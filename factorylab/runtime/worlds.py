@@ -107,6 +107,7 @@ class EvaluationSpec:
     min_coverage: float = 0.5
     trial_amount_micro: int = 100_000  # novelty trial paid per registration
     forecast_horizon_events: int = 10
+    consequence_backstop_events: int = 200
 
 
 @dataclass(frozen=True)
@@ -194,6 +195,9 @@ class WorldManifest:
             raise ValueError("novelty share must be in [0, 1]")
         if not 0 <= self.evaluation.consequence_share < 1:
             raise ValueError("consequence share must be in [0, 1)")
+        backstop = self.evaluation.consequence_backstop_events
+        if type(backstop) is not int or backstop < 1:
+            raise ValueError("consequence_backstop_events must be a positive integer")
         for a in self.assemblies:
             if a.role not in ("producer", "evaluator", "meta", "antagonist"):
                 raise ValueError(f"assembly {a.id} has unknown role {a.role}")
@@ -281,6 +285,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         min_coverage=float(ev.get("min_coverage", 0.5)),
         trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10")),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
+        consequence_backstop_events=ev.get("consequence_backstop_events", 200),
     )
     pr = d.get("prices") or {}
     prices = PricesSpec(

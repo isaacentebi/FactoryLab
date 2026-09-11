@@ -41,6 +41,10 @@ def test_scripted_world_phase2_spec_condition_2() -> None:
     assert s["evaluation_boundary"] == "producer → evaluator → meta"
     assert st["sample_propensity"] is not None
     assert sum(s["aggregates"]["spend_by_capability"]["spend"].values()) > 0
+    # Verdicts themselves now answer to the judged return's FIFO consequence.
+    assert st["lots_opened"] > 0 and st["lots_closed"] > 0
+    assert st["paid_off"] > 0 and st["not_paid_off"] > 0 and st["marked"] > 0
+    assert s["standing"]["eval-c"]["weight"] > s["standing"]["eval-a"]["weight"]
 
 
 def test_every_producer_decision_is_judged_or_censored() -> None:
@@ -509,3 +513,317 @@ def test_late_meta_verdict_is_censored():
     assert result.status is SettleStatus.CENSORED and result.score == 0
     assert result.sampling_ref is None
     assert runtime.stats.censored == 1
+
+
+def _consequence_runtime(*, provider=None, exchange=None, manifest=None):
+    from factorylab.runtime.loop import Runtime
+
+    return Runtime(
+        manifest or load_manifest("scripted"),
+        events=0,
+        seed=1,
+        initial_balance_micro=None,
+        ledger_path=None,
+        drip=False,
+        router_gamma=0.2,
+        provider=provider,
+        exchange=exchange,
+    )
+
+
+def _consequence_decision(runtime, action, channel):
+    from factorylab.kernel.queue import PropensityRecord
+
+    return runtime.queue.open(
+        actor="test-router",
+        event_id=f"test-{runtime.n}",
+        channel=channel,
+        propensity=PropensityRecord((action,), (1.0,), action, 0, "test-router", "state"),
+        deadline_ns=runtime.clock.now_ns + 100_000_000_000,
+        parent_handle=None,
+        cost_ceiling=runtime.wallet.available,
+    )
+
+
+def _consequence_produce(runtime, action="seed-decider", channel="verdict"):
+    from types import SimpleNamespace
+
+    from factorylab.kernel.events import Event, EventKind
+
+    runtime.n += 1
+    handle = _consequence_decision(runtime, action, channel)
+    runtime._producer_step(
+        Event(f"tick-{runtime.n}", EventKind.TICK, runtime.clock.now_ns, {"index": 0}, "test"),
+        handle,
+        SimpleNamespace(chosen=action),
+        runtime.queue.get(handle).deadline_ns,
+    )
+    event = next(
+        e
+        for e in runtime.internal
+        if e.kind == EventKind.PRODUCER_RETURN and e.payload["about_handle"] == handle
+    )
+    runtime._settle_due_forecasts()
+    return handle, event
+
+
+def _consequence_judge(runtime, event, judge):
+    from types import SimpleNamespace
+
+    runtime.n += 1
+    handle = _consequence_decision(runtime, judge, "conformity")
+    runtime._evaluator_step(
+        event,
+        handle,
+        SimpleNamespace(chosen=judge),
+        runtime.queue.get(handle).deadline_ns,
+    )
+    runtime._settle_due_forecasts()
+    return handle
+
+
+def _consequence_diary(runtime):
+    marker = runtime.ledger.append({"kind": "test.marker"})
+    runtime.termination.kill("test")
+    return [runtime.ledger.decrypt_item(i) for i in range(marker)]
+
+
+def test_delivered_verdicts_seal_raw_q_and_noop_skeptic_beats_noop_blesser():
+    runtime = _consequence_runtime()
+    about, event = _consequence_produce(runtime, "NOOP")
+    first = _consequence_judge(runtime, event, "eval-a")
+    second = _consequence_judge(runtime, event, "eval-c")
+    assert runtime.standing.weight("eval-c") > runtime.standing.weight("eval-a")
+    assert runtime.standing.skill("eval-a") < 0
+    items = _consequence_diary(runtime)
+    seals = [
+        i for i in items if i["kind"] == "forecast.seal" and i["predicate_id"] == "return_paid_off"
+    ]
+    assert len(seals) == 2
+    assert [(s["evaluator_id"], s["q"]) for s in seals] == [("eval-a", 0.9), ("eval-c", 0.1)]
+    assert all(s["about_handle"] == about for s in seals)
+    assert [runtime.queue.get(s["handle"]).parent_handle for s in seals] == [first, second]
+    outcomes = [i for i in items if i["kind"] == "forecast.consequence"]
+    assert len(outcomes) == 2 and all(i["y"] == 0 and not i["marked"] for i in outcomes)
+    assert runtime.ledger.verify()
+
+
+def test_tool_order_and_close_belong_to_calling_returns_and_tool_charge_decides_payoff():
+    import json
+    from decimal import Decimal
+
+    from factorylab.world.exchange import FakeExchange
+    from factorylab.world.models import ModelResponse
+
+    class Provider:
+        def __init__(self):
+            self.calls = 0
+
+        def complete(self, req):
+            replies = [
+                {
+                    "action": "hold",
+                    "tool_calls": [
+                        {
+                            "tool": "venue.place_market",
+                            "args": {
+                                "coin": "BTC",
+                                "side": "buy",
+                                "size": "1",
+                            },
+                        }
+                    ],
+                },
+                {"action": "noop"},
+                {
+                    "action": "hold",
+                    "tool_calls": [
+                        {
+                            "tool": "venue.close",
+                            "args": {
+                                "coin": "BTC",
+                            },
+                        }
+                    ],
+                },
+                {"action": "noop"},
+            ]
+            reply = replies[self.calls]
+            self.calls += 1
+            return ModelResponse(req.model_id, json.dumps(reply), 300, 40, "end_turn")
+
+    exchange = FakeExchange(
+        coins=("BTC",),
+        start_prices={"BTC": Decimal("100")},
+        price_path={"BTC": [Decimal("100.005010")]},
+        fee_bps=Decimal(0),
+        spread_bps=Decimal(0),
+    )
+    runtime = _consequence_runtime(provider=Provider(), exchange=exchange)
+    runtime.tool_specs["venue.place_market"]["price_micro_per_call"] = 11
+    opener, _ = _consequence_produce(runtime)
+    assert runtime.consequences.payoff(opener) is None
+    assert runtime.consequences.table.account(opener).cost_micro == 5011
+    runtime._settle_exchange_effects(exchange.advance(1_000_000_000))
+    closer, _ = _consequence_produce(runtime)
+    payoff = runtime.consequences.payoff(opener)
+    assert payoff.net_micro == 5010 and payoff.cost_micro == 5011 and payoff.y == 0
+    assert not payoff.marked
+    assert runtime.consequences.payoff(closer).y == 0
+    assert runtime.consequences.table.lots == ()
+    items = _consequence_diary(runtime)
+    commits = [i for i in items if i["kind"] == "wallet.commit" and i["handle"] == opener]
+    assert sum(i["amount"] for i in commits) == payoff.cost_micro
+    orders = [i for i in items if i["kind"] == "consequence.order"]
+    assert [i["handle"] for i in orders] == [opener, closer]
+    assert runtime.wallet.check_conservation() and runtime.ledger.verify()
+
+
+def test_antagonist_exposure_waits_past_verdict_timeout_for_marked_verdict_consequence():
+    from dataclasses import replace
+
+    from factorylab.runtime.loop import ScriptedProvider
+
+    class Provider(ScriptedProvider):
+        def _produce(self, desc, inputs):
+            return {"action": "order", "coin": "BTC", "side": "buy", "size": "0.001"}
+
+        @staticmethod
+        def _evaluate(req, inputs):
+            return {"verdict": 1.0, "rationale": "test", "forecasts": []}
+
+    manifest = load_manifest("scripted")
+    manifest = replace(
+        manifest,
+        evaluation=replace(
+            manifest.evaluation,
+            consequence_backstop_events=30,
+            verdict_timeout_events=2,
+        ),
+    )
+    runtime = _consequence_runtime(provider=Provider(), manifest=manifest)
+    about, event = _consequence_produce(runtime, "antagonist-a", "exposure")
+    _consequence_judge(runtime, event, "eval-a")
+    runtime.n = 10
+    runtime._settle_due_forecasts()
+    assert about in runtime.pending_exposure
+    runtime._settle_exchange_effects(runtime.exchange.advance(1_000_000_000))
+    runtime.n = 31
+    runtime._settle_due_forecasts()
+    assert about not in runtime.pending_exposure
+    assert runtime.queue.history(about)[-1].score == 1.0
+    assert runtime.consequences.payoff(about).marked
+    assert runtime.standing.skill("eval-a") < 0
+
+
+def test_population_cannot_propose_extra_kernel_forecasts():
+    runtime = _consequence_runtime()
+    parent = _consequence_decision(runtime, "eval-a", "conformity")
+    runtime._open_forecasts(
+        parent,
+        "eval-a",
+        "unused",
+        [
+            {
+                "predicate": "return_paid_off",
+                "params": {"horizon_events": 1},
+                "q": 0.0,
+            }
+        ],
+    )
+    assert runtime.book.outstanding() == 0
+    assert "return_paid_off" not in str(runtime._forecast_schema())
+    assert "return_paid_off" not in str(runtime._world_block())
+
+
+def test_consequence_backstop_manifest_default_override_and_validation():
+    import json
+    import tomllib
+
+    import pytest
+
+    from factorylab.runtime.worlds import WORLDS_DIR, manifest_from_dict
+
+    assert load_manifest("scripted").evaluation.consequence_backstop_events == 200
+    raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
+    raw["evaluation"]["consequence_backstop_events"] = 7
+    manifest = manifest_from_dict(raw)
+    assert manifest.evaluation.consequence_backstop_events == 7
+    assert json.loads(manifest.canonical_json())["evaluation"]["consequence_backstop_events"] == 7
+    for value in (0, -1, 1.5, True, "7"):
+        raw["evaluation"]["consequence_backstop_events"] = value
+        with pytest.raises(ValueError, match="consequence_backstop_events"):
+            manifest_from_dict(raw)
+
+
+def test_self_crossing_limit_tools_cannot_manufacture_paid_off_return():
+    from decimal import Decimal
+
+    from factorylab.world.exchange import FakeExchange
+
+    runtime = _consequence_runtime(
+        exchange=FakeExchange(
+            coins=("BTC",),
+            start_prices={"BTC": Decimal("100")},
+        )
+    )
+    runtime.consequences.start("wash", 0)
+    for side in ("buy", "sell"):
+        result, _ = runtime._run_tool(
+            "seed-decider",
+            "wash",
+            {
+                "tool": "venue.place_limit",
+                "args": {"coin": "BTC", "side": side, "size": "1", "price": "100"},
+            },
+        )
+        assert result["status"] == "filled"
+    runtime.consequences.finish("wash", 500)
+    runtime.consequences.resolve(0)
+    payoff = runtime.consequences.payoff("wash")
+    assert payoff.net_micro == -70_000 and payoff.y == 0
+    assert runtime.wallet.balance == runtime.initial - 70_000
+
+
+def test_resting_limit_fill_and_reduce_only_tool_keep_original_return_attribution():
+    from decimal import Decimal
+
+    from factorylab.world.exchange import FakeExchange
+
+    exchange = FakeExchange(
+        coins=("BTC",),
+        start_prices={"BTC": Decimal("101")},
+        price_path={"BTC": [Decimal("100"), Decimal("110")]},
+    )
+    runtime = _consequence_runtime(exchange=exchange)
+    runtime.consequences.start("limit", 0)
+    result, _ = runtime._run_tool(
+        "seed-decider",
+        "limit",
+        {
+            "tool": "venue.place_limit",
+            "args": {"coin": "BTC", "side": "buy", "size": "1", "price": "100"},
+        },
+    )
+    assert result["status"] == "resting"
+    runtime.consequences.finish("limit", 500)
+    runtime.consequences.resolve(0)
+    assert runtime.consequences.payoff("limit") is None
+    runtime._settle_exchange_effects(exchange.advance(1_000_000_000))
+    assert runtime.consequences.table.lots[0].handle == "limit"
+    runtime._settle_exchange_effects(exchange.advance(2_000_000_000))
+    runtime.consequences.start("reduce", 1)
+    result, _ = runtime._run_tool(
+        "seed-decider",
+        "reduce",
+        {
+            "tool": "venue.place_market",
+            "args": {"coin": "BTC", "side": "sell", "size": "2", "reduce_only": True},
+        },
+    )
+    assert result["filled_size"] == "1"
+    runtime.consequences.finish("reduce", 500)
+    runtime.consequences.resolve(1)
+    assert runtime.consequences.payoff("limit").y == 1
+    assert runtime.consequences.payoff("reduce").y == 0
+    assert runtime.consequences.table.lots == ()
