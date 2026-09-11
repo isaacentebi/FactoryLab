@@ -140,3 +140,7 @@ The Hyperliquid adapter reports funding rates but not funding paid. The lot tabl
 4. A Hyperliquid testnet world executes one withdrawal and one deposit through the factory's own tool call, confirmed on chain.
 5. A live run after Q (if approved) shows evaluators' consequence standing diverging between judges who bless `noop` and judges who do not.
 6. Bewilderment (v0.5 §9 condition 6) re-checked on that run and written up honestly.
+
+## 8. The clock is the factory's (workstream K)
+
+Decision 11 September: the funded world ticks every five minutes at launch. The essay says the factory keeps its own time and that speed is a form of cash burn, so the tick interval becomes a charter setting amendable by the committee within kernel bounds: `[clock] min_tick = "1m"`, `max_tick = "1h"` in the manifest (hard casts); an amendment may carry `tick_interval` (a duration string); on activation the live clock adopts it from the next tick. The seed value stays in the manifest as edition 1's setting. Ledger item `clock.changed` with edition and old/new intervals. Scripted and testnet manifests unchanged in behaviour unless amended. Files: `charter/amendment.py`, `book.py`, `runtime/worlds.py`, `runtime/live.py` (LiveClock takes a mutable interval), `runtime/loop.py` (activation), tests.
