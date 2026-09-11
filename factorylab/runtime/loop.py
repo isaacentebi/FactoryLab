@@ -468,6 +468,90 @@ class Runtime:
         self.delivered_seen.setdefault(learner.id, 0)
         return state
 
+    # ---- public schematics (spec v0.4 §1.6: schematics, contracts, prices and charter are public)
+
+    PROPOSAL_SHAPES: dict[str, Any] = {
+        "model": {"kind": "model", "openrouter_id": "vendor/model-id from the catalogue"},
+        "assembly": {
+            "kind": "assembly",
+            "id": "slug-2-to-48-chars",
+            "role": "producer | evaluator | meta",
+            "model_id": "a registered model id",
+            "system_prompt": "text, at most 4000 chars",
+            "accepts": ["event kinds this assembly is woken for"],
+            "max_tokens": 512,
+            "effort": "low | medium | high",
+        },
+        "router": {
+            "kind": "router",
+            "event_kind": "an event kind",
+            "learner": "exp3 | blum_mansour",
+            "gamma": 0.1,
+        },
+    }
+
+    def _world_block(self) -> dict[str, Any]:
+        """Facts about the world any assembly may see. No rules, no goals, no private state."""
+        return {
+            "wallet_balance_usd": str(money_to_usd(self.wallet.balance)),
+            "novelty_reserve_remaining_usd": str(money_to_usd(self.reserve.remaining())),
+            "models": [
+                {
+                    "id": mid,
+                    "usd_per_million_input_tokens": _price_str(p.input_micro),
+                    "usd_per_million_output_tokens": _price_str(p.output_micro),
+                }
+                for mid, p in self.prices.prices.items()
+            ],
+            "assemblies": [
+                {
+                    "id": a.spec.id,
+                    "role": a.spec.role,
+                    "model_id": a.spec.model_id,
+                    "accepts": sorted(a.spec.accepts),
+                }
+                for a in self.assemblies.values()
+            ],
+            "routers": [
+                {"event_kind": k, "learner": type(st.learner).__name__, "menu": st.universe}
+                for k, st in self.routers.items()
+            ],
+            "event_kinds": sorted(PRODUCER_KINDS | {"ProducerReturn", "Verdict"}),
+            "a_return_may_include": {
+                "register": "a list of proposals, each shaped like one of proposal_shapes",
+            },
+            "proposal_shapes": self.PROPOSAL_SHAPES,
+        }
+
+    @staticmethod
+    def _register_schema() -> dict[str, Any]:
+        return {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"kind": {"enum": ["model", "assembly", "router"]}},
+                "required": ["kind"],
+            },
+        }
+
+    def _forecast_schema(self) -> dict[str, Any]:
+        return {
+            "type": "array",
+            "maxItems": self.ev.max_forecasts_per_verdict,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "predicate": {"enum": [p.id for p in SEED_VOCABULARY]},
+                    "params": {
+                        "type": "object",
+                        "properties": {"horizon_events": {"type": "integer", "minimum": 1}},
+                    },
+                    "q": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["predicate", "params", "q"],
+            },
+        }
+
     # ---- feasibility and mixing
 
     def _is_feasible(self, action_id: str) -> tuple[bool, str]:
@@ -726,6 +810,7 @@ class Runtime:
                 "status": ret.status,
                 "stop_reason": sr,
                 "served_by": ret.served_by,
+                "outputs": json.dumps(ret.outputs, default=str)[:4000],
                 "ts": self.clock.now_ns,
             }
         )
@@ -775,12 +860,19 @@ class Runtime:
                 }
             payload["mids"] = {c: str(m) for c, m in self.exchange.mids().items()}
         description = f"Respond to event {ev.kind} on {ev.source}."
-        inputs = {"kind": str(ev.kind), "payload": payload}
+        inputs = {"kind": str(ev.kind), "payload": payload, "world": self._world_block()}
         if sample.chosen == NOOP:
             self.stats.noops += 1
             ret = Return(handle, {"action": "noop"}, 0, "ok")
         else:
-            schema = {"type": "object", "properties": {"action": {"type": "string"}}}
+            schema = {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "register": self._register_schema(),
+                },
+                "required": ["action"],
+            }
             req = self._request(handle, description, inputs, schema, deadline, CH_VERDICT)
             ret = self._invoke(sample.chosen, req, "producer")
             self._execute_outputs(ret)
@@ -824,23 +916,32 @@ class Runtime:
                 "status": payload["status"],
             },
             "charter": self.charter.render(),
-            "vocabulary": [
+            "predicates": [
                 {"predicate": p.id, "description": p.description, "params": list(p.param_schema)}
                 for p in SEED_VOCABULARY
             ],
+            "forecast_example": {
+                "predicate": "wallet_up",
+                "params": {"horizon_events": self.ev.forecast_horizon_events},
+                "q": 0.4,
+            },
+            "world": self._world_block(),
         }
         schema = {
             "type": "object",
             "properties": {
                 "verdict": {"type": "number", "minimum": 0, "maximum": 1},
                 "rationale": {"type": "string"},
-                "forecasts": {"type": "array"},
+                "forecasts": self._forecast_schema(),
+                "register": self._register_schema(),
             },
-            "required": ["verdict", "rationale"],
+            "required": ["verdict", "rationale", "forecasts"],
         }
         req = self._request(
             handle,
-            "Evaluate a producer return against the charter and forecast its consequences.",
+            "Evaluate a producer return against the charter, then give "
+            f"{self.ev.max_forecasts_per_verdict} forecasts: for each, a predicate from the "
+            "list and q = your probability it happens within its horizon.",
             inputs,
             schema,
             deadline,
@@ -944,6 +1045,7 @@ class Runtime:
             "verdict": {"verdict": payload["verdict"], "rationale": payload["rationale"]},
             "producer_outputs": payload["producer_outputs"],
             "charter": self.charter.render(),
+            "world": self._world_block(),
         }
         schema = {
             "type": "object",
@@ -1264,6 +1366,13 @@ class _KeyedLearner:
 
     def state(self) -> bytes:
         return self.inner.state()
+
+
+def _price_str(value: Any) -> str:
+    """Micro-USD per token equals USD per million tokens; render exactly, Fraction or int."""
+    num = getattr(value, "numerator", value)
+    den = getattr(value, "denominator", 1)
+    return str((Decimal(num) / Decimal(den)).normalize())
 
 
 def _equity_or_none(exchange: Any) -> str | None:
