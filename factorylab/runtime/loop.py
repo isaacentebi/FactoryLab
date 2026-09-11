@@ -386,6 +386,7 @@ class RunStats:
     amendments_proposed: int = 0
     amendments_passed: int = 0
     amendments_activated: int = 0
+    clock_changes: int = 0
     votes_cast: int = 0
     transfer_intents: int = 0
     exposures_settled: int = 0
@@ -441,6 +442,12 @@ class Runtime:
         self.kill_at_end = kill_at_end
         self.live = manifest.exchange.kind != "fake"
         self.clock_source = clock_source
+        self.tick_clock = (
+            LiveClock(manifest.tick_interval_ns, events) if self.live else
+            ClockSource(manifest.tick_interval_ns, manifest.tick_interval_ns, events)
+        )
+        if clock_source is not None and hasattr(clock_source, "set_interval"):
+            self.tick_clock = clock_source
         self.reconciler = Reconciler(every=reconcile_every)
         self.events_budget = events
         self.seed = manifest.seed if seed is None else seed
@@ -793,6 +800,7 @@ class Runtime:
             "replace": [],
             "remove": ["card-id"],
             "predicted_effect": "what you expect to change and why",
+            "tick_interval": "optional duration string, e.g. 30s",
         },
     }
     A_RETURN_MAY_INCLUDE: dict[str, str] = {
@@ -850,6 +858,11 @@ class Runtime:
                 {"event_kind": st.kind, "learner": type(st.learner).__name__, "menu": st.universe}
                 for st in self._all_router_states()
             ],
+            "clock": {
+                "tick_interval": f"{self.tick_clock.interval_ns}ns",
+                "min_tick": f"{self.m.clock.min_tick_ns}ns",
+                "max_tick": f"{self.m.max_tick_ns}ns",
+            },
             "prices": {"lambda_max": self.m.prices.lambda_max},
             "amendment_feedback": getattr(self, "amendment_feedback", None),
             "card_prices": [
@@ -945,16 +958,10 @@ class Runtime:
 
     def run(self) -> dict[str, Any]:
         tick_ns = self.m.tick_interval_ns
-        if self.clock_source is not None:
+        if self.clock_source is not None and not hasattr(self.clock_source, "events"):
             sources = [self.clock_source]
-        elif self.live:
-            sources = [LiveClock(tick_ns, self.events_budget).events()]
         else:
-            sources = [
-                ClockSource(
-                    start_ns=tick_ns, interval_ns=tick_ns, count=self.events_budget
-                ).events()
-            ]
+            sources = [self.tick_clock.events()]
         if self.use_drip and self.m.drip is not None:
             d = self.m.drip
             sources.append(
@@ -962,10 +969,14 @@ class Runtime:
                     d.amount_micro,
                     d.period_ns,
                     max(d.start_ns, tick_ns),
-                    min(d.end_ns, (self.events_budget + 1) * tick_ns),
+                    min(d.end_ns, (self.events_budget + 1) * self.m.max_tick_ns),
                 ).events()
             )
-        stream = merge_sources(*sources)
+        if (isinstance(self.tick_clock, ClockSource)
+                and self.clock_source is None and len(sources) > 1):
+            stream = self.tick_clock.events(sources[1])
+        else:
+            stream = merge_sources(*sources)
         self.bus.publish(
             Event(
                 "launch", EventKind.LAUNCH, 0, {"manifest_hash": self.m.manifest_hash()}, "kernel"
@@ -1396,7 +1407,7 @@ class Runtime:
         if chosen_role == "antagonist":
             channel = CH_EXPOSURE
         deadline = (
-            self.clock.now_ns + (self.ev.verdict_timeout_events + 2) * self.m.tick_interval_ns
+            self.clock.now_ns + (self.ev.verdict_timeout_events + 2) * self.tick_clock.interval_ns
         )
         handle = self.queue.open(
             actor=sample.learner_id,
@@ -1800,7 +1811,7 @@ class Runtime:
         self.consequences.seal_verdict(
             self.book, self.queue, evaluator_handle=handle, evaluator_id=sample.chosen,
             about=about, verdict=verdict, event=self.n, now_ns=self.clock.now_ns,
-            tick_ns=self.m.tick_interval_ns,
+            tick_ns=self.tick_clock.interval_ns,
         )
         self.stats.forecasts_sealed += 1
         self._open_forecasts(handle, sample.chosen, about, ret.outputs.get("forecasts"))
@@ -1840,7 +1851,7 @@ class Runtime:
                     evaluator_id=evaluator_id,
                     event_id=f"forecast-{evaluator_handle}",
                     q=q,
-                    deadline_ns=self.clock.now_ns + (horizon + 2) * self.m.tick_interval_ns * 4,
+                    deadline_ns=self.clock.now_ns + (horizon + 2) * self.tick_clock.interval_ns * 4,
                     parent_handle=evaluator_handle,
                     now_event=self.n,
                     horizon=horizon,
@@ -2208,9 +2219,21 @@ class Runtime:
             )
 
     def _propose_amendment(self, handle: str, item: dict[str, Any]) -> None:
-        from factorylab.charter.amendment import proposed_price
+        from factorylab.charter.amendment import proposed_price, proposed_tick_interval
         from factorylab.charter.charter import MetricCard
 
+        tick_interval = None
+        if "tick_interval" in item:
+            try:
+                proposed_tick_interval(
+                    item["tick_interval"], self.m.clock.min_tick_ns, self.m.max_tick_ns
+                )
+            except ValueError as exc:
+                feedback = {"id": str(item.get("id", "")), "reason": str(exc)}
+                self.ledger.append({"kind": "amendment.rejected", **feedback})
+                self.amendment_feedback = feedback
+                raise
+            tick_interval = item["tick_interval"]
         prices = []
 
         def cards(key: str) -> tuple[MetricCard, ...]:
@@ -2255,6 +2278,7 @@ class Runtime:
             remove=tuple(remove),
             predicted_effect=str(item.get("predicted_effect", "")),
             proposed_prices=tuple(prices),
+            tick_interval=tick_interval,
         )
         contract = Contract(
             id=f"amendment:{am.id}",
@@ -2293,6 +2317,7 @@ class Runtime:
                     ],
                     "remove": list(am.remove),
                     "predicted_effect": am.predicted_effect,
+                    **({"tick_interval": am.tick_interval} if am.tick_interval is not None else {}),
                 },
                 "charter": self.charter.render(),
                 "world": self._world_block(),
@@ -2307,7 +2332,7 @@ class Runtime:
                 "Vote on an amendment to the charter's metric cards.",
                 inputs,
                 schema,
-                self.clock.now_ns + self.m.tick_interval_ns * 10,
+                self.clock.now_ns + self.tick_clock.interval_ns * 10,
                 CH_FAST,
             )
             asm = self.assemblies.get(assembly_id)
@@ -2357,6 +2382,19 @@ class Runtime:
                     self.controller.register_pending(card_id)
                     self.priced.add(card_id)
                 self.controller.set_price(card_id, value, amendment_id=am.id)
+            if am.tick_interval is not None:
+                from factorylab.charter.amendment import proposed_tick_interval
+
+                interval = proposed_tick_interval(
+                    am.tick_interval, self.m.clock.min_tick_ns, self.m.max_tick_ns
+                )
+                if interval != self.tick_clock.interval_ns:
+                    self.ledger.append({
+                        "kind": "clock.changed", "edition": new.edition,
+                        "old_ns": self.tick_clock.interval_ns, "new_ns": interval,
+                    })
+                    self.tick_clock.set_interval(interval)
+                    self.stats.clock_changes += 1
             self.stats.amendments_activated += 1
             new = self.charter_book.activate_due(self.clock.now_ns)
 

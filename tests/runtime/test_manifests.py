@@ -102,3 +102,32 @@ def test_prices_section_defaults_and_validation() -> None:
         d["prices"] = bad
         with pytest.raises(ValueError):
             manifest_from_dict(d)
+
+
+def test_clock_bounds_seed_validation_and_hash():
+    d = _base()
+    d["clock"] = {"min_tick": "10s"}
+    d["tick_interval"] = "10s"
+    m = manifest_from_dict(d)
+    assert m.clock.min_tick_ns == 10_000_000_000
+    assert m.max_tick_ns == 1200_000_000_000
+    assert "max_tick" not in m.canonical_json()
+    d["tick_interval"] = "20m"
+    assert manifest_from_dict(d).tick_interval_ns == m.max_tick_ns
+    for invalid in ["9s", "1201s"]:
+        d["tick_interval"] = invalid
+        with pytest.raises(ValueError, match="tick_interval"):
+            manifest_from_dict(d)
+    d["tick_interval"] = "10s"
+    d["clock"]["min_tick"] = "5s"
+    assert manifest_from_dict(d).manifest_hash() != m.manifest_hash()
+    d["clock"]["max_tick"] = "20m"
+    with pytest.raises(ValueError, match="derived"):
+        manifest_from_dict(d)
+
+
+def test_clock_seed_intervals_remain_unchanged():
+    assert load_manifest("scripted").tick_interval_ns == 1_000_000_000
+    assert load_manifest("scripted-crash").tick_interval_ns == 1_000_000_000
+    assert load_manifest("testnet").tick_interval_ns == 60_000_000_000
+    assert load_manifest("testnet").clock.min_tick_ns == 10_000_000_000

@@ -21,6 +21,24 @@ def proposed_price(value: object, lambda_max: float) -> float:
     return price
 
 
+def proposed_tick_interval(value: object, min_ns: int, max_ns: int | float) -> int:
+    """Return exact integer nanoseconds for a duration within inclusive clock bounds."""
+    reason = f"tick_interval must be a duration string within [{min_ns}ns, {max_ns}ns]"
+    if not isinstance(value, str):
+        raise ValueError(reason)
+    match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)(ns|s|m|h|d)", value.strip())
+    if match is None:
+        raise ValueError(reason)
+    units = {"ns": 1, "s": 10**9, "m": 60 * 10**9, "h": 3600 * 10**9, "d": 86400 * 10**9}
+    whole, _, fraction = match[1].partition(".")
+    amount, remainder = divmod(
+        int(whole + fraction) * units[match[2]], 10 ** len(fraction)
+    )
+    if remainder or not min_ns <= amount <= max_ns:
+        raise ValueError(reason)
+    return int(amount)
+
+
 @dataclass(frozen=True)
 class Amendment:
     """A candidate's typed card changes and predicted effect cannot change after creation.
@@ -37,6 +55,7 @@ class Amendment:
     remove: tuple[str, ...]
     predicted_effect: str
     proposed_prices: tuple[tuple[str, float], ...] = ()
+    tick_interval: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or re.fullmatch(r"[a-z][a-z0-9-]{1,47}", self.id) is None:
@@ -51,6 +70,8 @@ class Amendment:
             or len(self.predicted_effect) > 2000
         ):
             raise ValueError("predicted_effect must be non-empty and at most 2000 chars")
+        if self.tick_interval is not None:
+            proposed_tick_interval(self.tick_interval, 1, float("inf"))
         ids = []
         for name in ("add", "replace", "remove"):
             values = getattr(self, name)

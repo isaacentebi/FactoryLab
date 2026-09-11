@@ -126,6 +126,11 @@ class NoveltySpec:
 
 
 @dataclass(frozen=True)
+class ClockSpec:
+    min_tick_ns: int = 10 * NS_PER_SECOND
+
+
+@dataclass(frozen=True)
 class TimingSpec:
     min_ratio: int = 3
     jitter_fraction: float = 0.2
@@ -153,10 +158,16 @@ class WorldManifest:
     tools: ToolsSpec = ToolsSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
-    tick_interval_ns: int = NS_PER_SECOND
+    clock: ClockSpec = ClockSpec()
+    tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
     # ---- derived
+
+    @property
+    def max_tick_ns(self) -> int:
+        """Return the largest integer interval satisfying the reserve-window ratio."""
+        return self.novelty.window_ns // self.timing.min_ratio
 
     def price_table(self) -> PriceTable:
         t = PriceTable()
@@ -225,6 +236,11 @@ class WorldManifest:
             raise ValueError("novelty window must be positive")
         if self.timing.min_ratio < 1:
             raise ValueError("timing min_ratio must be at least 1")
+        if type(self.clock.min_tick_ns) is not int or self.clock.min_tick_ns <= 0:
+            raise ValueError("clock.min_tick must be positive integer nanoseconds")
+        if (type(self.tick_interval_ns) is not int
+                or not self.clock.min_tick_ns <= self.tick_interval_ns <= self.max_tick_ns):
+            raise ValueError("tick_interval must lie within clock.min_tick and derived max_tick")
         if self.exchange.kind not in ("fake", "hyperliquid"):
             raise ValueError("unknown exchange kind")
         if self.exchange.kind == "hyperliquid" and self.exchange.mainnet and self.name != "funded":
@@ -253,6 +269,9 @@ def _ns(value: Any) -> int:
 
 
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
+    clock = d.get("clock", {})
+    if set(clock) - {"min_tick"}:
+        raise ValueError("clock accepts only min_tick; max_tick is derived")
     drip = None
     if "drip" in d:
         dd = d["drip"]
@@ -314,6 +333,8 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         lambda_max=float(pr.get("lambda_max", 1.0)),
         min_window_events=int(pr.get("min_window_events", 1)),
     )
+    # Scripted providers run in virtual time, including live-shaped test fixtures.
+    default_min_tick = "1s" if all(m.provider == "fake" for m in models) else "10s"
     nov = d.get("novelty", {})
     tim = d.get("timing", {})
     term = d.get("termination", {})
@@ -342,7 +363,8 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             (d.get("treasury") or {}).get("insolvency_events", 20),
             (d.get("treasury") or {}).get("discovery_url", DISCOVERY_URL),
         ),
-        tick_interval_ns=_ns(d.get("tick_interval", "1s")),
+        clock=ClockSpec(_ns(clock.get("min_tick", default_min_tick))),
+        tick_interval_ns=_ns(d.get("tick_interval", "10s")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
     m.validate()

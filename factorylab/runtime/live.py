@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+from factorylab.world.clock import ClockIterator
 from factorylab.world.events import WorldEvent, WorldEventKind
 
 NS_PER_SECOND = 1_000_000_000
@@ -35,7 +36,17 @@ class LiveClock:
     sleep: Callable[[float], None] = time.sleep
     source: str = "wallclock"
 
-    def events(self) -> Iterator[WorldEvent]:
+    def set_interval(self, interval_ns: int) -> None:
+        """Adopt positive integer nanoseconds for the next tick after the current yield."""
+        if type(interval_ns) is not int or interval_ns <= 0:
+            raise ValueError("interval_ns must be positive integer nanoseconds")
+        self.interval_ns = interval_ns
+
+    def events(self) -> ClockIterator:
+        """Return a wall-clock stream whose interval remains amendable when injected."""
+        return ClockIterator(self, self._events())
+
+    def _events(self) -> Iterator[WorldEvent]:
         last = -1
         for i in range(self.count):
             if i > 0:
