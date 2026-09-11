@@ -1,11 +1,11 @@
-# The scripted world plus three 50% BTC drops on ticks where the scripted trader
-# holds a leveraged long (tick index 1 mod 4 buys; venue step = index + 1). The
+# The scripted world plus four 50% BTC drops on ticks where the scripted trader
+# holds a leveraged long (it buys on tick 4k+2 after the venue moves; the drop lands on 4k+3). The
 # venue liquidates when equity falls below maintenance margin and the realised
 # loss lands in the wallet.
 # Used to demonstrate death by world event (spec section 6, condition 3).
 name = "scripted-crash"
 seed = 2
-initial_balance_usd = "5"
+initial_balance_usd = "20"
 tick_interval = "1s"
 
 [exchange]
@@ -13,9 +13,10 @@ kind = "fake"
 coins = ["BTC", "ETH"]
 seed = 2
 shocks = [
-  { step = 42, coin = "BTC", multiplier = "0.5" },
-  { step = 46, coin = "BTC", multiplier = "0.5" },
-  { step = 50, coin = "BTC", multiplier = "0.5" },
+  { step = 43, coin = "BTC", multiplier = "0.5" },
+  { step = 47, coin = "BTC", multiplier = "0.5" },
+  { step = 51, coin = "BTC", multiplier = "0.5" },
+  { step = 55, coin = "BTC", multiplier = "0.5" },
 ]
 
 [[models]]

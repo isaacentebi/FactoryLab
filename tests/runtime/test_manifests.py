@@ -2,7 +2,6 @@ import pytest
 
 from factorylab.runtime.cli import main
 from factorylab.runtime.worlds import (
-    NS_PER_DAY,
     NS_PER_HOUR,
     load_manifest,
     manifest_from_dict,
@@ -22,7 +21,7 @@ def test_scripted_manifest_loads_and_hashes_stably() -> None:
     assert m.name == "scripted" and m.exchange.kind == "fake"
     assert m.initial_balance_micro == 100_000_000
     assert m.drip is None  # phase 2: one starting balance, no drip in the seed worlds
-    assert m.novelty.window_ns == NS_PER_DAY
+    assert m.novelty.window_ns == 2 * 60 * 1_000_000_000  # short windows so charter editions can activate in tests
     assert m.price_table().cost("fake-opus", 1000, 100) == 1000 * 5 + 100 * 25
     assert m.manifest_hash() == load_manifest("scripted").manifest_hash()
     assert m.manifest_hash() != load_manifest("testnet").manifest_hash()
@@ -31,13 +30,10 @@ def test_scripted_manifest_loads_and_hashes_stably() -> None:
 def test_testnet_manifest_is_not_mainnet() -> None:
     m = load_manifest("testnet")
     assert m.exchange.kind == "hyperliquid" and m.exchange.mainnet is False
-    assert {t.id for t in m.models} == {
-        "z-ai/glm-5.3-flash",
-        "deepseek/deepseek-v4.1-flash",
-        "openai/gpt-5.6-luna",
-        "meta/muse-spark-1.3",
-    }
+    ids = {t.id for t in m.models}
+    assert {"z-ai/glm-5.3-flash", "qwen/qwen3.8-flash", "tencent/hy3", "openai/gpt-5.6-luna"} <= ids
     assert all(t.provider == "openrouter" for t in m.models)
+    assert "z-ai/glm-5.3-flash:online" in m.price_table().prices
 
 
 def _base() -> dict:

@@ -68,9 +68,7 @@ class CharterBook:
             )
         ]
 
-    def seat(
-        self, amendment_id: str, eligible: dict[str, str], rng: random.Random
-    ) -> Committee:
+    def seat(self, amendment_id: str, eligible: dict[str, str], rng: random.Random) -> Committee:
         """Issue exactly one committee per proposal and seal its alias-to-assembly mapping."""
         if amendment_id not in self.__proposals:
             raise ValueError("unknown amendment id")

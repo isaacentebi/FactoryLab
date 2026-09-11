@@ -106,10 +106,22 @@ class OpenRouterProvider:
             "messages": [{"role": "system", "content": req.system}, *req.messages],
             "max_tokens": req.max_tokens,
         }
-        base_id = req.model_id[:-7] if req.model_id.endswith(":online") else req.model_id
-        if req.model_id in self._web_config:
-            payload["plugins"] = [{"id": "web", **self._web_config[req.model_id]}]
-        if base_id in self._reasoning_config:
+        # "<id>@<effort>" selects a reasoning level as its own capability; ":online" adds web.
+        wire_id, effort_override = req.model_id, None
+        if "@" in wire_id:
+            wire_id, effort_override = wire_id.rsplit("@", 1)
+        payload["model"] = wire_id
+        base_id = wire_id[:-7] if wire_id.endswith(":online") else wire_id
+        if req.model_id in self._web_config or wire_id in self._web_config:
+            payload["plugins"] = [
+                {
+                    "id": "web",
+                    **self._web_config.get(req.model_id, self._web_config.get(wire_id, {})),
+                }
+            ]
+        if effort_override is not None:
+            payload["reasoning"] = {"effort": effort_override}
+        elif base_id in self._reasoning_config:
             payload["reasoning"] = dict(self._reasoning_config[base_id])
         elif req.effort in {"low", "medium", "high"} and base_id in self._reasoning_models:
             payload["reasoning"] = {"effort": req.effort}

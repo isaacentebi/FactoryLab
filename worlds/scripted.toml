@@ -91,7 +91,7 @@ forecast_horizon_events = 10
 
 [novelty]
 share = 0.1
-window = "1d"
+window = "2m"
 
 [timing]
 min_ratio = 3

@@ -120,7 +120,7 @@ class ScriptedProvider:
     input_tokens: int = 300
     output_tokens: int = 40
     register_at_calls: tuple[int, ...] = (40, 60, 80)
-    tool_at_calls: tuple[int, ...] = (30, 50, 70, 90, 110)
+    tool_at_calls: tuple[int, ...] = (30, 50, 70, 90, 110, 130, 150)
     _producer_calls: int = 0
 
     def complete(self, req: ModelRequest) -> ModelResponse:
@@ -213,7 +213,7 @@ class ScriptedProvider:
                     "role": "producer",
                     "model_id": "fake-haiku:online",
                     "system_prompt": "Search for context on funding moves; reply with JSON.",
-                    "accepts": ["Funding"],
+                    "accepts": ["MarketMid"],
                     "max_tokens": 128,
                 }
             ]
@@ -511,9 +511,7 @@ class Runtime:
                     "kind": spec.kind,
                 }
         self.tool_runner = ToolRunner()
-        self.charter_book = None
-        if CharterBook is not None:
-            self.charter_book = CharterBook(self.ledger, self.charter)
+        self.charter_book = CharterBook(self.ledger, self.charter)
         self.pending_votes: list[Any] = []  # committees awaiting tally
 
         # loop state
@@ -585,7 +583,11 @@ class Runtime:
     # ---- public schematics (spec v0.4 §1.6: schematics, contracts, prices and charter are public)
 
     PROPOSAL_SHAPES: dict[str, Any] = {
-        "model": {"kind": "model", "openrouter_id": "vendor/model-id from the catalogue"},
+        "model": {
+            "kind": "model",
+            "openrouter_id": "vendor/model-id from the catalogue, optionally @none|@low|@high|@max "
+            "to register that model at a reasoning level (same token prices, different usage)",
+        },
         "assembly": {
             "kind": "assembly",
             "id": "slug-2-to-48-chars",
@@ -963,11 +965,8 @@ class Runtime:
         return "producer"
 
     def _allowed_tools(self, action_id: str) -> set[str]:
-        asm = self.assemblies[action_id]
-        allowed = {t for t in self.tool_specs if self.tool_specs[t]["kind"] == "venue"}
-        allowed |= {t for t, owner in self.tool_owner.items() if owner == action_id}
-        allowed |= set(asm.spec.tool_ids) & set(self.tool_specs)
-        return allowed
+        """Every registered tool is a public primitive; schematics are public (v0.4 §1.6)."""
+        return set(self.tool_specs)
 
     def _run_tool(self, action_id: str, handle: str, call: dict[str, Any]) -> tuple[dict, int]:
         """Execute one tool call through metering. Returns (result, cost)."""
@@ -979,7 +978,7 @@ class Runtime:
         price = int(spec["price_micro_per_call"])
 
         def execute() -> dict:
-            if spec["kind"] == "venue" and self.venue_tools is not None:
+            if spec["kind"] == "venue":
                 return self.venue_tools.call(tool_id, args)
             tool = self.population_tools.get(tool_id)
             if tool is None:
@@ -1458,9 +1457,23 @@ class Runtime:
             self._emit(EventKind.REGISTERED, {"kind": "tool", "id": prop.id, "by": handle})
             return
         if isinstance(prop, ModelProposal):
-            if self.catalogue is None or prop.openrouter_id not in self.catalogue:
+            base, _, effort = prop.openrouter_id.partition("@")
+            if effort and effort not in (
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+            ):
+                raise ValueError("reasoning level must be none|minimal|low|medium|high|xhigh|max")
+            if base in self.prices.prices:
+                price = self.prices.price(base)
+            elif self.catalogue is not None and base in self.catalogue:
+                price = self.catalogue[base]
+            else:
                 raise ValueError("no catalogue entry for that model in this world")
-            price = self.catalogue[prop.openrouter_id]
             contract = _model_contract(prop.openrouter_id, price, "openrouter")
             res = self.reserve.reserve_for(contract, amount)
             self.registry.register(contract, by_handle=handle, reservation=res)
@@ -1528,8 +1541,6 @@ class Runtime:
             )
 
     def _propose_amendment(self, handle: str, item: dict[str, Any]) -> None:
-        if self.charter_book is None or Amendment is None:
-            raise ValueError("charter amendments unavailable in this build")
         from factorylab.charter.charter import MetricCard
 
         def cards(key: str) -> tuple[MetricCard, ...]:
@@ -1645,8 +1656,6 @@ class Runtime:
             self.stats.amendments_passed += 1
 
     def _activate_charter_if_due(self) -> None:
-        if self.charter_book is None:
-            return
         new = self.charter_book.activate_due(self.clock.now_ns)
         while new is not None:
             self.charter = new
