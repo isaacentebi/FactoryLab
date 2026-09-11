@@ -6,6 +6,8 @@ Everything in v0.4 sections 1, 2 and 7 still binds. Where this document names a 
 
 ## 0. Decisions since v0.4
 
+**Governing test.** The essay's own criterion of success is bewilderment: if the architect is comfortable with what the factory becomes, the architect has failed. Every phase from here carries a literal version of that check (section 9, condition 6). Scaffolding that scripts the factory's behaviour (the scripted provider, seed prompts, seed routers) exists to test physics and must be replaceable by the population; none of it is the experiment.
+
 | Topic | Decision |
 |---|---|
 | Drip | Off by default. One starting balance. The manifest may still declare a drip; the seed worlds do not. |
@@ -154,5 +156,6 @@ class OpenRouterProvider:
 3. Delayed-feedback replay of the reference game matches the synchronous regret numbers (seed 0, T = 5000) within 1e-9.
 4. With `OPENROUTER_API_KEY` set, `factorylab run --world testnet --events 30 --seed 3` completes 30 live events with at least one real model invocation whose ledger cost equals OpenRouter's reported cost rounded up, and one `Reconciled` event.
 5. `factorylab run --world scripted-crash --events 2000 --seed 2` still terminates by death with the seal released.
+6. **Bewilderment check.** In a testnet run of at least 200 live events with real models, the ledger contains at least one `Registered` or `RouterReplaced` event whose proposal came from a model's return, not from a script, and at least one router's most-frequent action differs from what the seed manifest would predict. This is the minimum evidence that the world did something we did not write; it is not proof of Class 3 behaviour, and a run that passes conditions 1 through 5 but fails this one is reported as a failure of the experiment, not a success of the build.
 
 Out of scope for phase 2: charter amendments, sortition, λ controller, population-written tools, real money, the venue-to-OpenRouter transfer.
