@@ -64,6 +64,59 @@ These are known gaps to close in phase 2, not oversights.
 
 Codex on `gpt-6-astra` delivered both logic workstreams in one attempt each with green gates it ran itself. Its decisions lists (23 for the kernel, 8 for the learners) were accurate and complete, which made review fast. The one substantive reviewer change was performance, not correctness. Both runs hit `uv` sandbox permission issues and worked around them with an offline cache; that is an environment problem, not a model one.
 
-## Phase 2 — next
+## Phase 2 — evaluators, settlement, registration, live path (11 September 2026)
 
-In order: evaluator assemblies with sealed forecasts and consequence settlement (`settlement/`); a live-venue runtime path on testnet with real model tiers; Blum–Mansour runtime adapter and a seeded retentive router; population registration through the reserve; charter metric cards and the λ controller (`charter/`). Then the funded world manifest, which is a launch decision, not a build task.
+Status: **built and merged; conditions 1, 2, 3 and 5 pass; conditions 4 and 6 need an OpenRouter key and a live run.**
+
+| PR | Workstream | Implementer | Attempts | Reviewer changes |
+|---|---|---|---|---|
+| #8 | OpenRouter provider, catalogue, cost-reported metering | Codex (`gpt-6-astra`) | 1 | none |
+| #9 | Delayed-feedback adapter, Blum–Mansour snapshots | Codex (`gpt-6-astra`) | 1 | none; Codex corrected a flawed acceptance test in the spec and documented why |
+| #10 | Settlement: vocabulary, sealed forecasts, Brier, baseline, standing, settler | Codex (`gpt-6-astra`) | 1 | none |
+| #11 | Kernel event kinds and key file, charter, registration parser, runtime rewrite, live path, manifests | Claude | iterated against the running loop | — |
+
+Test count on main: 482 (plus 4 network-marked).
+
+### Completion checks, as run
+
+1. `uv run pytest` — 482 passed.
+2. `factorylab run --world scripted --events 400 --seed 1` — 1,312 verdicts, 1,251 conformities, 89 censored, 2,624 forecasts sealed and 2,624 settled, consequence standing with coverage 1.0 for all four evaluators, 2 registrations accepted (a new producer assembly, then a router replacement) and 1 rejected (a model proposal; no catalogue in the scripted world), 2 comparator epochs, conservation and verify true.
+3. Delayed-feedback equivalence for Blum–Mansour within 1e-9 (in suite; see the note in PR #9 on why the spec's original test was wrong).
+4. Testnet with real models — **not run**: `OPENROUTER_API_KEY` is not set in this environment.
+5. `factorylab run --world scripted-crash --events 600 --seed 2` — terminated `balance_zero`, seal released.
+6. Bewilderment check — **not claimable** until a live run exists. By construction the scripted world cannot pass it: every registration in it was scripted by us.
+
+### Fidelity check against the essay's evaluation chapter
+
+| Essay claim | Where it lives | Status |
+|---|---|---|
+| Evaluations are online, inside the runtime | every producer decision publishes a `ProducerReturn` that is routed to an evaluator in the same loop | done |
+| More evaluators than producers, mostly exploratory | seeds: 2 producers, 4 evaluators, 2 metas, all on EXP3 routers | done |
+| Evaluators graded from above for conformity | metas settle the evaluator decision on `conformity` | one level; the boundary is reported in every summary |
+| A second signal from outside the input: realised consequence | sealed forecasts settled by `Observer` over kernel facts, Brier against a prevalence baseline | done; predicates are launch-declared and cannot be redefined by the population |
+| The consequence signal is nonfungible with charter points | the protected share `s` in evaluator selection reads only `ConsequenceStanding`; charter scores cannot touch it | done |
+| Judges cannot gain standing on easy cases only | coverage cap at 0.5 below `min_coverage` | done |
+| Unjudged work is not scored | censored settlements train nothing | done |
+| Adversarial population | not seeded | **gap**, phase 3 |
+| Charter co-written with the factory | read-only seed charter rendered into prompts | **gap**, phase 3 |
+
+### What the build taught us this phase
+
+**Scripted evaluators have negative skill, and that is the scoring working.** In the 400-event scripted run every evaluator's Brier mean sits about 0.25 below the prevalence baseline. The scripted forecasts are fixed probabilities; the wallet almost always falls between forecast and settlement because compute costs money; a constant-prevalence forecaster is therefore better. Real evaluators will have to beat the base rate to earn selection weight. No scripted seed should ever look good on this channel.
+
+**Every decision gets judged, including doing nothing.** Treating NOOP as a judgeable return removed the need for an architect-chosen reward for inaction. The essay's frame is that evaluators judge outputs; "no output" is an output.
+
+**The scripted world spends much faster with evaluation.** Eight assemblies burn the $5 crash wallet before tick 100; the crash shocks moved from tick 500 to ticks 42–50. In the real world this is the cost the essay predicts: evaluation consumes more compute than production.
+
+### Deliberate gaps carried into phase 3
+
+- No adversarial minority yet. The essay wants antagonists that manufacture real failures; the fake venue's shocks are the architect doing that job for now.
+- Charter is read-only. Amendments, sortition and the λ controller are phase 3.
+- Meta-evaluation stops at one level.
+- The venue-to-OpenRouter transfer is a declared manual rule, not code.
+- A crashed live world is readable post-mortem (key file) but not resumable.
+- Population-written tools are not executed anywhere yet.
+
+### What the live run needs from the experimenter
+
+`OPENROUTER_API_KEY` in the environment with a small credit balance (the testnet world's seeds are on the two flash tiers; a 200-event run should cost well under a dollar), and optionally `HL_PRIVATE_KEY` for a Hyperliquid testnet account funded from the faucet so orders fill. Without the venue key the world runs read-only: prices and funding are real, orders are rejected, and the wallet moves only through compute spend.
