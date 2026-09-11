@@ -18,6 +18,7 @@ class EventKind(StrEnum):
     FILL = "Fill"
     ORDER_REJECTED = "OrderRejected"
     VERDICT = "Verdict"
+    META_VERDICT = "MetaVerdict"
     PRODUCER_RETURN = "ProducerReturn"
     FORECAST_SETTLED = "ForecastSettled"
     REGISTERED = "Registered"
@@ -47,6 +48,15 @@ class Event:
         if not isinstance(self.payload, dict):
             raise TypeError("event payload must be a dict")
         object.__setattr__(self, "kind", EventKind(self.kind))
+        if self.kind is EventKind.META_VERDICT:
+            if any(not isinstance(self.payload.get(k), str) or not self.payload[k]
+                   for k in ("about", "by")):
+                raise ValueError("MetaVerdict requires about and by decision handles")
+            tier, score = self.payload.get("tier"), self.payload.get("score")
+            if type(tier) is not int or tier < 2:
+                raise ValueError("MetaVerdict tier must be an integer >= 2")
+            if isinstance(score, bool) or not isinstance(score, int | float) or not 0 <= score <= 1:
+                raise ValueError("MetaVerdict score must be in [0, 1]")
         object.__setattr__(self, "payload", _freeze(self.payload))
 
 

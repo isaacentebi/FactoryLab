@@ -104,6 +104,7 @@ def test_event_kinds_match_spec():
         "Fill",
         "OrderRejected",
         "Verdict",
+        "MetaVerdict",
         "ProducerReturn",
         "ForecastSettled",
         "Registered",
@@ -116,3 +117,28 @@ def test_event_kinds_match_spec():
     }
     with pytest.raises(ValueError):
         Event("a", "Unknown", 0, {}, "kernel")
+
+
+@pytest.mark.parametrize("override", [
+    {"about": ""}, {"about": 1}, {"by": None}, {"tier": 1}, {"tier": True},
+    {"tier": 2.0}, {"score": True}, {"score": -0.1}, {"score": 1.1},
+    {"score": float("nan")}, {"score": float("inf")},
+])
+def test_meta_verdict_rejects_invalid_payload(override):
+    with pytest.raises(ValueError):
+        Event("meta", "MetaVerdict", 0,
+              {"about": "decision-1", "by": "decision-2", "tier": 2, "score": 0.8,
+               **override}, "runtime")
+
+
+def test_meta_verdict_is_immutable_and_ledger_first(ledger):
+    bus = Bus(ledger)
+    event = Event("meta", "MetaVerdict", 0,
+                  {"about": "decision-1", "by": "decision-2", "tier": 3, "score": 0.8},
+                  "runtime")
+    seen = []
+    bus.subscribe("MetaVerdict", lambda e: seen.append((e, ledger.verify())))
+    bus.publish(event)
+    assert seen == [(event, True)]
+    with pytest.raises(TypeError):
+        event.payload["by"] = "assembly-id"

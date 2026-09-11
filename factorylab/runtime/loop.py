@@ -62,6 +62,7 @@ from factorylab.learners.base import BanditFeedback
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
 from factorylab.runtime.cards import parses, region_for
+from factorylab.runtime.cascade import CascadeGate, event_tier, release_threshold
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement import (
@@ -344,9 +345,10 @@ class MeasureWindow:
 
 @dataclass
 class PendingJudgement:
-    handle: str  # decision awaiting a verdict (producer) or conformity (evaluator)
+    handle: str  # decision awaiting a verdict (producer) or conformity (evaluator/meta)
     channel: str
     opened_at_event: int
+    tier: int = 1
 
 
 @dataclass
@@ -360,6 +362,7 @@ class RunStats:
     fills: int = 0
     producer_returns: int = 0
     verdicts: int = 0
+    meta_verdicts: dict[int, int] = field(default_factory=dict)
     conformities: int = 0
     censored: int = 0
     fast_settlements: int = 0
@@ -438,6 +441,8 @@ class Runtime:
         self.events_budget = events
         self.seed = manifest.seed if seed is None else seed
         self.rng = random.Random(self.seed)
+        self.cascade: dict[int, CascadeGate] = {}
+        self.cascade_windows: dict[str, list[str]] = {}  # representative -> other handles
         self.clock = SimClock(0)
         self.stats = RunStats()
         self.ev = manifest.evaluation
@@ -647,8 +652,16 @@ class Runtime:
         kinds = {k for a in self.assemblies.values() for k in a.spec.accepts}
         return sorted(kinds)
 
-    def _universe_for(self, kind: str) -> list[str]:
-        ids = sorted(a.spec.id for a in self.assemblies.values() if kind in a.spec.accepts)
+    def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
+        judged = None
+        if ev is not None and kind in ("Verdict", "MetaVerdict"):
+            handle = ev.payload["by"] if kind == "MetaVerdict" else ev.payload["evaluator_handle"]
+            judged = self.handle_to_assembly.get(handle)
+        ids = sorted(
+            a.spec.id
+            for a in self.assemblies.values()
+            if kind in a.spec.accepts and a.spec.id != judged
+        )
         return ids + [NOOP]
 
     def _all_router_states(self) -> list[RouterState]:
@@ -806,7 +819,11 @@ class Runtime:
                 }
                 for cid in sorted(self.priced)
             ],
-            "event_kinds": sorted(PRODUCER_KINDS | {"ProducerReturn", "Verdict"}),
+            "event_kinds": sorted(PRODUCER_KINDS | {"ProducerReturn", "Verdict", "MetaVerdict"}),
+            "meta_input": (
+                "A meta judges the released representative verdict. Its window describes "
+                "the arrivals it represents: count, mean score, min, max, and decision handles."
+            ),
             "a_return_may_include": self.A_RETURN_MAY_INCLUDE,
             "proposal_shapes": self.PROPOSAL_SHAPES,
         }
@@ -1185,8 +1202,60 @@ class Runtime:
 
     def _route(self, ev: Event) -> None:
         kind = str(ev.kind)
+        if ev.kind is EventKind.META_VERDICT:
+            self._deliver_meta_verdict(ev)
+        if ev.kind in (EventKind.VERDICT, EventKind.META_VERDICT):
+            ev = self._cascade_arrival(ev)
+            if ev is None:
+                return
         for state in list(self.routers.get(kind, [])):
             self._route_with(state, ev)
+
+    def _cascade_arrival(self, ev: Event) -> Event | None:
+        """Ledger every arrival and release before changing buffers or routing upward."""
+        tier = event_tier(ev)
+        gate = self.cascade.get(tier)
+        rng = random.Random()
+        rng.setstate(self.rng.getstate())
+        if gate is None:
+            gate = CascadeGate(
+                release_threshold(
+                    self.m.timing.min_ratio,
+                    self.m.timing.jitter_fraction,
+                    rng.random(),
+                )
+            )
+        next_gate, released = gate.add(ev)
+        self.ledger.append(
+            {
+                "kind": "cascade.arrival",
+                "tier": tier,
+                "event_id": ev.id,
+                "threshold": gate.threshold,
+                "ts": self.clock.now_ns,
+            }
+        )
+        if released is not None:
+            self.ledger.append(
+                {
+                    "kind": "cascade.release",
+                    "tier": tier,
+                    "event_id": ev.id,
+                    "window": _to_plain(released.payload["window"]),
+                    "ts": self.clock.now_ns,
+                }
+            )
+        self.rng.setstate(rng.getstate())
+        if next_gate is None:
+            self.cascade.pop(tier, None)
+        else:
+            self.cascade[tier] = next_gate
+        if released is not None:
+            # The meta judges the window as a distribution (essay II.IV.c); its score
+            # settles every handle in the window, so nobody gains by not being sampled.
+            handles = list(released.payload["window"]["handles"])
+            self.cascade_windows[handles[-1]] = handles[:-1]
+        return released
 
     def _route_with(self, state: RouterState, ev: Event) -> None:
         kind = str(ev.kind)
@@ -1194,10 +1263,21 @@ class Runtime:
         key = f"{state.learner.id}:{self.n}"
         if isinstance(state.learner, _KeyedLearner):
             state.learner.current_key = key
-        sample = state.router.route(kind, self._is_feasible, self.rng, mix=mix)
+        universe = self._universe_for(kind, ev)
+
+        def feasible(action_id: str) -> tuple[bool, str]:
+            if action_id not in universe:
+                return False, "self-judgement"
+            return self._is_feasible(action_id)
+
+        sample = state.router.route(kind, feasible, self.rng, mix=mix)
         self.stats.exclusions += len(sample.excluded)
         role = self._role_for_kind(kind)
         channel = {"producer": CH_VERDICT, "evaluator": CH_CONFORMITY, "meta": CH_FAST}[role]
+        if role == "meta" and any(
+            "MetaVerdict" in a.spec.accepts for a in self.assemblies.values()
+        ):
+            channel = CH_CONFORMITY
         chosen_role = self.assemblies[sample.chosen].spec.role if sample.chosen != NOOP else None
         if chosen_role == "antagonist":
             channel = CH_EXPOSURE
@@ -1246,7 +1326,7 @@ class Runtime:
     def _role_for_kind(kind: str) -> str:
         if kind == "ProducerReturn":
             return "evaluator"
-        if kind == "Verdict":
+        if kind in ("Verdict", "MetaVerdict"):
             return "meta"
         return "producer"
 
@@ -1632,67 +1712,143 @@ class Runtime:
 
     def _meta_step(self, ev: Event, handle: str, sample: Sample, deadline: int) -> None:
         payload = _to_plain(ev.payload)
-        evaluator_handle = payload["evaluator_handle"]
+        recursive = ev.kind is EventKind.META_VERDICT
+        about = payload["by"] if recursive else payload["evaluator_handle"]
+        tier = payload["tier"] + 1 if recursive else 2
+        channel = self.queue.get(handle).channel
+        definition = DEF_FAST if channel == CH_FAST else DEF_CONFORMITY
         if sample.chosen == NOOP:
             self.stats.noops += 1
             self.queue.settle(
                 handle,
-                channel=CH_FAST,
+                channel=channel,
                 score=0.0,
                 status=SettleStatus.INAPPLICABLE,
-                definition_version=DEF_FAST,
+                definition_version=definition,
                 sampling_ref=None,
             )
             return
         inputs = {
-            "verdict": {"verdict": payload["verdict"], "rationale": payload["rationale"]},
-            "producer_outputs": payload["producer_outputs"],
+            "verdict": {
+                "verdict": payload["score"] if recursive else payload["verdict"],
+                "rationale": payload.get("rationale", ""),
+            },
+            "producer_outputs": payload.get("producer_outputs", {}),
             "charter": self.charter.render(),
             "world": self._world_block(),
         }
+        if "window" in payload:
+            inputs["window"] = payload["window"]
+        if recursive:
+            inputs["meta_verdict"] = payload
         schema = {
             "type": "object",
-            "properties": {"conformity": {"type": "number"}, "rationale": {"type": "string"}},
+            "properties": {
+                "conformity": {"type": "number"},
+                "rationale": {"type": "string"},
+                "register": self._register_schema(),
+            },
             "required": ["conformity"],
         }
         req = self._request(
             handle,
-            "Assess an evaluator verdict for conformity with the charter.",
+            "Assess the released representative verdict for conformity with the charter, "
+            "using its window as context.",
             inputs,
             schema,
             deadline,
-            CH_FAST,
+            channel,
         )
         ret = self._invoke(sample.chosen, req, "meta")
+        self.handle_to_assembly[handle] = sample.chosen
+        self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
+            {"handle": handle, "outputs": ret.outputs, "verdict": None}
+        )
         self._apply_registrations(handle, ret)
         conformity = _as_unit(ret.outputs.get("conformity")) if ret.status == "ok" else None
-        self.queue.settle(
-            handle,
-            channel=CH_FAST,
-            score=1.0 if conformity is not None else 0.0,
-            status=SettleStatus.SETTLED,
-            definition_version=DEF_FAST,
-            sampling_ref=None,
-        )
-        self.stats.fast_settlements += 1
-        if conformity is None:
+        if channel == CH_FAST:
+            self.queue.settle(
+                handle,
+                channel=CH_FAST,
+                score=1.0 if conformity is not None else 0.0,
+                status=SettleStatus.SETTLED,
+                definition_version=DEF_FAST,
+                sampling_ref=None,
+            )
+            self.stats.fast_settlements += 1
+        else:
+            self.ledger.append(
+                {
+                    "kind": "meta.pending",
+                    "handle": handle,
+                    "tier": tier,
+                    "opened_at_event": self.n,
+                    "ts": self.clock.now_ns,
+                }
+            )
+            self.pending[handle] = PendingJudgement(handle, channel, self.n, tier)
+        if conformity is not None:
+            self._emit(
+                EventKind.META_VERDICT,
+                {
+                    "about": about,
+                    "tier": tier,
+                    "score": conformity,
+                    "by": handle,
+                    "rationale": str(ret.outputs.get("rationale", ""))[:2000],
+                },
+            )
+
+    def _deliver_meta_verdict(self, ev: Event) -> None:
+        """Only the first timely higher-tier judgement settles its original handle."""
+        payload = ev.payload
+        tier, about = payload["tier"], payload["about"]
+        self.stats.meta_verdicts[tier] = self.stats.meta_verdicts.get(tier, 0) + 1
+        pend = self.pending.get(about)
+        if (
+            pend is None
+            or pend.channel != CH_CONFORMITY
+            or tier <= pend.tier
+            or self.n - pend.opened_at_event > self.ev.verdict_timeout_events
+            or self.queue.get(about).status is not SettleStatus.PENDING
+        ):
             return
-        pend = self.pending.pop(evaluator_handle, None)
-        if pend is not None and self.queue.get(evaluator_handle).status is SettleStatus.PENDING:
+        self._settle_priced(
+            about,
+            channel=CH_CONFORMITY,
+            score=payload["score"],
+            definition_version=DEF_CONFORMITY,
+            sampling_ref=payload["by"],
+            cards=EVALUATOR_CARDS,
+        )
+        del self.pending[about]
+        self.stats.conformities += 1
+        for sibling in self.cascade_windows.pop(about, []):
+            sib = self.pending.get(sibling)
+            if (
+                sib is None
+                or self.n - sib.opened_at_event > self.ev.verdict_timeout_events
+                or self.queue.get(sibling).status is not SettleStatus.PENDING
+            ):
+                continue
             self._settle_priced(
-                evaluator_handle,
+                sibling,
                 channel=CH_CONFORMITY,
-                score=conformity,
+                score=payload["score"],
                 definition_version=DEF_CONFORMITY,
-                sampling_ref=handle,
+                sampling_ref=payload["by"],
                 cards=EVALUATOR_CARDS,
             )
+            del self.pending[sibling]
             self.stats.conformities += 1
-            owner = self.handle_to_assembly.get(evaluator_handle)
-            if owner is not None:
-                for entry in self.memory.get(owner, ()):
-                    if entry["handle"] == evaluator_handle:
-                        entry["verdict"] = conformity
+        self.stats.max_settlement_latency_events = max(
+            self.stats.max_settlement_latency_events, self.n - pend.opened_at_event
+        )
+        owner = self.handle_to_assembly.get(about)
+        if owner is not None:
+            for entry in self.memory.get(owner, ()):
+                if entry["handle"] == about:
+                    entry["verdict"] = payload["score"]
 
     # ---- registration
 
@@ -1709,7 +1865,7 @@ class Runtime:
             extra["known_tools"] = frozenset(self.tool_specs)
         accepted, rejected = parse_proposals(
             {**ret.outputs, "register": raw} if raw is not None else ret.outputs,
-            event_kinds=PRODUCER_KINDS | {"ProducerReturn", "Verdict"},
+            event_kinds=PRODUCER_KINDS | {"ProducerReturn", "Verdict", "MetaVerdict"},
             known_models=frozenset(self.prices.prices),
             known_assemblies=frozenset(self.assemblies),
             **extra,
@@ -2137,7 +2293,6 @@ class Runtime:
             if self.n - p.opened_at_event > self.ev.verdict_timeout_events
         ]
         for p in stale:
-            del self.pending[p.handle]
             if self.queue.get(p.handle).status is SettleStatus.PENDING:
                 self.queue.settle(
                     p.handle,
@@ -2148,6 +2303,7 @@ class Runtime:
                     sampling_ref=None,
                 )
                 self.stats.censored += 1
+            del self.pending[p.handle]
 
     def _deliver_returns(self) -> None:
         for state in self._all_router_states():
