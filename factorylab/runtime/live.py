@@ -173,5 +173,5 @@ def build_provider(manifest: Any) -> Any:
         from factorylab.world.openrouter import OpenRouterProvider
 
         config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
-        return OpenRouterProvider(reasoning_config=config)
+        return OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config())
     raise RuntimeError(f"unsupported provider set {sorted(providers)}")

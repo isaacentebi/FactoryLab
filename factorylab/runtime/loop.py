@@ -402,6 +402,16 @@ class Runtime:
         self.delivered_seen: dict[str, int] = {}
         self.snapshot_keys: dict[str, str] = {}  # decision handle -> snapshot key
 
+        # world memory (public facts) and assembly memory (private to each assembly)
+        self.recent_mids: dict[str, deque[dict[str, Any]]] = {}
+        self.realized_to_date = 0
+        self.fees_to_date = 0
+        self.funding_to_date = 0
+        self.memory: dict[str, deque[dict[str, Any]]] = {}
+        self.handle_to_assembly: dict[str, str] = {}
+        self.tool_specs: dict[str, dict[str, Any]] = {}  # tool id -> spec dict (world block)
+        self.tool_calls_made = 0
+
         # loop state
         self.pending: dict[str, PendingJudgement] = {}
         self.balance_at: list[int] = [self.wallet.balance]  # index = event number
@@ -492,8 +502,28 @@ class Runtime:
 
     def _world_block(self) -> dict[str, Any]:
         """Facts about the world any assembly may see. No rules, no goals, no private state."""
+        try:
+            acct = self.exchange.account()
+            account = {
+                "equity_usd": str(acct.equity_usd),
+                "cash_usd": str(acct.cash_usd),
+                "positions": [
+                    {"coin": p.coin, "size": str(p.size), "entry_px": str(p.entry_px)}
+                    for p in acct.positions
+                ],
+                "margin_used_usd": str(acct.margin_used_usd),
+            }
+        except RuntimeError:
+            account = {"equity_usd": str(money_to_usd(self.wallet.balance)), "positions": []}
+        account["realized_pnl_usd_to_date"] = str(money_to_usd(self.realized_to_date))
+        account["fees_usd_to_date"] = str(money_to_usd(self.fees_to_date))
+        account["funding_usd_to_date"] = str(money_to_usd(self.funding_to_date))
         return {
             "wallet_balance_usd": str(money_to_usd(self.wallet.balance)),
+            "charter_edition": self.charter.edition,
+            "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
+            "account": account,
+            "tools": list(self.tool_specs.values()),
             "novelty_reserve_remaining_usd": str(money_to_usd(self.reserve.remaining())),
             "models": [
                 {
@@ -619,6 +649,10 @@ class Runtime:
             self.bus.publish(ev)
             self.stats.events += 1
             self.events_log.append({"kind": str(ev.kind), "payload": _to_plain(ev.payload)})
+            if ev.kind is EventKind.MARKET_MID:
+                coin = str(ev.payload.get("coin"))
+                dq = self.recent_mids.setdefault(coin, deque(maxlen=20))
+                dq.append({"t_s": ev.ts_ns // 1_000_000_000, "mid": str(ev.payload.get("mid"))})
 
             self.wallet.drip(self.clock.now_ns)
             self._manage_reserve_window()
@@ -694,13 +728,16 @@ class Runtime:
                 return
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
-                delta = _usd_to_micro(we.payload["realized_usd"]) - _usd_to_micro(
-                    we.payload["fee_usd"]
-                )
+                realized = _usd_to_micro(we.payload["realized_usd"])
+                fee = _usd_to_micro(we.payload["fee_usd"])
+                self.realized_to_date += realized
+                self.fees_to_date += fee
+                delta = realized - fee
                 if delta:
                     self.wallet.settle(delta, f"fill:{we.payload['order_id']}", "exchange_pnl")
             elif we.kind is WorldEventKind.FUNDING:
                 paid = _usd_to_micro(we.payload["paid_usd"])
+                self.funding_to_date -= paid
                 if paid:
                     self.wallet.settle(-paid, f"funding:{we.payload['coin']}:{we.ts_ns}", "funding")
             self.internal.append(self._kernel_event(we))
@@ -860,7 +897,12 @@ class Runtime:
                 }
             payload["mids"] = {c: str(m) for c, m in self.exchange.mids().items()}
         description = f"Respond to event {ev.kind} on {ev.source}."
-        inputs = {"kind": str(ev.kind), "payload": payload, "world": self._world_block()}
+        inputs = {
+            "kind": str(ev.kind),
+            "payload": payload,
+            "world": self._world_block(),
+            "your_recent_returns": list(self.memory.get(sample.chosen, ())),
+        }
         if sample.chosen == NOOP:
             self.stats.noops += 1
             ret = Return(handle, {"action": "noop"}, 0, "ok")
@@ -877,6 +919,10 @@ class Runtime:
             ret = self._invoke(sample.chosen, req, "producer")
             self._execute_outputs(ret)
             self._apply_registrations(handle, ret)
+            self.handle_to_assembly[handle] = sample.chosen
+            self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
+                {"handle": handle, "outputs": ret.outputs, "verdict": None}
+            )
         self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
         self.stats.producer_returns += 1
         self._emit(
@@ -926,6 +972,7 @@ class Runtime:
                 "q": 0.4,
             },
             "world": self._world_block(),
+            "your_recent_returns": list(self.memory.get(sample.chosen, ())),
         }
         schema = {
             "type": "object",
@@ -949,6 +996,10 @@ class Runtime:
         )
         ret = self._invoke(sample.chosen, req, "evaluator")
         self._apply_registrations(handle, ret)
+        self.handle_to_assembly[handle] = sample.chosen
+        self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
+            {"handle": handle, "outputs": ret.outputs, "verdict": None}
+        )
         verdict = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
         if verdict is None:
             # a malformed verdict is objectively non-conforming; the producer stays unjudged
@@ -976,6 +1027,11 @@ class Runtime:
             self.stats.max_settlement_latency_events = max(
                 self.stats.max_settlement_latency_events, self.n - pend.opened_at_event
             )
+            owner = self.handle_to_assembly.get(about)
+            if owner is not None:
+                for entry in self.memory.get(owner, ()):
+                    if entry["handle"] == about:
+                        entry["verdict"] = verdict
         self._open_forecasts(handle, sample.chosen, about, ret.outputs.get("forecasts"))
         self.pending[handle] = PendingJudgement(handle, CH_CONFORMITY, self.n)
         self._emit(
@@ -1085,6 +1141,11 @@ class Runtime:
                 sampling_ref=handle,
             )
             self.stats.conformities += 1
+            owner = self.handle_to_assembly.get(evaluator_handle)
+            if owner is not None:
+                for entry in self.memory.get(owner, ()):
+                    if entry["handle"] == evaluator_handle:
+                        entry["verdict"] = conformity
 
     # ---- registration
 

@@ -41,12 +41,14 @@ class OpenRouterProvider:
         app_name: str = "factorylab",
         reasoning_models: Iterable[str] = (),
         reasoning_config: Mapping[str, Mapping[str, Any]] | None = None,
+        web_config: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self._key_env = key_env
         self._base_url = base_url.rstrip("/")
         self._app_name = app_name
         self._reasoning_models = frozenset(reasoning_models)
         self._reasoning_config = {k: dict(v) for k, v in (reasoning_config or {}).items()}
+        self._web_config = {k: dict(v) for k, v in (web_config or {}).items()}
         self._transport = transport if transport is not None else self._default_transport
 
     def _redact(self, body: str) -> str:
@@ -104,9 +106,12 @@ class OpenRouterProvider:
             "messages": [{"role": "system", "content": req.system}, *req.messages],
             "max_tokens": req.max_tokens,
         }
-        if req.model_id in self._reasoning_config:
-            payload["reasoning"] = dict(self._reasoning_config[req.model_id])
-        elif req.effort in {"low", "medium", "high"} and req.model_id in self._reasoning_models:
+        base_id = req.model_id[:-7] if req.model_id.endswith(":online") else req.model_id
+        if req.model_id in self._web_config:
+            payload["plugins"] = [{"id": "web", **self._web_config[req.model_id]}]
+        if base_id in self._reasoning_config:
+            payload["reasoning"] = dict(self._reasoning_config[base_id])
+        elif req.effort in {"low", "medium", "high"} and base_id in self._reasoning_models:
             payload["reasoning"] = {"effort": req.effort}
         response = self._request("POST", "/chat/completions", payload)
         choice = response["choices"][0]

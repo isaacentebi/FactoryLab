@@ -71,3 +71,4 @@ class Return:
     children: tuple[Request, ...] = field(default_factory=tuple)
     served_by: str | None = None
     stop_reason: str | None = None
+    tool_calls: tuple[dict[str, Any], ...] = ()
