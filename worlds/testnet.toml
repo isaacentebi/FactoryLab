@@ -1,0 +1,59 @@
+# The testnet world: live Hyperliquid testnet, real model providers at real prices,
+# a fake-USD wallet. Rehearsal only. No real money moves.
+name = "testnet"
+seed = 2
+initial_balance_usd = "100"
+tick_interval = "60s"
+
+[drip]
+amount_usd = "10"
+period = "7d"
+start = 0
+end = "84d"
+
+[exchange]
+kind = "hyperliquid"
+mainnet = false
+coins = ["BTC", "ETH"]
+start_cash_usd = "100"
+
+[[models]]
+id = "claude-opus-5"
+provider = "anthropic"
+input_usd_per_mtok = "5"
+output_usd_per_mtok = "25"
+
+[[models]]
+id = "claude-sonnet-5"
+provider = "anthropic"
+input_usd_per_mtok = "2"
+output_usd_per_mtok = "10"
+
+[[models]]
+id = "claude-haiku-4-5"
+provider = "anthropic"
+input_usd_per_mtok = "1"
+output_usd_per_mtok = "5"
+
+[[assemblies]]
+id = "seed-observer"
+model_id = "claude-haiku-4-5"
+accepts = ["MarketMid", "Funding"]
+max_tokens = 256
+
+[[assemblies]]
+id = "seed-decider"
+model_id = "claude-opus-5"
+accepts = ["Tick", "Fill"]
+max_tokens = 512
+
+[novelty]
+share = 0.1
+window = "1d"
+
+[timing]
+min_ratio = 3
+jitter_fraction = 0.2
+
+[termination]
+balance_floor_usd = "0"
