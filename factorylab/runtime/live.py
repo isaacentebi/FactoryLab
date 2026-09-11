@@ -167,8 +167,30 @@ def build_provider(manifest: Any) -> Any:
     providers = {t.provider for t in manifest.models}
     if providers == {"fake"}:
         return None
+    from factorylab.world.market import DISCOVERY_URL, MultiProvider, X402Provider
+
+    market = X402Provider(discovery_url=getattr(
+        getattr(manifest, "treasury", None), "discovery_url", DISCOVERY_URL,
+    ))
+    if "x402" in providers:
+        if not providers <= {"venice", "openrouter", "x402"}:
+            raise RuntimeError(f"unsupported provider set {sorted(providers)}")
+        if not os.environ.get("RESERVE_PRIVATE_KEY"):
+            raise RuntimeError("x402 needs RESERVE_PRIVATE_KEY")
+        from factorylab.world.openrouter import OpenRouterProvider
+        from factorylab.world.venice import VeniceProvider
+
+        if "openrouter" in providers and not os.environ.get("OPENROUTER_API_KEY"):
+            raise RuntimeError("OPENROUTER_API_KEY is not set")
+        if any(not t.id.startswith("x402:") for t in manifest.models if t.provider == "x402"):
+            raise RuntimeError("x402 model ids must start with x402:")
+        config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
+        return MultiProvider(
+            OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config()),
+            VeniceProvider(reasoning_config=config, web_config=manifest.web_config()), market,
+        )
     if "venice" in providers:
-        from factorylab.world.venice import VeniceAndOpenRouter, VeniceProvider
+        from factorylab.world.venice import VeniceProvider
 
         if not (os.environ.get("VENICE_API_KEY") or os.environ.get("RESERVE_PRIVATE_KEY")):
             raise RuntimeError("Venice needs VENICE_API_KEY or RESERVE_PRIVATE_KEY")
@@ -184,14 +206,18 @@ def build_provider(manifest: Any) -> Any:
             raise RuntimeError("OPENROUTER_API_KEY is not set")
         from factorylab.world.openrouter import OpenRouterProvider
 
-        return VeniceAndOpenRouter(venice, OpenRouterProvider(
+        return MultiProvider(OpenRouterProvider(
             reasoning_config=config, web_config=manifest.web_config(),
-        ))
+        ), venice, market)
     if "openrouter" in providers:
         if not os.environ.get("OPENROUTER_API_KEY"):
             raise RuntimeError("OPENROUTER_API_KEY is not set; the testnet world needs it")
         from factorylab.world.openrouter import OpenRouterProvider
+        from factorylab.world.venice import VeniceProvider
 
         config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
-        return OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config())
+        return MultiProvider(
+            OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config()),
+            VeniceProvider(reasoning_config=config, web_config=manifest.web_config()), market,
+        )
     raise RuntimeError(f"unsupported provider set {sorted(providers)}")

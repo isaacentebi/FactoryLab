@@ -57,10 +57,11 @@ def test_every_producer_decision_is_judged_or_censored() -> None:
     assert judged + s["outstanding_decisions"] >= st["producer_returns"]
 
 
-def test_scripted_world_starves_but_cannot_die_from_compute_alone() -> None:
+def test_scripted_world_compute_starvation_is_final_under_phase4() -> None:
     m = load_manifest("scripted")
-    s = run_world(m, events=600, seed=2, initial_balance_micro=200_000, drip=False)
-    assert s["terminated"] is False and 0 < s["wallet_balance_micro"] < 200_000
+    s = run_world(m, events=600, seed=2, initial_balance_micro=1, drip=False)
+    assert s["terminated"] and s["termination_reason"] == "insolvency:compute"
+    assert s["seal_key_released"] and s["wallet_balance_micro"] == 1
     assert s["stats"]["exclusions"] > 0
 
 
@@ -829,3 +830,193 @@ def test_resting_limit_fill_and_reduce_only_tool_keep_original_return_attributio
     assert runtime.consequences.payoff("limit").y == 1
     assert runtime.consequences.payoff("reduce").y == 0
     assert runtime.consequences.table.lots == ()
+
+
+@pytest.fixture
+def market_http(monkeypatch):
+    from urllib import request
+
+    from tests.world.test_market import SellerHTTP
+
+    monkeypatch.delenv("RESERVE_PRIVATE_KEY", raising=False)
+    monkeypatch.setattr(request.OpenerDirector, "open", lambda *a, **k: pytest.fail("network"))
+    return SellerHTTP(balance=100_000)
+
+
+def _market_runtime(market_http, *, provider=None, events=10, treasury=None, seed_price="0"):
+    from factorylab.runtime.worlds import manifest_from_dict
+    from factorylab.world.market import X402Provider
+    from tests.world.test_market import TEST_KEY
+
+    manifest = manifest_from_dict({
+        "name": "market-scripted", "seed": 1, "initial_balance_usd": "0.1",
+        "models": [{"id": "fake-model", "provider": "fake",
+                    "input_usd_per_mtok": seed_price, "output_usd_per_mtok": seed_price}],
+        "assemblies": [{"id": "seed-market", "model_id": "fake-model", "accepts": ["Tick"]}],
+        "evaluation": {"trial_amount_usd": "0.001"},
+        "novelty": {"share": 0.5},
+        "treasury": treasury or {"insolvency_events": 3},
+    })
+    return Runtime(
+        manifest, events=events, seed=1, initial_balance_micro=None, ledger_path=None,
+        drip=False, router_gamma=0.2, provider=provider or ScriptedProvider(),
+        market=X402Provider(private_key=TEST_KEY, transport=market_http),
+    )
+
+
+def test_population_registers_x402_seller_through_scripted_returns(market_http):
+    from tests.world.test_market import MODEL
+
+    class Proposer(ScriptedProvider):
+        def _produce(self, description, inputs):
+            self._producer_calls += 1
+            if self._producer_calls == 1:
+                return {"action": "hold", "register": [{"kind": "model", "openrouter_id": MODEL}]}
+            if self._producer_calls == 2:
+                return {"action": "hold", "register": [{
+                    "kind": "assembly", "id": "market-buyer", "model_id": MODEL,
+                    "system_prompt": "Return a JSON action.", "accepts": ["Tick"],
+                    "max_tokens": 16,
+                }]}
+            return {"action": "hold"}
+
+    runtime = _market_runtime(market_http, provider=Proposer(), events=20)
+    summary = runtime.run()
+    assert summary["stats"]["registrations_accepted"] == 2
+    assert runtime.prices.price(MODEL).per_request_micro == 1734
+    assert dict(runtime.registry.get("model:" + MODEL).price.units) == {
+        "input_token": 0, "output_token": 0, "request": 1734,
+    }
+    assert runtime._is_feasible("market-buyer") == (True, "")
+    assert runtime._world_block()["sellers"][0]["per_request_micro"] == 1734
+    assert market_http.payments
+    items = _diary(runtime)
+    assert any(i["kind"] == "event" and i["event"]["kind"] == "Registered"
+               and i["event"]["payload"]["id"] == MODEL
+               for i in items)
+    payment = next(i for i in items if i["kind"] == "x402.result")
+    commit = next(i for i in items if i["kind"] == "wallet.commit"
+                  and i["handle"] == payment["handle"])
+    assert payment["seq"] < commit["seq"]
+    invocation = next(i for i in items if i["kind"] == "invocation"
+                      and i["handle"] == payment["handle"])
+    assert commit["seq"] < invocation["seq"] and invocation["cost"] == 1734
+    assert summary["wallet_conservation"] and summary["ledger_verify"]
+
+
+def _register_test_seller(runtime):
+    from factorylab.cortex.registration import AssemblyProposal, ModelProposal
+    from tests.world.test_market import MODEL
+
+    runtime._manage_reserve_window()
+    runtime._register("proposal", ModelProposal(MODEL))
+    runtime._register("proposal", AssemblyProposal(
+        "market-buyer", "producer", MODEL, "Return JSON.", ("Tick",), 16, "low",
+    ))
+
+
+def test_x402_feasibility_uses_one_fixed_request_and_on_chain_reserve(market_http):
+    runtime = _market_runtime(market_http)
+    _register_test_seller(runtime)
+    runtime.wallet.settle(1734 - runtime.wallet.balance, "test", "exchange_pnl")
+    market_http.balance = 1734
+    assert runtime._is_feasible("market-buyer") == (True, "")
+    market_http.balance = 1733
+    assert not runtime._is_feasible("market-buyer")[0]
+    assert not market_http.payments  # registration and feasibility never authorize payments
+
+
+def test_market_discovery_tool_is_priced_and_debited_before_return(market_http, monkeypatch):
+    from factorylab.world.x402 import HTTPResponse
+    from tests.world.test_market import resource
+
+    runtime = _market_runtime(market_http)
+    calls = []
+
+    def fake(method, url, payload, headers):
+        calls.append(url)
+        return HTTPResponse(200, {"items": [resource("https://seller.test/chat")],
+                                 "pagination": {"offset": 0, "limit": 100, "total": 1}})
+
+    monkeypatch.setattr(runtime.market, "_transport", fake)
+    initial = runtime.wallet.balance
+    result, cost = runtime._run_tool("seed-market", "discovery", {
+        "tool": "market.discover", "args": {"url_substring": "chat"},
+    })
+    assert cost == runtime.m.tools.population_tool_micro_per_call
+    assert runtime.wallet.balance == initial - cost
+    assert result["sellers"][0]["resource"] == "https://seller.test/chat"
+    assert runtime.tool_specs["market.discover"]["kind"] == "market" and len(calls) == 1
+
+
+def test_insolvency_terminates_scripted_world_when_seller_demands_unaffordable_payment(market_http):
+    from factorylab.world.x402 import InsufficientReserve
+
+    class Unaffordable(ScriptedProvider):
+        def complete(self, req):
+            raise InsufficientReserve("Reserve cannot cover the quoted Base USDC payment")
+
+    runtime = _market_runtime(market_http, provider=Unaffordable(), events=200)
+    _register_test_seller(runtime)
+    # The reserve can be drained after feasibility, between the read and the payment quote.
+    def demand(req, *, record=None, quoted=None):
+        raise InsufficientReserve("Reserve cannot cover the quoted Base USDC payment")
+
+    runtime.market.complete = demand
+    # A single x402 route removes seeded alternatives while preserving ordinary router sampling.
+    del runtime.assemblies["seed-market"]
+    runtime._build_router("Tick", "exp3", 0.2)
+    result = runtime.run()
+    assert result["terminated"] and result["termination_reason"] == "insolvency:compute"
+    assert result["seal_key_released"] and result["wallet_balance_micro"] > 0
+    assert not market_http.payments
+    events = [i for i in _diary(runtime) if i["kind"] == "treasury.insolvency"]
+    assert [e["consecutive_events"] for e in events[-3:]] == [1, 2, 3]
+
+
+def test_insolvency_no_affordable_provider_counts_once_per_routed_event(market_http):
+    runtime = _market_runtime(market_http, seed_price="1000")
+    result = runtime.run()
+    assert result["termination_reason"] == "insolvency:compute"
+    assert result["seal_key_released"] and result["wallet_balance_micro"] == 100_000
+    items = _diary(runtime)
+    counted = [i for i in items if i["kind"] == "treasury.insolvency"]
+    assert [i["consecutive_events"] for i in counted] == [1, 2, 3]
+    assert len({i["event_id"] for i in counted}) == 3
+    assert len([i for i in items if i["kind"] == "event"
+                and i["event"]["kind"] == "Terminated"]) == 1
+
+
+def test_insolvency_streak_reset_noop_and_unrouted_events(market_http):
+    runtime = _market_runtime(market_http)
+    event = Event("routed", EventKind.TICK, 1, {}, "test")
+    runtime._compute_routed = True
+    runtime._compute_unaffordable = True
+    runtime._record_insolvency_event(event)
+    assert runtime.insolvency_count == 1
+    runtime._compute_routed = False
+    runtime._record_insolvency_event(Event("unrouted", EventKind.REGISTERED, 2, {}, "test"))
+    assert runtime.insolvency_count == 1
+    # Affordable NOOP choices are not insolvency; no invocation is needed to reset.
+    runtime._compute_routed = True
+    runtime._compute_unaffordable = False
+    runtime._record_insolvency_event(event)
+    assert runtime.insolvency_count == 0
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "20"])
+def test_treasury_insolvency_threshold_must_be_positive_integer(market_http, value):
+    with pytest.raises(ValueError, match="insolvency_events"):
+        _market_runtime(market_http, treasury={"insolvency_events": value})
+
+
+def test_treasury_defaults_are_hashed_and_can_select_an_index(market_http):
+    from factorylab.runtime.worlds import TreasurySpec
+    from factorylab.world.market import DISCOVERY_URL
+
+    assert TreasurySpec().insolvency_events == 20 and TreasurySpec().discovery_url == DISCOVERY_URL
+    runtime = _market_runtime(market_http, treasury={
+        "insolvency_events": 5, "discovery_url": "https://index.test/resources",
+    })
+    assert runtime.m.treasury.insolvency_events == 5
+    assert runtime.m.manifest_hash() != replace(runtime.m, treasury=TreasurySpec()).manifest_hash()

@@ -80,8 +80,10 @@ from factorylab.settlement.consequence import FillCursor, ReturnConsequences
 from factorylab.world.clock import ClockSource, DripSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange, HyperliquidExchange, Order
+from factorylab.world.market import MultiProvider, X402MeteredModel, X402Provider
 from factorylab.world.metering import Meter, MeteredModel
 from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
+from factorylab.world.x402 import X402Error
 
 try:  # phase 3 packages; hard imports once every workstream is merged
     from factorylab.world.venue_tools import VenueTools
@@ -429,6 +431,7 @@ class Runtime:
         drip: bool,
         router_gamma: float,
         provider: Any | None = None,
+        market: X402Provider | None = None,
         exchange: Any | None = None,
         clock_source: Any | None = None,
         reconcile_every: int = 10,
@@ -518,6 +521,12 @@ class Runtime:
         if provider is None:
             provider = build_provider(manifest)
         self.provider = provider if provider is not None else ScriptedProvider()
+        self.market = market if market is not None else (
+            self.provider.x402 if isinstance(self.provider, MultiProvider) else
+            self.provider if isinstance(self.provider, X402Provider) else
+            X402Provider(discovery_url=manifest.treasury.discovery_url)
+        )
+        self.sellers: dict[str, dict] = {}
         self.catalogue: dict[str, TokenPrice] | None = None
         if hasattr(self.provider, "catalogue"):
             try:
@@ -592,6 +601,21 @@ class Runtime:
             "price_micro_per_call": 0,
             "kind": "treasury",
         }
+        self.tool_specs["market.discover"] = {
+            "id": "market.discover",
+            "description": "Discover compute sellers with their resource URLs and listed prices.",
+            "args_schema": {
+                "type": "object",
+                "properties": {
+                    "url_substring": {"type": "string"},
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+                },
+                "additionalProperties": False,
+            },
+            "price_micro_per_call": manifest.tools.population_tool_micro_per_call,
+            "kind": "market",
+        }
         self.tool_runner = ToolRunner()
         self.charter_book = CharterBook(self.ledger, self.charter)
         self.pending_votes: list[Any] = []  # committees awaiting tally
@@ -621,12 +645,20 @@ class Runtime:
         self.internal: deque[Event] = deque()
         self.n = 0
         self.emitted = 0
+        self.insolvency_count = 0
+        self._compute_routed = False
+        self._compute_unaffordable = False
 
     # ---- setup helpers
 
     def _register_seed_contracts(self) -> None:
         for tier in self.m.models:
             price = self.prices.price(tier.id)
+            if tier.id.startswith("x402:"):
+                price, seller = self.market.registration_price(tier.id)
+                self.registry.register(_model_contract(tier.id, price, "x402"))
+                self._record_seller(tier.id, price, seller)
+                continue
             self.registry.register(_model_contract(tier.id, price, tier.provider))
         for seed in self.m.assemblies:
             self.registry.register(
@@ -647,7 +679,13 @@ class Runtime:
         )
 
     def _instantiate(self, spec: AssemblySpec) -> Assembly:
-        asm = Assembly(spec, MeteredModel(self.provider, self.prices, self.meter))
+        model = MeteredModel(self.provider, self.prices, self.meter)
+        if spec.model_id.startswith("x402:"):
+            model = X402MeteredModel(
+                self.market, self.prices, self.meter,
+                record=self._record_market, on_unaffordable=self._compute_failure,
+            )
+        asm = Assembly(spec, model)
         self.assemblies[spec.id] = asm
         return asm
 
@@ -709,7 +747,8 @@ class Runtime:
         "model": {
             "kind": "model",
             "openrouter_id": "vendor/model-id from the catalogue, optionally @none|@low|@high|@max "
-            "to register that model at a reasoning level (same token prices, different usage)",
+            "for reasoning; venice:<id> for Venice; x402:<seller_url>#<model> for a seller "
+            "priced per request",
         },
         "assembly": {
             "kind": "assembly",
@@ -793,9 +832,11 @@ class Runtime:
                     "id": mid,
                     "usd_per_million_input_tokens": _price_str(p.input_micro),
                     "usd_per_million_output_tokens": _price_str(p.output_micro),
+                    "per_request_micro": p.per_request_micro,
                 }
                 for mid, p in self.prices.prices.items()
             ],
+            "sellers": [{"model_id": mid, **seller} for mid, seller in self.sellers.items()],
             "assemblies": [
                 {
                     "id": a.spec.id,
@@ -870,9 +911,21 @@ class Runtime:
             ({"role": "user", "content": ""},),
             asm.spec.max_tokens,
         )
-        ceiling = asm.model.ceiling(probe) * 2
+        is_market = asm.spec.model_id.startswith("x402:")
+        ceiling = asm.model.ceiling(probe) * (1 if is_market else 2)
         if ceiling > self.wallet.available:
-            return False, f"wallet: ceiling {ceiling} exceeds available {self.wallet.available}"
+            return False, f"compute: ceiling {ceiling} exceeds wallet {self.wallet.available}"
+        try:
+            if is_market:
+                return self.market.affordable(asm.spec.model_id, ceiling)
+            if hasattr(self.provider, "affordable"):
+                return self.provider.affordable(asm.spec.model_id, ceiling)
+            if hasattr(self.provider, "balance_micro"):
+                balance = self.provider.balance_micro()
+                if balance is not None and balance < ceiling:
+                    return False, f"compute: provider balance {balance} below ceiling {ceiling}"
+        except Exception:
+            return False, "provider: balance unavailable"
         return True, ""
 
     def _mix_with_standing(self, dist: dict[str, float]) -> dict[str, float]:
@@ -957,7 +1010,10 @@ class Runtime:
             if self._check_termination():
                 break
 
+            self._compute_routed = False
+            self._compute_unaffordable = False
             self._route(ev)
+            self._record_insolvency_event(ev)
             if self._check_termination():
                 break
 
@@ -993,11 +1049,39 @@ class Runtime:
 
     def _check_termination(self) -> bool:
         reason = self.termination.check(self.wallet, self.clock.now_ns)
+        if reason is None and self.insolvency_count >= self.m.treasury.insolvency_events:
+            reason = "insolvency:compute"
         if reason is None:
             return False
         self._settle_due_forecasts()
         self.termination.kill(reason)
         return True
+
+    def _record_market(self, item: dict) -> None:
+        """Payment and pricing evidence is ledgered before dependent runtime state changes."""
+        self.ledger.append({**item, "ts": self.clock.now_ns})
+
+    def _record_seller(self, model_id: str, price: TokenPrice, seller: dict) -> None:
+        """Registered seller metadata and the provider ceiling follow durable pricing evidence."""
+        self._record_market({"kind": "market.registered", "model_id": model_id, **seller})
+        self.market.register(model_id, price.per_request_micro)
+        self.prices.register(model_id, price)
+        self.sellers[model_id] = seller
+
+    def _compute_failure(self, handle: str) -> None:
+        """A reserve shortfall counts once in the enclosing routed event, after its ledger item."""
+        self._record_market({"kind": "compute.unaffordable", "handle": handle})
+        self._compute_unaffordable = True
+
+    def _record_insolvency_event(self, ev: Event) -> None:
+        """Routed affordable events reset the streak; events without decisions leave it alone."""
+        if not self._compute_routed:
+            return
+        count = self.insolvency_count + 1 if self._compute_unaffordable else 0
+        self._record_market({"kind": "treasury.insolvency", "event_id": ev.id,
+                             "consecutive_events": count,
+                             "unaffordable": self._compute_unaffordable})
+        self.insolvency_count = count
 
     def _manage_reserve_window(self) -> None:
         if (
@@ -1292,6 +1376,15 @@ class Runtime:
             return self._is_feasible(action_id)
 
         sample = state.router.route(kind, feasible, self.rng, mix=mix)
+        candidates = [a for a in universe if a != NOOP]
+        excluded = dict(sample.excluded)
+        unaffordable = bool(candidates) and all(
+            excluded.get(a, "").startswith("compute:") for a in candidates
+        )
+        self._record_market({"kind": "compute.route", "event_id": ev.id,
+                             "router": state.learner.id, "unaffordable": unaffordable})
+        self._compute_routed = True
+        self._compute_unaffordable |= unaffordable
         self.stats.exclusions += len(sample.excluded)
         role = self._role_for_kind(kind)
         channel = {"producer": CH_VERDICT, "evaluator": CH_CONFORMITY, "meta": CH_FAST}[role]
@@ -1367,6 +1460,11 @@ class Runtime:
         def execute() -> dict:
             if spec["kind"] == "venue":
                 return self.venue_tools.call(tool_id, args)
+            if spec["kind"] == "market":
+                return {"sellers": self.market.discover(
+                    url_substring=args.get("url_substring"), query=args.get("query"),
+                    limit=args.get("limit", 20),
+                )}
             if spec["kind"] == "treasury":
                 direction = args.get("direction")
                 usd = args.get("usd")
@@ -1411,6 +1509,7 @@ class Runtime:
     def _invoke(self, action_id: str, req: Request, role: str) -> Return:
         asm = self.assemblies[action_id]
         ret = asm.invoke(req)
+        self._check_compute_return(req.handle, ret)
         if ret.status == "ok" and ret.tool_calls:
             results = []
             tool_cost = 0
@@ -1450,6 +1549,7 @@ class Runtime:
                 resource_liability=req.resource_liability,
             )
             second = asm.invoke(follow)
+            self._check_compute_return(req.handle, second)
             if second.tool_calls:
                 self.ledger.append(
                     {"kind": "tool.calls_ignored", "handle": req.handle, "ts": self.clock.now_ns}
@@ -1490,6 +1590,15 @@ class Runtime:
             }
         )
         return ret
+
+    def _check_compute_return(self, handle: str, ret: Return) -> None:
+        """Assembly-wrapped affordability failures join the enclosing event's insolvency count."""
+        reason = str(ret.outputs.get("reason", ""))
+        if ret.status == "failed" and (
+            reason == "ceiling exceeds request cost_ceiling"
+            or reason.startswith(("InsufficientReserve:", "infeasible:"))
+        ):
+            self._compute_failure(handle)
 
     def _request(
         self,
@@ -1895,6 +2004,26 @@ class Runtime:
         if isinstance(raw, list):
             amendments = [x for x in raw if isinstance(x, dict) and x.get("kind") == "amendment"]
             raw = [x for x in raw if not (isinstance(x, dict) and x.get("kind") == "amendment")]
+        # Keep the shared parser's proposal cap and ordering while adapting its legacy
+        # vendor/model field validation to opaque seller URLs and Venice model ids.
+        namespaced = {}
+        if isinstance(raw, list):
+            original_ids = {
+                item.get("openrouter_id") for item in raw if isinstance(item, dict)
+                and isinstance(item.get("openrouter_id"), str)
+            }
+            adapted = []
+            for index, item in enumerate(raw):
+                mid = item.get("openrouter_id") if isinstance(item, dict) else None
+                if (isinstance(mid, str) and item.get("kind") == "model"
+                        and mid.startswith(("x402:", "venice:"))):
+                    alias = f"namespace/{index}"
+                    while alias in original_ids:
+                        alias += "-"
+                    namespaced[alias] = mid
+                    item = {**item, "openrouter_id": alias}
+                adapted.append(item)
+            raw = adapted
         extra: dict[str, Any] = {}
         if "known_tools" in inspect.signature(parse_proposals).parameters:
             extra["known_tools"] = frozenset(self.tool_specs)
@@ -1905,6 +2034,11 @@ class Runtime:
             known_assemblies=frozenset(self.assemblies),
             **extra,
         )
+        accepted = [
+            ModelProposal(namespaced[prop.openrouter_id])
+            if isinstance(prop, ModelProposal) and prop.openrouter_id in namespaced else prop
+            for prop in accepted
+        ]
         for item in amendments:
             try:
                 self._propose_amendment(handle, item)
@@ -1934,7 +2068,7 @@ class Runtime:
             try:
                 self._register(handle, prop)
                 self.stats.registrations_accepted += 1
-            except (Infeasible, PermissionError, ValueError, KeyError) as exc:
+            except (Infeasible, PermissionError, ValueError, KeyError, X402Error) as exc:
                 self.stats.registrations_rejected += 1
                 self.ledger.append(
                     {
@@ -1973,7 +2107,22 @@ class Runtime:
             self._emit(EventKind.REGISTERED, {"kind": "tool", "id": prop.id, "by": handle})
             return
         if isinstance(prop, ModelProposal):
+            if prop.openrouter_id.startswith("x402:"):
+                if prop.openrouter_id in self.prices.prices:
+                    raise ValueError("model already registered")
+                price, seller = self.market.registration_price(prop.openrouter_id)
+                contract = _model_contract(prop.openrouter_id, price, "x402")
+                res = self.reserve.reserve_for(contract, amount)
+                self.registry.register(contract, by_handle=handle, reservation=res)
+                self._record_seller(prop.openrouter_id, price, seller)
+                self._emit(EventKind.REGISTERED, {
+                    "kind": "model", "id": prop.openrouter_id, "by": handle,
+                    "network": seller["network"], "per_request_micro": price.per_request_micro,
+                })
+                return
             base, _, effort = prop.openrouter_id.partition("@")
+            if not base or len(base) > 4096 or any(c.isspace() for c in base):
+                raise ValueError("invalid model id")
             if effort and effort not in (
                 "none",
                 "minimal",
@@ -1990,7 +2139,8 @@ class Runtime:
                 price = self.catalogue[base]
             else:
                 raise ValueError("no catalogue entry for that model in this world")
-            contract = _model_contract(prop.openrouter_id, price, "openrouter")
+            provider = "venice" if base.startswith("venice:") else "openrouter"
+            contract = _model_contract(prop.openrouter_id, price, provider)
             res = self.reserve.reserve_for(contract, amount)
             self.registry.register(contract, by_handle=handle, reservation=res)
             self.prices.register(prop.openrouter_id, price)
@@ -2467,11 +2617,15 @@ def _model_contract(model_id: str, price: TokenPrice, provider: str) -> Contract
         id=f"model:{model_id}",
         version=1,
         kind="model",
-        description=f"{provider} model {model_id}",
+        description=f"{provider} model {model_id}" + (
+            " on eip155:8453 (USDC)" if provider == "x402" else ""
+        ),
         input_schema={"type": "object"},
         output_schema={"type": "object"},
         price=PriceSpec(
-            {"input_token": int(price.input_micro), "output_token": int(price.output_micro)}
+            {"input_token": int(price.input_micro), "output_token": int(price.output_micro),
+             **({"request": price.per_request_micro}
+                if provider == "x402" or price.per_request_micro else {})}
         ),
         permissions=frozenset({"model.complete"}),
         resource_bounds=ResourceBounds(),
@@ -2503,6 +2657,7 @@ def run_world(
     router_gamma: float = 0.1,
     drip: bool = True,
     provider: Any | None = None,
+    market: X402Provider | None = None,
     exchange: Any | None = None,
     clock_source: Any | None = None,
     kill_at_end: bool = False,
@@ -2524,6 +2679,7 @@ def run_world(
         drip=drip,
         router_gamma=router_gamma,
         provider=provider,
+        market=market,
         exchange=exchange,
         clock_source=clock_source,
         kill_at_end=kill_at_end,

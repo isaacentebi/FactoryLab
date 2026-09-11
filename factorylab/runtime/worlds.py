@@ -17,6 +17,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from factorylab.world.market import DISCOVERY_URL
 from factorylab.world.models import PriceTable, TokenPrice
 
 NS_PER_SECOND = 1_000_000_000
@@ -90,6 +91,14 @@ class ToolsSpec:
 
 
 @dataclass(frozen=True)
+class TreasurySpec:
+    """Compute insolvency and the public discovery index are fixed at launch."""
+
+    insolvency_events: int = 20
+    discovery_url: str = DISCOVERY_URL
+
+
+@dataclass(frozen=True)
 class PricesSpec:
     """Price controller parameters (spec v0.6 section 8.1). Not money: bare rates and bounds."""
 
@@ -143,6 +152,7 @@ class WorldManifest:
     evaluation: EvaluationSpec = EvaluationSpec()
     tools: ToolsSpec = ToolsSpec()
     prices: PricesSpec = PricesSpec()
+    treasury: TreasurySpec = TreasurySpec()
     tick_interval_ns: int = NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -185,6 +195,16 @@ class WorldManifest:
     def validate(self) -> None:
         if self.initial_balance_micro < 0:
             raise ValueError("initial balance must be non-negative")
+        if type(self.treasury.insolvency_events) is not int or self.treasury.insolvency_events < 1:
+            raise ValueError("treasury.insolvency_events must be a positive integer")
+        from urllib.parse import urlsplit
+
+        discovery = urlsplit(self.treasury.discovery_url)
+        if (
+            discovery.scheme not in {"http", "https"} or not discovery.hostname
+            or discovery.username or discovery.password or discovery.query or discovery.fragment
+        ):
+            raise ValueError("treasury.discovery_url must be a public HTTP(S) endpoint")
         if not self.models:
             raise ValueError("a world needs at least one priced model tier")
         ids = {m.id for m in self.models}
@@ -318,6 +338,10 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             int((d.get("tools") or {}).get("max_routers_per_kind", 3)),
         ),
         prices=prices,
+        treasury=TreasurySpec(
+            (d.get("treasury") or {}).get("insolvency_events", 20),
+            (d.get("treasury") or {}).get("discovery_url", DISCOVERY_URL),
+        ),
         tick_interval_ns=_ns(d.get("tick_interval", "1s")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
