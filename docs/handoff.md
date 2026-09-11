@@ -40,9 +40,6 @@ The session model plans, specs, reviews diffs and merges. Codex on `gpt-6-astra`
 
 ## Next
 
-1. Finish and merge `p3b-runtime`; merge the price controller; wire it (regions parsed from metric cards, penalties applied to verdict and conformity scores).
-2. Live run 4 (in flight at the time of writing) and run 5 with the Hyperliquid testnet key so fills and P&L are real.
-3. Cold audits by Codex: money paths, sealing, sandbox.
-4. Hosting (small DigitalOcean droplet, supervisor, nightly backup of ledger + key).
-5. Automatic rebalancing: Hyperliquid withdrawal API plus OpenRouter crypto credit purchase; feasibility being checked.
-6. The `funded` manifest, only after 1–5.
+The ordered list, with the gaps against the essay, is `docs/design-audit-v2.md` §7. In short: merge the controller wiring and `p3b-runtime`; run 5 with the Hyperliquid testnet key; make the treasury real (Hyperliquid withdrawals to a factory-owned reserve address, mechanical float top-ups from the reserve only); `resume` after a process crash; a versioning module (transfer operator, spectral gap, pathology flags, early-warning signals); population-proposed λ; recursive meta-evaluation; cold audits; hosting; then the `funded` manifest and no changes, ever.
+
+Rebalancing finding (11 September): Hyperliquid withdrawals and deposits are scriptable through the SDK (main-wallet key, ~$1, ~5 min). OpenRouter credits cannot be bought by API (the crypto endpoint returns 410) and never flow back out. Hence the three-pot design in the audit §6.
