@@ -123,6 +123,18 @@ The loop closed against real prices and real models: 315 events, 198 model calls
 
 Not a bewilderment result either way: the routers drifted toward NOOP (114 of 312 decisions) because most invocations returned nothing judgeable, which is the physics behaving, not the factory choosing.
 
+### Live runs 2 and 3
+
+**Run 2** (reasoning fixed): 312 of 317 replies judgeable, 129 verdicts, 120 conformity scores, $0.089. Zero forecasts and zero proposals: nothing had described their shape. Fix: every request now carries the public schematics (wallet, prices, roster, routers, the exact proposal and forecast shapes), per spec v0.4 section 1.6. No goals, no rules, only what exists and what a return may contain.
+
+**Run 3** (schematics public, ended by kill): 323 of 328 replies judgeable, 135 verdicts, 264 forecasts sealed and settled, $0.227. Nine replies carried proposals. Six were accepted: three router replacements and three new producer assemblies the models named and wrote the prompts for themselves: `mid-tape` (an ETH price tape, proposed by seed-observer on GLM), `funding-analyst` (proposed by an evaluator, eval-b on GLM), `tick-decider` (proposed by seed-decider on DeepSeek). The new assemblies were invoked 8 and 13 times before the run ended. Four proposals were refused for shape with the reason logged (one tried to re-register an existing id, two were empty, one named an unknown event kind). Evaluator skill remains negative but has spread: eval-d on Luna −0.06, the others −0.14 to −0.18, and the protected consequence share now leans toward eval-d.
+
+**Bewilderment check (spec v0.5 condition 6).** Partially met, honestly stated: `Registered` and `RouterReplaced` events exist whose proposals came from model returns, not scripts, which is the first half. The second half (a router's most frequent action differing from what the seed would predict) holds trivially for MarketMid and Funding, whose menus now contain assemblies the seed did not have. The proposals themselves are modest and observational; nothing traded because the venue was read-only. This is the minimum evidence the check asks for, not evidence of Class 3 behaviour.
+
+**What the diary showed that the summary could not.** Evaluators reason about the charter in earnest and notice their own blind spots ("Metric cards cannot be fully verified from the inputs given"). Producers on a bare tick mostly hold, and several returned nonsense actions like `"action": "seed-observer"`, which evaluators marked down. Nobody has memory between calls and nobody sees more than one price, which limits what any of them can do; that is the next thing to fix.
+
+Summaries for the three runs are in `docs/runs/`. Diaries and keys are not committed.
+
 ### What the live run needs from the experimenter
 
 `OPENROUTER_API_KEY` in the environment with a small credit balance (the testnet world's seeds are on the two flash tiers; a 200-event run should cost well under a dollar), and optionally `HL_PRIVATE_KEY` for a Hyperliquid testnet account funded from the faucet so orders fill. Without the venue key the world runs read-only: prices and funding are real, orders are rejected, and the wallet moves only through compute spend.
