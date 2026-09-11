@@ -50,6 +50,7 @@ from factorylab.kernel.wallet import DripSchedule, Infeasible, Wallet
 from factorylab.learners.base import BanditFeedback
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
+from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement.forecast import Forecast, ForecastBook
 from factorylab.settlement.scoring import PrevalenceBaseline
@@ -58,7 +59,7 @@ from factorylab.settlement.standing import ConsequenceStanding
 from factorylab.settlement.vocabulary import SEED_VOCABULARY, Observer, WindowFacts
 from factorylab.world.clock import ClockSource, DripSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
-from factorylab.world.exchange import FakeExchange, Order
+from factorylab.world.exchange import FakeExchange, HyperliquidExchange, Order
 from factorylab.world.metering import Meter, MeteredModel
 from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
 
@@ -241,6 +242,7 @@ class RunStats:
     registrations_rejected: int = 0
     epochs: int = 0
     routers_replaced: int = 0
+    reconciliations: int = 0
     max_settlement_latency_events: int = 0
     sample_propensity: dict[str, Any] | None = None
     invocation_status: dict[str, int] = field(default_factory=dict)
@@ -277,10 +279,14 @@ class Runtime:
         drip: bool,
         router_gamma: float,
         provider: Any | None = None,
+        exchange: Any | None = None,
+        clock_source: Any | None = None,
+        reconcile_every: int = 10,
     ) -> None:
-        if manifest.exchange.kind != "fake":
-            raise NotImplementedError("the live venue path is not built yet; use `probe`")
         self.m = manifest
+        self.live = manifest.exchange.kind != "fake"
+        self.clock_source = clock_source
+        self.reconciler = Reconciler(every=reconcile_every)
         self.events_budget = events
         self.seed = manifest.seed if seed is None else seed
         self.rng = random.Random(self.seed)
@@ -333,17 +339,27 @@ class Runtime:
         self.settler = Settler(self.book, self.queue, self.standing, self.baseline, self.observer)
 
         # world
-        shocks: dict[int, dict[str, Decimal]] = {}
-        for sh in manifest.exchange.shocks:
-            shocks.setdefault(sh.step, {})[sh.coin] = Decimal(sh.multiplier)
-        self.exchange = FakeExchange(
-            seed=manifest.exchange.seed,
-            coins=manifest.exchange.coins,
-            start_cash_usd=money_to_usd(self.initial),
-            shocks=shocks,
-        )
+        if exchange is not None:
+            self.exchange = exchange
+        elif self.live:
+            self.exchange = HyperliquidExchange(
+                mainnet=manifest.exchange.mainnet, coins=manifest.exchange.coins
+            )
+        else:
+            shocks: dict[int, dict[str, Decimal]] = {}
+            for sh in manifest.exchange.shocks:
+                shocks.setdefault(sh.step, {})[sh.coin] = Decimal(sh.multiplier)
+            self.exchange = FakeExchange(
+                seed=manifest.exchange.seed,
+                coins=manifest.exchange.coins,
+                start_cash_usd=money_to_usd(self.initial),
+                shocks=shocks,
+            )
+        self.venue = LiveVenue(self.exchange) if self.live else None
         self.prices = manifest.price_table()
         self.meter = Meter(self.wallet)
+        if provider is None:
+            provider = build_provider(manifest)
         self.provider = provider if provider is not None else ScriptedProvider()
         self.catalogue: dict[str, TokenPrice] | None = None
         if hasattr(self.provider, "catalogue"):
@@ -474,9 +490,16 @@ class Runtime:
 
     def run(self) -> dict[str, Any]:
         tick_ns = self.m.tick_interval_ns
-        sources = [
-            ClockSource(start_ns=tick_ns, interval_ns=tick_ns, count=self.events_budget).events()
-        ]
+        if self.clock_source is not None:
+            sources = [self.clock_source]
+        elif self.live:
+            sources = [LiveClock(tick_ns, self.events_budget).events()]
+        else:
+            sources = [
+                ClockSource(
+                    start_ns=tick_ns, interval_ns=tick_ns, count=self.events_budget
+                ).events()
+            ]
         if self.use_drip and self.m.drip is not None:
             d = self.m.drip
             sources.append(
@@ -506,7 +529,16 @@ class Runtime:
             self.wallet.drip(self.clock.now_ns)
             self._manage_reserve_window()
             if ev.kind is EventKind.TICK:
-                self._settle_exchange_effects(self.exchange.advance(self.clock.now_ns))
+                if self.venue is not None:
+                    self._settle_exchange_effects(self.venue.on_tick(self.clock.now_ns))
+                    if self.reconciler.due():
+                        snap = Reconciler.snapshot(
+                            self.wallet.balance, self.provider, self.exchange
+                        )
+                        self.stats.reconciliations += 1
+                        self._emit(EventKind.RECONCILED, snap, source="kernel")
+                else:
+                    self._settle_exchange_effects(self.exchange.advance(self.clock.now_ns))
             if self._check_termination():
                 break
 
@@ -575,7 +607,8 @@ class Runtime:
                 if paid:
                     self.wallet.settle(-paid, f"funding:{we.payload['coin']}:{we.ts_ns}", "funding")
             self.internal.append(self._kernel_event(we))
-        self.exchange.sync_cash(money_to_usd(self.wallet.balance))
+        if hasattr(self.exchange, "sync_cash"):
+            self.exchange.sync_cash(money_to_usd(self.wallet.balance))
 
     def _execute_outputs(self, ret: Return) -> None:
         out = ret.outputs
@@ -708,14 +741,20 @@ class Runtime:
     def _producer_step(self, ev: Event, handle: str, sample: Sample, deadline: int) -> None:
         payload = _to_plain(ev.payload)
         if ev.kind is EventKind.TICK:
-            acct = self.exchange.account()
-            payload["account"] = {
-                "equity_usd": str(acct.equity_usd),
-                "positions": [
-                    {"coin": p.coin, "size": str(p.size), "entry_px": str(p.entry_px)}
-                    for p in acct.positions
-                ],
-            }
+            try:
+                acct = self.exchange.account()
+                payload["account"] = {
+                    "equity_usd": str(acct.equity_usd),
+                    "positions": [
+                        {"coin": p.coin, "size": str(p.size), "entry_px": str(p.entry_px)}
+                        for p in acct.positions
+                    ],
+                }
+            except RuntimeError:  # read-only live venue: no account yet
+                payload["account"] = {
+                    "equity_usd": str(money_to_usd(self.wallet.balance)),
+                    "positions": [],
+                }
             payload["mids"] = {c: str(m) for c, m in self.exchange.mids().items()}
         description = f"Respond to event {ev.kind} on {ev.source}."
         inputs = {"kind": str(ev.kind), "payload": payload}
@@ -1165,7 +1204,8 @@ class Runtime:
             "wallet_conservation": self.wallet.check_conservation(),
             "ledger_verify": self.ledger.verify(),
             "outstanding_decisions": len(self.queue.outstanding()),
-            "exchange_equity_usd": str(self.exchange.account().equity_usd),
+            "exchange_equity_usd": _equity_or_none(self.exchange),
+            "live": self.live,
             "evaluation_boundary": EVALUATION_BOUNDARY,
             "standing": self.standing.snapshot(),
             "routers": {
@@ -1206,6 +1246,13 @@ class _KeyedLearner:
 
     def state(self) -> bytes:
         return self.inner.state()
+
+
+def _equity_or_none(exchange: Any) -> str | None:
+    try:
+        return str(exchange.account().equity_usd)
+    except RuntimeError:
+        return None
 
 
 def _as_unit(value: Any) -> float | None:
@@ -1258,6 +1305,8 @@ def run_world(
     router_gamma: float = 0.1,
     drip: bool = True,
     provider: Any | None = None,
+    exchange: Any | None = None,
+    clock_source: Any | None = None,
 ) -> dict[str, Any]:
     """Run a world for ``events`` world events (plus the internal events they cause).
 
@@ -1276,4 +1325,6 @@ def run_world(
         drip=drip,
         router_gamma=router_gamma,
         provider=provider,
+        exchange=exchange,
+        clock_source=clock_source,
     ).run()

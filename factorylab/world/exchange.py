@@ -63,6 +63,8 @@ class Fill:
     px: Decimal
     fee: Decimal  # in USD, positive means paid
     ts_ns: int
+    realized: Decimal = Decimal(0)  # closed P&L in USD, signed
+    liquidation: bool = False
 
 
 @dataclass(frozen=True)
@@ -479,6 +481,8 @@ class HyperliquidExchange:
                     px=Decimal(str(f["px"])),
                     fee=Decimal(str(f.get("fee", "0"))),
                     ts_ns=int(f["time"]) * NS_PER_MS,
+                    realized=Decimal(str(f.get("closedPnl", "0"))),
+                    liquidation=bool(f.get("liquidation")),
                 )
             )
         return out
