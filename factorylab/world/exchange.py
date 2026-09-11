@@ -17,6 +17,12 @@ from typing import Any, Protocol
 
 from factorylab.world.events import WorldEvent, WorldEventKind
 
+
+class VenueUnavailable(RuntimeError):
+    """The venue's API failed transiently after retries. Raised only when no last-good
+    value exists to fall back on; otherwise reads return the last good value."""
+
+
 NS_PER_MS = 1_000_000
 NS_PER_HOUR = 3_600 * 1_000_000_000
 
@@ -550,17 +556,53 @@ class HyperliquidExchange:
             self._exchange = HLExchange(wallet, self.base_url, account_address=self._address)
         meta = self._info.meta()
         self._sz_decimals = {a["name"]: int(a["szDecimals"]) for a in meta["universe"]}
+        self.transient_failures = 0
+        self._last_mids: dict[str, Decimal] | None = None
+        self._last_account: AccountState | None = None
+
+    def _guarded(self, what: str, call: Any, attempts: int = 3) -> Any:
+        """Call the API with retries on transient failures; raise VenueUnavailable after.
+
+        Timeouts, connection errors and 5xx answers are the venue's weather, not
+        the world's death. Three attempts with 0.5 s, 1 s, 2 s pauses; every
+        exhausted call counts in ``transient_failures`` so the runtime can report it.
+        """
+        import time
+
+        import requests
+        from hyperliquid.utils.error import ServerError
+
+        delay = 0.5
+        for attempt in range(attempts):
+            try:
+                return call()
+            except (requests.RequestException, OSError, TimeoutError, ServerError) as exc:
+                if attempt == attempts - 1:
+                    self.transient_failures += 1
+                    raise VenueUnavailable(f"{what}: {type(exc).__name__}: {exc}") from exc
+                time.sleep(delay)
+                delay *= 2
+        raise AssertionError("unreachable")
 
     # ---- reads
 
     def mids(self) -> dict[str, Decimal]:
-        raw = self._info.all_mids()
-        return {c: Decimal(str(raw[c])) for c in self.coins if c in raw}
+        try:
+            raw = self._guarded("all_mids", self._info.all_mids)
+        except VenueUnavailable:
+            if self._last_mids is None:
+                raise
+            return dict(self._last_mids)
+        self._last_mids = {c: Decimal(str(raw[c])) for c in self.coins if c in raw}
+        return dict(self._last_mids)
 
     def funding(self) -> list[FundingEvent]:
         import time
 
-        meta, ctxs = self._info.meta_and_asset_ctxs()
+        try:
+            meta, ctxs = self._guarded("meta_and_asset_ctxs", self._info.meta_and_asset_ctxs)
+        except VenueUnavailable:
+            return []
         names = [a["name"] for a in meta["universe"]]
         now_ns = time.time_ns()
         out: list[FundingEvent] = []
@@ -579,7 +621,12 @@ class HyperliquidExchange:
     def account(self) -> AccountState:
         if not self._address:
             raise RuntimeError("account() needs an address or a private key")
-        st = self._info.user_state(self._address)
+        try:
+            st = self._guarded("user_state", lambda: self._info.user_state(self._address))
+        except VenueUnavailable:
+            if self._last_account is None:
+                raise
+            return self._last_account
         summary = st["marginSummary"]
         positions: list[Position] = []
         for ap in st.get("assetPositions", []):
@@ -589,17 +636,26 @@ class HyperliquidExchange:
                 continue
             entry = Decimal(str(p["entryPx"])) if p.get("entryPx") else Decimal(0)
             positions.append(Position(p["coin"], size, entry))
-        return AccountState(
+        self._last_account = AccountState(
             equity_usd=Decimal(str(summary["accountValue"])),
             cash_usd=Decimal(str(st.get("withdrawable", summary["accountValue"]))),
             positions=tuple(positions),
             margin_used_usd=Decimal(str(summary["totalMarginUsed"])),
         )
+        return self._last_account
 
     def fills(self, since_ns: int) -> list[Fill]:
+        """Fills since ``since_ns``; an unavailable venue yields none, and the caller's
+        last-seen timestamp makes the next poll pick them up."""
         if not self._address:
             raise RuntimeError("fills() needs an address or a private key")
-        raw = self._info.user_fills_by_time(self._address, since_ns // NS_PER_MS)
+        try:
+            raw = self._guarded(
+                "user_fills_by_time",
+                lambda: self._info.user_fills_by_time(self._address, since_ns // NS_PER_MS),
+            )
+        except VenueUnavailable:
+            return []
         out: list[Fill] = []
         for f in raw:
             out.append(
