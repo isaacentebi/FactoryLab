@@ -2,11 +2,12 @@
 
 A bounded experimental project informed by *The Superdark Factory*.
 
-**Current status:** phase 1 substrate complete and merged (229 tests). See the [build log](docs/build-log.md) for the fidelity review and phase 2 plan.
+**Current status:** phase 2 built and merged (482 tests): evaluators, sealed forecasts and consequence settlement, population registration, OpenRouter provider, live testnet path. The live run and the bewilderment check wait on an OpenRouter key. See the [build log](docs/build-log.md).
 
 ## Start here
 
-- [Build spec v0.4](docs/build-spec-v0.4.md) — the interfaces implemented; supersedes v0.3 where they conflict.
+- [Build spec v0.4](docs/build-spec-v0.4.md) — phase 1 interfaces; supersedes v0.3 where they conflict.
+- [Build spec v0.5](docs/build-spec-v0.5-phase2.md) — phase 2: evaluators, settlement, registration, live path, and the bewilderment check.
 - [Build log](docs/build-log.md) — what was built, by whom, and how faithfully.
 - [Working plan v0.3](outputs/project-plan.md) — the consolidated specification.
 - [Fable refinements](outputs/fable-refinements.md) — accepted, qualified and rejected recommendations.
@@ -23,14 +24,15 @@ from Git.
 ```bash
 uv sync
 uv run pytest
-uv run factorylab run --world scripted --events 200 --seed 1
-uv run factorylab run --world scripted-crash --events 2000 --seed 2
+uv run factorylab run --world scripted --events 400 --seed 1
+uv run factorylab run --world scripted-crash --events 600 --seed 2
 uv run factorylab probe --world testnet
+OPENROUTER_API_KEY=... uv run factorylab run --world testnet --events 30 --seed 3
 ```
 
 ## Next implementation milestone
 
-Phase 2: evaluator assemblies with sealed forecasts and consequence settlement, a live-venue runtime path on testnet with real model tiers, the Blum–Mansour runtime adapter, population registration through the novelty reserve, and the charter. The funded world is a launch decision, not a build task.
+A live testnet run with real models, then phase 3: an adversarial minority, charter amendments with sortition and the λ controller, deeper meta-evaluation, population-written tools. The funded world is a launch decision, not a build task.
 
 ## Location
 
