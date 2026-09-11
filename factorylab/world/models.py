@@ -2,14 +2,16 @@
 
 A provider turns a ``ModelRequest`` into a ``ModelResponse`` carrying the token
 usage the vendor reported. Pricing lives in a ``PriceTable`` keyed by the
-registered model id, in integer micro-USD per token, so cost is exact integer
-arithmetic. Providers never touch the wallet; ``metering`` does.
+registered model id, in exact micro-USD per token; total costs round up to
+integer micro-USD. Providers never touch the wallet; ``metering`` does.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
+from fractions import Fraction
+from math import ceil
 from typing import Any, Protocol
 
 MICRO = Decimal(1_000_000)
@@ -19,8 +21,18 @@ MICRO = Decimal(1_000_000)
 class TokenPrice:
     """Per-token prices in micro-USD. ``from_per_mtok`` converts $/MTok exactly."""
 
-    input_micro: int
-    output_micro: int
+    input_micro: int | Fraction
+    output_micro: int | Fraction
+
+    @classmethod
+    def from_per_token(
+        cls, prompt_usd_per_token: str, completion_usd_per_token: str
+    ) -> TokenPrice:
+        """Return exact fractional micro-USD prices from decimal USD-per-token quotes."""
+        return cls(
+            Fraction(Decimal(prompt_usd_per_token)) * 1_000_000,
+            Fraction(Decimal(completion_usd_per_token)) * 1_000_000,
+        )
 
     @classmethod
     def from_per_mtok(cls, input_usd: str | Decimal, output_usd: str | Decimal) -> TokenPrice:
@@ -36,10 +48,27 @@ class TokenPrice:
         return cls(int(i), int(o))
 
     def cost(self, input_tokens: int, output_tokens: int) -> int:
-        """Exact cost in micro-USD for the given usage."""
+        """Return the exact usage total rounded up once to whole micro-USD."""
         if input_tokens < 0 or output_tokens < 0:
             raise ValueError("token counts must be non-negative")
-        return input_tokens * self.input_micro + output_tokens * self.output_micro
+        return ceil(input_tokens * self.input_micro + output_tokens * self.output_micro)
+
+
+@dataclass(frozen=True)
+class CatalogueEntry:
+    """A catalogue model retains its original decimal price quotes."""
+
+    id: str
+    name: str
+    prompt_usd_per_token: str
+    completion_usd_per_token: str
+    context_length: int | None
+
+    def price(self) -> TokenPrice:
+        """Return exact per-token micro-USD prices without rounding the quotes."""
+        return TokenPrice.from_per_token(
+            self.prompt_usd_per_token, self.completion_usd_per_token
+        )
 
 
 @dataclass
@@ -95,6 +124,7 @@ class ModelResponse:
     stop_reason: str
     refused: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
+    cost_micro: int | None = None
 
 
 class ModelProvider(Protocol):

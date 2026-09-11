@@ -9,8 +9,8 @@ reached through a narrow protocol so this module does not import the kernel.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar
+from dataclasses import dataclass, replace
+from typing import Any, Literal, Protocol, TypeVar
 
 from factorylab.world.models import ModelProvider, ModelRequest, ModelResponse, PriceTable
 
@@ -38,6 +38,7 @@ class Metered[T]:
     reserved: int
     handle: str
     overrun: int = 0  # vendor billed beyond the ceiling; owed, not yet debited
+    cost_source: Literal["reported", "table"] = "table"
 
 
 @dataclass
@@ -90,11 +91,10 @@ class Meter:
 
 @dataclass
 class MeteredModel:
-    """A model provider whose every completion is metered at the registered price.
+    """Every completion uses reported cost when available, otherwise registered prices.
 
-    Guarantees the reservation covers ``max_tokens`` of output plus the
-    estimated input, so a completion can never exceed its ceiling by more than
-    the input-estimate error; that error is bounded by ``input_slack``.
+    The reservation prices ``max_tokens`` of output plus estimated input.
+    Any actual cost beyond that ceiling remains explicit in ``overrun``.
     """
 
     provider: ModelProvider
@@ -109,13 +109,20 @@ class MeteredModel:
         return price.cost(est_input, req.max_tokens)
 
     def complete(self, req: ModelRequest, *, handle: str) -> Metered[ModelResponse]:
+        """Return a committed completion with its cost source and any outstanding overrun."""
         price = self.prices.price(req.model_id)
-        return self.meter.run(
+        metered = self.meter.run(
             handle=handle,
             reason=f"model:{req.model_id}",
             ceiling=self.ceiling(req),
             execute=lambda: self.provider.complete(req),
-            cost_of=lambda r: self.prices.price(r.model_id).cost(r.input_tokens, r.output_tokens)
-            if r.model_id in self.prices.prices
-            else price.cost(r.input_tokens, r.output_tokens),
+            cost_of=lambda r: (
+                r.cost_micro if r.cost_micro is not None
+                else self.prices.price(r.model_id).cost(r.input_tokens, r.output_tokens)
+                if r.model_id in self.prices.prices
+                else price.cost(r.input_tokens, r.output_tokens)
+            ),
+        )
+        return replace(
+            metered, cost_source="reported" if metered.result.cost_micro is not None else "table"
         )
