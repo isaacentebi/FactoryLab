@@ -84,3 +84,35 @@ class CharterBook:
 4. Bewilderment check as in v0.5 condition 6, plus: at least one tool call or amendment proposal that came from a model's return.
 
 Out of scope: adversarial minority, λ controller, sortition of humans, real money.
+
+## 8. Phase 3b additions
+
+### 8.1 Price controller — `factorylab/charter/controller.py`
+
+Each metric card carries a price λ. Observed values arrive per settled window; a violation is the distance outside the card's acceptable region, in the card's own units, normalised by a declared scale. The controller updates λ per card at most once per eligible window: `λ_next = clip(λ + η · violation − decay · (1 − violated), 0, λ_max)`. Scores on the `verdict` and `conformity` channels are then `score_effective = score − Σ_j λ_j · violation_j` for the cards the judged return is responsible for, clipped to [0, 1]. The controller registers in the timing registry so it cannot reprice the same unsettled window twice. Saturation, overshoot and every update are ledger entries. Unclipped costs are retained. The controller has no authority over the consequence channel, the novelty reserve or exploration.
+
+```python
+@dataclass(frozen=True)
+class CardRegion:     # parsed from the card's acceptable_region text by the runtime; the controller never parses prose
+    card_id: str; kind: Literal["max", "min", "band"]; lo: float | None; hi: float | None; scale: float
+
+class PriceController:
+    def __init__(self, ledger, *, eta: float, decay: float, lambda_max: float, min_window_events: int)
+    def register(self, region: CardRegion) -> None
+    def observe(self, card_id: str, value: float, window_end_event: int) -> None    # one observation per window
+    def price(self, card_id: str) -> float
+    def penalty(self, values: dict[str, float]) -> float                              # Σ λ_j · violation_j for the given observed values
+    def snapshot(self) -> dict
+```
+
+### 8.2 Antagonists (runtime)
+
+Assembly role `antagonist`. Antagonists are producers whose declared job is to cause bounded trouble: they may place orders within the same limits as any producer, propose registrations, and submit forecasts designed to test the scoring. Their returns are judged like any producer's. Their own score channel is `exposure`: an antagonist decision is settled 1 if within `verdict_timeout_events` an evaluator's forecast on the antagonist's return earned a Brier score below the prevalence baseline (the antagonist fooled the judge), 0 otherwise. Seeds: one antagonist per world. Antagonists cannot touch the kernel, the vocabulary, or the charter's norms; their proposals go through the same reserve.
+
+### 8.3 Treasury tool (runtime)
+
+`treasury.transfer(direction ∈ {to_compute, to_venue}, usd)` records an intent in the ledger and emits a `TransferIntent` event; nothing moves. The experimenter executes recorded intents on a fixed weekly schedule and records each execution; the wallet reconciles both pots. Automatic execution is a later phase.
+
+### 8.4 Several routers per event kind (runtime)
+
+A `router` proposal with `add: true` registers an additional router for that event kind instead of replacing it. Each router makes its own decision on each event, so several assemblies may wake at once. The manifest caps routers per kind (`tools.max_routers_per_kind`, seed 3).
