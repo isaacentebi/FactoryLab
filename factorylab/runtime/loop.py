@@ -232,6 +232,7 @@ class ScriptedProvider:
                             "window": "rolling 100 events",
                             "acceptable_region": "below 5",
                             "observation": "venue fills",
+                            "lambda": 0.6,
                         }
                     ],
                     "replace": [],
@@ -598,7 +599,7 @@ class Runtime:
             timing=self.timing,
         )
         self.regions: dict[str, CardRegion] = {}  # cards of the current edition with a region
-        self.priced: set[str] = set()  # every card id ever registered with the controller
+        self.priced: set[str] = set()  # card ids currently registered with the controller
         self.rolling: dict[str, float] = {}
         self.unparsed_logged: set[tuple[str, int]] = set()
         self.window = MeasureWindow(0, self.wallet.balance)
@@ -731,6 +732,7 @@ class Runtime:
                     "window": "…",
                     "acceptable_region": "…",
                     "observation": "where the number comes from",
+                    "lambda": "optional number in [0, prices.lambda_max], for add or replace",
                 }
             ],
             "replace": [],
@@ -791,13 +793,18 @@ class Runtime:
                 {"event_kind": st.kind, "learner": type(st.learner).__name__, "menu": st.universe}
                 for st in self._all_router_states()
             ],
+            "prices": {"lambda_max": self.m.prices.lambda_max},
+            "amendment_feedback": getattr(self, "amendment_feedback", None),
             "card_prices": [
                 {
                     "card_id": cid,
                     "lambda": self.controller.price(cid),
-                    "region": {"kind": r.kind, "lo": r.lo, "hi": r.hi, "scale": r.scale},
+                    "region": (
+                        {"kind": r.kind, "lo": r.lo, "hi": r.hi, "scale": r.scale}
+                        if (r := self.regions.get(cid)) is not None else None
+                    ),
                 }
-                for cid, r in sorted(self.regions.items())
+                for cid in sorted(self.priced)
             ],
             "event_kinds": sorted(PRODUCER_KINDS | {"ProducerReturn", "Verdict"}),
             "a_return_may_include": self.A_RETURN_MAY_INCLUDE,
@@ -996,9 +1003,10 @@ class Runtime:
         for card in self.charter.cards:
             region = region_for(card, rolling=self.rolling)
             if region is None:
+                if card.id in self.regions:
+                    self.controller.clear_region(card.id)
                 key = (card.id, self.charter.edition)
                 if not parses(card) and key not in self.unparsed_logged:
-                    self.unparsed_logged.add(key)
                     self.ledger.append(
                         {
                             "kind": "price.unparsed",
@@ -1008,15 +1016,11 @@ class Runtime:
                             "ts": self.clock.now_ns,
                         }
                     )
+                    self.unparsed_logged.add(key)
                 continue
             regions[card.id] = region
             if region == self.regions.get(card.id):
                 continue
-            if card.id in self.priced:
-                self.controller.update_region(region)
-            else:
-                self.controller.register(region)
-                self.priced.add(card.id)
             self.ledger.append(
                 {
                     "kind": "price.region",
@@ -1031,6 +1035,10 @@ class Runtime:
                     "ts": self.clock.now_ns,
                 }
             )
+            if card.id not in self.priced:
+                self.controller.register_pending(card.id)
+                self.priced.add(card.id)
+            self.controller.update_region(region)
         self.regions = regions
 
     def _close_price_window(self) -> None:
@@ -1859,7 +1867,10 @@ class Runtime:
             )
 
     def _propose_amendment(self, handle: str, item: dict[str, Any]) -> None:
+        from factorylab.charter.amendment import proposed_price
         from factorylab.charter.charter import MetricCard
+
+        prices = []
 
         def cards(key: str) -> tuple[MetricCard, ...]:
             raw = item.get(key) or []
@@ -1869,6 +1880,15 @@ class Runtime:
             for c in raw:
                 if not isinstance(c, dict):
                     raise ValueError(f"{key} entries must be objects")
+                if "lambda" in c:
+                    try:
+                        value = proposed_price(c["lambda"], self.m.prices.lambda_max)
+                    except ValueError as exc:
+                        feedback = {"id": str(item.get("id", "")), "reason": str(exc)}
+                        self.ledger.append({"kind": "amendment.rejected", **feedback})
+                        self.amendment_feedback = feedback
+                        raise
+                    prices.append((str(c.get("id", "")), value))
                 out.append(
                     MetricCard(
                         str(c.get("id", "")),
@@ -1893,6 +1913,7 @@ class Runtime:
             replace=cards("replace"),
             remove=tuple(remove),
             predicted_effect=str(item.get("predicted_effect", "")),
+            proposed_prices=tuple(prices),
         )
         contract = Contract(
             id=f"amendment:{am.id}",
@@ -1914,14 +1935,21 @@ class Runtime:
         self._hold_vote(am, committee)
 
     def _hold_vote(self, am: Any, committee: Any) -> None:
+        prices = dict(am.proposed_prices)
         for seat in committee.seats:
             alias, assembly_id = seat[0], seat[1]
             handle = f"vote-{am.id}-{alias}"
             inputs = {
                 "amendment": {
                     "id": am.id,
-                    "add": [vars(c) for c in am.add],
-                    "replace": [vars(c) for c in am.replace],
+                    "add": [
+                        {**vars(c), **({"lambda": prices[c.id]}
+                         if c.id in prices else {})} for c in am.add
+                    ],
+                    "replace": [
+                        {**vars(c), **({"lambda": prices[c.id]}
+                         if c.id in prices else {})} for c in am.replace
+                    ],
                     "remove": list(am.remove),
                     "predicted_effect": am.predicted_effect,
                 },
@@ -1977,6 +2005,17 @@ class Runtime:
         new = self.charter_book.activate_due(self.clock.now_ns)
         while new is not None:
             self.charter = new
+            am = self.charter_book.activated_amendment(new.edition)
+            for card_id in sorted(self.priced - {c.id for c in new.cards}):
+                self.controller.remove(card_id, amendment_id=am.id)
+                self.priced.remove(card_id)
+                self.regions.pop(card_id, None)
+            self._derive_regions()
+            for card_id, value in am.proposed_prices:
+                if card_id not in self.priced:
+                    self.controller.register_pending(card_id)
+                    self.priced.add(card_id)
+                self.controller.set_price(card_id, value, amendment_id=am.id)
             self.stats.amendments_activated += 1
             new = self.charter_book.activate_due(self.clock.now_ns)
 

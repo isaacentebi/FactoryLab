@@ -2,8 +2,23 @@
 
 import re
 from dataclasses import dataclass
+from math import isfinite
 
 from factorylab.charter.charter import MetricCard
+
+
+def proposed_price(value: object, lambda_max: float) -> float:
+    """Return a finite proposed lambda within the inclusive bound, rejecting booleans."""
+    reason = f"lambda must be a finite number in [0, {lambda_max}]; booleans are invalid"
+    if type(value) not in (int, float):
+        raise ValueError(reason)
+    try:
+        price = float(value)
+    except OverflowError as exc:
+        raise ValueError(reason) from exc
+    if not isfinite(price) or not 0 <= price <= lambda_max:
+        raise ValueError(reason)
+    return price
 
 
 @dataclass(frozen=True)
@@ -21,6 +36,7 @@ class Amendment:
     replace: tuple[MetricCard, ...]
     remove: tuple[str, ...]
     predicted_effect: str
+    proposed_prices: tuple[tuple[str, float], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or re.fullmatch(r"[a-z][a-z0-9-]{1,47}", self.id) is None:
@@ -56,3 +72,13 @@ class Amendment:
                 ids.append(card_id)
         if len(set(ids)) != len(ids):
             raise ValueError("a card id may occur only once across amendment operations")
+        prices = tuple(
+            (card_id, proposed_price(value, float("inf")))
+            for card_id, value in self.proposed_prices
+        )
+        eligible = {card.id for card in (*self.add, *self.replace)}
+        if any(card_id not in eligible for card_id, _ in prices):
+            raise ValueError("lambda may only accompany an added or replaced card")
+        if len({card_id for card_id, _ in prices}) != len(prices):
+            raise ValueError("a card may have only one proposed lambda")
+        object.__setattr__(self, "proposed_prices", prices)

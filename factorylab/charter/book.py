@@ -26,6 +26,7 @@ class CharterBook:
         self.__committees: dict[str, Committee] = {}
         self.__ballots: dict[str, dict[str, Ballot]] = {}
         self.__activated: set[str] = set()
+        self.__activations: dict[int, Amendment] = {}
 
     def current(self) -> Charter:
         """Return the most recently activated immutable edition."""
@@ -146,8 +147,13 @@ class CharterBook:
             )
             self.__editions.append(edition)
             self.__activated.add(amendment_id)
+            self.__activations[edition.edition] = amendment
             return edition
         return None
+
+    def activated_amendment(self, edition: int) -> Amendment:
+        """Return the frozen amendment that produced an edition; unknown editions raise KeyError."""
+        return self.__activations[edition]
 
     def _require_committee(self, committee: Committee) -> None:
         if (
