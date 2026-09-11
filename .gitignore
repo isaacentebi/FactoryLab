@@ -1,0 +1,14 @@
+# Local source snapshots, review packets, logs and scratch work
+/work/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Generated dependencies and caches
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
