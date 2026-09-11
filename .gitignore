@@ -21,3 +21,5 @@ __pycache__/
 # world secrets and keys
 worlds/*.key
 worlds/*.secret*
+openrouter.key
+runs/

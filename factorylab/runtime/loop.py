@@ -307,6 +307,7 @@ class Runtime:
             manifest=json.loads(manifest.canonical_json()),
             clock_ns=self.clock,
             full_verify_every=1024,
+            key_path=(ledger_path + ".key") if ledger_path else None,
         )
         self.use_drip = drip and manifest.drip is not None
         schedule = None

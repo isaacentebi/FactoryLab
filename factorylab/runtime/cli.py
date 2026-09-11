@@ -24,6 +24,11 @@ def _load_dotenv() -> None:
     import os
     from pathlib import Path
 
+    keyfile = Path.cwd() / "openrouter.key"
+    if keyfile.exists() and "OPENROUTER_API_KEY" not in os.environ:
+        value = keyfile.read_text().strip()
+        if value:
+            os.environ["OPENROUTER_API_KEY"] = value
     path = Path.cwd() / ".env"
     if not path.exists():
         return
@@ -63,6 +68,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print("factorylab run: the runtime loop is not built yet", file=sys.stderr)
         return 1
     m = load_manifest(args.world)
+    if args.tick_interval:
+        import dataclasses
+
+        from factorylab.runtime.worlds import _ns
+
+        m = dataclasses.replace(m, tick_interval_ns=_ns(args.tick_interval))
     events = args.events
     if args.duration:
         from factorylab.runtime.worlds import _ns
