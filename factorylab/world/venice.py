@@ -1,0 +1,268 @@
+"""Venice inference reports integer costs and explicit estimates without wallet access."""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable, Iterable, Mapping
+from copy import deepcopy
+from decimal import Decimal
+from typing import Any
+from urllib import error
+
+from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
+from factorylab.world.x402 import VENICE_URL, X402Client, http_request, redact, usd_micro
+
+
+class VeniceError(Exception):
+    """Provider failures retain HTTP status but never transport bodies or credentials."""
+
+    def __init__(self, status: int | None, message: str) -> None:
+        self.status = status
+        super().__init__(f"Venice error ({status}): {message}")
+
+
+class VeniceProvider:
+    """Completions make one billed POST; only connection-failed GETs retry once.
+
+    ``raw.cost_source`` is ``reported`` for cost.usd, or ``table`` for a catalogue
+    estimate. Both yield integer ``cost_micro`` so existing metering charges the
+    amount; its generic populated-cost flag does not distinguish these sources.
+    """
+
+    name = "venice"
+
+    def __init__(
+        self,
+        *,
+        key_env: str = "VENICE_API_KEY",
+        base_url: str = VENICE_URL,
+        transport: Callable[[str, str, dict | None], dict] | None = None,
+        reasoning_models: Iterable[str] = (),
+        reasoning_config: Mapping[str, Mapping[str, Any]] | None = None,
+        web_config: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> None:
+        self._key_env = key_env
+        self._base_url = base_url.rstrip("/")
+        self._transport = transport or self._default_transport
+        self._reasoning_models = frozenset(reasoning_models)
+        self._reasoning_config = deepcopy(dict(reasoning_config or {}))
+        self._web_config = deepcopy(dict(web_config or {}))
+        self._prices: dict[str, TokenPrice] = {}
+
+    def _default_transport(self, method: str, path: str, payload: dict | None) -> dict:
+        key = os.environ.get(self._key_env)
+        if key:
+            headers = {"Authorization": f"Bearer {key}"}
+        elif os.environ.get("RESERVE_PRIVATE_KEY"):
+            headers = X402Client(base_url=self._base_url).auth_headers(path)
+        elif method == "GET" and path == "/models":
+            headers = {}  # The Venice catalogue is public.
+        else:
+            raise VeniceError(None, "Set VENICE_API_KEY or RESERVE_PRIVATE_KEY")
+        response = http_request(method, self._base_url + path, payload, headers)
+        if not 200 <= response.status < 300:
+            raise VeniceError(response.status, "HTTP request failed")
+        return response.body
+
+    def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
+        for attempt in range(2 if method == "GET" else 1):
+            try:
+                response = self._transport(method, path, payload)
+                return redact(
+                    response,
+                    (
+                        os.environ.get(self._key_env, ""),
+                        os.environ.get("RESERVE_PRIVATE_KEY", ""),
+                    ),
+                )
+            except error.HTTPError as exc:
+                exc.close()
+                raise VeniceError(exc.code, "HTTP request failed") from None
+            except VeniceError as exc:
+                # Even injected provider exceptions must not echo request credentials.
+                raise VeniceError(
+                    exc.status, "Request failed; check authentication and status"
+                ) from None
+            except (error.URLError, ConnectionError, TimeoutError):
+                if method != "GET" or attempt == 1:
+                    raise VeniceError(None, "Connection failed") from None
+            except Exception:
+                raise VeniceError(None, "Transport or response decoding failed") from None
+        raise AssertionError("unreachable")
+
+    def _configuration(self, req: ModelRequest) -> tuple[str, dict, dict]:
+        if not req.model_id.startswith("venice:"):
+            raise VeniceError(None, "Venice model ids must start with venice:")
+        tier, _, override = req.model_id.partition("@")
+        base = tier.removesuffix(":online")
+        reasoning = dict(
+            self._reasoning_config.get(
+                req.model_id, self._reasoning_config.get(tier, self._reasoning_config.get(base, {}))
+            )
+        )
+        if override:
+            reasoning = {"effort": override}
+        elif not reasoning and base in self._reasoning_models:
+            reasoning = {"effort": req.effort}
+        payload: dict[str, Any] = {}
+        params: dict[str, Any] = {}
+        metadata: dict[str, Any] = {}
+        effort = reasoning.get("effort")
+        if reasoning.get("enabled") is False or effort == "none":
+            params["disable_thinking"] = True
+            payload["reasoning_effort"] = "none"
+        else:
+            if "max_tokens" in reasoning:
+                effort = "low"
+                metadata["reasoning_substitution"] = {
+                    "requested_max_tokens": reasoning["max_tokens"],
+                    "reasoning_effort": "low",
+                    "reason": "token_budget_unsupported",
+                }
+            if effort is not None:
+                if effort not in {"minimal", "low", "medium", "high", "xhigh", "max"}:
+                    raise VeniceError(None, "Unsupported reasoning effort")
+                payload["reasoning_effort"] = effort
+                params["disable_thinking"] = False
+            elif reasoning.get("enabled") is True:
+                params["disable_thinking"] = False
+        web = next(
+            (self._web_config[k] for k in (req.model_id, tier, base) if k in self._web_config), None
+        )
+        if web is not None:
+            mode = web.get("enable_web_search", "auto")
+            if mode not in {"auto", "on", "off"}:
+                raise VeniceError(None, "Unsupported web search mode")
+            params["enable_web_search"] = mode
+            metadata["web_search"] = mode
+        if params:
+            payload["venice_parameters"] = params
+        return base.removeprefix("venice:"), payload, metadata
+
+    def complete(
+        self,
+        req: ModelRequest,
+        *,
+        tools: Iterable[dict] | None = None,
+        tool_choice: str | dict | None = None,
+        parallel_tool_calls: bool | None = None,
+    ) -> ModelResponse:
+        """Usage, cost provenance, tool calls and reasoning substitutions survive one POST.
+
+        Optional tool keywords extend the unchanged ModelRequest protocol; assistant
+        tool calls and tool-result messages also pass through unchanged.
+        """
+        wire_id, options, raw = self._configuration(req)
+        payload = {
+            "model": wire_id,
+            "messages": [{"role": "system", "content": req.system}, *req.messages],
+            "max_tokens": req.max_tokens,
+            **options,
+        }
+        if tools is not None:
+            payload["tools"] = list(tools)
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if parallel_tool_calls is not None:
+            payload["parallel_tool_calls"] = parallel_tool_calls
+        response = self._request("POST", "/chat/completions", payload)
+        try:
+            choice = response["choices"][0]
+            message = choice["message"]
+            content = message.get("content") or ""
+            if isinstance(content, list):
+                content = "".join(p["text"] for p in content if p.get("type") == "text")
+            usage = response["usage"]
+            input_tokens, output_tokens = usage["prompt_tokens"], usage["completion_tokens"]
+            if any(type(n) is not int or n < 0 for n in (input_tokens, output_tokens)):
+                raise ValueError
+            serving_id = "venice:" + (response.get("model") or wire_id).removeprefix("venice:")
+            reported = (response.get("cost") or {}).get("usd")
+            if reported is not None:
+                cost = usd_micro(reported, round_up=True)
+                raw["cost_source"] = "reported"
+            else:
+                if serving_id not in self._prices:
+                    self.catalogue()
+                price_id = serving_id if serving_id in self._prices else "venice:" + wire_id
+                cost = self._prices[price_id].cost(input_tokens, output_tokens)
+                raw.update(cost_source="table", price_model_id=price_id, cost_scope="tokens_only")
+            if response.get("id") is not None:
+                raw["request_id"] = response["id"]
+            details = usage.get("completion_tokens_details") or {}
+            if "reasoning_tokens" in details:
+                raw["reasoning_tokens"] = details["reasoning_tokens"]
+            for key in ("tool_calls", "reasoning_content", "reasoning_details"):
+                if key in message:
+                    raw[key] = message[key]
+            return ModelResponse(
+                serving_id,
+                content,
+                input_tokens,
+                output_tokens,
+                choice.get("finish_reason") or "",
+                False,
+                raw,
+                cost,
+            )
+        except VeniceError:
+            raise
+        except Exception:
+            raise VeniceError(None, "Invalid completion, cost or catalogue price") from None
+
+    def catalogue(self) -> list[CatalogueEntry]:
+        """Text model ids are namespaced and fractional per-Mtok prices stay exact."""
+        response = self._request("GET", "/models")
+        try:
+            entries = []
+            for model in response["data"]:
+                if model.get("type", "text") != "text":
+                    continue
+                spec = model["model_spec"]
+                prices = spec["pricing"]
+                quotes = []
+                for key in ("input", "output"):
+                    amount = Decimal(str(prices[key]["usd"]))
+                    if not amount.is_finite() or amount < 0:
+                        raise ValueError
+                    # Change only the decimal exponent; no context rounding of long quotes.
+                    sign, digits, exponent = amount.as_tuple()
+                    quotes.append(str(Decimal((sign, digits, exponent - 6))))
+                entries.append(
+                    CatalogueEntry(
+                        id="venice:" + model["id"].removeprefix("venice:"),
+                        name=model.get("name") or spec.get("name") or model["id"],
+                        prompt_usd_per_token=quotes[0],
+                        completion_usd_per_token=quotes[1],
+                        context_length=spec.get("availableContextTokens"),
+                    )
+                )
+            self._prices = {entry.id: entry.price() for entry in entries}
+            return entries
+        except Exception:
+            raise VeniceError(None, "Invalid catalogue") from None
+
+    def balance_micro(self) -> int | None:
+        """Wallet authentication exposes wallet credits; API-key credit scope is unknown."""
+        if os.environ.get(self._key_env):
+            return None
+        return X402Client(base_url=self._base_url).venice_balance()
+
+
+class VeniceAndOpenRouter:
+    """Namespaced model ids dispatch to Venice; all other ids dispatch to OpenRouter."""
+
+    name = "venice+openrouter"
+
+    def __init__(self, venice: VeniceProvider, openrouter: Any) -> None:
+        self._venice = venice
+        self._openrouter = openrouter
+
+    def complete(self, req: ModelRequest) -> ModelResponse:
+        """Exactly one provider receives each completion."""
+        provider = self._venice if req.model_id.startswith("venice:") else self._openrouter
+        return provider.complete(req)
+
+    def catalogue(self) -> list[CatalogueEntry]:
+        """Both catalogues coexist with disjoint Venice-prefixed identities."""
+        return [*self._openrouter.catalogue(), *self._venice.catalogue()]
