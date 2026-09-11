@@ -47,7 +47,7 @@ def test_scripted_world_starves_but_cannot_die_from_compute_alone() -> None:
 
 def test_crash_world_dies_and_releases_seal_spec_condition_3() -> None:
     m = load_manifest("scripted-crash")
-    s = run_world(m, events=2000, seed=2)
+    s = run_world(m, events=600, seed=2)
     assert s["terminated"] is True and s["termination_reason"] == "balance_zero"
     assert s["seal_key_released"] is True
     assert s["wallet_balance_micro"] <= 0

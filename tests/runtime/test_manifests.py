@@ -21,7 +21,7 @@ def test_scripted_manifest_loads_and_hashes_stably() -> None:
     m = load_manifest("scripted")
     assert m.name == "scripted" and m.exchange.kind == "fake"
     assert m.initial_balance_micro == 100_000_000
-    assert m.drip is not None and m.drip.period_ns == 7 * NS_PER_DAY
+    assert m.drip is None  # phase 2: one starting balance, no drip in the seed worlds
     assert m.novelty.window_ns == NS_PER_DAY
     assert m.price_table().cost("fake-opus", 1000, 100) == 1000 * 5 + 100 * 25
     assert m.manifest_hash() == load_manifest("scripted").manifest_hash()
@@ -31,7 +31,13 @@ def test_scripted_manifest_loads_and_hashes_stably() -> None:
 def test_testnet_manifest_is_not_mainnet() -> None:
     m = load_manifest("testnet")
     assert m.exchange.kind == "hyperliquid" and m.exchange.mainnet is False
-    assert {t.id for t in m.models} == {"claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"}
+    assert {t.id for t in m.models} == {
+        "z-ai/glm-5.3-flash",
+        "deepseek/deepseek-v4.1-flash",
+        "openai/gpt-5.6-luna",
+        "meta/muse-spark-1.3",
+    }
+    assert all(t.provider == "openrouter" for t in m.models)
 
 
 def _base() -> dict:

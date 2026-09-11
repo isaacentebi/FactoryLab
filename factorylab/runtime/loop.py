@@ -52,11 +52,17 @@ from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
 from factorylab.runtime.worlds import WorldManifest
-from factorylab.settlement.forecast import Forecast, ForecastBook
-from factorylab.settlement.scoring import PrevalenceBaseline
-from factorylab.settlement.settle import Settler, open_forecast_decision
-from factorylab.settlement.standing import ConsequenceStanding
-from factorylab.settlement.vocabulary import SEED_VOCABULARY, Observer, WindowFacts
+from factorylab.settlement import (
+    SEED_VOCABULARY,
+    ConsequenceStanding,
+    Forecast,
+    ForecastBook,
+    Observer,
+    PrevalenceBaseline,
+    Settler,
+    WindowFacts,
+    open_forecast_decision,
+)
 from factorylab.world.clock import ClockSource, DripSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange, HyperliquidExchange, Order
@@ -626,7 +632,8 @@ class Runtime:
         self.stats.orders_placed += 1
         if result.status == "rejected":
             self.stats.orders_rejected += 1
-        self._settle_exchange_effects(self.exchange.drain_events())
+        if hasattr(self.exchange, "drain_events"):  # fake venue fills synchronously
+            self._settle_exchange_effects(self.exchange.drain_events())
 
     # ---- routing
 

@@ -13,9 +13,9 @@ kind = "fake"
 coins = ["BTC", "ETH"]
 seed = 2
 shocks = [
-  { step = 502, coin = "BTC", multiplier = "0.5" },
-  { step = 506, coin = "BTC", multiplier = "0.5" },
-  { step = 510, coin = "BTC", multiplier = "0.5" },
+  { step = 42, coin = "BTC", multiplier = "0.5" },
+  { step = 46, coin = "BTC", multiplier = "0.5" },
+  { step = 50, coin = "BTC", multiplier = "0.5" },
 ]
 
 [[models]]
