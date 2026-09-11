@@ -1456,7 +1456,9 @@ class Runtime:
             {
                 "about_handle": handle,
                 "description": description,
-                "inputs": inputs,
+                # Judges see the event the producer answered, never the producer's private
+                # memory or its copy of the world block, and never its name (v0.4 §1.6).
+                "inputs": {"kind": inputs["kind"], "payload": inputs["payload"]},
                 "outputs": ret.outputs,
                 "cost": ret.cost,
                 "status": ret.status,
