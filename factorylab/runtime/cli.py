@@ -153,6 +153,49 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_postmortem(args: argparse.Namespace) -> int:
+    """Decrypt a dead world's diary with its released key file and print selected entries.
+
+    Only meaningful after termination. Reading a live world's key file breaks the
+    non-intervention covenant; this command does not check that for you.
+    """
+    from cryptography.fernet import Fernet
+
+    key = open(args.key, "rb").read().strip()
+    f = Fernet(key)
+    kinds = set(args.kinds.split(",")) if args.kinds else None
+    shown = 0
+    with open(args.ledger, "rb") as stream:
+        next(stream)  # header
+        for line in stream:
+            rec = json.loads(line)
+            item = json.loads(f.decrypt(rec["item"].encode()))
+            kind = item.get("kind")
+            if kind == "event":
+                kind = f"event:{item['event']['kind']}"
+            if kinds and kind not in kinds:
+                continue
+            shown += 1
+            if shown > args.limit:
+                break
+            if kind == "invocation":
+                out = item.get("outputs", "")
+                head = (
+                    f"[{item['seq']}] {kind} {item['assembly_id']} ({item['role']}, "
+                    f"{item['status']}, {item.get('stop_reason')}, {item['cost']} µUSD)"
+                )
+                print(head)
+                print("    ", out[: args.width])
+            elif kind.startswith("event:"):
+                payload = json.dumps(item["event"].get("payload"), default=str)
+                print(f"[{item['seq']}] {kind} {payload[: args.width]}")
+            else:
+                skip = ("kind", "seq", "prev_hash", "hash")
+                body = json.dumps({k: v for k, v in item.items() if k not in skip}, default=str)
+                print(f"[{item['seq']}] {kind} {body[: args.width]}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="factorylab")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -186,6 +229,14 @@ def build_parser() -> argparse.ArgumentParser:
     rp = sub.add_parser("report", help="print a run summary readably")
     rp.add_argument("summary")
     rp.set_defaults(func=_cmd_report)
+
+    pm = sub.add_parser("postmortem", help="decrypt a dead world's diary and print entries")
+    pm.add_argument("ledger")
+    pm.add_argument("key")
+    pm.add_argument("--kinds", default=None, help="comma list, e.g. invocation,event:Registered")
+    pm.add_argument("--limit", type=int, default=50)
+    pm.add_argument("--width", type=int, default=400)
+    pm.set_defaults(func=_cmd_postmortem)
     return p
 
 
