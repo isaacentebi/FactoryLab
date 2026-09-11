@@ -147,9 +147,11 @@ def _assembly(
         raise ValueError("accepts contains an unknown event kind")
     if role == "evaluator" and set(accepts) != {"ProducerReturn"}:
         raise ValueError("evaluators accept exactly ProducerReturn")
-    if role == "meta" and set(accepts) != {"Verdict"}:
-        raise ValueError("metas accept exactly Verdict")
-    if role in ("producer", "antagonist") and {"ProducerReturn", "Verdict"} & set(accepts):
+    if role == "meta" and accepts not in (["Verdict"], ["MetaVerdict"]):
+        raise ValueError("metas accept exactly one of Verdict or MetaVerdict")
+    if role in ("producer", "antagonist") and {
+        "ProducerReturn", "Verdict", "MetaVerdict"
+    } & set(accepts):
         raise ValueError("producers do not accept evaluation events")
     max_tokens = item.get("max_tokens", 512)
     if type(max_tokens) is not int or not 16 <= max_tokens <= 4096:

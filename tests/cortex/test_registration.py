@@ -1,3 +1,5 @@
+import pytest
+
 from factorylab.cortex.registration import (
     AssemblyProposal,
     ModelProposal,
@@ -5,7 +7,7 @@ from factorylab.cortex.registration import (
     parse_proposals,
 )
 
-KINDS = frozenset({"Tick", "MarketMid", "Fill", "ProducerReturn", "Verdict"})
+KINDS = frozenset({"Tick", "MarketMid", "Fill", "ProducerReturn", "Verdict", "MetaVerdict"})
 MODELS = frozenset({"glm-flash", "ds-flash"})
 ASSEMBLIES = frozenset({"seed-decider"})
 
@@ -115,3 +117,30 @@ def test_rejections_carry_reasons_and_cap_is_enforced() -> None:
 def test_register_must_be_list() -> None:
     acc, rej = _parse({"kind": "model"})
     assert acc == [] and rej[0].reason == "register must be a list"
+
+
+@pytest.mark.parametrize("accepts", [["Verdict"], ["MetaVerdict"]])
+def test_meta_accepts_one_evaluation_kind(accepts):
+    accepted, rejected = _parse([{
+        "kind": "assembly", "id": "recursive-meta", "role": "meta",
+        "model_id": "ds-flash", "system_prompt": "Judge the supplied return.",
+        "accepts": accepts,
+    }])
+    assert not rejected
+    assert accepted[0].accepts == tuple(accepts)
+
+
+@pytest.mark.parametrize("role,accepts", [
+    ("meta", []), ("meta", ["Verdict", "MetaVerdict"]),
+    ("meta", ["MetaVerdict", "MetaVerdict"]), ("meta", ["Verdict", "Verdict"]),
+    ("meta", ["Tick"]), ("meta", ["ProducerReturn"]),
+    ("producer", ["MetaVerdict"]), ("antagonist", ["MetaVerdict"]),
+    ("evaluator", ["MetaVerdict"]),
+])
+def test_evaluation_registration_boundaries(role, accepts):
+    accepted, rejected = _parse([{
+        "kind": "assembly", "id": "bad-meta", "role": role,
+        "model_id": "ds-flash", "system_prompt": "Judge.", "accepts": accepts,
+    }])
+    assert not accepted
+    assert len(rejected) == 1
