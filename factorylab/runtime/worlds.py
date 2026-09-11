@@ -83,6 +83,12 @@ class AssemblySeed:
 
 
 @dataclass(frozen=True)
+class ToolsSpec:
+    population_tool_micro_per_call: int = 50
+    max_leverage: int = 3
+
+
+@dataclass(frozen=True)
 class EvaluationSpec:
     consequence_share: float = 0.3
     max_forecasts_per_verdict: int = 2
@@ -123,6 +129,7 @@ class WorldManifest:
     timing: TimingSpec
     termination: TerminationSpec
     evaluation: EvaluationSpec = EvaluationSpec()
+    tools: ToolsSpec = ToolsSpec()
     tick_interval_ns: int = NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -278,6 +285,10 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             term.get("max_events"),
         ),
         evaluation=evaluation,
+        tools=ToolsSpec(
+            int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
+            int((d.get("tools") or {}).get("max_leverage", 3)),
+        ),
         tick_interval_ns=_ns(d.get("tick_interval", "1s")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )

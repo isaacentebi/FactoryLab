@@ -22,6 +22,7 @@ router whose menu grew.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import random
 from collections import deque
@@ -34,7 +35,6 @@ from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.registration import (
     AssemblyProposal,
     ModelProposal,
-    RouterProposal,
     parse_proposals,
 )
 from factorylab.cortex.request import Request, Return
@@ -68,6 +68,20 @@ from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange, HyperliquidExchange, Order
 from factorylab.world.metering import Meter, MeteredModel
 from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
+
+try:  # phase 3 packages; hard imports once every workstream is merged
+    from factorylab.world.venue_tools import VenueTools
+except ImportError:  # pragma: no cover
+    VenueTools = None  # type: ignore[assignment]
+try:
+    from factorylab.cortex.tools import PopulationTool, ToolRunner
+except ImportError:  # pragma: no cover
+    PopulationTool = ToolRunner = None  # type: ignore[assignment]
+try:
+    from factorylab.charter.amendment import Amendment
+    from factorylab.charter.book import CharterBook
+except ImportError:  # pragma: no cover
+    Amendment = CharterBook = None  # type: ignore[assignment]
 
 NOOP = "NOOP"
 CH_FAST, CH_VERDICT, CH_CONFORMITY, CH_CONSEQUENCE = "fast", "verdict", "conformity", "consequence"
@@ -249,6 +263,13 @@ class RunStats:
     epochs: int = 0
     routers_replaced: int = 0
     reconciliations: int = 0
+    tool_calls: int = 0
+    tool_call_failures: int = 0
+    population_tools_registered: int = 0
+    amendments_proposed: int = 0
+    amendments_passed: int = 0
+    amendments_activated: int = 0
+    votes_cast: int = 0
     max_settlement_latency_events: int = 0
     sample_propensity: dict[str, Any] | None = None
     invocation_status: dict[str, int] = field(default_factory=dict)
@@ -410,7 +431,28 @@ class Runtime:
         self.memory: dict[str, deque[dict[str, Any]]] = {}
         self.handle_to_assembly: dict[str, str] = {}
         self.tool_specs: dict[str, dict[str, Any]] = {}  # tool id -> spec dict (world block)
-        self.tool_calls_made = 0
+        self.population_tools: dict[str, Any] = {}
+        self.tool_owner: dict[str, str] = {}  # population tool id -> proposing assembly id
+        self.venue_tools = None
+        if VenueTools is not None:
+            self.venue_tools = VenueTools(
+                self.exchange,
+                coins=manifest.exchange.coins,
+                max_leverage=manifest.tools.max_leverage,
+            )
+            for spec in self.venue_tools.contracts():
+                self.tool_specs[spec.id] = {
+                    "id": spec.id,
+                    "description": spec.description,
+                    "args_schema": _to_plain(spec.args_schema),
+                    "price_micro_per_call": spec.price_micro_per_call,
+                    "kind": spec.kind,
+                }
+        self.tool_runner = ToolRunner() if ToolRunner is not None else None
+        self.charter_book = None
+        if CharterBook is not None:
+            self.charter_book = CharterBook(self.ledger, self.charter)
+        self.pending_votes: list[Any] = []  # committees awaiting tally
 
         # loop state
         self.pending: dict[str, PendingJudgement] = {}
@@ -498,6 +540,38 @@ class Runtime:
             "learner": "exp3 | blum_mansour",
             "gamma": 0.1,
         },
+        "tool": {
+            "kind": "tool",
+            "id": "slug",
+            "description": "what it computes",
+            "args_schema": {"type": "object", "properties": {"x": {"type": "number"}}},
+            "code": "python: read a JSON object from stdin, print a JSON object",
+            "timeout_s": 2,
+        },
+        "amendment": {
+            "kind": "amendment",
+            "id": "slug",
+            "add": [
+                {
+                    "id": "card-id",
+                    "norm": "one of the charter norms",
+                    "description": "what is measured",
+                    "units": "…",
+                    "window": "…",
+                    "acceptable_region": "…",
+                    "observation": "where the number comes from",
+                }
+            ],
+            "replace": [],
+            "remove": ["card-id"],
+            "predicted_effect": "what you expect to change and why",
+        },
+    }
+    A_RETURN_MAY_INCLUDE: dict[str, str] = {
+        "register": "a list of proposals, each shaped like one of proposal_shapes",
+        "tool_calls": (
+            'a list of {"tool": id, "args": {...}} (max 4); results come back in a second call'
+        ),
     }
 
     def _world_block(self) -> dict[str, Any]:
@@ -547,9 +621,7 @@ class Runtime:
                 for k, st in self.routers.items()
             ],
             "event_kinds": sorted(PRODUCER_KINDS | {"ProducerReturn", "Verdict"}),
-            "a_return_may_include": {
-                "register": "a list of proposals, each shaped like one of proposal_shapes",
-            },
+            "a_return_may_include": self.A_RETURN_MAY_INCLUDE,
             "proposal_shapes": self.PROPOSAL_SHAPES,
         }
 
@@ -719,6 +791,7 @@ class Runtime:
             self.reserve.open_window(self.clock.now_ns, self.wallet.balance)
             self.reserve_window_start = self.clock.now_ns
             self.stats.reserve_windows += 1
+            self._activate_charter_if_due()
 
     # ---- exchange effects
 
@@ -827,9 +900,97 @@ class Runtime:
             return "meta"
         return "producer"
 
+    def _allowed_tools(self, action_id: str) -> set[str]:
+        asm = self.assemblies[action_id]
+        allowed = {t for t in self.tool_specs if self.tool_specs[t]["kind"] == "venue"}
+        allowed |= {t for t, owner in self.tool_owner.items() if owner == action_id}
+        allowed |= set(asm.spec.tool_ids) & set(self.tool_specs)
+        return allowed
+
+    def _run_tool(self, action_id: str, handle: str, call: dict[str, Any]) -> tuple[dict, int]:
+        """Execute one tool call through metering. Returns (result, cost)."""
+        tool_id = str(call.get("tool"))
+        args = call.get("args") if isinstance(call.get("args"), dict) else {}
+        if tool_id not in self.tool_specs or tool_id not in self._allowed_tools(action_id):
+            return {"error": "unknown or disallowed tool"}, 0
+        spec = self.tool_specs[tool_id]
+        price = int(spec["price_micro_per_call"])
+
+        def execute() -> dict:
+            if spec["kind"] == "venue" and self.venue_tools is not None:
+                return self.venue_tools.call(tool_id, args)
+            tool = self.population_tools.get(tool_id)
+            if tool is None or self.tool_runner is None:
+                return {"error": "tool unavailable"}
+            return self.tool_runner.run(tool, args)
+
+        try:
+            metered = self.meter.run(
+                handle=handle,
+                reason=f"tool:{tool_id}",
+                ceiling=price,
+                execute=execute,
+                cost_of=lambda _r: price,
+            )
+        except Exception as exc:  # infeasible reservation or tool crash: no result, no charge
+            return {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0
+        return metered.result, metered.cost
+
     def _invoke(self, action_id: str, req: Request, role: str) -> Return:
         asm = self.assemblies[action_id]
         ret = asm.invoke(req)
+        if ret.status == "ok" and ret.tool_calls:
+            results = []
+            tool_cost = 0
+            for call in ret.tool_calls:
+                result, cost = self._run_tool(action_id, req.handle, call)
+                tool_cost += cost
+                ok = not (isinstance(result, dict) and "error" in result)
+                self.stats.tool_calls += 1
+                if not ok:
+                    self.stats.tool_call_failures += 1
+                self.ledger.append(
+                    {
+                        "kind": "tool.call",
+                        "handle": req.handle,
+                        "assembly_id": action_id,
+                        "tool": call.get("tool"),
+                        "args": json.dumps(call.get("args"), default=str)[:1000],
+                        "ok": ok,
+                        "cost": cost,
+                        "ts": self.clock.now_ns,
+                    }
+                )
+                results.append(
+                    {"tool": call.get("tool"), "args": call.get("args"), "result": result}
+                )
+            follow = Request(
+                handle=req.handle,
+                description=req.description,
+                inputs={**req.inputs, "tool_results": results},
+                capability_versions=req.capability_versions,
+                outcome_schema=req.outcome_schema,
+                deadline_ns=req.deadline_ns,
+                cost_ceiling=req.cost_ceiling,
+                parent_handle=req.parent_handle,
+                completion_criterion=req.completion_criterion,
+                scoring_channel=req.scoring_channel,
+                resource_liability=req.resource_liability,
+            )
+            second = asm.invoke(follow)
+            if second.tool_calls:
+                self.ledger.append(
+                    {"kind": "tool.calls_ignored", "handle": req.handle, "ts": self.clock.now_ns}
+                )
+            ret = Return(
+                req.handle,
+                second.outputs,
+                ret.cost + tool_cost + second.cost,
+                second.status,
+                children=second.children,
+                served_by=second.served_by,
+                stop_reason=second.stop_reason,
+            )
         self.stats.invocations += 1
         self.stats.invocation_status[ret.status] = (
             self.stats.invocation_status.get(ret.status, 0) + 1
@@ -1152,12 +1313,35 @@ class Runtime:
     def _apply_registrations(self, handle: str, ret: Return) -> None:
         if ret.status != "ok":
             return
+        raw = ret.outputs.get("register")
+        amendments = []
+        if isinstance(raw, list):
+            amendments = [x for x in raw if isinstance(x, dict) and x.get("kind") == "amendment"]
+            raw = [x for x in raw if not (isinstance(x, dict) and x.get("kind") == "amendment")]
+        extra: dict[str, Any] = {}
+        if "known_tools" in inspect.signature(parse_proposals).parameters:
+            extra["known_tools"] = frozenset(self.tool_specs)
         accepted, rejected = parse_proposals(
-            ret.outputs,
+            {**ret.outputs, "register": raw} if raw is not None else ret.outputs,
             event_kinds=PRODUCER_KINDS | {"ProducerReturn", "Verdict"},
             known_models=frozenset(self.prices.prices),
             known_assemblies=frozenset(self.assemblies),
+            **extra,
         )
+        for item in amendments:
+            try:
+                self._propose_amendment(handle, item)
+                self.stats.registrations_accepted += 1
+            except (Infeasible, PermissionError, ValueError, KeyError, TypeError) as exc:
+                self.stats.registrations_rejected += 1
+                self.ledger.append(
+                    {
+                        "kind": "registration.rejected",
+                        "handle": handle,
+                        "reason": f"amendment: {type(exc).__name__}: {exc}"[:300],
+                        "ts": self.clock.now_ns,
+                    }
+                )
         for r in rejected:
             self.stats.registrations_rejected += 1
             self.ledger.append(
@@ -1184,10 +1368,35 @@ class Runtime:
                     }
                 )
 
-    def _register(
-        self, handle: str, prop: ModelProposal | AssemblyProposal | RouterProposal
-    ) -> None:
+    def _register(self, handle: str, prop: Any) -> None:
         amount = self.ev.trial_amount_micro
+        if PopulationTool is not None and type(prop).__name__ == "ToolProposal":
+            contract = Contract(
+                id=f"tool:{prop.id}",
+                version=1,
+                kind="tool",
+                description=prop.description,
+                input_schema=_to_plain(prop.args_schema),
+                output_schema={"type": "object"},
+                price=PriceSpec({"call": self.m.tools.population_tool_micro_per_call}),
+                permissions=frozenset({"sandbox.run"}),
+                resource_bounds=ResourceBounds(max_duration_ns=prop.timeout_s * 1_000_000_000),
+            )
+            res = self.reserve.reserve_for(contract, amount)
+            self.registry.register(contract, by_handle=handle, reservation=res)
+            tool = PopulationTool(
+                prop.id, prop.description, prop.args_schema, prop.code, prop.timeout_s, handle
+            )
+            self.population_tools[prop.id] = tool
+            owner = self.handle_to_assembly.get(handle)
+            if owner is not None:
+                self.tool_owner[prop.id] = owner
+            self.tool_specs[prop.id] = self.tool_runner.as_spec(
+                tool, self.m.tools.population_tool_micro_per_call
+            )
+            self.stats.population_tools_registered += 1
+            self._emit(EventKind.REGISTERED, {"kind": "tool", "id": prop.id, "by": handle})
+            return
         if isinstance(prop, ModelProposal):
             if self.catalogue is None or prop.openrouter_id not in self.catalogue:
                 raise ValueError("no catalogue entry for that model in this world")
@@ -1257,6 +1466,132 @@ class Runtime:
                     "by": handle,
                 },
             )
+
+    def _propose_amendment(self, handle: str, item: dict[str, Any]) -> None:
+        if self.charter_book is None or Amendment is None:
+            raise ValueError("charter amendments unavailable in this build")
+        from factorylab.charter.charter import MetricCard
+
+        def cards(key: str) -> tuple[MetricCard, ...]:
+            raw = item.get(key) or []
+            if not isinstance(raw, list):
+                raise ValueError(f"{key} must be a list")
+            out = []
+            for c in raw:
+                if not isinstance(c, dict):
+                    raise ValueError(f"{key} entries must be objects")
+                out.append(
+                    MetricCard(
+                        str(c.get("id", "")),
+                        str(c.get("norm", "")),
+                        str(c.get("description", "")),
+                        str(c.get("units", "")),
+                        str(c.get("window", "")),
+                        str(c.get("acceptable_region", "")),
+                        str(c.get("observation", "")),
+                    )
+                )
+            return tuple(out)
+
+        remove = item.get("remove") or []
+        if not isinstance(remove, list) or any(not isinstance(r, str) for r in remove):
+            raise ValueError("remove must be a list of card ids")
+        am = Amendment(
+            id=str(item.get("id", "")),
+            proposer_handle=handle,
+            edition_base=self.charter.edition,
+            add=cards("add"),
+            replace=cards("replace"),
+            remove=tuple(remove),
+            predicted_effect=str(item.get("predicted_effect", "")),
+        )
+        contract = Contract(
+            id=f"amendment:{am.id}",
+            version=1,
+            kind="tool",
+            description="charter amendment proposal",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+            price=PriceSpec({}),
+            permissions=frozenset(),
+            resource_bounds=ResourceBounds(),
+        )
+        res = self.reserve.reserve_for(contract, self.ev.trial_amount_micro)
+        self.registry.register(contract, by_handle=handle, reservation=res)
+        self.charter_book.propose(am)
+        self.stats.amendments_proposed += 1
+        eligible = {a.spec.id: a.spec.role for a in self.assemblies.values()}
+        committee = self.charter_book.seat(am.id, eligible, self.rng)
+        self._hold_vote(am, committee)
+
+    def _hold_vote(self, am: Any, committee: Any) -> None:
+        for seat in committee.seats:
+            alias, assembly_id = seat[0], seat[1]
+            handle = f"vote-{am.id}-{alias}"
+            inputs = {
+                "amendment": {
+                    "id": am.id,
+                    "add": [vars(c) for c in am.add],
+                    "replace": [vars(c) for c in am.replace],
+                    "remove": list(am.remove),
+                    "predicted_effect": am.predicted_effect,
+                },
+                "charter": self.charter.render(),
+                "world": self._world_block(),
+            }
+            schema = {
+                "type": "object",
+                "properties": {"vote": {"type": "boolean"}, "reason": {"type": "string"}},
+                "required": ["vote", "reason"],
+            }
+            req = self._request(
+                handle,
+                "Vote on an amendment to the charter's metric cards.",
+                inputs,
+                schema,
+                self.clock.now_ns + self.m.tick_interval_ns * 10,
+                CH_FAST,
+            )
+            asm = self.assemblies.get(assembly_id)
+            if asm is None:
+                self.charter_book.abstain(committee, alias)
+                continue
+            ret = asm.invoke(req)
+            self.stats.invocations += 1
+            self.ledger.append(
+                {
+                    "kind": "invocation",
+                    "assembly_id": assembly_id,
+                    "role": "voter",
+                    "handle": handle,
+                    "cost": ret.cost,
+                    "status": ret.status,
+                    "stop_reason": ret.stop_reason or "none",
+                    "served_by": ret.served_by,
+                    "outputs": json.dumps(ret.outputs, default=str)[:2000],
+                    "ts": self.clock.now_ns,
+                }
+            )
+            vote = ret.outputs.get("vote") if ret.status == "ok" else None
+            if isinstance(vote, bool):
+                self.charter_book.vote(
+                    committee, alias, vote, str(ret.outputs.get("reason", ""))[:1000]
+                )
+                self.stats.votes_cast += 1
+            else:
+                self.charter_book.abstain(committee, alias)
+        outcome = self.charter_book.tally(committee)
+        if outcome == "passed":
+            self.stats.amendments_passed += 1
+
+    def _activate_charter_if_due(self) -> None:
+        if self.charter_book is None:
+            return
+        new = self.charter_book.activate_due(self.clock.now_ns)
+        while new is not None:
+            self.charter = new
+            self.stats.amendments_activated += 1
+            new = self.charter_book.activate_due(self.clock.now_ns)
 
     def _open_epoch(self, kind: str) -> None:
         state = self.routers.get(kind)
@@ -1388,6 +1723,8 @@ class Runtime:
             "exchange_equity_usd": _equity_or_none(self.exchange),
             "live": self.live,
             "evaluation_boundary": EVALUATION_BOUNDARY,
+            "charter_edition": self.charter.edition,
+            "tools": sorted(self.tool_specs),
             "standing": self.standing.snapshot(),
             "routers": {
                 k: {"universe": s.universe, "epoch": s.epoch, "learner": type(s.learner).__name__}
