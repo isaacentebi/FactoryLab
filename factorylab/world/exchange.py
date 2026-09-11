@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import random
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_DOWN, Decimal
 from enum import StrEnum
 from typing import Any, Protocol
@@ -19,6 +19,15 @@ from factorylab.world.events import WorldEvent, WorldEventKind
 
 NS_PER_MS = 1_000_000
 NS_PER_HOUR = 3_600 * 1_000_000_000
+
+
+def _interval_ns(interval: str) -> int:
+    return {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}[interval] * 1_000_000_000
+
+
+def _check_count(n: int, maximum: int) -> None:
+    if type(n) is not int or not 1 <= n <= maximum:
+        raise ValueError(f"count must be an integer between 1 and {maximum}")
 
 
 class OrderKind(StrEnum):
@@ -101,8 +110,14 @@ class Exchange(Protocol):
     def funding(self) -> list[FundingEvent]: ...
     def account(self) -> AccountState: ...
     def place(self, order: Order) -> OrderResult: ...
-    def cancel(self, order_id: str) -> None: ...
+    def cancel(self, order_id: str, *, coin: str | None = None) -> dict | None: ...
     def fills(self, since_ns: int) -> list[Fill]: ...
+    def candles(self, coin: str, interval: str, n: int) -> list[dict]: ...
+    def order_book(self, coin: str, depth: int) -> dict: ...
+    def funding_history(self, coin: str, n: int) -> list[FundingEvent]: ...
+    def open_orders(self) -> list[dict]: ...
+    def close(self, coin: str, size: Decimal | None = None) -> OrderResult: ...
+    def set_leverage(self, coin: str, leverage: int) -> dict: ...
 
 
 # --------------------------------------------------------------------------- fake
@@ -151,6 +166,9 @@ class FakeExchange:
         self._next_oid = 1
         self._last_funding_ns = 0
         self._pending_events: list[WorldEvent] = []
+        self._mid_history: dict[str, list[tuple[int, Decimal]]] = {coin: [] for coin in self._mids}
+        self._funding_history: list[FundingEvent] = []
+        self._leverage: dict[str, Decimal] = {}
 
     # ---- time and prices
 
@@ -169,6 +187,7 @@ class FakeExchange:
         events: list[WorldEvent] = []
         for coin in self.coins:
             self._mids[coin] = self._next_price(coin)
+            self._mid_history[coin].append((ts_ns, self._mids[coin]))
             events.append(
                 WorldEvent(
                     WorldEventKind.MARKET_MID,
@@ -214,16 +233,16 @@ class FakeExchange:
 
     def account(self) -> AccountState:
         unrealized = Decimal(0)
-        notional = Decimal(0)
+        margin = Decimal(0)
         for p in self._positions.values():
             mid = self._mids[p.coin]
             unrealized += (mid - p.entry_px) * p.size
-            notional += abs(p.size) * mid
+            margin += abs(p.size) * mid / self._leverage.get(p.coin, self.max_leverage)
         return AccountState(
             equity_usd=self._cash + unrealized,
             cash_usd=self._cash,
             positions=tuple(self._positions.values()),
-            margin_used_usd=notional / self.max_leverage if notional else Decimal(0),
+            margin_used_usd=margin,
         )
 
     def place(self, order: Order) -> OrderResult:
@@ -242,7 +261,14 @@ class FakeExchange:
         px = mid + half if order.is_buy else mid - half
         return self._fill(oid, order, px)
 
-    def cancel(self, order_id: str) -> None:
+    def cancel(self, order_id: str, *, coin: str | None = None) -> dict | None:
+        """Coin-scoped cancellations cannot remove another coin's order."""
+        if coin is not None:
+            order = self._resting.get(order_id)
+            if order is None or order.coin != coin:
+                return {"status": "rejected", "error": "unknown order for coin"}
+            del self._resting[order_id]
+            return {"status": "cancelled", "order_id": order_id}
         self._resting.pop(order_id, None)
 
     def fills(self, since_ns: int) -> list[Fill]:
@@ -252,6 +278,94 @@ class FakeExchange:
         """Return and clear events produced by ``place`` (fills, rejections)."""
         out, self._pending_events = self._pending_events, []
         return out
+
+    def candles(self, coin: str, interval: str, n: int) -> list[dict]:
+        """Return up to n observed OHLC buckets, oldest first, with zero synthetic volume.
+
+        Timestamps are bucket starts in nanoseconds. Empty buckets are omitted;
+        the latest bucket may be incomplete. Only advance() supplies observations.
+        """
+        _check_count(n, 200)
+        width = _interval_ns(interval)
+        buckets: dict[int, dict] = {}
+        for ts_ns, mid in self._mid_history[coin]:
+            start = ts_ns - ts_ns % width
+            if start not in buckets:
+                buckets[start] = {
+                    "ts_ns": start,
+                    "open": mid,
+                    "high": mid,
+                    "low": mid,
+                    "close": mid,
+                    "volume": Decimal(0),
+                }
+            else:
+                candle = buckets[start]
+                candle["high"] = max(candle["high"], mid)
+                candle["low"] = min(candle["low"], mid)
+                candle["close"] = mid
+        return list(buckets.values())[-n:]
+
+    def order_book(self, coin: str, depth: int) -> dict:
+        """Return deterministic best-first levels, with unit size halved at each level.
+
+        Level k is mid plus/minus k times the configured full spread. A zero
+        spread produces coincident prices, consistent with a frictionless fake.
+        """
+        _check_count(depth, 20)
+        mid = self._mids[coin]
+        spread = mid * self.spread_bps / Decimal(10_000)
+        return {
+            "coin": coin,
+            "ts_ns": self._now_ns,
+            "bids": [
+                {"price": mid - k * spread, "size": Decimal(1) / (2 ** (k - 1))}
+                for k in range(1, depth + 1)
+            ],
+            "asks": [
+                {"price": mid + k * spread, "size": Decimal(1) / (2 ** (k - 1))}
+                for k in range(1, depth + 1)
+            ],
+        }
+
+    def funding_history(self, coin: str, n: int) -> list[FundingEvent]:
+        """Return only applied funding observations, oldest first, capped at n."""
+        _check_count(n, 100)
+        if coin not in self._mids:
+            raise ValueError("unknown coin")
+        return [event for event in self._funding_history if event.coin == coin][-n:]
+
+    def open_orders(self) -> list[dict]:
+        """Return detached snapshots of currently resting orders."""
+        return [
+            {
+                "order_id": oid,
+                "coin": order.coin,
+                "side": "buy" if order.is_buy else "sell",
+                "size": order.size,
+                "price": order.limit_px,
+            }
+            for oid, order in self._resting.items()
+        ]
+
+    def close(self, coin: str, size: Decimal | None = None) -> OrderResult:
+        """Close at most the current position; flat or invalid requests are rejected."""
+        pos = self._positions.get(coin)
+        if pos is None:
+            return OrderResult(None, "rejected", Decimal(0), None, "no open position")
+        if size is not None and (not size.is_finite() or size <= 0):
+            return OrderResult(None, "rejected", Decimal(0), None, "size must be positive")
+        amount = abs(pos.size) if size is None else min(size, abs(pos.size))
+        return self.place(Order(coin, pos.size < 0, amount, reduce_only=True))
+
+    def set_leverage(self, coin: str, leverage: int) -> dict:
+        """Accept integer leverage within the venue cap without changing other coins."""
+        if coin not in self._mids:
+            return {"status": "rejected", "error": "unknown coin"}
+        if type(leverage) is not int or not 1 <= leverage <= self.max_leverage:
+            return {"status": "rejected", "error": f"leverage must be 1..{self.max_leverage}"}
+        self._leverage[coin] = Decimal(leverage)
+        return {"status": "ok", "coin": coin, "leverage": leverage}
 
     # ---- internals
 
@@ -272,6 +386,19 @@ class FakeExchange:
     def _fill(
         self, oid: str, order: Order, px: Decimal, *, liquidation: bool = False
     ) -> OrderResult:
+        if order.reduce_only:
+            pos = self._positions.get(order.coin)
+            if pos is None or (pos.size > 0) == order.is_buy:
+                self._pending_events.append(
+                    WorldEvent(
+                        WorldEventKind.ORDER_REJECTED,
+                        self._now_ns,
+                        self.name,
+                        {"order_id": oid, "coin": order.coin, "reason": "not reducing position"},
+                    )
+                )
+                return OrderResult(oid, "rejected", Decimal(0), None, "not reducing position")
+            order = replace(order, size=min(order.size, abs(pos.size)))
         notional = order.size * px
         fee = (notional * self.fee_bps / Decimal(10_000)).quantize(Decimal("0.000001"))
         signed = order.size if order.is_buy else -order.size
@@ -331,17 +458,19 @@ class FakeExchange:
         return OrderResult(oid, "filled", order.size, px)
 
     def _margin_ok(self, coin: str, new_size: Decimal, px: Decimal) -> bool:
-        notional = abs(new_size) * px
+        margin = abs(new_size) * px / self._leverage.get(coin, self.max_leverage)
         for p in self._positions.values():
             if p.coin != coin:
-                notional += abs(p.size) * self._mids[p.coin]
-        return notional <= self.account().equity_usd * self.max_leverage
+                margin += (
+                    abs(p.size) * self._mids[p.coin] / self._leverage.get(p.coin, self.max_leverage)
+                )
+        return margin <= self.account().equity_usd
 
     def _liquidate_if_needed(self) -> list[WorldEvent]:
         """Force-close every position at mid when equity falls below maintenance margin.
 
         Maintenance margin is ``maintenance_fraction`` of initial margin
-        (notional / max_leverage). The realised loss lands in cash like any
+        (notional / each coin's leverage). The realised loss lands in cash like any
         other fill, so a leveraged position can take the account negative.
         """
         if not self._positions:
@@ -362,6 +491,7 @@ class FakeExchange:
     def _apply_funding(self) -> list[WorldEvent]:
         events: list[WorldEvent] = []
         for coin in self.coins:
+            self._funding_history.append(FundingEvent(coin, self.funding_rate, None, self._now_ns))
             pos = self._positions.get(coin)
             paid = Decimal(0)
             if pos is not None:
@@ -487,13 +617,96 @@ class HyperliquidExchange:
             )
         return out
 
+    def candles(self, coin: str, interval: str, n: int) -> list[dict]:
+        """Return up to n recent OHLCV buckets in increasing nanosecond timestamp order."""
+        import time
+
+        _check_count(n, 200)
+        width_ms = _interval_ns(interval) // NS_PER_MS
+        end_ms = time.time_ns() // NS_PER_MS
+        start_ms = end_ms - end_ms % width_ms - (n - 1) * width_ms
+        raw = self._info.candles_snapshot(coin, interval, start_ms, end_ms)
+        return [
+            {
+                "ts_ns": int(c["t"]) * NS_PER_MS,
+                "open": Decimal(str(c["o"])),
+                "high": Decimal(str(c["h"])),
+                "low": Decimal(str(c["l"])),
+                "close": Decimal(str(c["c"])),
+                "volume": Decimal(str(c["v"])),
+            }
+            for c in sorted(raw, key=lambda c: int(c["t"]))[-n:]
+        ]
+
+    def order_book(self, coin: str, depth: int) -> dict:
+        """Return at most depth levels per side, bids descending and asks ascending."""
+        _check_count(depth, 20)
+        raw = self._info.l2_snapshot(coin)
+        sides = [
+            sorted(
+                [
+                    {"price": Decimal(str(level["px"])), "size": Decimal(str(level["sz"]))}
+                    for level in levels
+                ],
+                key=lambda level: level["price"],
+                reverse=index == 0,
+            )[:depth]
+            for index, levels in enumerate(raw["levels"])
+        ]
+        return {
+            "coin": coin,
+            "ts_ns": int(raw["time"]) * NS_PER_MS,
+            "bids": sides[0],
+            "asks": sides[1],
+        }
+
+    def funding_history(self, coin: str, n: int) -> list[FundingEvent]:
+        """Return up to n recent hourly funding observations, oldest first."""
+        import time
+
+        _check_count(n, 100)
+        end_ms = time.time_ns() // NS_PER_MS
+        raw = self._info.funding_history(coin, end_ms - n * NS_PER_HOUR // NS_PER_MS, end_ms)
+        return [
+            FundingEvent(
+                coin,
+                Decimal(str(f["fundingRate"])),
+                Decimal(str(f["premium"])) if f.get("premium") is not None else None,
+                int(f["time"]) * NS_PER_MS,
+            )
+            for f in sorted(raw, key=lambda f: int(f["time"]))[-n:]
+        ]
+
+    def open_orders(self) -> list[dict]:
+        """Return normalized resting orders for the configured address."""
+        if not self._address:
+            raise RuntimeError("open_orders() needs an address or a private key")
+        return [
+            {
+                "order_id": str(o["oid"]),
+                "coin": o["coin"],
+                "side": "buy" if o["side"] == "B" else "sell",
+                "size": Decimal(str(o["sz"])),
+                "price": Decimal(str(o["limitPx"])),
+            }
+            for o in self._info.open_orders(self._address)
+        ]
+
     # ---- writes
 
     def place(self, order: Order) -> OrderResult:
         if self._exchange is None:
             return OrderResult(None, "rejected", Decimal(0), None, "no signing key")
-        sz = float(self._round_size(order.coin, order.size))
         try:
+            if order.reduce_only and order.kind is OrderKind.MARKET:
+                pos = next((p for p in self.account().positions if p.coin == order.coin), None)
+                if pos is None or (pos.size > 0) == order.is_buy:
+                    return OrderResult(None, "rejected", Decimal(0), None, "not reducing position")
+                return self.close(order.coin, min(order.size, abs(pos.size)))
+            rounded = self._round_size(order.coin, order.size)
+            if not rounded.is_finite() or rounded <= 0:
+                return OrderResult(None, "rejected", Decimal(0), None, "size below venue precision")
+            sz = float(rounded)  # SDK wire format only; venue/account arithmetic stays Decimal.
             if order.kind is OrderKind.MARKET:
                 resp = self._exchange.market_open(order.coin, order.is_buy, sz)
             else:
@@ -510,16 +723,53 @@ class HyperliquidExchange:
             return OrderResult(None, "rejected", Decimal(0), None, f"{type(exc).__name__}: {exc}")
         return self._parse_order_response(resp)
 
-    def cancel(self, order_id: str) -> None:
+    def cancel(self, order_id: str, *, coin: str | None = None) -> dict:
+        """Return a cancellation result, including rejection when no signing key exists.
+
+        An explicit coin targets only that market. Legacy calls without a coin
+        try configured markets until the venue confirms success.
+        """
         if self._exchange is None:
-            return
-        # Hyperliquid cancels need the coin; callers track it. We try each coin.
-        for coin in self.coins:
+            return {"status": "rejected", "error": "no signing key"}
+        result = {"status": "rejected", "error": "unknown order"}
+        for name in (coin,) if coin is not None else self.coins:
             try:
-                self._exchange.cancel(coin, int(order_id))
-                return
-            except Exception:
-                continue
+                resp = self._exchange.cancel(name, int(order_id))
+                if resp.get("status") == "ok":
+                    statuses = resp["response"]["data"]["statuses"]
+                    if statuses == ["success"]:
+                        return {"status": "cancelled", "order_id": order_id}
+                result = {"status": "rejected", "error": str(resp)}
+            except Exception as exc:
+                result = {"status": "rejected", "error": f"{type(exc).__name__}: {exc}"}
+        return result
+
+    def close(self, coin: str, size: Decimal | None = None) -> OrderResult:
+        """Use the venue's reduce-only market close; never turn a tiny size into a full close."""
+        if self._exchange is None:
+            return OrderResult(None, "rejected", Decimal(0), None, "no signing key")
+        try:
+            rounded = None if size is None else self._round_size(coin, size)
+            if rounded is not None and (not rounded.is_finite() or rounded <= 0):
+                return OrderResult(None, "rejected", Decimal(0), None, "size below venue precision")
+            resp = self._exchange.market_close(coin, sz=None if rounded is None else float(rounded))
+            return self._parse_order_response(resp)
+        except Exception as exc:
+            return OrderResult(None, "rejected", Decimal(0), None, f"{type(exc).__name__}: {exc}")
+
+    def set_leverage(self, coin: str, leverage: int) -> dict:
+        """Return venue acknowledgement or a rejected result without propagating failures."""
+        if self._exchange is None:
+            return {"status": "rejected", "error": "no signing key"}
+        if type(leverage) is not int or leverage < 1:
+            return {"status": "rejected", "error": "leverage must be a positive integer"}
+        try:
+            resp = self._exchange.update_leverage(leverage, coin, is_cross=True)
+            if resp.get("status") == "ok":
+                return {"status": "ok", "coin": coin, "leverage": leverage}
+            return {"status": "rejected", "error": str(resp)}
+        except Exception as exc:
+            return {"status": "rejected", "error": f"{type(exc).__name__}: {exc}"}
 
     # ---- helpers
 
@@ -543,7 +793,14 @@ class HyperliquidExchange:
                 return OrderResult(str(st["resting"]["oid"]), "resting", Decimal(0), None)
             if "error" in st:
                 return OrderResult(None, "rejected", Decimal(0), None, str(st["error"]))
-        except (KeyError, IndexError, TypeError, AttributeError) as exc:
+        except (
+            KeyError,
+            IndexError,
+            TypeError,
+            AttributeError,
+            ArithmeticError,
+            ValueError,
+        ) as exc:
             return OrderResult(None, "rejected", Decimal(0), None, f"unparseable: {exc}")
         return OrderResult(None, "rejected", Decimal(0), None, "unknown response shape")
 
