@@ -338,3 +338,21 @@ def test_nonfinite_violation_is_rejected_before_ledger_or_state_changes(ledger):
         prices.observe("cost", 1e308, 0)
     assert prices.snapshot() == before
     assert evidence(ledger) == []
+
+
+def test_update_region_keeps_price_counts_and_timing_but_moves_the_bounds(ledger):
+    timing = TimingRegistry()
+    prices = controller(ledger, timing=timing)
+    prices.register(region())
+    prices.observe("cost", 12, 0)
+    before = prices.snapshot()
+    assert before["cards"]["cost"]["lambda"] == 0.5
+    prices.update_region(region(hi=20.0, scale=4.0))
+    assert prices.snapshot() == before  # nothing but the bounds changed
+    assert prices.violation("cost", 12) == 0.0 and prices.violation("cost", 28) == 2.0
+    assert timing.closure_count("price:cost") == 1
+    with pytest.raises(KeyError):
+        prices.update_region(region(card_id="unknown"))
+    with pytest.raises(ValueError):
+        prices.update_region("cost")
+    assert len(evidence(ledger)) == 1  # a region change is not a price revision

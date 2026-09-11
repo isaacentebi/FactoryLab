@@ -13,6 +13,14 @@ and settled later by the world. A meta assembly judges the verdict and
 settles the evaluator decision on ``conformity``. Anything nobody judged in
 time is censored: no score, no learning, no manufactured outcome.
 
+Prices. At each reserve-window boundary the runtime measures the window
+that closed (cost per return, well-formed rate, forecast skill, turnover)
+and hands each priced metric card one observation. The price controller
+(spec v0.6 section 8.1) revises a bounded λ per card; verdict and conformity
+scores settle net of Σ λ·violation, clipped to [0, 1]. The consequence and
+exposure channels, the novelty reserve and router exploration are outside
+its authority.
+
 Registration. Any return may carry proposals. Well-formed ones are paid from
 the novelty reserve, registered with the proposing decision as provenance,
 and announced. Adding an assembly opens a new comparator epoch for every
@@ -28,9 +36,11 @@ import random
 from collections import deque
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_EVEN, Decimal
+from statistics import median
 from typing import Any
 
 from factorylab.charter.charter import Charter, seed_charter
+from factorylab.charter.controller import CardRegion, PriceController
 from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.registration import (
     AssemblyProposal,
@@ -51,6 +61,7 @@ from factorylab.kernel.wallet import DripSchedule, Infeasible, Wallet
 from factorylab.learners.base import BanditFeedback
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
+from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement import (
@@ -87,6 +98,9 @@ CH_FAST, CH_VERDICT, CH_CONFORMITY, CH_CONSEQUENCE = "fast", "verdict", "conform
 CH_EXPOSURE, DEF_EXPOSURE = "exposure", "exposure-v1"
 DEF_FAST, DEF_VERDICT, DEF_CONFORMITY = "fast-v1", "verdict-v1", "conformity-v1"
 PRODUCER_KINDS = frozenset({"Tick", "MarketMid", "Funding", "Fill", "OrderRejected"})
+# metric cards a judged return answers for, by the judged role (spec v0.6 section 8.1)
+PRODUCER_CARDS = frozenset({"cost_per_return", "well_formed_rate", "turnover"})
+EVALUATOR_CARDS = frozenset({"forecast_skill", "well_formed_rate"})
 EVALUATION_BOUNDARY = "producer → evaluator → meta"
 
 
@@ -314,6 +328,20 @@ class RouterState:
 
 
 @dataclass
+class MeasureWindow:
+    """Raw material for one reserve window's metric-card observations."""
+
+    index: int
+    equity_start_micro: int
+    costs: list[int] = field(
+        default_factory=list
+    )  # wallet cost of each well-formed producer return
+    invocations: int = 0
+    ok: int = 0
+    notional_micro: int = 0  # filled size × price, summed
+
+
+@dataclass
 class PendingJudgement:
     handle: str  # decision awaiting a verdict (producer) or conformity (evaluator)
     channel: str
@@ -355,7 +383,11 @@ class RunStats:
     transfer_intents: int = 0
     exposures_settled: int = 0
     exposures_won: int = 0
+    price_updates: int = 0
+    price_skipped: int = 0
+    penalized_settlements: int = 0
     max_settlement_latency_events: int = 0
+    last_window_values: dict[str, float] = field(default_factory=dict)
     sample_propensity: dict[str, Any] | None = None
     invocation_status: dict[str, int] = field(default_factory=dict)
     invocations_by_role: dict[str, int] = field(default_factory=dict)
@@ -554,6 +586,22 @@ class Runtime:
         self.tool_runner = ToolRunner()
         self.charter_book = CharterBook(self.ledger, self.charter)
         self.pending_votes: list[Any] = []  # committees awaiting tally
+
+        # prices (spec v0.6 section 8.1): regions are parsed here, the controller only prices
+        pr = manifest.prices
+        self.controller = PriceController(
+            self.ledger,
+            eta=pr.eta,
+            decay=pr.decay,
+            lambda_max=pr.lambda_max,
+            min_window_events=pr.min_window_events,
+            timing=self.timing,
+        )
+        self.regions: dict[str, CardRegion] = {}  # cards of the current edition with a region
+        self.priced: set[str] = set()  # every card id ever registered with the controller
+        self.rolling: dict[str, float] = {}
+        self.unparsed_logged: set[tuple[str, int]] = set()
+        self.window = MeasureWindow(0, self.wallet.balance)
 
         # loop state
         self.pending: dict[str, PendingJudgement] = {}
@@ -911,10 +959,165 @@ class Runtime:
             self.reserve_window_start is None
             or self.clock.now_ns >= self.reserve_window_start + self.m.novelty.window_ns
         ):
+            if self.reserve_window_start is not None:
+                self._close_price_window()
             self.reserve.open_window(self.clock.now_ns, self.wallet.balance)
             self.reserve_window_start = self.clock.now_ns
             self.stats.reserve_windows += 1
             self._activate_charter_if_due()
+            self._derive_regions()
+            self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro())
+
+    # ---- prices
+
+    def _equity_micro(self) -> int:
+        try:
+            return _usd_to_micro(self.exchange.account().equity_usd)
+        except RuntimeError:  # read-only live venue: the wallet is the only equity there is
+            return self.wallet.balance
+
+    def _derive_regions(self) -> None:
+        """Every readable card of the current edition holds a region; unreadable ones hold none.
+
+        New cards register; cards whose bound moved (a rolling median, a restated
+        card) keep their price and get the new bounds. Each change is a
+        ``price.region`` entry; prose the runtime cannot read is logged once per
+        card per edition as ``price.unparsed``.
+        """
+        regions: dict[str, CardRegion] = {}
+        for card in self.charter.cards:
+            region = region_for(card, rolling=self.rolling)
+            if region is None:
+                key = (card.id, self.charter.edition)
+                if not parses(card) and key not in self.unparsed_logged:
+                    self.unparsed_logged.add(key)
+                    self.ledger.append(
+                        {
+                            "kind": "price.unparsed",
+                            "card_id": card.id,
+                            "text": card.acceptable_region,
+                            "edition": self.charter.edition,
+                            "ts": self.clock.now_ns,
+                        }
+                    )
+                continue
+            regions[card.id] = region
+            if region == self.regions.get(card.id):
+                continue
+            if card.id in self.priced:
+                self.controller.update_region(region)
+            else:
+                self.controller.register(region)
+                self.priced.add(card.id)
+            self.ledger.append(
+                {
+                    "kind": "price.region",
+                    "card_id": card.id,
+                    "edition": self.charter.edition,
+                    "region": {
+                        "kind": region.kind,
+                        "lo": region.lo,
+                        "hi": region.hi,
+                        "scale": region.scale,
+                    },
+                    "ts": self.clock.now_ns,
+                }
+            )
+        self.regions = regions
+
+    def _close_price_window(self) -> None:
+        """The window that just closed yields at most one observation per priced card.
+
+        cost_per_return: mean wallet cost (micro-USD) of well-formed producer
+        returns; well_formed_rate: ok returns over all invocations;
+        forecast_skill: mean consequence-standing skill over evaluators with
+        settled forecasts; turnover: filled notional over equity at the window
+        start (0 with no fills). A quantity without support is not observed.
+        """
+        w = self.window
+        values: dict[str, float] = {}
+        if w.costs:
+            values["cost_per_return"] = sum(w.costs) / len(w.costs)
+        if w.invocations:
+            values["well_formed_rate"] = w.ok / w.invocations
+        evaluators = {a.spec.id for a in self.assemblies.values() if a.spec.role == "evaluator"}
+        skills = [
+            v["skill"]
+            for eid, v in self.standing.snapshot().items()
+            if eid in evaluators and v.get("n")
+        ]
+        if skills:
+            values["forecast_skill"] = sum(skills) / len(skills)
+        if w.notional_micro == 0:
+            values["turnover"] = 0.0
+        elif w.equity_start_micro > 0:
+            values["turnover"] = w.notional_micro / w.equity_start_micro
+        self.ledger.append(
+            {
+                "kind": "price.window",
+                "window": w.index,
+                "window_end_event": self.n,
+                "values": values,
+                "ts": self.clock.now_ns,
+            }
+        )
+        before = self.controller.snapshot()["cards"]
+        observed = [c for c in sorted(self.regions) if c in values]
+        for card_id in observed:
+            self.controller.observe(card_id, values[card_id], window_end_event=self.n)
+        after = self.controller.snapshot()["cards"]
+        for card_id in observed:
+            if after[card_id]["updates"] > before[card_id]["updates"]:
+                self.stats.price_updates += 1
+            else:
+                self.stats.price_skipped += 1
+        if w.costs:
+            self.rolling["cost_per_return_prev_median"] = float(median(w.costs))
+        self.stats.last_window_values = values
+
+    def _penalty_for(self, cards: frozenset[str]) -> float:
+        """Σ λ_j · violation_j over the latest window's values for cards the role answers for."""
+        values = {
+            k: v
+            for k, v in self.stats.last_window_values.items()
+            if k in cards and k in self.regions
+        }
+        return self.controller.penalty(values) if values else 0.0
+
+    def _settle_priced(
+        self,
+        handle: str,
+        *,
+        channel: str,
+        score: float,
+        definition_version: str,
+        sampling_ref: str | None,
+        cards: frozenset[str],
+    ) -> None:
+        """Settle a judged score less the card penalty, clipped to [0, 1]; both are ledgered."""
+        penalty = self._penalty_for(cards)
+        effective = min(1.0, max(0.0, score - penalty))
+        self.queue.settle(
+            handle,
+            channel=channel,
+            score=effective,
+            status=SettleStatus.SETTLED,
+            definition_version=definition_version,
+            sampling_ref=sampling_ref,
+        )
+        self.ledger.append(
+            {
+                "kind": "price.penalty",
+                "handle": handle,
+                "channel": channel,
+                "raw": score,
+                "penalty": penalty,
+                "effective": effective,
+                "ts": self.clock.now_ns,
+            }
+        )
+        if penalty > 0:
+            self.stats.penalized_settlements += 1
 
     # ---- exchange effects
 
@@ -924,6 +1127,9 @@ class Runtime:
                 return
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
+                self.window.notional_micro += _usd_to_micro(
+                    Decimal(str(we.payload["size"])) * Decimal(str(we.payload["px"]))
+                )
                 realized = _usd_to_micro(we.payload["realized_usd"])
                 fee = _usd_to_micro(we.payload["fee_usd"])
                 self.realized_to_date += realized
@@ -1139,6 +1345,11 @@ class Runtime:
             self.stats.invocation_status.get(ret.status, 0) + 1
         )
         self.stats.invocations_by_role[role] = self.stats.invocations_by_role.get(role, 0) + 1
+        self.window.invocations += 1
+        if ret.status == "ok":
+            self.window.ok += 1
+            if role == "producer":
+                self.window.costs.append(ret.cost)
         sr = ret.stop_reason or "none"
         self.stats.stop_reasons[sr] = self.stats.stop_reasons.get(sr, 0) + 1
         self.ledger.append(
@@ -1333,13 +1544,13 @@ class Runtime:
             and about_decision.channel == CH_VERDICT
             and about_decision.status is SettleStatus.PENDING
         ):
-            self.queue.settle(
+            self._settle_priced(
                 about,
                 channel=CH_VERDICT,
                 score=verdict,
-                status=SettleStatus.SETTLED,
                 definition_version=DEF_VERDICT,
                 sampling_ref=handle,
+                cards=PRODUCER_CARDS,
             )
             self.stats.verdicts += 1
             self.stats.max_settlement_latency_events = max(
@@ -1450,13 +1661,13 @@ class Runtime:
             return
         pend = self.pending.pop(evaluator_handle, None)
         if pend is not None and self.queue.get(evaluator_handle).status is SettleStatus.PENDING:
-            self.queue.settle(
+            self._settle_priced(
                 evaluator_handle,
                 channel=CH_CONFORMITY,
                 score=conformity,
-                status=SettleStatus.SETTLED,
                 definition_version=DEF_CONFORMITY,
                 sampling_ref=handle,
+                cards=EVALUATOR_CARDS,
             )
             self.stats.conformities += 1
             owner = self.handle_to_assembly.get(evaluator_handle)
@@ -1935,6 +2146,7 @@ class Runtime:
             "charter_edition": self.charter.edition,
             "tools": sorted(self.tool_specs),
             "standing": self.standing.snapshot(),
+            "prices": self.controller.snapshot(),
             "routers": {
                 st.learner.id: {
                     "event_kind": st.kind,

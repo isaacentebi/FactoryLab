@@ -90,6 +90,16 @@ class ToolsSpec:
 
 
 @dataclass(frozen=True)
+class PricesSpec:
+    """Price controller parameters (spec v0.6 section 8.1). Not money: bare rates and bounds."""
+
+    eta: float = 0.5
+    decay: float = 0.1
+    lambda_max: float = 1.0
+    min_window_events: int = 1
+
+
+@dataclass(frozen=True)
 class EvaluationSpec:
     consequence_share: float = 0.3
     max_forecasts_per_verdict: int = 2
@@ -131,6 +141,7 @@ class WorldManifest:
     termination: TerminationSpec
     evaluation: EvaluationSpec = EvaluationSpec()
     tools: ToolsSpec = ToolsSpec()
+    prices: PricesSpec = PricesSpec()
     tick_interval_ns: int = NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -201,6 +212,9 @@ class WorldManifest:
                 raise ValueError("shock step must be >= 1 and multiplier positive")
         if self.drip is not None and (self.drip.period_ns <= 0 or self.drip.amount_micro < 0):
             raise ValueError("drip period must be positive and amount non-negative")
+        p = self.prices
+        if min(p.eta, p.decay, p.lambda_max) <= 0 or p.min_window_events < 1:
+            raise ValueError("prices: eta, decay, lambda_max > 0 and min_window_events >= 1")
 
 
 def _ns(value: Any) -> int:
@@ -268,6 +282,13 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10")),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
     )
+    pr = d.get("prices") or {}
+    prices = PricesSpec(
+        eta=float(pr.get("eta", 0.5)),
+        decay=float(pr.get("decay", 0.1)),
+        lambda_max=float(pr.get("lambda_max", 1.0)),
+        min_window_events=int(pr.get("min_window_events", 1)),
+    )
     nov = d.get("novelty", {})
     tim = d.get("timing", {})
     term = d.get("termination", {})
@@ -291,6 +312,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             int((d.get("tools") or {}).get("max_leverage", 3)),
             int((d.get("tools") or {}).get("max_routers_per_kind", 3)),
         ),
+        prices=prices,
         tick_interval_ns=_ns(d.get("tick_interval", "1s")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
