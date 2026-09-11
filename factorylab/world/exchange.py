@@ -132,6 +132,8 @@ class FakeExchange:
     funding_interval_ns: int = NS_PER_HOUR
     step_bps: Decimal = Decimal("10")  # random-walk step when no price_path
     max_leverage: Decimal = Decimal("3")
+    shocks: dict[int, dict[str, Decimal]] = field(default_factory=dict)  # step -> coin -> mult
+    maintenance_fraction: Decimal = Decimal("0.5")  # of initial margin; below it, liquidate
 
     def __post_init__(self) -> None:
         self._rng = random.Random(self.seed)
@@ -174,6 +176,7 @@ class FakeExchange:
                 )
             )
         events.extend(self._cross_resting())
+        events.extend(self._liquidate_if_needed())
         if ts_ns - self._last_funding_ns >= self.funding_interval_ns:
             self._last_funding_ns = ts_ns - (ts_ns % self.funding_interval_ns)
             events.extend(self._apply_funding())
@@ -185,7 +188,19 @@ class FakeExchange:
             return path[min(self._step - 1, len(path) - 1)]
         drift = Decimal(self._rng.uniform(-1, 1)) * self.step_bps / Decimal(10_000)
         px = self._mids[coin] * (Decimal(1) + drift)
+        shock = self.shocks.get(self._step, {}).get(coin)
+        if shock is not None:
+            px = px * shock
         return px.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+
+    def sync_cash(self, cash_usd: Decimal) -> None:
+        """Set venue cash to the authoritative wallet figure.
+
+        The runtime calls this after settling fills and funding into the wallet
+        so margin checks see the wallet's truth, including compute spend the
+        venue never observes.
+        """
+        self._cash = Decimal(cash_usd)
 
     # ---- protocol
 
@@ -252,14 +267,16 @@ class FakeExchange:
                 events.extend(self.drain_events())
         return events
 
-    def _fill(self, oid: str, order: Order, px: Decimal) -> OrderResult:
+    def _fill(
+        self, oid: str, order: Order, px: Decimal, *, liquidation: bool = False
+    ) -> OrderResult:
         notional = order.size * px
         fee = (notional * self.fee_bps / Decimal(10_000)).quantize(Decimal("0.000001"))
         signed = order.size if order.is_buy else -order.size
         pos = self._positions.get(order.coin)
         new_size = (pos.size if pos else Decimal(0)) + signed
-        # margin check on the resulting position
-        if pos is None or abs(new_size) > abs(pos.size):
+        # margin check on the resulting position (never blocks a liquidation close)
+        if not liquidation and (pos is None or abs(new_size) > abs(pos.size)):
             if not self._margin_ok(order.coin, new_size, px):
                 self._pending_events.append(
                     WorldEvent(
@@ -305,6 +322,7 @@ class FakeExchange:
                     "px": str(px),
                     "fee_usd": str(fee),
                     "realized_usd": str(realized),
+                    "liquidation": liquidation,
                 },
             )
         )
@@ -316,6 +334,28 @@ class FakeExchange:
             if p.coin != coin:
                 notional += abs(p.size) * self._mids[p.coin]
         return notional <= self.account().equity_usd * self.max_leverage
+
+    def _liquidate_if_needed(self) -> list[WorldEvent]:
+        """Force-close every position at mid when equity falls below maintenance margin.
+
+        Maintenance margin is ``maintenance_fraction`` of initial margin
+        (notional / max_leverage). The realised loss lands in cash like any
+        other fill, so a leveraged position can take the account negative.
+        """
+        if not self._positions:
+            return []
+        acct = self.account()
+        maintenance = acct.margin_used_usd * self.maintenance_fraction
+        if acct.equity_usd >= maintenance:
+            return []
+        events: list[WorldEvent] = []
+        for pos in list(self._positions.values()):
+            oid = str(self._next_oid)
+            self._next_oid += 1
+            close = Order(pos.coin, pos.size < 0, abs(pos.size))
+            self._fill(oid, close, self._mids[pos.coin], liquidation=True)
+            events.extend(self.drain_events())
+        return events
 
     def _apply_funding(self) -> list[WorldEvent]:
         events: list[WorldEvent] = []

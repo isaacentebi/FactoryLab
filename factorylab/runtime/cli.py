@@ -47,6 +47,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         seed=args.seed,
         initial_balance_micro=args.initial_balance,
         ledger_path=args.ledger,
+        drip=not args.no_drip,
     )
     print(json.dumps(summary, indent=2, default=str))
     return 0
@@ -70,6 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--seed", type=int, default=None)
     r.add_argument("--initial-balance", type=int, default=None, help="micro-USD override")
     r.add_argument("--ledger", default=None, help="ledger file path; in-memory if omitted")
+    r.add_argument("--no-drip", action="store_true", help="launch without the manifest's drip")
     r.set_defaults(func=_cmd_run)
     return p
 
