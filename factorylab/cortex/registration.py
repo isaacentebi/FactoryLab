@@ -43,7 +43,16 @@ class RouterProposal:
     gamma: float
 
 
-Proposal = ModelProposal | AssemblyProposal | RouterProposal
+@dataclass(frozen=True)
+class ToolProposal:
+    id: str
+    description: str
+    args_schema: dict
+    code: str
+    timeout_s: int
+
+
+Proposal = ModelProposal | AssemblyProposal | RouterProposal | ToolProposal
 
 
 @dataclass(frozen=True)
@@ -58,13 +67,15 @@ def parse_proposals(
     event_kinds: frozenset[str],
     known_models: frozenset[str],
     known_assemblies: frozenset[str],
+    known_tools: frozenset[str] = frozenset(),
 ) -> tuple[list[Proposal], list[Rejected]]:
     """Return well-formed proposals and the reasons the rest were refused.
 
     Guarantees: at most ``MAX_PROPOSALS_PER_RETURN`` proposals are accepted,
     in order; an assembly proposal never reuses an existing id or names an
     unknown model; a router proposal names a known event kind and learner;
-    prompts are bounded; nothing here has side effects.
+    prompts are bounded; tools have fresh ids, bounded source and timeouts;
+    nothing here has side effects.
     """
     raw = outputs.get("register")
     if raw is None:
@@ -88,6 +99,8 @@ def parse_proposals(
                 accepted.append(_assembly(item, event_kinds, known_models, known_assemblies))
             elif kind == "router":
                 accepted.append(_router(item, event_kinds))
+            elif kind == "tool":
+                accepted.append(_tool(item, known_tools))
             else:
                 raise ValueError("unknown proposal kind")
         except ValueError as exc:
@@ -157,3 +170,40 @@ def _router(item: dict[str, Any], event_kinds: frozenset[str]) -> RouterProposal
     if not isinstance(gamma, int | float) or isinstance(gamma, bool) or not 0 < gamma <= 1:
         raise ValueError("gamma must be in (0, 1]")
     return RouterProposal(kind, learner, float(gamma))
+
+
+def _tool(item: dict[str, Any], known_tools: frozenset[str]) -> ToolProposal:
+    tid = item.get("id")
+    if not isinstance(tid, str) or not SLUG.fullmatch(tid):
+        raise ValueError("id must be a slug of 2-48 chars")
+    if tid in known_tools:
+        raise ValueError("id already registered")
+    description = item.get("description")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError("description is required")
+    if len(description) > 500:
+        raise ValueError("description exceeds 500 chars")
+    schema = item.get("args_schema")
+    if (
+        not isinstance(schema, dict)
+        or schema.get("type") != "object"
+        or not isinstance(schema.get("properties"), dict)
+    ):
+        raise ValueError("args_schema must have type object and a properties dict")
+    code = item.get("code")
+    if not isinstance(code, str):
+        raise ValueError("code must be a string")
+    if len(code) > 8000:
+        raise ValueError("code exceeds 8000 chars")
+    if any(
+        name in code
+        for name in (
+            "import socket", "import urllib", "import http", "import requests",
+            "subprocess", "os.system",
+        )
+    ):
+        raise ValueError("code names a forbidden module")
+    timeout_s = item.get("timeout_s")
+    if type(timeout_s) is not int or not 1 <= timeout_s <= 5:
+        raise ValueError("timeout_s must be an int in [1, 5]")
+    return ToolProposal(tid, description, schema, code, timeout_s)
