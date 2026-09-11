@@ -1,0 +1,54 @@
+# The scripted world plus three 50% BTC drops on ticks where the scripted trader
+# holds a leveraged long (tick index 1 mod 4 buys; venue step = index + 1). The
+# venue liquidates when equity falls below maintenance margin and the realised
+# loss lands in the wallet.
+# Used to demonstrate death by world event (spec section 6, condition 3).
+name = "scripted-crash"
+seed = 2
+initial_balance_usd = "5"
+tick_interval = "1s"
+
+[exchange]
+kind = "fake"
+coins = ["BTC", "ETH"]
+seed = 2
+shocks = [
+  { step = 502, coin = "BTC", multiplier = "0.5" },
+  { step = 506, coin = "BTC", multiplier = "0.5" },
+  { step = 510, coin = "BTC", multiplier = "0.5" },
+]
+
+[[models]]
+id = "fake-opus"
+provider = "fake"
+input_usd_per_mtok = "5"
+output_usd_per_mtok = "25"
+
+[[models]]
+id = "fake-haiku"
+provider = "fake"
+input_usd_per_mtok = "1"
+output_usd_per_mtok = "5"
+
+[[assemblies]]
+id = "seed-observer"
+model_id = "fake-haiku"
+accepts = ["MarketMid", "Funding"]
+max_tokens = 256
+
+[[assemblies]]
+id = "seed-decider"
+model_id = "fake-opus"
+accepts = ["Tick", "Fill"]
+max_tokens = 512
+
+[novelty]
+share = 0.1
+window = "1d"
+
+[timing]
+min_ratio = 3
+jitter_fraction = 0.2
+
+[termination]
+balance_floor_usd = "0"

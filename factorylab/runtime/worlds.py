@@ -42,12 +42,22 @@ class DripSpec:
 
 
 @dataclass(frozen=True)
+class Shock:
+    """A scripted price multiplier applied to one coin at one venue step (fake venue only)."""
+
+    step: int
+    coin: str
+    multiplier: str
+
+
+@dataclass(frozen=True)
 class ExchangeSpec:
     kind: str  # "fake" | "hyperliquid"
     mainnet: bool = False
     coins: tuple[str, ...] = ("BTC", "ETH")
     seed: int = 0
     start_cash_usd: str = "100"
+    shocks: tuple[Shock, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -137,6 +147,11 @@ class WorldManifest:
             raise ValueError("unknown exchange kind")
         if self.exchange.kind == "hyperliquid" and self.exchange.mainnet and self.name != "funded":
             raise ValueError("mainnet is only allowed in the world named 'funded'")
+        if self.exchange.shocks and self.exchange.kind != "fake":
+            raise ValueError("price shocks exist only on the fake venue")
+        for sh in self.exchange.shocks:
+            if sh.step < 1 or Decimal(sh.multiplier) <= 0:
+                raise ValueError("shock step must be >= 1 and multiplier positive")
         if self.drip is not None and (self.drip.period_ns <= 0 or self.drip.amount_micro < 0):
             raise ValueError("drip period must be positive and amount non-negative")
 
@@ -169,6 +184,10 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         coins=tuple(ex.get("coins", ["BTC", "ETH"])),
         seed=int(ex.get("seed", d.get("seed", 0))),
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
+        shocks=tuple(
+            Shock(int(sh["step"]), str(sh["coin"]), str(sh["multiplier"]))
+            for sh in ex.get("shocks", [])
+        ),
     )
     models = tuple(
         ModelTier(

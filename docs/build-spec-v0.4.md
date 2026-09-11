@@ -275,7 +275,7 @@ Phase 1 is the substrate on the `scripted` world plus a live read against testne
 
 1. `uv run pytest` exits 0.
 2. `uv run factorylab run --world scripted --events 200 --seed 1` runs to completion and its final status output shows: at least one non-NOOP invocation with a logged propensity; every invocation metered before return (ledger shows reserve→commit pairs); at least one delayed settlement delivered to a handle opened at least 10 events earlier; wallet balance equal to the conservation formula; `Ledger.verify()` true.
-3. `uv run factorylab run --world scripted --events 2000 --seed 2 --initial-balance 5000000` terminates by death (balance ≤ 0) with a `Terminated` event and releases the seal key.
+3. `uv run factorylab run --world scripted-crash --events 2000 --seed 2` terminates by death (balance ≤ 0) with a `Terminated` event and releases the seal key. The crash world is the scripted world plus one scripted 50% BTC drop; death has to come from the world because metering never lets compute alone take the balance below zero (a wallet that cannot afford to think starves, it does not die).
 4. The reference-games test demonstrates Hedge accumulating positive swap regret and BlumMansour driving it toward zero on the same game and seed.
 5. `uv run factorylab probe --world testnet` fetches live mids and funding from Hyperliquid testnet and prints them (network required; skipped in CI).
 
