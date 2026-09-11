@@ -63,9 +63,10 @@ class ExchangeSpec:
 @dataclass(frozen=True)
 class ModelTier:
     id: str
-    provider: str  # "fake" | "anthropic"
+    provider: str  # "fake" | "openrouter" | "anthropic"
     input_usd_per_mtok: str
     output_usd_per_mtok: str
+    reasoning: bool = False  # send a reasoning-effort field to this model
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,17 @@ class AssemblySeed:
     max_tokens: int = 1024
     effort: str = "medium"
     memory_policy: str = "none"
+    role: str = "producer"
+
+
+@dataclass(frozen=True)
+class EvaluationSpec:
+    consequence_share: float = 0.3
+    max_forecasts_per_verdict: int = 2
+    verdict_timeout_events: int = 20
+    min_coverage: float = 0.5
+    trial_amount_micro: int = 100_000  # novelty trial paid per registration
+    forecast_horizon_events: int = 10
 
 
 @dataclass(frozen=True)
@@ -108,6 +120,7 @@ class WorldManifest:
     novelty: NoveltySpec
     timing: TimingSpec
     termination: TerminationSpec
+    evaluation: EvaluationSpec = EvaluationSpec()
     tick_interval_ns: int = NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -116,7 +129,9 @@ class WorldManifest:
     def price_table(self) -> PriceTable:
         t = PriceTable()
         for m in self.models:
-            t.register(m.id, TokenPrice.from_per_mtok(m.input_usd_per_mtok, m.output_usd_per_mtok))
+            per_in = Decimal(m.input_usd_per_mtok) / Decimal(1_000_000)
+            per_out = Decimal(m.output_usd_per_mtok) / Decimal(1_000_000)
+            t.register(m.id, TokenPrice.from_per_token(str(per_in), str(per_out)))
         return t
 
     def canonical_json(self) -> str:
@@ -139,6 +154,11 @@ class WorldManifest:
                 raise ValueError(f"assembly {a.id} uses unpriced model {a.model_id}")
         if not 0 <= self.novelty.share <= 1:
             raise ValueError("novelty share must be in [0, 1]")
+        if not 0 <= self.evaluation.consequence_share < 1:
+            raise ValueError("consequence share must be in [0, 1)")
+        for a in self.assemblies:
+            if a.role not in ("producer", "evaluator", "meta"):
+                raise ValueError(f"assembly {a.id} has unknown role {a.role}")
         if self.novelty.window_ns <= 0:
             raise ValueError("novelty window must be positive")
         if self.timing.min_ratio < 1:
@@ -195,6 +215,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             provider=m.get("provider", "fake"),
             input_usd_per_mtok=str(m["input_usd_per_mtok"]),
             output_usd_per_mtok=str(m["output_usd_per_mtok"]),
+            reasoning=bool(m.get("reasoning", False)),
         )
         for m in d.get("models", [])
     )
@@ -206,8 +227,18 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             max_tokens=int(a.get("max_tokens", 1024)),
             effort=a.get("effort", "medium"),
             memory_policy=a.get("memory_policy", "none"),
+            role=a.get("role", "producer"),
         )
         for a in d.get("assemblies", [])
+    )
+    ev = d.get("evaluation", {})
+    evaluation = EvaluationSpec(
+        consequence_share=float(ev.get("consequence_share", 0.3)),
+        max_forecasts_per_verdict=int(ev.get("max_forecasts_per_verdict", 2)),
+        verdict_timeout_events=int(ev.get("verdict_timeout_events", 20)),
+        min_coverage=float(ev.get("min_coverage", 0.5)),
+        trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10")),
+        forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
     )
     nov = d.get("novelty", {})
     tim = d.get("timing", {})
@@ -226,6 +257,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             usd_to_micro(term.get("balance_floor_usd", 0)),
             term.get("max_events"),
         ),
+        evaluation=evaluation,
         tick_interval_ns=_ns(d.get("tick_interval", "1s")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )

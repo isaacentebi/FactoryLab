@@ -41,9 +41,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print("factorylab run: the runtime loop is not built yet", file=sys.stderr)
         return 1
     m = load_manifest(args.world)
+    events = args.events
+    if args.duration:
+        from factorylab.runtime.worlds import _ns
+
+        events = max(1, _ns(args.duration) // m.tick_interval_ns)
     summary = run_world(
         m,
-        events=args.events,
+        events=events,
         seed=args.seed,
         initial_balance_micro=args.initial_balance,
         ledger_path=args.ledger,
@@ -72,6 +77,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--initial-balance", type=int, default=None, help="micro-USD override")
     r.add_argument("--ledger", default=None, help="ledger file path; in-memory if omitted")
     r.add_argument("--no-drip", action="store_true", help="launch without the manifest's drip")
+    r.add_argument(
+        "--duration", default=None, help="wall-clock length like 30m; overrides --events"
+    )
     r.set_defaults(func=_cmd_run)
     return p
 

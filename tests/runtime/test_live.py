@@ -1,0 +1,162 @@
+from decimal import Decimal
+
+from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
+from factorylab.runtime.loop import run_world
+from factorylab.runtime.worlds import load_manifest, manifest_from_dict
+from factorylab.world.events import WorldEventKind
+from factorylab.world.exchange import AccountState, Fill, FundingEvent, Order, OrderResult
+
+
+class FakeTime:
+    def __init__(self) -> None:
+        self.t = 1_000_000_000_000
+        self.slept: list[float] = []
+
+    def now_ns(self) -> int:
+        return self.t
+
+    def sleep(self, s: float) -> None:
+        self.slept.append(s)
+        self.t += int(s * 1_000_000_000)
+
+
+def test_live_clock_paces_against_wall_clock_without_real_sleep() -> None:
+    ft = FakeTime()
+    clock = LiveClock(interval_ns=2_000_000_000, count=3, now_ns=ft.now_ns, sleep=ft.sleep)
+    evs = list(clock.events())
+    assert [e.kind for e in evs] == [WorldEventKind.TICK] * 3
+    assert evs[1].ts_ns - evs[0].ts_ns == 2_000_000_000
+    assert ft.slept == [2.0, 2.0]
+
+
+class StubExchange:
+    """A read-only live venue stand-in with two fills appearing on the second tick."""
+
+    name = "stub-testnet"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def mids(self):
+        self.calls += 1
+        return {"BTC": Decimal("70000") + self.calls, "ETH": Decimal("2500")}
+
+    def funding(self):
+        return [FundingEvent("BTC", Decimal("0.0001"), Decimal("0.001"), 0)]
+
+    def account(self):
+        return AccountState(Decimal("100"), Decimal("100"), (), Decimal(0))
+
+    def place(self, order: Order) -> OrderResult:
+        return OrderResult(None, "rejected", Decimal(0), None, "no signing key")
+
+    def cancel(self, order_id: str) -> None:
+        pass
+
+    def fills(self, since_ns: int):
+        if self.calls < 2:
+            return []
+        return [
+            Fill(
+                "f1",
+                "BTC",
+                True,
+                Decimal("0.001"),
+                Decimal("70000"),
+                Decimal("0.02"),
+                5,
+                Decimal("0"),
+            ),
+            Fill(
+                "f2",
+                "BTC",
+                False,
+                Decimal("0.001"),
+                Decimal("70100"),
+                Decimal("0.02"),
+                6,
+                Decimal("0.1"),
+            ),
+        ]
+
+
+def test_live_venue_emits_mids_funding_and_new_fills_once() -> None:
+    v = LiveVenue(StubExchange())
+    first = v.on_tick(10)
+    kinds = [e.kind for e in first]
+    assert kinds.count(WorldEventKind.MARKET_MID) == 2 and WorldEventKind.FUNDING in kinds
+    assert WorldEventKind.FILL not in kinds
+    second = v.on_tick(20)
+    fills = [e for e in second if e.kind is WorldEventKind.FILL]
+    assert len(fills) == 2 and fills[1].payload["realized_usd"] == "0.1"
+    third = v.on_tick(30)
+    assert not [e for e in third if e.kind is WorldEventKind.FILL]  # not re-emitted
+
+
+def test_reconciler_snapshot_reports_discrepancy() -> None:
+    class P:
+        def balance_micro(self):
+            return 40_000_000
+
+    snap = Reconciler.snapshot(100_000_000, P(), StubExchange())
+    assert snap["openrouter_remaining_micro"] == 40_000_000
+    assert snap["venue_equity_usd"] == "100"
+    assert snap["pots_micro"] == 140_000_000 and snap["discrepancy_micro"] == -40_000_000
+
+
+def test_build_provider_needs_key_for_openrouter(monkeypatch) -> None:
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    m = load_manifest("testnet")
+    try:
+        build_provider(m)
+    except RuntimeError as exc:
+        assert "OPENROUTER_API_KEY" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected a RuntimeError without the key")
+    assert build_provider(load_manifest("scripted")) is None
+
+
+def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() -> None:
+    d = {
+        "name": "stubnet",
+        "seed": 5,
+        "initial_balance_usd": "20",
+        "tick_interval": "1s",
+        "exchange": {"kind": "hyperliquid", "mainnet": False, "coins": ["BTC", "ETH"]},
+        "models": [
+            {
+                "id": "fake-haiku",
+                "provider": "fake",
+                "input_usd_per_mtok": "1",
+                "output_usd_per_mtok": "5",
+            },
+        ],
+        "assemblies": [
+            {
+                "id": "seed-decider",
+                "role": "producer",
+                "model_id": "fake-haiku",
+                "accepts": ["Tick", "Fill"],
+            },
+            {
+                "id": "eval-a",
+                "role": "evaluator",
+                "model_id": "fake-haiku",
+                "accepts": ["ProducerReturn"],
+            },
+            {"id": "meta-a", "role": "meta", "model_id": "fake-haiku", "accepts": ["Verdict"]},
+        ],
+        "novelty": {"share": 0.1, "window": "1d"},
+    }
+    m = manifest_from_dict(d)
+    ft = FakeTime()
+    clock = LiveClock(
+        interval_ns=1_000_000_000, count=25, now_ns=ft.now_ns, sleep=ft.sleep
+    ).events()
+    s = run_world(m, events=25, seed=5, exchange=StubExchange(), clock_source=clock)
+    st = s["stats"]
+    assert s["live"] is True and s["terminated"] is False
+    assert st["reconciliations"] >= 2  # every 10 ticks
+    assert st["fills"] == 2 and st["orders_rejected"] == st["orders_placed"]
+    assert st["verdicts"] >= 1 and st["forecasts_sealed"] >= 1
+    assert s["wallet_conservation"] is True and s["ledger_verify"] is True

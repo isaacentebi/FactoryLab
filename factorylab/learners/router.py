@@ -39,15 +39,25 @@ class Router:
         self.action_ids_for_event = action_ids_for_event
 
     def route(
-        self, event_kind: str, is_feasible: Callable[[str], tuple[bool, str]], rng: Random
+        self,
+        event_kind: str,
+        is_feasible: Callable[[str], tuple[bool, str]],
+        rng: Random,
+        mix: Callable[[dict[str, float]], dict[str, float]] | None = None,
     ) -> Sample:
-        """Return a replayable draw and exact exclusions, with NOOP unconditionally feasible."""
+        """Return a replayable draw and exact exclusions, with NOOP unconditionally feasible.
+
+        ``mix`` may transform the learner's distribution before sampling (e.g. blend in a
+        protected share); the logged probs are the distribution actually sampled from.
+        """
         actions = list(dict.fromkeys(
             a for a in self.action_ids_for_event(event_kind) if a != "NOOP"
         ))
         actions.append("NOOP")
         result = filter(actions, lambda a: (True, "") if a == "NOOP" else is_feasible(a))
         distribution = self.learner.distribution(result.feasible)
+        if mix is not None:
+            distribution = mix(distribution)
         _probabilities(distribution, result.feasible)
         action_ids = tuple(result.feasible)
         probs = tuple(distribution[a] for a in action_ids)

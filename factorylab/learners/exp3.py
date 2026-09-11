@@ -44,6 +44,21 @@ class EXP3:
         )
         self._log_weights = _center(weights)
 
+    def expand(self, actions: Sequence[str]) -> "EXP3":
+        """Return a new learner over ``actions`` (a superset) for a new comparator epoch.
+
+        Existing actions carry their log-weights; new actions start at the carried
+        mean. No regret guarantee spans the epoch boundary.
+        """
+        new = _actions(actions)
+        if not set(self.actions) <= set(new):
+            raise ValueError("an epoch may only add actions")
+        carried = [self._log_weights[a] for a in self.actions]
+        mean = sum(carried) / len(carried)
+        learner = EXP3(new, self.gamma, id=self.id)
+        learner._log_weights = _center({a: self._log_weights.get(a, mean) for a in new})
+        return learner
+
     def state(self) -> bytes:
         """Return deterministic weights, parameters, and identity."""
         return _state(

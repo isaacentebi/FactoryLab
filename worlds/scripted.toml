@@ -4,11 +4,6 @@ seed = 1
 initial_balance_usd = "100"
 tick_interval = "1s"
 
-[drip]
-amount_usd = "10"
-period = "7d"
-start = 0
-end = "84d"
 
 [exchange]
 kind = "fake"
@@ -30,15 +25,68 @@ output_usd_per_mtok = "5"
 
 [[assemblies]]
 id = "seed-observer"
+role = "producer"
 model_id = "fake-haiku"
 accepts = ["MarketMid", "Funding"]
 max_tokens = 256
 
 [[assemblies]]
 id = "seed-decider"
+role = "producer"
 model_id = "fake-opus"
 accepts = ["Tick", "Fill"]
 max_tokens = 512
+
+# Evaluators outnumber producers; two run on the other model family.
+[[assemblies]]
+id = "eval-a"
+role = "evaluator"
+model_id = "fake-haiku"
+accepts = ["ProducerReturn"]
+max_tokens = 256
+
+[[assemblies]]
+id = "eval-b"
+role = "evaluator"
+model_id = "fake-haiku"
+accepts = ["ProducerReturn"]
+max_tokens = 256
+
+[[assemblies]]
+id = "eval-c"
+role = "evaluator"
+model_id = "fake-opus"
+accepts = ["ProducerReturn"]
+max_tokens = 256
+
+[[assemblies]]
+id = "eval-d"
+role = "evaluator"
+model_id = "fake-opus"
+accepts = ["ProducerReturn"]
+max_tokens = 256
+
+[[assemblies]]
+id = "meta-a"
+role = "meta"
+model_id = "fake-haiku"
+accepts = ["Verdict"]
+max_tokens = 128
+
+[[assemblies]]
+id = "meta-b"
+role = "meta"
+model_id = "fake-haiku"
+accepts = ["Verdict"]
+max_tokens = 128
+
+[evaluation]
+consequence_share = 0.3
+max_forecasts_per_verdict = 2
+verdict_timeout_events = 20
+min_coverage = 0.5
+trial_amount_usd = "0.10"
+forecast_horizon_events = 10
 
 [novelty]
 share = 0.1
