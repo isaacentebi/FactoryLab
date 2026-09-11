@@ -12,9 +12,13 @@ Written 11 September 2026 so that any session (or a compacted one) can resume fr
 
 ## State on main
 
-Phases 1, 2, 3 are merged (PRs #1–#16). 736 tests. Live testnet runs 1–3 are logged; run 3 was the first world that changed its own parts on model proposals.
+Phases 1–3b and most of phase 4 are merged (PRs #1–#24). Gate: 1170 tests. Merged on 11 September in phase 4: versioning (behaviour-based versions, pathologies, early warnings), population-proposed λ, recursive meta-evaluation behind a per-tier cascade gate, verdict-as-consequence-forecast with FIFO lots and a reward-hacking review, the x402 client and Venice provider, and compute bought on the open market (`market.discover`, `x402:` sellers, insolvency). Judges see only the event a producer answered. The Hyperliquid adapter survives transient API failures.
 
-Branch `p3b-runtime` (in progress, not merged): several routers per event kind (`router` proposals with `add: true`), the `treasury.transfer` intent tool and `TransferIntent` event, the `antagonist` role with the `exposure` channel, antagonists seeded in the three manifests. Codex is building the price controller (`charter/controller.py`, spec v0.6 §8.1) on branch `p3-D`.
+In flight: resume after a process death (spec v0.7 §6) and the committee-amendable clock (§8), both with Codex in worktrees `../FactoryLab-p4H` and `../FactoryLab-p4K`.
+
+Live runs: 1–5 logged (run 5 summary in `runs/`, to be copied to `docs/runs/`). Run 5 had two unscripted registrations and an antagonist that fooled judges 44 times in 50, but zero fills: the venue key's testnet account has no testnet USDC (faucet claim owed by the experimenter).
+
+Decisions taken 11 September: compute is bought by the factory itself on the x402 market with Venice as the credible renewable seller and OpenRouter credits as a depleting seed nobody refills (no human anywhere after launch; card and OpenRouter API routes verified dead, see `docs/research/`); the funded world ticks every five minutes at launch and the committee may amend the tick within physics bounds; verdicts are forecasts settled on realized consequence.
 
 ## Secrets and money
 
@@ -39,6 +43,8 @@ The wake page (artifact) is rebuilt from summaries and a killed world's diary; s
 The session model plans, specs, reviews diffs and merges. Codex on `gpt-6-astra` implements bounded logic workstreams from a spec section in its own worktree; Claude subagents implement runtime and design work. Every PR states the spec section, the gate output, and every decision the spec left open. After every build: run the completion checks literally, write the fidelity review, and check the bewilderment condition honestly.
 
 ## Next
+
+Remaining before the `funded` manifest: merge resume and the clock; one real x402 purchase from the reserve for cents (experimenter funds `reserve.key`'s address with about $5 USDC on Base; `factorylab reserve init` prints the address) and one real $5 Venice tranche; venue↔reserve real moves with CCTP and funding payments (spec §5.3, §5.5); testnet faucet then run 6 with real fills; cold audits; hosting; build log, wake page.
 
 The ordered list, with the gaps against the essay, is `docs/design-audit-v2.md` §7. In short: merge the controller wiring and `p3b-runtime`; run 5 with the Hyperliquid testnet key; make the treasury real (Hyperliquid withdrawals to a factory-owned reserve address, mechanical float top-ups from the reserve only); `resume` after a process crash; a versioning module (transfer operator, spectral gap, pathology flags, early-warning signals); population-proposed λ; recursive meta-evaluation; cold audits; hosting; then the `funded` manifest and no changes, ever.
 
