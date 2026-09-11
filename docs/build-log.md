@@ -138,3 +138,30 @@ Summaries for the three runs are in `docs/runs/`. Diaries and keys are not commi
 ### What the live run needs from the experimenter
 
 `OPENROUTER_API_KEY` in the environment with a small credit balance (the testnet world's seeds are on the two flash tiers; a 200-event run should cost well under a dollar), and optionally `HL_PRIVATE_KEY` for a Hyperliquid testnet account funded from the faucet so orders fill. Without the venue key the world runs read-only: prices and funding are real, orders are rejected, and the wallet moves only through compute spend.
+
+## Phase 3b — routers, treasury intent, antagonists, price controller wired (11 September 2026)
+
+Built by Codex (`charter/controller.py`, PR #17, one attempt, 23 tests) and a Claude subagent (wiring, several routers per kind, `treasury.transfer` intent, antagonists with the `exposure` channel, PR #18, one attempt plus one reviewer follow-up). Gate on merge: 851 passed.
+
+### Completion checks, as run
+
+- Ten venue tools, population tools, memory, reasoning levels, web variant, committee: carried from phase 3.
+- `[prices]` explicit in the three manifests; regions parsed from card prose outside the controller; one observation per settled window; `price.penalty` written for every verdict and conformity settlement with raw and effective scores; the world block shows every priced card's λ and region (reviewer follow-up, spec v0.4 §1.6).
+- Several routers per kind: `router` proposals with `add: true`; cap `tools.max_routers_per_kind`; epochs expand each router separately.
+- Antagonists: role, channel, `exposure` settled 1 when a judge's forecast about the antagonist's return scored below the prevalence baseline; seeded one per world.
+- Treasury: intent only (`treasury.intent` items, `TransferIntent` events). Superseded by spec v0.7 §5 before any real money moves.
+
+### Fidelity check
+
+- Soft casts as priced penalties (essay II.II): present, proportional with decay, bounded, ledgered. No integral or derivative term; the audit (`docs/design-audit-v2.md` §3) records this as acceptable at $100 and to be revisited if versioning shows oscillation.
+- Adversarial minority (II.III.b): present and real: antagonists trade the same account within the same limits and are paid only for fooling a judge.
+- Prices public (v0.4 §1.6): the first build omitted card prices from the world block; caught in review and fixed before merge.
+- What the scripted world showed: the scripted amendment's `turnover` card ("below 5") saturates at λ = 1 and zeroes every producer verdict for the rest of the run. That is the physics doing what a badly priced card asks; in a live world the committee that passes such a card pays for it. Kept, with the test asserting it.
+
+### Live run 4 (testnet, 30 ticks at 10 s, seed 4, five-family roster, read-only venue)
+
+699 events, 334 invocations, $0.41, conservation and verification true, ended by kill. Zero orders, zero proposals, zero tool calls, zero amendments. The diary explains it: the two producers on the cheapest tiers (Qwen 3.7 Flash with reasoning off, DeepSeek V4 Flash 0731) returned `noop` on every invocation, and the evaluators graded `noop` 0.8 to 1.0 for "care with scarce resources". The routers had no reason to prefer anything else.
+
+**Bewilderment check (v0.5 §9 condition 6): failed.** Nothing unscripted happened. Compared with run 3 (six registrations on GLM and DeepSeek 4.1 producers), the cheaper roster produced a duller world, which is itself information about what thinking costs.
+
+**What it taught us.** This is the essay's stable-failure attractor, and the cause is ours: the verdict channel prices charter conformity and the consequence channel prices the evaluators' separate forecasts, so no signal ties a verdict to money and blessing inaction is free. Fix approved as spec v0.7 §2: every verdict is also a sealed forecast that the judged return pays off, realized on close, net of fees, funding and the return's own compute. A second leak found while reviewing the same path: the `ProducerReturn` event republished the producer's whole input, including its private memory; judges now see only the event the producer answered (commit 2aff1cb).
