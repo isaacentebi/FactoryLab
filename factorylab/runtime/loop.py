@@ -35,6 +35,7 @@ from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.registration import (
     AssemblyProposal,
     ModelProposal,
+    ToolProposal,
     parse_proposals,
 )
 from factorylab.cortex.request import Request, Return
@@ -73,10 +74,8 @@ try:  # phase 3 packages; hard imports once every workstream is merged
     from factorylab.world.venue_tools import VenueTools
 except ImportError:  # pragma: no cover
     VenueTools = None  # type: ignore[assignment]
-try:
-    from factorylab.cortex.tools import PopulationTool, ToolRunner
-except ImportError:  # pragma: no cover
-    PopulationTool = ToolRunner = None  # type: ignore[assignment]
+from factorylab.cortex.tools import PopulationTool, ToolRunner, as_spec
+
 try:
     from factorylab.charter.amendment import Amendment
     from factorylab.charter.book import CharterBook
@@ -121,6 +120,7 @@ class ScriptedProvider:
     input_tokens: int = 300
     output_tokens: int = 40
     register_at_calls: tuple[int, ...] = (40, 60, 80)
+    tool_at_calls: tuple[int, ...] = (30, 50, 70, 90, 110)
     _producer_calls: int = 0
 
     def complete(self, req: ModelRequest) -> ModelResponse:
@@ -131,6 +131,8 @@ class ScriptedProvider:
             reply = self._evaluate(req, inputs)
         elif desc.startswith("Assess"):
             reply = self._meta(inputs)
+        elif desc.startswith("Vote"):
+            reply = {"vote": True, "reason": "scripted yes"}
         else:
             reply = self._produce(desc, inputs)
         return ModelResponse(
@@ -155,6 +157,66 @@ class ScriptedProvider:
                     side = "buy" if phase == 1 else "sell"
                     reply = {"action": "order", "coin": "BTC", "side": side, "size": str(size)}
         n = self._producer_calls
+        if "tool_results" in inputs:
+            reply["seen_tool_results"] = len(inputs["tool_results"])
+            return reply
+        if n in self.tool_at_calls:
+            # first the venue, then the population tool once it exists, then both
+            calls = [{"tool": "venue.candles", "args": {"coin": "BTC", "interval": "1m", "n": 5}}]
+            if n >= 50:
+                calls.append({"tool": "spread-check", "args": {"mid": 100.0, "bps": 3}})
+            reply["tool_calls"] = calls
+        if n == 45:
+            reply["register"] = [
+                {
+                    "kind": "tool",
+                    "id": "spread-check",
+                    "description": "Return the half-spread in price units for a mid and bps.",
+                    "args_schema": {
+                        "type": "object",
+                        "properties": {"mid": {"type": "number"}, "bps": {"type": "integer"}},
+                        "required": ["mid", "bps"],
+                    },
+                    "code": (
+                        "import json,sys\na=json.load(sys.stdin)\n"
+                        "print(json.dumps({'half_spread': a['mid']*a['bps']/20000}))"
+                    ),
+                    "timeout_s": 2,
+                }
+            ]
+        if n == 55:
+            reply["register"] = [
+                {
+                    "kind": "amendment",
+                    "id": "turnover-card",
+                    "add": [
+                        {
+                            "id": "turnover",
+                            "norm": "care with scarce resources",
+                            "description": "Notional traded per window relative to equity.",
+                            "units": "ratio",
+                            "window": "rolling 100 events",
+                            "acceptable_region": "below 5",
+                            "observation": "venue fills",
+                        }
+                    ],
+                    "replace": [],
+                    "remove": [],
+                    "predicted_effect": "Evaluators will mark down churn; fewer round trips.",
+                }
+            ]
+        if n == 65:
+            reply["register"] = [
+                {
+                    "kind": "assembly",
+                    "id": "web-observer",
+                    "role": "producer",
+                    "model_id": "fake-haiku:online",
+                    "system_prompt": "Search for context on funding moves; reply with JSON.",
+                    "accepts": ["Funding"],
+                    "max_tokens": 128,
+                }
+            ]
         if n == self.register_at_calls[0]:
             reply["register"] = [
                 {
@@ -448,7 +510,7 @@ class Runtime:
                     "price_micro_per_call": spec.price_micro_per_call,
                     "kind": spec.kind,
                 }
-        self.tool_runner = ToolRunner() if ToolRunner is not None else None
+        self.tool_runner = ToolRunner()
         self.charter_book = None
         if CharterBook is not None:
             self.charter_book = CharterBook(self.ledger, self.charter)
@@ -920,7 +982,7 @@ class Runtime:
             if spec["kind"] == "venue" and self.venue_tools is not None:
                 return self.venue_tools.call(tool_id, args)
             tool = self.population_tools.get(tool_id)
-            if tool is None or self.tool_runner is None:
+            if tool is None:
                 return {"error": "tool unavailable"}
             return self.tool_runner.run(tool, args)
 
@@ -1370,7 +1432,7 @@ class Runtime:
 
     def _register(self, handle: str, prop: Any) -> None:
         amount = self.ev.trial_amount_micro
-        if PopulationTool is not None and type(prop).__name__ == "ToolProposal":
+        if isinstance(prop, ToolProposal):
             contract = Contract(
                 id=f"tool:{prop.id}",
                 version=1,
@@ -1391,9 +1453,7 @@ class Runtime:
             owner = self.handle_to_assembly.get(handle)
             if owner is not None:
                 self.tool_owner[prop.id] = owner
-            self.tool_specs[prop.id] = self.tool_runner.as_spec(
-                tool, self.m.tools.population_tool_micro_per_call
-            )
+            self.tool_specs[prop.id] = as_spec(tool, self.m.tools.population_tool_micro_per_call)
             self.stats.population_tools_registered += 1
             self._emit(EventKind.REGISTERED, {"kind": "tool", "id": prop.id, "by": handle})
             return
