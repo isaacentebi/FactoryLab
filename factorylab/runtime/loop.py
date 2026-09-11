@@ -289,8 +289,10 @@ class Runtime:
         exchange: Any | None = None,
         clock_source: Any | None = None,
         reconcile_every: int = 10,
+        kill_at_end: bool = False,
     ) -> None:
         self.m = manifest
+        self.kill_at_end = kill_at_end
         self.live = manifest.exchange.kind != "fake"
         self.clock_source = clock_source
         self.reconciler = Reconciler(every=reconcile_every)
@@ -559,6 +561,9 @@ class Runtime:
             self.stats.timeouts += len(self.queue.expire(self.clock.now_ns))
             self._deliver_returns()
             self.balance_at.append(self.wallet.balance)
+        if self.kill_at_end and not self.termination.final:
+            # a budgeted rehearsal world ends by explicit kill so its diary becomes readable
+            self.termination.kill("explicit_kill:budget")
         return self._summary()
 
     def _next_event(self, stream) -> Event | None:
@@ -1227,7 +1232,7 @@ class Runtime:
             },
             "stats": dict(vars(self.stats)),
         }
-        if not self.termination.final:
+        if not self.termination.final or self.kill_at_end:
             summary["aggregates"] = {
                 "action_frequencies": self.ledger.aggregate("action_frequencies"),
                 "invocations_by_assembly": self.ledger.aggregate("invocations_by_assembly"),
@@ -1320,6 +1325,7 @@ def run_world(
     provider: Any | None = None,
     exchange: Any | None = None,
     clock_source: Any | None = None,
+    kill_at_end: bool = False,
 ) -> dict[str, Any]:
     """Run a world for ``events`` world events (plus the internal events they cause).
 
@@ -1340,4 +1346,5 @@ def run_world(
         provider=provider,
         exchange=exchange,
         clock_source=clock_source,
+        kill_at_end=kill_at_end,
     ).run()

@@ -86,8 +86,70 @@ def _cmd_run(args: argparse.Namespace) -> int:
         initial_balance_micro=args.initial_balance,
         ledger_path=args.ledger,
         drip=not args.no_drip,
+        kill_at_end=args.kill_at_end,
     )
     print(json.dumps(summary, indent=2, default=str))
+    return 0
+
+
+def _cmd_report(args: argparse.Namespace) -> int:
+    with open(args.summary) as f:
+        s = json.load(f)
+    st = s["stats"]
+    print(
+        f"world {s['world']}  seed {s['seed']}  live {s.get('live')}  "
+        f"terminated {s['terminated']} ({s['termination_reason']})"
+    )
+    spent = None
+    spent_text = "n/a"
+    agg = s.get("aggregates") or {}
+    spend = (agg.get("spend_by_capability") or {}).get("spend") or {}
+    if spend:
+        spent = sum(spend.values()) / 1e6
+        spent_text = f"{spent:.6f}"
+    print(
+        f"wallet {s['wallet_balance_micro'] / 1e6:.6f} USD  spent {spent_text} USD  "
+        f"conservation {s['wallet_conservation']}  verify {s['ledger_verify']}  "
+        f"seal_released {s['seal_key_released']}"
+    )
+    rows = [
+        ("events", st["events"]),
+        ("decisions", st["decisions"]),
+        ("invocations", st["invocations"]),
+        ("noops", st["noops"]),
+        ("producer_returns", st["producer_returns"]),
+        ("verdicts", st["verdicts"]),
+        ("conformities", st["conformities"]),
+        ("censored", st["censored"]),
+        ("forecasts sealed/settled", f"{st['forecasts_sealed']}/{st['forecasts_settled']}"),
+        (
+            "registrations ok/rejected",
+            f"{st['registrations_accepted']}/{st['registrations_rejected']}",
+        ),
+        ("epochs", st["epochs"]),
+        ("routers replaced", st["routers_replaced"]),
+        ("orders placed/rejected", f"{st['orders_placed']}/{st['orders_rejected']}"),
+        ("fills", st["fills"]),
+        ("reconciliations", st.get("reconciliations", 0)),
+    ]
+    for k, v in rows:
+        print(f"  {k:<28} {v}")
+    print("  invocation status:", st["invocation_status"])
+    print("  stop reasons:     ", st.get("stop_reasons", {}))
+    print("  by role:          ", st["invocations_by_role"])
+    if spend:
+        print("  spend by capability (USD):", {k: round(v / 1e6, 6) for k, v in spend.items()})
+    counts = (agg.get("action_frequencies") or {}).get("counts")
+    if counts:
+        print("  action frequencies:", counts)
+    for k, v in s.get("routers", {}).items():
+        print(f"  router {k:<16} epoch {v['epoch']}  {v['learner']}  {v['universe']}")
+    standing = s.get("standing") or {}
+    for e, v in standing.items():
+        print(
+            f"  standing {e:<10} n={v['n']} skill={v['skill']:.3f} "
+            f"coverage={v['coverage']:.2f} weight={v['weight']:.3f}"
+        )
     return 0
 
 
@@ -114,7 +176,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--duration", default=None, help="wall-clock length like 30m; overrides --events"
     )
     r.add_argument("--tick-interval", default=None, help="override the manifest tick, e.g. 10s")
+    r.add_argument(
+        "--kill-at-end",
+        action="store_true",
+        help="end a budgeted rehearsal world by explicit kill so its seal key is released",
+    )
     r.set_defaults(func=_cmd_run)
+
+    rp = sub.add_parser("report", help="print a run summary readably")
+    rp.add_argument("summary")
+    rp.set_defaults(func=_cmd_report)
     return p
 
 
