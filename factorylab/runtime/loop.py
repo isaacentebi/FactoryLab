@@ -76,6 +76,7 @@ from factorylab.settlement import (
     WindowFacts,
     open_forecast_decision,
 )
+from factorylab.settlement.consequence import FillCursor, ReturnConsequences
 from factorylab.world.clock import ClockSource, DripSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange, HyperliquidExchange, Order
@@ -279,8 +280,8 @@ class ScriptedProvider:
         status = producer.get("status")
         action = (producer.get("outputs") or {}).get("action")
         verdict = 1.0 if status == "ok" and action in ("order", "hold") else 0.3
-        if action == "noop":
-            verdict = 0.6
+        if action in ("noop", "hold"):
+            verdict = 0.9 if req.model_id == "fake-haiku" else 0.1
         style = int(hashlib.sha256(req.system.encode()).hexdigest(), 16) % 4
         q = (0.3, 0.45, 0.6, 0.75)[style]
         return {
@@ -491,6 +492,8 @@ class Runtime:
         self.standing = ConsequenceStanding(self.ev.min_coverage)
         self.observer = Observer()
         self.settler = Settler(self.book, self.queue, self.standing, self.baseline, self.observer)
+        self.consequences = ReturnConsequences(self.ledger, self.ev.consequence_backstop_events)
+        self.consequence_fills = FillCursor(self.ledger)
 
         # world
         if exchange is not None:
@@ -933,7 +936,16 @@ class Runtime:
             self._manage_reserve_window()
             if ev.kind is EventKind.TICK:
                 if self.venue is not None:
-                    self._settle_exchange_effects(self.venue.on_tick(self.clock.now_ns))
+                    observed = [
+                        we for we in self.venue.on_tick(self.clock.now_ns)
+                        if we.kind is not WorldEventKind.FILL
+                    ]
+                    observed.extend(
+                        WorldEvent(WorldEventKind.FILL, max(self.clock.now_ns, ts),
+                                   self.exchange.name, payload)
+                        for ts, payload in self.consequence_fills.poll(self.exchange)
+                    )
+                    self._settle_exchange_effects(observed)
                     if self.reconciler.due():
                         snap = Reconciler.snapshot(
                             self.wallet.balance, self.provider, self.exchange
@@ -983,6 +995,7 @@ class Runtime:
         reason = self.termination.check(self.wallet, self.clock.now_ns)
         if reason is None:
             return False
+        self._settle_due_forecasts()
         self.termination.kill(reason)
         return True
 
@@ -1156,6 +1169,8 @@ class Runtime:
 
     def _settle_exchange_effects(self, evs: list[WorldEvent]) -> None:
         for we in evs:
+            self.consequences.observe(str(we.kind), dict(we.payload), self.n)
+        for we in evs:
             if self.wallet.dead:
                 return
             if we.kind is WorldEventKind.FILL:
@@ -1192,6 +1207,12 @@ class Runtime:
         except (KeyError, ValueError, ArithmeticError):
             return
         result = self.exchange.place(order)
+        self.consequences.order_result(
+            ret.handle,
+            {"status": result.status, "order_id": result.order_id,
+             "filled_size": str(result.filled_size)},
+            {"size": str(order.size)}, self.n,
+        )
         self.stats.orders_placed += 1
         if result.status == "rejected":
             self.stats.orders_rejected += 1
@@ -1379,6 +1400,12 @@ class Runtime:
             )
         except Exception as exc:  # infeasible reservation or tool crash: no result, no charge
             return {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0
+        if spec["kind"] == "venue":
+            self.consequences.order_result(handle, metered.result, args, self.n)
+            if tool_id == "venue.cancel" and metered.result.get("status") == "cancelled":
+                self.consequences.cancel(str(args["order_id"]), self.n)
+            if hasattr(self.exchange, "drain_events"):
+                self._settle_exchange_effects(self.exchange.drain_events())
         return metered.result, metered.cost
 
     def _invoke(self, action_id: str, req: Request, role: str) -> Return:
@@ -1490,6 +1517,7 @@ class Runtime:
     # ---- producer
 
     def _producer_step(self, ev: Event, handle: str, sample: Sample, deadline: int) -> None:
+        self.consequences.start(handle, self.n)
         payload = _to_plain(ev.payload)
         if ev.kind is EventKind.TICK:
             try:
@@ -1534,6 +1562,7 @@ class Runtime:
             self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
                 {"handle": handle, "outputs": ret.outputs, "verdict": None}
             )
+        self.consequences.finish(handle, ret.cost)
         if self.queue.get(handle).channel == CH_EXPOSURE:
             self.pending_exposure[handle] = self.n
         else:
@@ -1659,6 +1688,12 @@ class Runtime:
                 for entry in self.memory.get(owner, ()):
                     if entry["handle"] == about:
                         entry["verdict"] = verdict
+        self.consequences.seal_verdict(
+            self.book, self.queue, evaluator_handle=handle, evaluator_id=sample.chosen,
+            about=about, verdict=verdict, event=self.n, now_ns=self.clock.now_ns,
+            tick_ns=self.m.tick_interval_ns,
+        )
+        self.stats.forecasts_sealed += 1
         self._open_forecasts(handle, sample.chosen, about, ret.outputs.get("forecasts"))
         self.pending[handle] = PendingJudgement(handle, CH_CONFORMITY, self.n)
         self._emit(
@@ -2231,17 +2266,18 @@ class Runtime:
                 continue
             if s.brier < s.baseline_brier:
                 self._settle_exposure(s.about_handle, 1.0)
+        waiting = {f.about_handle for f in self.book.pending()}
         stale = [
             h
             for h, o in self.pending_exposure.items()
-            if self.n - o > self.ev.verdict_timeout_events
+            if self.n - o > self.ev.verdict_timeout_events and h not in waiting
         ]
         for h in stale:
             self._settle_exposure(h, 0.0)
 
     def _settle_exposure(self, handle: str, score: float) -> None:
-        self.pending_exposure.pop(handle, None)
-        if self.queue.get(handle).status is not SettleStatus.PENDING:
+        if self.queue.get(handle).status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
+            self.pending_exposure.pop(handle, None)
             return
         self.queue.settle(
             handle,
@@ -2251,12 +2287,15 @@ class Runtime:
             definition_version=DEF_EXPOSURE,
             sampling_ref=None,
         )
+        self.pending_exposure.pop(handle, None)
         self.stats.exposures_settled += 1
         if score > 0:
             self.stats.exposures_won += 1
 
     def _settle_due_forecasts(self) -> None:
+        self.consequences.resolve(self.n)
         settled = self.settler.settle_due(self.n, self._facts_for)
+        settled.extend(self.settler.settle_consequences(self.consequences.payoff))
         self._settle_exposures(settled)
         for s in settled:
             self.stats.forecasts_settled += 1
@@ -2269,8 +2308,11 @@ class Runtime:
                     "y": s.y,
                     "brier": s.brier,
                     "status": str(s.status),
+                    "marked": s.marked,
                 },
             )
+            if s.brier is None:
+                continue
             self.last_closure_ns = max(self.clock.now_ns, self.last_closure_ns + 1)
             self.timing.record_closure("leaf", self.last_closure_ns)
             self.buffer.add(
@@ -2361,7 +2403,7 @@ class Runtime:
                 }
                 for st in self._all_router_states()
             },
-            "stats": dict(vars(self.stats)),
+            "stats": {**vars(self.stats), **self.consequences.counts()},
         }
         if not self.termination.final or self.kill_at_end:
             summary["aggregates"] = {

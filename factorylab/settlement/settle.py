@@ -1,13 +1,14 @@
 """Due commitments receive one original-handle outcome, with missing facts left unscored."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from factorylab.kernel.queue import DecisionQueue, SettleStatus
 from factorylab.settlement.forecast import Forecast, ForecastBook
+from factorylab.settlement.lots import Payoff
 from factorylab.settlement.scoring import PrevalenceBaseline, brier
 from factorylab.settlement.standing import ConsequenceStanding
-from factorylab.settlement.vocabulary import Observer, WindowFacts
+from factorylab.settlement.vocabulary import RETURN_PAID_OFF, Observer, WindowFacts
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class Settled:
     brier: float | None
     baseline_brier: float | None
     status: SettleStatus
+    marked: bool = False
 
 
 class Settler:
@@ -47,6 +49,8 @@ class Settler:
         """Return due outcomes in seal order; only accepted observed settlements train history."""
         results = []
         for forecast in self.__book.due(n):
+            if forecast.predicate_id == RETURN_PAID_OFF.id:
+                continue
             facts = facts_for(forecast)
             y = score = baseline_score = None
             status = SettleStatus.CENSORED
@@ -82,5 +86,45 @@ class Settler:
                     baseline_score,
                     status,
                 )
+            )
+        return results
+
+    def settle_consequences(
+        self, payoff_for: Callable[[str], Payoff | None]
+    ) -> list[Settled]:
+        """Score kernel commitments as soon as their immutable return outcome is available."""
+        results = []
+        for forecast in self.__book.pending(predicate_id=RETURN_PAID_OFF.id):
+            payoff = payoff_for(forecast.about_handle)
+            if payoff is None:
+                continue
+            if payoff.handle != forecast.about_handle:
+                raise ValueError("consequence belongs to a different return")
+            score = brier(forecast.q, payoff.y)
+            baseline = self.__baseline.baseline_brier(forecast.predicate_id, payoff.y)
+            self.__book.record_consequence(
+                forecast.handle,
+                {**asdict(payoff), "handle": forecast.handle, "about_handle": payoff.handle,
+                 "predicate_id": forecast.predicate_id, "q": forecast.q,
+                 "brier": score, "baseline_brier": baseline},
+            )
+            self.__queue.settle(
+                forecast.handle,
+                channel="consequence",
+                score=score,
+                status=SettleStatus.SETTLED,
+                definition_version="brier-v1",
+                sampling_ref=None,
+            )
+            self.__baseline.record(forecast.predicate_id, payoff.y)
+            self.__standing.record(forecast.evaluator_id, score, baseline)
+            self.__book.mark_settled(forecast.handle)
+            self.__standing.set_requested(
+                forecast.evaluator_id, self.__book.requested(forecast.evaluator_id)
+            )
+            results.append(
+                Settled(forecast.handle, forecast.evaluator_id, forecast.about_handle,
+                        forecast.predicate_id, payoff.y, score, baseline,
+                        SettleStatus.SETTLED, payoff.marked)
             )
         return results

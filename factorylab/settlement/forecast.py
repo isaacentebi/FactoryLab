@@ -32,7 +32,7 @@ class Forecast:
         _require_event_index(self.due_at_event, "due_at_event")
         if self.due_at_event <= self.made_at_event:
             raise ValueError("due_at_event must exceed made_at_event")
-        _validate_params(self.predicate_id, self.params)
+        _validate_params(self.predicate_id, self.params, kernel=True)
         if not isinstance(self.seal, str):
             raise ValueError("seal must be a string")
         object.__setattr__(self, "params", _freeze(self.params))
@@ -83,6 +83,19 @@ class ForecastBook:
         if handle not in self.__forecasts:
             raise KeyError(handle)
         self.__settled.add(handle)
+
+    def pending(self, *, predicate_id: str | None = None) -> list[Forecast]:
+        """Return unsettled commitments in seal order, optionally restricted by predicate."""
+        return [
+            f for h, f in self.__forecasts.items()
+            if h not in self.__settled and (predicate_id is None or f.predicate_id == predicate_id)
+        ]
+
+    def record_consequence(self, handle: str, evidence: dict) -> None:
+        """Persist kernel outcome evidence, including mark status, before score delivery."""
+        if handle not in self.__forecasts:
+            raise KeyError(handle)
+        self.__ledger.append({"kind": "forecast.consequence", "handle": handle, **evidence})
 
     def outstanding(self) -> int:
         """Return the count of sealed forecasts without a book settlement."""

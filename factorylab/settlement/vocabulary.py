@@ -18,6 +18,7 @@ class Predicate:
     description: str
     param_schema: dict
     horizon_param: str
+    proposable: bool = True
 
     def __post_init__(self) -> None:
         for value in (self.id, self.description, self.horizon_param):
@@ -56,6 +57,15 @@ SEED_VOCABULARY = (
     ),
 )
 
+# Kernel-only commitment: deliberately absent from SEED_VOCABULARY and Observer.
+RETURN_PAID_OFF = Predicate(
+    "return_paid_off",
+    "The return's FIFO proceeds, net of fees and funding, exceed its own compute cost.",
+    _seed("return_paid_off", "Kernel consequence.").param_schema,
+    "horizon_events",
+    proposable=False,
+)
+
 
 def _require_event_index(value: int, name: str, *, positive: bool = False) -> None:
     if type(value) is not int or value < (1 if positive else 0):
@@ -63,9 +73,11 @@ def _require_event_index(value: int, name: str, *, positive: bool = False) -> No
         raise ValueError(f"{name} must be a {qualifier} integer")
 
 
-def _validate_params(predicate_id: str, params: dict) -> None:
+def _validate_params(predicate_id: str, params: dict, *, kernel: bool = False) -> None:
     _require_id(predicate_id)
-    if not any(predicate.id == predicate_id for predicate in SEED_VOCABULARY):
+    if not any(predicate.id == predicate_id for predicate in SEED_VOCABULARY) and not (
+        kernel and predicate_id == RETURN_PAID_OFF.id
+    ):
         raise ValueError(f"unknown predicate: {predicate_id}")
     required = {"horizon_events"}
     if predicate_id == "drawdown_exceeds":
