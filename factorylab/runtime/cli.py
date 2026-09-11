@@ -135,6 +135,8 @@ def _cmd_report(args: argparse.Namespace) -> int:
         ("orders placed/rejected", f"{st['orders_placed']}/{st['orders_rejected']}"),
         ("fills", st["fills"]),
         ("reconciliations", st.get("reconciliations", 0)),
+        ("price updates/skipped", f"{st.get('price_updates', 0)}/{st.get('price_skipped', 0)}"),
+        ("penalized settlements", st.get("penalized_settlements", 0)),
     ]
     for k, v in rows:
         print(f"  {k:<28} {v}")

@@ -80,3 +80,25 @@ def test_cli_probe_refuses_world_without_live_venue(capsys) -> None:
 def test_cli_probe_testnet(capsys) -> None:
     assert main(["probe", "--world", "testnet"]) == 0
     assert "hyperliquid-testnet" in capsys.readouterr().out
+
+
+def test_prices_section_defaults_and_validation() -> None:
+    m = manifest_from_dict(_base())
+    assert (m.prices.eta, m.prices.decay, m.prices.lambda_max, m.prices.min_window_events) == (
+        0.5,
+        0.1,
+        1.0,
+        1,
+    )
+    d = _base()
+    d["prices"] = {"eta": 0.25, "decay": 0.05, "lambda_max": 2, "min_window_events": 3}
+    m2 = manifest_from_dict(d)
+    assert m2.prices.lambda_max == 2.0 and m2.prices.min_window_events == 3
+    assert (
+        m2.manifest_hash() != m.manifest_hash()
+    )  # the controller's parameters are part of the seed
+    for bad in ({"eta": 0}, {"decay": -1}, {"lambda_max": 0}, {"min_window_events": 0}):
+        d = _base()
+        d["prices"] = bad
+        with pytest.raises(ValueError):
+            manifest_from_dict(d)

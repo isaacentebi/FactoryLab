@@ -45,7 +45,7 @@ class AssemblySpec:
     def __post_init__(self) -> None:
         if self.memory_policy not in ("none", "handle-scoped"):
             raise ValueError("unknown memory policy")
-        if self.role not in ("producer", "evaluator", "meta"):
+        if self.role not in ("producer", "evaluator", "meta", "antagonist"):
             raise ValueError("unknown assembly role")
         if self.max_tokens <= 0:
             raise ValueError("max_tokens must be positive")

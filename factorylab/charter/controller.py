@@ -1,6 +1,6 @@
 """Settled metric windows carry bounded prices and ledger-first revision evidence."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import isfinite
 from typing import Literal
 
@@ -115,6 +115,17 @@ class PriceController:
                     raise ValueError("price timing loop must have no prior closures")
         self.__cards[region.card_id] = _CardState(region)
 
+    def update_region(self, region: CardRegion) -> None:
+        """Replace a registered card's bounds; its price, counts and timing history survive.
+
+        The runtime calls this when a card's region is re-derived (a rolling bound
+        moved, or a new edition restated the card). Unknown cards raise KeyError.
+        """
+        if not isinstance(region, CardRegion):
+            raise ValueError("region must be a CardRegion")
+        state = self.__cards[region.card_id]
+        self.__cards[region.card_id] = replace(state, region=region)
+
     def violation(self, card_id: str, value: float) -> float:
         """Return normalized distance outside inclusive bounds; unknown cards raise KeyError."""
         region = self.__cards[card_id].region
@@ -140,19 +151,21 @@ class PriceController:
             raise ValueError("window_end_event must be a nonnegative integer")
         last = state.last_window_end_event
         if last is not None and window_end_event < last + self.__min_window_events:
-            self.__ledger.append({
-                "kind": "price.skipped",
-                "card_id": card_id,
-                "value": value,
-                "window_end_event": window_end_event,
-                "last_window_end_event": last,
-                "min_window_events": self.__min_window_events,
-                "reason": "min_window_events",
-            })
+            self.__ledger.append(
+                {
+                    "kind": "price.skipped",
+                    "card_id": card_id,
+                    "value": value,
+                    "window_end_event": window_end_event,
+                    "last_window_end_event": last,
+                    "min_window_events": self.__min_window_events,
+                    "reason": "min_window_events",
+                }
+            )
             return
         violation = self.violation(card_id, value)
-        requested = state.price + self.__eta * violation if violation > 0 else (
-            state.price - self.__decay
+        requested = (
+            state.price + self.__eta * violation if violation > 0 else (state.price - self.__decay)
         )
         price = min(self.__lambda_max, max(0.0, requested))
         saturated = requested < 0 or requested > self.__lambda_max
@@ -164,16 +177,18 @@ class PriceController:
             max_step=max(state.max_step, abs(price - state.price)),
             last_window_end_event=window_end_event,
         )
-        self.__ledger.append({
-            "kind": "price.update",
-            "card_id": card_id,
-            "value": value,
-            "violation": violation,
-            "lambda_before": state.price,
-            "lambda_after": price,
-            "saturated": saturated,
-            "window_end_event": window_end_event,
-        })
+        self.__ledger.append(
+            {
+                "kind": "price.update",
+                "card_id": card_id,
+                "value": value,
+                "violation": violation,
+                "lambda_before": state.price,
+                "lambda_after": price,
+                "saturated": saturated,
+                "window_end_event": window_end_event,
+            }
+        )
         if self.__timing is not None:
             self.__timing.record_closure(f"price:{card_id}", window_end_event)
         self.__cards[card_id] = updated
@@ -186,8 +201,11 @@ class PriceController:
     def penalty(self, values: dict[str, float]) -> float:
         """Return the unclipped sum for known cards only; callers own score clipping."""
         return sum(
-            (self.__cards[card_id].price * self.violation(card_id, value)
-             for card_id, value in values.items() if card_id in self.__cards),
+            (
+                self.__cards[card_id].price * self.violation(card_id, value)
+                for card_id, value in values.items()
+                if card_id in self.__cards
+            ),
             0.0,
         )
 

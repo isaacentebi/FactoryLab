@@ -68,6 +68,13 @@ accepts = ["ProducerReturn"]
 max_tokens = 256
 
 [[assemblies]]
+id = "antagonist-a"
+role = "antagonist"
+model_id = "fake-haiku"
+accepts = ["Tick", "MarketMid"]
+max_tokens = 256
+
+[[assemblies]]
 id = "meta-a"
 role = "meta"
 model_id = "fake-haiku"
@@ -96,6 +103,12 @@ window = "2m"
 [timing]
 min_ratio = 3
 jitter_fraction = 0.2
+
+[prices]
+eta = 0.5
+decay = 0.1
+lambda_max = 1.0
+min_window_events = 1
 
 [termination]
 balance_floor_usd = "0"

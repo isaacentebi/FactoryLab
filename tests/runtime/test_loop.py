@@ -34,7 +34,7 @@ def test_every_producer_decision_is_judged_or_censored() -> None:
     m = load_manifest("scripted")
     s = run_world(m, events=120, seed=4)
     st = s["stats"]
-    judged = st["verdicts"] + st["censored"]
+    judged = st["verdicts"] + st["censored"] + st["exposures_settled"]
     assert judged + s["outstanding_decisions"] >= st["producer_returns"]
 
 
@@ -82,3 +82,21 @@ def test_scripted_world_phase3_spec_condition_2() -> None:
     assert st["amendments_proposed"] >= 1 and st["votes_cast"] >= 3
     assert st["amendments_passed"] >= 1 and st["amendments_activated"] >= 1
     assert s["charter_edition"] >= 2
+    # prices (spec v0.6 section 8.1): a 2-minute window over 500 one-second ticks closes four
+    # windows, and every closed window hands the well_formed_rate card one observation
+    cards = s["prices"]["cards"]
+    closed = st["reserve_windows"] - 1
+    assert closed >= 3 and st["price_updates"] >= 2 and st["price_skipped"] == 0
+    assert cards["well_formed_rate"]["updates"] == closed
+    assert cards["well_formed_rate"]["lambda"] == 0.0  # scripted returns are all well formed
+    assert st["last_window_values"]["well_formed_rate"] == 1.0
+    # the amendment's turnover card ("below 5", ratio units) is registered once edition 2 is
+    # live and is violated by two orders of magnitude every window, so its price saturates at
+    # lambda_max and every producer verdict settles at 0 while it stands; evaluators pay for
+    # forecast skill below zero. This run therefore shows penalized settlements, not a world
+    # with no violated card.
+    assert "turnover" in cards and cards["turnover"]["lambda"] == 1.0
+    assert cards["turnover"]["saturations"] >= 1
+    assert st["last_window_values"]["turnover"] > 5
+    assert st["penalized_settlements"] >= 1
+    assert cards["cost_per_return"]["updates"] == closed - 1  # no median before the first window
