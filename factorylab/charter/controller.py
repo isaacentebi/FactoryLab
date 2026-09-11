@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from math import isfinite
 from typing import Literal
 
+from factorylab.charter.amendment import proposed_price
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.timing import TimingRegistry
 
@@ -56,7 +57,7 @@ class CardRegion:
 
 @dataclass(frozen=True)
 class _CardState:
-    region: CardRegion
+    region: CardRegion | None
     price: float = 0.0
     updates: int = 0
     saturations: int = 0
@@ -65,7 +66,7 @@ class _CardState:
 
 
 class PriceController:
-    """Prices stay bounded; only ledgered, sufficiently separated windows revise them.
+    """Prices stay bounded; revisions require ledgered windows or adopted proposals.
 
     The caller supplies settled observations. Prices are soft penalties only;
     this controller has no settlement, reserve, exploration or spending authority.
@@ -115,6 +116,47 @@ class PriceController:
                     raise ValueError("price timing loop must have no prior closures")
         self.__cards[region.card_id] = _CardState(region)
 
+    def register_pending(self, card_id: str) -> None:
+        """Register zero price without a region; penalties wait until bounds are available."""
+        if not isinstance(card_id, str) or not card_id.strip():
+            raise ValueError("card_id must be a nonempty string")
+        if card_id in self.__cards:
+            raise ValueError("card_id is already registered")
+        self.__ledger.append({"kind": "price.register", "card_id": card_id})
+        if self.__timing is not None:
+            try:
+                self.__timing.closure_count(f"price:{card_id}")
+            except KeyError:
+                self.__timing.register_loop(f"price:{card_id}", [])
+        self.__cards[card_id] = _CardState(None)
+
+    def clear_region(self, card_id: str) -> None:
+        """Suspend penalties for unavailable bounds while preserving the card's price."""
+        state = self.__cards[card_id]
+        self.__ledger.append({"kind": "price.region_cleared", "card_id": card_id})
+        self.__cards[card_id] = replace(state, region=None)
+
+    def set_price(self, card_id: str, value: float, *, amendment_id: str) -> None:
+        """Ledger a bounded adopted price before mutation, preserving observation history."""
+        state = self.__cards[card_id]
+        price = proposed_price(value, self.__lambda_max)
+        if not isinstance(amendment_id, str) or not amendment_id.strip():
+            raise ValueError("amendment_id is required")
+        self.__ledger.append({
+            "kind": "price.proposed", "card_id": card_id, "amendment_id": amendment_id,
+            "lambda_before": state.price, "lambda_after": price,
+        })
+        self.__cards[card_id] = replace(state, price=price)
+
+    def remove(self, card_id: str, *, amendment_id: str) -> None:
+        """Drop a known card's price and region only after recording its removal."""
+        state = self.__cards[card_id]
+        self.__ledger.append({
+            "kind": "price.removed", "card_id": card_id, "amendment_id": amendment_id,
+            "lambda_before": state.price,
+        })
+        del self.__cards[card_id]
+
     def update_region(self, region: CardRegion) -> None:
         """Replace a registered card's bounds; its price, counts and timing history survive.
 
@@ -130,6 +172,8 @@ class PriceController:
         """Return normalized distance outside inclusive bounds; unknown cards raise KeyError."""
         region = self.__cards[card_id].region
         value = _number(value, "value")
+        if region is None:
+            return 0.0
         distance = 0.0
         if region.kind in ("min", "band") and value < region.lo:
             distance = region.lo - value

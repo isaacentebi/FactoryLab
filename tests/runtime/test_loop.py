@@ -100,3 +100,44 @@ def test_scripted_world_phase3_spec_condition_2() -> None:
     assert st["last_window_values"]["turnover"] > 5
     assert st["penalized_settlements"] >= 1
     assert cards["cost_per_return"]["updates"] == closed - 1  # no median before the first window
+
+
+def test_scripted_amendment_lambda_is_voted_adopted_and_visible(monkeypatch):
+    from factorylab.runtime.loop import Runtime, ScriptedProvider, _inputs_from_prompt
+
+    requests = []
+
+    class RecordingProvider(ScriptedProvider):
+        def complete(self, req):
+            text = "\n".join(str(m.get("content", "")) for m in req.messages)
+            requests.append(_inputs_from_prompt(text))
+            return super().complete(req)
+
+    rt = Runtime(load_manifest("scripted"), events=260, seed=1, initial_balance_micro=None,
+                 ledger_path=None, drip=True, router_gamma=0.1, provider=RecordingProvider())
+    entries = []
+    append = rt.ledger.append
+
+    def capture(entry):
+        result = append(entry)
+        entries.append(dict(entry))
+        return result
+
+    monkeypatch.setattr(rt.ledger, "append", capture)
+    result = rt.run()
+    assert result["ledger_verify"] and result["wallet_conservation"]
+    votes = [req["amendment"] for req in requests if "amendment" in req]
+    assert votes and all(am["add"][0]["lambda"] == 0.6 for am in votes)
+    proposed = [(i, e) for i, e in enumerate(entries) if e["kind"] == "price.proposed"]
+    assert len(proposed) == 1
+    index, item = proposed[0]
+    assert item["card_id"] == "turnover" and item["amendment_id"] == "turnover-card"
+    assert item["lambda_after"] == 0.6
+    assert any(e["kind"] == "price.region" and e["card_id"] == "turnover"
+               for e in entries[:index])
+    worlds = [req["world"] for req in requests if req.get("world", {}).get("charter_edition") == 2]
+    first = next(c for c in worlds[0]["card_prices"] if c["card_id"] == "turnover")
+    assert first["lambda"] == 0.6
+    updates = [e for e in entries[index + 1:]
+               if e["kind"] == "price.update" and e["card_id"] == "turnover"]
+    assert updates and updates[0]["lambda_before"] == 0.6
