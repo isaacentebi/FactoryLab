@@ -117,6 +117,12 @@ Test count on main: 482 (plus 4 network-marked).
 - A crashed live world is readable post-mortem (key file) but not resumable.
 - Population-written tools are not executed anywhere yet.
 
+### Live run 1 (testnet, 30 ticks at 10 s, seed 3, read-only venue)
+
+The loop closed against real prices and real models: 315 events, 198 model calls, $0.068 spent, conservation and verification true, three reconciliations. But 167 of 198 replies were empty. Diagnosis by direct calls: GLM 5.3 Flash and DeepSeek V4.1 Flash are reasoning models and spent the entire output budget on hidden reasoning when given the long evaluator prompt; GLM reasoned for 2,000 tokens and returned nothing. GLM and GPT-5.6 Luna answer well with `reasoning: {effort: low}` (43 and 122 reasoning tokens). DeepSeek ignores effort and only answers with `reasoning: {enabled: false}`. Fix: reasoning is now a per-tier manifest setting passed to OpenRouter verbatim, output budgets rose (producers 800–1000, evaluators 1,500, metas 800), and every invocation records its finish reason. Thinking depth is architect configuration of a capability's contract, like its price; a later phase can let the population register the same model with a different reasoning setting as a separate capability.
+
+Not a bewilderment result either way: the routers drifted toward NOOP (114 of 312 decisions) because most invocations returned nothing judgeable, which is the physics behaving, not the factory choosing.
+
 ### What the live run needs from the experimenter
 
 `OPENROUTER_API_KEY` in the environment with a small credit balance (the testnet world's seeds are on the two flash tiers; a 200-event run should cost well under a dollar), and optionally `HL_PRIVATE_KEY` for a Hyperliquid testnet account funded from the faucet so orders fill. Without the venue key the world runs read-only: prices and funding are real, orders are rejected, and the wallet moves only through compute spend.
