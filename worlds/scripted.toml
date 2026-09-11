@@ -22,6 +22,7 @@ id = "fake-haiku"
 provider = "fake"
 input_usd_per_mtok = "1"
 output_usd_per_mtok = "5"
+web = { engine = "exa", mode = "fast", max_results = 5, usd_per_request = "0.007" }
 
 [[assemblies]]
 id = "seed-observer"
@@ -90,7 +91,7 @@ forecast_horizon_events = 10
 
 [novelty]
 share = 0.1
-window = "1d"
+window = "2m"
 
 [timing]
 min_ratio = 3

@@ -23,6 +23,7 @@ class TokenPrice:
 
     input_micro: int | Fraction
     output_micro: int | Fraction
+    per_request_micro: int = 0  # e.g. a web-search plugin charged per request
 
     @classmethod
     def from_per_token(cls, prompt_usd_per_token: str, completion_usd_per_token: str) -> TokenPrice:
@@ -49,7 +50,12 @@ class TokenPrice:
         """Return the exact usage total rounded up once to whole micro-USD."""
         if input_tokens < 0 or output_tokens < 0:
             raise ValueError("token counts must be non-negative")
-        return ceil(input_tokens * self.input_micro + output_tokens * self.output_micro)
+        total = (
+            input_tokens * self.input_micro
+            + output_tokens * self.output_micro
+            + self.per_request_micro
+        )
+        return int(ceil(total))
 
 
 @dataclass(frozen=True)

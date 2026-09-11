@@ -112,6 +112,8 @@ def _model(item: dict[str, Any]) -> ModelProposal:
     oid = item.get("openrouter_id")
     if not isinstance(oid, str) or "/" not in oid or len(oid) > 128 or " " in oid:
         raise ValueError("openrouter_id must look like vendor/model")
+    if oid.count("@") > 1:
+        raise ValueError("at most one @reasoning-level suffix")
     return ModelProposal(oid)
 
 
@@ -198,8 +200,12 @@ def _tool(item: dict[str, Any], known_tools: frozenset[str]) -> ToolProposal:
     if any(
         name in code
         for name in (
-            "import socket", "import urllib", "import http", "import requests",
-            "subprocess", "os.system",
+            "import socket",
+            "import urllib",
+            "import http",
+            "import requests",
+            "subprocess",
+            "os.system",
         )
     ):
         raise ValueError("code names a forbidden module")

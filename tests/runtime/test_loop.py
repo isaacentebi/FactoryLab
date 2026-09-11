@@ -61,3 +61,24 @@ def test_determinism_same_seed_same_summary() -> None:
     a.pop("aggregates", None)
     b.pop("aggregates", None)
     assert a == b
+
+
+def test_scripted_world_phase3_spec_condition_2() -> None:
+    m = load_manifest("scripted")
+    s = run_world(m, events=500, seed=1)
+    st = s["stats"]
+    assert s["terminated"] is False
+    assert s["wallet_conservation"] is True and s["ledger_verify"] is True
+    # tool calls executed and results returned to the calling assembly
+    assert st["tool_calls"] >= 10
+    assert st["tool_call_failures"] < st["tool_calls"]
+    # a population tool was registered and then called
+    assert st["population_tools_registered"] >= 1 and "spread-check" in s["tools"]
+    # an online variant is registered as a purchasable and an assembly was built on it
+    assert "fake-haiku:online" in s["aggregates"]["invocations_by_assembly"]["counts"] or (
+        "web-observer" in s["aggregates"]["invocations_by_assembly"]["counts"]
+    )
+    # an amendment was proposed, voted, passed and activated: evaluators now see edition 2
+    assert st["amendments_proposed"] >= 1 and st["votes_cast"] >= 3
+    assert st["amendments_passed"] >= 1 and st["amendments_activated"] >= 1
+    assert s["charter_edition"] >= 2

@@ -67,6 +67,8 @@ class ModelTier:
     input_usd_per_mtok: str
     output_usd_per_mtok: str
     reasoning: tuple[tuple[str, Any], ...] = ()  # OpenRouter `reasoning` object, e.g. effort=low
+    # web purchasable: engine, mode, max_results, usd_per_request
+    web: tuple[tuple[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -78,6 +80,12 @@ class AssemblySeed:
     effort: str = "medium"
     memory_policy: str = "none"
     role: str = "producer"
+
+
+@dataclass(frozen=True)
+class ToolsSpec:
+    population_tool_micro_per_call: int = 50
+    max_leverage: int = 3
 
 
 @dataclass(frozen=True)
@@ -121,6 +129,7 @@ class WorldManifest:
     timing: TimingSpec
     termination: TerminationSpec
     evaluation: EvaluationSpec = EvaluationSpec()
+    tools: ToolsSpec = ToolsSpec()
     tick_interval_ns: int = NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -131,8 +140,25 @@ class WorldManifest:
         for m in self.models:
             per_in = Decimal(m.input_usd_per_mtok) / Decimal(1_000_000)
             per_out = Decimal(m.output_usd_per_mtok) / Decimal(1_000_000)
-            t.register(m.id, TokenPrice.from_per_token(str(per_in), str(per_out)))
+            base = TokenPrice.from_per_token(str(per_in), str(per_out))
+            t.register(m.id, base)
+            web = dict(m.web)
+            if web:
+                per_request = usd_to_micro(web.get("usd_per_request", "0"))
+                t.register(
+                    f"{m.id}:online",
+                    TokenPrice(base.input_micro, base.output_micro, per_request),
+                )
         return t
+
+    def web_config(self) -> dict[str, dict[str, Any]]:
+        """OpenRouter web-plugin options per online variant (price key stripped)."""
+        out: dict[str, dict[str, Any]] = {}
+        for m in self.models:
+            web = {k: v for k, v in dict(m.web).items() if k != "usd_per_request"}
+            if dict(m.web):
+                out[f"{m.id}:online"] = web
+        return out
 
     def canonical_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
@@ -216,6 +242,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             input_usd_per_mtok=str(m["input_usd_per_mtok"]),
             output_usd_per_mtok=str(m["output_usd_per_mtok"]),
             reasoning=tuple(sorted((m.get("reasoning") or {}).items())),
+            web=tuple(sorted((m.get("web") or {}).items())),
         )
         for m in d.get("models", [])
     )
@@ -258,6 +285,10 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             term.get("max_events"),
         ),
         evaluation=evaluation,
+        tools=ToolsSpec(
+            int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
+            int((d.get("tools") or {}).get("max_leverage", 3)),
+        ),
         tick_interval_ns=_ns(d.get("tick_interval", "1s")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )

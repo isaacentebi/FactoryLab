@@ -118,7 +118,15 @@ class Assembly:
                 ]
             )
         children = self._children(req, parsed)
-        outputs = {k: v for k, v in parsed.items() if k != "requests"}
+        raw_calls = parsed.get("tool_calls")
+        tool_calls = (
+            tuple(c for c in raw_calls if isinstance(c, dict) and isinstance(c.get("tool"), str))[
+                :4
+            ]
+            if isinstance(raw_calls, list)
+            else ()
+        )
+        outputs = {k: v for k, v in parsed.items() if k not in ("requests", "tool_calls")}
         return Return(
             req.handle,
             outputs,
@@ -127,6 +135,7 @@ class Assembly:
             children=children,
             served_by=resp.model_id,
             stop_reason=resp.stop_reason,
+            tool_calls=tool_calls,
         )
 
     def _children(self, req: Request, parsed: dict[str, Any]) -> tuple[Request, ...]:

@@ -23,3 +23,4 @@ worlds/*.key
 worlds/*.secret*
 openrouter.key
 runs/
+hyperliquid.key
