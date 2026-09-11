@@ -113,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument(
         "--duration", default=None, help="wall-clock length like 30m; overrides --events"
     )
+    r.add_argument("--tick-interval", default=None, help="override the manifest tick, e.g. 10s")
     r.set_defaults(func=_cmd_run)
     return p
 
