@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from random import Random
 
-from .base import Learner, _probabilities
+from .base import Learner, _probabilities, restore_learner, state_bytes
 from .feasibility import filter
 
 
@@ -36,6 +36,17 @@ class Router:
         self.learner = learner
         self.action_ids_for_event = action_ids_for_event
 
+    def state(self) -> dict:
+        """Return all private router state; the public menu lookup is supplied at restoration."""
+        return {"algorithm": "Router", "learner": self.learner.state()}
+
+    @classmethod
+    def restore(cls, state: dict, action_ids_for_event: Callable[[str], list[str]]) -> "Router":
+        """Restore a learner exactly against the caller's restored public capability menu."""
+        if state.get("algorithm") != "Router":
+            raise ValueError("router algorithm mismatch")
+        return cls(restore_learner(state["learner"]), action_ids_for_event)
+
     def route(
         self,
         event_kind: str,
@@ -59,7 +70,7 @@ class Router:
         _probabilities(distribution, result.feasible)
         action_ids = tuple(result.feasible)
         probs = tuple(distribution[a] for a in action_ids)
-        state_hash = hashlib.sha256(self.learner.state()).hexdigest()
+        state_hash = hashlib.sha256(state_bytes(self.learner.state())).hexdigest()
         seed = rng.getrandbits(128)
         chosen = Random(seed).choices(action_ids, weights=probs, k=1)[0]
         return Sample(

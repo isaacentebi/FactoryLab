@@ -29,6 +29,23 @@ def test_live_clock_paces_against_wall_clock_without_real_sleep() -> None:
     assert ft.slept == [2.0, 2.0]
 
 
+def test_restored_live_clock_keeps_indices_budget_and_outage_time():
+    import json
+
+    ft = FakeTime()
+    clock = LiveClock(2_000_000_000, 4, now_ns=ft.now_ns, sleep=ft.sleep)
+    stream = clock.events()
+    next(stream)
+    last = next(stream)
+    saved = json.loads(json.dumps(clock.state()))
+    ft.t += 100_000_000_000
+    restored = LiveClock.restore(saved, now_ns=ft.now_ns, sleep=ft.sleep)
+    events = list(restored.events())
+    assert [e.payload["index"] for e in events] == [2, 3]
+    assert events[0].ts_ns == last.ts_ns + 100_000_000_000
+    assert events[1].ts_ns == events[0].ts_ns + 2_000_000_000
+
+
 class StubExchange:
     """A read-only live venue stand-in with two fills appearing on the second tick."""
 

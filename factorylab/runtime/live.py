@@ -35,6 +35,8 @@ class LiveClock:
     now_ns: Callable[[], int] = time.time_ns
     sleep: Callable[[float], None] = time.sleep
     source: str = "wallclock"
+    index: int = 0
+    last_ns: int = -1
 
     def set_interval(self, interval_ns: int) -> None:
         """Adopt positive integer nanoseconds for the next tick after the current yield."""
@@ -47,16 +49,27 @@ class LiveClock:
         return ClockIterator(self, self._events())
 
     def _events(self) -> Iterator[WorldEvent]:
-        last = -1
-        for i in range(self.count):
-            if i > 0:
-                target = last + self.interval_ns
+        while self.index < self.count:
+            if self.last_ns >= 0:
+                target = self.last_ns + self.interval_ns
                 wait = target - self.now_ns()
                 if wait > 0:
                     self.sleep(wait / NS_PER_SECOND)
-            ts = max(self.now_ns(), last + 1)
-            last = ts
+            ts = max(self.now_ns(), self.last_ns + 1)
+            self.last_ns = ts
+            i = self.index
+            self.index += 1
             yield WorldEvent(WorldEventKind.TICK, ts, self.source, {"index": i})
+
+    def state(self) -> dict:
+        """Retain the original budget, next tick index and last delivered timestamp."""
+        return {"interval_ns": self.interval_ns, "count": self.count, "source": self.source,
+                "index": self.index, "last_ns": self.last_ns}
+
+    @classmethod
+    def restore(cls, state: dict, *, now_ns=time.time_ns, sleep=time.sleep) -> LiveClock:
+        """Continue the saved clock with fresh process-local time and sleep functions."""
+        return cls(**state, now_ns=now_ns, sleep=sleep)
 
 
 @dataclass
@@ -148,8 +161,12 @@ class Reconciler:
             except Exception:
                 remaining = None
         equity = None
+        positions = None
         try:
-            equity = str(exchange.account().equity_usd)
+            account = exchange.account()
+            equity = str(account.equity_usd)
+            positions = [{"coin": p.coin, "size": str(p.size), "entry_px": str(p.entry_px)}
+                         for p in account.positions]
         except Exception:
             equity = None
         pots = 0
@@ -161,6 +178,7 @@ class Reconciler:
             "wallet_micro": wallet_balance_micro,
             "openrouter_remaining_micro": remaining,
             "venue_equity_usd": equity,
+            "positions": positions,
             "pots_micro": pots if (remaining is not None or equity is not None) else None,
             "discrepancy_micro": (wallet_balance_micro - pots)
             if (remaining is not None or equity is not None)

@@ -1,4 +1,3 @@
-import json
 import math
 
 import pytest
@@ -27,7 +26,7 @@ def test_delayed_feedback_does_not_use_latest_distribution():
     learner.update(BanditFeedback("a", 1, 0.5))
     learner.distribution(("a",))
     learner.update(BanditFeedback("a", 1, 0.25))
-    logs = json.loads(learner.state())["log_weights"]
+    logs = learner.state()["log_weights"]
     assert logs["a"] - logs["b"] == pytest.approx(0.6)
 
 

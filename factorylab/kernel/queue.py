@@ -145,9 +145,9 @@ class DecisionQueue:
             raise ValueError("deadline must be integer nanoseconds at or after opening")
         if parent_handle is not None and parent_handle not in self.__decisions:
             raise ValueError("parent handle must already exist")
-        # Ledger sequence keeps handles unique even when more than one queue shares a ledger.
+        # The ledger owns the ordinal across queues; resume annotations cannot change it.
         seq = self.__ledger.append({"kind": "decision.handle", "ts": now})
-        handle = f"decision-{seq}"
+        handle = self.__ledger.decision_id(seq)
         decision = Decision(
             handle,
             actor,
@@ -307,3 +307,21 @@ class DecisionQueue:
     def has_history(self, contract_id: str) -> bool:
         """Count settled performance even after retirement; exclude missingness and timeouts."""
         return contract_id in self.__settled_contracts
+
+    def state(self) -> dict:
+        """Retain all decisions, outcomes, retirement routes and delivered feedback in order."""
+        return {
+            "decisions": dict(self.__decisions), "retired": set(self.__retired),
+            "successors": {k: (v[0], dict(v[1])) for k, v in self.__successors.items()},
+            "deliveries": {k: list(v) for k, v in self.__deliveries.items()},
+            "returns": {k: list(v) for k, v in self.__returns.items()},
+            "settled_contracts": set(self.__settled_contracts),
+        }
+
+    def _restore_state(self, state: dict) -> None:
+        """Authenticated checkpoint feedback retains its original handles and delivery order."""
+        if self.__ledger.final:
+            raise RuntimeError("world is final")
+        for name in ("decisions", "retired", "successors", "deliveries", "returns",
+                     "settled_contracts"):
+            setattr(self, f"_DecisionQueue__{name}", state[name])

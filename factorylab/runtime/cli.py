@@ -286,6 +286,20 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_resume(args: argparse.Namespace) -> int:
+    """Continue only the authenticated original manifest and saved event budget."""
+    from factorylab.kernel.ledger import LedgerIntegrityError
+    from factorylab.runtime.resume import ResumeError, resume_world
+
+    try:
+        summary = resume_world(load_manifest(args.world), args.ledger)
+    except (ResumeError, LedgerIntegrityError) as exc:
+        print(f"factorylab resume: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(summary, indent=2, default=str))
+    return 0
+
+
 def _cmd_postmortem(args: argparse.Namespace) -> int:
     """Decrypt a dead world's diary with its released key file and print selected entries.
 
@@ -386,6 +400,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="end a budgeted rehearsal world by explicit kill so its seal key is released",
     )
     r.set_defaults(func=_cmd_run)
+
+    resume = sub.add_parser("resume", help="continue a process-interrupted world")
+    resume.add_argument("--world", required=True)
+    resume.add_argument("--ledger", required=True, help="ledger with an adjacent .key file")
+    resume.set_defaults(func=_cmd_resume)
 
     rp = sub.add_parser("report", help="print a run summary readably")
     rp.add_argument("summary")

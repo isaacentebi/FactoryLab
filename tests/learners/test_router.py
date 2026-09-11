@@ -5,7 +5,7 @@ from random import Random
 
 import pytest
 
-from factorylab.learners.base import FullInfoFeedback
+from factorylab.learners.base import FullInfoFeedback, state_bytes
 from factorylab.learners.blum_mansour import BlumMansour
 from factorylab.learners.hedge import Hedge
 from factorylab.learners.router import Router
@@ -23,7 +23,7 @@ def test_twenty_thousand_draws_match_logged_probs_and_replay_exactly():
         assert sample.chosen == Random(sample.rng_seed).choices(
             sample.action_ids, weights=sample.probs, k=1
         )[0]
-        assert sample.learner_state_hash == hashlib.sha256(learner.state()).hexdigest()
+        assert sample.learner_state_hash == hashlib.sha256(state_bytes(learner.state())).hexdigest()
         assert sample.learner_id == learner.id
         counts[sample.chosen] += 1
         seeds.add(sample.rng_seed)

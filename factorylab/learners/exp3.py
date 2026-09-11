@@ -11,7 +11,16 @@ epoch; the caller chooses it for the horizon (or starts a new epoch).
 import math
 from collections.abc import Sequence
 
-from .base import BanditFeedback, Feedback, _actions, _center, _state, _support, _weights
+from .base import (
+    BanditFeedback,
+    Feedback,
+    _actions,
+    _center,
+    _restore_weights,
+    _state,
+    _support,
+    _weights,
+)
 
 
 class EXP3:
@@ -59,7 +68,7 @@ class EXP3:
         learner._log_weights = _center({a: self._log_weights.get(a, mean) for a in new})
         return learner
 
-    def state(self) -> bytes:
+    def state(self) -> dict:
         """Return deterministic weights, parameters, and identity."""
         return _state(
             algorithm="EXP3",
@@ -68,6 +77,14 @@ class EXP3:
             gamma=self.gamma,
             log_weights=self._log_weights,
         )
+
+    @classmethod
+    def restore(cls, state: dict) -> "EXP3":
+        """Preserve weights bit for bit, including expanded epochs and their action order."""
+        weights = _restore_weights(state, "EXP3")
+        learner = cls(state["actions"], state["gamma"], id=state["id"])
+        learner._log_weights = weights
+        return learner
 
     def update_observed_gain(self, action: str, gain: float, proposal_probability: float) -> None:
         """Apply the SR_MAB observed gain using its row proposal denominator (Lemma 10).

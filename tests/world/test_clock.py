@@ -99,3 +99,40 @@ def test_injected_iterator_retains_clock_control(live):
     stream.set_interval(20)
     assert stream.interval_ns == clock.interval_ns == 20
     assert next(stream).ts_ns == 20
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_restored_clock_keeps_amended_interval_and_remaining_ticks(live):
+    import json
+
+    from factorylab.runtime.live import LiveClock
+
+    now = [10]
+
+    def sleep(seconds):
+        now[0] += round(seconds * 1_000_000_000)
+
+    clock = (LiveClock(5, 4, now_ns=lambda: now[0], sleep=sleep) if live
+             else ClockSource(10, 5, 4))
+    stream = clock.events()
+    assert next(stream).ts_ns == 10
+    clock.set_interval(2)
+    assert next(stream).ts_ns == 12
+    saved = json.loads(json.dumps(clock.state()))
+    assert saved["interval_ns"] == 2
+    restored = (LiveClock.restore(saved, now_ns=lambda: now[0], sleep=sleep) if live
+                else ClockSource.restore(saved))
+    remaining = list(restored.events())
+    assert [e.ts_ns for e in remaining] == [14, 16]
+    assert [e.payload["index"] for e in remaining] == [2, 3]
+    assert list(restored.events()) == []
+
+
+def test_restored_clock_after_drip_keeps_time_floor_when_interval_shortens():
+    clock = ClockSource(10, 10, 3)
+    stream = clock.events(DripSource(1, 100, 15, 15).events())
+    assert [next(stream).ts_ns, next(stream).ts_ns] == [10, 15]
+    clock.set_interval(2)
+    restored = ClockSource.restore(clock.state())
+    assert list(restored.events()) == list(stream)
+    assert restored.last_ns == 17

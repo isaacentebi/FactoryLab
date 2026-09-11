@@ -1,4 +1,3 @@
-import json
 import math
 
 import pytest
@@ -102,7 +101,7 @@ def test_sr_mab_gain_split_estimator_and_exploration_match_paper(chosen):
     learner, bases = bandit_reduction()
     actions = learner.actions
     rows = [base.distribution(actions) for base in bases]
-    logs = [json.loads(base.state())["log_weights"] for base in bases]
+    logs = [base.state()["log_weights"] for base in bases]
     p = learner.distribution(actions)
     # Distinct nonuniform rows expose a missing q factor or a second division by p.
     assert rows[0] != rows[1] and p["a"] != pytest.approx(1 / 3)
@@ -116,7 +115,7 @@ def test_sr_mab_gain_split_estimator_and_exploration_match_paper(chosen):
         assert denominator == rows[i][chosen]
         estimate = gain / denominator
         assert p[chosen] * estimate == pytest.approx(p[actions[i]] * reward)
-        after = json.loads(base.state())["log_weights"]
+        after = base.state()["log_weights"]
         other = next(a for a in actions if a != chosen)
         delta = after[chosen] - after[other] - (logs[i][chosen] - logs[i][other])
         assert delta == pytest.approx(base.gamma / len(actions) * estimate)

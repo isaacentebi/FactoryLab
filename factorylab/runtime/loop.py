@@ -36,6 +36,7 @@ import random
 from collections import deque
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_EVEN, Decimal
+from itertools import islice
 from statistics import median
 from typing import Any
 
@@ -64,6 +65,13 @@ from factorylab.learners.router import Router, Sample
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_threshold
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
+from factorylab.runtime.resume import (
+    JournalProxy,
+    RecoveryJournal,
+    decode,
+    encode,
+    runtime_state,
+)
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement import (
     SEED_VOCABULARY,
@@ -77,12 +85,12 @@ from factorylab.settlement import (
     open_forecast_decision,
 )
 from factorylab.settlement.consequence import FillCursor, ReturnConsequences
-from factorylab.world.clock import ClockSource, DripSource, merge_sources
+from factorylab.world.clock import ClockIterator, ClockSource, DripSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange, HyperliquidExchange, Order
 from factorylab.world.market import MultiProvider, X402MeteredModel, X402Provider
 from factorylab.world.metering import Meter, MeteredModel
-from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
+from factorylab.world.models import FakeModel, ModelRequest, ModelResponse, TokenPrice
 from factorylab.world.x402 import X402Error
 
 try:  # phase 3 packages; hard imports once every workstream is merged
@@ -331,6 +339,30 @@ class RouterState:
     router: Router
     epoch: int = 1
 
+    def state(self) -> dict:
+        """Retain the exact learner, public universe order and comparator epoch."""
+        return {
+            "kind": self.kind,
+            "universe": list(self.universe),
+            "router": self.router.state(),
+            "epoch": self.epoch,
+        }
+
+    @classmethod
+    def restore(cls, state: dict) -> RouterState:
+        """Restore the router and its learner as the same object against the saved menu."""
+        from factorylab.learners.base import restore_learner
+
+        saved = state["router"]["learner"]
+        learner = (
+            _KeyedLearner.restore(saved)
+            if saved["algorithm"] == "KeyedLearner"
+            else restore_learner(saved)
+        )
+        universe = list(state["universe"])
+        router = Router(learner, lambda _k: [a for a in universe if a != NOOP])
+        return cls(state["kind"], universe, learner, router, state["epoch"])
+
 
 def _duration_str(ns: int) -> str:
     """Whole seconds/minutes/hours where exact, else seconds with a decimal."""
@@ -367,6 +399,7 @@ class PendingJudgement:
 
 @dataclass
 class RunStats:
+    resumes: int = 0
     events: int = 0
     decisions: int = 0
     invocations: int = 0
@@ -448,6 +481,7 @@ class Runtime:
         clock_source: Any | None = None,
         reconcile_every: int = 10,
         kill_at_end: bool = False,
+        _journal: RecoveryJournal | None = None,
     ) -> None:
         self.m = manifest
         self.kill_at_end = kill_at_end
@@ -459,25 +493,30 @@ class Runtime:
             else ClockSource(manifest.tick_interval_ns, manifest.tick_interval_ns, events)
         )
         if clock_source is not None and hasattr(clock_source, "set_interval"):
-            self.tick_clock = clock_source
+            self.tick_clock = (
+                clock_source._clock if isinstance(clock_source, ClockIterator) else clock_source
+            )
         self.reconciler = Reconciler(every=reconcile_every)
         self.events_budget = events
         self.seed = manifest.seed if seed is None else seed
         self.rng = random.Random(self.seed)
         self.cascade: dict[int, CascadeGate] = {}
         self.cascade_windows: dict[str, list[str]] = {}  # representative -> other handles
-        self.clock = SimClock(0)
+        self.clock = SimClock(0) if _journal is None else _journal.clock
         self.stats = RunStats()
         self.ev = manifest.evaluation
         self.charter: Charter = seed_charter()
 
         # kernel
-        self.ledger = Ledger(
-            ledger_path,
-            manifest=json.loads(manifest.canonical_json()),
-            clock_ns=self.clock,
-            full_verify_every=1024,
-            key_path=(ledger_path + ".key") if ledger_path else None,
+        self.ledger = _journal or RecoveryJournal(
+            Ledger(
+                ledger_path,
+                manifest=json.loads(manifest.canonical_json()),
+                clock_ns=self.clock,
+                full_verify_every=1024,
+                key_path=(ledger_path + ".key") if ledger_path else None,
+            ),
+            self.clock,
         )
         self.use_drip = drip and manifest.drip is not None
         schedule = None
@@ -534,6 +573,12 @@ class Runtime:
                 start_cash_usd=money_to_usd(self.initial),
                 shocks=shocks,
             )
+        self.exchange = JournalProxy(
+            self.exchange,
+            self.ledger,
+            "exchange",
+            deterministic=isinstance(self.exchange, FakeExchange) and not self.live,
+        )
         self.venue = LiveVenue(self.exchange) if self.live else None
         self.prices = manifest.price_table()
         self.meter = Meter(self.wallet)
@@ -551,15 +596,23 @@ class Runtime:
                 else X402Provider(discovery_url=manifest.treasury.discovery_url)
             )
         )
+        self.provider = JournalProxy(
+            self.provider,
+            self.ledger,
+            "provider",
+            deterministic=isinstance(self.provider, (ScriptedProvider, FakeModel)),
+        )
+        self.market = JournalProxy(self.market, self.ledger, "market")
         self.sellers: dict[str, dict] = {}
         self.catalogue: dict[str, TokenPrice] | None = None
-        if hasattr(self.provider, "catalogue"):
+        if not self.ledger.bootstrap and hasattr(self.provider, "catalogue"):
             try:
                 self.catalogue = {e.id: e.price() for e in self.provider.catalogue()}
             except Exception:  # catalogue unavailable: model proposals will be rejected
                 self.catalogue = None
 
-        self._register_seed_contracts()
+        if not self.ledger.bootstrap:
+            self._register_seed_contracts()
         self.assemblies: dict[str, Assembly] = {}
         for a in manifest.assemblies:
             self._instantiate(
@@ -641,7 +694,7 @@ class Runtime:
             "price_micro_per_call": manifest.tools.population_tool_micro_per_call,
             "kind": "market",
         }
-        self.tool_runner = ToolRunner()
+        self.tool_runner = JournalProxy(ToolRunner(), self.ledger, "sandbox")
         self.charter_book = CharterBook(self.ledger, self.charter)
         self.pending_votes: list[Any] = []  # committees awaiting tally
 
@@ -674,6 +727,10 @@ class Runtime:
         self.registration_feedback: deque[dict[str, Any]] = deque(maxlen=8)
         self._compute_routed = False
         self._compute_unaffordable = False
+        self.world_consumed = 0
+        self.ticks_consumed = 0
+        self.drips_consumed = 0
+        self.started = False
 
     # ---- setup helpers
 
@@ -988,21 +1045,26 @@ class Runtime:
     # ---- the loop
 
     def run(self) -> dict[str, Any]:
+        """Continue the original source budget; restored internal events keep their ordering."""
+        if self.termination.final or (self.started and self._check_termination()):
+            return self._summary()
+        self.ledger.active = True
         tick_ns = self.m.tick_interval_ns
+        if self.clock_source is None:
+            self.tick_clock.count = self.events_budget
         if self.clock_source is not None and not hasattr(self.clock_source, "events"):
             sources = [self.clock_source]
         else:
             sources = [self.tick_clock.events()]
         if self.use_drip and self.m.drip is not None:
             d = self.m.drip
-            sources.append(
-                DripSource(
-                    d.amount_micro,
-                    d.period_ns,
-                    max(d.start_ns, tick_ns),
-                    min(d.end_ns, (self.events_budget + 1) * self.m.max_tick_ns),
-                ).events()
-            )
+            drips = DripSource(
+                d.amount_micro,
+                d.period_ns,
+                max(d.start_ns, tick_ns),
+                min(d.end_ns, (self.events_budget + 1) * self.m.max_tick_ns),
+            ).events()
+            sources.append(islice(drips, self.drips_consumed, None))
         if (
             isinstance(self.tick_clock, ClockSource)
             and self.clock_source is None
@@ -1011,78 +1073,137 @@ class Runtime:
             stream = self.tick_clock.events(sources[1])
         else:
             stream = merge_sources(*sources)
-        self.bus.publish(
-            Event(
-                "launch", EventKind.LAUNCH, 0, {"manifest_hash": self.m.manifest_hash()}, "kernel"
+        if not self.started:
+            self.bus.publish(
+                Event(
+                    "launch",
+                    EventKind.LAUNCH,
+                    0,
+                    {"manifest_hash": self.m.manifest_hash()},
+                    "kernel",
+                )
             )
-        )
+            self.started = True
+            self._snapshot("launch")
         while True:
             ev = self._next_event(stream)
-            if ev is None:
+            if ev is None or not self._process_event(ev):
                 break
-            self.n += 1
-            self.clock.now_ns = max(self.clock.now_ns, ev.ts_ns)
-            self.bus.publish(ev)
-            self.stats.events += 1
-            self.events_log.append({"kind": str(ev.kind), "payload": _to_plain(ev.payload)})
-            if ev.kind is EventKind.MARKET_MID:
-                coin = str(ev.payload.get("coin"))
-                dq = self.recent_mids.setdefault(coin, deque(maxlen=20))
-                dq.append({"t_s": ev.ts_ns // 1_000_000_000, "mid": str(ev.payload.get("mid"))})
-
-            self.wallet.drip(self.clock.now_ns)
-            self._manage_reserve_window()
-            if ev.kind is EventKind.TICK:
-                if self.venue is not None:
-                    observed = [
-                        we
-                        for we in self.venue.on_tick(self.clock.now_ns)
-                        if we.kind is not WorldEventKind.FILL
-                    ]
-                    observed.extend(
-                        WorldEvent(
-                            WorldEventKind.FILL,
-                            max(self.clock.now_ns, ts),
-                            self.exchange.name,
-                            payload,
-                        )
-                        for ts, payload in self.consequence_fills.poll(self.exchange)
-                    )
-                    self._settle_exchange_effects(observed)
-                    if self.reconciler.due():
-                        snap = Reconciler.snapshot(
-                            self.wallet.balance, self.provider, self.exchange
-                        )
-                        self.stats.reconciliations += 1
-                        self._emit(EventKind.RECONCILED, snap, source="kernel")
-                else:
-                    self._settle_exchange_effects(self.exchange.advance(self.clock.now_ns))
-            if self._check_termination():
-                break
-
-            self._compute_routed = False
-            self._compute_unaffordable = False
-            self._route(ev)
-            self._record_insolvency_event(ev)
-            if self._check_termination():
-                break
-
-            self._settle_due_forecasts()
-            self._censor_stale_judgements()
-            self.stats.timeouts += len(self.queue.expire(self.clock.now_ns))
-            self._deliver_returns()
-            self.balance_at.append(self.wallet.balance)
         if self.kill_at_end and not self.termination.final:
             # a budgeted rehearsal world ends by explicit kill so its diary becomes readable
             self.termination.kill("explicit_kill:budget")
         return self._summary()
 
+    def _process_event(self, ev: Event) -> bool:
+        """Normal execution and recovery use identical transitions after a durable input item."""
+        previous_window = self.reserve_window_start
+        self.n += 1
+        self.clock.now_ns = max(self.clock.now_ns, ev.ts_ns)
+        self.bus.publish(ev)
+        self.stats.events += 1
+        self.events_log.append({"kind": str(ev.kind), "payload": _to_plain(ev.payload)})
+        if ev.kind is EventKind.MARKET_MID:
+            coin = str(ev.payload.get("coin"))
+            dq = self.recent_mids.setdefault(coin, deque(maxlen=20))
+            dq.append({"t_s": ev.ts_ns // 1_000_000_000, "mid": str(ev.payload.get("mid"))})
+
+        self.wallet.drip(self.clock.now_ns)
+        self._manage_reserve_window()
+        if ev.kind is EventKind.TICK:
+            if self.venue is not None:
+                observed = [
+                    we
+                    for we in self.venue.on_tick(self.clock.now_ns)
+                    if we.kind is not WorldEventKind.FILL
+                ]
+                observed.extend(
+                    WorldEvent(
+                        WorldEventKind.FILL, max(self.clock.now_ns, ts), self.exchange.name, payload
+                    )
+                    for ts, payload in self.consequence_fills.poll(self.exchange)
+                )
+                self._settle_exchange_effects(observed)
+                if self.reconciler.due():
+                    snap = Reconciler.snapshot(self.wallet.balance, self.provider, self.exchange)
+                    self.stats.reconciliations += 1
+                    self._emit(EventKind.RECONCILED, snap, source="kernel")
+            else:
+                self._settle_exchange_effects(self.exchange.advance(self.clock.now_ns))
+        if self._check_termination():
+            return False
+
+        self._compute_routed = False
+        self._compute_unaffordable = False
+        self._route(ev)
+        self._record_insolvency_event(ev)
+        if self._check_termination():
+            return False
+
+        self._settle_due_forecasts()
+        self._censor_stale_judgements()
+        self.stats.timeouts += len(self.queue.expire(self.clock.now_ns))
+        self._deliver_returns()
+        self.ledger.append({"kind": "runtime.event_done", "n": self.n})
+        self.balance_at.append(self.wallet.balance)
+        if previous_window != self.reserve_window_start:
+            self._snapshot("reserve_window")
+        return True
+
+    def _snapshot(self, boundary: str) -> None:
+        """Persist a complete continuation at launch and after each boundary event finishes."""
+        self.ledger.append(
+            {"kind": "snapshot", "boundary": boundary, "n": self.n, "state": runtime_state(self)}
+        )
+
+    def _resume_at(self, now_ns: int) -> None:
+        """Reconcile and ledger outage timeouts before admitting another world event."""
+        now_ns = max(now_ns, self.clock.now_ns)
+        self.ledger.append({"kind": "resume.begin", "now_ns": now_ns, "n": self.n})
+        self.clock.now_ns = now_ns
+        if self.live:
+            observed = [
+                WorldEvent(WorldEventKind.FILL, max(now_ns, ts), self.exchange.name, payload)
+                for ts, payload in self.consequence_fills.poll(self.exchange)
+            ]
+            self._settle_exchange_effects(observed)
+        snapshot = Reconciler.snapshot(self.wallet.balance, self.provider, self.exchange)
+        self.ledger.append({"kind": "resume.reconcile", **snapshot})
+        if self.live:
+            self.stats.reconciliations += 1
+            self._emit(EventKind.RECONCILED, snapshot, source="kernel")
+        handles = [d.handle for d in self.queue.outstanding() if d.deadline_ns <= now_ns]
+        self.ledger.append({"kind": "resume.timeouts", "handles": handles, "n": self.n})
+        self.stats.timeouts += len(self.queue.expire(now_ns))
+        self._deliver_returns()
+        self.ledger.append(
+            {
+                "kind": "resume",
+                "manifest_hash": self.m.manifest_hash(),
+                "n": self.n,
+                "resumes": self.stats.resumes + 1,
+            }
+        )
+        self.stats.resumes += 1
+
     def _next_event(self, stream) -> Event | None:
         if self.internal:
+            self.ledger.append({"kind": "runtime.input", "internal": encode(self.internal[0])})
             return self.internal.popleft()
-        we = next(stream, None)
+        saved = self.ledger.peek()
+        we = decode(saved["world"]) if saved and "world" in saved else next(stream, None)
         if we is None:
             return None
+        self.ledger.append({"kind": "runtime.input", "world": encode(we)})
+        self.world_consumed += 1
+        if we.kind is WorldEventKind.TICK:
+            self.ticks_consumed += 1
+            if isinstance(self.tick_clock, (ClockSource, LiveClock)):
+                self.tick_clock.index = self.ticks_consumed
+                self.tick_clock.last_ns = we.ts_ns
+        elif we.kind is WorldEventKind.DRIP:
+            self.drips_consumed += 1
+        if isinstance(self.tick_clock, ClockSource):
+            self.tick_clock.last_event_ns = we.ts_ns
         return self._kernel_event(we)
 
     def _kernel_event(self, we: WorldEvent) -> Event:
@@ -2640,7 +2761,7 @@ class Runtime:
             "wallet_conservation": self.wallet.check_conservation(),
             "ledger_verify": self.ledger.verify(),
             "outstanding_decisions": len(self.queue.outstanding()),
-            "exchange_equity_usd": _equity_or_none(self.exchange),
+            "exchange_equity_usd": _equity_or_none(self.exchange.target),
             "live": self.live,
             "evaluation_boundary": EVALUATION_BOUNDARY,
             "charter_edition": self.charter.edition,
@@ -2688,8 +2809,22 @@ class _KeyedLearner:
     def update(self, feedback) -> None:
         raise TypeError("use inner.update_for(key, feedback)")
 
-    def state(self) -> bytes:
-        return self.inner.state()
+    def state(self) -> dict:
+        """Preserve the adapter's current decision key as well as all frozen learning rounds."""
+        return {
+            "algorithm": "KeyedLearner",
+            "inner": self.inner.state(),
+            "current_key": self.current_key,
+        }
+
+    @classmethod
+    def restore(cls, state: dict) -> _KeyedLearner:
+        """Rebind a complete snapshot learner without losing its in-flight routing key."""
+        from factorylab.learners.delayed import SnapshotLearner
+
+        learner = cls(SnapshotLearner.restore(state["inner"]))
+        learner.current_key = state["current_key"]
+        return learner
 
 
 def _price_str(value: Any) -> str:

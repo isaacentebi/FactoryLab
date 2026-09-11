@@ -166,3 +166,13 @@ class Registry:
     def purchasables(self) -> list[Contract]:
         """Return the latest contracts explicitly registered with kind purchase."""
         return self.available("purchase")
+
+    def state(self) -> dict:
+        """Retain every immutable version and provenance, including superseded contracts."""
+        return {"contracts": {k: dict(v) for k, v in self.__contracts.items()}}
+
+    def _restore_state(self, state: dict) -> None:
+        """Authenticated checkpoint contracts replace bootstrap state without new registrations."""
+        if self.__ledger.final:
+            raise RuntimeError("world is final")
+        self.__contracts = {k: dict(v) for k, v in state["contracts"].items()}

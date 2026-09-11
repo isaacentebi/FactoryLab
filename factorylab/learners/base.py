@@ -36,7 +36,7 @@ type Feedback = FullInfoFeedback | BanditFeedback
 
 @runtime_checkable
 class Learner(Protocol):
-    """Private learning state is available as bytes, independent of kernel records."""
+    """Private learning state round-trips through JSON, independent of kernel records."""
 
     id: str
 
@@ -48,8 +48,13 @@ class Learner(Protocol):
         """Apply bounded feedback according to the learner's declared feedback model."""
         ...
 
-    def state(self) -> bytes:
-        """Return deterministic private state suitable for hashing."""
+    def state(self) -> dict:
+        """Return complete, detached, JSON-serialisable private state."""
+        ...
+
+    @classmethod
+    def restore(cls, state: dict) -> "Learner":
+        """Return an independent learner with exactly the saved continuation state."""
         ...
 
 
@@ -78,8 +83,39 @@ def _probabilities(distribution: dict[str, float], support: Sequence[str]) -> No
         raise ValueError("probabilities must sum to one")
 
 
-def _state(**values: object) -> bytes:
-    return json.dumps(values, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+def _state(**values: object) -> dict:
+    # Python's JSON encoder uses repr-round-trippable float numbers, not rounded decimals.
+    return json.loads(json.dumps(values, allow_nan=False))
+
+
+def state_bytes(state: dict) -> bytes:
+    """Return canonical JSON bytes without rounding any finite floating-point number."""
+    return json.dumps(state, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+
+def restore_learner(state: dict) -> Learner:
+    """Restore only the explicitly supported algorithms; never import a ledger-supplied name."""
+    from .blum_mansour import BlumMansour
+    from .delayed import SnapshotLearner
+    from .exp3 import EXP3
+    from .hedge import Hedge
+
+    kinds = {c.__name__: c for c in (EXP3, Hedge, BlumMansour, SnapshotLearner)}
+    if not isinstance(state, dict) or state.get("algorithm") not in kinds:
+        raise ValueError("unknown learner state")
+    return kinds[state["algorithm"]].restore(state)
+
+
+def _restore_weights(state: dict, algorithm: str) -> dict[str, float]:
+    if state.get("algorithm") != algorithm:
+        raise ValueError("learner algorithm mismatch")
+    actions = _actions(state["actions"])
+    weights = state["log_weights"]
+    if set(weights) != set(actions) or any(
+        type(w) not in (int, float) or not math.isfinite(w) for w in weights.values()
+    ):
+        raise ValueError("invalid saved log weights")
+    return {a: weights[a] for a in actions}
 
 
 def _weights(log_weights: dict[str, float], support: Sequence[str]) -> dict[str, float]:
