@@ -12,3 +12,12 @@ node_modules/
 __pycache__/
 *.pyc
 .DS_Store
+
+# uv
+.venv/
+.ruff_cache/
+.pytest_cache/
+
+# world secrets and keys
+worlds/*.key
+worlds/*.secret*

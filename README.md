@@ -2,10 +2,11 @@
 
 A bounded experimental project informed by *The Superdark Factory*.
 
-**Current status:** source-audited working plan; implementation has not begun.
+**Current status:** build spec v0.4 written; phase 1 substrate under construction.
 
 ## Start here
 
+- [Build spec v0.4](docs/build-spec-v0.4.md) — the interfaces being implemented; supersedes v0.3 where they conflict.
 - [Working plan v0.3](outputs/project-plan.md) — the consolidated specification.
 - [Fable refinements](outputs/fable-refinements.md) — accepted, qualified and rejected recommendations.
 - [Independent Fable 5.1 CLI review](outputs/fable-cli-review.md).
@@ -18,13 +19,10 @@ from Git.
 
 ## Next implementation milestone
 
-Build the deterministic substrate described in section 11 of the working plan:
-contracts, resource accounting, decision addressing, isolated workers, asynchronous
-feedback, reference learners and the mechanism acceptance checks. Provider choices,
-operating parameters and a paid experiment budget remain separate launch decisions.
+Phase 1 of the build spec: the deterministic substrate (wallet, sealed ledger, registry, decision queue, novelty reserve), the reference learners and router, world adapters with a scripted exchange and model, and a runtime loop that closes on the `scripted` world. Completion condition is in spec section 6.
 
 ## Location
 
 The project lives at `/Users/isaacentebi/Desktop/FactoryLab`.
 The original Codex workspace path redirects here so existing conversation links
-continue to work. This repository is local; no remote is configured.
+continue to work. Remote: github.com/isaacentebi/FactoryLab (private).
