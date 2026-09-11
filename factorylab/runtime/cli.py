@@ -24,11 +24,15 @@ def _load_dotenv() -> None:
     import os
     from pathlib import Path
 
-    keyfile = Path.cwd() / "openrouter.key"
-    if keyfile.exists() and "OPENROUTER_API_KEY" not in os.environ:
-        value = keyfile.read_text().strip()
-        if value:
-            os.environ["OPENROUTER_API_KEY"] = value
+    for filename, var in (
+        ("openrouter.key", "OPENROUTER_API_KEY"),
+        ("hyperliquid.key", "HL_PRIVATE_KEY"),
+    ):
+        keyfile = Path.cwd() / filename
+        if keyfile.exists() and var not in os.environ:
+            value = keyfile.read_text().strip()
+            if value:
+                os.environ[var] = value
     path = Path.cwd() / ".env"
     if not path.exists():
         return
