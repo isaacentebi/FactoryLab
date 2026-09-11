@@ -34,6 +34,10 @@ class X402Error(Exception):
     """Failures contain local explanations and status codes, never response bodies or keys."""
 
 
+class InsufficientReserve(X402Error):
+    """A validated payment cannot be covered; no authorization was signed."""
+
+
 @dataclass(frozen=True)
 class HTTPResponse:
     """Status and headers remain available even for a payment-required response."""
@@ -178,16 +182,23 @@ def _address(address: str) -> str:
     return address
 
 
-def _requirements(accepted: dict, amount_micro: int) -> None:
-    if type(amount_micro) is not int or amount_micro != TOP_UP_MICRO:
-        raise X402Error("Only a $5 Venice top-up is supported")
+def _requirements(accepted: dict, amount_micro: int | None = None) -> None:
     if (
         accepted.get("scheme") != "exact"
         or accepted.get("network") != BASE_NETWORK
         or str(accepted.get("asset", "")).lower() != BASE_USDC
-        or accepted.get("amount") != str(amount_micro)
     ):
-        raise X402Error("Quote must offer exactly $5 in canonical USDC on Base")
+        raise X402Error("Quote must use exact, eip155:8453 and canonical Base USDC")
+    amount = accepted.get("amount")
+    if (
+        not isinstance(amount, str) or not re.fullmatch(r"0|[1-9][0-9]{0,77}", amount)
+        or int(amount) >= 2**256
+    ):
+        raise X402Error("Quote amount must be a nonnegative uint256 decimal string")
+    if amount_micro is not None and (
+        type(amount_micro) is not int or amount_micro < 0 or int(amount) != amount_micro
+    ):
+        raise X402Error("Quote does not match the requested micro-USD amount")
     _address(accepted.get("payTo"))
     if int(accepted["payTo"], 16) == 0:
         raise X402Error("Zero payment recipient is not supported")
@@ -211,9 +222,14 @@ class PaymentQuote:
     resource: dict | None = None
     extensions: dict | None = None
 
+    @property
+    def amount_micro(self) -> int:
+        """Canonical Base USDC base units equal integer micro-USD."""
+        return int(self.accepted["amount"])
 
-def parse_quote(response: HTTPResponse, *, amount_micro: int = TOP_UP_MICRO) -> PaymentQuote:
-    """Only a v2 402 quote for the explicitly requested Base USDC amount is accepted."""
+
+def parse_quote(response: HTTPResponse, *, amount_micro: int | None = None) -> PaymentQuote:
+    """Only v2 exact Base USDC quotes pass; an optional amount further restricts selection."""
     if response.status != 402:
         raise X402Error(f"Expected a 402 quote; received HTTP {response.status}")
     encoded = _header(response.headers, "payment-required", "x-payment-required")
@@ -234,7 +250,7 @@ def parse_quote(response: HTTPResponse, *, amount_micro: int = TOP_UP_MICRO) -> 
             if field_name in quote and not isinstance(quote[field_name], dict):
                 raise X402Error("Invalid payment metadata")
         return PaymentQuote(dict(accepted), quote.get("resource"), quote.get("extensions"))
-    raise X402Error("No exact $5 canonical Base USDC quote is available")
+    raise X402Error("No matching exact eip155:8453 canonical Base USDC quote is available")
 
 
 def authorization_typed_data(
@@ -244,8 +260,8 @@ def authorization_typed_data(
     now: int | None = None,
     nonce: bytes | None = None,
 ) -> dict:
-    """The EIP-3009 signature can spend only $5 USDC to this quote's recipient on Base."""
-    _requirements(accepted, TOP_UP_MICRO)
+    """The EIP-3009 signature spends only the quoted USDC to its recipient on Base."""
+    _requirements(accepted)
     _address(address)
     now = time.time_ns() // 1_000_000_000 if now is None else now
     nonce = os.urandom(32) if nonce is None else nonce
@@ -354,7 +370,7 @@ def eth_balance(address: str, *, rpc: str = BASE_RPC, transport: Transport | Non
 
 
 class X402Client:
-    """Only an explicit top_up signs payment; status and inference auth cannot move USDC."""
+    """Only explicit payment authorization signs USDC; balance reads cannot move funds."""
 
     def __init__(
         self,
@@ -393,6 +409,17 @@ class X402Client:
     def eth_balance(self, address: str | None = None) -> int:
         """The reserve's native ETH balance is integer wei."""
         return eth_balance(address or self.address, rpc=self.rpc, transport=self._transport)
+
+    def authorize(self, quote: PaymentQuote, *, ceiling_micro: int) -> str:
+        """No signature exists until both the registered ceiling and reserve cover the quote."""
+        _requirements(quote.accepted)
+        if type(ceiling_micro) is not int or ceiling_micro < 0:
+            raise X402Error("Payment ceiling must be nonnegative integer micro-USD")
+        if quote.amount_micro > ceiling_micro:
+            raise X402Error("Quote exceeds registered per-request ceiling")
+        if self.usdc_balance() < quote.amount_micro:
+            raise InsufficientReserve("Reserve cannot cover the quoted Base USDC payment")
+        return payment_header(self._account, quote)
 
     def venice_balance(self, address: str | None = None) -> int:
         """A SIWE-authenticated wallet balance is rounded down to integer micro-USD."""

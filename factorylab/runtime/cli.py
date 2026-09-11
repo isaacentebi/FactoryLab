@@ -61,6 +61,32 @@ def _cmd_manifest(args: argparse.Namespace) -> int:
 
 
 def _cmd_probe(args: argparse.Namespace) -> int:
+    if args.provider == "x402":
+        from factorylab.world.market import X402Provider, seller_root
+        from factorylab.world.models import ModelRequest
+        from factorylab.world.x402 import BASE_RPC, X402Error, usd_micro
+
+        if not args.seller or not args.model:
+            print("x402 probe requires --seller URL --model M", file=sys.stderr)
+            return 2
+        model_id = f"x402:{seller_root(args.seller)}#{args.model}"
+        provider = X402Provider(rpc=args.rpc or BASE_RPC)
+        req = ModelRequest(
+            model_id, "Reply briefly.", ({"role": "user", "content": "Reply with OK."},), 32,
+        )
+        quote = provider.quote(req)
+        if quote.amount_micro > usd_micro(args.max_cost_usd):
+            raise X402Error("Probe quote exceeds --max-cost-usd")
+        provider.register(model_id, quote.amount_micro)
+        response = provider.complete(req, quoted=quote)
+        settlement = response.raw.get("settlement") or {}
+        print(json.dumps({
+            "provider": "x402", "model": model_id, "text": response.text,
+            "cost_micro": response.cost_micro, "cost_source": response.raw["cost_source"],
+            "quote": response.raw["quote"], "settlement": settlement,
+            "settlement_reference": settlement.get("transaction"),
+        }, default=str))
+        return 0
     if args.provider == "venice":
         from factorylab.world.models import ModelRequest
         from factorylab.world.venice import VeniceProvider
@@ -96,6 +122,17 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         return 2
     out = probe_hyperliquid(mainnet=m.exchange.mainnet, coins=m.exchange.coins)
     print(json.dumps(out, indent=2))
+    return 0
+
+
+def _cmd_market(args: argparse.Namespace) -> int:
+    """Public discovery prints compact sellers without loading credentials or paying."""
+    from factorylab.world.market import DISCOVERY_URL, discover
+
+    print(json.dumps(discover(
+        url_substring=args.url_substring, query=args.query, limit=args.limit,
+        discovery_url=args.discovery_url or DISCOVERY_URL,
+    ), indent=2, default=str))
     return 0
 
 
@@ -303,11 +340,22 @@ def build_parser() -> argparse.ArgumentParser:
     pr = sub.add_parser("probe", help="read live venue data for a world (network)")
     probe_target = pr.add_mutually_exclusive_group(required=True)
     probe_target.add_argument("--world")
-    probe_target.add_argument("--provider", choices=("venice",))
+    probe_target.add_argument("--provider", choices=("venice", "x402"))
     pr.add_argument("--model")
+    pr.add_argument("--seller", help="x402 seller root or chat-completions URL")
+    pr.add_argument("--max-cost-usd", default="0.10", help="x402 probe payment cap (default $0.10)")
     pr.add_argument("--base-url", help="Venice API root, including /api/v1")
-    pr.add_argument("--rpc", help="Base RPC override (probe itself makes no RPC calls)")
+    pr.add_argument("--rpc", help="Base RPC override for the x402 reserve balance check")
     pr.set_defaults(func=_cmd_probe)
+
+    market = sub.add_parser("market", help="discover public x402 sellers")
+    market_sub = market.add_subparsers(dest="market_cmd", required=True)
+    discovery = market_sub.add_parser("discover")
+    discovery.add_argument("--url-substring")
+    discovery.add_argument("--query")
+    discovery.add_argument("--limit", type=int, default=20)
+    discovery.add_argument("--discovery-url", help="override the public discovery index URL")
+    discovery.set_defaults(func=_cmd_market)
 
     reserve = sub.add_parser("reserve", help="initialize, inspect or fund the Venice reserve")
     reserve_sub = reserve.add_subparsers(dest="reserve_cmd", required=True)
@@ -357,6 +405,21 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     is_reserve = args.cmd == "reserve"
     is_venice_probe = args.cmd == "probe" and args.provider == "venice"
+    is_x402 = args.cmd == "market" or (args.cmd == "probe" and args.provider == "x402")
+    if is_x402:
+        from factorylab.world.x402 import X402Error
+
+        try:
+            if args.cmd == "probe":
+                _load_dotenv()
+            return int(args.func(args))
+        except X402Error as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except Exception:
+            print("Market command failed; check endpoint and reserve configuration. "
+                  "A submitted payment may have settled; do not blindly retry.", file=sys.stderr)
+            return 1
     if is_reserve or is_venice_probe:
         try:
             if not (is_reserve and args.reserve_cmd == "init"):

@@ -101,9 +101,9 @@ def test_quote_body_or_case_insensitive_base64_header(quote, header):
         ("scheme", "upto"),
         ("network", "eip155:1"),
         ("asset", "0x" + "12" * 20),
-        ("amount", "5000001"),
+        ("amount", "-1"),
         ("amount", 5000000),
-        ("amount", "4999999"),
+        ("amount", str(2**256)),
         ("payTo", "0x" + "00" * 20),
         ("payTo", "not-an-address"),
         ("maxTimeoutSeconds", 0),
@@ -436,3 +436,42 @@ def test_topup_preserves_venice_data_envelope(quote):
         HTTPResponse(402, quote), HTTPResponse(200, settlement),
     ])
     assert X402Client(private_key=TEST_KEY, transport=fake).top_up() == settlement
+
+
+@pytest.mark.parametrize("amount", [0, 1, 1734, 5_000_001, 10**30])
+def test_general_quote_signs_exact_arbitrary_amount(quote, amount):
+    quote["accepts"][0]["amount"] = str(amount)
+    selected = parse_quote(HTTPResponse(402, quote))
+    assert selected.amount_micro == amount and type(selected.amount_micro) is int
+    account = Account.from_key(TEST_KEY)
+    typed = authorization_typed_data(selected.accepted, account.address)
+    assert typed["message"]["value"] == amount
+    header = decoded(payment_header(account, selected))
+    assert header["payload"]["authorization"]["value"] == str(amount)
+
+
+@pytest.mark.parametrize("amount", [4_999_999, 5_000_001])
+def test_venice_topup_still_requires_explicit_five_dollar_quote(quote, amount):
+    quote["accepts"][0]["amount"] = str(amount)
+    with pytest.raises(X402Error):
+        parse_quote(HTTPResponse(402, quote), amount_micro=5_000_000)
+    fake = FakeHTTP([
+        HTTPResponse(200, {"id": 1, "result": hex(6_000_000)}), HTTPResponse(402, quote),
+    ])
+    with pytest.raises(X402Error):
+        X402Client(private_key=TEST_KEY, transport=fake).top_up()
+    assert len(fake.calls) == 2
+
+
+def test_generic_authorize_ceiling_and_reserve_precede_signature(quote, monkeypatch):
+    quote["accepts"][0]["amount"] = "123"
+    selected = parse_quote(HTTPResponse(402, quote))
+    fake = FakeHTTP([HTTPResponse(200, {"id": 1, "result": hex(122)})])
+    client = X402Client(private_key=TEST_KEY, transport=fake)
+    monkeypatch.setattr("factorylab.world.x402.payment_header", lambda *a: pytest.fail("signed"))
+    with pytest.raises(X402Error, match="ceiling"):
+        client.authorize(selected, ceiling_micro=122)
+    assert not fake.calls
+    with pytest.raises(X402Error, match="Reserve"):
+        client.authorize(selected, ceiling_micro=123)
+    assert len(fake.calls) == 1
