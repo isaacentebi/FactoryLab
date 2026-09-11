@@ -10,7 +10,7 @@ Binding for phase 4. Sections are independent workstreams; each names its files,
 | Verdict as forecast | Approved. Every verdict is also a sealed forecast that the judged return pays off, settled at the horizon, and it feeds the evaluator's consequence standing. Producers are then priced by judges who are priced by money. |
 | λ from the factory | An amendment may propose a starting price for a card; adopted on passage; the controller continues from it. |
 | Meta recursion | One event kind `MetaVerdict`; metas may accept `Verdict` or `MetaVerdict`; a meta is judged only if someone accepts `MetaVerdict`; depth is the population's. |
-| Treasury | Three pots; venue↔reserve moves are real and executed by the factory's tool; reserve→float top-ups are the operator's mechanical rule outside the factory's sight; compute insolvency is death. |
+| Treasury | Compute is bought on the open market: any x402 seller is a primitive the factory can discover, register and pay per request from its own reserve; OpenRouter credits are a depleting seed nobody refills; venue↔reserve moves are real; compute insolvency is death. No human anywhere after launch. |
 | Resume | Snapshot at reserve-window boundaries plus tail replay; a resumed scripted world's summary equals an uninterrupted run's. |
 
 ## 1. Versioning — `factorylab/versioning/` (workstream V)
@@ -93,40 +93,40 @@ New `EventKind.META_VERDICT` (`"MetaVerdict"`, payload `about` = the judged deci
 
 Channels: a meta decision opens on `conformity` if any registered assembly accepts `MetaVerdict` at the moment it opens, else on `fast` as today. A `conformity` meta decision is settled by the first higher-tier `MetaVerdict` about it within `verdict_timeout_events`, else censored like an unjudged producer. Seeds unchanged; the population adds depth by registering a meta that accepts `MetaVerdict`. Files: `kernel/events.py`, `cortex/registration.py`, `runtime/loop.py`, tests.
 
-## 5. The treasury made real (workstream T)
+## 5. The treasury made real: compute bought on the open market (workstream T)
 
-### 5.1 Pots and the accounting identity
+Revised 11 September after two research passes (`docs/research/venice.md`, and the x402 discovery index). The rule that decides everything: the factory may not depend on the experimenter for anything after launch, and compute is the dependency that mattered. OpenRouter cannot be refilled by a program. So compute must be bought by the factory, with its own money, from sellers it can pay on-chain, and there must be more than one seller so it is not captive.
 
-The kernel wallet stays one number. Three pots are a view of it: `venue` (Hyperliquid equity), `reserve` (USDC at a factory-owned address on Arbitrum), `float` (unspent OpenRouter credits). Identity, checked by the reconciler: `wallet == venue + reserve + float` within a tolerance of $0.50; drift is a `reconcile.drift` ledger item and a `Reconciled` event, never silently corrected.
+### 5.1 Pots and the identity
 
-Compute spend reduces `float` and the wallet by the metered cost (as today). Trading changes `venue` and the wallet (as today via the reconciler). `treasury.transfer(to_reserve, usd)`: a real withdrawal from the venue to the reserve address; `venue −usd`, `reserve +usd − fee`, wallet `−fee`. `treasury.transfer(to_venue, usd)`: a real deposit from the reserve to the bridge; `reserve −usd − gas`, `venue +usd`, wallet `−gas`. Both are two-phase: `treasury.submitted` (tx reference) then `treasury.confirmed` or `treasury.failed` on the next reconcile; the pots move on confirmation. Amounts below the venue's minimum, or above the pot, are refused with the reason in the tool result and a `treasury.refused` item.
+The kernel wallet stays one number. Pots are a view: `venue` (Hyperliquid equity), `reserve` (USDC at the factory's own address on Base, `reserve.key`), `seed` (the OpenRouter credits the experimenter bought before launch: a depleting endowment that nobody ever refills), and any wallet-bound seller balances the factory chose to hold (Venice tranches). Identity checked by the reconciler within $0.50: `wallet == venue + reserve + seed + Σ seller balances`; drift is a `reconcile.drift` item and a `Reconciled` event, never corrected silently.
 
-The float top-up is not a factory action: when `float < treasury.float_floor_usd`, the operator converts `min(reserve, treasury.float_target_usd − float)` from the reserve into OpenRouter credits and records it with `factorylab treasury topup --usd X --tx ...` (a CLI command that appends `treasury.topup` and adjusts the pots; nothing else). The world block shows the three pots and the floor.
+### 5.2 Sellers are primitives
 
-### 5.2 Compute insolvency
+An x402 seller is any OpenAI-compatible chat-completions endpoint that answers a request with HTTP 402 and an `exact`-scheme quote on `eip155:8453` (USDC). The factory pays per request: the reserve key signs the quoted authorization, the facilitator settles, the response comes back; the kernel meters exactly the amount paid, and the reservation ceiling is the quote. No float, no tranche, no human.
 
-If the provider refuses calls for lack of credit (OpenRouter 402, or the credits endpoint reporting a balance below one request's ceiling) for `treasury.insolvency_events` consecutive events (default 20), the world terminates with `termination_reason = "insolvency:compute"`. The factory that lets its float run dry with money in the venue has died of its own liquidity management, which is the essay's "$0 token budget" made exact.
+- World tool `market.discover(url_substring | query, limit)`: reads the x402 discovery index (`https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources`, public, paginated) and returns sellers with their listed prices and networks. Public schematic; priced like any world read.
+- Model proposal namespace `x402:<seller_url>#<model_id>`. On registration the runtime reads the seller's `/v1/models` for per-token prices when it has one, else takes the 402 quote as the per-request price; the capability is registered with that price and the seller's network. Anything else about the seller is for the factory to learn: a seller that fails, stalls or returns garbage produces a malformed return, gets judged, and its routers learn.
+- Venice stays a seller with a wallet-bound balance: `venice:<id>` models are paid from the balance, and `treasury.transfer(to_venice, 5)` is a real $5 tranche from the reserve (the x402 client already built). The per-request path is the default; the tranche path exists because Venice's catalogue is wider than most sellers'.
+- The OpenRouter `seed` pot pays for `openrouter` models until it is gone. When it is gone, those capabilities become infeasible (cost ceiling unmet), exactly like any other unaffordable primitive.
 
-### 5.3 Interfaces
+### 5.3 Venue ↔ reserve, for real
 
-`world/treasury.py`:
+`treasury.transfer(to_reserve, usd)`: a real Hyperliquid withdrawal (SDK, main-wallet key) to the reserve address on Arbitrum, then Circle CCTP burn on Arbitrum and mint on Base to the same address (contract calls through raw JSON-RPC with `eth_account`; the reserve holds a small ETH gas budget on Arbitrum and Base, booked as a fee when spent). `treasury.transfer(to_venue, usd)`: the reverse. Two-phase and ledgered: `treasury.submitted` with tx references, then `treasury.confirmed` or `treasury.failed` on reconcile; pots move on confirmation. Amounts below the venue minimum or above the pot are refused with the reason in the tool result.
 
-```python
-class Treasury(Protocol):
-    def withdraw_to_reserve(self, usd: Decimal) -> TxRef
-    def deposit_to_venue(self, usd: Decimal) -> TxRef
-    def status(self, tx: TxRef) -> Literal["pending", "confirmed", "failed"]
-    def reserve_balance_usd(self) -> Decimal
-    def float_balance_usd(self) -> Decimal            # OpenRouter GET /api/v1/credits: total_credits − total_usage
-```
+### 5.4 Insolvency
 
-`FakeTreasury` for scripted worlds: instant confirmation on the next tick, fixed fee $1.00, gas $0.05, float tracked from metered spend. `HyperliquidTreasury`: withdrawals through the SDK's bridge withdrawal signed by the main wallet key (`HL_PRIVATE_KEY`); deposits as an ERC-20 USDC transfer from the reserve key (`RESERVE_PRIVATE_KEY`, loaded from `reserve.key` like the others) to the Hyperliquid bridge on Arbitrum via raw JSON-RPC with `eth_account` signing (already present transitively); `web3` may be added as a dependency only if raw signing of the transfer proves impractical, and the PR must say so. Testnet: Hyperliquid testnet and Arbitrum Sepolia; mainnet addresses only when the manifest is named `funded`.
+If no affordable provider exists for a routed decision (reserve below every quote, seed empty, seller balances empty) for `treasury.insolvency_events` consecutive events (default 20), the world terminates with `insolvency:compute`. A factory that lets its compute money run dry with money in the venue died of its own liquidity management. This is the essay's "$0 token budget" made exact.
 
-Manifest: `[treasury] float_floor_usd, float_target_usd, insolvency_events, reserve_address`. Wallet: `pots()` view derived from ledger items; the venue's `sync_cash` and the reconciler use the `venue` pot only.
+### 5.5 Live funding payments
 
-### 5.4 Acceptance
+The Hyperliquid adapter reports funding rates but not funding paid. The lot table (§2) needs actual payments: add `funding_payments(since_ns)` to the exchange protocol from the venue's user-funding history and have the reconciler emit Funding events with real `paid_usd`.
 
-Scripted world with `FakeTreasury`: the scripted transfer at call 120 moves pots, fees land in the wallet, conservation holds, the identity holds at every reconcile; a scripted insolvency (float forced to zero) terminates with `insolvency:compute`. Testnet: one real withdrawal and one real deposit on Hyperliquid testnet, both confirmed, recorded in the build log with tx references. Keys are never read, printed or committed by anyone but the process.
+### 5.6 Workstreams and acceptance
+
+- **T1** (now): x402 per-request provider, `market.discover`, the `x402:` proposal namespace, metering at the paid amount, the insolvency rule, `factorylab probe --provider x402 --seller URL --model M` paying one real request from the reserve. Acceptance: HTTP-faked tests for the 402 loop, metering equality with the quote, discovery parsing, proposal registration and feasibility; then one real request bought from the reserve for cents and recorded in the build log.
+- **T2** (after resume): venue↔reserve real moves with CCTP, pots view, identity reconcile, funding payments. Acceptance: on Hyperliquid testnet and Arbitrum/Base Sepolia end to end, then one real $10 round trip, both logged with tx references.
+- The `funded` manifest waits for both, plus resume, hosting and the cold audits.
 
 ## 6. Resume (workstream H)
 
