@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from random import Random
 
 from .base import FullInfoFeedback, Learner, _actions, _probabilities
+from .delayed import SnapshotLearner
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,35 @@ def simulate(
         chosen = rng.choices(game.actions, weights=[probs[a] for a in game.actions], k=1)[0]
         history.append(Round(losses, probs, chosen))
         learner.update(FullInfoFeedback(losses))
+    return history
+
+
+def simulate_delayed(
+    game: MatrixGame, learner: SnapshotLearner, opponent_sequence: Sequence[str], *,
+    seed: int = 0, delay_permutation: Sequence[int],
+) -> list[Round]:
+    """Sample every round before feedback, then settle in the specified index order.
+
+    Returned histories retain opening order regardless of delivery order. This
+    models a fully delayed batch, not an adaptive synchronous trajectory: an
+    untrained learner stays uniform throughout the batch on a fixed menu.
+    Invalid permutations and opponent moves fail before any learner mutation.
+    Handles are decimal round indices; use a fresh adapter for each simulation.
+    """
+    order = tuple(delay_permutation)
+    count = len(opponent_sequence)
+    if any(type(i) is not int for i in order) or sorted(order) != list(range(count)):
+        raise ValueError("delay_permutation must be a permutation of round indices")
+    losses_by_round = [game.loss_vector(move) for move in opponent_sequence]
+    rng = Random(seed)
+    history = []
+    for index, losses in enumerate(losses_by_round):
+        probs = learner.distribution_for(str(index), game.actions)
+        _probabilities(probs, game.actions)
+        chosen = rng.choices(game.actions, weights=[probs[a] for a in game.actions], k=1)[0]
+        history.append(Round(losses, probs, chosen))
+    for index in order:
+        learner.update_for(str(index), FullInfoFeedback(history[index].losses))
     return history
 
 

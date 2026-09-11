@@ -21,6 +21,15 @@ idempotent, but changing the menu before feedback is rejected. Delayed or
 out-of-order training requires a separate adapter/algorithm with decision
 snapshots; the thin Feedback type cannot identify earlier rounds.
 
+The explicit snapshot()/update_from_snapshot() extension supports that adapter.
+snapshot() detaches the pending round, freezing its support, solved p and every
+base row Q. Later feedback trains the current base weights with that round's
+p_i-scaled losses, or its p_i, q_i,k and logged p_k for SR_MAB. It never restores
+old weights. Full-information Hedge updates add -eta*p_i*loss[j] in log space,
+so delivery order for a fixed collection of snapshots is immaterial apart from
+floating-point rounding. This does not imply identical policies when feedback
+is delayed during play, or commutativity for arbitrary custom base learners.
+
 For filtering, all N rows propose over the feasible menu and the stationary
 system uses the feasible rows/columns. Unavailable actions have p_i=0. This
 preserves stationarity on the actual menu, but no dynamic-menu regret theorem
@@ -30,6 +39,7 @@ floating-point sum error; returned p is never clipped or renormalized.
 
 import math
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from fractions import Fraction
 
 from .base import (
@@ -43,6 +53,21 @@ from .base import (
     _support,
 )
 from .exp3 import EXP3
+
+
+@dataclass(frozen=True)
+class BlumMansourSnapshot:
+    """Immutable round data belongs to the learner that produced it.
+
+    Rows follow the fixed universe order; each row's entries and p retain the
+    feasible order. Weight state is deliberately excluded so late updates can
+    accumulate on current weights. Exactly-once delivery belongs to the adapter.
+    """
+
+    support: tuple[str, ...]
+    p: tuple[tuple[str, float], ...]
+    rows: tuple[tuple[tuple[str, float], ...], ...]
+    _owner: object = field(repr=False, compare=False)
 
 
 def stationary_distribution(matrix: Sequence[Sequence[float]]) -> tuple[float, ...]:
@@ -163,6 +188,36 @@ class BlumMansour:
         else:
             raise TypeError("unsupported feedback")
         self._pending = None
+
+    def snapshot(self) -> BlumMansourSnapshot:
+        """Detach the pending round into immutable data, permitting another query.
+
+        No weights change. Calling without a pending distribution raises
+        RuntimeError. Ordinary distribution/update calls remain synchronous.
+        """
+        if self._pending is None:
+            raise RuntimeError("distribution must open a round before snapshot")
+        support, p, rows = self._pending
+        snapshot = BlumMansourSnapshot(
+            support, tuple(p.items()), tuple(tuple(row.items()) for row in rows), self,
+        )
+        self._pending = None
+        return snapshot
+
+    def update_from_snapshot(self, snapshot: BlumMansourSnapshot, feedback: Feedback) -> None:
+        """Train current weights using this learner's frozen round and existing validation.
+
+        Any ordinary pending round survives success or failure unchanged. The
+        caller owns snapshot consumption; invalid feedback can be retried.
+        """
+        if not isinstance(snapshot, BlumMansourSnapshot) or snapshot._owner is not self:
+            raise ValueError("snapshot must belong to this BlumMansour learner")
+        pending = self._pending
+        self._pending = snapshot.support, dict(snapshot.p), tuple(map(dict, snapshot.rows))
+        try:
+            self.update(feedback)
+        finally:
+            self._pending = pending
 
     def state(self) -> bytes:
         """Return parameters, every base state, and the pending decision snapshot."""
