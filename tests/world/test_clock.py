@@ -43,3 +43,59 @@ def test_merge_rejects_non_monotonic_source() -> None:
 
     with pytest.raises(ValueError):
         list(merge_sources(bad()))
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_interval_change_applies_to_next_tick_and_rejects_invalid(live):
+    from factorylab.runtime.live import LiveClock
+
+    now = [10]
+
+    def sleep(seconds):
+        now[0] += round(seconds * 1_000_000_000)
+
+    clock = (LiveClock(5, 5, now_ns=lambda: now[0], sleep=sleep) if live
+             else ClockSource(10, 5, 5))
+    stream = clock.events()
+    assert next(stream).ts_ns == 10
+    assert next(stream).ts_ns == 15
+    clock.set_interval(2)
+    assert next(stream).ts_ns == 17
+    for invalid in [0, -1, True, 1.5, "2"]:
+        with pytest.raises(ValueError):
+            clock.set_interval(invalid)
+        assert clock.interval_ns == 2
+    clock.set_interval(20)
+    assert [e.ts_ns for e in stream] == [37, 57]
+
+
+def test_clock_change_after_drip_recomputes_pending_tick():
+    def run():
+        clock = ClockSource(10, 10, 3)
+        stream = clock.events(DripSource(1, 100, 15, 15).events())
+        events = [next(stream), next(stream)]
+        assert [e.ts_ns for e in events] == [10, 15]
+        clock.set_interval(20)
+        return events + list(stream)
+
+    first = run()
+    assert [e.ts_ns for e in first] == [10, 15, 30, 50]
+    assert first == run()
+
+
+@pytest.mark.parametrize("live", [False, True])
+def test_injected_iterator_retains_clock_control(live):
+    from factorylab.runtime.live import LiveClock
+
+    now = [0]
+
+    def sleep(seconds):
+        now[0] += round(seconds * 1_000_000_000)
+
+    clock = (LiveClock(10, 2, now_ns=lambda: now[0], sleep=sleep) if live
+             else ClockSource(0, 10, 2))
+    stream = clock.events()
+    assert next(stream).ts_ns == 0
+    stream.set_interval(20)
+    assert stream.interval_ns == clock.interval_ns == 20
+    assert next(stream).ts_ns == 20

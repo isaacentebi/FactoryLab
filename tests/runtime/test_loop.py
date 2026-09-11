@@ -1020,3 +1020,54 @@ def test_treasury_defaults_are_hashed_and_can_select_an_index(market_http):
     })
     assert runtime.m.treasury.insolvency_events == 5
     assert runtime.m.manifest_hash() != replace(runtime.m, treasury=TreasurySpec()).manifest_hash()
+
+
+def test_scripted_clock_amendment_changes_next_tick_deterministically(monkeypatch):
+    import json
+
+    from factorylab.runtime.loop import _inputs_from_prompt
+
+    def run():
+        requests = []
+
+        class ClockProvider(ScriptedProvider):
+            def complete(self, req):
+                text = "\n".join(str(m.get("content", "")) for m in req.messages)
+                requests.append(_inputs_from_prompt(text))
+                response = super().complete(req)
+                body = json.loads(response.text)
+                for proposal in body.get("register", []):
+                    if proposal.get("kind") == "amendment":
+                        proposal["tick_interval"] = "2s"
+                return replace(response, text=json.dumps(body))
+
+        rt = Runtime(load_manifest("scripted"), events=260, seed=1,
+                     initial_balance_micro=None, ledger_path=None, drip=True,
+                     router_gamma=0.1, provider=ClockProvider())
+        entries = []
+        append = rt.ledger.append
+
+        def capture(entry):
+            entries.append(dict(entry))
+            return append(entry)
+
+        monkeypatch.setattr(rt.ledger, "append", capture)
+        summary = rt.run()
+        votes = [r["amendment"] for r in requests if "amendment" in r]
+        assert votes and all(v["tick_interval"] == "2s" for v in votes)
+        assert summary["stats"]["clock_changes"] == 1
+        changed = next(i for i, e in enumerate(entries) if e["kind"] == "clock.changed")
+        ticks_before = [e for e in entries[:changed]
+                        if e["kind"] == "event" and e["event"].kind == "Tick"]
+        ticks_after = [e for e in entries[changed:]
+                       if e["kind"] == "event" and e["event"].kind == "Tick"]
+        assert ticks_after[0]["ts"] - ticks_before[-1]["ts"] == 2_000_000_000
+        assert all(b["ts"] - a["ts"] == 2_000_000_000
+                   for a, b in zip(ticks_after, ticks_after[1:], strict=False))
+        assert rt._world_block()["clock"]["tick_interval"] == "2000000000ns"
+        return summary, entries
+
+    first, entries = run()
+    second, replay = run()
+    assert first == second
+    assert entries == replay
