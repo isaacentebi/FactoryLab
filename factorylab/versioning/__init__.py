@@ -1,0 +1,98 @@
+"""Deterministic observer reports require only decrypted diary evidence."""
+
+from math import isfinite
+
+from factorylab.versioning.operator import cell_series, transition_operator
+from factorylab.versioning.series import card_names, ordered, windows
+from factorylab.versioning.versions import early_warnings, pathologies, settling, versions
+
+__all__ = ("summary", "render")
+
+
+def summary(
+    items: list[dict],
+    *,
+    window_items: int = 200,
+    bins: int = 3,
+    k: int = 3,
+    tv_threshold: float = 0.5,
+    gap_threshold: float = 0.5,
+) -> dict:
+    """Return a detached JSON-serialisable report, independent of input order and randomness.
+
+    Only retained windows contribute observations or quantiles. Parameters are
+    validated even for empty diaries; no file, clock, network or runtime state
+    is consulted.
+    """
+    for name, value in (("window_items", window_items), ("bins", bins), ("k", k)):
+        if type(value) is not int or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
+    for name, value in (("tv_threshold", tv_threshold), ("gap_threshold", gap_threshold)):
+        if type(value) not in (int, float) or not isfinite(value) or not 0 <= value <= 1:
+            raise ValueError(f"{name} must be finite and in [0, 1]")
+    items = ordered(items)
+    cards = card_names(items)
+    groups = windows(items, window_items=window_items)
+    discretized = cell_series(groups, cards, bins=bins)
+    cells = discretized["cells"]
+    for group, cell in zip(groups, cells, strict=True):
+        group["cell"] = list(cell)
+    operator = transition_operator(cells)
+    operator.update(dimensions=discretized["dimensions"], cuts=discretized["cuts"])
+    spans = versions(groups, cells, k=k, tv_threshold=tv_threshold)
+    return {
+        "params": {
+            "window_items": window_items,
+            "bins": bins,
+            "k": k,
+            "tv_threshold": tv_threshold,
+            "gap_threshold": gap_threshold,
+        },
+        "windows": groups,
+        "operator": operator,
+        "versions": spans,
+        "pathologies": pathologies(
+            groups, cells, spans, k=k, tv_threshold=tv_threshold, gap_threshold=gap_threshold
+        ),
+        "ews": early_warnings(groups, spans, cards, k=k),
+        "settling": settling(items, groups, cells, k=k, tv_threshold=tv_threshold),
+    }
+
+
+def _display(value: float | None) -> str:
+    """Unsupported values have an explicit plain-text representation."""
+    return "unsupported" if value is None else f"{value:.4g}"
+
+
+def render(report: dict) -> str:
+    """A stable plain-text report labels bounds and evidence without changing the report.
+
+    The last endpoint supplies one EWS line per series, with all three scales;
+    earlier version-end signals remain available in the structured summary.
+    """
+    op = report["operator"]
+    lines = [
+        f"Factory versions: {len(report['versions'])} across {len(report['windows'])} windows",
+        f"Spectral gap lower bound (Dobrushin): {_display(op['gap_bound'])}; "
+        f"delta={_display(op['delta'])}; empirical mixing TV={_display(op['mixing'])}",
+    ]
+    for span in report["versions"]:
+        lines.append(
+            f"Version {span['start_window']}..{span['end_window']}: "
+            f"{span['duration']} windows, charter {span['charter_edition']}"
+        )
+    if not report["pathologies"]:
+        lines.append("Pathology evidence: none")
+    for flag in report["pathologies"]:
+        lines.append(f"Evidence {flag['kind']}: {flag['start_window']}..{flag['end_window']}")
+    if report["ews"]:
+        for name, scales in report["ews"][-1]["series"].items():
+            lines.append(
+                f"EWS {name}: "
+                + "; ".join(
+                    f"{scale['span']}w var={_display(scale['variance'])} "
+                    f"acf1={_display(scale['autocorrelation'])}"
+                    for scale in scales
+                )
+            )
+    return "\n".join(lines)
