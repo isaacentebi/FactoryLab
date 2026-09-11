@@ -27,9 +27,16 @@ def _load_dotenv() -> None:
     for filename, var in (
         ("openrouter.key", "OPENROUTER_API_KEY"),
         ("hyperliquid.key", "HL_PRIVATE_KEY"),
+        ("reserve.key", "RESERVE_PRIVATE_KEY"),
     ):
         keyfile = Path.cwd() / filename
         if keyfile.exists() and var not in os.environ:
+            if filename == "reserve.key":
+                import stat
+
+                info = keyfile.lstat()
+                if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+                    raise ValueError("reserve.key must be a regular file with mode 0600")
             value = keyfile.read_text().strip()
             if value:
                 os.environ[var] = value
@@ -54,6 +61,33 @@ def _cmd_manifest(args: argparse.Namespace) -> int:
 
 
 def _cmd_probe(args: argparse.Namespace) -> int:
+    if args.provider == "venice":
+        from factorylab.world.models import ModelRequest
+        from factorylab.world.venice import VeniceProvider
+        from factorylab.world.x402 import VENICE_URL
+
+        if not args.model or not args.model.startswith("venice:"):
+            print("Venice probe requires --model venice:<id>", file=sys.stderr)
+            return 2
+        provider = VeniceProvider(
+            base_url=args.base_url or VENICE_URL,
+            reasoning_config={args.model: {"enabled": False}},
+        )
+        response = provider.complete(ModelRequest(
+            args.model, "Reply briefly.", ({"role": "user", "content": "Reply with OK."},),
+            max_tokens=32,
+        ))
+        print(json.dumps({
+            "provider": "venice", "model": response.model_id,
+            "text": response.text, "input_tokens": response.input_tokens,
+            "output_tokens": response.output_tokens, "cost_micro": response.cost_micro,
+            "cost_source": response.raw["cost_source"],
+            "request_id": response.raw.get("request_id"),
+        }))
+        return 0
+    if not args.world:
+        print("probe requires --world or --provider venice --model venice:<id>", file=sys.stderr)
+        return 2
     from factorylab.world.probe import probe_hyperliquid
 
     m = load_manifest(args.world)
@@ -62,6 +96,62 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         return 2
     out = probe_hyperliquid(mainnet=m.exchange.mainnet, coins=m.exchange.coins)
     print(json.dumps(out, indent=2))
+    return 0
+
+
+def _cmd_reserve(args: argparse.Namespace) -> int:
+    """Only init writes a key; status is read-only and topup authorizes exactly $5."""
+    import os
+    from decimal import Decimal, InvalidOperation
+    from pathlib import Path
+
+    from eth_account import Account  # Already supplied by hyperliquid-python-sdk.
+
+    from factorylab.world.x402 import BASE_RPC, TOP_UP_MICRO, VENICE_URL, X402Client
+
+    if args.reserve_cmd == "init":
+        try:
+            # O_EXCL refuses existing files and symlinks without ever opening them for reading.
+            fd = os.open(Path.cwd() / "reserve.key", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            print("reserve.key already exists; refusing to overwrite", file=sys.stderr)
+            return 2
+        with os.fdopen(fd, "w") as stream:
+            account = Account.create(os.urandom(32))
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write("0x" + account.key.hex() + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        print(account.address)
+        return 0
+    if args.reserve_cmd == "topup":
+        try:
+            amount = Decimal(args.usd)
+            if not amount.is_finite() or amount != Decimal("5"):
+                raise ValueError
+        except (InvalidOperation, ValueError):
+            print("Only --usd 5 is supported by the verified Venice quote", file=sys.stderr)
+            return 2
+    client = X402Client(base_url=args.base_url or VENICE_URL, rpc=args.rpc or BASE_RPC)
+    if args.reserve_cmd == "status":
+        usdc, eth, venice = client.usdc_balance(), client.eth_balance(), client.venice_balance()
+        print(json.dumps({
+            "address": client.address, "network": "eip155:8453",
+            "usdc_micro": usdc, "usdc_usd": format(Decimal(usdc) / 1_000_000, ".6f"),
+            "eth_wei": eth, "eth": format(Decimal(eth) / 10**18, ".18f"),
+            "venice_balance_micro": venice,
+            "venice_balance_usd": format(Decimal(venice) / 1_000_000, ".6f"),
+            "topup_5_affordable": usdc >= TOP_UP_MICRO,
+        }))
+        return 0
+    settlement = client.top_up(TOP_UP_MICRO)
+    # Preserve the reference even if the subsequent balance read fails.
+    print(json.dumps({"address": client.address, "settlement": settlement}, default=str))
+    balance = client.venice_balance()
+    print(json.dumps({
+        "venice_balance_micro": balance,
+        "venice_balance_usd": format(Decimal(balance) / 1_000_000, ".6f"),
+    }))
     return 0
 
 
@@ -211,8 +301,25 @@ def build_parser() -> argparse.ArgumentParser:
     m.set_defaults(func=_cmd_manifest)
 
     pr = sub.add_parser("probe", help="read live venue data for a world (network)")
-    pr.add_argument("--world", required=True)
+    probe_target = pr.add_mutually_exclusive_group(required=True)
+    probe_target.add_argument("--world")
+    probe_target.add_argument("--provider", choices=("venice",))
+    pr.add_argument("--model")
+    pr.add_argument("--base-url", help="Venice API root, including /api/v1")
+    pr.add_argument("--rpc", help="Base RPC override (probe itself makes no RPC calls)")
     pr.set_defaults(func=_cmd_probe)
+
+    reserve = sub.add_parser("reserve", help="initialize, inspect or fund the Venice reserve")
+    reserve_sub = reserve.add_subparsers(dest="reserve_cmd", required=True)
+    init = reserve_sub.add_parser("init", help="create reserve.key once; print only its address")
+    init.set_defaults(func=_cmd_reserve)
+    for name in ("status", "topup"):
+        command = reserve_sub.add_parser(name)
+        command.add_argument("--rpc", help="Base JSON-RPC URL")
+        command.add_argument("--base-url", help="Venice API root, including /api/v1")
+        if name == "topup":
+            command.add_argument("--usd", required=True, help="exactly 5; never rounded")
+        command.set_defaults(func=_cmd_reserve)
 
     r = sub.add_parser("run", help="run a world's event loop")
     r.add_argument("--world", required=True)
@@ -247,8 +354,20 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    _load_dotenv()
     args = build_parser().parse_args(argv)
+    is_reserve = args.cmd == "reserve"
+    is_venice_probe = args.cmd == "probe" and args.provider == "venice"
+    if is_reserve or is_venice_probe:
+        try:
+            if not (is_reserve and args.reserve_cmd == "init"):
+                _load_dotenv()
+            return int(args.func(args))
+        except Exception:
+            # Loading/signing/transport exceptions can include secrets. No traceback or body.
+            print("Reserve/Venice command failed; check key setup and endpoint status. "
+                  "After a top-up submission, check balances before retrying.", file=sys.stderr)
+            return 1
+    _load_dotenv()
     return int(args.func(args))
 
 

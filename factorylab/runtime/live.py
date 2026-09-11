@@ -167,6 +167,26 @@ def build_provider(manifest: Any) -> Any:
     providers = {t.provider for t in manifest.models}
     if providers == {"fake"}:
         return None
+    if "venice" in providers:
+        from factorylab.world.venice import VeniceAndOpenRouter, VeniceProvider
+
+        if not (os.environ.get("VENICE_API_KEY") or os.environ.get("RESERVE_PRIVATE_KEY")):
+            raise RuntimeError("Venice needs VENICE_API_KEY or RESERVE_PRIVATE_KEY")
+        if not providers <= {"venice", "openrouter"}:
+            raise RuntimeError(f"unsupported provider set {sorted(providers)}")
+        if any(not t.id.startswith("venice:") for t in manifest.models if t.provider == "venice"):
+            raise RuntimeError("Venice model ids must start with venice:")
+        config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
+        venice = VeniceProvider(reasoning_config=config, web_config=manifest.web_config())
+        if providers == {"venice"}:
+            return venice
+        if not os.environ.get("OPENROUTER_API_KEY"):
+            raise RuntimeError("OPENROUTER_API_KEY is not set")
+        from factorylab.world.openrouter import OpenRouterProvider
+
+        return VeniceAndOpenRouter(venice, OpenRouterProvider(
+            reasoning_config=config, web_config=manifest.web_config(),
+        ))
     if "openrouter" in providers:
         if not os.environ.get("OPENROUTER_API_KEY"):
             raise RuntimeError("OPENROUTER_API_KEY is not set; the testnet world needs it")

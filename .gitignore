@@ -24,3 +24,6 @@ worlds/*.secret*
 openrouter.key
 runs/
 hyperliquid.key
+
+# The factory-owned reserve wallet key (Base). Created by `factorylab reserve init`, never committed.
+reserve.key
