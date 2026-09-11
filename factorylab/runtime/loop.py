@@ -791,6 +791,14 @@ class Runtime:
                 {"event_kind": st.kind, "learner": type(st.learner).__name__, "menu": st.universe}
                 for st in self._all_router_states()
             ],
+            "card_prices": [
+                {
+                    "card_id": cid,
+                    "lambda": self.controller.price(cid),
+                    "region": {"kind": r.kind, "lo": r.lo, "hi": r.hi, "scale": r.scale},
+                }
+                for cid, r in sorted(self.regions.items())
+            ],
             "event_kinds": sorted(PRODUCER_KINDS | {"ProducerReturn", "Verdict"}),
             "a_return_may_include": self.A_RETURN_MAY_INCLUDE,
             "proposal_shapes": self.PROPOSAL_SHAPES,
