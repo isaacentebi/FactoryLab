@@ -31,9 +31,7 @@ class Sample:
 class Router:
     """Event actions are filtered before querying and sampling the learner."""
 
-    def __init__(
-        self, learner: Learner, action_ids_for_event: Callable[[str], list[str]]
-    ) -> None:
+    def __init__(self, learner: Learner, action_ids_for_event: Callable[[str], list[str]]) -> None:
         """Retain the learner and event lookup without introducing kernel dependencies."""
         self.learner = learner
         self.action_ids_for_event = action_ids_for_event
@@ -50,9 +48,9 @@ class Router:
         ``mix`` may transform the learner's distribution before sampling (e.g. blend in a
         protected share); the logged probs are the distribution actually sampled from.
         """
-        actions = list(dict.fromkeys(
-            a for a in self.action_ids_for_event(event_kind) if a != "NOOP"
-        ))
+        actions = list(
+            dict.fromkeys(a for a in self.action_ids_for_event(event_kind) if a != "NOOP")
+        )
         actions.append("NOOP")
         result = filter(actions, lambda a: (True, "") if a == "NOOP" else is_feasible(a))
         distribution = self.learner.distribution(result.feasible)

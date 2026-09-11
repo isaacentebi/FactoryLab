@@ -102,7 +102,12 @@ class Assembly:
         parsed = _parse_json_object(resp.text)
         if parsed is None:
             return Return(
-                req.handle, {"raw": resp.text}, cost, "malformed", served_by=resp.model_id
+                req.handle,
+                {"raw": resp.text},
+                cost,
+                "malformed",
+                served_by=resp.model_id,
+                stop_reason=resp.stop_reason,
             )
         if self.spec.memory_policy == "handle-scoped":
             scope = req.parent_handle or req.handle
@@ -114,7 +119,15 @@ class Assembly:
             )
         children = self._children(req, parsed)
         outputs = {k: v for k, v in parsed.items() if k != "requests"}
-        return Return(req.handle, outputs, cost, "ok", children=children, served_by=resp.model_id)
+        return Return(
+            req.handle,
+            outputs,
+            cost,
+            "ok",
+            children=children,
+            served_by=resp.model_id,
+            stop_reason=resp.stop_reason,
+        )
 
     def _children(self, req: Request, parsed: dict[str, Any]) -> tuple[Request, ...]:
         raw = parsed.get("requests")

@@ -253,6 +253,7 @@ class RunStats:
     sample_propensity: dict[str, Any] | None = None
     invocation_status: dict[str, int] = field(default_factory=dict)
     invocations_by_role: dict[str, int] = field(default_factory=dict)
+    stop_reasons: dict[str, int] = field(default_factory=dict)
 
 
 def _usd_to_micro(value: str | Decimal) -> int:
@@ -708,6 +709,8 @@ class Runtime:
             self.stats.invocation_status.get(ret.status, 0) + 1
         )
         self.stats.invocations_by_role[role] = self.stats.invocations_by_role.get(role, 0) + 1
+        sr = ret.stop_reason or "none"
+        self.stats.stop_reasons[sr] = self.stats.stop_reasons.get(sr, 0) + 1
         self.ledger.append(
             {
                 "kind": "invocation",
@@ -716,6 +719,8 @@ class Runtime:
                 "handle": req.handle,
                 "cost": ret.cost,
                 "status": ret.status,
+                "stop_reason": sr,
+                "served_by": ret.served_by,
                 "ts": self.clock.now_ns,
             }
         )

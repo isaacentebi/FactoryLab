@@ -66,7 +66,7 @@ class ModelTier:
     provider: str  # "fake" | "openrouter" | "anthropic"
     input_usd_per_mtok: str
     output_usd_per_mtok: str
-    reasoning: bool = False  # send a reasoning-effort field to this model
+    reasoning: tuple[tuple[str, Any], ...] = ()  # OpenRouter `reasoning` object, e.g. effort=low
 
 
 @dataclass(frozen=True)
@@ -215,7 +215,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             provider=m.get("provider", "fake"),
             input_usd_per_mtok=str(m["input_usd_per_mtok"]),
             output_usd_per_mtok=str(m["output_usd_per_mtok"]),
-            reasoning=bool(m.get("reasoning", False)),
+            reasoning=tuple(sorted((m.get("reasoning") or {}).items())),
         )
         for m in d.get("models", [])
     )

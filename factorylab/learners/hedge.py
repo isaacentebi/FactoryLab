@@ -58,7 +58,11 @@ class Hedge:
     def state(self) -> bytes:
         """Return deterministic weights, parameters, identity, and last support."""
         return _state(
-            algorithm="Hedge", id=self.id, actions=self.actions, eta=self.eta,
-            log_weights=self._log_weights, feasible=self._last_support.feasible,
+            algorithm="Hedge",
+            id=self.id,
+            actions=self.actions,
+            eta=self.eta,
+            log_weights=self._log_weights,
+            feasible=self._last_support.feasible,
             unavailable=self._last_support.unavailable,
         )

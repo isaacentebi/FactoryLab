@@ -25,9 +25,7 @@ class TokenPrice:
     output_micro: int | Fraction
 
     @classmethod
-    def from_per_token(
-        cls, prompt_usd_per_token: str, completion_usd_per_token: str
-    ) -> TokenPrice:
+    def from_per_token(cls, prompt_usd_per_token: str, completion_usd_per_token: str) -> TokenPrice:
         """Return exact fractional micro-USD prices from decimal USD-per-token quotes."""
         return cls(
             Fraction(Decimal(prompt_usd_per_token)) * 1_000_000,
@@ -66,9 +64,7 @@ class CatalogueEntry:
 
     def price(self) -> TokenPrice:
         """Return exact per-token micro-USD prices without rounding the quotes."""
-        return TokenPrice.from_per_token(
-            self.prompt_usd_per_token, self.completion_usd_per_token
-        )
+        return TokenPrice.from_per_token(self.prompt_usd_per_token, self.completion_usd_per_token)
 
 
 @dataclass

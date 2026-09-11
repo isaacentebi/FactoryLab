@@ -108,8 +108,7 @@ def stationary_distribution(matrix: Sequence[Sequence[float]]) -> tuple[float, .
         raise ArithmeticError("stationary solve failed positivity or unit-mass invariant")
     result = tuple(float(v) for v in exact)
     residual = max(
-        abs(math.fsum(result[i] * matrix[i][j] for i in range(n)) - result[j])
-        for j in range(n)
+        abs(math.fsum(result[i] * matrix[i][j] for i in range(n)) - result[j]) for j in range(n)
     )
     if residual > 1e-10:
         raise ArithmeticError("stationary solve exceeded residual tolerance")
@@ -120,14 +119,17 @@ class BlumMansour:
     """N independent external-regret learners supply one stationary master policy."""
 
     def __init__(
-        self, base_factory: Callable[[Sequence[str]], Learner], actions: Sequence[str],
-        *, id: str = "blum_mansour",
+        self,
+        base_factory: Callable[[Sequence[str]], Learner],
+        actions: Sequence[str],
+        *,
+        id: str = "blum_mansour",
     ) -> None:
         """Create a fresh base per action; reject shared base objects and mixed EXP3 modes."""
         self.actions = _actions(actions)
         self.id = id
         self._bases = tuple(base_factory(self.actions) for _ in self.actions)
-        if any(a is b for i, a in enumerate(self._bases) for b in self._bases[i + 1:]):
+        if any(a is b for i, a in enumerate(self._bases) for b in self._bases[i + 1 :]):
             raise ValueError("base_factory must return independent learners")
         bandit = tuple(isinstance(base, EXP3) for base in self._bases)
         if any(bandit) and not all(bandit):
@@ -175,7 +177,10 @@ class BlumMansour:
                 raise TypeError("SR_MAB requires EXP3 bases satisfying Lemma 10")
             k = feedback.action
             if k not in support or not math.isclose(
-                feedback.propensity, p[k], rel_tol=1e-12, abs_tol=0,
+                feedback.propensity,
+                p[k],
+                rel_tol=1e-12,
+                abs_tol=0,
             ):
                 raise ValueError("feedback must carry the saved round's executed propensity")
             gains = [
@@ -199,7 +204,10 @@ class BlumMansour:
             raise RuntimeError("distribution must open a round before snapshot")
         support, p, rows = self._pending
         snapshot = BlumMansourSnapshot(
-            support, tuple(p.items()), tuple(tuple(row.items()) for row in rows), self,
+            support,
+            tuple(p.items()),
+            tuple(tuple(row.items()) for row in rows),
+            self,
         )
         self._pending = None
         return snapshot
@@ -222,6 +230,9 @@ class BlumMansour:
     def state(self) -> bytes:
         """Return parameters, every base state, and the pending decision snapshot."""
         return _state(
-            algorithm="BlumMansour", id=self.id, actions=self.actions,
-            bases=[base.state().hex() for base in self._bases], pending=self._pending,
+            algorithm="BlumMansour",
+            id=self.id,
+            actions=self.actions,
+            bases=[base.state().hex() for base in self._bases],
+            pending=self._pending,
         )

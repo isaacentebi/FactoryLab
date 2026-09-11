@@ -172,6 +172,6 @@ def build_provider(manifest: Any) -> Any:
             raise RuntimeError("OPENROUTER_API_KEY is not set; the testnet world needs it")
         from factorylab.world.openrouter import OpenRouterProvider
 
-        reasoning = frozenset(t.id for t in manifest.models if getattr(t, "reasoning", False))
-        return OpenRouterProvider(reasoning_models=reasoning)
+        config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
+        return OpenRouterProvider(reasoning_config=config)
     raise RuntimeError(f"unsupported provider set {sorted(providers)}")

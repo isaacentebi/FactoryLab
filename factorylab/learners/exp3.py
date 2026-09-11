@@ -62,13 +62,14 @@ class EXP3:
     def state(self) -> bytes:
         """Return deterministic weights, parameters, and identity."""
         return _state(
-            algorithm="EXP3", id=self.id, actions=self.actions, gamma=self.gamma,
+            algorithm="EXP3",
+            id=self.id,
+            actions=self.actions,
+            gamma=self.gamma,
             log_weights=self._log_weights,
         )
 
-    def update_observed_gain(
-        self, action: str, gain: float, proposal_probability: float
-    ) -> None:
+    def update_observed_gain(self, action: str, gain: float, proposal_probability: float) -> None:
         """Apply the SR_MAB observed gain using its row proposal denominator (Lemma 10).
 
         This is the paper's off-proposal feedback interface, not an assertion

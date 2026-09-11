@@ -111,8 +111,12 @@ def simulate(
 
 
 def simulate_delayed(
-    game: MatrixGame, learner: SnapshotLearner, opponent_sequence: Sequence[str], *,
-    seed: int = 0, delay_permutation: Sequence[int],
+    game: MatrixGame,
+    learner: SnapshotLearner,
+    opponent_sequence: Sequence[str],
+    *,
+    seed: int = 0,
+    delay_permutation: Sequence[int],
 ) -> list[Round]:
     """Sample every round before feedback, then settle in the specified index order.
 

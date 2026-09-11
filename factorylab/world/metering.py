@@ -117,7 +117,8 @@ class MeteredModel:
             ceiling=self.ceiling(req),
             execute=lambda: self.provider.complete(req),
             cost_of=lambda r: (
-                r.cost_micro if r.cost_micro is not None
+                r.cost_micro
+                if r.cost_micro is not None
                 else self.prices.price(r.model_id).cost(r.input_tokens, r.output_tokens)
                 if r.model_id in self.prices.prices
                 else price.cost(r.input_tokens, r.output_tokens)

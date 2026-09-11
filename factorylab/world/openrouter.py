@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any
 from urllib import error, request
@@ -40,11 +40,13 @@ class OpenRouterProvider:
         transport: Callable[[str, str, dict | None], dict] | None = None,
         app_name: str = "factorylab",
         reasoning_models: Iterable[str] = (),
+        reasoning_config: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self._key_env = key_env
         self._base_url = base_url.rstrip("/")
         self._app_name = app_name
         self._reasoning_models = frozenset(reasoning_models)
+        self._reasoning_config = {k: dict(v) for k, v in (reasoning_config or {}).items()}
         self._transport = transport if transport is not None else self._default_transport
 
     def _redact(self, body: str) -> str:
@@ -102,7 +104,9 @@ class OpenRouterProvider:
             "messages": [{"role": "system", "content": req.system}, *req.messages],
             "max_tokens": req.max_tokens,
         }
-        if req.effort in {"low", "medium", "high"} and req.model_id in self._reasoning_models:
+        if req.model_id in self._reasoning_config:
+            payload["reasoning"] = dict(self._reasoning_config[req.model_id])
+        elif req.effort in {"low", "medium", "high"} and req.model_id in self._reasoning_models:
             payload["reasoning"] = {"effort": req.effort}
         response = self._request("POST", "/chat/completions", payload)
         choice = response["choices"][0]

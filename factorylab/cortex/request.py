@@ -70,3 +70,4 @@ class Return:
     status: str  # "ok" | "malformed" | "refused" | "failed"
     children: tuple[Request, ...] = field(default_factory=tuple)
     served_by: str | None = None
+    stop_reason: str | None = None

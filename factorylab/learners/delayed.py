@@ -73,10 +73,13 @@ class SnapshotLearner:
             return self.inner.state()
         snapshots = {
             handle: {"support": saved.support, "p": saved.p, "rows": saved.rows}
-            if isinstance(saved, BlumMansourSnapshot) else saved
+            if isinstance(saved, BlumMansourSnapshot)
+            else saved
             for handle, saved in self._snapshots.items()
         }
         return _state(
-            algorithm="SnapshotLearner", id=self.id, inner=self.inner.state().hex(),
+            algorithm="SnapshotLearner",
+            id=self.id,
+            inner=self.inner.state().hex(),
             snapshots=snapshots,
         )
