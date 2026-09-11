@@ -15,6 +15,28 @@ import sys
 from factorylab.runtime.worlds import load_manifest
 
 
+def _load_dotenv() -> None:
+    """Load KEY=VALUE lines from a .env file in the working directory into the environment.
+
+    Existing variables win. Values are never printed. This is the only place
+    the runtime reads a file for secrets; the file is gitignored.
+    """
+    import os
+    from pathlib import Path
+
+    path = Path.cwd() / ".env"
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def _cmd_manifest(args: argparse.Namespace) -> int:
     m = load_manifest(args.world)
     out = {"name": m.name, "hash": m.manifest_hash(), "models": [t.id for t in m.models]}
@@ -85,6 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _load_dotenv()
     args = build_parser().parse_args(argv)
     return int(args.func(args))
 
