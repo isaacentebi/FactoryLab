@@ -75,6 +75,13 @@ accepts = ["ProducerReturn"]
 max_tokens = 256
 
 [[assemblies]]
+id = "antagonist-a"
+role = "antagonist"
+model_id = "fake-haiku"
+accepts = ["Tick", "MarketMid"]
+max_tokens = 256
+
+[[assemblies]]
 id = "meta-a"
 role = "meta"
 model_id = "fake-haiku"

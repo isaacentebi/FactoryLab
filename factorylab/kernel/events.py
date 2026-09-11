@@ -23,6 +23,7 @@ class EventKind(StrEnum):
     REGISTERED = "Registered"
     ROUTER_REPLACED = "RouterReplaced"
     RECONCILED = "Reconciled"
+    TRANSFER_INTENT = "TransferIntent"
     WALLET_CHANGED = "WalletChanged"
     RESERVE_WINDOW_OPENED = "ReserveWindowOpened"
     TERMINATED = "Terminated"

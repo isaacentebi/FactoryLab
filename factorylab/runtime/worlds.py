@@ -86,6 +86,7 @@ class AssemblySeed:
 class ToolsSpec:
     population_tool_micro_per_call: int = 50
     max_leverage: int = 3
+    max_routers_per_kind: int = 3
 
 
 @dataclass(frozen=True)
@@ -183,7 +184,7 @@ class WorldManifest:
         if not 0 <= self.evaluation.consequence_share < 1:
             raise ValueError("consequence share must be in [0, 1)")
         for a in self.assemblies:
-            if a.role not in ("producer", "evaluator", "meta"):
+            if a.role not in ("producer", "evaluator", "meta", "antagonist"):
                 raise ValueError(f"assembly {a.id} has unknown role {a.role}")
         if self.novelty.window_ns <= 0:
             raise ValueError("novelty window must be positive")
@@ -288,6 +289,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         tools=ToolsSpec(
             int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
             int((d.get("tools") or {}).get("max_leverage", 3)),
+            int((d.get("tools") or {}).get("max_routers_per_kind", 3)),
         ),
         tick_interval_ns=_ns(d.get("tick_interval", "1s")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},

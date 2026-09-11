@@ -84,6 +84,7 @@ except ImportError:  # pragma: no cover
 
 NOOP = "NOOP"
 CH_FAST, CH_VERDICT, CH_CONFORMITY, CH_CONSEQUENCE = "fast", "verdict", "conformity", "consequence"
+CH_EXPOSURE, DEF_EXPOSURE = "exposure", "exposure-v1"
 DEF_FAST, DEF_VERDICT, DEF_CONFORMITY = "fast-v1", "verdict-v1", "conformity-v1"
 PRODUCER_KINDS = frozenset({"Tick", "MarketMid", "Funding", "Fill", "OrderRejected"})
 EVALUATION_BOUNDARY = "producer → evaluator → meta"
@@ -121,6 +122,8 @@ class ScriptedProvider:
     output_tokens: int = 40
     register_at_calls: tuple[int, ...] = (40, 60, 80)
     tool_at_calls: tuple[int, ...] = (30, 50, 70, 90, 110, 130, 150)
+    treasury_at_call: int = 120
+    router_add_at_call: int = 100
     _producer_calls: int = 0
 
     def complete(self, req: ModelRequest) -> ModelResponse:
@@ -166,6 +169,23 @@ class ScriptedProvider:
             if n >= 50:
                 calls.append({"tool": "spread-check", "args": {"mid": 100.0, "bps": 3}})
             reply["tool_calls"] = calls
+        if n == self.treasury_at_call:
+            reply["tool_calls"] = [
+                {
+                    "tool": "treasury.transfer",
+                    "args": {"direction": "to_venue", "usd": 5, "reason": "scripted"},
+                }
+            ]
+        if n == self.router_add_at_call:
+            reply["register"] = [
+                {
+                    "kind": "router",
+                    "event_kind": "Tick",
+                    "learner": "exp3",
+                    "gamma": 0.3,
+                    "add": True,
+                }
+            ]
         if n == 45:
             reply["register"] = [
                 {
@@ -332,6 +352,9 @@ class RunStats:
     amendments_passed: int = 0
     amendments_activated: int = 0
     votes_cast: int = 0
+    transfer_intents: int = 0
+    exposures_settled: int = 0
+    exposures_won: int = 0
     max_settlement_latency_events: int = 0
     sample_propensity: dict[str, Any] | None = None
     invocation_status: dict[str, int] = field(default_factory=dict)
@@ -479,9 +502,10 @@ class Runtime:
 
         # nervous system
         self.router_gamma = router_gamma
-        self.routers: dict[str, RouterState] = {}
+        self.routers: dict[str, list[RouterState]] = {}
         for kind in self._routable_kinds():
             self._build_router(kind, "exp3", router_gamma)
+        self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened event
         self.delivered_seen: dict[str, int] = {}
         self.snapshot_keys: dict[str, str] = {}  # decision handle -> snapshot key
 
@@ -510,6 +534,23 @@ class Runtime:
                     "price_micro_per_call": spec.price_micro_per_call,
                     "kind": spec.kind,
                 }
+        self.tool_specs["treasury.transfer"] = {
+            "id": "treasury.transfer",
+            "description": "Record an intent to move money between the compute pot and the venue "
+            "account. Nothing moves until the fixed weekly execution; the wallet is one number "
+            "either way.",
+            "args_schema": {
+                "type": "object",
+                "properties": {
+                    "direction": {"enum": ["to_compute", "to_venue"]},
+                    "usd": {"type": "number", "minimum": 0},
+                    "reason": {"type": "string"},
+                },
+                "required": ["direction", "usd"],
+            },
+            "price_micro_per_call": 0,
+            "kind": "treasury",
+        }
         self.tool_runner = ToolRunner()
         self.charter_book = CharterBook(self.ledger, self.charter)
         self.pending_votes: list[Any] = []  # committees awaiting tally
@@ -561,20 +602,37 @@ class Runtime:
         ids = sorted(a.spec.id for a in self.assemblies.values() if kind in a.spec.accepts)
         return ids + [NOOP]
 
-    def _build_router(self, kind: str, learner_kind: str, gamma: float) -> RouterState:
-        universe = self._universe_for(kind)
-        learner: Any
+    def _all_router_states(self) -> list[RouterState]:
+        return [st for states in self.routers.values() for st in states]
+
+    def _make_learner(
+        self, kind: str, learner_kind: str, gamma: float, universe: list[str], lid: str
+    ):
         if learner_kind == "blum_mansour":
             from factorylab.learners.blum_mansour import BlumMansour
             from factorylab.learners.delayed import SnapshotLearner
 
-            inner = BlumMansour(lambda acts: EXP3(acts, gamma), universe, id=f"router:{kind}")
-            learner = _KeyedLearner(SnapshotLearner(inner, id=f"router:{kind}"))
-        else:
-            learner = EXP3(universe, gamma, id=f"router:{kind}")
+            inner = BlumMansour(lambda acts: EXP3(acts, gamma), universe, id=lid)
+            return _KeyedLearner(SnapshotLearner(inner, id=lid))
+        return EXP3(universe, gamma, id=lid)
+
+    def _build_router(
+        self, kind: str, learner_kind: str, gamma: float, *, replace: bool = True
+    ) -> RouterState:
+        """Create a router for ``kind``. ``replace`` swaps the whole set; else one is added."""
+        universe = self._universe_for(kind)
+        existing = self.routers.get(kind, [])
+        index = 0 if replace else len(existing)
+        if not replace and len(existing) >= self.m.tools.max_routers_per_kind:
+            raise ValueError("router cap reached for this event kind")
+        lid = f"router:{kind}" if index == 0 else f"router:{kind}#{index}"
+        learner = self._make_learner(kind, learner_kind, gamma, universe, lid)
         router = Router(learner, lambda _k, u=universe: [x for x in u if x != NOOP])
         state = RouterState(kind, universe, learner, router)
-        self.routers[kind] = state
+        if replace:
+            self.routers[kind] = [state]
+        else:
+            self.routers.setdefault(kind, []).append(state)
         if not hasattr(self, "delivered_seen"):
             self.delivered_seen = {}
         self.delivered_seen.setdefault(learner.id, 0)
@@ -603,6 +661,7 @@ class Runtime:
             "event_kind": "an event kind",
             "learner": "exp3 | blum_mansour",
             "gamma": 0.1,
+            "add": "false replaces the kind's routers; true adds another (several wake at once)",
         },
         "tool": {
             "kind": "tool",
@@ -681,8 +740,8 @@ class Runtime:
                 for a in self.assemblies.values()
             ],
             "routers": [
-                {"event_kind": k, "learner": type(st.learner).__name__, "menu": st.universe}
-                for k, st in self.routers.items()
+                {"event_kind": st.kind, "learner": type(st.learner).__name__, "menu": st.universe}
+                for st in self._all_router_states()
             ],
             "event_kinds": sorted(PRODUCER_KINDS | {"ProducerReturn", "Verdict"}),
             "a_return_may_include": self.A_RETURN_MAY_INCLUDE,
@@ -904,9 +963,11 @@ class Runtime:
 
     def _route(self, ev: Event) -> None:
         kind = str(ev.kind)
-        state = self.routers.get(kind)
-        if state is None:
-            return
+        for state in list(self.routers.get(kind, [])):
+            self._route_with(state, ev)
+
+    def _route_with(self, state: RouterState, ev: Event) -> None:
+        kind = str(ev.kind)
         mix = self._mix_with_standing if kind == "ProducerReturn" else None
         key = f"{state.learner.id}:{self.n}"
         if isinstance(state.learner, _KeyedLearner):
@@ -915,6 +976,9 @@ class Runtime:
         self.stats.exclusions += len(sample.excluded)
         role = self._role_for_kind(kind)
         channel = {"producer": CH_VERDICT, "evaluator": CH_CONFORMITY, "meta": CH_FAST}[role]
+        chosen_role = self.assemblies[sample.chosen].spec.role if sample.chosen != NOOP else None
+        if chosen_role == "antagonist":
+            channel = CH_EXPOSURE
         deadline = (
             self.clock.now_ns + (self.ev.verdict_timeout_events + 2) * self.m.tick_interval_ns
         )
@@ -980,6 +1044,24 @@ class Runtime:
         def execute() -> dict:
             if spec["kind"] == "venue":
                 return self.venue_tools.call(tool_id, args)
+            if spec["kind"] == "treasury":
+                direction = args.get("direction")
+                usd = args.get("usd")
+                if direction not in ("to_compute", "to_venue") or not isinstance(usd, int | float):
+                    return {"error": "direction must be to_compute|to_venue and usd a number"}
+                if isinstance(usd, bool) or usd < 0:
+                    return {"error": "usd must be non-negative"}
+                intent = {
+                    "direction": direction,
+                    "usd": str(Decimal(str(usd)).quantize(Decimal("0.01"))),
+                    "reason": str(args.get("reason", ""))[:500],
+                    "by": action_id,
+                    "handle": handle,
+                }
+                self.ledger.append({"kind": "treasury.intent", **intent, "ts": self.clock.now_ns})
+                self._emit(EventKind.TRANSFER_INTENT, intent, source="kernel")
+                self.stats.transfer_intents += 1
+                return {"recorded": True, **intent}
             tool = self.population_tools.get(tool_id)
             if tool is None:
                 return {"error": "tool unavailable"}
@@ -1145,7 +1227,10 @@ class Runtime:
             self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
                 {"handle": handle, "outputs": ret.outputs, "verdict": None}
             )
-        self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
+        if self.queue.get(handle).channel == CH_EXPOSURE:
+            self.pending_exposure[handle] = self.n
+        else:
+            self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
         self.stats.producer_returns += 1
         self._emit(
             EventKind.PRODUCER_RETURN,
@@ -1236,7 +1321,18 @@ class Runtime:
             self.stats.conformities += 1
             return
         pend = self.pending.pop(about, None)
-        if pend is not None and self.queue.get(about).status is SettleStatus.PENDING:
+        about_decision = self.queue.get(about)
+        if about_decision.channel == CH_EXPOSURE:
+            owner = self.handle_to_assembly.get(about)
+            if owner is not None:
+                for entry in self.memory.get(owner, ()):
+                    if entry["handle"] == about:
+                        entry["verdict"] = verdict
+        if (
+            pend is not None
+            and about_decision.channel == CH_VERDICT
+            and about_decision.status is SettleStatus.PENDING
+        ):
             self.queue.settle(
                 about,
                 channel=CH_VERDICT,
@@ -1528,7 +1624,7 @@ class Runtime:
                     import factorylab.learners.delayed  # noqa: F401
                 except ImportError as exc:
                     raise ValueError("blum_mansour router unavailable in this build") from exc
-            self._build_router(prop.event_kind, prop.learner, prop.gamma)
+            self._build_router(prop.event_kind, prop.learner, prop.gamma, replace=not prop.add)
             self.stats.routers_replaced += 1
             self._emit(
                 EventKind.ROUTER_REPLACED,
@@ -1536,6 +1632,7 @@ class Runtime:
                     "event_kind": prop.event_kind,
                     "learner": prop.learner,
                     "gamma": prop.gamma,
+                    "added": prop.add,
                     "by": handle,
                 },
             )
@@ -1663,29 +1760,38 @@ class Runtime:
             new = self.charter_book.activate_due(self.clock.now_ns)
 
     def _open_epoch(self, kind: str) -> None:
-        state = self.routers.get(kind)
         universe = self._universe_for(kind)
         entry = {"kind": "epoch", "event_kind": kind, "universe": universe, "ts": self.clock.now_ns}
-        if state is None:
+        states = self.routers.get(kind)
+        if not states:
             self._build_router(kind, "exp3", self.router_gamma)
             self.ledger.append({**entry, "carried": False})
             self.stats.epochs += 1
             return
-        if universe == state.universe:
-            return
-        if isinstance(state.learner, EXP3):
-            new_learner = state.learner.expand(universe)
-            state.learner = new_learner
-            state.universe = universe
-            state.router = Router(new_learner, lambda _k, u=universe: [x for x in u if x != NOOP])
-            state.epoch += 1
-            self.ledger.append({**entry, "carried": True})
-        else:  # snapshot learners cannot expand; rebuild fresh over the new universe
-            prev = state.epoch
-            self._build_router(kind, "blum_mansour", self.router_gamma)
-            self.routers[kind].epoch = prev + 1
-            self.ledger.append({**entry, "carried": False})
-        self.stats.epochs += 1
+        for i, state in enumerate(list(states)):
+            if universe == state.universe:
+                continue
+            if isinstance(state.learner, EXP3):
+                new_learner = state.learner.expand(universe)
+                state.learner = new_learner
+                state.universe = universe
+                state.router = Router(
+                    new_learner, lambda _k, u=universe: [x for x in u if x != NOOP]
+                )
+                state.epoch += 1
+                self.ledger.append({**entry, "carried": True, "router": state.learner.id})
+            else:  # snapshot learners cannot expand; rebuild fresh over the new universe
+                lid = state.learner.id
+                fresh = self._make_learner(kind, "blum_mansour", self.router_gamma, universe, lid)
+                states[i] = RouterState(
+                    kind,
+                    universe,
+                    fresh,
+                    Router(fresh, lambda _k, u=universe: [x for x in u if x != NOOP]),
+                    state.epoch + 1,
+                )
+                self.ledger.append({**entry, "carried": False, "router": lid})
+            self.stats.epochs += 1
 
     # ---- settlement and learning
 
@@ -1701,8 +1807,42 @@ class Runtime:
             events=tuple(self.events_log[start + 1 : self.n + 1]),
         )
 
+    def _settle_exposures(self, settled: list[Any]) -> None:
+        """An antagonist wins when a judge's forecast about its return scored below baseline."""
+        for s in settled:
+            opened = self.pending_exposure.get(s.about_handle)
+            if opened is None or s.brier is None or s.baseline_brier is None:
+                continue
+            if s.brier < s.baseline_brier:
+                self._settle_exposure(s.about_handle, 1.0)
+        stale = [
+            h
+            for h, o in self.pending_exposure.items()
+            if self.n - o > self.ev.verdict_timeout_events
+        ]
+        for h in stale:
+            self._settle_exposure(h, 0.0)
+
+    def _settle_exposure(self, handle: str, score: float) -> None:
+        self.pending_exposure.pop(handle, None)
+        if self.queue.get(handle).status is not SettleStatus.PENDING:
+            return
+        self.queue.settle(
+            handle,
+            channel=CH_EXPOSURE,
+            score=score,
+            status=SettleStatus.SETTLED,
+            definition_version=DEF_EXPOSURE,
+            sampling_ref=None,
+        )
+        self.stats.exposures_settled += 1
+        if score > 0:
+            self.stats.exposures_won += 1
+
     def _settle_due_forecasts(self) -> None:
-        for s in self.settler.settle_due(self.n, self._facts_for):
+        settled = self.settler.settle_due(self.n, self._facts_for)
+        self._settle_exposures(settled)
+        for s in settled:
             self.stats.forecasts_settled += 1
             self._emit(
                 EventKind.FORECAST_SETTLED,
@@ -1750,7 +1890,7 @@ class Runtime:
                 self.stats.censored += 1
 
     def _deliver_returns(self) -> None:
-        for state in list(self.routers.values()):
+        for state in self._all_router_states():
             lid = state.learner.id
             returns = self.queue.returns_for(lid)
             for lr in returns[self.delivered_seen.get(lid, 0) :]:
@@ -1796,8 +1936,13 @@ class Runtime:
             "tools": sorted(self.tool_specs),
             "standing": self.standing.snapshot(),
             "routers": {
-                k: {"universe": s.universe, "epoch": s.epoch, "learner": type(s.learner).__name__}
-                for k, s in self.routers.items()
+                st.learner.id: {
+                    "event_kind": st.kind,
+                    "universe": st.universe,
+                    "epoch": st.epoch,
+                    "learner": type(st.learner).__name__,
+                }
+                for st in self._all_router_states()
             },
             "stats": dict(vars(self.stats)),
         }

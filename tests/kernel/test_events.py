@@ -109,6 +109,7 @@ def test_event_kinds_match_spec():
         "Registered",
         "RouterReplaced",
         "Reconciled",
+        "TransferIntent",
         "WalletChanged",
         "ReserveWindowOpened",
         "Terminated",

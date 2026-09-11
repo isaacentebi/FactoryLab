@@ -17,7 +17,7 @@ SLUG = re.compile(r"^[a-z][a-z0-9-]{1,47}$")
 MAX_PROMPT_CHARS = 4000
 MAX_PROPOSALS_PER_RETURN = 3
 LEARNERS = ("exp3", "blum_mansour")
-ROLES = ("producer", "evaluator", "meta")
+ROLES = ("producer", "evaluator", "meta", "antagonist")
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,7 @@ class RouterProposal:
     event_kind: str
     learner: str
     gamma: float
+    add: bool = False  # True: add another router for the kind instead of replacing
 
 
 @dataclass(frozen=True)
@@ -130,7 +131,7 @@ def _assembly(
         raise ValueError("id already registered")
     role = item.get("role", "producer")
     if role not in ROLES:
-        raise ValueError("role must be producer, evaluator or meta")
+        raise ValueError("role must be producer, evaluator, meta or antagonist")
     model_id = item.get("model_id")
     if not isinstance(model_id, str) or model_id not in known_models:
         raise ValueError("model_id must name a registered model")
@@ -148,7 +149,7 @@ def _assembly(
         raise ValueError("evaluators accept exactly ProducerReturn")
     if role == "meta" and set(accepts) != {"Verdict"}:
         raise ValueError("metas accept exactly Verdict")
-    if role == "producer" and {"ProducerReturn", "Verdict"} & set(accepts):
+    if role in ("producer", "antagonist") and {"ProducerReturn", "Verdict"} & set(accepts):
         raise ValueError("producers do not accept evaluation events")
     max_tokens = item.get("max_tokens", 512)
     if type(max_tokens) is not int or not 16 <= max_tokens <= 4096:
@@ -171,7 +172,10 @@ def _router(item: dict[str, Any], event_kinds: frozenset[str]) -> RouterProposal
     gamma = item.get("gamma", 0.1)
     if not isinstance(gamma, int | float) or isinstance(gamma, bool) or not 0 < gamma <= 1:
         raise ValueError("gamma must be in (0, 1]")
-    return RouterProposal(kind, learner, float(gamma))
+    add = item.get("add", False)
+    if not isinstance(add, bool):
+        raise ValueError("add must be a boolean")
+    return RouterProposal(kind, learner, float(gamma), add)
 
 
 def _tool(item: dict[str, Any], known_tools: frozenset[str]) -> ToolProposal:

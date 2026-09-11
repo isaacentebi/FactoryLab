@@ -34,7 +34,7 @@ def test_every_producer_decision_is_judged_or_censored() -> None:
     m = load_manifest("scripted")
     s = run_world(m, events=120, seed=4)
     st = s["stats"]
-    judged = st["verdicts"] + st["censored"]
+    judged = st["verdicts"] + st["censored"] + st["exposures_settled"]
     assert judged + s["outstanding_decisions"] >= st["producer_returns"]
 
 

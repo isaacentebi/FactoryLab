@@ -1,0 +1,48 @@
+# Handoff — where Factory Lab stands
+
+Written 11 September 2026 so that any session (or a compacted one) can resume from the repository alone. Update this file whenever a phase lands.
+
+## Where to look
+
+- `docs/build-spec-v0.4.md`, `v0.5-phase2.md`, `v0.6-phase3.md` — the binding specs, in order. §8 of v0.6 is phase 3b.
+- `docs/build-log.md` — what was built, by whom, attempts, the literal completion-check results, and the fidelity review against the essay after each phase.
+- `docs/runs/*.summary.json` — the summaries of every live testnet run. Diaries and keys are never committed.
+- `outputs/project-plan.md` v0.3 — the long design rationale; specs win where they conflict.
+- The governing test is the essay's bewilderment criterion; it is completion condition 6 in v0.5 §9.
+
+## State on main
+
+Phases 1, 2, 3 are merged (PRs #1–#16). 736 tests. Live testnet runs 1–3 are logged; run 3 was the first world that changed its own parts on model proposals.
+
+Branch `p3b-runtime` (in progress, not merged): several routers per event kind (`router` proposals with `add: true`), the `treasury.transfer` intent tool and `TransferIntent` event, the `antagonist` role with the `exposure` channel, antagonists seeded in the three manifests. Codex is building the price controller (`charter/controller.py`, spec v0.6 §8.1) on branch `p3-D`.
+
+## Secrets and money
+
+- `openrouter.key` and `hyperliquid.key` at the repo root, 0600, gitignored, loaded by the CLI. Never read, print, or commit them. The experimenter creates them; the assistant does not handle key values.
+- The Hyperliquid account is being funded with real money by the experimenter. The code refuses mainnet unless the world is named `funded`; that manifest does not exist yet and must not be created until: testnet fills verified, antagonists and price controller merged, the three cold audits (money paths, sealing, sandbox) done, hosting with restart and backup, the weekly rebalancing rule written down.
+
+## How to run
+
+```
+uv run pytest
+uv run factorylab run --world scripted --events 500 --seed 1
+uv run factorylab run --world scripted-crash --events 600 --seed 2
+uv run python -m factorylab.runtime.cli run --world testnet --events 30 --seed 4 --tick-interval 10s --ledger runs/x.jsonl --kill-at-end
+uv run python -m factorylab.runtime.cli report runs/x.summary.json
+uv run python -m factorylab.runtime.cli postmortem runs/x.jsonl runs/x.jsonl.key --kinds event:Registered,invocation
+```
+
+The wake page (artifact) is rebuilt from summaries and a killed world's diary; see the build log for what it shows.
+
+## Working agreement
+
+The session model plans, specs, reviews diffs and merges. Codex on `gpt-6-astra` implements bounded logic workstreams from a spec section in its own worktree; Claude subagents implement runtime and design work. Every PR states the spec section, the gate output, and every decision the spec left open. After every build: run the completion checks literally, write the fidelity review, and check the bewilderment condition honestly.
+
+## Next
+
+1. Finish and merge `p3b-runtime`; merge the price controller; wire it (regions parsed from metric cards, penalties applied to verdict and conformity scores).
+2. Live run 4 (in flight at the time of writing) and run 5 with the Hyperliquid testnet key so fills and P&L are real.
+3. Cold audits by Codex: money paths, sealing, sandbox.
+4. Hosting (small DigitalOcean droplet, supervisor, nightly backup of ledger + key).
+5. Automatic rebalancing: Hyperliquid withdrawal API plus OpenRouter crypto credit purchase; feasibility being checked.
+6. The `funded` manifest, only after 1–5.

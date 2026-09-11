@@ -120,6 +120,15 @@ accepts = ["ProducerReturn"]
 max_tokens = 1500
 effort = "low"
 
+# One antagonist: bounded trouble, judged like a producer, scored on whether it fooled a judge.
+[[assemblies]]
+id = "antagonist-a"
+role = "antagonist"
+model_id = "qwen/qwen3.8-flash"
+accepts = ["Tick", "MarketMid"]
+max_tokens = 1000
+effort = "low"
+
 [[assemblies]]
 id = "meta-a"
 role = "meta"
