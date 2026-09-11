@@ -93,7 +93,8 @@ def test_subscription_changes_take_effect_for_next_event(ledger):
     assert seen == ["one", "two", "new"]
 
 
-def test_event_kinds_match_phase_one():
+def test_event_kinds_match_spec():
+    # v0.4 section 4.5 plus the v0.5 section 1 additions
     assert {kind.value for kind in EventKind} == {
         "Launch",
         "Tick",
@@ -103,6 +104,11 @@ def test_event_kinds_match_phase_one():
         "Fill",
         "OrderRejected",
         "Verdict",
+        "ProducerReturn",
+        "ForecastSettled",
+        "Registered",
+        "RouterReplaced",
+        "Reconciled",
         "WalletChanged",
         "ReserveWindowOpened",
         "Terminated",
