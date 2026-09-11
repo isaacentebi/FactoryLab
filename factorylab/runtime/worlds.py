@@ -128,7 +128,9 @@ class WorldManifest:
     def price_table(self) -> PriceTable:
         t = PriceTable()
         for m in self.models:
-            t.register(m.id, TokenPrice.from_per_mtok(m.input_usd_per_mtok, m.output_usd_per_mtok))
+            per_in = Decimal(m.input_usd_per_mtok) / Decimal(1_000_000)
+            per_out = Decimal(m.output_usd_per_mtok) / Decimal(1_000_000)
+            t.register(m.id, TokenPrice.from_per_token(str(per_in), str(per_out)))
         return t
 
     def canonical_json(self) -> str:

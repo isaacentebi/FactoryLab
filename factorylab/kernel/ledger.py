@@ -43,8 +43,8 @@ def _canonical(value) -> bytes:
 class KeyStore:
     """Public key access remains sealed until the bound Termination is final."""
 
-    def __init__(self) -> None:
-        self.__key = Fernet.generate_key()
+    def __init__(self, key: bytes | None = None) -> None:
+        self.__key = Fernet.generate_key() if key is None else key
         self.__cipher = Fernet(self.__key)
         self.__owner = None
         self.__released = False
@@ -93,13 +93,14 @@ class Ledger:
         manifest: dict | None = None,
         clock_ns: Callable[[], int] = time_ns,
         full_verify_every: int = 256,
+        key_path: str | Path | None = None,
     ) -> None:
         if type(full_verify_every) is not int or full_verify_every < 1:
             raise ValueError("full_verify_every must be a positive integer")
         self.__full_every = full_verify_every
         self.__size = 0
         self.__last_line = b""
-        self.__keys = KeyStore()
+        self.__keys = KeyStore(self._persist_key(key_path))
         self.__clock = clock_ns
         self.__tokens: list[bytes] = []
         self.__genesis = hashlib.sha256(_canonical({"manifest": manifest or {}})).hexdigest()
@@ -118,6 +119,25 @@ class Ledger:
                 os.fsync(stream.fileno())
             self.__size = len(line)
             self.__last_line = line
+
+    @staticmethod
+    def _persist_key(key_path: str | Path | None) -> bytes | None:
+        """Create a 0600 key file (or return None for a memory-only key).
+
+        The file must not already exist: a world never reuses another world's
+        key. The file's only purpose is post-mortem decryption after a crash;
+        it does not resume a world. Reading it before termination is a breach
+        of the non-intervention covenant, not something the kernel can prevent.
+        """
+        if key_path is None:
+            return None
+        key = Fernet.generate_key()
+        fd = os.open(Path(key_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(key)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return key
 
     @property
     def key_store(self) -> KeyStore:
