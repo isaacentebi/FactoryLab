@@ -121,6 +121,7 @@ class PricesSpec:
     lambda_max: float = 1.0
     min_window_events: int = 1
     kappa: float = 0.5
+    penalty_cap: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,8 @@ class ImmuneSpec:
     gain_step: float = 0.05
     gamma_max: float = 0.5
     decay_step: float = 0.1
+    registration_bins: tuple[float, ...] = (0.0, 2.0)
+    revision_bins: tuple[float, ...] = (0.0,)
 
 
 @dataclass(frozen=True)
@@ -175,6 +178,7 @@ class TimingSpec:
     min_ratio: int = 3
     jitter_fraction: float = 0.2
     cadence_sample: int = 200
+    min_support: int = 30
 
 
 @dataclass(frozen=True)
@@ -303,6 +307,14 @@ class WorldManifest:
             value = getattr(self.immune, name)
             if type(value) not in (int, float) or not isfinite(value) or not 0 < value <= 1:
                 raise ValueError(f"immune.{name} must be finite and in (0, 1]")
+        if self.immune.bins != 3:
+            raise ValueError("immune.bins must be 3 for fixed region-relative cells")
+        for name in ("registration_bins", "revision_bins"):
+            cuts = getattr(self.immune, name)
+            if (not isinstance(cuts, (tuple, list)) or not cuts
+                    or any(type(v) not in (int, float) or not isfinite(v) or v < 0 for v in cuts)
+                    or any(a >= b for a, b in zip(cuts, cuts[1:], strict=False))):
+                raise ValueError(f"immune.{name} must contain increasing finite nonnegative cuts")
         if not 0 <= self.evaluation.consequence_share < 1:
             raise ValueError("consequence share must be in [0, 1)")
         for name in ("adversarial_share", "sibling_share", "sampling_step"):
@@ -323,6 +335,8 @@ class WorldManifest:
             raise ValueError("novelty window must be positive")
         if type(self.timing.cadence_sample) is not int or self.timing.cadence_sample < 1:
             raise ValueError("timing.cadence_sample must be a positive integer")
+        if type(self.timing.min_support) is not int or self.timing.min_support < 1:
+            raise ValueError("timing.min_support must be a positive integer")
         if type(self.timing.min_ratio) is not int or self.timing.min_ratio < 3:
             raise ValueError("timing min_ratio must be an integer at least 3")
         if type(self.clock.min_tick_ns) is not int or self.clock.min_tick_ns <= 0:
@@ -359,6 +373,9 @@ class WorldManifest:
                     or not 0 <= value <= self.prices.lambda_max):
                 raise ValueError(f"card {card_id} lambda: must be in [0, prices.lambda_max]")
         p = self.prices
+        if (type(p.penalty_cap) not in (int, float) or not isfinite(p.penalty_cap)
+                or not 0 < p.penalty_cap < 1):
+            raise ValueError("prices.penalty_cap must be finite and in (0, 1)")
         if type(p.kappa) not in (int, float) or not isfinite(p.kappa) or p.kappa < 0:
             raise ValueError("prices.kappa must be finite and nonnegative")
         if min(p.eta, p.decay, p.lambda_max) <= 0 or p.min_window_events < 1:
@@ -485,6 +502,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         decay=float(pr.get("decay", 0.1)),
         lambda_max=float(pr.get("lambda_max", 1.0)),
         min_window_events=int(pr.get("min_window_events", 1)),
+        penalty_cap=pr.get("penalty_cap", 0.5),
     )
     # Scripted providers run in virtual time, including live-shaped test fixtures.
     default_min_tick = "1s" if all(m.provider == "fake" for m in models) else "10s"
@@ -509,6 +527,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         timing=TimingSpec(
             int(tim.get("min_ratio", 3)), float(tim.get("jitter_fraction", 0.2)),
             tim.get("cadence_sample", 200),
+            tim.get("min_support", 30),
         ),
         termination=TerminationSpec(
             usd_to_micro(term.get("balance_floor_usd", 0)),

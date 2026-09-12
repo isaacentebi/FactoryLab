@@ -40,6 +40,8 @@ def test_a15_bad_votes_lose_after_declared_window_and_survive_resume(monkeypatch
     rt.clock.now_ns = (rt.m.timing.min_ratio * rt.ev.consequence_backstop_events
                        * rt.tick_clock.interval_ns)
     rt.window = MeasureWindow(2, rt.wallet.balance, costs=[200], invocations=1, ok=1)
+    rt.n = max(rt.n, rt.cadence.earliest_event())  # A2: activation waits for fresh events too
+    rt.cadence.advance(rt.n)
     rt._activate_charter_if_due()
     assert rt.charter.edition == 2
     assert all(v["baseline"] == 100 for v in rt.pending_votes)
@@ -136,6 +138,8 @@ def boundary(rt, index: int) -> None:
     rt.clock.now_ns += (rt.m.timing.min_ratio * rt.ev.consequence_backstop_events
                         * rt.tick_clock.interval_ns)
     rt.window = MeasureWindow(index, rt.wallet.balance, costs=[100], invocations=1, ok=1)
+    rt.n = max(rt.n, rt.cadence.earliest_event())  # A2: activation waits for fresh events too
+    rt.cadence.advance(rt.n)
     rt._activate_charter_if_due()
 
 

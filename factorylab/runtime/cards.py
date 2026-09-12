@@ -70,11 +70,12 @@ def region_for(card: MetricCard, *, rolling: dict[str, float]) -> CardRegion | N
 
     Exclusive phrasings ("above zero") are treated as inclusive bounds. "Below
     the median of the previous window" reads ``rolling[f"{card.id}_prev_median"]``
-    and yields None until that record exists. Scale is 1.0 for ratios and
-    fractions and ``max(1, |bound|)`` for cards whose units mention USD.
+    and yields None until that record exists. Scale is the width of the
+    observation catalogue's unit range; card prose and bound magnitude cannot change it.
     """
     bounds = _parse(card.acceptable_region)
-    if bounds is None or observation_for(card.observation) is None:
+    observation = observation_for(card.observation)
+    if bounds is None or observation is None:
         return None
     lo, hi = bounds.lo, bounds.hi
     if bounds.deferred:
@@ -84,6 +85,5 @@ def region_for(card: MetricCard, *, rolling: dict[str, float]) -> CardRegion | N
         hi = float(prev)
         if not math.isfinite(hi):
             return None
-    magnitude = max(abs(b) for b in (lo, hi) if b is not None)
-    scale = max(1.0, magnitude) if "usd" in card.units.lower() else 1.0
+    scale = observation.scale
     return CardRegion(card.id, bounds.kind, lo, hi, scale)  # type: ignore[arg-type]

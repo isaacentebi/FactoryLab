@@ -160,7 +160,7 @@ def test_clipping_counts_only_attempts_beyond_bounds_and_tracks_actual_steps(led
         prices.observe("cost", value, event)
     assert prices.snapshot()["cards"]["cost"] == {
         "lambda": 2.0, "updates": 7, "saturations": 4, "max_step": 2.0,
-        "last_window_end_event": 6,
+        "last_window_end_event": 6, "effective_lambda": 2.0, "relief_window": None,
     }
     entries = evidence(ledger)
     assert [item["lambda_after"] for item in entries] == [2, 2, 1, 0, 0, 2, 2]
@@ -215,7 +215,7 @@ def test_snapshot_shape_defaults_and_detachment(ledger):
     prices.register(region())
     assert prices.snapshot()["cards"]["cost"] == {
         "lambda": 0.0, "updates": 0, "saturations": 0, "max_step": 0.0,
-        "last_window_end_event": None,
+        "last_window_end_event": None, "effective_lambda": 0.0, "relief_window": None,
     }
     snapshot = prices.snapshot()
     snapshot["parameters"]["eta"] = 100

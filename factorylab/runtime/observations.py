@@ -19,6 +19,12 @@ class Observation:
     description: str
     units: str
     measure: Callable[[MeasureWindow], float | None]
+    unit_range: tuple[float, float]
+
+    @property
+    def scale(self) -> float:
+        """The catalogue's declared unit interval fixes normalization independently of a card."""
+        return self.unit_range[1] - self.unit_range[0]
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -52,30 +58,35 @@ CATALOGUE: tuple[Observation, ...] = (
         "Mean cost of well-formed producer returns.",
         "micro-USD per return",
         lambda w: _mean(w.costs),
+        (0.0, 1_000_000.0),
     ),
     Observation(
         "well_formed_rate",
         "Well-formed returns over runtime invocations (excluding votes).",
         "fraction",
         lambda w: _ratio(w.ok, w.invocations),
+        (0.0, 1.0),
     ),
     Observation(
         "forecast_skill",
         "Mean cumulative consequence skill of evaluators with settlements.",
         "score difference",
         lambda w: _mean(w.forecast_skills),
+        (-1.0, 1.0),
     ),
     Observation(
         "turnover",
         "Filled notional over equity at window start; zero without fills.",
         "ratio",
         lambda w: 0.0 if not w.notional_micro else _ratio(w.notional_micro, w.equity_start_micro),
+        (0.0, 1.0),
     ),
     Observation(
         "noop_share",
         "Producer returns with action noop or hold over all producer returns.",
         "fraction",
         lambda w: _ratio(w.noop_returns, w.producer_returns),
+        (0.0, 1.0),
     ),
     Observation(
         "revision_rate",
@@ -84,42 +95,49 @@ CATALOGUE: tuple[Observation, ...] = (
         "do not count.",
         "fraction",
         lambda w: _ratio(w.revision_returns, w.producer_returns),
+        (0.0, 1.0),
     ),
     Observation(
         "registrations",
         "Accepted population registrations, including amendment proposals.",
         "count",
         lambda w: float(w.registrations),
+        (0.0, 1.0),
     ),
     Observation(
         "registration_rejections",
         "Rejected population registration proposals.",
         "count",
         lambda w: float(w.registration_rejections),
+        (0.0, 1.0),
     ),
     Observation(
         "amendments_proposed",
         "Amendments admitted to the charter proposal book.",
         "count",
         lambda w: float(w.amendments_proposed),
+        (0.0, 1.0),
     ),
     Observation(
         "amendments_activated",
         "Amendments activated in this window.",
         "count",
         lambda w: float(w.amendments_activated),
+        (0.0, 1.0),
     ),
     Observation(
         "verdict_mean",
         "Mean raw evaluator verdict delivered in the window.",
         "score",
         lambda w: _mean(_verdicts(w)),
+        (0.0, 1.0),
     ),
     Observation(
         "verdict_std",
         "Population standard deviation of delivered raw evaluator verdicts.",
         "score standard deviation",
         _verdict_std,
+        (0.0, 0.5),
     ),
     Observation(
         "evaluator_disagreement",
@@ -127,19 +145,23 @@ CATALOGUE: tuple[Observation, ...] = (
         "at least two judges in this window, averaging repeats per judge.",
         "score standard deviation",
         _disagreement,
+        (0.0, 0.5),
     ),
     Observation(
         "consequence_paid_off_rate",
         "Positive outcomes over settled return consequences.",
         "fraction",
         lambda w: _ratio(w.consequences_paid_off, w.consequences_settled),
+        (0.0, 1.0),
     ),
-    Observation("fills", "Venue fills processed in the window.", "count", lambda w: float(w.fills)),
+    Observation("fills", "Venue fills processed in the window.", "count",
+                lambda w: float(w.fills), (0.0, 1.0)),
     Observation(
         "realized_pnl_usd",
         "Realized fill P&L before fees and funding.",
         "USD",
         lambda w: w.realized_pnl_micro / 1_000_000,
+        (-1.0, 1.0),
     ),
     Observation(
         "position_concentration",
@@ -151,18 +173,21 @@ CATALOGUE: tuple[Observation, ...] = (
             if w.max_position_notional_micro is None
             else _ratio(w.max_position_notional_micro, w.equity_start_micro)
         ),
+        (0.0, 1.0),
     ),
     Observation(
         "exposure_win_rate",
         "Winning antagonist exposure settlements over settled exposures.",
         "fraction",
         lambda w: _ratio(w.exposures_won, w.exposures_settled),
+        (0.0, 1.0),
     ),
     Observation(
         "meta_verdict_mean",
         "Mean raw meta verdict delivered, across all tiers.",
         "score",
         lambda w: _mean(w.meta_verdicts),
+        (0.0, 1.0),
     ),
     Observation(
         "censored_share",
@@ -170,18 +195,21 @@ CATALOGUE: tuple[Observation, ...] = (
         "outcomes, including exposures; excludes inapplicable and timeout penalties.",
         "fraction",
         lambda w: _ratio(w.censored, w.outcomes),
+        (0.0, 1.0),
     ),
     Observation(
         "tool_calls",
         "Attempted tool calls, including failures; excludes ignored calls.",
         "count",
         lambda w: float(w.tool_calls),
+        (0.0, 1.0),
     ),
     Observation(
         "market_purchases",
         "Paid x402 requests with a recorded result; excludes free or unresolved requests.",
         "count",
         lambda w: float(w.market_purchases),
+        (0.0, 1.0),
     ),
 )
 
@@ -192,6 +220,7 @@ def observation_for(name: str) -> Observation | None:
     return next((observation for observation in CATALOGUE if observation.id == key), None)
 
 
-def catalogue() -> list[dict[str, str]]:
+def catalogue() -> list[dict]:
     """Return independent public metadata without exposing implementation callables."""
-    return [{"id": o.id, "description": o.description, "units": o.units} for o in CATALOGUE]
+    return [{"id": o.id, "description": o.description, "units": o.units,
+             "unit_range": list(o.unit_range), "scale": o.scale} for o in CATALOGUE]

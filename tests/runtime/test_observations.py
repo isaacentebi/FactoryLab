@@ -69,7 +69,8 @@ def test_disagreement_requires_distinct_judges_and_weights_returns_equally():
 def test_catalogue_is_exact_and_public_metadata_cannot_mutate_it():
     public = catalogue()
     assert len(public) == len({o.id for o in CATALOGUE}) == 22
-    assert all(set(item) == {"id", "description", "units"} for item in public)
+    assert all(set(item) == {"id", "description", "units", "unit_range", "scale"}
+               for item in public)
     public[0]["id"] = "changed"
     assert catalogue()[0]["id"] == "cost_per_return"
     assert observation_for("  NoOp_ShArE \n").id == "noop_share"

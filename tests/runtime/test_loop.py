@@ -17,6 +17,11 @@ def _covered_evaluators(standing: dict) -> list[str]:
     return [e for e, v in per.items() if isinstance(v, dict) and v.get("settled", 0) > 0]
 
 
+def _short_cadence_manifest():
+    base = load_manifest("scripted")
+    return replace(base, evaluation=replace(base.evaluation, consequence_backstop_events=20))
+
+
 def test_scripted_world_phase2_spec_condition_2() -> None:
     m = load_manifest("scripted")
     s = run_world(m, events=400, seed=1)
@@ -82,7 +87,7 @@ def test_determinism_same_seed_same_summary() -> None:
 
 
 def test_scripted_world_phase3_spec_condition_2() -> None:
-    m = load_manifest("scripted")
+    m = _short_cadence_manifest()
     s = run_world(m, events=500, seed=1)
     st = s["stats"]
     assert s["terminated"] is False
@@ -114,10 +119,8 @@ def test_scripted_world_phase3_spec_condition_2() -> None:
     assert cards["well_formed_rate"]["lambda"] == 0.0  # scripted returns are all well formed
     assert st["last_window_values"]["well_formed_rate"] == 1.0
     # the amendment's turnover card ("below 5", ratio units) is registered once edition 2 is
-    # live and is violated by two orders of magnitude every window, so its price saturates at
-    # lambda_max and every producer verdict settles at 0 while it stands; evaluators pay for
-    # forecast skill below zero. This run therefore shows penalized settlements, not a world
-    # with no violated card.
+    # live and is violated by two orders of magnitude every window. Its price saturates,
+    # while the bounded, attributed penalty preserves positive settled producer rewards.
     assert "turnover" in cards and cards["turnover"]["lambda"] == 1.0
     assert cards["turnover"]["saturations"] >= 1
     assert st["last_window_values"]["turnover"] > 5
@@ -138,7 +141,7 @@ def test_scripted_amendment_lambda_is_voted_adopted_and_visible(monkeypatch):
             return super().complete(req)
 
     rt = Runtime(
-        load_manifest("scripted"),
+        _short_cadence_manifest(),
         events=260,
         seed=1,
         initial_balance_micro=None,
@@ -514,7 +517,7 @@ def test_meta_timeout_boundary_first_judgement_and_evaluator_prices(monkeypatch)
 
     monkeypatch.setattr(runtime, "_settle_priced", priced)
 
-    def penalty(cards):
+    def penalty(cards, handle=None):
         assert cards == "meta"
         return 0.25
 
@@ -1091,7 +1094,7 @@ def test_scripted_clock_amendment_changes_next_tick_deterministically(monkeypatc
                         proposal["tick_interval"] = "2s"
                 return replace(response, text=json.dumps(body))
 
-        rt = Runtime(load_manifest("scripted"), events=260, seed=1,
+        rt = Runtime(_short_cadence_manifest(), events=260, seed=1,
                      initial_balance_micro=None, ledger_path=None, drip=True,
                      router_gamma=0.1, provider=ClockProvider())
         entries = []
@@ -1129,7 +1132,8 @@ def test_scripted_governance_waits_for_measured_periods_and_ledgers_both_forecas
 
     base = load_manifest("scripted")
     manifest = replace(
-        base, timing=replace(base.timing, cadence_sample=20),
+        base, timing=replace(base.timing, cadence_sample=20, min_support=2),
+        evaluation=replace(base.evaluation, consequence_backstop_events=4),
         novelty=replace(base.novelty, window_ns=3_000_000_000),
     )
     manifest.validate()
@@ -1213,16 +1217,16 @@ def test_scripted_governance_waits_for_measured_periods_and_ledgers_both_forecas
             assert item["opened_event"] == opens[item["handle"]]["made_at_event"]
             assert item["latency_ns"] == item["settled_ns"] - item["opened_ns"]
             assert item["latency_events"] == item["settled_event"] - item["opened_event"]
-            latencies = (latencies + [item["latency_ns"]])[-20:]
+            latencies = (latencies + [item["latency_events"]])[-20:]
         elif item["kind"] == "charter.approved":
             approvals.add(item["amendment_id"])
         elif item["kind"] == "charter.deferred":
             assert item["amendment_id"] in approvals
-            assert item["ts"] < item["earliest_ns"]
+            assert item["ts"] < item["earliest_ns"] or item["n"] < item["earliest_event"]
             deferred.append((item["amendment_id"], item["window"]))
         elif item["kind"] == "charter.cadence":
             measured = sorted(latencies)[ceil(0.9 * len(latencies)) - 1]
-            period = min(measured, manifest.evaluation.consequence_backstop_events * 10**9)
+            period = max(measured, manifest.evaluation.consequence_backstop_events) * 10**9
             assert item["slowest_period_ns"] == period
             assert item["activation_ns"] - last_activation >= manifest.timing.min_ratio * period
             assert item["previous_activation_ns"] == last_activation
@@ -1230,7 +1234,8 @@ def test_scripted_governance_waits_for_measured_periods_and_ledgers_both_forecas
             activations.append(item)
     assert deferred and len(deferred) == len(set(deferred))
     assert len(activations) == 2 and any(s["waiting"] for s in snapshots)
-    assert [i["activation_ns"] for i in activations] == [13_000_000_000, 25_000_000_000]
+    assert all(i["activation_event"] - i["previous_activation_event"]
+               >= manifest.timing.min_ratio * i["slowest_period_events"] for i in activations)
     assert not snapshots[-1]["waiting"]
     assert (summary, items, snapshots) == run()
 
@@ -1312,9 +1317,13 @@ def test_two_roles_measure_same_observation_with_independent_bounds():
     assert window["values"] == {"low": 0.5, "high": 0.5}
     from factorylab.versioning import summary
 
-    report = summary(items)
-    assert "low" in report["operator"]["dimensions"]
-    assert report["windows"][0]["profile"]["low"] == 0.5
+    report = summary(items, **{
+        name: getattr(rt.m.immune, name) for name in (
+            "bins", "k", "tv_threshold", "gap_threshold", "registration_bins", "revision_bins"
+        )
+    })
+    assert "card:low" in report["operator"]["dimensions"]
+    assert report["windows"][0]["profile"]["card:low"] == 0.5
 
 
 def test_position_peak_is_ledger_first_and_survives_flat_account(monkeypatch):

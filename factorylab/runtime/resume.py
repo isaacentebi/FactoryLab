@@ -416,12 +416,14 @@ _RUNTIME_FIELDS = (
     "card_samples",
     "exposure_evidence", "pending_meta", "verdict_outcomes", "consequence_mix",
     "sampling_history", "novelty_grant",
+    "card_samples", "price_windows", "price_origins", "immune_trials",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
     ("book", "_ForecastBook__", ("forecasts", "settled", "requested")),
     ("baseline", "_PrevalenceBaseline__", ("counts",)),
-    ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred")),
+    ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred",
+                       "current_event", "last_activation_event", "outstanding", "min_support")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
     ("settler", "_Settler__", ("snapshots", "recorded")),
     ("charter_book", "_CharterBook__", (
@@ -500,6 +502,8 @@ def restore_runtime(rt, state: dict) -> None:
                           code="venue_account_mismatch")
     for name, value in decode(state["runtime"]).items():
         setattr(rt, name, value)
+    if rt.window.index in rt.price_windows:
+        rt.price_windows[rt.window.index] = rt.window
     rt.clock.now_ns = state["clock_ns"]
     saved_clock = state["tick_clock"]
     if "start_ns" in saved_clock:

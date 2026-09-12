@@ -13,6 +13,8 @@ from factorylab.charter.charter import MetricCard
 RETURN_OBSERVATIONS = frozenset({
     "cost_per_return", "well_formed_rate", "noop_share", "revision_rate", "tool_calls",
 })
+# A4 keeps per-decision attribution on the same window object; measurement never observes it.
+ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions")
 FORECAST_OBSERVATIONS = frozenset({
     "forecast_skill", "verdict_mean", "verdict_std", "consequence_paid_off_rate", "censored_share",
 })
@@ -86,7 +88,10 @@ class CardSamples:
     def closed(self, window) -> None:
         """A closed window enters the record once, detached from the runtime's counters."""
         if not self.windows or self.windows[-1]["index"] != window.index:
-            self.windows.append(deepcopy(asdict(window)))
+            record = deepcopy(asdict(window))
+            for key in ATTRIBUTION_FIELDS:
+                record.pop(key, None)  # A4 per-decision attribution is not a window observation
+            self.windows.append(record)
 
     def prune(self, cards, *, pending_handles=frozenset()) -> None:
         """Retain only the sample horizons still required by cards or outstanding policy votes."""

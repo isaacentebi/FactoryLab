@@ -1,5 +1,7 @@
 """Deterministic observer reports require only decrypted diary evidence."""
 
+import hashlib
+import json
 from math import isfinite
 
 from factorylab.versioning.operator import cell_series, transition_operator
@@ -9,36 +11,73 @@ from factorylab.versioning.versions import early_warnings, pathologies, settling
 __all__ = ("summary", "render")
 
 
-def summary(
-    items: list[dict],
-    *,
-    window_items: int = 200,
-    bins: int = 3,
-    k: int = 3,
-    tv_threshold: float = 0.5,
-    gap_threshold: float = 0.5,
-) -> dict:
-    """Return a detached JSON-serialisable report, independent of input order and randomness.
+def manifest_parameters(items: list[dict]) -> dict:
+    """Recover the committed launch settings; a diary without them supplies no implicit defaults."""
+    for item in items:
+        event = item.get("event", {}) if item.get("kind") == "event" else {}
+        if event.get("kind") != "Launch":
+            continue
+        payload = event.get("payload", {})
+        manifest = payload.get("manifest")
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("immune"), dict):
+            break
+        canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+        if hashlib.sha256(canonical.encode()).hexdigest() != payload.get("manifest_hash"):
+            raise ValueError("launch manifest hash differs")
+        if items and "prev_hash" in items[0]:
+            genesis = json.dumps({"manifest": manifest}, sort_keys=True, separators=(",", ":"),
+                                 ensure_ascii=False, allow_nan=False)
+            if hashlib.sha256(genesis.encode()).hexdigest() != items[0]["prev_hash"]:
+                raise ValueError("launch manifest differs from ledger genesis")
+        return dict(manifest["immune"])
+    raise ValueError("versions requires the genesis manifest's immune settings")
 
-    Only retained windows contribute observations or quantiles. Parameters are
-    validated even for empty diaries; no file, clock, network or runtime state
-    is consulted.
+
+def summary(
+    items: list[dict], *, window_items: int = 200,
+    bins: int | None = None, k: int | None = None,
+    tv_threshold: float | None = None, gap_threshold: float | None = None,
+    registration_bins: tuple[float, ...] | None = None,
+    revision_bins: tuple[float, ...] | None = None,
+) -> dict:
+    """Return deterministic analysis using the genesis settings or explicit caller parameters.
+
+    Runtime window observations are reclassified with the live predicate; recorded
+    flags are never treated as conclusions. Analysis cannot silently use different
+    numeric defaults from the world whose ledger it describes.
     """
+    items = ordered(items)
+    supplied = dict(bins=bins, k=k, tv_threshold=tv_threshold, gap_threshold=gap_threshold,
+                    registration_bins=registration_bins, revision_bins=revision_bins)
+    committed = manifest_parameters(items) if any(v is None for v in supplied.values()) else {}
+    params = {name: committed[name] if value is None else value for name, value in supplied.items()}
+    bins, k = params["bins"], params["k"]
+    tv_threshold, gap_threshold = params["tv_threshold"], params["gap_threshold"]
+    registration_bins = tuple(params["registration_bins"])
+    revision_bins = tuple(params["revision_bins"])
     for name, value in (("window_items", window_items), ("bins", bins), ("k", k)):
         if type(value) is not int or value < 1:
             raise ValueError(f"{name} must be a positive integer")
     for name, value in (("tv_threshold", tv_threshold), ("gap_threshold", gap_threshold)):
         if type(value) not in (int, float) or not isfinite(value) or not 0 <= value <= 1:
             raise ValueError(f"{name} must be finite and in [0, 1]")
-    items = ordered(items)
+    if bins != 3:
+        raise ValueError("bins must be 3 for fixed region-relative cells")
+    for name, cuts in (("registration_bins", registration_bins), ("revision_bins", revision_bins)):
+        if (not cuts or any(type(v) not in (int, float) or not isfinite(v) or v < 0 for v in cuts)
+                or any(a >= b for a, b in zip(cuts, cuts[1:], strict=False))):
+            raise ValueError(f"{name} must contain increasing finite nonnegative cuts")
     cards = card_names(items)
     groups = windows(items, window_items=window_items)
-    discretized = cell_series(groups, cards, bins=bins)
+    discretized = cell_series(groups, cards, registration_bins=registration_bins,
+                              revision_bins=revision_bins)
     cells = discretized["cells"]
     for group, cell in zip(groups, cells, strict=True):
         group["cell"] = list(cell)
     operator = transition_operator(cells)
-    operator.update(dimensions=discretized["dimensions"], cuts=discretized["cuts"])
+    operator.update(dimensions=discretized["dimensions"], cuts=discretized["cuts"],
+                    durable=operator["gap_bound"] is not None
+                    and operator["gap_bound"] >= gap_threshold)
     spans = versions(groups, cells, k=k, tv_threshold=tv_threshold)
     return {
         "params": {
@@ -47,12 +86,15 @@ def summary(
             "k": k,
             "tv_threshold": tv_threshold,
             "gap_threshold": gap_threshold,
+            "registration_bins": list(registration_bins),
+            "revision_bins": list(revision_bins),
         },
         "windows": groups,
         "operator": operator,
         "versions": spans,
         "pathologies": pathologies(
-            groups, cells, spans, k=k, tv_threshold=tv_threshold, gap_threshold=gap_threshold
+            groups, cells, spans, k=k, registration_bins=registration_bins,
+            revision_bins=revision_bins
         ),
         "ews": early_warnings(groups, spans, cards, k=k),
         "settling": settling(items, groups, cells, k=k, tv_threshold=tv_threshold),

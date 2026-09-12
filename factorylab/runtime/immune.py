@@ -5,9 +5,8 @@ from math import isfinite
 
 from factorylab.charter.controller import PriceController
 from factorylab.runtime.observations import observation_for
-from factorylab.versioning.operator import cell_series, transition_operator
 from factorylab.versioning.series import CHANNELS
-from factorylab.versioning.versions import block_distances, violation
+from factorylab.versioning.versions import diagnose
 
 
 class ImmunePriceController(PriceController):
@@ -65,18 +64,9 @@ def _gain(rt, kind: str, window: int) -> None:
 
 
 def close_window(rt, values: dict[str, float]) -> None:
-    """Each closure publishes evidence and ratchets only after sustained supported pathology.
-
-    Stable failure and learning death use the last k cells. Block TV compares two
-    k-window blocks; k consecutive supported distances need 3k-1 retained windows.
-    Quantiles are recomputed over that bounded live history, with missing values
-    retained as missing. A charter revision starts a fresh comparison horizon.
-    """
+    """Fixed cells retain history across editions and publish causal diagnostic evidence."""
     spec = rt.m.immune
     previous = rt.stats.immune_windows
-    if previous and previous[-1]["charter_edition"] != rt.charter.edition:
-        previous = []
-    cards = sorted(f"card:{c.id}" for c in rt.charter.cards)
     profile = {channel: None for channel in CHANNELS}
     profile.update({
         "verdict": values.get("verdict_mean"),
@@ -89,44 +79,27 @@ def close_window(rt, values: dict[str, float]) -> None:
                     for c in rt.charter.cards})
     # Activity is a separate observation even when the charter has no registration card.
     profile["registrations"] = values.get("registrations", 0.0)
+    profile["revision"] = values.get("revision_rate", 0.0)
     current = {
         "index": rt.window.index, "charter_edition": rt.charter.edition,
         "profile": profile,
         "regions": {f"card:{cid}": asdict(region) for cid, region in rt.regions.items()
-                    if rt.controller.price(cid) > 0},
+                    },
     }
-    windows = [*previous, current][-(3 * spec.k - 1):]
-    cells = cell_series(windows, cards, bins=spec.bins)["cells"]
-    tail = cells[-spec.k:]
-    supported = len(tail) == spec.k
-    same = supported and len(set(tail)) == 1
-    bound = transition_operator(tail)["gap_bound"]
-    violated = [
-        {cid for cid, region in w["regions"].items()
-         if (value := w["profile"].get(cid)) is not None and violation(region, value) > 0}
-        for w in windows[-spec.k:]
-    ]
-    failures = set.intersection(*violated) if supported else set()
-    distances = block_distances(cells, spec.k)[-spec.k:]
-    flags = {
-        "stable_failure": bool(same and bound is not None and bound >= spec.gap_threshold
-                               and failures),
-        "thrash": len(distances) == spec.k and all(
-            tv is not None and tv > spec.tv_threshold for tv in distances
-        ),
-        "learning_death": bool(same and all(
-            w["profile"]["registrations"] == 0 for w in windows[-spec.k:]
-        )),
-    }
-    evidence = {"window": current["index"], "cells": [list(c) for c in tail],
-                "gap_bound": bound, "block_tv": distances,
-                "violated_cards": sorted(cid.removeprefix("card:") for cid in failures)}
+    windows = [*previous, current][-(spec.k + 1):]
+    diagnosed = diagnose(windows, k=spec.k, registration_bins=spec.registration_bins,
+                         revision_bins=spec.revision_bins)
+    flags = diagnosed.pop("flags")
+    evidence = {"window": current["index"], **diagnosed}
     for kind, detected in flags.items():
         if detected:
             rt.ledger.append({"kind": f"pathology.{kind}", **evidence})
-    rt.ledger.append({"kind": "immune.window", **evidence, "profile": profile, "flags": flags})
+    rt.ledger.append({"kind": "immune.window", **evidence, "profile": profile, "flags": flags,
+                      "regions": current["regions"], "charter_edition": rt.charter.edition})
     rt.stats.immune_windows = windows
     rt.stats.pathologies = flags
+    if flags["learning_death"]:
+        grant_novelty(rt, current["index"] + 1)
     # Oscillation has priority if coarse cells make the two signals overlap.
     if flags["thrash"]:
         _gain(rt, "thrash", current["index"])
@@ -134,3 +107,35 @@ def close_window(rt, values: dict[str, float]) -> None:
                                 ledger=rt.ledger, window=current["index"] + 1)
     elif flags["stable_failure"]:
         _gain(rt, "stable_failure", current["index"])
+        for cid in diagnosed["violated_cards"]:
+            rt.controller.relieve(cid.removeprefix("card:"), window=current["index"] + 1)
+
+
+def grant_novelty(rt, window: int) -> None:
+    """One extra trial per existing assembly is available only in the next window.
+
+    A trial ends when its first own producer consequence settles; continuations
+    share that trial. The A13 reserve lifetime policy can consume this allowance
+    without changing the detection mechanism.
+    """
+    rt.ledger.append({"kind": "immune.novelty", "window": window,
+                      "trials_per_assembly": 1, "assemblies": sorted(rt.assemblies)})
+    rt.immune_trials = {"window": window, "assemblies": dict.fromkeys(rt.assemblies)}
+
+
+def novelty_available(rt, action_id: str) -> bool:
+    """Extra exploratory access ends after its own consequence settles or its window expires."""
+    grants = rt.immune_trials
+    if rt.window.index != grants.get("window") or action_id not in grants.get("assemblies", {}):
+        return False
+    trial = grants["assemblies"][action_id]
+    return trial is None or not trial["settled"]
+
+
+def settle_novelty(rt, handles: tuple[str | None, ...]) -> None:
+    """Only delivery of an attributed consequence consumes an extra exploratory trial."""
+    for action, trial in rt.immune_trials.get("assemblies", {}).items():
+        if trial is not None and not trial["settled"] and trial["handle"] in handles:
+            rt.ledger.append({"kind": "immune.novelty_settled", "assembly_id": action,
+                              "handle": trial["handle"], "window": rt.immune_trials["window"]})
+            trial["settled"] = True

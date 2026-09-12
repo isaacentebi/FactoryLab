@@ -59,6 +59,8 @@ def test_activation_ledgers_before_clock_mutation(monkeypatch):
     assert rt.tick_clock.interval_ns == 10**9
     assert rt.stats.clock_changes == 0
     rt.clock.now_ns = threshold
+    rt.n = rt.cadence.earliest_event()
+    rt.cadence.advance(rt.n)
     append = rt.ledger.append
     changes = []
 
@@ -101,6 +103,8 @@ def test_clock_unchanged_when_ledger_write_fails(monkeypatch):
     assert rt.tick_clock.interval_ns == 10**9
     assert rt.stats.clock_changes == 0
     rt.clock.now_ns = threshold
+    rt.n = rt.cadence.earliest_event()
+    rt.cadence.advance(rt.n)
     append = rt.ledger.append
 
     def fail(entry):

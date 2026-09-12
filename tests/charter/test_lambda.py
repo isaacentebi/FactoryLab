@@ -43,6 +43,8 @@ def activate_after_backstop(rt):
     rt._activate_charter_if_due()
     assert rt.charter.edition == edition
     rt.clock.now_ns += 1
+    rt.n = rt.cadence.earliest_event()
+    rt.cadence.advance(rt.n)
     rt._activate_charter_if_due()
     assert rt.charter.edition == edition + 1
 
@@ -105,7 +107,7 @@ def test_controller_ledger_first_bounds_history_and_removal(monkeypatch):
     assert entries[0] == {"kind": "price.proposed", "card_id": "card",
                           "amendment_id": "adopted", "lambda_before": 0.5, "lambda_after": 0.8}
     assert controller.snapshot()["cards"]["card"] == {
-        **before["cards"]["card"], "lambda": 0.8,
+        **before["cards"]["card"], "lambda": 0.8, "effective_lambda": 0.8,
     }
     assert timing.closure_count("price:card") == 1
     for value in (True, -1, 2, float("nan")):

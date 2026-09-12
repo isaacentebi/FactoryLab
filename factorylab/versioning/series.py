@@ -39,6 +39,9 @@ def ordered(items: list[dict]) -> list[dict]:
 
 def card_names(items: list[dict]) -> list[str]:
     """Card dimensions include every price.window value name, in lexical order."""
+    immune = [item for item in items if item.get("kind") == "immune.window"]
+    if immune:
+        return sorted({name for item in immune for name in item.get("regions", {})})
     return sorted(
         {
             name
@@ -57,7 +60,7 @@ def profile(items: list[dict], cards: list[str]) -> Profile:
     Counts are floats for the observer profile; wallet accounting is untouched.
     Card/profile name collisions are rejected instead of overwriting evidence.
     """
-    names = (*CHANNELS, "noop_share", "registrations", "disagreement", "balance")
+    names = (*CHANNELS, "noop_share", "registrations", "revision", "disagreement", "balance")
     if set(cards).intersection(names):
         raise ValueError("card name collides with a profile field")
     result = dict.fromkeys((*CHANNELS, *cards))
@@ -65,6 +68,7 @@ def profile(items: list[dict], cards: list[str]) -> Profile:
     decisions = []
     judged = {}
     registrations = 0
+    revision = 0.0
     balance = None
     for item in items:
         kind = item.get("kind", "")
@@ -77,6 +81,7 @@ def profile(items: list[dict], cards: list[str]) -> Profile:
         elif kind == "decision.open":
             decisions.append(item["propensity"]["chosen"] == "NOOP")
         elif kind == "price.window":
+            revision = number(item.get("observations", {}).get("revision_rate", 0.0))
             for card in cards:
                 result[card] = number(item.get("values", {}).get(card))
         elif kind == "event":
@@ -95,6 +100,7 @@ def profile(items: list[dict], cards: list[str]) -> Profile:
     result.update(
         noop_share=mean(decisions),
         registrations=float(registrations),
+        revision=revision,
         disagreement=mean([pstdev(group.values()) for group in judged.values() if len(group) > 1]),
         balance=balance,
     )
@@ -115,6 +121,7 @@ def windows(items: list[dict], *, window_items: int = 200) -> list[dict]:
         raise ValueError("window_items must be a positive integer")
     items = ordered(items)
     cards = card_names(items)
+    immune = {i["window"]: i for i in items if i.get("kind") == "immune.window"}
     closings = []
     previous_event = None
     for index, item in enumerate(items):
@@ -145,6 +152,19 @@ def windows(items: list[dict], *, window_items: int = 200) -> list[dict]:
                     start_edition = edition
             elif item.get("kind") == "price.region":
                 regions[item["card_id"]] = deepcopy(item["region"])
+            elif item.get("kind") in ("price.removed", "price.region_cleared"):
+                regions.pop(item["card_id"], None)
+        measured = profile(group, cards)
+        marker = group[-1]
+        evidence = (immune.get(marker.get("window"))
+                    if marker.get("kind") == "price.window" else None)
+        if evidence is not None:
+            measured.update(deepcopy(evidence["profile"]))
+            regions = deepcopy(evidence["regions"])
+            start_edition = evidence["charter_edition"]
+        elif "regions" in marker:
+            regions = deepcopy(marker["regions"])
+            start_edition = marker.get("charter_edition", start_edition)
         result.append(
             {
                 "index": len(result),
@@ -152,7 +172,7 @@ def windows(items: list[dict], *, window_items: int = 200) -> list[dict]:
                 "end_seq": group[-1]["seq"],
                 "start_event": previous_event,
                 "end_event": end_event,
-                "profile": profile(group, cards),
+                "profile": measured,
                 "regions": deepcopy(regions),
                 "charter_edition": start_edition,
             }

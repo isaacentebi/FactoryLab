@@ -32,6 +32,7 @@ router whose menu grew.
 
 from __future__ import annotations
 
+import json
 from collections import deque
 from itertools import islice
 from typing import Any
@@ -44,6 +45,7 @@ from factorylab.kernel.money import money_to_usd
 from factorylab.kernel.queue import SettleStatus
 from factorylab.learners.router import Sample
 from factorylab.runtime.bootstrap import BootstrapMixin
+from factorylab.runtime.cadence import settle_forecasts
 from factorylab.runtime.compute import ComputeMixin
 from factorylab.runtime.feedback import FeedbackMixin, PendingJudgement
 from factorylab.runtime.governance import GovernanceMixin
@@ -84,6 +86,10 @@ class Runtime(
 ):
     """One world, from launch to the end of its event budget or its death."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._init_fidelity()
+
     def _invoke(self, action_id, req, role, *, child=False):
         """A6: retain one typed measurement sample for each completed return."""
         tool_calls = self.window.tool_calls
@@ -94,14 +100,23 @@ class Runtime(
         self.card_samples.returns[-1]["tool_calls"] = self.window.tool_calls - tool_calls
         return ret
 
-    def _settle_due_forecasts(self):
-        """A6: retain paired forecast samples without changing the settlement implementation."""
+    def _settle_due_forecasts(self) -> None:
+        """A6 sampling and A2 cadence openings both wrap the one settlement implementation."""
         from copy import deepcopy
 
         pending = {f.handle: f for f in self.book.pending()}
         baseline = deepcopy(self.baseline)
-        super()._settle_due_forecasts()
+        settle_forecasts(self, super()._settle_due_forecasts)
         self._record_card_forecasts(pending, baseline)
+
+    def _unhistoried(self, action_id: str) -> bool:
+        from factorylab.runtime.immune import novelty_available
+
+        return novelty_available(self, action_id) or super()._unhistoried(action_id)
+
+    def _settle_exchange_effects(self, events) -> None:
+        super()._settle_exchange_effects(events)
+        self._record_pricing_fills(events)
 
     def run(self) -> dict[str, Any]:
         """Keep exclusive ledger ownership through the last runtime action or process death."""
@@ -159,7 +174,8 @@ class Runtime(
                 "launch",
                 EventKind.LAUNCH,
                 self.clock.now_ns,
-                {"manifest_hash": self.m.manifest_hash()},
+                {"manifest_hash": self.m.manifest_hash(),
+                 "manifest": json.loads(self.m.canonical_json())},
                 "kernel",
             )
         )
@@ -171,6 +187,7 @@ class Runtime(
         self.n += 1
         self.clock.now_ns = max(self.clock.now_ns, ev.ts_ns)
         self.bus.publish(ev)
+        self.cadence.advance(self.n)
         self.stats.events += 1
         self.events_log.append({"kind": str(ev.kind), "payload": _to_plain(ev.payload)})
         if ev.kind is EventKind.MARKET_MID:
