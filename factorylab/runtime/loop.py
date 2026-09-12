@@ -443,8 +443,9 @@ class Runtime:
         self.live = manifest.exchange.kind != "fake"
         self.clock_source = clock_source
         self.tick_clock = (
-            LiveClock(manifest.tick_interval_ns, events) if self.live else
-            ClockSource(manifest.tick_interval_ns, manifest.tick_interval_ns, events)
+            LiveClock(manifest.tick_interval_ns, events)
+            if self.live
+            else ClockSource(manifest.tick_interval_ns, manifest.tick_interval_ns, events)
         )
         if clock_source is not None and hasattr(clock_source, "set_interval"):
             self.tick_clock = clock_source
@@ -528,10 +529,16 @@ class Runtime:
         if provider is None:
             provider = build_provider(manifest)
         self.provider = provider if provider is not None else ScriptedProvider()
-        self.market = market if market is not None else (
-            self.provider.x402 if isinstance(self.provider, MultiProvider) else
-            self.provider if isinstance(self.provider, X402Provider) else
-            X402Provider(discovery_url=manifest.treasury.discovery_url)
+        self.market = (
+            market
+            if market is not None
+            else (
+                self.provider.x402
+                if isinstance(self.provider, MultiProvider)
+                else self.provider
+                if isinstance(self.provider, X402Provider)
+                else X402Provider(discovery_url=manifest.treasury.discovery_url)
+            )
         )
         self.sellers: dict[str, dict] = {}
         self.catalogue: dict[str, TokenPrice] | None = None
@@ -689,8 +696,11 @@ class Runtime:
         model = MeteredModel(self.provider, self.prices, self.meter)
         if spec.model_id.startswith("x402:"):
             model = X402MeteredModel(
-                self.market, self.prices, self.meter,
-                record=self._record_market, on_unaffordable=self._compute_failure,
+                self.market,
+                self.prices,
+                self.meter,
+                record=self._record_market,
+                on_unaffordable=self._compute_failure,
             )
         asm = Assembly(spec, model)
         self.assemblies[spec.id] = asm
@@ -878,7 +888,8 @@ class Runtime:
                     "lambda": self.controller.price(cid),
                     "region": (
                         {"kind": r.kind, "lo": r.lo, "hi": r.hi, "scale": r.scale}
-                        if (r := self.regions.get(cid)) is not None else None
+                        if (r := self.regions.get(cid)) is not None
+                        else None
                     ),
                 }
                 for cid in sorted(self.priced)
@@ -979,8 +990,11 @@ class Runtime:
                     min(d.end_ns, (self.events_budget + 1) * self.m.max_tick_ns),
                 ).events()
             )
-        if (isinstance(self.tick_clock, ClockSource)
-                and self.clock_source is None and len(sources) > 1):
+        if (
+            isinstance(self.tick_clock, ClockSource)
+            and self.clock_source is None
+            and len(sources) > 1
+        ):
             stream = self.tick_clock.events(sources[1])
         else:
             stream = merge_sources(*sources)
@@ -1008,12 +1022,17 @@ class Runtime:
             if ev.kind is EventKind.TICK:
                 if self.venue is not None:
                     observed = [
-                        we for we in self.venue.on_tick(self.clock.now_ns)
+                        we
+                        for we in self.venue.on_tick(self.clock.now_ns)
                         if we.kind is not WorldEventKind.FILL
                     ]
                     observed.extend(
-                        WorldEvent(WorldEventKind.FILL, max(self.clock.now_ns, ts),
-                                   self.exchange.name, payload)
+                        WorldEvent(
+                            WorldEventKind.FILL,
+                            max(self.clock.now_ns, ts),
+                            self.exchange.name,
+                            payload,
+                        )
                         for ts, payload in self.consequence_fills.poll(self.exchange)
                     )
                     self._settle_exchange_effects(observed)
@@ -1096,9 +1115,14 @@ class Runtime:
         if not self._compute_routed:
             return
         count = self.insolvency_count + 1 if self._compute_unaffordable else 0
-        self._record_market({"kind": "treasury.insolvency", "event_id": ev.id,
-                             "consecutive_events": count,
-                             "unaffordable": self._compute_unaffordable})
+        self._record_market(
+            {
+                "kind": "treasury.insolvency",
+                "event_id": ev.id,
+                "consecutive_events": count,
+                "unaffordable": self._compute_unaffordable,
+            }
+        )
         self.insolvency_count = count
 
     def _manage_reserve_window(self) -> None:
@@ -1311,9 +1335,13 @@ class Runtime:
         result = self.exchange.place(order)
         self.consequences.order_result(
             ret.handle,
-            {"status": result.status, "order_id": result.order_id,
-             "filled_size": str(result.filled_size)},
-            {"size": str(order.size)}, self.n,
+            {
+                "status": result.status,
+                "order_id": result.order_id,
+                "filled_size": str(result.filled_size),
+            },
+            {"size": str(order.size)},
+            self.n,
         )
         self.stats.orders_placed += 1
         if result.status == "rejected":
@@ -1399,8 +1427,14 @@ class Runtime:
         unaffordable = bool(candidates) and all(
             excluded.get(a, "").startswith("compute:") for a in candidates
         )
-        self._record_market({"kind": "compute.route", "event_id": ev.id,
-                             "router": state.learner.id, "unaffordable": unaffordable})
+        self._record_market(
+            {
+                "kind": "compute.route",
+                "event_id": ev.id,
+                "router": state.learner.id,
+                "unaffordable": unaffordable,
+            }
+        )
         self._compute_routed = True
         self._compute_unaffordable |= unaffordable
         self.stats.exclusions += len(sample.excluded)
@@ -1479,10 +1513,13 @@ class Runtime:
             if spec["kind"] == "venue":
                 return self.venue_tools.call(tool_id, args)
             if spec["kind"] == "market":
-                return {"sellers": self.market.discover(
-                    url_substring=args.get("url_substring"), query=args.get("query"),
-                    limit=args.get("limit", 20),
-                )}
+                return {
+                    "sellers": self.market.discover(
+                        url_substring=args.get("url_substring"),
+                        query=args.get("query"),
+                        limit=args.get("limit", 20),
+                    )
+                }
             if spec["kind"] == "treasury":
                 direction = args.get("direction")
                 usd = args.get("usd")
@@ -1816,8 +1853,14 @@ class Runtime:
                     if entry["handle"] == about:
                         entry["verdict"] = verdict
         self.consequences.seal_verdict(
-            self.book, self.queue, evaluator_handle=handle, evaluator_id=sample.chosen,
-            about=about, verdict=verdict, event=self.n, now_ns=self.clock.now_ns,
+            self.book,
+            self.queue,
+            evaluator_handle=handle,
+            evaluator_id=sample.chosen,
+            about=about,
+            verdict=verdict,
+            event=self.n,
+            now_ns=self.clock.now_ns,
             tick_ns=self.tick_clock.interval_ns,
         )
         self.stats.forecasts_sealed += 1
@@ -2027,14 +2070,18 @@ class Runtime:
         namespaced = {}
         if isinstance(raw, list):
             original_ids = {
-                item.get("openrouter_id") for item in raw if isinstance(item, dict)
-                and isinstance(item.get("openrouter_id"), str)
+                item.get("openrouter_id")
+                for item in raw
+                if isinstance(item, dict) and isinstance(item.get("openrouter_id"), str)
             }
             adapted = []
             for index, item in enumerate(raw):
                 mid = item.get("openrouter_id") if isinstance(item, dict) else None
-                if (isinstance(mid, str) and item.get("kind") == "model"
-                        and mid.startswith(("x402:", "venice:"))):
+                if (
+                    isinstance(mid, str)
+                    and item.get("kind") == "model"
+                    and mid.startswith(("x402:", "venice:"))
+                ):
                     alias = f"namespace/{index}"
                     while alias in original_ids:
                         alias += "-"
@@ -2054,7 +2101,8 @@ class Runtime:
         )
         accepted = [
             ModelProposal(namespaced[prop.openrouter_id])
-            if isinstance(prop, ModelProposal) and prop.openrouter_id in namespaced else prop
+            if isinstance(prop, ModelProposal) and prop.openrouter_id in namespaced
+            else prop
             for prop in accepted
         ]
         for item in amendments:
@@ -2133,10 +2181,16 @@ class Runtime:
                 res = self.reserve.reserve_for(contract, amount)
                 self.registry.register(contract, by_handle=handle, reservation=res)
                 self._record_seller(prop.openrouter_id, price, seller)
-                self._emit(EventKind.REGISTERED, {
-                    "kind": "model", "id": prop.openrouter_id, "by": handle,
-                    "network": seller["network"], "per_request_micro": price.per_request_micro,
-                })
+                self._emit(
+                    EventKind.REGISTERED,
+                    {
+                        "kind": "model",
+                        "id": prop.openrouter_id,
+                        "by": handle,
+                        "network": seller["network"],
+                        "per_request_micro": price.per_request_micro,
+                    },
+                )
                 return
             base, _, effort = prop.openrouter_id.partition("@")
             if not base or len(base) > 4096 or any(c.isspace() for c in base):
@@ -2315,12 +2369,12 @@ class Runtime:
                 "amendment": {
                     "id": am.id,
                     "add": [
-                        {**vars(c), **({"lambda": prices[c.id]}
-                         if c.id in prices else {})} for c in am.add
+                        {**vars(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
+                        for c in am.add
                     ],
                     "replace": [
-                        {**vars(c), **({"lambda": prices[c.id]}
-                         if c.id in prices else {})} for c in am.replace
+                        {**vars(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
+                        for c in am.replace
                     ],
                     "remove": list(am.remove),
                     "predicted_effect": am.predicted_effect,
@@ -2396,10 +2450,14 @@ class Runtime:
                     am.tick_interval, self.m.clock.min_tick_ns, self.m.max_tick_ns
                 )
                 if interval != self.tick_clock.interval_ns:
-                    self.ledger.append({
-                        "kind": "clock.changed", "edition": new.edition,
-                        "old_ns": self.tick_clock.interval_ns, "new_ns": interval,
-                    })
+                    self.ledger.append(
+                        {
+                            "kind": "clock.changed",
+                            "edition": new.edition,
+                            "old_ns": self.tick_clock.interval_ns,
+                            "new_ns": interval,
+                        }
+                    )
                     self.tick_clock.set_interval(interval)
                     self.stats.clock_changes += 1
             self.stats.amendments_activated += 1
@@ -2662,15 +2720,20 @@ def _model_contract(model_id: str, price: TokenPrice, provider: str) -> Contract
         id=f"model:{model_id}",
         version=1,
         kind="model",
-        description=f"{provider} model {model_id}" + (
-            " on eip155:8453 (USDC)" if provider == "x402" else ""
-        ),
+        description=f"{provider} model {model_id}"
+        + (" on eip155:8453 (USDC)" if provider == "x402" else ""),
         input_schema={"type": "object"},
         output_schema={"type": "object"},
         price=PriceSpec(
-            {"input_token": int(price.input_micro), "output_token": int(price.output_micro),
-             **({"request": price.per_request_micro}
-                if provider == "x402" or price.per_request_micro else {})}
+            {
+                "input_token": int(price.input_micro),
+                "output_token": int(price.output_micro),
+                **(
+                    {"request": price.per_request_micro}
+                    if provider == "x402" or price.per_request_micro
+                    else {}
+                ),
+            }
         ),
         permissions=frozenset({"model.complete"}),
         resource_bounds=ResourceBounds(),
