@@ -84,14 +84,15 @@ def _json_value(value: Any) -> Any:
 class VenueTools:
     """Only schema-valid requests reach the exchange; every attempt has an audit entry."""
 
-    def __init__(self, exchange: Exchange, *, coins: tuple[str, ...], max_leverage: int = 3):
+    def __init__(self, exchange: Exchange, *, coins: tuple[str, ...], max_leverage: int = 3,
+                 spot_pairs: tuple[str, ...] = ()):
         if type(max_leverage) is not int or max_leverage < 1:
             raise ValueError("max_leverage must be a positive integer")
         if not coins or any(not isinstance(coin, str) or not coin for coin in coins):
             raise ValueError("coins must contain nonempty coin names")
         self.exchange = exchange
         self.log: list[tuple[str, dict, bool]] = []
-        coin = {"type": "string", "enum": list(dict.fromkeys(coins))}
+        coin = {"type": "string", "enum": list(dict.fromkeys((*coins, *spot_pairs)))}
         positive = {
             "anyOf": [
                 {"type": "number", "exclusiveMinimum": 0},
@@ -102,7 +103,9 @@ class VenueTools:
                 },
             ]
         }
+        market = {"type": "string", "enum": ["perp", "spot"], "default": "perp"}
         trade = {
+            "market": market,
             "coin": coin,
             "side": {"type": "string", "enum": ["buy", "sell"]},
             "size": positive,
@@ -156,6 +159,7 @@ class VenueTools:
                 "Reduce a position by size, or close it fully when size is omitted or null.",
                 {
                     "coin": coin,
+                    "market": market,
                     "size": {"anyOf": [*positive["anyOf"], {"type": "null"}], "default": None},
                 },
                 ["coin"],
@@ -165,6 +169,7 @@ class VenueTools:
                 "Set cross-margin leverage for a coin.",
                 {
                     "coin": coin,
+                    "market": market,
                     "leverage": {"type": "integer", "minimum": 1, "maximum": max_leverage},
                 },
                 ["coin", "leverage"],
@@ -233,7 +238,9 @@ class VenueTools:
         if tool_id == "venue.open_orders":
             return {"open_orders": ex.open_orders()}
         if tool_id == "venue.positions":
-            return {"positions": ex.account().positions}
+            account = ex.account()
+            return {"positions": account.positions, **({"spot_balances": account.spot_balances}
+                    if getattr(ex, "spot_pairs", ()) else {})}
         if tool_id in ("venue.place_market", "venue.place_limit"):
             limit = tool_id == "venue.place_limit"
             return ex.place(
@@ -244,11 +251,13 @@ class VenueTools:
                     OrderKind.LIMIT if limit else OrderKind.MARKET,
                     Decimal(str(args["price"])) if limit else None,
                     reduce_only=args.get("reduce_only", False),
+                    market=args.get("market", "perp"),
                 )
             )
         if tool_id == "venue.cancel":
             return ex.cancel(args["order_id"], coin=args["coin"])
         if tool_id == "venue.close":
             size = args.get("size")
-            return ex.close(args["coin"], None if size is None else Decimal(str(size)))
-        return ex.set_leverage(args["coin"], args["leverage"])
+            return ex.close(args["coin"], None if size is None else Decimal(str(size)),
+                            market=args.get("market", "perp"))
+        return ex.set_leverage(args["coin"], args["leverage"], market=args.get("market", "perp"))

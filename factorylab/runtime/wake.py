@@ -445,14 +445,12 @@ def _realized(exchange) -> int | str:
 
 
 def _venue(manifest) -> dict:
-    from factorylab.world.exchange import HyperliquidExchange
+    from factorylab.world.exchange import live_exchange
 
     result = {"equity_micro": UNAVAILABLE,
               "realized_to_date_micro": UNAVAILABLE}
     try:
-        exchange = HyperliquidExchange(
-            mainnet=manifest.exchange.mainnet, coins=manifest.exchange.coins,
-        )
+        exchange = live_exchange(manifest.exchange)
         account = exchange.account()
         result.update(equity_micro=_micro(account.equity_usd))
         result["realized_to_date_micro"] = _realized(exchange)

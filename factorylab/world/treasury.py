@@ -118,6 +118,7 @@ class Treasury:
             )
         else:
             seed, sellers = provider_pots(self.provider)
+        observed = {}
         try:
             observed = self.rail.balances()
             venue, reserve = observed["venue"], observed["reserve"]
@@ -126,6 +127,7 @@ class Treasury:
         except Exception:
             venue = reserve = None
         pots = {"venue": venue, "reserve": reserve, "seed": seed, "sellers": sellers}
+        pots.update({k: observed[k] for k in ("perps", "spot") if k in observed})
         self._write("pots", pots=pots)
         self._pots = pots
         return self.pots()
@@ -136,8 +138,9 @@ class Treasury:
         """A refusal has a reason; a submitted result has references but never promises arrival."""
         direction = "to_reserve" if direction == "to_compute" else direction
         try:
-            if direction not in {"to_reserve", "to_venue", "to_venice"}:
-                raise RailError("direction must be to_reserve, to_venue or to_venice")
+            if direction not in {"to_reserve", "to_venue", "to_venice",
+                                 "spot_to_perps", "perps_to_spot"}:
+                raise RailError("unsupported treasury direction")
             if isinstance(usd, bool) or not isinstance(usd, str | Decimal | int):
                 raise RailError("usd must be an exact decimal string or integer, not a float")
             amount = usd_to_money(str(usd))
@@ -176,7 +179,8 @@ class Treasury:
                              venice_spent_after=self.venice_spent + amount)
             reference = self.rail.prepare(steps[0], state, self.gas_spent)
             self._check_fee(reference, state)
-            fee_budget = 0 if direction == "to_venice" else self.fee_ceiling_micro
+            fee_budget = (0 if direction in ("to_venice", "spot_to_perps", "perps_to_spot")
+                          else self.fee_ceiling_micro)
             if amount + fee_budget > self.wallet.available:
                 raise RailError("wallet cannot reserve principal plus transfer fee ceiling")
         except (RailError, ValueError, TypeError, ArithmeticError) as exc:
@@ -460,22 +464,47 @@ class FakeRail:
 
     name = "scripted"
 
-    def __init__(self, wallet, *, fee_micro: int = 10_000):
+    def __init__(self, wallet, *, fee_micro: int = 10_000, exchange=None):
         self.wallet, self.fee_micro = wallet, fee_micro
+        self.exchange = exchange
         self.reserve = 0
         self.venice = 0
 
     def balances(self) -> dict:
-        return {"venue": self.wallet.balance - self.reserve - self.venice,
-                "reserve": self.reserve, "venice": self.venice}
+        venue = self.wallet.balance - self.reserve - self.venice
+        result = {"venue": venue, "reserve": self.reserve, "venice": self.venice}
+        if self.exchange is not None:
+            acct = self.exchange.account()
+            spot = int((acct.equity_usd - self.exchange._perp_equity()) * 1_000_000)
+            book = self.exchange._cash + self.exchange._spot_cash + sum(
+                (p.size * p.entry_px for p in self.exchange._spot_positions.values()), Decimal(0))
+            adjustment = money_to_usd(venue) - book
+            perps = int((self.exchange._perp_equity() + adjustment) * 1_000_000)
+            result.update(venue=perps + spot, perps=perps, spot=spot)
+        return result
 
     def plan(self, direction: str) -> tuple[str, ...]:
         return (direction,)
 
     def preflight(self, direction: str, amount: int, gas_spent: dict) -> None:
-        if direction not in {"to_reserve", "to_venue", "to_venice"}:
+        if direction not in {"to_reserve", "to_venue", "to_venice",
+                                 "spot_to_perps", "perps_to_spot"}:
             raise RailError("unsupported scripted direction")
+        if direction in ("spot_to_perps", "perps_to_spot"):
+            if self.exchange is None:
+                raise RailError("spot exchange unavailable")
+            self.exchange.sync_cash(money_to_usd(
+                self.wallet.balance - self.reserve - self.venice))
+            available = (self.exchange._spot_available("USDC") if direction == "spot_to_perps"
+                         else self.exchange._perp_withdrawable())
+            if amount > int(available * 1_000_000):
+                raise RailError("amount exceeds available source class")
+            return
         pot = self.balances()["venue" if direction == "to_reserve" else "reserve"]
+        if direction == "to_reserve" and self.exchange is not None:
+            self.exchange.sync_cash(money_to_usd(
+                self.wallet.balance - self.reserve - self.venice))
+            pot = int(self.exchange._perp_withdrawable() * 1_000_000)
         if amount < 5_000_000:
             raise RailError("amount is below venue minimum")
         fee = 0 if direction == "to_venice" else self.fee_micro
@@ -489,7 +518,7 @@ class FakeRail:
         pass
 
     def poll(self, step: str, state: dict) -> dict:
-        fee = 0 if step == "to_venice" else self.fee_micro
+        fee = 0 if step in ("to_venice", "spot_to_perps", "perps_to_spot") else self.fee_micro
         return {
             "confirmed": True,
             "received_micro": state["amount_micro"] - fee,
@@ -499,7 +528,10 @@ class FakeRail:
         }
 
     def confirm(self, state: dict) -> None:
-        if state["direction"] == "to_reserve":
+        if state["direction"] in ("spot_to_perps", "perps_to_spot"):
+            self.exchange.class_transfer(money_to_usd(state["amount_micro"]),
+                                         state["direction"] == "spot_to_perps")
+        elif state["direction"] == "to_reserve":
             self.reserve += state["received_micro"]
         else:
             self.reserve -= state["amount_micro"]
@@ -508,9 +540,11 @@ class FakeRail:
 
 
 class FakeTreasury(Treasury):
-    def __init__(self, ledger, wallet, *, fee_micro=10_000, max_venice_per_window=10_000_000):
+    def __init__(self, ledger, wallet, *, fee_micro=10_000, max_venice_per_window=10_000_000,
+                 exchange=None):
         super().__init__(
-            ledger, wallet, FakeRail(wallet, fee_micro=fee_micro), fee_ceiling_micro=fee_micro,
+            ledger, wallet, FakeRail(wallet, fee_micro=fee_micro, exchange=exchange),
+            fee_ceiling_micro=fee_micro,
             max_venice_per_window=max_venice_per_window,
         )
         self.refresh_pots()
@@ -523,16 +557,71 @@ class FakeTreasury(Treasury):
                 seed=0,
                 sellers={"venice": self.rail.venice},
                 complete=True,
-                total_micro=self.wallet.balance,
+                total_micro=self.rail.balances()["venue"] + self.rail.reserve + self.rail.venice,
             )
         return result
 
     @property
     def venue_balance_usd(self) -> Decimal:
-        return money_to_usd(self.rail.balances()["venue"])
+        return money_to_usd(self.wallet.balance - self.rail.reserve - self.rail.venice)
 
 
-class UnconfiguredRail:
+class ClassTransferRail:
+    """USDC class transfers retain the signed nonce until matching ledger evidence arrives."""
+
+    def class_preflight(self, direction: str, amount: int) -> None:
+        sdk = self.exchange._exchange
+        if (sdk is None or sdk.wallet.address.lower() != self.exchange._address.lower()
+                or sdk.vault_address):
+            raise RailError("class transfers require the main account signing key")
+        acct = self.exchange.account()
+        available = (acct.cash_usd if direction == "perps_to_spot" else next(
+            (b.available for b in acct.spot_balances if b.coin == "USDC"), Decimal(0)))
+        if amount > int(available * 1_000_000):
+            raise RailError("amount exceeds available source class")
+
+    def class_prepare(self, step: str, state: dict) -> dict:
+        return {"network": self.exchange.name, "sender": self.exchange._address,
+                "action": {"type": "usdClassTransfer",
+                           "amount": str(money_to_usd(state["amount_micro"])),
+                           "toPerp": step == "spot_to_perps", "nonce": state["nonce"]},
+                "nonce": state["nonce"], "fee_ceiling_micro": 0}
+
+    def class_send(self, reference: dict) -> None:
+        from hyperliquid.utils.constants import MAINNET_API_URL
+        from hyperliquid.utils.signing import sign_usd_class_transfer_action
+
+        if (reference["sender"] != self.exchange._address
+                or reference["network"] != self.exchange.name):
+            raise RailError("class transfer identity mismatch")
+        action = deepcopy(reference["action"])
+        sdk = self.exchange._exchange
+        signature = sign_usd_class_transfer_action(
+            sdk.wallet, action, self.exchange.base_url == MAINNET_API_URL)
+        response = sdk._post_action(action, signature, reference["nonce"])
+        if response.get("status") != "ok":
+            raise RailError("venue rejected withdrawal")
+
+    def class_poll(self, state: dict) -> dict | None:
+        ref = state["reference"]
+        rows = self.exchange._info.user_non_funding_ledger_updates(
+            self.exchange._address, ref["nonce"])
+        matches = []
+        for row in rows:
+            delta = row.get("delta", {})
+            if (row.get("time") == ref["nonce"] and row.get("hash")
+                    and delta.get("type") == "accountClassTransfer"
+                    and delta.get("toPerp") is ref["action"]["toPerp"]
+                    and Decimal(str(delta.get("usdc", "0"))) * 1_000_000
+                    == state["amount_micro"]):
+                matches.append(row)
+        if len(matches) != 1:
+            return None
+        return {"confirmed": True, "received_micro": state["amount_micro"],
+                "fee_micro": 0, "principal_moved": True, "evidence": matches[0]}
+
+
+class UnconfiguredRail(ClassTransferRail):
     """A world with no reserve address can observe its venue but cannot move treasury money."""
 
     name = "unconfigured"
@@ -541,7 +630,29 @@ class UnconfiguredRail:
         self.exchange = exchange
 
     def balances(self) -> dict:
-        return {"venue": int(self.exchange.account().equity_usd * 1_000_000), "reserve": 0}
+        acct = self.exchange.account()
+        venue = int(acct.equity_usd * 1_000_000)
+        result = {"venue": venue, "reserve": 0}
+        if getattr(self.exchange, "spot_pairs", ()):
+            state = self.exchange._info.user_state(self.exchange._address)
+            perps = int(Decimal(str(state["marginSummary"]["accountValue"])) * 1_000_000)
+            result.update(perps=perps, spot=venue - perps)
+        return result
 
-    def preflight(self, *_args) -> None:
-        raise RailError("treasury.reserve_address and gas budgets are not configured")
+    def plan(self, direction: str) -> tuple[str, ...]:
+        if direction not in ("spot_to_perps", "perps_to_spot"):
+            raise RailError("reserve route is not configured")
+        return (direction,)
+
+    def preflight(self, direction: str, amount: int, gas_spent: dict) -> None:
+        self.plan(direction)
+        self.class_preflight(direction, amount)
+
+    def prepare(self, step: str, state: dict, gas_spent: dict) -> dict:
+        return self.class_prepare(step, state)
+
+    def send(self, step: str, reference: dict) -> None:
+        self.class_send(reference)
+
+    def poll(self, step: str, state: dict) -> dict | None:
+        return self.class_poll(state)

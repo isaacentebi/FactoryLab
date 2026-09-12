@@ -203,3 +203,6 @@ reserve_address = "0x1111111111111111111111111111111111111111"
 hyperevm_gas_budget_wei = 100000000000000000
 base_gas_budget_wei = 1000000000000000
 max_transfer_fee_usd = "2"
+
+[venue]
+spot_pairs = ["BTC/USDC", "ETH/USDC"]

@@ -172,6 +172,8 @@ class LiveVenue:
                         "px": str(fl.px),
                         "fee_usd": str(fl.fee),
                         "realized_usd": str(fl.realized),
+                        "market": getattr(fl, "market", "perp"),
+                        "inventory_size": str(getattr(fl, "inventory_size", None) or fl.size),
                         "liquidation": fl.liquidation,
                     },
                 )

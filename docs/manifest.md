@@ -243,3 +243,16 @@ assembly beyond `novelty.trials`, and whatever is unspent expires at the next
 boundary, where the flag must be raised again to re-issue it. That single grant
 is part of the novelty lifetime policy (A13): ledger evidence `novelty.grant` and
 `novelty.grant_consumed`.
+
+## Spot venue
+
+`venue.spot_pairs` is a list of unique `BASE/USDC` pairs, default `[]`, fixed at
+launch. Testnet seeds `["BTC/USDC", "ETH/USDC"]`; scripted seeds `["BTC/USDC"]`.
+Live pairs must exist verbatim in SDK spot metadata; unavailable pairs fail launch.
+Orders and closes accept `market: "perp" | "spot"` (default `perp`); spot uses pair
+names and long-only inventory. Spot has no leverage, funding or liquidation.
+The world venue block publishes lot sizes and price decimal increments; live prices
+also obey the venue's five-significant-figure rule (integer prices are allowed).
+`treasury.transfer` accepts `perps_to_spot` and `spot_to_perps`, moving available
+USDC through the same intent, submission and receipt journal. Venue pots show
+`perps` and `spot` as components of `venue`, never additional capital.
