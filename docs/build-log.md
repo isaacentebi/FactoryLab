@@ -267,7 +267,7 @@ and sent 0.05 HYPE to the reserve in
 `0x3e9fe1784a516afded473625d2e861fca6605a8cce1851babe3917a4176bdf5e`.
 These bootstrap actions preceded the acceptance ledger's initial balance.
 
-**Acceptance in progress.** The encrypted, restartable acceptance journal is
+**Acceptance completed at 03:04:29 UTC on 12 September.** The encrypted, restartable acceptance journal is
 outside the repository at the projectless task's `work/t2-live-acceptance.jsonl`.
 Its adjacent key and lock must be preserved. Initial USDC pots totalled 986.930257
 (venue 986.930257, Base reserve 0). Native gas balances were 0.05 HYPE at the
@@ -277,8 +277,10 @@ HyperEVM reserve and 0.001 ETH at the Base Sepolia reserve.
 |---|---|---|
 | Withdraw and burn 10 test USDC | HyperCore nonce `1789177432547`, ledger hash `0xbfdb1262d524792ac1540429185eb20000162a48702797fc63a3bdb594285315`; HyperEVM system hash `0xfbb27bf157f4be3d02672aeee924fd6e58827f544c9ed090acfc437f73a2542a`; Circle/archive hash `0xfeb0a857f06578edef908512901e94b8ce202f8f69a06393c4d828d71ad4149f` | Validated against the canonical system call and destination-verified Circle attestation. Burned 10 USDC; CCTP fee 0. |
 | Mint on Base Sepolia | `0x5356f36e164358944d76400810a730289423095dded19dfca30f876fa965da77`; CCTP nonce `0x26bdeda379b24e773dcb4f384025490efe053877039169a61928a6d15bef9b5b` | Finalized canonical receipt reconciled at 02:17:21 UTC on 12 September; reserve arrival confirmed at 10 USDC. Gas 1,056,152,931,299 wei ETH, valued at 2,631 micro-USD. |
-| Return burn on Base Sepolia | Approval `0x8b9f025ecceb56be57a7c1b71993b6527296e08ff023ab9933edd86c26a4e31e`; burn `0x91a29aaf838932fd230e3c2c0bec711a0a650810db01f2c03a3071d40475e095`, block 46706391 | Burn receipt status 1 observed at 02:46:29 UTC; finality pending. |
-| Return mint and HyperCore credit | Transfer `treasury-1` for 10 USDC | Pending Base finality and Circle attestation. |
+| Return burn on Base Sepolia | Approval `0x8b9f025ecceb56be57a7c1b71993b6527296e08ff023ab9933edd86c26a4e31e`; burn `0x91a29aaf838932fd230e3c2c0bec711a0a650810db01f2c03a3071d40475e095`, block 46706391 | Both approval and burn finalized; reconciled at 03:02:24 UTC. Combined native gas valued at 2,422 micro-USD, with no USDC fee. |
+| Mint on HyperEVM testnet | `0x4ac371e8f2a7dc90f9576d4afce0aa6280eb1b4568d9f4ec2bbd7b2e7f5247fc`; CCTP nonce `0x16519b1ceb8584ed99f6a3e52435ffc557b2969b7378439ead4800fac880b704` | Finalized mint of 10 USDC reconciled at 03:03:04 UTC; CCTP fee 0. |
+| Approve CoreDepositWallet | `0xef57aae3bf639b8cfb378d53f84e134f44efd2cc4561502cae8906ba7e1685a9` | Finalized at 03:03:46 UTC. |
+| HyperCore credit | Deposit `0xda7a02447339640f80ff8be1c8116b93d9eecbe04ff3257914b454b4e82ae0e3`; HyperCore ledger hash `0x47c57f8308ec6a35493f042919649e0000009768a3ef8907eb8e2ad5c7e0441f`, nonce 475810 | Finalized receipt plus unique forwarding event and matching 10-USDC perps credit confirmed at 03:04:29 UTC. |
 
 The native HyperCore charge was 0.00002 HYPE, valued at the observed $36 HYPE mid
 as 720 micro-USD. Review of that first live receipt caught an accounting defect:
@@ -304,8 +306,23 @@ future authorized funded world; this acceptance CLI cannot select them.
 
 The acceptance process was restarted between submission and reconciliation and
 continued the same encrypted journal, transfer ID, nonce and transaction references.
-It did not issue a replacement withdrawal. Full verification and live return
-settlement are in progress; this entry is not yet a completed round-trip claim.
+It did not issue a replacement withdrawal. Both 10-USDC directions are confirmed.
+Final observed pots: venue 986.930257 USDC, Base reserve 0, total 986.930257;
+no transfer remains pending. Kernel balance 986.929537 retains the historical
+0.000720-USDC debit described above, so its discrepancy is -720 micro-USDC,
+inside the 500,000-micro-USDC reconciliation tolerance. Outbound economic gas
+cost was 3,351 micro-USD and return cost 3,593 micro-USD: 6,944 micro-USD total.
+These are USD valuations of test HYPE/ETH, not real-money spending. All bridge and
+withdrawal USDC fees observed on this round trip were zero. The full gate is green on code commit `e24f960`:
+
+```text
+$ uv run ruff check . && uv run pytest
+All checks passed!
+================ 1358 passed, 5 deselected in 475.70s (0:07:55) ================
+```
+
+Five opt-in network tests are deselected by the repository default; the live
+acceptance above is separate. Subsequent changes only finalize this evidence log.
 
 **Latency corrections.** A profiled 120-event scripted workload spent 44.896 of
 56.066 seconds repeatedly decrypting unchanged ledger records. The ledger now
@@ -338,7 +355,8 @@ checked against the live Base Sepolia response on 11 September local time.
 11 September 2026. The reserve already exists with a 0600, gitignored key. Its
 verified Base mainnet address is
 `0x1228e5620944a79D268Afc7522E00891526EdEBb`, chain 8453. Read-only status reported
-0 native USDC, 0 ETH, 0 Venice balance, and `topup_5_affordable: false`.
+0 native USDC, 0 ETH, 0 Venice balance, and `topup_5_affordable: false`
+on the final read at about 03:03 UTC on 12 September (11 September local).
 No payment authorization or mainnet transfer was submitted. Total proof spend: $0.
 
 | Requested proof | Actual observation | Settlement / answer |
