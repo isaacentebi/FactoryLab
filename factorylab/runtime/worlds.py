@@ -21,6 +21,7 @@ from typing import Any
 from factorylab.charter.charter import Charter, MetricCard, seed_charter
 from factorylab.runtime.cards import parses
 from factorylab.runtime.observations import observation_for
+from factorylab.world.connector import DEFAULT_DENYLIST, validate_denylist
 from factorylab.world.market import DISCOVERY_URL
 from factorylab.world.models import PriceTable, TokenPrice
 
@@ -106,6 +107,25 @@ class ToolsSpec:
     max_depth: int = 4
     max_children: int = 3
     max_tool_calls: int = 4
+
+
+@dataclass(frozen=True)
+class ConnectorsSpec:
+    """Connector reads share immutable size, time, flat-price and assembly-window bounds."""
+
+    max_bytes: int = 262144
+    timeout_s: int = 10
+    call_price_micro: int = 1000
+    max_calls_per_window: int = 60
+    origin_denylist: tuple[str, ...] = DEFAULT_DENYLIST
+
+    def __post_init__(self):
+        for name in ("max_bytes", "timeout_s", "max_calls_per_window", "call_price_micro"):
+            value = getattr(self, name)
+            if type(value) is not int or value < (0 if name == "call_price_micro" else 1):
+                raise ValueError(f"connectors.{name} must be an integer within its bounds")
+        validate_denylist(self.origin_denylist)
+        object.__setattr__(self, "origin_denylist", tuple(self.origin_denylist))
 
 
 @dataclass(frozen=True)
@@ -215,6 +235,7 @@ class WorldManifest:
     termination: TerminationSpec
     evaluation: EvaluationSpec = EvaluationSpec()
     tools: ToolsSpec = ToolsSpec()
+    connectors: ConnectorsSpec = ConnectorsSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
     clock: ClockSpec = ClockSpec()
@@ -448,6 +469,20 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
 
 
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
+    conn = d.get("connectors", {})
+    if not isinstance(conn, dict) or set(conn) - {
+        "max_bytes", "timeout_s", "call_price_usd", "max_calls_per_window", "origin_denylist"
+    }:
+        raise ValueError("unknown connectors manifest key")
+    connector_price = conn.get("call_price_usd", "0.001")
+    if type(connector_price) not in (str, int):
+        raise ValueError("connectors.call_price_usd must be exact USD text or integer")
+    connectors = ConnectorsSpec(
+        max_bytes=conn.get("max_bytes", 262144), timeout_s=conn.get("timeout_s", 10),
+        call_price_micro=usd_to_micro(connector_price),
+        max_calls_per_window=conn.get("max_calls_per_window", 60),
+        origin_denylist=conn.get("origin_denylist", DEFAULT_DENYLIST),
+    )
     venice_cap = (d.get("treasury") or {}).get("max_venice_per_window", "10")
     if type(venice_cap) not in (str, int):
         raise ValueError("treasury.max_venice_per_window must be exact USD text or integer")
@@ -565,6 +600,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         charter=charter,
         charter_prices=charter_prices,
         evaluation=evaluation,
+        connectors=connectors,
         tools=ToolsSpec(
             int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
             int((d.get("tools") or {}).get("max_leverage", 3)),

@@ -379,3 +379,45 @@ also obey the venue's five-significant-figure rule (integer prices are allowed).
 `treasury.transfer` accepts `perps_to_spot` and `spot_to_perps`, moving available
 USDC through the same intent, submission and receipt journal. Venue pots show
 `perps` and `spot` as components of `venue`, never additional capital.
+
+## Registrable connectors (W8)
+
+`[connectors]` is a hard cast with exactly these keys; it contains no seed origins.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `max_bytes` | `262144` | Positive integer response-body cap; an extra detection byte causes refusal. |
+| `timeout_s` | `10` | Positive integer wall-time bound for DNS, TLS and reading. |
+| `call_price_usd` | `"0.001"` | Exact USD text or integer, converted to nonnegative integer micro-USD. |
+| `max_calls_per_window` | `60` | Positive integer attempted calls per assembly per novelty reserve window. |
+| `origin_denylist` | The world's own rail hosts: the venue API and RPC on both networks, the model providers and the discovery index | Hostnames (matched exactly or as a parent domain) or CIDRs; every registered seller's host is added to them. Bare addresses, private names and nonpublic resolved addresses are always refused. |
+
+Population proposals have `{kind: "connector", id, description, origin}`, with an
+origin of `https://<host>` and no credentials, port, path, query or fragment.
+A priced `GET /` preflight precedes the same experienced, proposer-excluding
+sortition ballot path as amendments. A strict majority admits the next
+`connector:<id>` registry version. There is no predicted-effect field, so
+connector policy ballots are censored rather than assigned a manufactured score.
+The usual novelty registration trial is charged on admission.
+
+`connector.fetch {id, path}` costs the flat price even for transport, status or
+size failures once dispatched; malformed, denylisted, over-quota and unaffordable
+requests never dispatch. Preflights share the proposer's price and window cap.
+Paths may include a query but cannot change origin. Redirects are refused.
+Responses decode as UTF-8 with replacement and arrive in `seen_tool_results`
+(and the existing `tool_results`) on the caller's continuation. A successful
+fetch permits one additional tool round consisting of ordinary population tools,
+then a final model answer. The jail is unchanged.
+
+Bodies and copies in parser arguments/model journal responses are transient and
+redacted from the public ledger surfaces. Final outputs containing the raw body
+are refused instead of rewriting their action fields. Counters and registry
+versions survive checkpoints. A dispatched fetch is journalled as one
+`io.call`/`io.result` pair, like a paid model call or an x402 purchase, so
+recovery replays a call made after the last checkpoint from its recorded
+outcome: it does not re-fetch potentially changed information and does not
+repeat the debit.
+
+The observatory's `connectors` section publishes latest registered versions and
+attempt counts per UTC date at each public window close, including preflights.
+Scripted manifests use an offline fake transport; live manifests use bounded HTTPS.

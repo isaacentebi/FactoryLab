@@ -85,6 +85,9 @@ def test_unaffordable_committee_vote_counts_toward_insolvency(monkeypatch):
     committee = SimpleNamespace(seats=[("seat", next(iter(rt.assemblies)))])
     rt._hold_vote(am, committee)
     assert rt._compute_routed and rt._compute_unaffordable
+    # One unaffordable ballot is one piece of evidence: the invocation records it.
+    assert len([i for i in rt.ledger._recovery_items()
+                if i["kind"] == "compute.unaffordable"]) == 1
     rt._record_insolvency_event(SimpleNamespace(id="vote-event"))
     assert rt.insolvency_count == 1
 

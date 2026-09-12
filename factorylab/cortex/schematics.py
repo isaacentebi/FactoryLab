@@ -43,6 +43,8 @@ class SchematicsMixin:
             "add": False,
         },
         "retire": {"kind": "retire", "assembly_id": "a registered assembly id"},
+        "connector": {"kind": "connector", "id": "public-source",
+                      "description": "Public information", "origin": "https://example.org"},
         "tool": {
             "kind": "tool",
             "id": "slug",
@@ -164,6 +166,7 @@ class SchematicsMixin:
 
     def _world_block(self) -> dict[str, Any]:
         """Facts about the world any assembly may see. No rules, no goals, no private state."""
+        self._ensure_connector_tool()
         try:
             acct = self.exchange.account()
             account = {
@@ -193,6 +196,18 @@ class SchematicsMixin:
             "account": account,
             "venue": self.exchange.instruments(),
             "tools": list(self.tool_specs.values()),
+            "connectors": {"registered": self._connector_catalogue(),
+                           "max_bytes": self.m.connectors.max_bytes,
+                           "timeout_s": self.m.connectors.timeout_s,
+                           "call_price_micro": self.m.connectors.call_price_micro,
+                           "max_calls_per_window": self.m.connectors.max_calls_per_window,
+                           "window_ns": self.m.novelty.window_ns,
+                           "origin_denylist": list(self.m.connectors.origin_denylist),
+                           "method": "GET",
+                           "result": "UTF-8 text in seen_tool_results[].result.body",
+                           "tool_rounds": 2, "continuation_tool_kinds": ["population"],
+                           "encoding": "UTF-8 with replacement", "redirects": "refused",
+                           "oversize": "refused", "credentials": False},
             "population_tools": {
                 "available": self.tool_jail_available,
                 "reason": None if self.tool_jail_available else "no jail on this host",
@@ -332,7 +347,7 @@ class SchematicsMixin:
                 "type": "object",
                 "properties": {"kind": {"enum": ["model", "assembly", "router", "tool",
                                                    "observation", "learner", "amendment",
-                                                   "retire"]}},
+                                                   "retire", "connector"]}},
                 "required": ["kind"],
             },
         }
