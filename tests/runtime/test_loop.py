@@ -736,7 +736,11 @@ def test_population_cannot_propose_extra_kernel_forecasts():
     )
     assert runtime.book.outstanding() == 0
     assert "return_paid_off" not in str(runtime._forecast_schema())
-    assert "return_paid_off" not in str(runtime._world_block())
+    world = runtime._world_block()
+    # Scoring is public; describing the kernel predicate does not make it proposable.
+    assert "return_paid_off" in world["scoring"]
+    assert "return_paid_off" not in str(world["proposal_shapes"])
+    assert "return_paid_off" not in str(world["a_return_may_include"])
 
 
 def test_consequence_backstop_manifest_default_override_and_validation():
