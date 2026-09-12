@@ -15,6 +15,7 @@ factorylab = "factorylab.runtime.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=8.3",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.8",
 ]
 
@@ -27,8 +28,11 @@ packages = ["factorylab"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["network: requires network access (deselected in CI)"]
-addopts = "-m 'not network'"
+markers = [
+    "network: requires network access (deselected in CI)",
+    "slow: kills and resumes real subprocesses; run before merging to main (`-m ''`)",
+]
+addopts = "-m 'not network and not slow' -n auto"
 
 [tool.ruff]
 line-length = 100

@@ -8,6 +8,8 @@ from decimal import Decimal
 
 import pytest
 
+pytestmark = pytest.mark.slow
+
 from factorylab.kernel.ledger import Ledger, LedgerIntegrityError
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.loop import Runtime, ScriptedProvider, run_world
