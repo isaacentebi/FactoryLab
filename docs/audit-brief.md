@@ -1,6 +1,9 @@
 # Cold audit brief
 
-Three independent auditors, none of whom has seen this code before: Codex (`gpt-6-astra`, xhigh), a Claude Fable subagent, and a Claude Opus subagent. Same brief, separate worktrees, no contact with each other, no contact with the build history beyond what the repository says. The point of three is diversity of blind spots.
+Five independent auditors, none of whom has seen this code before, in separate worktrees, no contact with each other, no contact with the build history beyond what the repository says. The point of five is diversity of blind spots.
+
+- Three **fidelity auditors** answer all of questions A–E: Codex (`gpt-6-astra`, xhigh), a Claude Fable subagent, and a Claude Opus subagent.
+- Two **defect auditors** answer only question C, in depth: a second Codex session (`gpt-6-astra`, xhigh) and a second Claude Fable subagent. They still read the essay first, because "will it run" includes running as the essay intends, but they do not opine on Class 3 or fidelity. They read every test as well as every module and try to break the world: fuzz the return shapes, malformed provider replies, venue failures mid-fill, a kill during every ledger write, concurrent resume, wallet arithmetic at the boundaries, the sandbox from a hostile tool, the x402 quote parser on adversarial headers.
 
 ## Required reading, in this order
 
@@ -22,7 +25,7 @@ Three independent auditors, none of whom has seen this code before: Codex (`gpt-
 
 ## What to deliver
 
-`docs/audits/<auditor>.md`: findings ranked by severity, each with file and line, the essay passage it answers to (quote under 15 words with the section), the failure scenario, and a proposed fix or the statement that no fix is possible without demoting the factory. Separate "this makes it not Class 3" from "this will break" from "this is unclean". No fixes applied; findings only. Under 3,000 words.
+`docs/audits/<auditor>.md` (fidelity-codex, fidelity-fable, fidelity-opus, defects-codex, defects-fable): findings ranked by severity, each with file and line, the essay passage it answers to (quote under 15 words with the section), the failure scenario, and a proposed fix or the statement that no fix is possible without demoting the factory. Separate "this makes it not Class 3" from "this will break" from "this is unclean". No fixes applied; findings only. Under 3,000 words.
 
 ## What is out of scope
 
