@@ -15,15 +15,38 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-DEFAULT_DENYLIST = (
-    "hyperliquid.xyz", "openrouter.ai", "anthropic.com", "venice.ai",
-    "localhost", "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-    "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10",
-)
+from hyperliquid.utils.constants import MAINNET_API_URL, TESTNET_API_URL
+
+from factorylab.world.evm import BASE, BASE_SEPOLIA, HYPEREVM, HYPEREVM_TESTNET
+from factorylab.world.market import DISCOVERY_URL
+from factorylab.world.x402 import VENICE_URL
 
 
 class ConnectorRefused(ValueError):
     """A bounded public refusal contains no remote body or host exception text."""
+
+
+def url_host(url: str) -> str | None:
+    """Return the lowercase host of a rail or seller URL, or None when it names none."""
+    try:
+        host = urlsplit(url).hostname
+    except ValueError:
+        return None
+    return host.lower() if host else None
+
+
+# Every endpoint this world's own rails talk to, taken from the modules that
+# define them, so a renamed or added rail cannot silently become fetchable.
+RAIL_URLS = (
+    MAINNET_API_URL, TESTNET_API_URL,                                # world/exchange.py venue
+    HYPEREVM.rpc, HYPEREVM_TESTNET.rpc, BASE.rpc, BASE_SEPOLIA.rpc,  # world/evm.py RPC
+    "https://openrouter.ai/api/v1",                                  # world/openrouter.py
+    "https://api.anthropic.com",                                     # world/models.py
+    VENICE_URL,                                                      # world/x402.py
+    DISCOVERY_URL,                                                   # world/market.py index
+)
+
+DEFAULT_DENYLIST = tuple(dict.fromkeys(h for h in map(url_host, RAIL_URLS) if h))
 
 
 def origin_host(origin: str) -> str:
@@ -53,26 +76,40 @@ def validate_denylist(entries) -> None:
             origin_host(f"https://{entry}")
 
 
-def check_host(host: str, denylist: tuple[str, ...]) -> None:
-    """Deny exact hosts, their subdomains, nonpublic addresses and configured IP networks."""
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        address = None
-    if address is not None and (not address.is_global or address.is_multicast
-                                or getattr(address, "ipv4_mapped", None) is not None):
+def check_address(address: str, denylist: tuple[str, ...]) -> None:
+    """Only a globally routable unicast address outside every configured network is reached."""
+    ip = ipaddress.ip_address(address)
+    if (not ip.is_global or ip.is_loopback or ip.is_private or ip.is_link_local
+            or ip.is_multicast or getattr(ip, "ipv4_mapped", None) is not None):
         raise ConnectorRefused("private or nonpublic address")
     for entry in denylist:
         try:
             network = ipaddress.ip_network(entry)
         except ValueError:
-            if host == entry or host.endswith("." + entry):
-                raise ConnectorRefused("denylisted host") from None
-        else:
-            if address is not None and address in network:
-                raise ConnectorRefused("denylisted address range")
+            continue
+        if ip in network:
+            raise ConnectorRefused("denylisted address range")
+
+
+def check_host(host: str, denylist: tuple[str, ...]) -> None:
+    """Deny bare addresses, private names, denylisted hosts and any of their subdomains."""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        # A literal address names no host to verify TLS against and skips DNS policy;
+        # loopback and private ranges are refused here and again on every DNS answer.
+        check_address(host, denylist)
+        raise ConnectorRefused("origin must name a host, not an address")
     if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
         raise ConnectorRefused("private host")
+    for entry in denylist:
+        try:
+            ipaddress.ip_network(entry)
+        except ValueError:
+            if host == entry or host.endswith("." + entry):
+                raise ConnectorRefused("denylisted host") from None
 
 
 def validate_path(path: str) -> None:
@@ -152,7 +189,7 @@ class HTTPSTransport:
         if not addresses:
             raise ConnectorRefused("DNS returned no addresses")
         for address in addresses:
-            check_host(address, denylist)
+            check_address(address, denylist)
         connection = http.client.HTTPSConnection(host, timeout=timeout_s)
         try:
             remaining = deadline - time.monotonic()
@@ -203,15 +240,21 @@ class FakeConnectorTransport:
 class ConnectorProxy:
     """No keys, credentials, cookies, cache, redirect followups or user-supplied headers."""
 
-    def __init__(self, bounds, transport=None):
+    def __init__(self, bounds, transport=None, sellers=None):
         self.bounds = bounds
         self.transport = transport if transport is not None else HTTPSTransport()
+        self.sellers = sellers if sellers is not None else (lambda: ())
+
+    def denylist(self) -> tuple[str, ...]:
+        """The manifest's entries plus the host of every seller registered so far."""
+        return tuple(self.bounds.origin_denylist) + tuple(
+            dict.fromkeys(h for h in map(url_host, self.sellers()) if h))
 
     def validate(self, origin: str, path: str) -> str:
         """Only a permitted origin and path can reach a transport."""
         host = origin_host(origin)
         validate_path(path)
-        check_host(host, self.bounds.origin_denylist)
+        check_host(host, self.denylist())
         return host
 
     def fetch(self, origin: str, path: str) -> dict:
@@ -221,7 +264,7 @@ class ConnectorProxy:
             host = self.validate(origin, path)
             response = self.transport.get(
                 host, path, max_bytes=self.bounds.max_bytes, timeout_s=self.bounds.timeout_s,
-                denylist=self.bounds.origin_denylist,
+                denylist=self.denylist(),
             )
             if time.monotonic() - started > self.bounds.timeout_s:
                 raise ConnectorRefused("connector timeout")

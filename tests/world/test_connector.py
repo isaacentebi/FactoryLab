@@ -10,11 +10,13 @@ import pytest
 
 from factorylab.runtime.worlds import ConnectorsSpec
 from factorylab.world.connector import (
+    DEFAULT_DENYLIST,
     ConnectorProxy,
     ConnectorRefused,
     ConnectorResponse,
     HTTPSTransport,
     _DeadlineReader,
+    check_address,
     check_host,
     origin_host,
 )
@@ -170,12 +172,38 @@ def test_total_deadline_applies_to_each_header_read(monkeypatch):
 
 
 def test_public_ipv6_dns_and_configured_networks():
-    check_host("2606:4700:4700::1111", ())
+    check_address("2606:4700:4700::1111", ())
     for address in ("::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1"):
         with pytest.raises(ConnectorRefused):
-            check_host(address, ())
+            check_address(address, ())
     with pytest.raises(ConnectorRefused, match="denylisted address"):
-        check_host("93.184.216.34", ("93.184.216.0/24",))
+        check_address("93.184.216.34", ("93.184.216.0/24",))
+    # However public it resolves to be, an origin names a host the TLS name is checked against.
+    with pytest.raises(ConnectorRefused, match="not an address"):
+        check_host("93.184.216.34", ())
+
+
+@pytest.mark.parametrize("host", [
+    "api.hyperliquid.xyz", "rpc.hyperliquid.xyz", "api.hyperliquid-testnet.xyz",
+    "rpc.hyperliquid-testnet.xyz", "mainnet.base.org", "sepolia.base.org", "openrouter.ai",
+    "api.venice.ai", "api.cdp.coinbase.com", "api.anthropic.com", "node.rpc.hyperliquid.xyz",
+    "10.0.0.1", "127.0.0.1", "192.168.1.1", "::1", "localhost",
+])
+def test_default_denylist_covers_the_rails_on_both_networks_and_every_address(host):
+    with pytest.raises(ConnectorRefused):
+        check_host(host, DEFAULT_DENYLIST)
+
+
+def test_public_hosts_pass_and_a_registered_seller_is_denied_while_it_is_registered():
+    check_host("example.org", DEFAULT_DENYLIST)
+    transport = Transport()
+    registered = []
+    proxy = ConnectorProxy(ConnectorsSpec(), transport, sellers=lambda: list(registered))
+    assert proxy.fetch("https://seller.example.net", "/v1/models")["body"]
+    registered.append("https://seller.example.net/v1")
+    assert proxy.fetch("https://seller.example.net", "/v1/models")["error"] == "denylisted host"
+    assert proxy.fetch("https://api.seller.example.net", "/")["error"] == "denylisted host"
+    assert proxy.fetch("https://example.org", "/")["body"]
 
 
 def test_transport_caps_stream_read_without_content_length(monkeypatch):

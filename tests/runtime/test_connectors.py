@@ -261,6 +261,14 @@ def test_observatory_contains_connector_versions_and_daily_counts(monkeypatch):
     assert block["connectors"]["call_price_micro"] == 1000
     assert block["connectors"]["registered"] == rt._connector_catalogue()
     assert any(tool["id"] == "connector.fetch" for tool in block["tools"])
+    # The block states the registration shape, the call shape and the price. How a
+    # registration is admitted is physics the runtime enforces, not prompt text.
+    connectors = json.dumps(block["connectors"])
+    assert not any(word in connectors for word in
+                   ("admission", "preflight", "sortition", "vote", "majority", "committee"))
+    assert block["proposal_shapes"]["connector"] == {
+        "kind": "connector", "id": "public-source", "description": "Public information",
+        "origin": "https://example.org"}
 
 
 @pytest.mark.parametrize("fields", [

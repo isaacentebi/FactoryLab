@@ -390,7 +390,7 @@ USDC through the same intent, submission and receipt journal. Venue pots show
 | `timeout_s` | `10` | Positive integer wall-time bound for DNS, TLS and reading. |
 | `call_price_usd` | `"0.001"` | Exact USD text or integer, converted to nonnegative integer micro-USD. |
 | `max_calls_per_window` | `60` | Positive integer attempted calls per assembly per novelty reserve window. |
-| `origin_denylist` | Venue/provider domains and private ranges, as in `worlds/scripted.toml` | Hostnames (including subdomains) or CIDRs. Nonpublic resolved addresses are always refused. |
+| `origin_denylist` | The world's own rail hosts: the venue API and RPC on both networks, the model providers and the discovery index | Hostnames (matched exactly or as a parent domain) or CIDRs; every registered seller's host is added to them. Bare addresses, private names and nonpublic resolved addresses are always refused. |
 
 Population proposals have `{kind: "connector", id, description, origin}`, with an
 origin of `https://<host>` and no credentials, port, path, query or fragment.

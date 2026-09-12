@@ -313,6 +313,7 @@ class ComputeMixin:
             offline = all(m.provider == "fake" for m in self.m.models)
             self.connector_proxy = ConnectorProxy(
                 self.m.connectors, FakeConnectorTransport() if offline else None,
+                sellers=lambda: [s["seller"] for s in self.sellers.values() if s.get("seller")],
             )
             # Scripted transports re-run in replay; live reads return their journalled result.
             self.connector_deterministic = offline

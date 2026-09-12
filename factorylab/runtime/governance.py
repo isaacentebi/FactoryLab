@@ -723,7 +723,6 @@ class GovernanceMixin:
             if asm is None:
                 self.card_samples.returned(handle=handle, assembly=assembly_id, role="other",
                                            window=self.window.index, ret=ret)
-            self._check_compute_return(handle, ret)
             self._compute_routed = True
             vote = ret.outputs.get("vote") if ret.status == "ok" else None
             if connector is not None:

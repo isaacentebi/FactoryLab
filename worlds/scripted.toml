@@ -156,6 +156,4 @@ max_bytes = 262144
 timeout_s = 10
 call_price_usd = "0.001"
 max_calls_per_window = 60
-origin_denylist = ["hyperliquid.xyz", "openrouter.ai", "anthropic.com", "venice.ai",
-                   "localhost", "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-                   "169.254.0.0/16", "::1/128", "fc00::/7", "fe80::/10"]
+# No origin_denylist override: the default is built from the world's own rail hosts.
