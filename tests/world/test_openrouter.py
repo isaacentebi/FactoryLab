@@ -347,6 +347,11 @@ class TinyWallet:
         self.balance -= actual
         self.log.append(("commit", actual))
 
+    def commit_reported(self, reservation, actual):
+        self.reserved -= reservation
+        self.balance -= actual
+        self.log.append(("commit", actual))
+
     def release(self, reservation):
         self.reserved -= reservation
         self.log.append(("release", reservation))
@@ -380,8 +385,8 @@ def test_reported_zero_and_overrun_preserve_accounting(completion, req, cost, ex
     )
     result = model.complete(req, handle="overrun")
     assert result.cost_source == "reported"
-    assert result.cost + result.overrun == expected
-    assert result.cost == min(expected, model.ceiling(req))
+    assert result.cost == expected
+    assert result.overrun == max(0, expected - model.ceiling(req))
     assert wallet.balance == 1000 - result.cost and wallet.reserved == 0
 
 

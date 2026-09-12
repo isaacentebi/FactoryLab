@@ -1,5 +1,6 @@
 """Sealed evidence and fixed kernel aggregate views."""
 
+import fcntl
 import hashlib
 import json
 import os
@@ -18,6 +19,45 @@ if TYPE_CHECKING:
 
 class LedgerIntegrityError(RuntimeError):
     """Evidence is unavailable when its authenticated chain is invalid."""
+
+
+class LedgerBusyError(RuntimeError):
+    """Another runtime already holds the exclusive writer lock."""
+
+
+class LedgerLock:
+    """Hold one OS writer lock until close or process exit; never unlink its inode."""
+
+    def __init__(self, path: str | Path | None) -> None:
+        self.fd = None
+        if path is None:
+            return
+        lock_path = str(Path(path).resolve()) + ".lock"
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            raise LedgerBusyError("ledger already in use") from None
+        except BaseException:
+            os.close(fd)
+            raise
+        self.fd = fd
+
+    def close(self) -> None:
+        """Release ownership exactly once; process death also releases the OS lock."""
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def __del__(self):
+        self.close()
 
 
 def _plain(value):
@@ -149,14 +189,18 @@ class Ledger:
     ) -> "Ledger":
         """Authenticate an existing non-final world with its adjacent key, keeping it sealed.
 
-        No file is created, truncated or changed on failure. Incomplete records
-        fail verification just like any other chain corruption.
+        A newline acknowledges a record. Only an unterminated final line may
+        be discarded, after authenticating the complete prefix. A repair item
+        precedes subsequent work. Runtime writers must hold the sidecar lock.
         """
         ledger = cls(manifest=manifest, clock_ns=clock_ns, full_verify_every=full_verify_every)
-        ledger.__path = Path(path)
+        ledger_path = Path(path)
         try:
             ledger.__keys = KeyStore(Path(str(path) + ".key").read_bytes().strip())
-            tokens = ledger._tokens()
+            data = ledger_path.read_bytes()
+            boundary = data.rfind(b"\n") + 1
+            prefix = data[:boundary]
+            tokens = ledger._tokens(data=prefix)
             ledger.__tokens = tokens
             if tokens:
                 ledger.__head = json.loads(ledger.__keys._decrypt(tokens[-1]))["hash"]
@@ -171,9 +215,20 @@ class Ledger:
             if any(item.get("kind") == "event" and item["event"]["kind"] == "Terminated"
                    for item in items):
                 raise LedgerIntegrityError("cannot resume a terminated world")
-            data = ledger.__path.read_bytes()
-            ledger.__size = len(data)
-            ledger.__last_line = data.splitlines(keepends=True)[-1]
+            # Authentication above uses the in-memory prefix; failure never
+            # edits even a single acknowledged byte on disk.
+            discarded = len(data) - boundary
+            if discarded:
+                with ledger_path.open("r+b") as stream:
+                    stream.truncate(boundary)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            ledger.__path = ledger_path
+            ledger.__size = len(prefix)
+            ledger.__last_line = prefix.splitlines(keepends=True)[-1]
+            if discarded:
+                ledger.append({"kind": "ledger.repaired", "discarded_bytes": discarded,
+                               "acknowledged_bytes": boundary})
         except (OSError, ValueError, KeyError, TypeError, InvalidToken) as exc:
             raise LedgerIntegrityError("ledger/key unavailable or manifest hash differs") from exc
         return ledger
@@ -260,11 +315,12 @@ class Ledger:
             self.__decision_ids[item["seq"]] = f"decision-{len(self.__decision_ids)}"
         return item["seq"]
 
-    def _tokens(self) -> list[bytes]:
-        if self.__path is None:
+    def _tokens(self, *, data: bytes | None = None) -> list[bytes]:
+        if data is None and self.__path is None:
             return list(self.__tokens)
-        with self.__path.open("rb") as stream:
-            lines = stream.readlines()
+        if data is None:
+            data = self.__path.read_bytes()
+        lines = data.splitlines(keepends=True)
         if not lines or any(not line.endswith(b"\n") for line in lines):
             raise LedgerIntegrityError("incomplete ledger")
         if json.loads(lines[0]) != self.__header:

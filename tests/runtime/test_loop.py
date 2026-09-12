@@ -93,7 +93,12 @@ def test_scripted_world_phase3_spec_condition_2() -> None:
     assert st["tool_calls"] >= 10
     assert st["tool_call_failures"] < st["tool_calls"]
     # a population tool was registered and then called
-    assert st["population_tools_registered"] >= 1 and "spread-check" in s["tools"]
+    from factorylab.cortex.sandbox import jail_available
+
+    if jail_available():
+        assert st["population_tools_registered"] >= 1 and "spread-check" in s["tools"]
+    else:
+        assert st["population_tools_registered"] == 0 and "spread-check" not in s["tools"]
     # an online variant is registered as a purchasable and an assembly was built on it
     assert "fake-haiku:online" in s["aggregates"]["invocations_by_assembly"]["counts"] or (
         "web-observer" in s["aggregates"]["invocations_by_assembly"]["counts"]

@@ -56,6 +56,7 @@ class Wallet:
             raise TypeError("drip_schedule must be immutable DripSchedule")
         self.__ledger = ledger
         self.__initial = self.__balance = initial
+        self.__exhausted = initial <= 0
         self.__schedule = drip_schedule
         self.__clock = clock_ns
         self.__reservations: dict[str, Reservation] = {}
@@ -126,8 +127,8 @@ class Wallet:
 
     @property
     def dead(self) -> bool:
-        """Zero or negative booked balance is death, regardless of future drips."""
-        return self.__balance <= 0
+        """Crossing zero is final, even when later observed settlements recover cash."""
+        return self.__exhausted or self.__balance <= 0
 
     def _live(self) -> None:
         if self.dead or self.__ledger.final:
@@ -183,6 +184,28 @@ class Wallet:
         self._held(reservation)
         if actual > reservation.amount:
             raise Infeasible("actual exceeds reservation")
+        self._commit(reservation, actual)
+
+    def commit_reported(self, reservation: Reservation, actual: Money) -> None:
+        """Debit a completed vendor bill in full, including debt beyond its held ceiling.
+
+        Only a genuine, still-open reservation can carry a reported overrun.
+        Ordinary commit remains ceiling-bounded. Both evidence items precede
+        the balance/hold mutation, so interrupted accounting replays once.
+        """
+        require_money(actual, nonnegative=True)
+        self._live()
+        self._held(reservation)
+        if actual > reservation.amount:
+            self.__ledger.append({
+                "kind": "metering.overrun", "handle": reservation.handle,
+                "reason": reservation.reason, "reservation_id": reservation.id,
+                "reserved": reservation.amount, "actual": actual,
+                "overrun": actual - reservation.amount, "ts": self.__clock(),
+            })
+        self._commit(reservation, actual)
+
+    def _commit(self, reservation: Reservation, actual: Money) -> None:
         balance = self.balance - actual
         self._log(
             "commit",
@@ -191,9 +214,10 @@ class Wallet:
             reservation.handle,
             reservation.reason,
             reservation_id=reservation.id,
-            released=reservation.amount - actual,
+            released=max(0, reservation.amount - actual),
         )
         self.__balance = balance
+        self.__exhausted |= balance <= 0
         self.__commits += actual
         self._refund_novelty(reservation, actual)
         del self.__reservations[reservation.id]
@@ -219,16 +243,33 @@ class Wallet:
 
     def settle(self, delta: Money, handle: str, reason: str) -> None:
         """Book signed exchange P&L or funding only while the world remains alive."""
-        require_money(delta)
-        if reason not in ("exchange_pnl", "funding"):
-            raise ValueError("settlement source must be exchange_pnl or funding")
-        if not isinstance(handle, str) or not handle:
-            raise ValueError("settlement handle is required")
+        self.settle_batch([(delta, handle, reason)])
+
+    def settle_batch(self, settlements: list[tuple[Money, str, str]]) -> None:
+        """Book every observed exchange effect; crossing zero is final even if cash recovers.
+
+        Validate the whole batch before writing. Preserve one ordinary settlement
+        item per effect, then publish the new state only after all appends succeed.
+        A retry belongs to authenticated recovery, never to a second live submission.
+        """
         self._live()
-        balance = self.balance + delta
-        self._log("settle", delta, balance, handle, reason)
+        balance = self.balance
+        entries = []
+        exhausted = self.__exhausted
+        for delta, handle, reason in settlements:
+            require_money(delta)
+            if reason not in ("exchange_pnl", "funding"):
+                raise ValueError("settlement source must be exchange_pnl or funding")
+            if not isinstance(handle, str) or not handle:
+                raise ValueError("settlement handle is required")
+            balance += delta
+            exhausted |= balance <= 0
+            entries.append((delta, balance, handle, reason))
+        for delta, after, handle, reason in entries:
+            self._log("settle", delta, after, handle, reason)
         self.__balance = balance
-        self.__settlements += delta
+        self.__exhausted = exhausted
+        self.__settlements += sum(delta for delta, _, _, _ in entries)
 
     def drip(self, now_ns: int) -> Money:
         """Apply each scheduled deposit once in [start, end); never revive a dead wallet."""
@@ -259,6 +300,7 @@ class Wallet:
         """Return accounting and outstanding holds, excluding ledger, clock and issuer objects."""
         return {
             "initial": self.__initial, "balance": self.__balance, "schedule": self.__schedule,
+            "exhausted": self.__exhausted,
             "reservations": [replace(r, _issuer=None) for r in self.__reservations.values()],
             "next_reservation": self.__next_reservation, "drip_count": self.__drip_count,
             "drips": self.__drips, "settlements": self.__settlements, "commits": self.__commits,
@@ -277,12 +319,16 @@ class Wallet:
             state["initial"] + state["drips"] + state["settlements"] - state["commits"]
         ):
             raise ValueError("checkpoint violates conservation")
+        exhausted = state.get("exhausted", state["balance"] <= 0)
+        if type(exhausted) is not bool:
+            raise ValueError("checkpoint exhaustion must be boolean")
         holds = {r.id: replace(r, _issuer=self) for r in state["reservations"]}
         for name in (
             "balance", "next_reservation", "drip_count", "drips", "settlements", "commits",
         ):
             setattr(self, f"_Wallet__{name}", state[name])
         self.__reservations = holds
+        self.__exhausted = exhausted or self.__balance <= 0
         self.__novelty_holds = dict(state.get("novelty_holds", {}))
 
     def _reservation_for_resume(self, reservation_id: str) -> Reservation:

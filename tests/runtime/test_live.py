@@ -51,7 +51,8 @@ class StubExchange:
 
     name = "stub-testnet"
 
-    def __init__(self) -> None:
+    def __init__(self, launch_ns=0) -> None:
+        self.launch_ns = launch_ns
         self.calls = 0
 
     def mids(self):
@@ -81,7 +82,7 @@ class StubExchange:
                 Decimal("0.001"),
                 Decimal("70000"),
                 Decimal("0.02"),
-                5,
+                self.launch_ns + 5,
                 Decimal("0"),
             ),
             Fill(
@@ -91,14 +92,14 @@ class StubExchange:
                 Decimal("0.001"),
                 Decimal("70100"),
                 Decimal("0.02"),
-                6,
+                self.launch_ns + 6,
                 Decimal("0.1"),
             ),
         ]
 
 
 def test_live_venue_emits_mids_funding_and_new_fills_once() -> None:
-    v = LiveVenue(StubExchange())
+    v = LiveVenue(StubExchange(), last_fill_ns=0)
     first = v.on_tick(10)
     kinds = [e.kind for e in first]
     assert kinds.count(WorldEventKind.MARKET_MID) == 2 and WorldEventKind.FUNDING in kinds
@@ -170,7 +171,7 @@ def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() 
     clock = LiveClock(
         interval_ns=1_000_000_000, count=25, now_ns=ft.now_ns, sleep=ft.sleep
     ).events()
-    s = run_world(m, events=25, seed=5, exchange=StubExchange(), clock_source=clock)
+    s = run_world(m, events=25, seed=5, exchange=StubExchange(ft.now_ns()), clock_source=clock)
     st = s["stats"]
     assert s["live"] is True and s["terminated"] is False
     assert st["reconciliations"] >= 2  # every 10 ticks

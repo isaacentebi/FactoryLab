@@ -18,11 +18,12 @@ T = TypeVar("T")
 
 
 class WalletLike(Protocol):
-    """The three wallet operations metering needs. Satisfied by the kernel Wallet."""
+    """Wallet operations that reserve ceilings and book completed work in full."""
 
     def reserve(self, amount: int, handle: str, reason: str) -> Any: ...
     def commit(self, reservation: Any, actual: int) -> None: ...
     def release(self, reservation: Any) -> None: ...
+    def commit_reported(self, reservation: Any, actual: int) -> None: ...
 
 
 class Infeasible(Exception):
@@ -31,13 +32,13 @@ class Infeasible(Exception):
 
 @dataclass(frozen=True)
 class Metered[T]:
-    """A result together with what it cost. ``cost`` is the committed amount."""
+    """A result and its full debited cost, including any reported overrun."""
 
     result: T
     cost: int
     reserved: int
     handle: str
-    overrun: int = 0  # vendor billed beyond the ceiling; owed, not yet debited
+    overrun: int = 0  # portion beyond the ceiling, already included in the debit
     cost_source: Literal["reported", "table"] = "table"
 
 
@@ -46,8 +47,8 @@ class Meter:
     """Runs priced work against a wallet with reserve → execute → commit semantics.
 
     Guarantees: no result is returned before its cost is committed; a failed
-    execution commits nothing and releases the reservation; ``actual`` can never
-    exceed the reservation because the ceiling is enforced by the wallet.
+    execution commits nothing and releases the reservation. A reported vendor
+    overrun is debited in full before return, even when it exhausts the wallet.
     """
 
     wallet: WalletLike
@@ -80,11 +81,8 @@ class Meter:
             self.wallet.release(reservation)
             raise ValueError("cost must be non-negative")
         if actual > ceiling:
-            # The vendor billed more than the ceiling. The wallet must still be
-            # charged the truth; commit the ceiling and record the overrun so the
-            # runtime settles the remainder as a debt and lowers future ceilings.
-            self.wallet.commit(reservation, ceiling)
-            return Metered(result, ceiling, ceiling, handle, overrun=actual - ceiling)
+            self.wallet.commit_reported(reservation, actual)
+            return Metered(result, actual, ceiling, handle, overrun=actual - ceiling)
         self.wallet.commit(reservation, actual)
         return Metered(result, actual, ceiling, handle)
 
@@ -94,7 +92,7 @@ class MeteredModel:
     """Every completion uses reported cost when available, otherwise registered prices.
 
     The reservation prices ``max_tokens`` of output plus estimated input.
-    Any actual cost beyond that ceiling remains explicit in ``overrun``.
+    Any actual cost beyond that ceiling is debited and remains explicit in ``overrun``.
     """
 
     provider: ModelProvider
@@ -109,7 +107,7 @@ class MeteredModel:
         return price.cost(est_input, req.max_tokens)
 
     def complete(self, req: ModelRequest, *, handle: str) -> Metered[ModelResponse]:
-        """Return a committed completion with its cost source and any outstanding overrun."""
+        """Return a committed completion with its cost source and any already-debited overrun."""
         price = self.prices.price(req.model_id)
         metered = self.meter.run(
             handle=handle,

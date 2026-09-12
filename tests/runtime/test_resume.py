@@ -21,6 +21,7 @@ from factorylab.runtime.resume import (
 )
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.clock import ClockSource
+from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange, Order
 
 pytestmark = pytest.mark.slow
@@ -405,3 +406,111 @@ def test_resume_command_keeps_saved_seed_and_budget(tmp_path, capsys):
     assert summary["stats"]["resumes"] == 1
     summary["stats"]["resumes"] = 0
     assert summary == json.loads(json.dumps(run_world(m, events=3, seed=1)))
+
+
+def test_resume_recovers_a_torn_tail_and_replays_past_repair_items(tmp_path):
+    m = load_manifest("scripted")
+    path = tmp_path / "torn.jsonl"
+    rt = make_runtime(m, path)
+    rt.events_budget = 5
+    stop_after(rt, lambda r, e: r.n == 8)
+    raw = path.read_bytes()
+    prefix = b"".join(raw.splitlines(keepends=True)[:-1])
+    path.write_bytes(raw[:-17])
+    resumed = resume_world(m, str(path))
+    resumed["stats"]["resumes"] = 0
+    assert resumed == run_world(m, events=5, seed=1)
+    assert path.read_bytes().startswith(prefix)
+    diary = items(path, m)
+    assert sum(i["kind"] == "ledger.repaired" for i in diary) == 1
+    again = resume_world(m, str(path))
+    assert again["stats"]["resumes"] == 2 and again["ledger_verify"]
+
+
+def test_repeated_resume_replays_old_jail_availability_before_refresh(tmp_path, monkeypatch):
+    m = load_manifest("scripted")
+    path = tmp_path / "host-change.jsonl"
+    monkeypatch.setattr("factorylab.cortex.tools.jail_available", lambda: True)
+    run_world(m, events=0, ledger_path=str(path))
+    assert resume_world(m, str(path))["stats"]["resumes"] == 1
+    monkeypatch.setattr("factorylab.cortex.tools.jail_available", lambda: False)
+    restored = resume_runtime(m, str(path))
+    assert restored.tool_jail_available is False
+    assert restored.run()["stats"]["resumes"] == 2
+    assert resume_world(m, str(path))["stats"]["resumes"] == 3
+
+
+def test_resume_replays_an_overrun_commit_once_before_final_death(tmp_path):
+    class Overrun(ScriptedProvider):
+        def complete(self, request):
+            return replace(super().complete(request), cost_micro=1_000_000_000)
+
+    m = load_manifest("scripted")
+    path = tmp_path / "overrun.jsonl"
+    rt = make_runtime(m, path, provider=Overrun())
+    rt.events_budget = 2
+    append = rt.ledger.append
+
+    def crash_after_commit(entry):
+        seq = append(entry)
+        if entry["kind"] == "wallet.commit" and entry["reason"].startswith("model:"):
+            raise ProcessDeath
+        return seq
+
+    rt.ledger.append = crash_after_commit
+    with pytest.raises(ProcessDeath):
+        rt.run()
+    restored = resume_runtime(m, str(path), provider=Overrun())
+    summary = restored.run()
+    assert summary["terminated"] and summary["termination_reason"] == "balance_zero"
+    assert summary["wallet_balance_micro"] < 0 and summary["wallet_conservation"]
+    diary = restored.ledger._recovery_items()
+    assert sum(i["kind"] == "metering.overrun" for i in diary) == 1
+    commits = [i for i in diary if i["kind"] == "wallet.commit"]
+    assert len(commits) == 1 and commits[0]["amount"] == 1_000_000_000
+
+
+@pytest.mark.parametrize("cut", ["fill:0", "fill:1", "consequence.fill"])
+@pytest.mark.parametrize("recover_cash", [False, True])
+def test_resume_books_the_entire_fatal_fill_batch_once(tmp_path, cut, recover_cash):
+    class BatchVenue(FakeExchange):
+        def advance(self, ts_ns):
+            events = [WorldEvent(WorldEventKind.FILL, ts_ns, self.name, {
+                "order_id": str(i), "coin": "BTC", "is_buy": True, "size": "1", "px": "1",
+                "fee_usd": "0.000020",
+                "realized_usd": "0.000100" if recover_cash and i == 1 else "0",
+            }) for i in range(2)]
+            return [*events, WorldEvent(WorldEventKind.FUNDING, ts_ns, self.name, {
+                "coin": "BTC", "paid_usd": "0.000005",
+            })]
+
+    m = replace(load_manifest("scripted"), initial_balance_micro=10, drip=None)
+    path = tmp_path / "fill-batch.jsonl"
+    rt = make_runtime(m, path, exchange=BatchVenue())
+    rt.events_budget = 1
+    append = rt.ledger.append
+
+    def crash_after_append(entry):
+        seq = append(entry)
+        if (entry["kind"] == cut or
+                entry["kind"] == "wallet.settle" and entry["handle"] == cut):
+            raise ProcessDeath
+        return seq
+
+    rt.ledger.append = crash_after_append
+    with pytest.raises(ProcessDeath):
+        rt.run()
+    prefix = path.read_bytes()
+    restored = resume_runtime(m, str(path), exchange=BatchVenue())
+    summary = restored.run()
+    assert summary["terminated"] and summary["termination_reason"] == "balance_zero"
+    assert summary["wallet_balance_micro"] == (-35 + 100 * recover_cash)
+    assert summary["wallet_conservation"] and summary["ledger_verify"]
+    assert summary["stats"]["fills"] == 2 and summary["stats"]["invocations"] == 0
+    assert restored.fees_to_date == 40 and restored.funding_to_date == -5
+    assert path.read_bytes().startswith(prefix)
+    diary = restored.ledger._recovery_items()
+    settlements = [item for item in diary if item["kind"] == "wallet.settle"]
+    assert [item["amount"] for item in settlements] == [-20, -20 + 100 * recover_cash, -5]
+    assert sum(item["kind"] == "consequence.fill" for item in diary) == 2
+    assert sum(item["kind"] == "consequence.funding" for item in diary) == 1

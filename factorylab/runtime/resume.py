@@ -21,7 +21,7 @@ from enum import Enum
 from fractions import Fraction
 from typing import Any
 
-from factorylab.kernel.ledger import Ledger, _canonical
+from factorylab.kernel.ledger import Ledger, LedgerLock, _canonical
 
 
 class ResumeError(RuntimeError):
@@ -317,7 +317,7 @@ _RUNTIME_FIELDS = (
     "pending", "balance_at", "events_log", "last_closure_ns", "reserve_window_start", "internal",
     "n", "emitted", "insolvency_count", "_compute_routed", "_compute_unaffordable",
     "world_consumed", "ticks_consumed", "drips_consumed", "started", "catalogue", "sellers",
-    "registration_feedback",
+    "registration_feedback", "tool_jail_available",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
@@ -329,7 +329,7 @@ _COMPONENT_FIELDS = (
         "editions", "proposals", "committees", "ballots", "activated", "activations",
     )),
     ("controller", "_PriceController__", (
-        "eta", "decay", "lambda_max", "min_window_events", "cards",
+        "eta", "kappa", "decay", "lambda_max", "min_window_events", "cards",
     )),
     ("consequences", "", ("backstop", "table", "mids")),
     ("consequence_fills", "", ("since_ns", "seen")),
@@ -404,6 +404,9 @@ def restore_runtime(rt, state: dict) -> None:
     components = decode(state["components"])
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
+            if name == "controller" and field == "kappa" and field not in components[name]:
+                # Older checkpoints inherited this immutable parameter from the same manifest.
+                continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
     rt.prices.prices = decode(state["prices"])
     rt.assemblies.clear()
@@ -430,7 +433,20 @@ def restore_runtime(rt, state: dict) -> None:
 
 
 def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, exchange=None,
-                   clock_source=None, now_ns=None):
+                   clock_source=None, now_ns=None, _lock=None):
+    """Hold exclusive ownership before reading recovery evidence or contacting a provider."""
+    lock = _lock or LedgerLock(ledger_path)
+    try:
+        return _resume_runtime(manifest, ledger_path, provider=provider, market=market,
+                               exchange=exchange, clock_source=clock_source, now_ns=now_ns,
+                               lock=lock)
+    except BaseException:
+        lock.close()
+        raise
+
+
+def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_source,
+                    now_ns, lock):
     """Authenticate, restore, replay and reconcile before admitting another world event."""
     from factorylab.runtime.loop import Runtime, SimClock
 
@@ -448,11 +464,12 @@ def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, ex
     journal = RecoveryJournal(ledger, clock)
     journal.bootstrap = True
     rt = Runtime(manifest, **state["config"], ledger_path=None, provider=provider, market=market,
-                 exchange=exchange, clock_source=clock_source, _journal=journal)
+                 exchange=exchange, clock_source=clock_source, _journal=journal, _lock=lock)
     restore_runtime(rt, state)
     journal.bootstrap = False
     journal.active = journal.recovering = True
-    journal.tail = items[snapshot["seq"] + 1:]
+    journal.tail = [item for item in items[snapshot["seq"] + 1:]
+                    if item.get("kind") != "ledger.repaired"]
     try:
         while (item := journal.peek()) is not None:
             if item["kind"] == "runtime.input":

@@ -151,24 +151,14 @@ class Assembly:
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
     """Return the first JSON object in ``text`` or None. Tolerates code fences."""
-    s = text.strip()
-    if s.startswith("```"):
-        s = s.strip("`")
-        if s.startswith("json"):
-            s = s[4:]
-    start = s.find("{")
-    if start < 0:
-        return None
-    depth = 0
-    for i in range(start, len(s)):
-        if s[i] == "{":
-            depth += 1
-        elif s[i] == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    obj = json.loads(s[start : i + 1])
-                except json.JSONDecodeError:
-                    return None
-                return obj if isinstance(obj, dict) else None
+    decoder = json.JSONDecoder()
+    for start, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text, start)
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(obj, dict):
+            return obj
     return None

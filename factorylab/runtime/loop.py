@@ -51,7 +51,7 @@ from factorylab.cortex.registration import (
 )
 from factorylab.cortex.request import Request, Return
 from factorylab.kernel.events import Bus, Event, EventKind
-from factorylab.kernel.ledger import Ledger
+from factorylab.kernel.ledger import Ledger, LedgerLock
 from factorylab.kernel.money import money_to_usd, usd_to_money
 from factorylab.kernel.queue import DecisionQueue, LearningReturn, PropensityRecord, SettleStatus
 from factorylab.kernel.registry import Contract, PriceSpec, Registry, ResourceBounds
@@ -379,6 +379,20 @@ def _duration_str(ns: int) -> str:
     return f"{ns / 1_000_000_000:g}s"
 
 
+@dataclass
+class _ObservedMeteredModel(MeteredModel):
+    record: Any = None
+
+    def complete(self, req: ModelRequest, *, handle: str) -> Metered[ModelResponse]:
+        """Expose already-debited vendor overruns to runtime evidence before returning."""
+        metered = super().complete(req, handle=handle)
+        if metered.overrun:
+            self.record({"kind": "compute.overrun", "handle": handle,
+                         "model_id": metered.result.model_id, "cost": metered.cost,
+                         "overrun": metered.overrun})
+        return metered
+
+
 class _ObservedX402Model(X402MeteredModel):
     """Paid completions enter observations after metering, including during journal replay."""
 
@@ -524,7 +538,9 @@ class Runtime:
         reconcile_every: int = 10,
         kill_at_end: bool = False,
         _journal: RecoveryJournal | None = None,
+        _lock: LedgerLock | None = None,
     ) -> None:
+        self._ledger_lock = _lock or LedgerLock(ledger_path)
         self.m = manifest
         self.kill_at_end = kill_at_end
         self.live = manifest.exchange.kind != "fake"
@@ -545,6 +561,11 @@ class Runtime:
         self.cascade: dict[int, CascadeGate] = {}
         self.cascade_windows: dict[str, list[str]] = {}  # representative -> other handles
         self.clock = SimClock(0) if _journal is None else _journal.clock
+        if self.live and _journal is None:
+            self.clock.now_ns = (
+                self.tick_clock.now_ns() if isinstance(self.tick_clock, LiveClock)
+                else self.tick_clock.start_ns
+            )
         self.stats = RunStats()
         self.ev = manifest.evaluation
         self.charter: Charter = manifest.charter
@@ -603,7 +624,7 @@ class Runtime:
         self.observer = Observer()
         self.settler = Settler(self.book, self.queue, self.standing, self.baseline, self.observer)
         self.consequences = ReturnConsequences(self.ledger, self.ev.consequence_backstop_events)
-        self.consequence_fills = FillCursor(self.ledger)
+        self.consequence_fills = FillCursor(self.ledger, start_ns=self.clock.now_ns)
 
         # world
         if exchange is not None:
@@ -630,7 +651,8 @@ class Runtime:
         )
         # Fills before launch belong to nobody; funding uses the same launch boundary.
         self.venue = (
-            LiveVenue(self.exchange, last_fill_ns=self.clock.now_ns, ledger=self.ledger)
+            LiveVenue(self.exchange, last_fill_ns=self.clock.now_ns, ledger=self.ledger,
+                      last_funding_ns=self.clock.now_ns)
             if self.live
             else None
         )
@@ -712,7 +734,9 @@ class Runtime:
         for kind in self._routable_kinds():
             self._build_router(kind, "exp3", router_gamma)
         self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened event
-        self.delivered_seen: dict[str, int] = {}
+        self.delivered_seen: dict[str, int] = {
+            st.learner.id: 0 for st in self._all_router_states()
+        }
         self.snapshot_keys: dict[str, str] = {}  # decision handle -> snapshot key
 
         # world memory (public facts) and assembly memory (private to each assembly)
@@ -788,6 +812,9 @@ class Runtime:
             "kind": "market",
         }
         self.tool_runner = JournalProxy(ToolRunner(), self.ledger, "sandbox")
+        available = self.tool_runner.available
+        self.ledger.append({"kind": "sandbox.availability", "available": available})
+        self.tool_jail_available = available
         self.charter_book = CharterBook(self.ledger, self.charter)
         self.pending_votes: list[Any] = []  # committees awaiting tally
 
@@ -860,7 +887,9 @@ class Runtime:
         )
 
     def _instantiate(self, spec: AssemblySpec) -> Assembly:
-        model = MeteredModel(self.provider, self.prices, self.meter)
+        model = _ObservedMeteredModel(
+            self.provider, self.prices, self.meter, record=self._record_market,
+        )
         if spec.model_id.startswith("x402:"):
             model = _ObservedX402Model(
                 self.market,
@@ -913,10 +942,15 @@ class Runtime:
         if not replace and len(existing) >= self.m.tools.max_routers_per_kind:
             raise ValueError("router cap reached for this event kind")
         lid = f"router:{kind}" if index == 0 else f"router:{kind}#{index}"
+        lid = self._fresh_router_id(lid)
         learner = self._make_learner(kind, learner_kind, gamma, universe, lid)
         router = Router(learner, lambda _k, u=universe: [x for x in u if x != NOOP])
         state = RouterState(kind, universe, learner, router, seed_gamma=gamma)
+        self.ledger.append({"kind": "router.created", "learner_id": lid, "event_kind": kind,
+                            "replaces": [st.learner.id for st in existing] if replace else []})
         if replace:
+            for retired in existing:
+                self.queue.retire_actor(retired.learner.id)
             self.routers[kind] = [state]
         else:
             self.routers.setdefault(kind, []).append(state)
@@ -924,6 +958,16 @@ class Runtime:
             self.delivered_seen = {}
         self.delivered_seen.setdefault(learner.id, 0)
         return state
+
+    def _fresh_router_id(self, base: str) -> str:
+        """Fresh learners never receive an active or retired learner's delayed returns."""
+        used = set(getattr(self, "delivered_seen", {}))
+        used.update(st.learner.id for st in self._all_router_states())
+        lid, generation = base, 0
+        while lid in used:
+            generation += 1
+            lid = f"{base}@{generation}"
+        return lid
 
     # ---- public schematics (spec v0.4 §1.6: schematics, contracts, prices and charter are public)
 
@@ -1020,6 +1064,10 @@ class Runtime:
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
             "tools": list(self.tool_specs.values()),
+            "population_tools": {
+                "available": self.tool_jail_available,
+                "reason": None if self.tool_jail_available else "no jail on this host",
+            },
             "observations": catalogue(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trial_invocations": self.m.novelty.trial_invocations},
@@ -1185,6 +1233,13 @@ class Runtime:
     # ---- the loop
 
     def run(self) -> dict[str, Any]:
+        """Keep exclusive ledger ownership through the last runtime action or process death."""
+        try:
+            return self._run()
+        finally:
+            self._ledger_lock.close()
+
+    def _run(self) -> dict[str, Any]:
         """Continue the original source budget; restored internal events keep their ordering."""
         if self.termination.final or (self.started and self._check_termination()):
             return self._summary()
@@ -1218,7 +1273,7 @@ class Runtime:
                 Event(
                     "launch",
                     EventKind.LAUNCH,
-                    0,
+                    self.clock.now_ns,
                     {"manifest_hash": self.m.manifest_hash()},
                     "kernel",
                 )
@@ -1308,6 +1363,16 @@ class Runtime:
         now_ns = max(now_ns, self.clock.now_ns)
         self.ledger.append({"kind": "resume.begin", "now_ns": now_ns, "n": self.n})
         self.clock.now_ns = now_ns
+        available = self.tool_runner.available
+        if self.ledger.recovering:
+            saved = self.ledger.peek()
+            available = (
+                saved["available"] if saved and saved.get("kind") == "sandbox.availability"
+                else self.tool_jail_available
+            )
+        if available != self.tool_jail_available:
+            self.ledger.append({"kind": "sandbox.availability", "available": available})
+            self.tool_jail_available = available
         if self.live:
             observed = [
                 WorldEvent(WorldEventKind.FILL, max(now_ns, ts), self.exchange.name, payload)
@@ -1688,11 +1753,24 @@ class Runtime:
     # ---- exchange effects
 
     def _settle_exchange_effects(self, evs: list[WorldEvent]) -> None:
+        settlements = []
+        for we in evs:
+            if we.kind is WorldEventKind.FILL:
+                delta = _usd_to_micro(we.payload["realized_usd"]) - _usd_to_micro(
+                    we.payload["fee_usd"]
+                )
+                if delta:
+                    settlements.append((delta, f"fill:{we.payload['order_id']}", "exchange_pnl"))
+            elif we.kind is WorldEventKind.FUNDING:
+                paid = _usd_to_micro(we.payload["paid_usd"])
+                if paid:
+                    settlements.append((-paid, f"funding:{we.payload['coin']}:{we.ts_ns}",
+                                        "funding"))
+        if settlements:
+            self.wallet.settle_batch(settlements)
         for we in evs:
             self.consequences.observe(str(we.kind), dict(we.payload), self.n)
         for we in evs:
-            if self.wallet.dead:
-                return
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
                 self.window.fills += 1
@@ -1704,14 +1782,11 @@ class Runtime:
                 fee = _usd_to_micro(we.payload["fee_usd"])
                 self.realized_to_date += realized
                 self.fees_to_date += fee
-                delta = realized - fee
-                if delta:
-                    self.wallet.settle(delta, f"fill:{we.payload['order_id']}", "exchange_pnl")
+
             elif we.kind is WorldEventKind.FUNDING:
                 paid = _usd_to_micro(we.payload["paid_usd"])
                 self.funding_to_date -= paid
-                if paid:
-                    self.wallet.settle(-paid, f"funding:{we.payload['coin']}:{we.ts_ns}", "funding")
+
             self.internal.append(self._kernel_event(we))
         if hasattr(self.exchange, "sync_cash"):
             self.exchange.sync_cash(
@@ -1721,7 +1796,7 @@ class Runtime:
 
     def _execute_outputs(self, ret: Return) -> None:
         out = ret.outputs
-        if ret.status != "ok" or out.get("action") != "order":
+        if self.wallet.dead or ret.status != "ok" or out.get("action") != "order":
             return
         try:
             order = Order(
@@ -1805,6 +1880,8 @@ class Runtime:
             if ev is None:
                 return
         for state in list(self.routers.get(kind, [])):
+            if self.wallet.dead:
+                break
             self._route_with(state, ev)
 
     def _cascade_arrival(self, ev: Event) -> Event | None:
@@ -2046,10 +2123,12 @@ class Runtime:
         ret = self._invoke_compute(action_id, req)
         self._check_compute_return(req.handle, ret)
         revision = self._carries_revision(ret)
-        if ret.status == "ok" and ret.tool_calls:
+        if not self.wallet.dead and ret.status == "ok" and ret.tool_calls:
             results = []
             tool_cost = 0
             for call in ret.tool_calls:
+                if self.wallet.dead:
+                    break
                 result, cost = self._run_tool(action_id, req.handle, call)
                 tool_cost += cost
                 ok = not (isinstance(result, dict) and "error" in result)
@@ -2085,7 +2164,10 @@ class Runtime:
                 scoring_channel=req.scoring_channel,
                 resource_liability=req.resource_liability,
             )
-            second = self._invoke_compute(action_id, follow)
+            second = (
+                Return(req.handle, {"reason": "wallet exhausted"}, 0, "failed")
+                if self.wallet.dead else self._invoke_compute(action_id, follow)
+            )
             self._check_compute_return(req.handle, second)
             revision = revision or self._carries_revision(second)
             if second.tool_calls:
@@ -2594,6 +2676,7 @@ class Runtime:
         extra: dict[str, Any] = {}
         if "known_tools" in inspect.signature(parse_proposals).parameters:
             extra["known_tools"] = frozenset(self.tool_specs)
+        extra["tool_jail"] = self.tool_jail_available
         accepted, rejected = parse_proposals(
             {**ret.outputs, "register": raw} if raw is not None else ret.outputs,
             event_kinds=PRODUCER_KINDS | {"ProducerReturn", "Verdict", "MetaVerdict"},
@@ -2640,6 +2723,8 @@ class Runtime:
     def _register(self, handle: str, prop: Any) -> None:
         amount = self.ev.trial_amount_micro
         if isinstance(prop, ToolProposal):
+            if not self.tool_jail_available:
+                raise Infeasible("no jail on this host")
             contract = Contract(
                 id=f"tool:{prop.id}",
                 version=1,
@@ -2872,6 +2957,8 @@ class Runtime:
     def _hold_vote(self, am: Any, committee: Any) -> None:
         prices = dict(am.proposed_prices)
         for seat in committee.seats:
+            if self.wallet.dead:
+                break
             alias, assembly_id = seat[0], seat[1]
             handle = f"vote-{am.id}-{alias}"
             inputs = {
@@ -2925,6 +3012,8 @@ class Runtime:
                     "ts": self.clock.now_ns,
                 }
             )
+            self._check_compute_return(handle, ret)
+            self._compute_routed = True
             vote = ret.outputs.get("vote") if ret.status == "ok" else None
             if isinstance(vote, bool):
                 self.charter_book.vote(
@@ -3015,10 +3104,13 @@ class Runtime:
                 state.epoch += 1
                 self.ledger.append({**entry, "carried": True, "router": state.learner.id})
             else:  # snapshot learners cannot expand; rebuild fresh over the new universe
-                lid = state.learner.id
+                lid = self._fresh_router_id(state.learner.id)
                 fresh = self._make_learner(
                     kind, "blum_mansour", gamma(state.learner), universe, lid
                 )
+                self.ledger.append({**entry, "carried": False, "router": lid})
+                self.queue.retire_actor(state.learner.id)
+                self.delivered_seen[lid] = 0
                 states[i] = RouterState(
                     kind,
                     universe,
@@ -3027,7 +3119,6 @@ class Runtime:
                     state.epoch + 1,
                     state.seed_gamma,
                 )
-                self.ledger.append({**entry, "carried": False, "router": lid})
             self.stats.epochs += 1
 
     # ---- settlement and learning

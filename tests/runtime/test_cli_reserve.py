@@ -369,3 +369,28 @@ def test_cli_output_and_decrypted_metering_ledger_never_contain_private_key(
         assert TEST_KEY[2:] not in json.dumps(ledger.decrypt_item(index))
     assert "[REDACTED]" in json.dumps(ledger.decrypt_item(seq))
     assert TEST_KEY[2:].encode() not in (tmp_path / "proof.jsonl").read_bytes()
+
+
+def test_owner_read_only_key_does_not_trap_loading(keyfile, monkeypatch):
+    import os
+
+    keyfile.chmod(0o400)
+    # Synthetic content only; production credentials are never inspected by tests.
+    monkeypatch.setattr(Path, "read_text", lambda *_a, **_kw: TEST_KEY)
+    _load_dotenv()
+    assert os.environ["RESERVE_PRIVATE_KEY"] == TEST_KEY
+
+
+def test_resume_reports_insecure_key_metadata_without_reading_it(tmp_path, monkeypatch, capsys):
+    from factorylab.runtime.loop import run_world
+    from factorylab.runtime.worlds import load_manifest
+
+    path = tmp_path / "synthetic.jsonl"
+    run_world(load_manifest("scripted"), events=0, ledger_path=str(path))
+    (tmp_path / "hyperliquid.key").touch(mode=0o644)
+    monkeypatch.delenv("HL_PRIVATE_KEY", raising=False)
+    monkeypatch.setattr(Path, "read_text", lambda *_a, **_kw: pytest.fail("must not read key"))
+    assert main(["resume", "--world", "scripted", "--ledger", str(path)]) == 2
+    captured = capsys.readouterr()
+    assert "hyperliquid.key must be an owned regular file with mode 0400 or 0600" in captured.err
+    assert captured.out == ""

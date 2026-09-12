@@ -15,6 +15,11 @@ import sys
 from factorylab.runtime.worlds import load_manifest
 
 TERMINATED_EXIT = 3  # deploy/factorylab.service: SuccessExitStatus + RestartPreventExitStatus
+LEDGER_BUSY_EXIT = 4
+
+
+class KeyFileModeError(ValueError):
+    """A credential's metadata is unsafe; its contents have not been read."""
 
 
 def _load_dotenv() -> None:
@@ -32,13 +37,16 @@ def _load_dotenv() -> None:
         ("reserve.key", "RESERVE_PRIVATE_KEY"),
     ):
         keyfile = Path.cwd() / filename
-        if keyfile.exists() and var not in os.environ:
+        if (keyfile.exists() or keyfile.is_symlink()) and var not in os.environ:
             if filename in {"reserve.key", "hyperliquid.key"}:
                 import stat
 
                 info = keyfile.lstat()
-                if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
-                    raise ValueError(f"{filename} must be a regular file with mode 0600")
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                        or stat.S_IMODE(info.st_mode) not in (0o400, 0o600)):
+                    raise KeyFileModeError(
+                        f"{filename} must be an owned regular file with mode 0400 or 0600"
+                    )
             value = keyfile.read_text().strip()
             if value:
                 os.environ[var] = value
@@ -337,6 +345,21 @@ def _cmd_report(args: argparse.Namespace) -> int:
 
 
 def _cmd_resume(args: argparse.Namespace, *, load_keys: bool = False) -> int:
+    """Acquire the writer lock before preflight, repair, credential loading or recovery."""
+    from factorylab.kernel.ledger import LedgerBusyError, LedgerLock
+
+    try:
+        with LedgerLock(args.ledger) as lock:
+            return _cmd_resume_locked(args, load_keys=load_keys, lock=lock)
+    except LedgerBusyError as exc:
+        print(f"factorylab resume: {exc}", file=sys.stderr)
+        return LEDGER_BUSY_EXIT
+    except KeyFileModeError as exc:
+        print(f"factorylab resume: {exc}", file=sys.stderr)
+        return 2
+
+
+def _cmd_resume_locked(args: argparse.Namespace, *, load_keys: bool, lock) -> int:
     """Continue only the authenticated original manifest and saved event budget."""
     from factorylab.kernel.ledger import Ledger, LedgerIntegrityError
     from factorylab.runtime.resume import ResumeError, resume_world
@@ -347,7 +370,7 @@ def _cmd_resume(args: argparse.Namespace, *, load_keys: bool = False) -> int:
             # Finality must win even if an unrelated provider credential has become invalid.
             Ledger.reopen(args.ledger, manifest=json.loads(manifest.canonical_json()))
             _load_dotenv()
-        summary = resume_world(manifest, args.ledger)
+        summary = resume_world(manifest, args.ledger, _lock=lock)
     except (ResumeError, LedgerIntegrityError) as exc:
         if isinstance(exc, LedgerIntegrityError) and str(exc) == "cannot resume a terminated world":
             print("factorylab resume: world terminated", file=sys.stderr)
@@ -526,6 +549,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.cmd == "run":
+        from factorylab.kernel.ledger import LedgerBusyError
+
+        try:
+            _load_dotenv()
+            return int(args.func(args))
+        except LedgerBusyError as exc:
+            print(f"factorylab run: {exc}", file=sys.stderr)
+            return LEDGER_BUSY_EXIT
+        except KeyFileModeError as exc:
+            print(f"factorylab run: {exc}", file=sys.stderr)
+            return 2
     if args.cmd == "treasury-testnet":
         from factorylab.world.evm import RailError
 
