@@ -2,17 +2,113 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from factorylab.kernel.events import Event, EventKind
-from factorylab.kernel.queue import PropensityRecord
+from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.registry import Contract
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
 from factorylab.runtime.immune import gamma
 from factorylab.runtime.shared import CH_CONFORMITY, CH_EXPOSURE, CH_FAST, CH_VERDICT, NOOP
 from factorylab.world.models import ModelRequest
+
+
+@dataclass(frozen=True)
+class PopulationEvent(Event):
+    """A population event retains the kernel envelope and cannot impersonate a built-in kind."""
+
+    def __post_init__(self) -> None:
+        from factorylab.cortex.registration import event_name
+
+        kind = event_name(self.kind)
+        if kind in {str(k) for k in EventKind}:
+            raise ValueError("use the kernel event type for a built-in kind")
+        # Reuse the kernel's envelope validation and immutable payload construction.
+        envelope = Event(self.id, EventKind.REGISTERED, self.ts_ns, self.payload, self.source)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "payload", envelope.payload)
+
+
+class ContractQueue:
+    """A variant contract binds once; the underlying kernel decision never changes channels.
+
+    The kernel routes a polymorphic decision on ``emits``. This adapter resolves
+    that declared sum type to the selected public channel, retaining its binding
+    in the ledger and checkpoint. Sampling, settlement, money and retirement
+    remain owned by the kernel queue; no private queue state is modified.
+    """
+
+    def __init__(self, queue, runtime) -> None:
+        self.queue = queue
+        self.runtime = runtime
+
+    def __getattr__(self, name):
+        return getattr(self.queue, name)
+
+    def open(self, *, return_channels=None, **kwargs):
+        """Every possible variant is declared before the first metered call."""
+        if return_channels:
+            return_channels = dict(return_channels)
+            if len(set(return_channels.values())) > 1:
+                kwargs["channel"] = "emits"
+        handle = self.queue.open(**kwargs)
+        if return_channels:
+            self.runtime.ledger.append({"kind": "decision.contract", "handle": handle,
+                                        "return_channels": return_channels})
+            self.runtime.return_bindings[handle] = {
+                "channels": return_channels, "selected": None}
+        return handle
+
+    def bind(self, handle: str, kind: str) -> str | None:
+        """A return selects one predeclared channel, irrevocably and before its effects."""
+        binding = self.runtime.return_bindings.get(handle)
+        if binding is None:
+            # A single-channel contract has nothing to select, and a handle the kernel
+            # queue never opened has no channel to report.
+            try:
+                return self.queue.get(handle).channel
+            except KeyError:
+                return None
+        if kind not in binding["channels"]:
+            raise ValueError("return emits an undeclared kind")
+        if binding["selected"] not in (None, kind):
+            raise ValueError("return kind cannot change after tools or children run")
+        if binding["selected"] is None:
+            if self.queue.get(handle).status is not SettleStatus.PENDING:
+                raise ValueError("a finished decision cannot select a return kind")
+            self.runtime.ledger.append({"kind": "decision.emits", "handle": handle,
+                                        "emits": kind, "channel": binding["channels"][kind]})
+            binding["selected"] = kind
+        return binding["channels"][kind]
+
+    def _channel(self, handle, channel):
+        binding = self.runtime.return_bindings.get(handle)
+        if channel == "emits" and binding and binding["selected"] is not None:
+            return binding["channels"][binding["selected"]]
+        return channel
+
+    def get(self, handle):
+        decision = self.queue.get(handle)
+        return replace(decision, channel=self._channel(handle, decision.channel))
+
+    def outstanding(self, actor=None):
+        return [self.get(d.handle) for d in self.queue.outstanding(actor)]
+
+    def settle(self, handle, *, channel, **kwargs):
+        """Only the selected variant may settle; the original kernel routing channel is retained."""
+        if channel != self.get(handle).channel:
+            raise ValueError("settlement must address the selected return channel")
+        return self.queue.settle(handle, channel=self.queue.get(handle).channel, **kwargs)
+
+    def history(self, handle):
+        return tuple(replace(r, channel=self._channel(handle, r.channel))
+                     for r in self.queue.history(handle))
+
+    def returns_for(self, actor):
+        return tuple(replace(r, channel=self._channel(r.handle, r.channel))
+                     for r in self.queue.returns_for(actor))
 
 
 @dataclass
@@ -98,8 +194,33 @@ class RoutingMixin:
     """Preserve runtime state and behavior for routing operations."""
 
     def _routable_kinds(self) -> list[str]:
-        kinds = {k for a in self.assemblies.values() for k in a.spec.accepts}
+        kinds = {k for aid, a in self.assemblies.items()
+                 if aid not in self.retired_assemblies for k in a.spec.accepts}
         return sorted(kinds)
+
+    def _event_kinds(self) -> frozenset[str]:
+        """World kinds and published contracts remain discoverable after a retirement."""
+        return frozenset({str(k) for k in EventKind} | {"Exposure"}
+                         | set(self.event_schemas)
+                         | {k for a in self.assemblies.values() for k in a.spec.accepts})
+
+    def _ancestry(self, handle: str | None) -> set[str]:
+        """Request parents and evaluated subjects retain the complete causal ancestry."""
+        seen = set()
+        remaining = [handle] if handle else []
+        while remaining:
+            current = remaining.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            try:
+                parent = self.queue.get(current).parent_handle
+            except KeyError:
+                parent = None
+            for ancestor in (parent, self.decision_subjects.get(current)):
+                if ancestor is not None:
+                    remaining.append(ancestor)
+        return seen
 
     def _subject_authors(self, kind: str, ev: Event | None) -> set[str]:
         """Assemblies that authored an event's subject, or the parent of a child's return.
@@ -110,19 +231,15 @@ class RoutingMixin:
         """
         if ev is None:
             return set()
-        key = {"ProducerReturn": "about_handle", "Verdict": "evaluator_handle",
-               "MetaVerdict": "by"}.get(kind)
-        if key is None or key not in ev.payload:
-            return set()
-        subject = ev.payload[key]
-        authors = {self.handle_to_assembly.get(subject)}
-        try:
-            parent = self.queue.get(subject).parent_handle
-        except KeyError:
-            parent = None
-        if parent is not None:
-            authors.add(self.handle_to_assembly.get(parent))
-        return {a for a in authors if a is not None}
+        subject = self._event_subject(ev)
+        return {self.handle_to_assembly[h] for h in self._ancestry(subject)
+                if h in self.handle_to_assembly}
+
+    @staticmethod
+    def _event_subject(ev: Event) -> str | None:
+        key = {"Verdict": "evaluator_handle", "MetaVerdict": "by"}.get(
+            str(ev.kind), "about_handle")
+        return ev.payload.get(key)
 
     def _higher_tier_universe(self, chosen: str) -> list[str]:
         """The assemblies that could judge the meta verdict ``chosen`` is about to emit.
@@ -137,6 +254,8 @@ class RoutingMixin:
             a.spec.id
             for a in self.assemblies.values()
             if "MetaVerdict" in a.spec.accepts and a.spec.id != chosen
+            and a.spec.id not in self.retired_assemblies
+            and set(a.spec.emits) & {"Verdict", "MetaVerdict"}
         )
 
     def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
@@ -144,7 +263,10 @@ class RoutingMixin:
         ids = sorted(
             a.spec.id
             for a in self.assemblies.values()
-            if kind in a.spec.accepts and a.spec.id not in excluded
+            if kind in a.spec.accepts
+            and (a.spec.id not in excluded
+                 or not set(a.spec.emits) <= {"Verdict", "MetaVerdict"})
+            and a.spec.id not in self.retired_assemblies
         )
         return ids + [NOOP]
 
@@ -245,16 +367,29 @@ class RoutingMixin:
         return (grant["window"] == self.stats.reserve_windows
                 and assembly_id not in grant["consumed"])
 
-    def _register_with_trial(self, contract: Contract, handle: str, amount: int):
+    def _register_with_trial(self, contract: Contract, handle: str, amount: int,
+                             *, refuse: str = ""):
         """A refused registration returns its trial to the window; only a registered
-        contract consumes the novelty share."""
+        contract consumes the novelty share. ``refuse`` states a refusal the registry
+        cannot see, so it is still paid for and refunded like any other (A13)."""
         receipt = self.reserve.reserve_for(contract, amount)
         try:
+            if refuse:
+                raise ValueError(refuse)
             self.registry.register(contract, by_handle=handle, reservation=receipt)
         except Exception:
             self.reserve.release(receipt)
             raise
         return receipt
+
+    def _registration_has_history(self, contract_id: str) -> bool:
+        """A retired assembly may issue its next contract version without erasing learner history.
+
+        This callback governs registration receipts only. Compute eligibility still
+        reads the durable queue history and the assembly's original trial lifetime.
+        """
+        return (contract_id not in getattr(self, "retired_assemblies", ())
+                and self.queue.has_history(contract_id))
 
     def _novelty_compute(self, handle: str, reason: str) -> bool:
         """Only an assembly's own model calls can use its novelty entitlement."""
@@ -313,7 +448,7 @@ class RoutingMixin:
         """
         share = self.ev.adversarial_share
         adversaries = [a for a in dist if a in self.assemblies
-                       and self.assemblies[a].spec.role == "antagonist"]
+                       and "Exposure" in self.assemblies[a].spec.emits]
         rest = [a for a in dist if a not in adversaries]
         mass = sum(dist[a] for a in adversaries)
         rest_mass = sum(dist[a] for a in rest)
@@ -324,7 +459,8 @@ class RoutingMixin:
 
     def _mix_with_standing(self, dist: dict[str, float]) -> dict[str, float]:
         s = self.consequence_mix
-        evaluators = [a for a in dist if a != NOOP]
+        evaluators = [a for a in dist if a in self.assemblies
+                      and "Verdict" in self.assemblies[a].spec.emits]
         if s <= 0 or not evaluators:
             return dist
         weights = {a: self.standing.weight(a) for a in evaluators}
@@ -350,8 +486,9 @@ class RoutingMixin:
 
     def _route_with(self, state: RouterState, ev: Event) -> None:
         kind = str(ev.kind)
-        mix = ((lambda d: self._cap_adversarial(self._mix_with_standing(d)))
-               if kind == "ProducerReturn" else self._cap_adversarial)
+        def mix(dist):
+            return self._cap_adversarial(self._mix_with_standing(dist))
+
         key = f"{state.learner.id}:{self.n}"
         if isinstance(state.learner, _KeyedLearner):
             state.learner.current_key = key
@@ -384,17 +521,12 @@ class RoutingMixin:
                 self.ledger.append({"kind": "route.excluded", "event_id": ev.id,
                                     "router": state.learner.id, "assembly_id": assembly_id,
                                     "reason": reason, "ts": self.clock.now_ns})
-        role = self._role_for_kind(kind)
-        channel = {"producer": CH_VERDICT, "evaluator": CH_CONFORMITY, "meta": CH_FAST}[role]
-        if role == "meta" and self._higher_tier_universe(sample.chosen):
-            channel = CH_CONFORMITY
-        chosen_role = self.assemblies[sample.chosen].spec.role if sample.chosen != NOOP else None
-        if chosen_role == "antagonist":
-            channel = CH_EXPOSURE
+        channels = self._return_channels(sample.chosen, ev)
+        channel = next(iter(channels.values()), CH_VERDICT)
         deadline = (
             self.clock.now_ns + (self.ev.verdict_timeout_events + 2) * self.tick_clock.interval_ns
         )
-        if channel == CH_FAST:
+        if CH_FAST in channels.values():
             # A top meta is graded against the judged verdict's eventual consequence, so
             # its decision lives as long as the return's backstop, like a forecast.
             deadline = self.clock.now_ns + (
@@ -410,6 +542,7 @@ class RoutingMixin:
             cost_ceiling=(self.wallet.unhistoried_available
                           if sample.chosen != NOOP and self._unhistoried(sample.chosen)
                           else max(0, self.wallet.available)),
+            return_channels=channels,
         )
         if isinstance(state.learner, _KeyedLearner):
             self.snapshot_keys[handle] = key
@@ -422,12 +555,7 @@ class RoutingMixin:
                 "chosen": sample.chosen,
                 "rng_seed": sample.rng_seed,
             }
-        if role == "producer":
-            self._producer_step(ev, handle, sample, deadline)
-        elif role == "evaluator":
-            self._evaluator_step(ev, handle, sample, deadline)
-        else:
-            self._meta_step(ev, handle, sample, deadline)
+        self._assembly_step(ev, handle, sample, deadline)
 
     @staticmethod
     def _propensity(sample: Sample) -> PropensityRecord:
@@ -440,13 +568,23 @@ class RoutingMixin:
             sample.learner_state_hash,
         )
 
-    @staticmethod
-    def _role_for_kind(kind: str) -> str:
-        if kind == "ProducerReturn":
-            return "evaluator"
-        if kind in ("Verdict", "MetaVerdict"):
-            return "meta"
-        return "producer"
+    def _return_channels(self, action_id: str, ev: Event | None = None) -> dict[str, str]:
+        """Each output kind declares its reward contract, independent of the accepted event."""
+        excluded = self._subject_authors(str(ev.kind), ev) if ev else set()
+        higher = set(self._higher_tier_universe(action_id)) - excluded
+        if action_id == NOOP:
+            # Abstention shares a homogeneous menu's contract, including the four
+            # shipped seeds. A mixed menu has no selected output and is inapplicable.
+            kinds = {kind for a in self._universe_for(str(ev.kind), ev) if a != NOOP
+                     for kind in self.assemblies[a].spec.emits}
+            kinds = kinds if len(kinds) == 1 else {"ProducerReturn"}
+        else:
+            kinds = self.assemblies[action_id].spec.emits
+        return {kind: (CH_CONFORMITY if kind == "Verdict" else
+                       CH_CONFORMITY if kind == "MetaVerdict" and higher else
+                       CH_FAST if kind == "MetaVerdict" else
+                       CH_EXPOSURE if kind == "Exposure" else CH_VERDICT)
+                for kind in kinds}
 
     def _open_epoch(self, kind: str) -> None:
         universe = self._universe_for(kind)
@@ -460,7 +598,7 @@ class RoutingMixin:
         for i, state in enumerate(list(states)):
             if universe == state.universe:
                 continue
-            if isinstance(state.learner, EXP3):
+            if isinstance(state.learner, EXP3) and set(state.universe) <= set(universe):
                 new_learner = state.learner.expand(universe)
                 state.learner = new_learner
                 state.universe = universe
@@ -469,11 +607,16 @@ class RoutingMixin:
                 )
                 state.epoch += 1
                 self.ledger.append({**entry, "carried": True, "router": state.learner.id})
-            else:  # snapshot learners cannot expand; rebuild fresh over the new universe
+            else:  # A shrinking universe gets a new identity; old decisions train the old one.
                 lid = self._fresh_router_id(state.learner.id)
-                fresh = self._make_learner(
-                    kind, "blum_mansour", gamma(state.learner), universe, lid
-                )
+                if isinstance(state.learner, EXP3):
+                    saved = state.learner.state()
+                    saved.update(id=lid, actions=list(universe), log_weights={
+                        a: saved["log_weights"][a] for a in universe})
+                    fresh = EXP3.restore(saved)
+                else:
+                    fresh = self._make_learner(
+                        kind, "blum_mansour", gamma(state.learner), universe, lid)
                 self.ledger.append({**entry, "carried": False, "router": lid})
                 self._retain_router(state)
                 self.delivered_seen[lid] = 0
@@ -486,3 +629,14 @@ class RoutingMixin:
                     state.seed_gamma,
                 )
             self.stats.epochs += 1
+
+    def _retire_assembly(self, assembly_id: str, proposal_id: str) -> None:
+        """Retirement changes sampling membership, retaining accounts, memory and old routers."""
+        if assembly_id in self.retired_assemblies:
+            return
+        self.ledger.append({"kind": "assembly.retired", "assembly_id": assembly_id,
+                            "proposal_id": proposal_id,
+                            "version": self.assemblies[assembly_id].spec.version})
+        self.retired_assemblies.add(assembly_id)
+        for kind in sorted(self.routers):
+            self._open_epoch(kind)

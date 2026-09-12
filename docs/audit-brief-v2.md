@@ -22,7 +22,7 @@ Seats 1–3 are Codex because those questions are argument, not sandbox internal
 
 1. The essay in full: `docs/essay.md`.
 2. Edition 1: `worlds/edition1-example.toml`, `docs/charter/edition1-draft.md`, `worlds/testnet.toml`.
-3. `docs/design-audit-v2.md`, the specs `docs/build-spec-v0.4.md` through `v0.7-phase4.md`, `docs/build-log.md`, `docs/handoff.md`, and round one's reports in `docs/audits/` (so nothing is re-found; anything re-found is a finding against the fix).
+3. The superseded design notes and specs in `docs/history/`, `docs/build-log.md`, `docs/handoff.md`, and round one's reports in `docs/audits/` (so nothing is re-found; anything re-found is a finding against the fix).
 4. The code, all of it: `factorylab/`, `tests/`, `scripts/`, `deploy/`, `worlds/`. Run `uv run pytest` and the scripted worlds. Read a dead world's diary if a key is present.
 
 ## What every report contains

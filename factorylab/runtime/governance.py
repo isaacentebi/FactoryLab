@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from statistics import fmean
 from typing import Any
 
@@ -16,7 +16,9 @@ from factorylab.cortex.registration import (
     LearnerProposal,
     ModelProposal,
     ObservationProposal,
+    RetireProposal,
     ToolProposal,
+    measured_role,
     parse_proposals,
 )
 from factorylab.cortex.request import Return
@@ -40,8 +42,18 @@ except ImportError:  # pragma: no cover
     Amendment = CharterBook = Refusal = None  # type: ignore[assignment]
 
 
-from factorylab.runtime.shared import PRODUCER_KINDS, _to_plain
+from factorylab.runtime.shared import _to_plain
 from factorylab.runtime.summary import _assembly_contract, _model_contract
+
+
+@dataclass(frozen=True)
+class Retirement:
+    """A vote targets one frozen assembly version and retains the proposing decision."""
+
+    id: str
+    proposer_handle: str
+    assembly_id: str
+    version: int
 
 
 class GovernanceMixin:
@@ -73,11 +85,12 @@ class GovernanceMixin:
                     adapted = {**item, "openrouter_id": "namespace/model"} if namespaced else item
                     accepted, rejected = parse_proposals(
                         {"register": [adapted]},
-                        event_kinds=PRODUCER_KINDS | {"ProducerReturn", "Verdict", "MetaVerdict"},
+                        event_kinds=self._event_kinds(),
                         known_models=frozenset(self.prices.prices),
                         known_assemblies=frozenset(self.assemblies),
                         known_tools=frozenset(self.tool_specs),
                         tool_jail=self.tool_jail_available,
+                        retired_assemblies=frozenset(self.retired_assemblies),
                         seed_observations=SEED_IDS,
                     )
                     if rejected:
@@ -89,10 +102,11 @@ class GovernanceMixin:
                     self._register(handle, prop)
                     # Only an accepted registration is a revision (A14); proposals and
                     # tool calls that changed nothing do not count.
-                    self.window.revision_handles.add(handle)
+                    if not isinstance(prop, RetireProposal):
+                        self.window.revision_handles.add(handle)
                 self.stats.registrations_accepted += 1
                 self.window.registrations += 1
-                if item.get("kind") != "amendment":
+                if item.get("kind") not in ("amendment", "retire"):
                     self.card_samples.revised(handle)
             except (Infeasible, PermissionError, ValueError, OverflowError, KeyError,
                     TypeError, X402Error) as exc:
@@ -210,6 +224,9 @@ class GovernanceMixin:
 
     def _register(self, handle: str, prop: Any) -> None:
         amount = self.ev.trial_amount_micro
+        if isinstance(prop, RetireProposal):
+            self._propose_retirement(handle, prop)
+            return
         if isinstance(prop, ConnectorProposal):
             self._register_connector(handle, prop)
             return
@@ -290,20 +307,24 @@ class GovernanceMixin:
                 EventKind.REGISTERED, {"kind": "model", "id": prop.openrouter_id}
             )
         elif isinstance(prop, AssemblyProposal):
-            contract = _assembly_contract(prop.id, prop.role, prop.accepts, prop.max_tokens)
-            self._register_with_trial(contract, handle, amount)
-            self._instantiate(
-                AssemblySpec(
-                    id=prop.id,
-                    version=1,
-                    model_id=prop.model_id,
-                    system_prompt=prop.system_prompt,
-                    max_tokens=prop.max_tokens,
-                    effort=prop.effort,
-                    accepts=frozenset(prop.accepts),
-                    role=prop.role,
-                )
-            )
+            live = prop.id in self.assemblies and prop.id not in self.retired_assemblies
+            version = (self.assemblies[prop.id].spec.version + 1
+                       if prop.id in self.assemblies else 1)
+            emits = prop.emits or None
+            spec = AssemblySpec(
+                id=prop.id, version=version, model_id=prop.model_id,
+                system_prompt=prop.system_prompt, max_tokens=prop.max_tokens,
+                effort=prop.effort, accepts=frozenset(prop.accepts), role=prop.role,
+                emits=emits, schemas=prop.schemas)
+            self._check_event_schemas(spec)
+            contract = _assembly_contract(prop.id, prop.role, prop.accepts, prop.max_tokens,
+                                         emits=spec.emits, schemas=spec.schemas, version=version)
+            self._register_with_trial(
+                contract, handle, amount,
+                refuse=("id already registered: a live assembly is retired by vote before "
+                        "its id takes a next version") if live else "")
+            self._instantiate(spec)
+            self.retired_assemblies.discard(prop.id)
             for kind in prop.accepts:
                 self._open_epoch(kind)
             self._emit(
@@ -313,6 +334,9 @@ class GovernanceMixin:
                     "id": prop.id,
                     "role": prop.role,
                     "accepts": list(prop.accepts),
+                    "emits": list(spec.emits),
+                    "schemas": spec.schemas,
+                    "version": version,
                 },
             )
         else:
@@ -520,7 +544,8 @@ class GovernanceMixin:
         from factorylab.charter.committee import experienced
 
         evidence = {(r.handle, self.handle_to_assembly.get(r.handle))
-                    for r in self.consequences.table.returns if r.payoff is not None}
+                    for r in self.consequences.table.returns if r.payoff is not None
+                    and self.queue.get(r.handle).channel in ("verdict", "exposure")}
         for decision in self.queue.state()["decisions"].values():
             if decision.channel == "consequence" and decision.status is SettleStatus.SETTLED:
                 if decision.parent_handle:
@@ -528,8 +553,66 @@ class GovernanceMixin:
                         decision.parent_handle, decision.actor)))
         settled = Counter(assembly for handle, assembly in evidence
                           if assembly is not None and self._independent_decision(handle, assembly))
-        return experienced({a.spec.id: a.spec.role for a in self.assemblies.values()},
+        return experienced({a.spec.id: a.spec.role for a in self.assemblies.values()
+                            if a.spec.id not in self.retired_assemblies},
                            settled, self.m.committee.min_settled)
+
+    def _propose_retirement(self, handle: str, proposal: RetireProposal) -> None:
+        """Any assembly may request a seed or population retirement through the amendment draw."""
+        from factorylab.charter.committee import Committee, draw
+
+        target = proposal.assembly_id
+        if target not in self.assemblies or target in self.retired_assemblies:
+            raise ValueError("assembly is unavailable or already retired")
+        version = self.assemblies[target].spec.version
+        if any(row["proposal"].assembly_id == target and row["proposal"].version == version
+               and row["status"] in ("voting", "passed")
+               for row in self.retirement_proposals.values()):
+            raise ValueError("retirement is already pending for this assembly version")
+        # A17: the motion id reaches the public wake through the governance queue, and
+        # the wake never names an assembly — so the id identifies the proposal, not its
+        # target. The target is on the sealed ledger row below.
+        motion = Retirement(f"retire:{handle}:{len(self.retirement_proposals) + 1}",
+                            handle, target, version)
+        contract = Contract(
+            id=motion.id, version=1, kind="tool", description="assembly retirement proposal",
+            input_schema={"type": "object"}, output_schema={"type": "object"},
+            price=PriceSpec({}), permissions=frozenset(), resource_bounds=ResourceBounds())
+        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        eligible = self._committee_eligible()
+        proposer = self.handle_to_assembly.get(handle, self.queue.get(handle).propensity.chosen)
+        eligible.pop(proposer, None)
+        committee = Committee(motion.id, len(self.retirement_proposals) + 1,
+                              draw(eligible, self.rng, self.m.committee.seats))
+        self.ledger.append({"kind": "retirement.proposed", **asdict(motion),
+                            "committee": asdict(committee)})
+        self.retirement_proposals[motion.id] = {
+            "proposal": motion, "committee": committee, "ballots": {}, "status": "voting"}
+        self._hold_vote(motion, committee)
+
+    def _activate_retirements_if_due(self) -> None:
+        """Retire one approved version at the same cadence boundary used by amendments."""
+        waiting = self.cadence.world_block(self.tick_clock.interval_ns)["waiting"]
+        for row in self.retirement_proposals.values():
+            if row["status"] != "passed":
+                continue
+            if waiting and waiting[0] != row["proposal"].id:
+                continue
+            if not self.cadence.ready(now_ns=self.clock.now_ns,
+                                      tick_interval_ns=self.tick_clock.interval_ns,
+                                      window=self.stats.reserve_windows):
+                return
+            motion = row["proposal"]
+            if self.assemblies[motion.assembly_id].spec.version != motion.version:
+                self.ledger.append({"kind": "retirement.stale", "proposal_id": motion.id})
+                row["status"] = "stale"
+                continue
+            self._retire_assembly(motion.assembly_id, motion.id)
+            row["status"] = "activated"
+            self.cadence.activated(motion.id, self.clock.now_ns, self.tick_clock.interval_ns)
+            self.card_samples.revised(motion.proposer_handle)
+            self.window.revision_returns += 1
+            return
 
     def _independent_decision(self, handle: str, assembly: str) -> bool:
         """A self-request anywhere in the decision's ancestry cannot manufacture eligibility."""
@@ -549,7 +632,8 @@ class GovernanceMixin:
         """Amendments and connectors share seats, metered ballot requests and majority counting."""
         if am.id in self.voted_amendments:
             return
-        prices = dict(am.proposed_prices) if connector is None else {}
+        retiring = isinstance(am, Retirement)
+        prices = {} if retiring or connector is not None else dict(am.proposed_prices)
         connector_yes = 0
         for seat in committee.seats:
             if self.wallet.dead:
@@ -568,8 +652,10 @@ class GovernanceMixin:
             # This covers the remaining experiment, rather than expiring after the ballot call.
             deadline = self.clock.now_ns + (
                 self.events_budget + self.ev.consequence_backstop_events
-            ) * self.m.max_tick_ns + (am.predicted_effect.window if connector is None else 1
-                                     ) * self.m.novelty.window_ns
+            ) * self.m.max_tick_ns + (
+                0 if retiring else
+                (1 if connector is not None else am.predicted_effect.window)
+                * self.m.novelty.window_ns)
             handle = self.queue.open(
                 actor=lid, event_id=event_id,
                 propensity=PropensityRecord((assembly_id,), (1.,), assembly_id, 0, lid,
@@ -581,10 +667,16 @@ class GovernanceMixin:
                                 "handle": handle})
             self.vote_handles[event_id] = handle
             self.handle_to_assembly[handle] = assembly_id
+            self._start_return(handle)
             self.stats.decisions += 1
-            if connector is None:
+            if connector is not None:
+                inputs = {"connector": asdict(connector), "world": self._world_block(),
+                          "charter": self._charter_text()}
+            else:
                 inputs = {
-                    "amendment": {
+                    ("retirement" if retiring else "amendment"): ({
+                        "assembly_id": am.assembly_id, "version": am.version,
+                    } if retiring else {
                         "id": am.id,
                         "add": [
                             {**asdict(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
@@ -598,15 +690,12 @@ class GovernanceMixin:
                         "predicted_effect": asdict(am.predicted_effect),
                         **({"tick_interval": am.tick_interval}
                            if am.tick_interval is not None else {}),
-                    },
+                    }),
                     "charter": self._charter_text(),
                     "world": self._world_block(),
                     "your_policy_returns": [asdict(lr) for lr in self.queue.returns_for(lid)
                                             if lr.channel == "policy"],
                 }
-            else:
-                inputs = {"connector": asdict(connector), "world": self._world_block(),
-                          "charter": self._charter_text()}
             schema = {
                 "type": "object",
                 "properties": {"vote": {"type": "boolean"}, "reason": {"type": "string"}},
@@ -615,6 +704,7 @@ class GovernanceMixin:
             req = self._request(
                 handle,
                 ("Vote on a connector registration." if connector is not None else
+                 "Vote on retiring the named assembly version." if retiring else
                  "Vote on an amendment to the charter's metric cards."),
                 inputs,
                 schema,
@@ -625,7 +715,11 @@ class GovernanceMixin:
             if asm is None:
                 ret = Return(handle, {"reason": "assembly unavailable"}, 0, "failed")
             else:
+                # A ballot is an ordinary metered return: a voter may reach a
+                # registered connector before it decides, and its sample is typed
+                # from the contract it emits (the _invoke override records it).
                 ret = self._invoke(assembly_id, req, "voter", child=True)
+            self.consequences.finish(handle, ret.cost)
             if asm is None:
                 self.card_samples.returned(handle=handle, assembly=assembly_id, role="other",
                                            window=self.window.index, ret=ret)
@@ -641,7 +735,19 @@ class GovernanceMixin:
                 self.stats.votes_cast += ballot is not None
                 # Connector shape has no predicted metric effect to grade later.
                 self._settle_policy(handle, 0.0, SettleStatus.CENSORED)
-            elif isinstance(vote, bool):
+                continue
+            if retiring:
+                ballot = vote if type(vote) is bool else None
+                self.ledger.append({"kind": "retirement.ballot", "proposal_id": am.id,
+                                    "alias": alias, "vote": ballot,
+                                    "reason": str(ret.outputs.get("reason", ""))[:1000]})
+                self.retirement_proposals[am.id]["ballots"][alias] = ballot
+                self.stats.votes_cast += int(ballot is not None)
+                # A retire proposal specifies no outcome forecast; inventing one would
+                # turn a procedural vote into a new objective for the population.
+                self._settle_policy(handle, 0.0, SettleStatus.CENSORED)
+                continue
+            if isinstance(vote, bool):
                 self.charter_book.vote(
                     committee, alias, vote, str(ret.outputs.get("reason", ""))[:1000]
                 )
@@ -664,7 +770,15 @@ class GovernanceMixin:
                                 "yes": connector_yes, "seats": len(committee.seats),
                                 "passed": passed})
             return passed
-        outcome = self.charter_book.tally(committee)
+        if retiring:
+            row = self.retirement_proposals[am.id]
+            yes = sum(v is True for v in row["ballots"].values())
+            outcome = "passed" if yes >= len(committee.seats) // 2 + 1 else "failed"
+            self.ledger.append({"kind": "retirement.tally", "proposal_id": am.id,
+                                "outcome": outcome})
+            row["status"] = outcome
+        else:
+            outcome = self.charter_book.tally(committee)
         if outcome == "passed":
             self.cadence.approve(am.id)
             self.cadence.ready(
@@ -672,12 +786,16 @@ class GovernanceMixin:
                 tick_interval_ns=self.tick_clock.interval_ns,
                 window=self.stats.reserve_windows,
             )
-            self.stats.amendments_passed += 1
+            if not retiring:
+                self.stats.amendments_passed += 1
         elif outcome == "failed":
             self._censor_ballots(am.id)
 
     def _next_charter_activation(self) -> Charter | None:
         """Activate only at a boundary that meets the measured governance separation."""
+        waiting = self.cadence.world_block(self.tick_clock.interval_ns)["waiting"]
+        if waiting and waiting[0] in self.retirement_proposals:
+            return None
         if not self.cadence.ready(
             now_ns=self.clock.now_ns,
             tick_interval_ns=self.tick_clock.interval_ns,
@@ -715,6 +833,7 @@ class GovernanceMixin:
                                  if v["amendment_id"] != amendment_id]
 
     def _activate_charter_if_due(self) -> None:
+        self._activate_retirements_if_due()
         new = self._next_charter_activation()
         while new is not None:
             self.charter = new
@@ -801,7 +920,7 @@ class GovernanceMixin:
             source = next((r for r in reversed(self.card_samples.returns)
                            if r["handle"] == parent), {})
             assembly = forecast.evaluator_id
-            role = (self.assemblies[assembly].spec.role
+            role = (measured_role(self.assemblies[assembly].spec.emits)
                     if assembly in self.assemblies else "evaluator")
             self.card_samples.forecasts.append({
                 "handle": forecast.handle, "assembly": assembly, "role": role,

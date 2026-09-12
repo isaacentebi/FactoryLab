@@ -1,6 +1,6 @@
-# Verdict consequence review (phase 4 Q, revised for v0.8 A16/A5/A9)
+# Verdict as a consequence forecast: the reward-hacking review
 
-The binding rules are v0.7 section 2 and v0.8 sections A16, A5 and A9. Producers
+The binding rules are `docs/build-spec-v0.8-round2.md` sections A16, A5 and A9. Producers
 still receive the existing verdict channel (antagonists the existing exposure
 channel); this change adds no direct producer reward for wallet growth. Every
 valid delivered evaluation carries two numbers: the `verdict` (charter quality,

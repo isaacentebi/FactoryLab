@@ -84,7 +84,9 @@ def _record_types() -> dict[str, type]:
     from factorylab.kernel.wallet import DripSchedule, Reservation
     from factorylab.runtime.cascade import CascadeGate
     from factorylab.runtime.feedback import PendingJudgement
+    from factorylab.runtime.governance import Retirement
     from factorylab.runtime.pricing import MeasureWindow
+    from factorylab.runtime.routing import PopulationEvent
     from factorylab.runtime.summary import RunStats
     from factorylab.settlement.forecast import Forecast
     from factorylab.settlement.lots import Lot, LotOrder, LotTable, Payoff, ReturnAccount
@@ -107,9 +109,11 @@ def _record_types() -> dict[str, type]:
     classes = (
         Amendment, PredictedEffect, Charter, MetricCard, MetricWindow, CardSamples,
         Ballot, Committee, Seat, CardRegion, _CardState,
-        AssemblySpec, PopulationTool, Event, EventKind, Decision, LearningReturn, PropensityRecord,
+        AssemblySpec, PopulationTool, Event, PopulationEvent, EventKind, Decision,
+        LearningReturn, PropensityRecord,
         SettleStatus, Contract, PriceSpec, ResourceBounds, DistributionSummary, DripSchedule,
-        Reservation, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast, Lot,
+        Reservation, Retirement, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast,
+        Lot,
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
         AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position,
         SpotBalance, SellerModel,
@@ -453,6 +457,10 @@ _RUNTIME_FIELDS = (
     "exposure_evidence", "pending_meta", "verdict_outcomes", "consequence_mix",
     "sampling_history", "novelty_grant",
     "card_samples", "price_windows", "price_origins",
+    "retired_assemblies", "retirement_proposals", "return_kinds", "decision_subjects",
+    "event_schemas",
+    "return_bindings",
+    "return_events",
     # W5: A11's registered measurements and A10's open assembly-learner rounds.
     "registered_observations", "assembly_rounds",
     "connector_calls", "connector_calls_day",

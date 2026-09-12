@@ -23,12 +23,6 @@ DEF_FAST, DEF_VERDICT, DEF_CONFORMITY = "fast-v1", "verdict-v1", "conformity-v1"
 DEF_META_CONSEQUENCE = "meta-consequence-v1"
 
 
-PRODUCER_KINDS = frozenset({"Tick", "MarketMid", "Funding", "Fill", "OrderRejected"})
-
-
-EVALUATION_BOUNDARY = "producer → evaluator → meta"
-
-
 class SimClock:
     """Simulated time. Every kernel component reads the current event's timestamp from here."""
 
