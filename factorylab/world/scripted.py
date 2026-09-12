@@ -34,6 +34,7 @@ class ScriptedProvider:
     treasury_at_call: int = 120
     router_add_at_call: int = 100
     _producer_calls: int = 0
+    spot_pair: str | None = None
 
     def complete(self, req: ModelRequest) -> ModelResponse:
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
@@ -94,6 +95,14 @@ class ScriptedProvider:
                     "args": {"direction": "to_venue", "usd": 5, "reason": "scripted"},
                 }
             ]
+        if self.spot_pair and n in (5, 15, 25):
+            reply = {"action": "hold", "payoff": 0.1, "tool_calls": [
+                {"tool": "treasury.transfer", "args": {
+                    "direction": "perps_to_spot", "usd": "10"}}
+                if n == 5 else {"tool": "venue.place_market", "args": {
+                    "coin": self.spot_pair, "market": "spot",
+                    "side": "buy" if n == 15 else "sell", "size": "0.0001"}}
+            ]}
         if n == self.router_add_at_call:
             reply["register"] = [
                 {

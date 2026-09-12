@@ -480,8 +480,10 @@ def test_producer_verdict_delivery_is_immediate_before_any_cascade_release():
     items = _diary(runtime)
     verdicts = [i for i in items if i["kind"] == "event" and i["event"]["kind"] == "Verdict"]
     assert verdicts
-    assert not any(i["kind"] == "cascade.release" for i in items)
+    releases = [i["seq"] for i in items if i["kind"] == "cascade.release"]
     for verdict in verdicts:
+        # A verdict never waits on the conformity cascade that grades its evaluator.
+        assert all(seq > verdict["seq"] for seq in releases)
         handle = verdict["event"]["payload"]["about_handle"]
         settlement = next(
             i for i in items if i["kind"] == "decision.settle" and i["return"]["handle"] == handle

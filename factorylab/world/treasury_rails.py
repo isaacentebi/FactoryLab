@@ -56,6 +56,7 @@ from factorylab.world.evm import (
     event_topic,
     word_address,
 )
+from factorylab.world.treasury import ClassTransferRail
 from factorylab.world.x402 import Transport, http_request
 
 
@@ -67,7 +68,7 @@ def gas_micro(wei: int, price: str) -> int:
     )
 
 
-class LiveRail:
+class LiveRail(ClassTransferRail):
     """Only pinned, receipt-confirmed native USDC transfers advance the treasury's opaque plan."""
 
     name = "hypercore-hyperevm-base-cctp-v2"
@@ -115,6 +116,10 @@ class LiveRail:
             "reserve": self.base.balance(self.base.chain.usdc),
             "hyperevm_reserve": self.hyper.balance(self.hyper.chain.usdc),
         }
+        if getattr(self.exchange, "spot_pairs", ()):
+            result["venue"] = int(self.exchange.account().equity_usd * 1_000_000)
+            result["perps"] = int(Decimal(state["marginSummary"]["accountValue"]) * 1_000_000)
+            result["spot"] = result["venue"] - result["perps"]
         if not self.testnet:
             try:
                 result["venice"] = self._venice_client().venice_balance()
@@ -123,6 +128,8 @@ class LiveRail:
         return result
 
     def plan(self, direction: str) -> tuple[str, ...]:
+        if direction in ("spot_to_perps", "perps_to_spot"):
+            return (direction,)
         if direction == "to_venice":
             return ("venice_top_up",)
         if direction == "to_reserve":
@@ -133,6 +140,9 @@ class LiveRail:
 
     def preflight(self, direction: str, amount: int, gas_spent: dict) -> None:
         self.plan(direction)
+        if direction in ("spot_to_perps", "perps_to_spot"):
+            self.class_preflight(direction, amount)
+            return
         if direction == "to_venice":
             from factorylab.world.x402 import TOP_UP_MICRO
 
@@ -255,6 +265,8 @@ class LiveRail:
 
     def prepare(self, step: str, state: dict, gas_spent: dict) -> dict:
         """Return immutable replay references without broadcasting an external write."""
+        if step in ("spot_to_perps", "perps_to_spot"):
+            return self.class_prepare(step, state)
         if step == "venice_top_up":
             from factorylab.world.venice import prepare_top_up
 
@@ -335,6 +347,8 @@ class LiveRail:
         return ref
 
     def send(self, step: str, reference: dict) -> dict | None:
+        if step in ("spot_to_perps", "perps_to_spot"):
+            return self.class_send(reference)
         if step == "venice_top_up":
             from factorylab.world.venice import top_up
 
@@ -521,6 +535,8 @@ class LiveRail:
         }
 
     def poll(self, step: str, state: dict) -> dict | None:
+        if step in ("spot_to_perps", "perps_to_spot"):
+            return self.class_poll(state)
         if step == "venice_top_up":
             return self._venice_receipt(state)
         ref, amount = state["reference"], state["received_micro"]

@@ -105,10 +105,12 @@ class ReturnConsequences:
                     order_id=str(payload["order_id"]),
                     coin=payload["coin"],
                     is_buy=payload["is_buy"],
-                    size=str(payload["size"]),
+                    size=str(payload.get("inventory_size", payload["size"])),
                     px=str(payload["px"]),
                     fee_usd=str(payload["fee_usd"]),
                     liquidation=payload.get("liquidation", False),
+                    market=payload.get("market", "perp"),
+                    order_size=str(payload["size"]),
                 )
             except ValueError as exc:
                 if "open consequence account" not in str(exc):
@@ -260,6 +262,8 @@ class FillCursor:
                 "fee_usd": str(fill.fee),
                 "realized_usd": str(fill.realized),
                 "liquidation": fill.liquidation,
+                "market": getattr(fill, "market", "perp"),
+                "inventory_size": str(getattr(fill, "inventory_size", None) or fill.size),
             }
             key = (fill.ts_ns, *payload.values())
             counts[key] += 1

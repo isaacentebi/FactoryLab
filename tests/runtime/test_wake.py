@@ -182,6 +182,36 @@ def test_optional_accounts_are_projected_and_independent(world, monkeypatch):
     assert "NEVER SHOW" not in json.dumps(result)
 
 
+def test_wake_venue_is_built_with_spot_pairs_and_counts_spot_equity(world, monkeypatch):
+    from factorylab.world.exchange import HyperliquidExchange
+
+    monkeypatch.setenv("HL_PRIVATE_KEY", "synthetic")
+    built = {}
+
+    def construct(**kwargs):
+        built.update(kwargs)
+        venue = HyperliquidExchange.__new__(HyperliquidExchange)
+        venue.coins, venue.spot_pairs = kwargs["coins"], kwargs.get("spot_pairs", ())
+        venue._address, venue._last_account = "fixture", None
+        venue._spot_marks = {"BTC": "@7"}
+        venue._guarded = lambda label, call: call()
+        venue._info = SimpleNamespace(
+            all_mids=lambda: {"BTC": "100", "@7": "100"},
+            user_state=lambda _: {"marginSummary": {"accountValue": "1",
+                                                    "totalMarginUsed": "0"}},
+            spot_user_state=lambda _: {"balances": [{"coin": "USDC", "total": "2"},
+                                                    {"coin": "BTC", "total": "3"}]},
+            user_fills_by_time=lambda *a: [],
+        )
+        return venue
+
+    monkeypatch.setattr("factorylab.world.exchange.HyperliquidExchange", construct)
+    result = collect_wake(world)
+    assert built["spot_pairs"] == load_manifest("scripted").exchange.spot_pairs == ("BTC/USDC",)
+    # 1 USDC of perps account value, 2 of spot cash and 3 BTC marked at 100.
+    assert result["venue"] == {"equity_micro": 303_000_000, "realized_to_date_micro": 0}
+
+
 def test_realized_pagination_preserves_boundary_and_refuses_retention_limit():
     calls = []
     rows = [{"time": n, "closedPnl": "0.000001"} for n in range(2001)]

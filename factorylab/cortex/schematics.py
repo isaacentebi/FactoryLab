@@ -78,6 +78,7 @@ class SchematicsMixin:
             '"noop" | "hold" | "order"; an "order" return also carries "coin" (one of the '
             'world\'s coins), "side" ("buy" | "sell") and "size" (base units as a decimal '
             'string, e.g. "0.005"), and is placed at market on return; limit, reduce-only, '
+            '"market" defaults to "perp" or accepts "spot" with a configured BASE/USDC pair; '
             "close, leverage and cancel are tool_calls on the venue.* tools"
         ),
         "order_example": '{"action": "order", "coin": "ETH", "side": "buy", "size": "0.004"}',
@@ -141,6 +142,8 @@ class SchematicsMixin:
                     for p in acct.positions
                 ],
                 "margin_used_usd": str(acct.margin_used_usd),
+                "spot_balances": [{"coin": b.coin, "total": str(b.total),
+                                   "available": str(b.available)} for b in acct.spot_balances],
             }
         except RuntimeError:
             account = {"equity_usd": str(money_to_usd(self.wallet.balance)), "positions": []}
@@ -156,6 +159,7 @@ class SchematicsMixin:
             "composition": SEED_SYSTEM_PROMPT,
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
+            "venue": self.exchange.instruments(),
             "tools": list(self.tool_specs.values()),
             "population_tools": {
                 "available": self.tool_jail_available,
