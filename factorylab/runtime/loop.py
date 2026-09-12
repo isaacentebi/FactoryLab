@@ -14,7 +14,7 @@ settles the evaluator decision on ``conformity``. Anything nobody judged in
 time is censored: no score, no learning, no manufactured outcome.
 
 Prices. At each reserve-window boundary the runtime measures the window
-that closed (cost per return, well-formed rate, forecast skill, turnover)
+that closed using the observation catalogue
 and hands each priced metric card one observation. The price controller
 (spec v0.6 section 8.1) revises a bounded λ per card; verdict and conformity
 scores settle net of Σ λ·violation, clipped to [0, 1]. The consequence and
@@ -34,7 +34,7 @@ import inspect
 import json
 import random
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_EVEN, Decimal
 from itertools import islice
 from statistics import median
@@ -66,6 +66,7 @@ from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_threshold
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
+from factorylab.runtime.observations import CATALOGUE, catalogue, observation_for
 from factorylab.runtime.resume import (
     JournalProxy,
     RecoveryJournal,
@@ -90,7 +91,7 @@ from factorylab.world.clock import ClockIterator, ClockSource, DripSource, merge
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange, HyperliquidExchange, Order
 from factorylab.world.market import MultiProvider, X402MeteredModel, X402Provider
-from factorylab.world.metering import Meter, MeteredModel
+from factorylab.world.metering import Meter, Metered, MeteredModel
 from factorylab.world.models import FakeModel, ModelRequest, ModelResponse, TokenPrice
 from factorylab.world.x402 import X402Error
 
@@ -244,7 +245,7 @@ class ScriptedProvider:
                             "units": "ratio",
                             "window": "rolling 100 events",
                             "acceptable_region": "below 5",
-                            "observation": "venue fills",
+                            "observation": "turnover",
                             "lambda": 0.6,
                         }
                     ],
@@ -376,6 +377,17 @@ def _duration_str(ns: int) -> str:
     return f"{ns / 1_000_000_000:g}s"
 
 
+class _ObservedX402Model(X402MeteredModel):
+    """Paid completions enter observations after metering, including during journal replay."""
+
+    def complete(self, req: ModelRequest, *, handle: str) -> Metered[ModelResponse]:
+        """A positive committed request yields exactly one ledgered purchase observation."""
+        result = super().complete(req, handle=handle)
+        if result.cost > 0:
+            self.record({"kind": "observation.market_purchase", "handle": handle})
+        return result
+
+
 @dataclass
 class MeasureWindow:
     """Raw material for one reserve window's metric-card observations."""
@@ -388,6 +400,28 @@ class MeasureWindow:
     invocations: int = 0
     ok: int = 0
     notional_micro: int = 0  # filled size × price, summed
+    forecast_skills: list[float] = field(default_factory=list)
+    producer_returns: int = 0
+    noop_returns: int = 0
+    revision_returns: int = 0
+    revision_handles: set[str] = field(default_factory=set)
+    registrations: int = 0
+    registration_rejections: int = 0
+    amendments_proposed: int = 0
+    amendments_activated: int = 0
+    verdicts: dict[str, dict[str, list[float]]] = field(default_factory=dict)
+    consequences_settled: int = 0
+    consequences_paid_off: int = 0
+    fills: int = 0
+    realized_pnl_micro: int = 0
+    max_position_notional_micro: int | None = None
+    exposures_settled: int = 0
+    exposures_won: int = 0
+    meta_verdicts: list[float] = field(default_factory=list)
+    outcomes: int = 0
+    censored: int = 0
+    tool_calls: int = 0
+    market_purchases: int = 0
 
 
 @dataclass
@@ -589,7 +623,8 @@ class Runtime:
         # Fills before launch belong to nobody; funding uses the same launch boundary.
         self.venue = (
             LiveVenue(self.exchange, last_fill_ns=self.clock.now_ns, ledger=self.ledger)
-            if self.live else None
+            if self.live
+            else None
         )
         self.prices = manifest.price_table()
         self.meter = Meter(self.wallet)
@@ -599,8 +634,9 @@ class Runtime:
         from factorylab.world.treasury import FakeTreasury, Treasury, UnconfiguredRail
 
         if not self.live:
-            self.treasury = FakeTreasury(self.ledger, self.wallet,
-                                         fee_micro=manifest.treasury.fake_fee_micro)
+            self.treasury = FakeTreasury(
+                self.ledger, self.wallet, fee_micro=manifest.treasury.fake_fee_micro
+            )
         else:
             if manifest.treasury.reserve_address is not None:
                 from factorylab.world.treasury_rails import LiveRail
@@ -608,8 +644,13 @@ class Runtime:
                 rail = LiveRail(self.exchange, manifest.treasury)
             else:
                 rail = UnconfiguredRail(self.exchange.target)
-            self.treasury = Treasury(self.ledger, self.wallet, rail, provider=self.provider,
-                                     fee_ceiling_micro=manifest.treasury.max_transfer_fee_micro)
+            self.treasury = Treasury(
+                self.ledger,
+                self.wallet,
+                rail,
+                provider=self.provider,
+                fee_ceiling_micro=manifest.treasury.max_transfer_fee_micro,
+            )
         self.wallet.bind_pots(self.treasury.pots)
         self.treasury.rail = JournalProxy(
             self.treasury.rail, self.ledger, "treasury.rail", deterministic=not self.live
@@ -809,7 +850,7 @@ class Runtime:
     def _instantiate(self, spec: AssemblySpec) -> Assembly:
         model = MeteredModel(self.provider, self.prices, self.meter)
         if spec.model_id.startswith("x402:"):
-            model = X402MeteredModel(
+            model = _ObservedX402Model(
                 self.market,
                 self.prices,
                 self.meter,
@@ -917,7 +958,7 @@ class Runtime:
                     "units": "…",
                     "window": "…",
                     "acceptable_region": "…",
-                    "observation": "where the number comes from",
+                    "observation": "one of world.observations ids",
                     "lambda": "optional number in [0, prices.lambda_max], for add or replace",
                 }
             ],
@@ -966,6 +1007,7 @@ class Runtime:
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
             "tools": list(self.tool_specs.values()),
+            "observations": catalogue(),
             "novelty_reserve_remaining_usd": str(money_to_usd(self.reserve.remaining())),
             "models": [
                 {
@@ -1157,6 +1199,7 @@ class Runtime:
 
         self.wallet.drip(self.clock.now_ns)
         self._manage_reserve_window()
+        self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
             self.treasury.tick(self.clock.now_ns)
             if self.venue is not None:
@@ -1174,8 +1217,11 @@ class Runtime:
                 self._settle_exchange_effects(observed)
                 if self.reconciler.due():
                     snap = Reconciler.snapshot(
-                        self.wallet.balance, self.provider, self.exchange,
-                        pots_view=self.treasury.refresh_pots(), ledger=self.ledger,
+                        self.wallet.balance,
+                        self.provider,
+                        self.exchange,
+                        pots_view=self.treasury.refresh_pots(),
+                        ledger=self.ledger,
                     )
                     self.stats.reconciliations += 1
                     self._emit(EventKind.RECONCILED, snap, source="kernel")
@@ -1221,7 +1267,9 @@ class Runtime:
             self._settle_exchange_effects(observed)
             self.treasury.tick(now_ns)
         snapshot = Reconciler.snapshot(
-            self.wallet.balance, self.provider, self.exchange,
+            self.wallet.balance,
+            self.provider,
+            self.exchange,
             pots_view=self.treasury.refresh_pots() if self.live else self.treasury.pots(),
             ledger=self.ledger,
         )
@@ -1328,6 +1376,8 @@ class Runtime:
     def _record_market(self, item: dict) -> None:
         """Payment and pricing evidence is ledgered before dependent runtime state changes."""
         self.ledger.append({**item, "ts": self.clock.now_ns})
+        if item["kind"] == "observation.market_purchase":
+            self.window.market_purchases += 1
 
     def _record_seller(self, model_id: str, price: TokenPrice, seller: dict) -> None:
         """Registered seller metadata and the provider ceiling follow durable pricing evidence."""
@@ -1368,9 +1418,10 @@ class Runtime:
             self.reserve.open_window(self.clock.now_ns, self.wallet.balance)
             self.reserve_window_start = self.clock.now_ns
             self.stats.reserve_windows += 1
+            self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro())
+            self._observe_positions()
             self._activate_charter_if_due()
             self._derive_regions()
-            self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro())
 
     # ---- prices
 
@@ -1379,6 +1430,49 @@ class Runtime:
             return _usd_to_micro(self.exchange.account().equity_usd)
         except RuntimeError:  # read-only live venue: the wallet is the only equity there is
             return self.wallet.balance
+
+    def _observe_delivered_event(self, ev: Event) -> None:
+        """Only ledgered event deliveries contribute raw verdict samples to this window."""
+        if ev.kind is EventKind.VERDICT:
+            judges = self.window.verdicts.setdefault(ev.payload["about_handle"], {})
+            judge = self.handle_to_assembly.get(
+                ev.payload["evaluator_handle"], ev.payload["evaluator_handle"]
+            )
+            judges.setdefault(judge, []).append(float(ev.payload["verdict"]))
+        elif ev.kind is EventKind.META_VERDICT:
+            self.window.meta_verdicts.append(float(ev.payload["score"]))
+        elif ev.kind is EventKind.MARKET_MID:
+            self._observe_positions()
+
+    def _observe_positions(self) -> None:
+        """A new peak position notional is recorded before it enters the window."""
+        try:
+            positions = self.exchange.account().positions
+            mids = self.exchange.mids() if positions else {}
+        except RuntimeError:
+            return
+        notionals: dict[str, Decimal] = {}
+        if any(position.size and position.coin not in mids for position in positions):
+            return
+        for position in positions:
+            if position.size:
+                notionals[position.coin] = notionals.get(position.coin, Decimal(0)) + (
+                    position.size * Decimal(str(mids[position.coin]))
+                )
+        if not notionals:
+            return
+        peak = max(_usd_to_micro(abs(value)) for value in notionals.values())
+        previous = self.window.max_position_notional_micro
+        if previous is None or peak > previous:
+            self.ledger.append(
+                {
+                    "kind": "observation.position_peak",
+                    "window": self.window.index,
+                    "notional_micro": peak,
+                    "ts": self.clock.now_ns,
+                }
+            )
+            self.window.max_position_notional_micro = peak
 
     def _derive_regions(self) -> None:
         """Every readable card of the current edition holds a region; unreadable ones hold none.
@@ -1395,12 +1489,20 @@ class Runtime:
                 if card.id in self.regions:
                     self.controller.clear_region(card.id)
                 key = (card.id, self.charter.edition)
-                if not parses(card) and key not in self.unparsed_logged:
+                unknown = []
+                if not parses(card):
+                    unknown.append("region")
+                if observation_for(card.observation) is None:
+                    unknown.append("observation")
+                if unknown and key not in self.unparsed_logged:
                     self.ledger.append(
                         {
                             "kind": "price.unparsed",
                             "card_id": card.id,
                             "text": card.acceptable_region,
+                            "observation": card.observation,
+                            "unparsed": unknown,
+                            "reason": "unknown " + " and ".join(unknown),
                             "edition": self.charter.edition,
                             "ts": self.clock.now_ns,
                         }
@@ -1439,53 +1541,59 @@ class Runtime:
         settled forecasts; turnover: filled notional over equity at the window
         start (0 with no fills). A quantity without support is not observed.
         """
-        w = self.window
-        values: dict[str, float] = {}
-        if w.costs:
-            values["cost_per_return"] = sum(w.costs) / len(w.costs)
-        if w.invocations:
-            values["well_formed_rate"] = w.ok / w.invocations
         evaluators = {a.spec.id for a in self.assemblies.values() if a.spec.role == "evaluator"}
         skills = [
             v["skill"]
             for eid, v in self.standing.snapshot().items()
             if eid in evaluators and v.get("n")
         ]
-        if skills:
-            values["forecast_skill"] = sum(skills) / len(skills)
-        if w.notional_micro == 0:
-            values["turnover"] = 0.0
-        elif w.equity_start_micro > 0:
-            values["turnover"] = w.notional_micro / w.equity_start_micro
+        w = replace(self.window, forecast_skills=skills)
+        values = {o.id: value for o in CATALOGUE if (value := o.measure(w)) is not None}
+        card_values = {
+            c.id: values[o.id]
+            for c in self.charter.cards
+            if c.id in self.regions
+            and (o := observation_for(c.observation)) is not None
+            and o.id in values
+        }
         self.ledger.append(
             {
                 "kind": "price.window",
                 "window": w.index,
                 "window_end_event": self.n,
-                "values": values,
+                "values": card_values,  # Diary dimensions are card ids, not catalogue ids.
+                "observations": values,
                 "ts": self.clock.now_ns,
             }
         )
         before = self.controller.snapshot()["cards"]
-        observed = [c for c in sorted(self.regions) if c in values]
+        observed = sorted(card_values)
         for card_id in observed:
-            self.controller.observe(card_id, values[card_id], window_end_event=self.n)
+            self.controller.observe(card_id, card_values[card_id], window_end_event=self.n)
         after = self.controller.snapshot()["cards"]
         for card_id in observed:
             if after[card_id]["updates"] > before[card_id]["updates"]:
                 self.stats.price_updates += 1
             else:
                 self.stats.price_skipped += 1
-        if w.costs:
-            self.rolling["cost_per_return_prev_median"] = float(median(w.costs))
+        for card in self.charter.cards:
+            observation = observation_for(card.observation)
+            if observation is not None and observation.id in values:
+                samples = (
+                    w.costs if observation.id == "cost_per_return" else [values[observation.id]]
+                )
+                self.rolling[f"{card.id}_prev_median"] = float(median(samples))
         self.stats.last_window_values = values
 
     def _penalty_for(self, cards: frozenset[str]) -> float:
         """Σ λ_j · violation_j over the latest window's values for cards the role answers for."""
         values = {
-            k: v
-            for k, v in self.stats.last_window_values.items()
-            if k in cards and k in self.regions
+            card.id: self.stats.last_window_values[observation.id]
+            for card in self.charter.cards
+            if card.id in cards
+            and card.id in self.regions
+            and (observation := observation_for(card.observation)) is not None
+            and observation.id in self.stats.last_window_values
         }
         return self.controller.penalty(values) if values else 0.0
 
@@ -1510,6 +1618,7 @@ class Runtime:
             definition_version=definition_version,
             sampling_ref=sampling_ref,
         )
+        self.window.outcomes += 1
         self.ledger.append(
             {
                 "kind": "price.penalty",
@@ -1534,10 +1643,12 @@ class Runtime:
                 return
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
+                self.window.fills += 1
                 self.window.notional_micro += _usd_to_micro(
                     Decimal(str(we.payload["size"])) * Decimal(str(we.payload["px"]))
                 )
                 realized = _usd_to_micro(we.payload["realized_usd"])
+                self.window.realized_pnl_micro += realized
                 fee = _usd_to_micro(we.payload["fee_usd"])
                 self.realized_to_date += realized
                 self.fees_to_date += fee
@@ -1551,8 +1662,10 @@ class Runtime:
                     self.wallet.settle(-paid, f"funding:{we.payload['coin']}:{we.ts_ns}", "funding")
             self.internal.append(self._kernel_event(we))
         if hasattr(self.exchange, "sync_cash"):
-            self.exchange.sync_cash(getattr(self.treasury, "venue_balance_usd",
-                                            money_to_usd(self.wallet.balance)))
+            self.exchange.sync_cash(
+                getattr(self.treasury, "venue_balance_usd", money_to_usd(self.wallet.balance))
+            )
+        self._observe_positions()
 
     def _execute_outputs(self, ret: Return) -> None:
         out = ret.outputs
@@ -1773,8 +1886,9 @@ class Runtime:
                 self.ledger.append({"kind": "treasury.intent", **intent, "ts": self.clock.now_ns})
                 self._emit(EventKind.TRANSFER_INTENT, intent, source="kernel")
                 self.stats.transfer_intents += 1
-                return self.treasury.transfer(direction, usd, handle=handle,
-                                              now_ns=self.clock.now_ns)
+                return self.treasury.transfer(
+                    direction, usd, handle=handle, now_ns=self.clock.now_ns
+                )
             tool = self.population_tools.get(tool_id)
             if tool is None:
                 return {"error": "tool unavailable"}
@@ -1798,10 +1912,19 @@ class Runtime:
                 self._settle_exchange_effects(self.exchange.drain_events())
         return metered.result, metered.cost
 
+    @staticmethod
+    def _carries_revision(ret: Return) -> bool:
+        """A return counts once for a proposal object or tool call, even if later rejected."""
+        proposals = ret.outputs.get("register")
+        return bool(ret.tool_calls) or (
+            isinstance(proposals, list) and any(isinstance(p, dict) for p in proposals)
+        )
+
     def _invoke(self, action_id: str, req: Request, role: str) -> Return:
         asm = self.assemblies[action_id]
         ret = asm.invoke(req)
         self._check_compute_return(req.handle, ret)
+        revision = self._carries_revision(ret)
         if ret.status == "ok" and ret.tool_calls:
             results = []
             tool_cost = 0
@@ -1824,6 +1947,7 @@ class Runtime:
                         "ts": self.clock.now_ns,
                     }
                 )
+                self.window.tool_calls += 1
                 results.append(
                     {"tool": call.get("tool"), "args": call.get("args"), "result": result}
                 )
@@ -1842,6 +1966,7 @@ class Runtime:
             )
             second = asm.invoke(follow)
             self._check_compute_return(req.handle, second)
+            revision = revision or self._carries_revision(second)
             if second.tool_calls:
                 self.ledger.append(
                     {"kind": "tool.calls_ignored", "handle": req.handle, "ts": self.clock.now_ns}
@@ -1860,11 +1985,6 @@ class Runtime:
             self.stats.invocation_status.get(ret.status, 0) + 1
         )
         self.stats.invocations_by_role[role] = self.stats.invocations_by_role.get(role, 0) + 1
-        self.window.invocations += 1
-        if ret.status == "ok":
-            self.window.ok += 1
-            if role == "producer":
-                self.window.costs.append(ret.cost)
         sr = ret.stop_reason or "none"
         self.stats.stop_reasons[sr] = self.stats.stop_reasons.get(sr, 0) + 1
         self.ledger.append(
@@ -1881,6 +2001,13 @@ class Runtime:
                 "ts": self.clock.now_ns,
             }
         )
+        self.window.invocations += 1
+        if ret.status == "ok":
+            self.window.ok += 1
+            if role == "producer":
+                self.window.costs.append(ret.cost)
+        if role == "producer" and revision:
+            self.window.revision_handles.add(req.handle)
         return ret
 
     def _check_compute_return(self, handle: str, ret: Return) -> None:
@@ -1964,6 +2091,21 @@ class Runtime:
                 {"handle": handle, "outputs": ret.outputs, "verdict": None}
             )
         self.consequences.finish(handle, ret.cost)
+        noop = str(ret.outputs.get("action", "")).lower() in ("noop", "hold")
+        revision = handle in self.window.revision_handles
+        self.ledger.append(
+            {
+                "kind": "observation.producer",
+                "handle": handle,
+                "noop": noop,
+                "revision": revision,
+                "ts": self.clock.now_ns,
+            }
+        )
+        self.window.producer_returns += 1
+        self.window.noop_returns += int(noop)
+        self.window.revision_returns += int(revision)
+        self.window.revision_handles.discard(handle)
         if self.queue.get(handle).channel == CH_EXPOSURE:
             self.pending_exposure[handle] = self.n
         else:
@@ -2059,6 +2201,7 @@ class Runtime:
                 sampling_ref=None,
             )
             self.stats.conformities += 1
+            self.window.outcomes += 1
             return
         pend = self.pending.pop(about, None)
         about_decision = self.queue.get(about)
@@ -2219,6 +2362,7 @@ class Runtime:
                 sampling_ref=None,
             )
             self.stats.fast_settlements += 1
+            self.window.outcomes += 1
         else:
             self.ledger.append(
                 {
@@ -2347,6 +2491,7 @@ class Runtime:
             try:
                 self._propose_amendment(handle, item)
                 self.stats.registrations_accepted += 1
+                self.window.registrations += 1
             except (Infeasible, PermissionError, ValueError, KeyError, TypeError) as exc:
                 self._reject_registration(
                     handle, f"amendment: {type(exc).__name__}: {exc}"[:300], None
@@ -2357,6 +2502,7 @@ class Runtime:
             try:
                 self._register(handle, prop)
                 self.stats.registrations_accepted += 1
+                self.window.registrations += 1
             except (Infeasible, PermissionError, ValueError, KeyError, X402Error) as exc:
                 self._reject_registration(handle, f"{type(exc).__name__}: {exc}", None)
 
@@ -2368,6 +2514,7 @@ class Runtime:
         if index is not None:
             item["index"] = index
         self.ledger.append({**item, "ts": self.clock.now_ns})
+        self.window.registration_rejections += 1
         self.registration_feedback.append({k: v for k, v in item.items() if k != "kind"})
 
     def _register(self, handle: str, prop: Any) -> None:
@@ -2581,6 +2728,7 @@ class Runtime:
         self.registry.register(contract, by_handle=handle, reservation=res)
         self.charter_book.propose(am)
         self.stats.amendments_proposed += 1
+        self.window.amendments_proposed += 1
         eligible = {a.spec.id: a.spec.role for a in self.assemblies.values()}
         committee = self.charter_book.seat(am.id, eligible, self.rng)
         self._hold_vote(am, committee)
@@ -2706,6 +2854,7 @@ class Runtime:
                     self.tick_clock.set_interval(interval)
                     self.stats.clock_changes += 1
             self.stats.amendments_activated += 1
+            self.window.amendments_activated += 1
             new = self._next_charter_activation()
 
     def _open_epoch(self, kind: str) -> None:
@@ -2878,8 +3027,11 @@ class Runtime:
         )
         self.pending_exposure.pop(handle, None)
         self.stats.exposures_settled += 1
+        self.window.outcomes += 1
+        self.window.exposures_settled += 1
         if score > 0:
             self.stats.exposures_won += 1
+            self.window.exposures_won += 1
 
     def _settle_due_forecasts(self) -> None:
         self.consequences.resolve(self.n)
@@ -2899,6 +3051,11 @@ class Runtime:
                 status=str(s.status),
             )
             self.stats.forecasts_settled += 1
+            self.window.outcomes += 1
+            self.window.censored += int(s.status is SettleStatus.CENSORED)
+            if s.predicate_id == "return_paid_off" and s.status is SettleStatus.SETTLED:
+                self.window.consequences_settled += 1
+                self.window.consequences_paid_off += int(s.y == 1)
             self._emit(
                 EventKind.FORECAST_SETTLED,
                 {
@@ -2946,6 +3103,8 @@ class Runtime:
                     sampling_ref=None,
                 )
                 self.stats.censored += 1
+                self.window.outcomes += 1
+                self.window.censored += 1
             del self.pending[p.handle]
 
     def _deliver_returns(self) -> None:
