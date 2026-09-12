@@ -27,6 +27,21 @@ def pass_amendment(rt, am):
     rt.charter_book.propose(am)
     committee = rt.charter_book.seat(am.id, {"one": "producer"}, random.Random(1))
     rt.charter_book.vote(committee, "seat-1", True, "yes")
+    assert rt.charter_book.tally(committee) == "passed"
+    rt.cadence.approve(am.id)
+
+
+def activate_after_backstop(rt):
+    edition = rt.charter.edition
+    # No settlement samples exist: the current backstop is the period.
+    delay = (rt.m.timing.min_ratio * rt.m.evaluation.consequence_backstop_events
+             * rt.tick_clock.interval_ns)
+    rt.clock.now_ns += delay - 1
+    rt._activate_charter_if_due()
+    assert rt.charter.edition == edition
+    rt.clock.now_ns += 1
+    rt._activate_charter_if_due()
+    assert rt.charter.edition == edition + 1
 
 
 @pytest.mark.parametrize("value", [True, False, None, "0.5", -0.1, 1.01,
@@ -125,18 +140,18 @@ def test_activation_preserves_unpriced_changes_removes_and_readds_cards():
     rt._derive_regions()
     rt.controller.set_price("well_formed_rate", 0.7, amendment_id="initial")
     pass_amendment(rt, amendment())
-    rt._activate_charter_if_due()
+    activate_after_backstop(rt)
     assert rt.controller.price("well_formed_rate") == 0.7
     pass_amendment(rt, amendment(id="remove-card", edition_base=2, replace=(),
                                 remove=("well_formed_rate",)))
-    rt._activate_charter_if_due()
+    activate_after_backstop(rt)
     assert "well_formed_rate" not in rt.regions
     assert "well_formed_rate" not in rt.priced
     assert "well_formed_rate" not in rt.controller.snapshot()["cards"]
     pass_amendment(rt, amendment(id="restore-card", edition_base=3, replace=(),
                                 add=(seed_charter().cards[1],),
                                 proposed_prices=(("well_formed_rate", 0.4),)))
-    rt._activate_charter_if_due()
+    activate_after_backstop(rt)
     assert rt.controller.price("well_formed_rate") == 0.4
     assert "well_formed_rate" in rt.regions
 
@@ -146,12 +161,12 @@ def test_proposed_price_survives_unreadable_then_readable_bounds():
     rt._derive_regions()
     card = replace(rt.charter.cards[1], acceptable_region="use judgment")
     pass_amendment(rt, amendment(replace=(card,), proposed_prices=((card.id, 0.8),)))
-    rt._activate_charter_if_due()
+    activate_after_backstop(rt)
     public = next(c for c in rt._world_block()["card_prices"] if c["card_id"] == card.id)
     assert public["lambda"] == 0.8 and public["region"] is None
     assert rt.controller.penalty({card.id: -10}) == 0
     pass_amendment(rt, amendment(id="readable-again", edition_base=2))
-    rt._activate_charter_if_due()
+    activate_after_backstop(rt)
     assert rt.controller.price(card.id) == 0.8
     assert card.id in rt.regions
 
@@ -167,7 +182,13 @@ def test_prices_wait_for_approval_and_later_passed_proposals_win():
     pass_amendment(rt, second)
     committee = rt.charter_book.seat(first.id, {"one": "producer"}, random.Random(1))
     rt.charter_book.vote(committee, "seat-1", True, "yes")
-    rt._activate_charter_if_due()
+    assert rt.charter_book.tally(committee) == "passed"
+    rt.cadence.approve(first.id)
+    activate_after_backstop(rt)
+    assert rt.charter.edition == 2
+    assert rt.controller.price("well_formed_rate") == 0.3
+    assert rt.charter_book.pending() == [second]
+    activate_after_backstop(rt)
     assert rt.charter.edition == 3
     assert rt.controller.price("well_formed_rate") == 0.9
 
@@ -176,7 +197,7 @@ def test_added_unreadable_card_retains_adopted_price():
     rt = runtime()
     card = replace(rt.charter.cards[1], id="new-card", acceptable_region="use judgment")
     pass_amendment(rt, amendment(replace=(), add=(card,), proposed_prices=((card.id, 0.6),)))
-    rt._activate_charter_if_due()
+    activate_after_backstop(rt)
     assert rt.controller.price(card.id) == 0.6
     assert card.id not in rt.regions
     assert rt.controller.penalty({card.id: -10}) == 0

@@ -63,6 +63,7 @@ class _CardState:
     saturations: int = 0
     max_step: float = 0.0
     last_window_end_event: int | None = None
+    previous_violation: float = 0.0
 
 
 class PriceController:
@@ -81,8 +82,12 @@ class PriceController:
         lambda_max: float,
         min_window_events: int,
         timing: TimingRegistry | None = None,
+        kappa: float = 0.5,
     ) -> None:
-        """Require positive finite rates/bounds and a positive integer window separation."""
+        """Require finite rates, nonnegative damping and positive bounds/window separation."""
+        self.__kappa = _number(kappa, "kappa")
+        if self.__kappa < 0:
+            raise ValueError("kappa must be nonnegative")
         self.__eta = _number(eta, "eta")
         self.__decay = _number(decay, "decay")
         self.__lambda_max = _number(lambda_max, "lambda_max")
@@ -208,8 +213,13 @@ class PriceController:
             )
             return
         violation = self.violation(card_id, value)
+        damping = (
+            self.__kappa * max(0.0, state.previous_violation - violation)
+            if violation > 0 else 0.0
+        )
         requested = (
-            state.price + self.__eta * violation if violation > 0 else (state.price - self.__decay)
+            state.price + self.__eta * violation - damping
+            if violation > 0 else state.price - self.__decay
         )
         price = min(self.__lambda_max, max(0.0, requested))
         saturated = requested < 0 or requested > self.__lambda_max
@@ -220,6 +230,7 @@ class PriceController:
             saturations=state.saturations + int(saturated),
             max_step=max(state.max_step, abs(price - state.price)),
             last_window_end_event=window_end_event,
+            previous_violation=violation,
         )
         self.__ledger.append(
             {
@@ -227,6 +238,8 @@ class PriceController:
                 "card_id": card_id,
                 "value": value,
                 "violation": violation,
+                "previous_violation": state.previous_violation,
+                "damping": damping,
                 "lambda_before": state.price,
                 "lambda_after": price,
                 "saturated": saturated,
@@ -258,6 +271,7 @@ class PriceController:
         return {
             "parameters": {
                 "eta": self.__eta,
+                "kappa": self.__kappa,
                 "decay": self.__decay,
                 "lambda_max": self.__lambda_max,
                 "min_window_events": self.__min_window_events,
