@@ -360,6 +360,17 @@ def _cmd_wake(args: argparse.Namespace) -> int:
     return 1 if data["wallet_series"] == UNAVAILABLE else 0
 
 
+def _cmd_versions(args: argparse.Namespace) -> int:
+    """Behaviour-based versions, pathologies and early warnings over a dead world's diary
+    (spec v0.7 §1). Read-only; needs the released key like postmortem."""
+    from factorylab.versioning import render, summary
+    from factorylab.versioning.reader import read_diary
+
+    report = summary(read_diary(args.ledger, args.key))
+    print(json.dumps(report, default=str) if args.json else render(report))
+    return 0
+
+
 def _cmd_postmortem(args: argparse.Namespace) -> int:
     """Decrypt a dead world's diary with its released key file and print selected entries.
 
@@ -498,6 +509,12 @@ def build_parser() -> argparse.ArgumentParser:
     pm.add_argument("--limit", type=int, default=50)
     pm.add_argument("--width", type=int, default=400)
     pm.set_defaults(func=_cmd_postmortem)
+
+    vs = sub.add_parser("versions", help="version a dead world's diary by behaviour")
+    vs.add_argument("ledger")
+    vs.add_argument("key")
+    vs.add_argument("--json", action="store_true", help="print the full summary as JSON")
+    vs.set_defaults(func=_cmd_versions)
     return p
 
 
