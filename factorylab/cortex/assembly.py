@@ -291,7 +291,7 @@ def reserved_return_fields() -> dict:
     properties = {k: {"type": "string"} for k in
                   ("action", "rationale", "reason", "status", "coin", "side")}
     properties.update({k: {"type": "number", "minimum": 0, "maximum": 1}
-                       for k in ("verdict", "conformity")})
+                       for k in ("verdict", "payoff", "conformity")})
     properties.update({
         "vote": {"type": "boolean"},
         "register": {"type": "array"},

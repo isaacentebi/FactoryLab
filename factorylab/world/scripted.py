@@ -16,11 +16,12 @@ class ScriptedProvider:
     """Deterministic stand-in for models in the scripted world, aware of the three roles.
 
     Producers cycle buy / hold / sell / hold on ticks (sized to equity) and
-    occasionally propose registrations. Evaluators return a verdict and two
-    forecasts whose probabilities depend on the evaluator's own prompt, so
-    evaluators differ. Metas return a conformity score. Token usage is
-    declared so costs are exact. It exists to close the loop, not to be
-    clever.
+    occasionally propose registrations; every produce reply carries a low
+    ``payoff`` self-forecast, which the runtime seals only for antagonists.
+    Evaluators return a verdict, a payoff probability and two forecasts whose
+    probabilities depend on the evaluator's own prompt, so evaluators differ.
+    Metas return a conformity score. Token usage is declared so costs are
+    exact. It exists to close the loop, not to be clever.
     """
 
     name: str = "scripted"
@@ -52,7 +53,7 @@ class ScriptedProvider:
 
     def _produce(self, desc: str, inputs: dict[str, Any]) -> dict[str, Any]:
         self._producer_calls += 1
-        reply: dict[str, Any] = {"action": "hold"}
+        reply: dict[str, Any] = {"action": "hold", "payoff": 0.1}
         if "event Tick" in desc:
             try:
                 payload = inputs["payload"]
@@ -180,6 +181,8 @@ class ScriptedProvider:
         q = (0.3, 0.45, 0.6, 0.75)[style]
         return {
             "verdict": verdict,
+            # The haiku judge blesses inaction as paying off; the opus judge does not.
+            "payoff": verdict,
             "rationale": "scripted judgement",
             "forecasts": [
                 {"predicate": "wallet_up", "params": {"horizon_events": 10}, "q": q},

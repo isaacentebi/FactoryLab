@@ -65,10 +65,22 @@ class PricingMixin:
             self.reserve_window_start = self.clock.now_ns
             self.market_index = None
             self.stats.reserve_windows += 1
+            self._issue_novelty_grant()
             self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro())
             self._observe_positions()
             self._activate_charter_if_due()
             self._derive_regions()
+
+    def _issue_novelty_grant(self) -> None:
+        """Learning death in the window that closed grants one extra novelty trial per
+        assembly for the window that opens (spec A13); whatever the previous grant left
+        unspent expires here, and the flag must be raised again to re-issue it."""
+        flagged = bool(self.stats.pathologies.get("learning_death"))
+        window = self.stats.reserve_windows if flagged else None
+        self.novelty_grant = {"window": window, "consumed": []}
+        if flagged:
+            self.ledger.append({"kind": "novelty.grant", "window": window,
+                                "ts": self.clock.now_ns})
 
     def _observe_delivered_event(self, ev: Event) -> None:
         """Only ledgered event deliveries contribute raw verdict samples to this window."""

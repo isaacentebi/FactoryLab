@@ -19,6 +19,10 @@ CH_EXPOSURE, DEF_EXPOSURE = "exposure", "exposure-v1"
 DEF_FAST, DEF_VERDICT, DEF_CONFORMITY = "fast-v1", "verdict-v1", "conformity-v1"
 
 
+# A top meta's conformity graded by Brier against the judged verdict's consequence.
+DEF_META_CONSEQUENCE = "meta-consequence-v1"
+
+
 PRODUCER_KINDS = frozenset({"Tick", "MarketMid", "Funding", "Fill", "OrderRejected"})
 
 

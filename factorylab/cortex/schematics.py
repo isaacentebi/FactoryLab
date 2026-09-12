@@ -79,6 +79,16 @@ class SchematicsMixin:
             "close, leverage and cancel are tool_calls on the venue.* tools"
         ),
         "order_example": '{"action": "order", "coin": "ETH", "side": "buy", "size": "0.004"}',
+        "verdict": (
+            "evaluator returns (required): the judged return's quality against the charter, "
+            "0 to 1; it settles the producer's verdict channel and is graded by meta conformity"
+        ),
+        "payoff": (
+            "evaluator returns (required): your probability that the kernel's consequence "
+            "predicate resolves true for the judged return; antagonist returns (optional): the "
+            "same probability about your own return. Either is sealed as the kernel's payoff "
+            "forecast and graded by Brier against the realised predicate (see scoring)"
+        ),
         "register": "a list of up to three proposals, including amendments, shaped like "
         "proposal_shapes; router add=false replaces, add=true adds a router. Learners: exp3 or "
         "blum_mansour. Assembly roles: producer, evaluator, meta, antagonist; effort: low, medium, "
@@ -137,7 +147,8 @@ class SchematicsMixin:
             },
             "observations": measurement_catalogue(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
-                        "trial_invocations": self.m.novelty.trial_invocations},
+                        "trials": self.m.novelty.trials,
+                        "max_lifetime_windows": self.m.novelty.max_lifetime_windows},
             "committee": self._mechanics_block()["committee"],
             "pathologies": dict(self.stats.pathologies),
             "novelty_reserve_remaining_usd": str(money_to_usd(self.reserve.remaining())),
@@ -215,7 +226,8 @@ class SchematicsMixin:
             },
             "novelty": {"share": nov.share, "window_ns": nov.window_ns,
                         "window": _duration_str(nov.window_ns),
-                        "trials": getattr(nov, "trials", nov.trial_invocations)},
+                        "trials": nov.trials,
+                        "max_lifetime_windows": nov.max_lifetime_windows},
             "controller": {
                 "eta": pr.eta, "kappa": pr.kappa, "decay": self.controller.snapshot()[
                     "parameters"]["decay"],
@@ -276,7 +288,7 @@ class SchematicsMixin:
         """How decisions settle, stated as facts about the world (v0.4 §1.6: schematics are
         public; no goals). Run 7 showed judges grading conformity alone because nothing told
         them a verdict is also a forecast, and producers reinforced by verdicts that never
-        answered to money."""
+        answered to money. Every formula here is the one the runtime applies."""
         ev = self.ev
         return {
             "producer_or_antagonist_return": (
@@ -285,42 +297,74 @@ class SchematicsMixin:
                 "unjudged returns are censored (no score, no learning)"
             ),
             "antagonist_exposure": (
-                "an antagonist return also settles 1 on the exposure channel when a judge's "
-                "forecast about it scores worse than the prevalence baseline, else 0"
+                "an antagonist return settles on the exposure channel, less the antagonist's "
+                "card penalty: 1 only when the judge's mandatory payoff forecast about it "
+                "scored a worse Brier than the prevalence baseline and the antagonist's own "
+                "payoff forecast about it scored better; a judge's optional forecasts never "
+                "count; otherwise 0 once nothing about the return is pending"
             ),
-            "verdict": (
-                "a verdict is also sealed as a forecast, with q = verdict, that the judged "
-                "return pays off; it settles on the evaluator's consequence standing"
+            "antagonist_routing": (
+                "router probability mass on antagonist assemblies is renormalised to at most "
+                f"{ev.adversarial_share} before every draw"
+            ),
+            "verdict_and_payoff": (
+                "an evaluator gives two numbers: verdict (charter quality) settles the judged "
+                "return and is graded by meta conformity; payoff is sealed as a forecast with "
+                "q = payoff that return_paid_off resolves true for the judged return and is "
+                "graded by Brier against the realised predicate; the two never substitute for "
+                "each other"
             ),
             "return_paid_off": (
-                "1 when the lots the return's own fills opened are closed with realized gain "
-                "net of fees, funding and the return's own compute cost; a return that placed "
-                "no fills settles 0; lots still open after "
-                f"{ev.consequence_backstop_events} events are marked to mid"
+                "the kernel's consequence predicate about a return, resolved 1 or 0 by the "
+                "runtime once the return's consequence is fixed; the payoff field is the only "
+                "forecast sealed about it and it cannot be proposed"
             ),
-            "consequence_standing": (
-                "Brier score of the evaluator's forecasts against the prevalence baseline; "
-                f"it enters evaluator selection with weight {ev.consequence_share} beside the "
-                "learned selection"
+            "payoff_standing": (
+                "mean Brier of the evaluator's payoff forecasts minus the prevalence "
+                "baseline's, capped below minimum coverage; it enters evaluator selection with "
+                f"weight consequence_mix (now {self.consequence_mix}, manifest "
+                f"{ev.consequence_share}) beside the learned selection; when the verdict mean "
+                f"rises while payoff skill falls over {self.m.immune.k} windows the mix rises by "
+                f"{ev.sampling_step} for the next window, capped at {ev.sampling_cap}, and "
+                "steps back otherwise"
             ),
             "evaluator_return": (
                 "settles on the conformity channel: the score a meta gives the verdict within "
                 f"{ev.verdict_timeout_events} events, less the card penalty; metas judge one "
                 f"verdict in every {self.m.timing.min_ratio} (with jitter) as the window's "
-                "representative and its score settles the whole window"
+                "representative; the representative settles at the meta's score and each "
+                f"unread sibling at {ev.sibling_share} of it"
             ),
             "meta_return": (
-                "settles on the fast channel (well-formed = 1) unless a higher tier of metas "
-                "exists, in which case on conformity like an evaluator"
+                "a top-tier meta's conformity c is graded by Brier 1 - (c - y)^2 where y = 1 "
+                "when the judged verdict's payoff forecast scored at least the prevalence "
+                "baseline; a malformed conformity settles 0; a lower tier settles on "
+                "conformity like an evaluator"
             ),
             "card_penalty": (
                 "effective = clip(score - sum(lambda_j * violation_j), 0, 1); each role's "
                 "cards use their declared typed windows; prices and region scales "
                 "are in card_prices"
             ),
+            "revision": (
+                "a producer return counts as a revision only when a registration it carried "
+                "was accepted; an activated amendment counts in its window; refused proposals "
+                "and tool calls do not"
+            ),
+            "venue_and_treasury_writes": (
+                "venue.place_market, venue.place_limit, venue.close, venue.cancel, "
+                "venue.set_leverage and treasury.transfer act only for a decision with an open "
+                "consequence account (producer, antagonist and child returns); a judging "
+                "decision is refused; nothing judges its own output or its child's"
+            ),
             "policy": self._mechanics_block()["committee"]["liability"],
             "novelty_reserve": (
-                "registrations draw on the novelty reserve at the trial amount; refused "
-                "proposals carry a reason in registration_feedback"
+                "registrations draw on the novelty reserve at the trial amount; a refused "
+                "proposal returns its trial to the window and carries a reason in "
+                "registration_feedback; a registered assembly keeps protected compute until "
+                f"{self.m.novelty.trials} settled consequences have been delivered to it or "
+                f"{self.m.novelty.max_lifetime_windows} windows have passed since registration "
+                "(continuations and children do not count; a learning-death window grants one "
+                "more)"
             ),
         }

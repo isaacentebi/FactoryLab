@@ -6,12 +6,15 @@ scores and no rules; it is glue over kernel physics.
 Roles. Producers respond to world events. Every producer decision, including
 NOOP, is published as a ``ProducerReturn`` and judged by an evaluator chosen
 by the evaluator router (whose executed distribution blends a protected
-share weighted by consequence standing). An evaluator returns a verdict,
-which settles the producer decision on its ``verdict`` channel, and sealed
-forecasts, each opened as its own decision on the ``consequence`` channel
-and settled later by the world. A meta assembly judges the verdict and
-settles the evaluator decision on ``conformity``. Anything nobody judged in
-time is censored: no score, no learning, no manufactured outcome.
+share weighted by payoff standing, with antagonist mass capped). An
+evaluator returns two numbers: a ``verdict`` (charter quality), which settles
+the producer decision on its ``verdict`` channel, and a ``payoff`` (the
+probability the return pays off), sealed as a forecast on the ``consequence``
+channel and settled later by the world; optional public-predicate forecasts
+settle the same way. A meta assembly judges the verdict and settles the
+evaluator decision on ``conformity``; a top meta is itself graded against
+the verdict's eventual consequence. Anything nobody judged in time is
+censored: no score, no learning, no manufactured outcome.
 
 Prices. At each reserve-window boundary the runtime measures the window
 that closed using the observation catalogue
@@ -178,6 +181,8 @@ class Runtime(
         self.wallet.drip(self.clock.now_ns)
         self._manage_reserve_window()
         self.treasury.open_window(self.stats.reserve_windows)  # A12: reserve-window top-up cap
+        if previous_window is not None and previous_window != self.reserve_window_start:
+            self._sampling_actuator()
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
             self._reconcile_orders()
@@ -357,6 +362,13 @@ class Runtime(
                 }
             payload["mids"] = {c: str(m) for c, m in self.exchange.mids().items()}
         description = f"Respond to event {ev.kind} on {ev.source}."
+        adversarial = self.queue.get(handle).channel == CH_EXPOSURE
+        if adversarial:
+            description += (
+                " You may include payoff: your probability that return_paid_off, the "
+                "kernel's consequence predicate, resolves true for this return; it is "
+                "sealed as your forecast about your own return."
+            )
         inputs = {
             "kind": str(ev.kind),
             "payload": payload,
@@ -372,6 +384,8 @@ class Runtime(
                 "properties": {
                     "action": {"type": "string"},
                     "register": self._register_schema(),
+                    **({"payoff": {"type": "number", "minimum": 0, "maximum": 1}}
+                       if adversarial else {}),
                 },
                 "required": ["action"],
             }
@@ -383,6 +397,14 @@ class Runtime(
             self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
                 {"handle": handle, "outputs": ret.outputs, "verdict": None}
             )
+            payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
+            if adversarial and payoff is not None:
+                self.consequences.seal_self_forecast(
+                    self.book, self.queue, handle=handle, assembly_id=sample.chosen,
+                    payoff=payoff, event=self.n, now_ns=self.clock.now_ns,
+                    tick_ns=self.tick_clock.interval_ns,
+                )
+                self.stats.forecasts_sealed += 1
         self.consequences.finish(handle, ret.cost)
         noop = str(ret.outputs.get("action", "")).lower() in ("noop", "hold")
         revision = handle in self.window.revision_handles
@@ -458,15 +480,18 @@ class Runtime(
             "type": "object",
             "properties": {
                 "verdict": {"type": "number", "minimum": 0, "maximum": 1},
+                "payoff": {"type": "number", "minimum": 0, "maximum": 1},
                 "rationale": {"type": "string"},
                 "forecasts": self._forecast_schema(),
                 "register": self._register_schema(),
             },
-            "required": ["verdict", "rationale", "forecasts"],
+            "required": ["verdict", "payoff", "rationale", "forecasts"],
         }
         req = self._request(
             handle,
-            "Evaluate a producer return against the charter, then give "
+            "Evaluate a producer return. Give two numbers: verdict = its quality against "
+            "the charter (0 to 1); payoff = your probability that return_paid_off, the "
+            "kernel's consequence predicate, resolves true for the return. Then give "
             f"{self.ev.max_forecasts_per_verdict} forecasts: for each, a predicate from the "
             "list and q = your probability it happens within its horizon.",
             inputs,
@@ -481,7 +506,8 @@ class Runtime(
             {"handle": handle, "outputs": ret.outputs, "verdict": None}
         )
         verdict = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
-        if verdict is None:
+        payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
+        if verdict is None or payoff is None:
             # a malformed verdict is objectively non-conforming; the producer stays unjudged
             self.queue.settle(
                 handle,
@@ -524,13 +550,13 @@ class Runtime(
                 for entry in self.memory.get(owner, ()):
                     if entry["handle"] == about:
                         entry["verdict"] = verdict
-        self.consequences.seal_verdict(
+        forecast = self.consequences.seal_verdict(
             self.book,
             self.queue,
             evaluator_handle=handle,
             evaluator_id=sample.chosen,
             about=about,
-            verdict=verdict,
+            payoff=payoff,
             event=self.n,
             now_ns=self.clock.now_ns,
             tick_ns=self.tick_clock.interval_ns,
@@ -544,6 +570,8 @@ class Runtime(
                 "about_handle": about,
                 "evaluator_handle": handle,
                 "verdict": verdict,
+                "payoff": payoff,
+                "payoff_handle": forecast.handle,
                 "rationale": str(ret.outputs.get("rationale", ""))[:2000],
                 "producer_outputs": payload["outputs"],
             },
@@ -570,6 +598,7 @@ class Runtime(
         inputs = {
             "verdict": {
                 "verdict": payload["score"] if recursive else payload["verdict"],
+                **({} if recursive else {"payoff": payload.get("payoff")}),
                 "rationale": payload.get("rationale", ""),
             },
             "producer_outputs": payload.get("producer_outputs", {}),
@@ -580,6 +609,8 @@ class Runtime(
             inputs["window"] = payload["window"]
         if recursive:
             inputs["meta_verdict"] = payload
+        # The root judge whose payoff forecast eventually grades this tier's top meta.
+        judge_handle = payload.get("evaluator_handle", about)
         schema = {
             "type": "object",
             "properties": {
@@ -605,16 +636,28 @@ class Runtime(
         )
         self._apply_registrations(handle, ret)
         conformity = _as_unit(ret.outputs.get("conformity")) if ret.status == "ok" else None
-        if channel == CH_FAST:
+        if channel == CH_FAST and conformity is None:
+            # a malformed conformity is objectively non-conforming
             self._settle_priced(
                 handle,
                 channel=CH_FAST,
-                score=1.0 if conformity is not None else 0.0,
+                score=0.0,
                 definition_version=DEF_FAST,
                 sampling_ref=None,
                 cards="meta",
             )
             self.stats.fast_settlements += 1
+        elif channel == CH_FAST:
+            # The top meta earns nothing for being well formed: its conformity is graded by
+            # Brier against the judged verdict's eventual consequence (A14).
+            known = self.verdict_outcomes.get(judge_handle)
+            if known is not None:
+                y, _at, forecast_handle = known
+                self._settle_meta_consequence(handle, conformity, y, forecast_handle)
+            else:
+                self.ledger.append({"kind": "meta.awaiting_consequence", "handle": handle,
+                                    "judge_handle": judge_handle, "ts": self.clock.now_ns})
+                self.pending_meta.setdefault(judge_handle, []).append((handle, conformity))
         else:
             self.ledger.append(
                 {
@@ -634,6 +677,7 @@ class Runtime(
                     "tier": tier,
                     "score": conformity,
                     "by": handle,
+                    "evaluator_handle": judge_handle,
                     "rationale": str(ret.outputs.get("rationale", ""))[:2000],
                 },
             )

@@ -258,7 +258,7 @@ def test_manifest_card_requires_explicit_role(field):
         manifest_from_dict(raw)
 
 
-@pytest.mark.parametrize("value", [True, None, "", "unknown"])
+@pytest.mark.parametrize("value", [True, None, "", "judge", "unknown"])
 def test_manifest_card_rejects_unknown_role(value):
     raw = _with_charter()
     raw["charter"]["cards"][0]["answers_for"] = value
@@ -267,8 +267,11 @@ def test_manifest_card_rejects_unknown_role(value):
 
 
 @pytest.mark.parametrize("section,field,value", [
-    ("novelty", "trial_invocations", True), ("novelty", "trial_invocations", 0),
-    ("novelty", "trial_invocations", 1.5), ("committee", "min_settled", 0),
+    ("novelty", "trials", True), ("novelty", "trials", 0),
+    ("novelty", "trials", 1.5), ("novelty", "max_lifetime_windows", 0),
+    ("novelty", "trial_invocations", 3), ("committee", "min_settled", 0),
+    ("evaluation", "adversarial_share", 1.5), ("evaluation", "sibling_share", -0.1),
+    ("evaluation", "sampling_step", 2), ("evaluation", "sampling_cap", 0.2),
     ("committee", "min_settled", False), ("immune", "k", 1), ("immune", "k", 3.0),
     ("immune", "bins", 1), ("immune", "tv_threshold", -1),
     ("immune", "gamma_max", 1.1), ("immune", "gap_threshold", float("nan")),
@@ -289,7 +292,10 @@ def test_fidelity_casts_are_explicit_in_all_worlds_and_hashed():
     for path in WORLDS_DIR.glob("*.toml"):
         raw = tomllib.loads(path.read_text())
         manifest = manifest_from_dict(raw)
-        assert raw["novelty"]["trial_invocations"] == manifest.novelty.trial_invocations == 3
+        assert raw["novelty"]["trials"] == manifest.novelty.trials == 3
+        assert raw["novelty"]["max_lifetime_windows"] == manifest.novelty.max_lifetime_windows
+        for key in ("adversarial_share", "sibling_share", "sampling_step", "sampling_cap"):
+            assert raw["evaluation"][key] == getattr(manifest.evaluation, key)
         assert raw["committee"]["min_settled"] == manifest.committee.min_settled == 5
         for key in ("k", "bins", "tv_threshold", "gap_threshold", "gain_step", "gamma_max",
                     "decay_step"):

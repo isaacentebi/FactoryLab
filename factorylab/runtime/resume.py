@@ -414,6 +414,8 @@ _RUNTIME_FIELDS = (
     "registration_feedback", "tool_jail_available", "vote_handles", "voted_amendments",
     "order_intents", "market_index", "unresolved_x402",
     "card_samples",
+    "exposure_evidence", "pending_meta", "verdict_outcomes", "consequence_mix",
+    "sampling_history", "novelty_grant",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
@@ -421,6 +423,7 @@ _COMPONENT_FIELDS = (
     ("baseline", "_PrevalenceBaseline__", ("counts",)),
     ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
+    ("settler", "_Settler__", ("snapshots", "recorded")),
     ("charter_book", "_CharterBook__", (
         "editions", "proposals", "committees", "ballots", "activated", "activations",
     )),

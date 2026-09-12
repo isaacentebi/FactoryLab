@@ -150,7 +150,8 @@ max_tokens = 800
 effort = "low"
 
 [novelty]
-trial_invocations = 3
+trials = 3
+max_lifetime_windows = 6
 share = 0.1
 window = "1h"
 
@@ -166,6 +167,10 @@ verdict_timeout_events = 20
 min_coverage = 0.5
 trial_amount_usd = "0.10"
 forecast_horizon_events = 10
+adversarial_share = 0.15
+sibling_share = 0.5
+sampling_step = 0.1
+sampling_cap = 0.7
 
 [tools]
 population_tool_micro_per_call = 50

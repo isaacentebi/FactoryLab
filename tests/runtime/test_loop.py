@@ -273,7 +273,16 @@ def test_population_registers_recursive_meta_and_settles_higher_tiers():
         if events.get(o["event_id"], {}).get("kind") in ("Verdict", "MetaVerdict")
     ]
     assert any(o["seq"] < registration and o["channel"] == "fast" for o in meta_opens)
-    assert all(o["channel"] == "conformity" for o in meta_opens if o["seq"] > registration)
+    # Once the recursive tier exists, a meta it can judge opens on conformity; the
+    # recursive judge itself is terminal (nothing judges its own output) and opens on
+    # the consequence-graded channel instead of waiting for a verdict no one can give.
+    later = [o for o in meta_opens if o["seq"] > registration]
+    assert later and any(o["propensity"]["chosen"] == "recursive-meta" for o in later)
+    assert all(
+        o["channel"] == ("fast" if o["propensity"]["chosen"] == "recursive-meta"
+                         else "conformity")
+        for o in later
+    )
     judged_metas = []
     for event in meta_events:
         p = event["payload"]
@@ -301,11 +310,15 @@ def test_population_registers_recursive_meta_and_settles_higher_tiers():
         if event["kind"] == "MetaVerdict":
             judged = opens[event["payload"]["by"]]["propensity"]["chosen"]
             assert judged not in opened["propensity"]["action_ids"]
-    assert any(
-        r["status"] == "censored"
-        and r["channel"] == "conformity"
-        and opens[r["handle"]]["propensity"]["chosen"] == "recursive-meta"
-        for r in returns
+    # The sole recursive meta is graded by its conformity Brier against the judged
+    # verdict's consequence (A14): it is never left to time out on a tier above it.
+    graded = [
+        r for r in returns
+        if opens[r["handle"]]["propensity"]["chosen"] == "recursive-meta"
+    ]
+    assert graded and all(
+        r["status"] == "settled" and r["definition_version"] == "meta-consequence-v1"
+        for r in graded
     )
     # The sole recursive judge cannot sample itself when its tier-3 return is delivered.
     self_routes = [
@@ -420,7 +433,7 @@ def test_cascade_release_is_ledger_first_and_fast_fallback_keeps_timeout(monkeyp
     assert handles[1] in runtime.pending and handles[2] in runtime.pending
 
 
-def test_meta_score_settles_every_handle_in_its_window():
+def test_meta_score_settles_the_representative_and_siblings_at_the_sibling_share():
     runtime = _recursive_runtime(events=0)
     runtime.m = replace(runtime.m, timing=replace(runtime.m.timing, jitter_fraction=0))
     handles = [_pending_meta(runtime) for _ in range(3)]
@@ -448,8 +461,10 @@ def test_meta_score_settles_every_handle_in_its_window():
     runtime._deliver_meta_verdict(judged)
     for h in handles:
         assert runtime.queue.get(h).status is SettleStatus.SETTLED
-        assert runtime.queue.history(h)[0].score == 0.25
         assert h not in runtime.pending
+    assert runtime.queue.history(handles[2])[0].score == 0.25
+    share = runtime.ev.sibling_share
+    assert [runtime.queue.history(h)[0].score for h in handles[:2]] == [0.25 * share] * 2
     assert handles[2] not in runtime.cascade_windows
 
 
@@ -696,10 +711,11 @@ def test_tool_order_and_close_belong_to_calling_returns_and_tool_charge_decides_
     payoff = runtime.consequences.payoff(opener)
     assert payoff.net_micro == 5010 and payoff.cost_micro == 5011 and payoff.y == 0
     assert not payoff.marked
-    assert runtime.consequences.payoff(closer).y == 0
+    closed = runtime.consequences.payoff(closer)
+    assert closed.net_micro == 5010 and closed.cost_micro == 5000 and closed.y == 1  # credited
     assert runtime.consequences.table.lots == ()
     assert runtime.window.producer_returns == runtime.window.noop_returns == 2
-    assert runtime.window.revision_returns == 2  # Tool evidence survives both noop follow-ups.
+    assert runtime.window.revision_returns == 0  # Tool calls are not revisions (A14).
     assert runtime.window.tool_calls == runtime.window.fills == 2
     items = _consequence_diary(runtime)
     commits = [i for i in items if i["kind"] == "wallet.commit" and i["handle"] == opener]
@@ -716,11 +732,12 @@ def test_antagonist_exposure_waits_past_verdict_timeout_for_marked_verdict_conse
 
     class Provider(ScriptedProvider):
         def _produce(self, desc, inputs):
-            return {"action": "order", "coin": "BTC", "side": "buy", "size": "0.001"}
+            return {"action": "order", "coin": "BTC", "side": "buy", "size": "0.001",
+                    "payoff": 0.0}
 
         @staticmethod
         def _evaluate(req, inputs):
-            return {"verdict": 1.0, "rationale": "test", "forecasts": []}
+            return {"verdict": 1.0, "payoff": 1.0, "rationale": "test", "forecasts": []}
 
     manifest = load_manifest("scripted")
     manifest = replace(
@@ -860,7 +877,7 @@ def test_resting_limit_fill_and_reduce_only_tool_keep_original_return_attributio
     runtime.consequences.finish("reduce", 500)
     runtime.consequences.resolve(1)
     assert runtime.consequences.payoff("limit").y == 1
-    assert runtime.consequences.payoff("reduce").y == 0
+    assert runtime.consequences.payoff("reduce").y == 1  # the closer is credited (A16)
     assert runtime.consequences.table.lots == ()
 
 
@@ -1137,7 +1154,7 @@ def test_scripted_governance_waits_for_measured_periods_and_ledgers_both_forecas
                 parent = _consequence_decision(rt, "eval-a", "conformity")
                 rt.consequences.seal_verdict(
                     rt.book, rt.queue, evaluator_handle=parent, evaluator_id="eval-a",
-                    about=about, verdict=0.5, event=rt.n, now_ns=rt.clock.now_ns,
+                    about=about, payoff=0.5, event=rt.n, now_ns=rt.clock.now_ns,
                     tick_ns=rt.tick_clock.interval_ns,
                 )
                 rt._open_forecasts(parent, "eval-a", about, [{
@@ -1322,17 +1339,6 @@ def test_position_peak_is_ledger_first_and_survives_flat_account(monkeypatch):
     positions.clear()
     rt._observe_positions()
     assert rt.window.max_position_notional_micro == 6_000_000
-
-
-@pytest.mark.parametrize(("proposals", "expected"), [
-    (None, False), ([], False), ("not a proposal", False), (["not a proposal"], False),
-    ([{"kind": "unknown"}], True),
-])
-def test_revision_requires_a_proposal_object(proposals, expected):
-    from factorylab.cortex.request import Return
-
-    ret = Return("h", {"register": proposals}, 0, "ok")
-    assert Runtime._carries_revision(ret) is expected
 
 
 def test_manifest_charter_is_edition_one_and_seeds_prices():

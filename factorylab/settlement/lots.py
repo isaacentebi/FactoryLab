@@ -3,7 +3,9 @@
 Prices and sizes enter as decimal strings, never binary floats. Fractional micro-USD
 fees, funding and P&L remain exact until each return's final total is floored once.
 A backstop fixes the outcome, not the inventory: subsequent closes still consume
-the marked opener's lots and cannot transfer their gains to a later return.
+the marked opener's lots. A close credits the realised P&L of the closed quantity
+to both sides: the opener, net of its opening fee and funding, and the closer, net
+of its closing fee. Only a decision with an open account can own an order or a lot.
 """
 
 from collections.abc import Mapping
@@ -60,6 +62,7 @@ class ReturnAccount:
     closed_lots: int = 0
     liquidated: bool = False
     payoff: Payoff | None = None
+    closes: int = 0  # lots this return closed, in whole or in part, as the closer
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,8 @@ class LotTable:
             raise ValueError("order size must be positive")
         if any(o.order_id == order_id for o in self.orders):
             raise ValueError("order already attributed")
+        if not any(r.handle == handle for r in self.returns):
+            raise ValueError("order requires an open consequence account")
         return replace(self, orders=(*self.orders, LotOrder(order_id, handle, quantity)))
 
     def cancel(self, order_id: str) -> "LotTable":
@@ -134,11 +139,14 @@ class LotTable:
         fee_usd: str,
         liquidation: bool = False,
     ) -> "LotTable":
-        """Close opposite lots FIFO, charging both fills and funding to each opener.
+        """Close opposite lots FIFO, crediting the realised P&L to opener and closer alike.
 
-        A reversal opens only its residual quantity for the caller. Liquidation
-        never opens a new position. Venue average-entry realized P&L is not an
-        allocation key: FIFO P&L is computed from actual opening/closing prices.
+        The opener's credit is net of its opening fee and accrued funding; the
+        closer's is net of its closing fee. A reversal opens only its residual
+        quantity for the caller. Liquidation never opens a new position and
+        credits no closer. Venue average-entry realized P&L is not an allocation
+        key: FIFO P&L is computed from actual opening/closing prices. A fill
+        whose order belongs to no open account is refused rather than pooled.
         """
         _require_id(order_id)
         _require_id(coin)
@@ -150,8 +158,12 @@ class LotTable:
         order = next((o for o in self.orders if o.order_id == order_id), None)
         owner = order.handle if order else None
         accounts = {r.handle: r for r in self.returns}
+        if not liquidation and owner not in accounts:
+            raise ValueError("fill without an open consequence account")
         remainder = quantity
         lots = []
+        closer_net = Fraction(0)
+        closes = 0
         for lot in self.lots:
             if remainder <= 0 or lot.coin != coin or lot.is_buy == is_buy:
                 lots.append(lot)
@@ -159,7 +171,11 @@ class LotTable:
             closed = min(remainder, lot.size)
             share = closed / lot.size
             pnl = (price - lot.px) * closed * (1 if lot.is_buy else -1) * 1_000_000
-            net = pnl - lot.charges_micro * share - fee * closed / quantity
+            closing_fee = fee * closed / quantity
+            # A liquidation has no closer: its fee is the liquidated opener's own cost.
+            net = pnl - lot.charges_micro * share - (closing_fee if liquidation else 0)
+            closer_net += pnl - closing_fee
+            closes += 1
             if lot.handle in accounts:
                 account = accounts[lot.handle]
                 accounts[lot.handle] = replace(
@@ -175,6 +191,12 @@ class LotTable:
                     )
                 )
             remainder -= closed
+        if closes and owner in accounts:
+            accounts[owner] = replace(
+                accounts[owner],
+                realized_micro=accounts[owner].realized_micro + closer_net,
+                closes=accounts[owner].closes + closes,
+            )
         if remainder and not liquidation:
             lots.append(Lot(owner, coin, is_buy, remainder, price, fee * remainder / quantity))
             if owner in accounts:
@@ -209,8 +231,9 @@ class LotTable:
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
         The backstop counts runtime events from the return, including any time
-        awaiting a fill. Accepted unfilled orders defer early settlement. Pure
-        closers and no-fill returns cannot inherit another return's positive P&L.
+        awaiting a fill. Accepted unfilled orders defer early settlement. A return
+        pays off when the realised result credited to it, as opener or closer,
+        exceeds its own cost; a no-fill return cannot inherit anyone's P&L.
         """
         _require_event_index(event, "event")
         _require_event_index(backstop, "backstop", positive=True)
@@ -236,7 +259,8 @@ class LotTable:
             micro = net.numerator // net.denominator
             outcome = Payoff(
                 account.handle,
-                int(account.opened_lots > 0 and micro > account.cost_micro),
+                int((account.opened_lots > 0 or account.closes > 0)
+                    and micro > account.cost_micro),
                 micro,
                 account.cost_micro,
                 event,

@@ -60,7 +60,8 @@ SEED_VOCABULARY = (
 # Kernel-only commitment: deliberately absent from SEED_VOCABULARY and Observer.
 RETURN_PAID_OFF = Predicate(
     "return_paid_off",
-    "The return's FIFO proceeds, net of fees and funding, exceed its own compute cost.",
+    "The realised P&L credited to the return, as opener (net of its opening fee and "
+    "funding) or as closer (net of its closing fee), exceeds its own compute and tool cost.",
     _seed("return_paid_off", "Kernel consequence.").param_schema,
     "horizon_events",
     proposable=False,

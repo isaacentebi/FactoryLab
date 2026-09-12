@@ -67,3 +67,27 @@ def test_votes_have_one_queue_decision_per_seat_per_amendment(monkeypatch):
     for call in calls:
         assert rt.queue.history(call['handle'])
     assert rt.window.invocations == 2
+
+
+def test_a_router_add_at_the_cap_is_refused_before_the_receipt_is_spent():
+    """Codex finding: an `add` proposal registered its router contract, consuming the
+    novelty receipt, and only then did `_build_router` refuse it at the cap: an orphan
+    contract in an append-only registry and no refund. Everything that can refuse the
+    router is checked first."""
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    cap = rt.m.tools.max_routers_per_kind
+    while len(rt.routers['Tick']) < cap:
+        rt._build_router('Tick', 'exp3', .1, replace=False)
+    registry, remaining = rt.registry.state(), rt.reserve.remaining()
+    rt._apply_registrations('author', Return('author', {'register': [
+        {'kind': 'router', 'learner': 'exp3', 'event_kind': 'Tick', 'add': True}]}, 0, 'ok'))
+    assert rt.stats.registrations_rejected == 1 and rt.stats.registrations_accepted == 0
+    assert 'router cap reached' in rt.registration_feedback[-1]['reason']
+    assert len(rt.routers['Tick']) == cap
+    assert rt.registry.state() == registry and rt.reserve.remaining() == remaining
+    assert not [i for i in rt.ledger._recovery_items() if i['kind'] == 'novelty.release']
+    assert rt.wallet.check_conservation()
+    # Replacing a router is still allowed at the cap, and that one does register.
+    rt._register('author', RouterProposal('Tick', 'exp3', .1))
+    assert len(rt.routers['Tick']) == 1 and rt.reserve.remaining() < remaining

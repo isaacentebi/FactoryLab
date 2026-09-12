@@ -1,8 +1,17 @@
-# Manifest parameters: round-two W3
+# Manifest keys
+
+Every parameter the essay leaves open is a manifest key with a seed value; nothing
+here is an objective for the population. A **hard cast** is fixed for the world's
+life (it is hashed into genesis and no amendment reaches it); a **soft cast** can be
+moved by the population through the charter. Keys are listed as their fix pass
+introduces them; the polish pass will complete the table for the older keys.
 
 The TOML manifest fixes the initial conditions. Money is stored as integer
-micro-USD after exact decimal parsing. These entries document the W3 additions
-and the changed charter contract; other sections retain their existing keys.
+micro-USD after exact decimal parsing. The entries below document the round-two
+additions and the changed charter contract; other sections retain their existing
+keys.
+
+## Round-two W3: disclosure, governance, the treasury
 
 | Key | Type | Default / seed | Hard cast? |
 | --- | --- | --- | --- |
@@ -17,11 +26,36 @@ and the changed charter contract; other sections retain their existing keys.
 | Amendment `predicted_effect.window` | Positive integer count of closed reserve windows after activation | Required; no default | Population-authored liability horizon |
 
 The existing `committee.min_settled`, `novelty.window`, `novelty.share`,
-`novelty.trial_invocations`, prices, timing and clock parameters are disclosed in
+`novelty.trials`, prices, timing and clock parameters are disclosed in
 every request's `world.mechanics`. Their runtime values, including temporary
 controller decay, are used in that disclosure. W1 owns the penalty-cap change;
-until that parameter exists, the W3 mechanics block reports it as null and the
+until that parameter exists, the mechanics block reports it as null and the
 scoring block retains the actual uncapped formula.
+
+## Round-two W2: judges, consequences, the reserve
+
+### `[evaluation]`
+
+| Key | Type | Default | Cast | Meaning |
+|---|---|---|---|---|
+| `consequence_share` | float in [0, 1) | 0.3 | hard | Base weight of payoff standing in evaluator selection; the live actuator starts here. |
+| `adversarial_share` | float in [0, 1] | 0.15 | hard | Cap on the router's probability mass over antagonist assemblies (A5). The essay's "minority" is a constraint, not a prize. |
+| `sibling_share` | float in [0, 1] | 0.5 | hard | Share of the representative's meta score at which an unread cascade sibling settles (A14). |
+| `sampling_step` | float in [0, 1] | 0.1 | hard | Step by which the consequence mix rises per divergent window and steps back otherwise (A14, the live sampling-rate actuator). |
+| `sampling_cap` | float in [consequence_share, 1) | 0.7 | hard | Ceiling of the raised consequence mix (A14). |
+
+### `[novelty]`
+
+| Key | Type | Default | Cast | Meaning |
+|---|---|---|---|---|
+| `trials` | int >= 1 | 3 | hard | Settled consequences delivered to a population assembly before its protected trial ends (A13). Replaces `trial_invocations`, which counted model calls; continuations and children do not count. A learning-death window grants one more. |
+| `max_lifetime_windows` | int >= 1 | 6 | hard | Reserve windows after registration after which the trial ends regardless of deliveries (A13). |
+
+### Ledger evidence these keys produce
+
+`route.excluded`, `tool.refused`, `consequence.refused` (A9); `exposure.settled` (A5);
+`cascade.sibling`, `meta.consequence`, `meta.awaiting_consequence`, `sampling.raise`,
+`sampling.lower` (A14); `novelty.release` (A13).
 
 ## Exact measurement
 

@@ -79,7 +79,9 @@ CATALOGUE: tuple[Observation, ...] = (
     ),
     Observation(
         "revision_rate",
-        "Producer returns carrying registrations or tool calls, counted once.",
+        "Producer returns whose registration was accepted, counted once, plus amendments "
+        "activated in the window, over producer returns; refused proposals and tool calls "
+        "do not count.",
         "fraction",
         lambda w: _ratio(w.revision_returns, w.producer_returns),
     ),

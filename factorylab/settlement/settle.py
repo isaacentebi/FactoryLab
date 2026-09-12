@@ -27,7 +27,12 @@ class Settled:
 
 
 class Settler:
-    """Each due forecast is scored at most once and missing facts never become performance."""
+    """Each due forecast is scored at most once and missing facts never become performance.
+
+    Only the kernel payoff commitment (``return_paid_off``) trains consequence
+    standing; optional public-predicate forecasts settle to their handles and the
+    prevalence baseline but never enter a judge's selection weight.
+    """
 
     def __init__(
         self,
@@ -42,6 +47,10 @@ class Settler:
         self.__standing = standing
         self.__baseline = baseline
         self.__observer = observer
+        # about_handle -> baseline q before that return's outcome entered the base rate
+        self.__snapshots: dict[str, float] = {}
+        # about_handle -> the outcome already counted in the base rate, once per return
+        self.__recorded: dict[str, int] = {}
 
     def settle_due(
         self, n: int, facts_for: Callable[[Forecast], WindowFacts | None]
@@ -70,11 +79,7 @@ class Settler:
             )
             if y is not None:
                 self.__baseline.record(forecast.predicate_id, y)
-                self.__standing.record(forecast.evaluator_id, score, baseline_score)
             self.__book.mark_settled(forecast.handle)
-            self.__standing.set_requested(
-                forecast.evaluator_id, self.__book.requested(forecast.evaluator_id)
-            )
             results.append(
                 Settled(
                     forecast.handle,
@@ -92,39 +97,65 @@ class Settler:
     def settle_consequences(
         self, payoff_for: Callable[[str], Payoff | None]
     ) -> list[Settled]:
-        """Score kernel commitments as soon as their immutable return outcome is available."""
+        """Score kernel commitments as soon as their immutable return outcome is available.
+
+        Every forecast about one payoff outcome is scored against the same
+        pre-outcome prevalence baseline, whether it is scored in this call or a
+        later one: a judge sealed on the handle of an antagonist's self-forecast
+        is never compared against a base rate that already holds the outcome.
+        One return is one observation: however many forecasts share an outcome,
+        it enters the prevalence rate once, after the forecasts scored here.
+        """
         results = []
-        for forecast in self.__book.pending(predicate_id=RETURN_PAID_OFF.id):
-            payoff = payoff_for(forecast.about_handle)
-            if payoff is None:
-                continue
-            if payoff.handle != forecast.about_handle:
-                raise ValueError("consequence belongs to a different return")
-            score = brier(forecast.q, payoff.y)
-            baseline = self.__baseline.baseline_brier(forecast.predicate_id, payoff.y)
-            self.__book.record_consequence(
-                forecast.handle,
-                {**asdict(payoff), "handle": forecast.handle, "about_handle": payoff.handle,
-                 "predicate_id": forecast.predicate_id, "q": forecast.q,
-                 "brier": score, "baseline_brier": baseline},
-            )
-            self.__queue.settle(
-                forecast.handle,
-                channel="consequence",
-                score=score,
-                status=SettleStatus.SETTLED,
-                definition_version="brier-v1",
-                sampling_ref=None,
-            )
-            self.__baseline.record(forecast.predicate_id, payoff.y)
-            self.__standing.record(forecast.evaluator_id, score, baseline)
-            self.__book.mark_settled(forecast.handle)
-            self.__standing.set_requested(
-                forecast.evaluator_id, self.__book.requested(forecast.evaluator_id)
-            )
-            results.append(
-                Settled(forecast.handle, forecast.evaluator_id, forecast.about_handle,
-                        forecast.predicate_id, payoff.y, score, baseline,
-                        SettleStatus.SETTLED, payoff.marked)
-            )
+        outcomes: dict[str, int] = {}
+        try:
+            for forecast in self.__book.pending(predicate_id=RETURN_PAID_OFF.id):
+                payoff = payoff_for(forecast.about_handle)
+                if payoff is None:
+                    continue
+                if payoff.handle != forecast.about_handle:
+                    raise ValueError("consequence belongs to a different return")
+                score = brier(forecast.q, payoff.y)
+                baseline = brier(self.__baseline_before(payoff.handle), payoff.y)
+                self.__book.record_consequence(
+                    forecast.handle,
+                    {**asdict(payoff), "handle": forecast.handle, "about_handle": payoff.handle,
+                     "predicate_id": forecast.predicate_id, "q": forecast.q,
+                     "brier": score, "baseline_brier": baseline},
+                )
+                self.__queue.settle(
+                    forecast.handle,
+                    channel="consequence",
+                    score=score,
+                    status=SettleStatus.SETTLED,
+                    definition_version="brier-v1",
+                    sampling_ref=None,
+                )
+                if payoff.handle not in self.__recorded:
+                    outcomes[payoff.handle] = payoff.y
+                self.__standing.record(forecast.evaluator_id, score, baseline)
+                self.__book.mark_settled(forecast.handle)
+                self.__standing.set_requested(
+                    forecast.evaluator_id,
+                    self.__book.requested(forecast.evaluator_id, RETURN_PAID_OFF.id),
+                )
+                results.append(
+                    Settled(forecast.handle, forecast.evaluator_id, forecast.about_handle,
+                            forecast.predicate_id, payoff.y, score, baseline,
+                            SettleStatus.SETTLED, payoff.marked)
+                )
+        finally:
+            # Scored outcomes reach the base rate even if a later forecast's write fails:
+            # a settled forecast is never rescored, so its return's observation is due now.
+            for about_handle, y in outcomes.items():
+                self.__recorded[about_handle] = y
+                self.__baseline.record(RETURN_PAID_OFF.id, y)
         return results
+
+    def __baseline_before(self, about_handle: str) -> float:
+        """The payoff base rate as it stood before this return's outcome was first scored,
+        fixed on first use so later forecasts about the same outcome share it."""
+        q = self.__snapshots.get(about_handle)
+        if q is None:
+            q = self.__snapshots[about_handle] = self.__baseline.baseline_q(RETURN_PAID_OFF.id)
+        return q

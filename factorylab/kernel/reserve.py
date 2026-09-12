@@ -118,6 +118,27 @@ class NoveltyReserve:
         self.__receipts[reservation.id] = (reservation, contract)
         return reservation
 
+    def release(self, receipt: Reservation) -> None:
+        """Return an unconsumed receipt's entitlement to its own window; a refused proposal
+        does not spend the share it never registered."""
+        pair = self.__receipts.get(receipt.id)
+        if pair is None or pair[0] is not receipt:
+            raise PermissionError("novelty receipt is foreign, consumed or unknown")
+        del self.__receipts[receipt.id]
+        refunded = receipt.window_start_ns == self.__start and self._active()
+        if refunded:
+            self.__remaining += receipt.amount
+        self.__ledger.append(
+            {
+                "kind": "novelty.release",
+                "reservation_id": receipt.id,
+                "contract_id": receipt.contract_id,
+                "amount": receipt.amount,
+                "refunded": refunded,
+                "ts": self.__clock(),
+            }
+        )
+
     def remaining(self) -> Money:
         """Return the active window's unallocated entitlement, or zero after expiry."""
         return self.__remaining if self._active() else 0

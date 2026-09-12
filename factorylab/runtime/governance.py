@@ -77,6 +77,9 @@ class GovernanceMixin:
                         continue
                     prop = ModelProposal(mid) if namespaced else accepted[0]
                     self._register(handle, prop)
+                    # Only an accepted registration is a revision (A14); proposals and
+                    # tool calls that changed nothing do not count.
+                    self.window.revision_handles.add(handle)
                 self.stats.registrations_accepted += 1
                 self.window.registrations += 1
                 if item.get("kind") != "amendment":
@@ -112,8 +115,7 @@ class GovernanceMixin:
                 permissions=frozenset({"sandbox.run"}),
                 resource_bounds=ResourceBounds(max_duration_ns=prop.timeout_s * 1_000_000_000),
             )
-            res = self.reserve.reserve_for(contract, amount)
-            self.registry.register(contract, by_handle=handle, reservation=res)
+            self._register_with_trial(contract, handle, amount)
             tool = PopulationTool(
                 prop.id, prop.description, prop.args_schema, prop.code, prop.timeout_s, handle
             )
@@ -131,8 +133,7 @@ class GovernanceMixin:
             if prop.openrouter_id.startswith("x402:"):
                 price, seller = self._seller_price(prop.openrouter_id)
                 contract = _model_contract(prop.openrouter_id, price, "x402")
-                res = self.reserve.reserve_for(contract, amount)
-                self.registry.register(contract, by_handle=handle, reservation=res)
+                self._register_with_trial(contract, handle, amount)
                 self._record_seller(prop.openrouter_id, price, seller)
                 self._emit(
                     EventKind.REGISTERED,
@@ -165,16 +166,14 @@ class GovernanceMixin:
                 raise ValueError("no catalogue entry for that model in this world")
             provider = "venice" if base.startswith("venice:") else "openrouter"
             contract = _model_contract(prop.openrouter_id, price, provider)
-            res = self.reserve.reserve_for(contract, amount)
-            self.registry.register(contract, by_handle=handle, reservation=res)
+            self._register_with_trial(contract, handle, amount)
             self.prices.register(prop.openrouter_id, price)
             self._emit(
                 EventKind.REGISTERED, {"kind": "model", "id": prop.openrouter_id}
             )
         elif isinstance(prop, AssemblyProposal):
             contract = _assembly_contract(prop.id, prop.role, prop.accepts, prop.max_tokens)
-            res = self.reserve.reserve_for(contract, amount)
-            self.registry.register(contract, by_handle=handle, reservation=res)
+            self._register_with_trial(contract, handle, amount)
             self._instantiate(
                 AssemblySpec(
                     id=prop.id,
@@ -199,6 +198,18 @@ class GovernanceMixin:
                 },
             )
         else:
+            # Everything that can refuse this router is checked before the receipt is
+            # spent: a registry entry cannot be withdrawn, so a later failure would leave
+            # an orphan contract and a burnt novelty trial.
+            if prop.learner == "blum_mansour":
+                try:
+                    import factorylab.learners.delayed  # noqa: F401
+                except ImportError as exc:
+                    raise ValueError("blum_mansour router unavailable in this build") from exc
+            if prop.add and (
+                len(self.routers.get(prop.event_kind, [])) >= self.m.tools.max_routers_per_kind
+            ):
+                raise ValueError("router cap reached for this event kind")
             contract = Contract(
                 id=f"router:{prop.event_kind}:{prop.learner}:{self.n}",
                 version=1,
@@ -210,13 +221,7 @@ class GovernanceMixin:
                 permissions=frozenset(),
                 resource_bounds=ResourceBounds(),
             )
-            res = self.reserve.reserve_for(contract, amount)
-            self.registry.register(contract, by_handle=handle, reservation=res)
-            if prop.learner == "blum_mansour":
-                try:
-                    import factorylab.learners.delayed  # noqa: F401
-                except ImportError as exc:
-                    raise ValueError("blum_mansour router unavailable in this build") from exc
+            self._register_with_trial(contract, handle, amount)
             self._build_router(prop.event_kind, prop.learner, prop.gamma, replace=not prop.add)
             self.stats.routers_replaced += 1
             self._emit(
@@ -324,8 +329,7 @@ class GovernanceMixin:
             permissions=frozenset(),
             resource_bounds=ResourceBounds(),
         )
-        res = self.reserve.reserve_for(contract, self.ev.trial_amount_micro)
-        self.registry.register(contract, by_handle=handle, reservation=res)
+        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
         self.charter_book.propose(am)
         self.stats.amendments_proposed += 1
         self.window.amendments_proposed += 1
@@ -568,6 +572,7 @@ class GovernanceMixin:
             self.stats.amendments_activated += 1
             self.window.amendments_activated += 1
             self.card_samples.revised(am.proposer_handle)
+            self.window.revision_returns += 1  # an activated amendment is a revision (A14)
             new = self._next_charter_activation()
 
     def _settle_policy(self, handle, score, status) -> None:

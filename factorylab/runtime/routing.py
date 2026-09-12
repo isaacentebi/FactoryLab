@@ -7,6 +7,7 @@ from typing import Any
 
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord
+from factorylab.kernel.registry import Contract
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
 from factorylab.runtime.immune import gamma
@@ -100,15 +101,50 @@ class RoutingMixin:
         kinds = {k for a in self.assemblies.values() for k in a.spec.accepts}
         return sorted(kinds)
 
+    def _subject_authors(self, kind: str, ev: Event | None) -> set[str]:
+        """Assemblies that authored an event's subject, or the parent of a child's return.
+
+        Nothing judges its own output (essay II.III): the author of a return, a
+        verdict or a meta verdict never sits on the router that judges it, and a
+        parent never judges the child it requested.
+        """
+        if ev is None:
+            return set()
+        key = {"ProducerReturn": "about_handle", "Verdict": "evaluator_handle",
+               "MetaVerdict": "by"}.get(kind)
+        if key is None or key not in ev.payload:
+            return set()
+        subject = ev.payload[key]
+        authors = {self.handle_to_assembly.get(subject)}
+        try:
+            parent = self.queue.get(subject).parent_handle
+        except KeyError:
+            parent = None
+        if parent is not None:
+            authors.add(self.handle_to_assembly.get(parent))
+        return {a for a in authors if a is not None}
+
+    def _higher_tier_universe(self, chosen: str) -> list[str]:
+        """The assemblies that could judge the meta verdict ``chosen`` is about to emit.
+
+        Nothing judges its own output (A9), so the tier above this decision always
+        excludes the meta making it: a recursive meta that is the only assembly
+        accepting ``MetaVerdict`` is terminal on the tier it judges, and its
+        conformity is graded against the consequence (A14) rather than waiting for
+        a verdict that no one can give.
+        """
+        return sorted(
+            a.spec.id
+            for a in self.assemblies.values()
+            if "MetaVerdict" in a.spec.accepts and a.spec.id != chosen
+        )
+
     def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
-        judged = None
-        if ev is not None and kind in ("Verdict", "MetaVerdict"):
-            handle = ev.payload["by"] if kind == "MetaVerdict" else ev.payload["evaluator_handle"]
-            judged = self.handle_to_assembly.get(handle)
+        excluded = self._subject_authors(kind, ev)
         ids = sorted(
             a.spec.id
             for a in self.assemblies.values()
-            if kind in a.spec.accepts and a.spec.id != judged
+            if kind in a.spec.accepts and a.spec.id not in excluded
         )
         return ids + [NOOP]
 
@@ -175,12 +211,50 @@ class RoutingMixin:
         return lid
 
     def _unhistoried(self, action_id: str) -> bool:
-        """No settled record, or an unspent population assembly trial, admits protected compute."""
+        """No settled record, or an unfinished population trial, admits protected compute.
+
+        A population assembly's trial ends when ``novelty.trials`` settled
+        consequences have been delivered to it (continuations and children do not
+        count) or ``novelty.max_lifetime_windows`` have passed since its
+        registration, whichever comes first: the lifetime ends the trial even when
+        no consequence ever arrived, so silence is not an unbounded entitlement
+        (essay II.IV.b: the compensation period must be shorter than the lifetime).
+        The window after a learning-death flag grants one more trial. A seed
+        assembly has no registration window; it is protected until its first
+        settled record.
+        """
+        try:
+            population = self.registry.get(action_id).provenance != "seed"
+        except KeyError:  # no contract: nothing the population registered, so no lifetime
+            population = False
+        if not population:
+            return not self.queue.has_history(action_id)
+        born = self.stats.registered_window.get(action_id, self.stats.reserve_windows)
+        if self.stats.reserve_windows - born >= self.m.novelty.max_lifetime_windows:
+            return False
         if not self.queue.has_history(action_id):
             return True
-        return (self.registry.get(action_id).provenance != "seed"
-                and self.stats.invocations_by_assembly.get(action_id, 0)
-                < self.m.novelty.trial_invocations)
+        delivered = self.stats.consequences_by_assembly.get(action_id, 0)
+        return delivered < self.m.novelty.trials or self._novelty_grant_open(action_id)
+
+    def _novelty_grant_open(self, assembly_id: str) -> bool:
+        """A learning-death grant is one extra trial per assembly, live only in the window
+        it was issued for and spent by that assembly's first delivered trial beyond the
+        base allowance (spec A13); an unspent grant expires at the next boundary."""
+        grant = self.novelty_grant
+        return (grant["window"] == self.stats.reserve_windows
+                and assembly_id not in grant["consumed"])
+
+    def _register_with_trial(self, contract: Contract, handle: str, amount: int):
+        """A refused registration returns its trial to the window; only a registered
+        contract consumes the novelty share."""
+        receipt = self.reserve.reserve_for(contract, amount)
+        try:
+            self.registry.register(contract, by_handle=handle, reservation=receipt)
+        except Exception:
+            self.reserve.release(receipt)
+            raise
+        return receipt
 
     def _novelty_compute(self, handle: str, reason: str) -> bool:
         """Only an assembly's own model calls can use its novelty entitlement."""
@@ -231,8 +305,25 @@ class RoutingMixin:
             return False, "provider: balance unavailable"
         return True, ""
 
+    def _cap_adversarial(self, dist: dict[str, float]) -> dict[str, float]:
+        """Antagonist mass is renormalised to at most ``evaluation.adversarial_share``.
+
+        The essay's adversarial minority (II.III.b) is a constraint on routing,
+        not a prize exposure wins can grow.
+        """
+        share = self.ev.adversarial_share
+        adversaries = [a for a in dist if a in self.assemblies
+                       and self.assemblies[a].spec.role == "antagonist"]
+        rest = [a for a in dist if a not in adversaries]
+        mass = sum(dist[a] for a in adversaries)
+        rest_mass = sum(dist[a] for a in rest)
+        if mass <= share or not rest or rest_mass <= 0:
+            return dist
+        return {a: (dist[a] * share / mass if a in adversaries
+                    else dist[a] * (1 - share) / rest_mass) for a in dist}
+
     def _mix_with_standing(self, dist: dict[str, float]) -> dict[str, float]:
-        s = self.ev.consequence_share
+        s = self.consequence_mix
         evaluators = [a for a in dist if a != NOOP]
         if s <= 0 or not evaluators:
             return dist
@@ -259,7 +350,8 @@ class RoutingMixin:
 
     def _route_with(self, state: RouterState, ev: Event) -> None:
         kind = str(ev.kind)
-        mix = self._mix_with_standing if kind == "ProducerReturn" else None
+        mix = ((lambda d: self._cap_adversarial(self._mix_with_standing(d)))
+               if kind == "ProducerReturn" else self._cap_adversarial)
         key = f"{state.learner.id}:{self.n}"
         if isinstance(state.learner, _KeyedLearner):
             state.learner.current_key = key
@@ -287,11 +379,14 @@ class RoutingMixin:
         self._compute_routed = True
         self._compute_unaffordable |= unaffordable
         self.stats.exclusions += len(sample.excluded)
+        for assembly_id, reason in sample.excluded:
+            if reason == "self-judgement":
+                self.ledger.append({"kind": "route.excluded", "event_id": ev.id,
+                                    "router": state.learner.id, "assembly_id": assembly_id,
+                                    "reason": reason, "ts": self.clock.now_ns})
         role = self._role_for_kind(kind)
         channel = {"producer": CH_VERDICT, "evaluator": CH_CONFORMITY, "meta": CH_FAST}[role]
-        if role == "meta" and any(
-            "MetaVerdict" in a.spec.accepts for a in self.assemblies.values()
-        ):
+        if role == "meta" and self._higher_tier_universe(sample.chosen):
             channel = CH_CONFORMITY
         chosen_role = self.assemblies[sample.chosen].spec.role if sample.chosen != NOOP else None
         if chosen_role == "antagonist":
@@ -299,6 +394,12 @@ class RoutingMixin:
         deadline = (
             self.clock.now_ns + (self.ev.verdict_timeout_events + 2) * self.tick_clock.interval_ns
         )
+        if channel == CH_FAST:
+            # A top meta is graded against the judged verdict's eventual consequence, so
+            # its decision lives as long as the return's backstop, like a forecast.
+            deadline = self.clock.now_ns + (
+                (self.ev.consequence_backstop_events + 2) * self.tick_clock.interval_ns * 4
+            )
         handle = self.queue.open(
             actor=sample.learner_id,
             event_id=ev.id,
