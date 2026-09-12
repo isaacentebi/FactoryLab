@@ -409,11 +409,10 @@ class Proof:
         return {**summary, "path": "docs/runs/compute-proof.md"}
 
     def _done(self, name: str) -> bool:
-        """A step counts as done only with a result file whose status is ok and no attempt
-        marker left behind; a failed step's result is removed so it can run again."""
+        """A step counts as done with a result file whose status is ok (its attempt marker
+        stays as evidence); a failed step's result is removed so it can run again."""
         result = self.directory / (name + ".json")
-        marker = self.directory / (name + ".attempt")
-        if not result.exists() or marker.exists():
+        if not result.exists():
             return False
         try:
             data = json.loads(result.read_text())
