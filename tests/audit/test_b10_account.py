@@ -4,11 +4,12 @@ from dataclasses import replace
 
 import pytest
 
-from factorylab.runtime.loop import ScriptedProvider, run_world
+from factorylab.runtime.loop import run_world
 from factorylab.runtime.resume import ResumeError, resume_runtime
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.clock import ClockSource
 from factorylab.world.exchange import FakeExchange
+from factorylab.world.scripted import ScriptedProvider
 
 
 def test_resume_refuses_a_changed_venue_address_before_live_reads(tmp_path):

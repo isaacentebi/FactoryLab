@@ -8,7 +8,7 @@ from statistics import fmean, pstdev
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from factorylab.runtime.loop import MeasureWindow
+    from factorylab.runtime.pricing import MeasureWindow
 
 
 @dataclass(frozen=True)

@@ -8,11 +8,12 @@ import json
 from dataclasses import replace
 from decimal import Decimal
 
-from factorylab.runtime.loop import ScriptedProvider, run_world
+from factorylab.runtime.loop import run_world
 from factorylab.runtime.resume import resume_world
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.clock import ClockSource
 from factorylab.world.exchange import FakeExchange, VenueUnavailable
+from factorylab.world.scripted import ScriptedProvider
 
 
 class RecordedProvider:

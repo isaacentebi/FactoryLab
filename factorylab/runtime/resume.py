@@ -81,7 +81,9 @@ def _record_types() -> dict[str, type]:
     from factorylab.kernel.timing import DistributionSummary
     from factorylab.kernel.wallet import DripSchedule, Reservation
     from factorylab.runtime.cascade import CascadeGate
-    from factorylab.runtime.loop import MeasureWindow, PendingJudgement, RunStats
+    from factorylab.runtime.feedback import PendingJudgement
+    from factorylab.runtime.pricing import MeasureWindow
+    from factorylab.runtime.summary import RunStats
     from factorylab.settlement.forecast import Forecast
     from factorylab.settlement.lots import Lot, LotOrder, LotTable, Payoff, ReturnAccount
     from factorylab.settlement.standing import _Standing
@@ -474,7 +476,7 @@ def runtime_state(rt) -> dict:
 def restore_runtime(rt, state: dict) -> None:
     """Restore only authenticated matching-format state, rebinding dependencies to this process."""
     from factorylab.runtime.live import LiveClock
-    from factorylab.runtime.loop import RouterState
+    from factorylab.runtime.routing import RouterState
     from factorylab.world.clock import ClockSource
 
     if state.get("format") != 1 or state["manifest_hash"] != rt.m.manifest_hash():
@@ -555,7 +557,8 @@ def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, ex
 def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_source,
                     now_ns, lock):
     """Authenticate, restore, replay and reconcile before admitting another world event."""
-    from factorylab.runtime.loop import Runtime, SimClock
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.shared import SimClock
 
     clock = SimClock()
     ledger = Ledger.reopen(

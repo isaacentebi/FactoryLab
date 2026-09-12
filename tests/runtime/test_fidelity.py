@@ -8,7 +8,8 @@ import pytest
 from factorylab.charter.charter import Charter, MetricCard
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.wallet import Infeasible
-from factorylab.runtime.loop import MeasureWindow, Runtime
+from factorylab.runtime.loop import Runtime
+from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.worlds import load_manifest
 
 

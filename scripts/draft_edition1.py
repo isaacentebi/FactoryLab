@@ -35,10 +35,11 @@ from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, _parse_json_object
 from factorylab.runtime.cards import parses
 from factorylab.runtime.cli import _load_dotenv
 from factorylab.runtime.live import build_provider
-from factorylab.runtime.loop import Runtime, ScriptedProvider
+from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import WorldManifest, load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelRequest, ModelResponse, PriceTable
+from factorylab.world.scripted import ScriptedProvider
 
 REPO = Path(__file__).resolve().parents[1]
 MAX_TOKENS = 1500  # one proposal completion per assembly

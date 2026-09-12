@@ -10,7 +10,6 @@ from time import time_ns
 
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.wallet import Wallet
-from factorylab.runtime.loop import SimClock
 from factorylab.runtime.resume import (
     JournalProxy,
     RecoveryJournal,
@@ -19,6 +18,7 @@ from factorylab.runtime.resume import (
     decode,
     encode,
 )
+from factorylab.runtime.shared import SimClock
 from factorylab.world.evm import RailError
 from factorylab.world.treasury import Treasury
 

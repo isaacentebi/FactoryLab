@@ -10,7 +10,7 @@ import pytest
 
 from factorylab.kernel.ledger import Ledger, LedgerIntegrityError
 from factorylab.kernel.queue import SettleStatus
-from factorylab.runtime.loop import Runtime, ScriptedProvider, run_world
+from factorylab.runtime.loop import Runtime, run_world
 from factorylab.runtime.resume import (
     ResumeError,
     decode,
@@ -23,6 +23,7 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.clock import ClockSource
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange, Order
+from factorylab.world.scripted import ScriptedProvider
 
 pytestmark = pytest.mark.slow
 

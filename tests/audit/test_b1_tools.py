@@ -5,10 +5,11 @@ from dataclasses import replace
 
 import pytest
 
-from factorylab.runtime.loop import Runtime, ScriptedProvider
+from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelResponse
+from factorylab.world.scripted import ScriptedProvider
 from tests.runtime.test_fa_defects import make_runtime
 
 
