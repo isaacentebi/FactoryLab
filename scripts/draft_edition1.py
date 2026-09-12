@@ -1,9 +1,9 @@
 """One-off: let the seed population draft the metric cards for charter edition 1.
 
 The four norms are the architect's and stay fixed. Each seed assembly in the
-manifest is asked, through its own model tier, for up to three metric cards it
-would put in edition 1, given only the norms, the current seed cards, what a
-card is, what the runtime can measure today, and the public world facts. A
+manifest is asked, through its own model tier, for metric cards it
+would put in edition 1, given only the norms, the executable card contract,
+and the public world facts. Existing cards are withheld. A
 committee of five is then drawn by lot across roles and votes yes/no on the
 union of proposals; three of five passes. The result is written to
 ``docs/charter/edition1-draft.md`` with every proposal, every vote, the
@@ -20,17 +20,22 @@ ledger; it is a survey of the population, not a run of the world.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from factorylab.charter.charter import SEED_NORMS, Charter, MetricCard, seed_charter
+from factorylab.charter.amendment import proposed_price
+from factorylab.charter.charter import Charter, MetricCard
 from factorylab.charter.committee import Ballot, Committee, Seat, draw
+from factorylab.charter.measurement import measurement_catalogue as catalogue
+from factorylab.charter.measurement import preflight_measurement
+from factorylab.charter.windows import window_schema
 from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, _parse_json_object
 from factorylab.runtime.cards import parses
 from factorylab.runtime.cli import _load_dotenv
@@ -44,36 +49,18 @@ from factorylab.world.scripted import ScriptedProvider
 REPO = Path(__file__).resolve().parents[1]
 MAX_TOKENS = 1500  # one proposal completion per assembly
 VOTE_MAX_TOKENS = 4000  # a ballot carries one reason per proposal; the union can be large
-CARD_FIELDS = ("id", "norm", "description", "units", "window", "acceptable_region", "observation")
+CARD_FIELDS = ("id", "norm", "description", "units", "window", "acceptable_region",
+               "observation", "answers_for")
 
-# What the runtime computes per price window today (loop.py::_close_price_window).
-COMPUTED_PER_WINDOW: dict[str, str] = {
-    "cost_per_return": (
-        "mean wallet cost, in micro-USD, of the well-formed producer returns in the window"
-    ),
-    "well_formed_rate": "well-formed returns divided by all invocations in the window",
-    "forecast_skill": (
-        "mean consequence-standing skill over evaluators that have settled forecasts"
-    ),
-    "turnover": "filled notional in the window divided by equity at the window start",
-}
-PUBLIC_FACTS_A_CARD_MAY_OBSERVE = (
-    "wallet balance",
-    "account positions and equity",
-    "venue fills (size, price, fee, realised amount)",
-    "registrations (models, assemblies, routers, tools, amendments)",
-    "verdict scores and their means",
-)
 WHAT_A_CARD_IS = (
-    "A metric card turns one norm into a number. The number is computed over a window and "
-    "compared with an acceptable region. Fields: id (a short slug); norm (exactly one of the "
-    "charter's norms, which are fixed and cannot be added to); description (one sentence "
-    "saying what is measured); units; window (the span the number is computed over, e.g. "
-    "'rolling 100 returns' or 'rolling 50 settled forecasts per evaluator'); acceptable_region "
-    "(one of these phrasings, with N, A and B numbers: 'at least N', 'at most N', 'below N', "
-    "'above N', 'between A and B', or 'below the median of the previous window'); observation "
-    "(where the number comes from: which record or public fact is read). A card may also "
-    "carry a starting price lambda in [0, 1]; lambda is optional."
+    "A metric card turns one norm into a number, compared with an acceptable region. "
+    "Fields: id; norm (exactly one supplied norm); description; units; window "
+    "{kind: returns|forecasts|windows, n: positive integer, per: role|assembly|null}; "
+    "acceptable_region (one of the supplied phrasings); observation (a catalogue id); "
+    "answers_for (producer|evaluator|meta|antagonist|all). An optional starting lambda "
+    "lies within world.prices.lambda_max. Windows select the latest n samples; "
+    "insufficient samples remain unmeasured. Every proposed card is preflighted "
+    "through the runtime measurement contract before voting."
 )
 REGION_PHRASINGS = (
     "at least N",
@@ -124,6 +111,24 @@ class Proposal:
 # ------------------------------------------------------------------- prompt rendering
 
 
+def roster_hash(manifest: WorldManifest) -> str:
+    """Bind the survey to the exact assemblies and the model configurations they used."""
+    model_ids = {a.model_id for a in manifest.assemblies}
+    roster = {"assemblies": [asdict(a) for a in manifest.assemblies],
+              "system_prompt": SEED_SYSTEM_PROMPT,
+              "models": [asdict(m) for m in manifest.models if m.id in model_ids]}
+    encoded = json.dumps(roster, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def survey_world(world: dict[str, Any]) -> dict[str, Any]:
+    """Survey participants see mechanics and observations without existing card anchors."""
+    return {k: v for k, v in world.items() if k not in (
+        "charter", "card_prices", "amendment_feedback", "registration_feedback",
+        "a_return_may_include", "proposal_shapes",
+    )}
+
+
 def _prompt(description: str, inputs: dict[str, Any], schema: dict[str, Any]) -> str:
     """Render like ``Request.prompt_text`` so the population sees its usual shape."""
     return "\n\n".join(
@@ -139,38 +144,30 @@ def _prompt(description: str, inputs: dict[str, Any], schema: dict[str, Any]) ->
 def proposal_prompt(charter: Charter, world: dict[str, Any]) -> str:
     inputs = {
         "norms": list(charter.norms),
-        "current_cards": charter.render(),
         "what_a_metric_card_is": WHAT_A_CARD_IS,
         "acceptable_region_phrasings": list(REGION_PHRASINGS),
-        "measurable_today": {
-            "computed_per_window": COMPUTED_PER_WINDOW,
-            "public_facts_a_card_may_name_as_its_observation": list(
-                PUBLIC_FACTS_A_CARD_MAY_OBSERVE
-            ),
-            "note": (
-                "A card whose observation is none of the above cannot be measured by the "
-                "runtime today; it can still be proposed."
-            ),
-        },
-        "world": world,
+        "measurable_today": catalogue(),
+        "world": survey_world(world),
     }
     card_schema = {
         "type": "object",
         "properties": {
-            **{f: {"type": "string"} for f in CARD_FIELDS},
+            **{f: {"type": "string"} for f in CARD_FIELDS if f != "window"},
+            "window": window_schema(),
             "norm": {"type": "string", "enum": list(charter.norms)},
             "reason": {"type": "string", "description": "one sentence"},
-            "lambda": {"type": "number", "minimum": 0, "maximum": 1},
+            "lambda": {"type": "number", "minimum": 0,
+                       "maximum": world["prices"]["lambda_max"]},
         },
         "required": [*CARD_FIELDS, "reason"],
     }
     schema = {
         "type": "object",
-        "properties": {"cards": {"type": "array", "maxItems": 3, "items": card_schema}},
+        "properties": {"cards": {"type": "array", "items": card_schema}},
         "required": ["cards"],
     }
     return _prompt(
-        "Propose up to three metric cards for edition 1 of the charter. The norms are fixed; "
+        "Propose metric cards for edition 1 of the charter. The norms are fixed; "
         "the cards are the population's to write. Give one sentence of reason per card.",
         inputs,
         schema,
@@ -182,14 +179,14 @@ def vote_prompt(charter: Charter, world: dict[str, Any], proposals: list[Proposa
         "proposals": [
             {
                 "proposal": p.key,
-                **vars(p.card),
+                **asdict(p.card),
                 **({"lambda": p.price} if p.price is not None else {}),
             }
             for p in proposals
         ],
-        "charter": charter.render(),
+        "charter": Charter(charter.edition, charter.norms, ()).render(),
         "what_a_metric_card_is": WHAT_A_CARD_IS,
-        "world": world,
+        "world": survey_world(world),
     }
     schema = {
         "type": "object",
@@ -274,7 +271,12 @@ def _card_from(raw: dict[str, Any], norms: tuple[str, ...]) -> tuple[MetricCard 
         return None, f"missing {', '.join(missing)}"
     if str(raw["norm"]) not in norms:
         return None, f"norm {raw['norm']!r} is not one of the charter's norms (norms are read-only)"
-    return MetricCard(*(str(raw[f]).strip() for f in CARD_FIELDS)), None
+    try:
+        card = MetricCard(**{f: raw[f] for f in CARD_FIELDS})
+        preflight_measurement(card)
+        return card, None
+    except (ValueError, TypeError) as exc:
+        return None, str(exc)
 
 
 def collect_proposals(
@@ -297,7 +299,7 @@ def collect_proposals(
             call.error = f"malformed reply (stop_reason={resp.stop_reason})"
             print(f"  malformed reply; stop_reason={resp.stop_reason}", flush=True)
             continue
-        for raw in cards[:3]:
+        for raw in cards:
             if not isinstance(raw, dict):
                 continue
             key = f"p{len(proposals) + 1:02d}"
@@ -305,19 +307,16 @@ def collect_proposals(
             price: float | None = None
             if "lambda" in raw and raw["lambda"] is not None:
                 try:
-                    price = float(raw["lambda"])
-                    if not 0 <= price <= 1:
-                        problem = problem or f"lambda {price} outside [0, 1]"
-                        price = None
+                    price = proposed_price(raw["lambda"], manifest.prices.lambda_max)
                 except (TypeError, ValueError):
-                    problem = problem or f"lambda {raw['lambda']!r} is not a number"
+                    problem = problem or "lambda is not a finite number within prices.lambda_max"
             proposals.append(
                 Proposal(
                     key, a.id, a.role, a.model_id, raw, card,
                     str(raw.get("reason", "")).strip(), price, problem,
                 )
             )
-        print(f"  {len(cards[:3])} card(s); cost {call.cost_micro} micro-USD", flush=True)
+        print(f"  {len(cards)} card(s); cost {call.cost_micro} micro-USD", flush=True)
     return proposals
 
 
@@ -328,8 +327,15 @@ def hold_vote(
     manifest: WorldManifest, provider: Any, prices: PriceTable, charter: Charter,
     world: dict[str, Any], proposals: list[Proposal], calls: list[Call], rng: random.Random,
 ) -> Committee:
+    for proposal in proposals:
+        if proposal.card is not None and proposal.problem is None:
+            try:
+                preflight_measurement(proposal.card)
+            except ValueError as exc:
+                proposal.problem = str(exc)
+    proposals = [p for p in proposals if p.card is not None and p.problem is None]
     eligible = {a.id: a.role for a in manifest.assemblies}
-    committee = Committee("edition1-draft", 1, draw(eligible, rng))
+    committee = Committee("edition1-draft", 1, draw(eligible, rng, size=manifest.committee.seats))
     effort = {a.id: a.effort for a in manifest.assemblies}
     model = {a.id: a.model_id for a in manifest.assemblies}
     text = vote_prompt(charter, world, proposals)
@@ -374,12 +380,18 @@ def _toml_str(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
 
 
-def render_toml(cards: list[tuple[MetricCard, float | None]]) -> str:
-    out = ["[charter]", "edition = 1", ""]
+def render_toml(cards: list[tuple[MetricCard, float | None]], norms: tuple[str, ...]) -> str:
+    out = ["[charter]", "edition = 1", "norms = " + json.dumps(norms), ""]
     for card, price in cards:
         out.append("[[charter.cards]]")
         for f in CARD_FIELDS:
-            out.append(f"{f} = {_toml_str(getattr(card, f))}")
+            if f == "window":
+                fields = asdict(card.window)
+                text = ", ".join(f"{k} = {json.dumps(v)}" for k, v in fields.items()
+                                 if v is not None)
+                out.append("window = { " + text + " }")
+            else:
+                out.append(f"{f} = {_toml_str(getattr(card, f))}")
         if price is not None:
             out.append(f"lambda = {price}")
         out.append("")
@@ -409,13 +421,14 @@ def render_report(
     w("")
     w(f"- world: `{manifest.name}` (manifest sha256 `{manifest.manifest_hash()[:16]}…`, "
       f"seed {manifest.seed})")
+    w(f"- surveyed roster sha256: `{roster_hash(manifest)}`")
     w(f"- norms (read-only, the architect's): {'; '.join(charter.norms)}")
     w(f"- seed assemblies asked: {len(manifest.assemblies)}; proposals received: "
       f"{len(proposals)}; put to the vote: {len(voted)}; passed: {len(passing)}")
     w(f"- committee: {len(committee.seats)} seats drawn by lot across roles; "
       f"{threshold} yes votes pass")
     w("")
-    w("Each assembly saw the four norms verbatim, the current seed cards, a plain description "
+    w("Each assembly saw the norms verbatim, a plain description "
       "of a metric card, what the runtime can measure per window today, and the public world "
       "block (launch-shaped: fake venue at the initial balance, no positions, no mids). "
       "No goals were given and nothing was said about what to optimise.")
@@ -434,7 +447,7 @@ def render_report(
             w(f"- description: {p.card.description}")
             w(f"- units: {p.card.units}; window: {p.card.window}; "
               f"acceptable: {p.card.acceptable_region}")
-            w(f"- observation: {p.card.observation}")
+            w(f"- observation: {p.card.observation}; answers_for: {p.card.answers_for}")
         else:
             w(f"- as proposed: `{json.dumps(p.raw, ensure_ascii=False)[:600]}`")
         if p.price is not None:
@@ -499,14 +512,14 @@ def render_report(
                 n += 1
             used.add(cid)
             if cid != card.id:
-                card = MetricCard(cid, *(getattr(card, f) for f in CARD_FIELDS[1:]))
+                card = replace(card, id=cid)
             rendered.append((card, p.price))
-        w("Rendered as TOML a manifest could carry. Note: `worlds.py` does not read a "
-          "`[charter]` table today; the runtime still starts from `seed_charter()`. Card ids "
-          "that collided among passing cards were suffixed.")
+        w("Rendered as an explicit manifest charter. Each card passed measurement preflight. "
+          "Card ids that collided among passing cards were suffixed; measurement and role "
+          "bindings are preserved. The launch manifest must validate before adoption.")
         w("")
         w("```toml")
-        w(render_toml(rendered).rstrip())
+        w(render_toml(rendered, charter.norms).rstrip())
         w("```")
     else:
         w("Nothing passed.")
@@ -514,7 +527,7 @@ def render_report(
 
     w("## What the population asked for that the runtime cannot measure yet")
     w("")
-    computed = set(COMPUTED_PER_WINDOW)
+    computed = {o["id"] for o in catalogue()}
     for label, group in (("Passing cards", passing), ("Failed or unvoted cards", [
         p for p in proposals if p not in passing
     ])):
@@ -529,8 +542,8 @@ def render_report(
                 w(f"- {p.key} `{p.raw.get('id', '?')}`: malformed, see above")
                 continue
             notes = []
-            if p.card.id in computed:
-                notes.append("computed per window today")
+            if p.card.observation in computed:
+                notes.append("catalogue observation with a typed window")
             else:
                 notes.append("no window computes this id today; the observation "
                              f"names \"{p.card.observation}\"")
@@ -541,10 +554,8 @@ def render_report(
             )
             w(f"- {p.key} `{p.card.id}`: " + "; ".join(notes))
         w("")
-    w("Only the four computed ids (`cost_per_return`, `well_formed_rate`, `forecast_skill`, "
-      "`turnover`) feed the price controller today. Any other passing card is a request for a "
-      "new window computation in `loop.py::_close_price_window`, and the observation text above "
-      "says what the population expects that computation to read.")
+    w("Only cards with measurable observations, scopes and windows were put to the vote. "
+      "Unavailable measurements require a revised proposal, not an implicit translation.")
     w("")
 
     w("## Cost")
@@ -629,8 +640,7 @@ def main(argv: list[str] | None = None) -> int:
         print("this world has no live model tiers; nothing to ask", file=sys.stderr)
         return 1
     prices = manifest.price_table()
-    charter = seed_charter()
-    assert charter.norms == SEED_NORMS
+    charter = Charter(1, manifest.charter.norms, ())
 
     # Public facts, launch-shaped: the runtime's own world block over a fake venue.
     rt = Runtime(

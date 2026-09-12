@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import reserved_return_fields
 from factorylab.kernel.money import money_to_usd
-from factorylab.runtime.observations import catalogue
 from factorylab.runtime.shared import PRODUCER_KINDS
 from factorylab.runtime.summary import _duration_str, _price_str
 from factorylab.settlement import SEED_VOCABULARY
@@ -56,7 +56,7 @@ class SchematicsMixin:
                     "norm": "one of the charter norms",
                     "description": "what is measured",
                     "units": "…",
-                    "window": "…",
+                    "window": {"kind": "returns", "n": 100, "per": "role"},
                     "acceptable_region": "…",
                     "observation": "one of world.observations ids",
                     "answers_for": "producer",
@@ -65,7 +65,7 @@ class SchematicsMixin:
             ],
             "replace": [],
             "remove": ["card-id"],
-            "predicted_effect": "what you expect to change and why",
+            "predicted_effect": {"card_id": "card-id", "direction": "increase", "window": 1},
             "tick_interval": "30s",
         },
     }
@@ -82,8 +82,13 @@ class SchematicsMixin:
         "register": "a list of up to three proposals, including amendments, shaped like "
         "proposal_shapes; router add=false replaces, add=true adds a router. Learners: exp3 or "
         "blum_mansour. Assembly roles: producer, evaluator, meta, antagonist; effort: low, medium, "
-        "high. Cards answer for producer, evaluator, meta or all; lambda is optional and bounded "
-        "by prices.lambda_max; tick_interval is an optional duration within world.clock bounds.",
+        "high. Cards answer for producer, evaluator, meta, antagonist or all; window is "
+        "{kind: returns|forecasts|windows, n: positive integer, per: role|assembly|null}. "
+        "Insufficient samples are unmeasured. Lambda is optional and bounded by prices.lambda_max; "
+        "tick_interval is an optional duration within world.clock bounds. A prediction names a "
+        "card_id, direction (increase or decrease), and a positive window count after activation. "
+        "Unmeasurable windows, duplicate role/observation bindings and unchanged amendments "
+        "are refused before a vote.",
         "tool_calls": (
             'a list of {"tool": id, "args": {...}} (max 4); results come back in a second call'
         ),
@@ -121,6 +126,8 @@ class SchematicsMixin:
             "wallet_balance_usd": str(money_to_usd(self.wallet.balance)),
             "pots": self.wallet.pots(),
             "charter_edition": self.charter.edition,
+            "charter": self._charter_text(),
+            "mechanics": self._mechanics_block(),
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
             "tools": list(self.tool_specs.values()),
@@ -128,11 +135,10 @@ class SchematicsMixin:
                 "available": self.tool_jail_available,
                 "reason": None if self.tool_jail_available else "no jail on this host",
             },
-            "observations": catalogue(),
+            "observations": measurement_catalogue(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trial_invocations": self.m.novelty.trial_invocations},
-            "committee": {"min_settled": self.m.committee.min_settled,
-                          "eligibility": "assemblies with at least min_settled settled decisions"},
+            "committee": self._mechanics_block()["committee"],
             "pathologies": dict(self.stats.pathologies),
             "novelty_reserve_remaining_usd": str(money_to_usd(self.reserve.remaining())),
             "models": [
@@ -147,16 +153,14 @@ class SchematicsMixin:
             "sellers": [{"model_id": mid, **seller} for mid, seller in self.sellers.items()],
             "assemblies": [
                 {
-                    "id": a.spec.id,
-                    "role": a.spec.role,
-                    "model_id": a.spec.model_id,
-                    "accepts": sorted(a.spec.accepts),
+                    "event_kind": kind,
+                    "count": sum(kind in a.spec.accepts for a in self.assemblies.values()),
                 }
-                for a in self.assemblies.values()
+                for kind in sorted({k for a in self.assemblies.values() for k in a.spec.accepts})
             ],
             "routers": [
-                {"event_kind": st.kind, "learner": type(st.learner).__name__, "menu": st.universe}
-                for st in self._all_router_states()
+                {"event_kind": kind, "count": len(states)}
+                for kind, states in sorted(self.routers.items())
             ],
             "clock": {
                 "tick_interval": _duration_str(self.tick_clock.interval_ns),
@@ -188,6 +192,51 @@ class SchematicsMixin:
             ),
             "a_return_may_include": self.A_RETURN_MAY_INCLUDE,
             "proposal_shapes": self.PROPOSAL_SHAPES,
+        }
+
+    def _charter_text(self) -> str:
+        """Every duplicate charter disclosure uses the same current controller prices."""
+        return self.charter.render({c.id: self.controller.price(c.id) for c in self.charter.cards})
+
+    def _mechanics_block(self) -> dict[str, Any]:
+        """Expose the committed parameters and operative formulas without learner state."""
+        pr, nov = self.m.prices, self.m.novelty
+        return {
+            "committee": {
+                "seats": self.m.committee.seats,
+                "threshold": "floor(number of seated delegates / 2) + 1 yes votes",
+                "min_settled": self.m.committee.min_settled,
+                "eligibility": "distinct independently requested decisions with settled "
+                "consequences; the proposer's assembly is excluded",
+                "liability": "yes votes forecast the predicted direction; no votes its negation. "
+                "Brier = 1 - (vote - outcome)^2, measured at the declared window after activation "
+                "against the pre-activation value. No activation or missing evidence is censored. "
+                "Feedback returns to the voting assembly's durable identity.",
+            },
+            "novelty": {"share": nov.share, "window_ns": nov.window_ns,
+                        "window": _duration_str(nov.window_ns),
+                        "trials": getattr(nov, "trials", nov.trial_invocations)},
+            "controller": {
+                "eta": pr.eta, "kappa": pr.kappa, "decay": self.controller.snapshot()[
+                    "parameters"]["decay"],
+                "lambda_max": pr.lambda_max, "min_window_events": pr.min_window_events,
+                "penalty_cap": getattr(pr, "penalty_cap", None),
+                "recurrence": "v = distance outside the inclusive region / scale; "
+                "if v > 0: lambda' = clip(lambda + eta*v - kappa*max(0, v_previous-v), "
+                "0, lambda_max); otherwise lambda' = max(0, lambda-decay)",
+            },
+            "cascade": {"min_ratio": self.m.timing.min_ratio,
+                        "jitter_fraction": self.m.timing.jitter_fraction},
+            "consequence_mix": getattr(self, "consequence_mix", self.ev.consequence_share),
+            "treasury": {"max_venice_per_window_micro": self.m.treasury.max_venice_per_window,
+                         "venice_tranche_usd": "5"},
+            "tick_bounds_ns": {"min": self.m.clock.min_tick_ns, "max": self.m.max_tick_ns},
+            "measurement": "Select the latest n completed returns, settled forecasts or closed "
+            "windows. per=null pools the factory; role/assembly partitions responders' or "
+            "forecasters' own samples, filtering roles by answers_for unless all. "
+            "The controller receives the equal mean of supported scopes; "
+            "fewer than n samples is unmeasured. Closed-window ratios recompute "
+            "their denominators.",
         }
 
 
@@ -265,9 +314,11 @@ class SchematicsMixin:
                 "exists, in which case on conformity like an evaluator"
             ),
             "card_penalty": (
-                "each priced metric card subtracts its price times the window's violation "
-                "from verdict and conformity scores; prices are in card_prices"
+                "effective = clip(score - sum(lambda_j * violation_j), 0, 1); each role's "
+                "cards use their declared typed windows; prices and region scales "
+                "are in card_prices"
             ),
+            "policy": self._mechanics_block()["committee"]["liability"],
             "novelty_reserve": (
                 "registrations draw on the novelty reserve at the trial amount; refused "
                 "proposals carry a reason in registration_feedback"

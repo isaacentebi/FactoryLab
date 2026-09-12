@@ -123,7 +123,7 @@ class ScriptedProvider:
                             "norm": "care with scarce resources",
                             "description": "Notional traded per window relative to equity.",
                             "units": "ratio",
-                            "window": "rolling 100 events",
+                            "window": {"kind": "windows", "n": 1, "per": None},
                             "acceptable_region": "below 5",
                             "observation": "turnover",
                             "answers_for": "producer",
@@ -132,7 +132,8 @@ class ScriptedProvider:
                     ],
                     "replace": [],
                     "remove": [],
-                    "predicted_effect": "Evaluators will mark down churn; fewer round trips.",
+                    "predicted_effect": {"card_id": "turnover", "direction": "decrease",
+                                         "window": 1},
                 }
             ]
         if n == 65:

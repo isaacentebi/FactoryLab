@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from statistics import median
 
 from factorylab.charter.controller import CardRegion
+from factorylab.charter.measurement import measure_cards
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.cards import parses, region_for
@@ -158,13 +158,8 @@ class PricingMixin:
         ]
         w = replace(self.window, forecast_skills=skills)
         values = {o.id: value for o in CATALOGUE if (value := o.measure(w)) is not None}
-        card_values = {
-            c.id: values[o.id]
-            for c in self.charter.cards
-            if c.id in self.regions
-            and (o := observation_for(c.observation)) is not None
-            and o.id in values
-        }
+        card_values = measure_cards(self.charter.cards, self.card_samples, w)  # A6: typed windows
+        card_values = {cid: value for cid, value in card_values.items() if cid in self.regions}
         self.ledger.append(
             {
                 "kind": "price.window",
@@ -185,13 +180,9 @@ class PricingMixin:
                 self.stats.price_updates += 1
             else:
                 self.stats.price_skipped += 1
-        for card in self.charter.cards:
-            observation = observation_for(card.observation)
-            if observation is not None and observation.id in values:
-                samples = (
-                    w.costs if observation.id == "cost_per_return" else [values[observation.id]]
-                )
-                self.rolling[f"{card.id}_prev_median"] = float(median(samples))
+        self.rolling.update({f"{cid}_prev_median": value
+                             for cid, value in self.card_samples.medians.items()})
+        self._close_policy_window(w.index)  # A15: delayed committee liability
         self.stats.last_window_values = values
         self.controller.set_decay(self.m.prices.decay, ledger=self.ledger, window=w.index)
         close_window(self, values)
@@ -199,12 +190,12 @@ class PricingMixin:
     def _penalty_for(self, cards: str) -> float:
         """Σ λ_j · violation_j over the latest window's values for cards the role answers for."""
         values = {
-            card.id: self.stats.last_window_values[observation.id]
+            card.id: self.card_samples.values[card.id]
             for card in self.charter.cards
             if card.answers_for in (cards, "all")
             and card.id in self.regions
-            and (observation := observation_for(card.observation)) is not None
-            and observation.id in self.stats.last_window_values
+            and observation_for(card.observation) is not None
+            and card.id in self.card_samples.values
         }
         return self.controller.penalty(values) if values else 0.0
 

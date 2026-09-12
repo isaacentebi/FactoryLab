@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from factorylab.charter.amendment import PredictedEffect
 from factorylab.cortex.registration import RouterProposal, parse_proposals
 from factorylab.cortex.request import Return
 from tests.runtime.test_fa_defects import make_runtime
@@ -51,7 +52,8 @@ def test_votes_have_one_queue_decision_per_seat_per_amendment(monkeypatch):
     monkeypatch.setattr(rt.charter_book, 'abstain', lambda *_: None)
     monkeypatch.setattr(rt.charter_book, 'tally', lambda *_: 'failed')
     amendment = SimpleNamespace(id='test', proposed_prices=(), add=(), replace=(), remove=(),
-                                predicted_effect='', tick_interval=None)
+                                predicted_effect=PredictedEffect("cost_per_return", "decrease", 1),
+                    tick_interval=None)
     committee = SimpleNamespace(seats=[('seat1', 'seed-decider'), ('seat2', 'seed-decider')])
     rt._hold_vote(amendment, committee)
     n = rt.stats.invocations

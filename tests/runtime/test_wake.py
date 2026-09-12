@@ -68,7 +68,7 @@ def test_cli_exact_public_content_and_self_contained_page(world, tmp_path, capsy
     assert data["world"] == "scripted" and data["manifest_hash"] == manifest.manifest_hash()
     assert data["last_event_time_ns"] > 0 and data["uptime_ns"] == data["last_event_time_ns"]
     for view in VIEWS:
-        assert data[view] == ledger.aggregate(view)
+        assert data[view] == ledger.public_aggregates(manifest)[view]
     assert not ledger.seal_key_released()
     with pytest.raises(PermissionError):
         _ = ledger.key_store.key
@@ -177,9 +177,7 @@ def test_optional_accounts_are_projected_and_independent(world, monkeypatch):
         usdc_balance=lambda: 12, venice_balance=fail,
     ))
     result = collect_wake(world)
-    assert result["venue"] == {"equity_micro": 1123456, "positions": [
-        {"coin": "BTC", "size": "0.2", "entry_px": "100"},
-    ], "realized_to_date_micro": 3}
+    assert result["venue"] == {"equity_micro": 1123456, "realized_to_date_micro": 3}
     assert result["reserve"] == {"usdc_micro": 12, "venice_micro": UNAVAILABLE}
     assert "NEVER SHOW" not in json.dumps(result)
 

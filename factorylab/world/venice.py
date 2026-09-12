@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
@@ -11,6 +13,72 @@ from urllib import error
 
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
 from factorylab.world.x402 import VENICE_URL, X402Client, http_request, redact, usd_micro
+
+
+def prepare_top_up(client: X402Client, *, now_s: int, nonce: bytes) -> dict:
+    """Fix a $5 quote and unsigned authorization before the treasury reserves and journals it."""
+    from factorylab.world.x402 import TOP_UP_MICRO, authorization_typed_data, parse_quote
+
+    if client.usdc_balance() < TOP_UP_MICRO:
+        raise ValueError("insufficient Base USDC for a $5 Venice top-up")
+    credit = client.venice_balance()
+    quote = parse_quote(client._request("POST", "/x402/top-up", {}), amount_micro=TOP_UP_MICRO)
+    typed = authorization_typed_data(quote.accepted, client.address, now=now_s, nonce=nonce)
+    return {"accepted": quote.accepted, "resource": quote.resource, "extensions": quote.extensions,
+            "created_s": now_s, "authorization": typed["message"], "credit_before_micro": credit}
+
+
+def top_up(client: X402Client, reference: dict) -> dict:
+    """The existing x402 transport signs and submits only the journal's exact authorization.
+
+    The CLI client's one-shot method generates a new nonce per call. Treasury retries
+    instead reconstruct this fixed nonce and expiry, so an ambiguous reply cannot
+    authorize another $5. References contain no signature or private signing material.
+    """
+    from eth_account.messages import encode_typed_data
+
+    from factorylab.world.x402 import (
+        BASE_NETWORK,
+        TOP_UP_MICRO,
+        PaymentQuote,
+        X402Error,
+        _decode,
+        _header,
+        authorization_typed_data,
+    )
+
+    quote = PaymentQuote(reference["accepted"], reference["resource"], reference["extensions"])
+    if quote.amount_micro != TOP_UP_MICRO:
+        raise X402Error("only a $5 Venice top-up is supported")
+    typed = authorization_typed_data(
+        quote.accepted, client.address, now=reference["created_s"],
+        nonce=bytes.fromhex(reference["authorization"]["nonce"].removeprefix("0x")),
+    )
+    if typed["message"] != reference["authorization"]:
+        raise X402Error("Venice authorization differs from the journal")
+    signature = client._account.sign_message(encode_typed_data(full_message=typed))
+    authorization = {k: str(v) if k in ("value", "validAfter", "validBefore") else v
+                     for k, v in typed["message"].items()}
+    envelope = {"x402Version": 2, "accepted": quote.accepted,
+                "payload": {"signature": "0x" + signature.signature.hex(),
+                            "authorization": authorization}}
+    for key in ("resource", "extensions"):
+        if reference[key] is not None:
+            envelope[key] = reference[key]
+    encoded = base64.b64encode(json.dumps(envelope, separators=(",", ":")).encode()).decode()
+    response = client._request("POST", "/x402/top-up", {}, **{"X-402-Payment": encoded})
+    if not 200 <= response.status < 300:
+        raise X402Error("Venice top-up outcome unknown; reconcile the existing authorization")
+    header = _header(response.headers, "payment-response", "x-payment-response")
+    settlement = _decode(header) if header else response.body
+    data = settlement.get("data", settlement)
+    if (not isinstance(data, dict) or settlement.get("success") is False
+            or data.get("success") is False or data.get("network", BASE_NETWORK) != BASE_NETWORK
+            or str(data.get("payer", client.address)).lower() != client.address.lower()):
+        raise X402Error("Venice settlement identity unavailable; reconcile the authorization")
+    # Only a public receipt reference and observed balance leave this adapter.
+    return {"transaction": data.get("transaction", data.get("transactionHash")),
+            "credit_after_micro": client.venice_balance()}
 
 
 class VeniceError(Exception):

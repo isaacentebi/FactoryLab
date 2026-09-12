@@ -69,10 +69,12 @@ class _ReplayFault(BaseException):
 
 
 def _record_types() -> dict[str, type]:
-    from factorylab.charter.amendment import Amendment
+    from factorylab.charter.amendment import Amendment, PredictedEffect
     from factorylab.charter.charter import Charter, MetricCard
     from factorylab.charter.committee import Ballot, Committee, Seat
     from factorylab.charter.controller import CardRegion, _CardState
+    from factorylab.charter.measurement import CardSamples
+    from factorylab.charter.windows import MetricWindow
     from factorylab.cortex.assembly import AssemblySpec
     from factorylab.cortex.tools import PopulationTool
     from factorylab.kernel.events import Event, EventKind
@@ -102,7 +104,8 @@ def _record_types() -> dict[str, type]:
     from factorylab.world.x402 import PaymentQuote
 
     classes = (
-        Amendment, Charter, MetricCard, Ballot, Committee, Seat, CardRegion, _CardState,
+        Amendment, PredictedEffect, Charter, MetricCard, MetricWindow, CardSamples,
+        Ballot, Committee, Seat, CardRegion, _CardState,
         AssemblySpec, PopulationTool, Event, EventKind, Decision, LearningReturn, PropensityRecord,
         SettleStatus, Contract, PriceSpec, ResourceBounds, DistributionSummary, DripSchedule,
         Reservation, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast, Lot,
@@ -410,6 +413,7 @@ _RUNTIME_FIELDS = (
     "world_consumed", "ticks_consumed", "drips_consumed", "started", "catalogue", "sellers",
     "registration_feedback", "tool_jail_available", "vote_handles", "voted_amendments",
     "order_intents", "market_index", "unresolved_x402",
+    "card_samples",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (

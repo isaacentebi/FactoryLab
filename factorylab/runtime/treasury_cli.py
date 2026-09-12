@@ -23,6 +23,29 @@ from factorylab.world.evm import RailError
 from factorylab.world.treasury import Treasury
 
 
+def world_ledger_exists(root: Path, explicit: str | None = None) -> bool:
+    """An explicit ledger or any encrypted world journal in this workspace ends seed access."""
+    if explicit is not None and Path(explicit).exists():
+        return True
+    for directory, names, files in os.walk(root):
+        names[:] = [name for name in names if name not in (".git", ".venv", "node_modules")]
+        for name in files:
+            if not name.endswith(".jsonl"):
+                continue
+            try:
+                with (Path(directory) / name).open("rb") as stream:
+                    header = json.loads(stream.readline())
+                if (isinstance(header, dict) and header.get("format") == 1
+                        and "genesis_hash" in header):
+                    return True
+            except (OSError, ValueError):
+                # A journal in the declared run directory is not safe to bypass
+                # merely because creation was interrupted or it cannot be read.
+                if Path(directory).name == "runs":
+                    return True
+    return False
+
+
 class AcceptanceSession:
     """Persist every input and response; recover bookkeeping without inventing another transfer."""
 

@@ -10,6 +10,7 @@ from typing import Any
 
 from factorylab.charter.charter import Charter
 from factorylab.charter.controller import CardRegion
+from factorylab.charter.measurement import CardSamples
 from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.kernel.events import Bus, Event
 from factorylab.kernel.ledger import Ledger, LedgerLock
@@ -242,7 +243,8 @@ class BootstrapMixin:
 
         if not self.live:
             self.treasury = FakeTreasury(
-                self.ledger, self.wallet, fee_micro=manifest.treasury.fake_fee_micro
+                self.ledger, self.wallet, fee_micro=manifest.treasury.fake_fee_micro,
+                max_venice_per_window=manifest.treasury.max_venice_per_window,
             )
         else:
             self.treasury = Treasury(
@@ -251,6 +253,7 @@ class BootstrapMixin:
                 rail,
                 provider=self.provider,
                 fee_ceiling_micro=manifest.treasury.max_transfer_fee_micro,
+                max_venice_per_window=manifest.treasury.max_venice_per_window,
             )
         self.wallet.bind_pots(self.treasury.pots)
         self.treasury.rail = JournalProxy(
@@ -332,12 +335,14 @@ class BootstrapMixin:
                 }
         self.tool_specs["treasury.transfer"] = {
             "id": "treasury.transfer",
-            "description": "Submit a transfer between venue and reserve. Principal stays held "
+            "description": "Submit a transfer between venue and reserve, or to_venice from "
+            "reserve in a fixed $5 tranche, within treasury.max_venice_per_window. "
+            "Principal stays held "
             "until receipt-confirmed arrival. The result carries references or a refusal reason.",
             "args_schema": {
                 "type": "object",
                 "properties": {
-                    "direction": {"enum": ["to_reserve", "to_venue"]},
+                    "direction": {"enum": ["to_reserve", "to_venue", "to_venice"]},
                     "usd": {"type": ["string", "integer"], "description": "Exact positive USD"},
                     "reason": {"type": "string"},
                 },
@@ -388,7 +393,8 @@ class BootstrapMixin:
             "venue.cancel": [{"coin": coin, "order_id": "1"}],
             "venue.close": [{"coin": coin}, {"coin": coin, "size": None}],
             "venue.set_leverage": [{"coin": coin, "leverage": 1}],
-            "treasury.transfer": [{"direction": "to_reserve", "usd": amount}
+            "treasury.transfer": [{"direction": direction, "usd": amount}
+                                  for direction in ("to_reserve", "to_venice")
                                   for amount in ("5", 5)],
             "catalogue.search": [{"substring": "flash", "limit": 20}],
             "market.discover": [{"query": "inference", "limit": 20}],
@@ -422,6 +428,7 @@ class BootstrapMixin:
         self.rolling: dict[str, float] = {}
         self.unparsed_logged: set[tuple[str, int]] = set()
         self.window = MeasureWindow(0, self.wallet.balance)
+        self.card_samples = CardSamples()
 
         # loop state
         self.pending: dict[str, PendingJudgement] = {}

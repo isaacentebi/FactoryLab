@@ -1,46 +1,42 @@
-"""The charter: norms and metric cards, rendered for evaluators.
-
-Phase 2 keeps the charter immutable. Norms are the read-only layer the essay
-reserves for the architect; metric cards are the operational interpretations
-that a later phase lets the population amend. Nothing here is enforced by
-code: the charter is what evaluators are asked to judge against, and the
-consequence channel is what keeps that judging honest.
-"""
+"""Immutable charter editions expose norms and executable measurement contracts."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from factorylab.charter.windows import MetricWindow
+
 
 @dataclass(frozen=True)
 class MetricCard:
-    """One operational interpretation of a norm. Text fields are what evaluators read."""
+    """One norm interpretation binds a typed window and an accountable scoring role."""
 
     id: str
     norm: str
     description: str
     units: str
-    window: str
+    window: MetricWindow
     acceptable_region: str
-    observation: str  # where the number would come from; informational in this phase
+    observation: str
     answers_for: str
 
     def __post_init__(self) -> None:
-        for name in ("id", "norm", "description", "units", "window", "acceptable_region"):
-            if not getattr(self, name):
+        for name in ("id", "norm", "description", "units", "acceptable_region", "observation"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
                 raise ValueError(f"metric card needs {name}")
+        object.__setattr__(self, "window", MetricWindow.parse(self.window))
         if not isinstance(self.answers_for, str) or self.answers_for.strip().lower() not in (
-            "producer", "evaluator", "meta", "all",
+            "producer", "evaluator", "meta", "antagonist", "all",
         ):
             raise ValueError(
-                f"card {self.id} answers_for: expected producer, evaluator, meta or all"
+                f"card {self.id} answers_for: expected producer, evaluator, meta, antagonist or all"
             )
         object.__setattr__(self, "answers_for", self.answers_for.strip().lower())
 
 
 @dataclass(frozen=True)
 class Charter:
-    """Immutable in phase 2. ``render()`` is the exact text evaluators see."""
+    """Each edition retains its exact norms and checked cards."""
 
     edition: int
     norms: tuple[str, ...]
@@ -59,7 +55,8 @@ class Charter:
             if c.norm not in self.norms:
                 raise ValueError(f"card {c.id} references an unknown norm")
 
-    def render(self) -> str:
+    def render(self, prices: dict[str, float] | None = None) -> str:
+        """Expose the full charter, including each window, role and current supplied price."""
         lines = [f"CHARTER (edition {self.edition})", "", "NORMS"]
         lines += [f"- {n}" for n in self.norms]
         lines += ["", "METRIC CARDS"]
@@ -69,6 +66,7 @@ class Charter:
                 f"  {c.description}",
                 f"  units: {c.units}; window: {c.window}; acceptable: {c.acceptable_region}",
                 f"  observation: {c.observation}; answers_for: {c.answers_for}",
+                f"  lambda: {prices.get(c.id, 0.0) if prices is not None else 'unassigned'}",
             ]
         return "\n".join(lines)
 
@@ -92,7 +90,7 @@ def seed_charter() -> Charter:
                 norm="care with scarce resources",
                 description="Wallet cost of producing one well-formed return.",
                 units="micro-USD per return",
-                window="rolling 100 returns",
+                window=MetricWindow("returns", 100, "role"),
                 acceptable_region="below the median of the previous window",
                 observation="cost_per_return",
                 answers_for="producer",
@@ -102,7 +100,7 @@ def seed_charter() -> Charter:
                 norm="truthful commitments",
                 description="Share of returns that satisfy their declared outcome schema.",
                 units="fraction",
-                window="rolling 100 returns",
+                window=MetricWindow("returns", 100, "role"),
                 acceptable_region="at least 0.9",
                 observation="well_formed_rate",
                 answers_for="all",
@@ -112,7 +110,7 @@ def seed_charter() -> Charter:
                 norm="useful inquiry",
                 description="Mean Brier score of settled forecasts minus the prevalence baseline.",
                 units="score difference in [-1, 1]",
-                window="rolling 50 settled forecasts per evaluator",
+                window=MetricWindow("forecasts", 50, "assembly"),
                 acceptable_region="above zero",
                 observation="forecast_skill",
                 answers_for="evaluator",

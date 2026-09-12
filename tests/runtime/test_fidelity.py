@@ -6,6 +6,7 @@ from random import Random
 import pytest
 
 from factorylab.charter.charter import Charter, MetricCard
+from factorylab.charter.windows import MetricWindow
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.wallet import Infeasible
 from factorylab.runtime.loop import Runtime
@@ -14,7 +15,11 @@ from factorylab.runtime.worlds import load_manifest
 
 
 def runtime(**changes):
-    manifest = replace(load_manifest("scripted"), **changes)
+    seed = load_manifest("scripted")
+    # These controller tests explicitly select a single complete reserve window.
+    charter = replace(seed.charter, cards=tuple(replace(c, window=MetricWindow("windows", 1, None))
+                                               for c in seed.charter.cards))
+    manifest = replace(seed, charter=charter, **changes)
     return Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
                    ledger_path=None, drip=False, router_gamma=0.1)
 
@@ -25,7 +30,15 @@ def decision(rt, assembly, *, settled=False):
         parent_handle=None, cost_ceiling=rt.wallet.balance,
         propensity=PropensityRecord((assembly,), (1.0,), assembly, 0, "test-router", "state"),
     )
+    rt.handle_to_assembly[handle] = assembly
     if settled:
+        child = rt.queue.open(
+            actor=assembly, event_id="consequence", channel="consequence", deadline_ns=10**18,
+            parent_handle=handle, cost_ceiling=0,
+            propensity=PropensityRecord((assembly,), (1.0,), assembly, 0, assembly, "test"),
+        )
+        rt.queue.settle(child, channel="consequence", score=0.5, status=SettleStatus.SETTLED,
+                        definition_version="test", sampling_ref=None)
         rt.queue.settle(handle, channel="verdict", score=0.5, status=SettleStatus.SETTLED,
                         definition_version="test", sampling_ref=None)
     return handle
@@ -46,17 +59,20 @@ def test_population_authored_price_changes_a_settled_reward():
         for _ in range(5):
             decision(rt, assembly, settled=True)
     rt._propose_amendment("author", {
-        "id": "population-quality", "predicted_effect": "Price malformed returns.",
-        "add": [{"id": "population-quality", "norm": rt.charter.norms[0],
+        "id": "population-quality",
+                    "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease",
+                    "window": 1},
+        "replace": [{"id": "well_formed_rate", "norm": rt.charter.norms[0],
                  "description": "Quality observed in this world.", "units": "fraction",
-                 "window": "reserve window", "acceptable_region": "at least 0.9",
+                 "window": {"kind": "windows", "n": 1, "per": None},
+                    "acceptable_region": "at least 0.9",
                  "observation": "well_formed_rate", "answers_for": "producer", "lambda": 0.5}],
     })
     rt.clock.now_ns += (rt.m.timing.min_ratio * rt.ev.consequence_backstop_events
                         * rt.tick_clock.interval_ns)
     rt._activate_charter_if_due()
     assert rt.charter.edition == 2
-    rt.stats.last_window_values = {"well_formed_rate": 0.5}
+    rt.card_samples.values = {c.id: 0.5 for c in rt.charter.cards}
     handle = decision(rt, "seed-decider")
     rt._settle_priced(handle, channel="verdict", score=0.8,
                       definition_version="test", sampling_ref=None, cards="producer")
@@ -116,7 +132,9 @@ def test_registration_flood_does_not_change_committee_draw():
     for assembly in rt.assemblies:
         for _ in range(5):
             decision(rt, assembly, settled=True)
-    item = {"id": "before-flood", "predicted_effect": "No change."}
+    item = {"id": "before-flood", "tick_interval": "2s",
+                    "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease",
+                    "window": 1}}
     rt.rng = Random(3)
     rt._propose_amendment("author", item)
     first = rt.charter_book._CharterBook__committees[item["id"]]
@@ -138,18 +156,21 @@ def test_role_field_is_required_and_validated_in_population_cards():
         card = {**base, "answers_for": value}
         with pytest.raises(ValueError, match="answers_for"):
             rt._propose_amendment("author", {"id": "bad-card", "add": [card],
-                                             "predicted_effect": "test"})
+                                             "predicted_effect": {"card_id": "cost_per_return",
+                   "direction": "decrease",
+                    "window": 1}})
 
 
 def test_role_prices_are_not_card_id_conventions():
     rt = runtime()
     rt.charter = Charter(1, rt.charter.norms, tuple(
-        MetricCard(f"card-{role}", rt.charter.norms[0], "d", "fraction", "w",
+        MetricCard(f"card-{role}", rt.charter.norms[0], "d", "fraction",
+                   MetricWindow("windows", 1, None),
                    "above 0.9", "well_formed_rate", answers_for=role)
         for role in ("producer", "evaluator", "meta", "all")
     ))
     rt._derive_regions()
-    rt.stats.last_window_values = {"well_formed_rate": 0.5}
+    rt.card_samples.values = {c.id: 0.5 for c in rt.charter.cards}
     for card in rt.charter.cards:
         rt.controller.set_price(card.id, 0.25, amendment_id="test")
     for role in ("producer", "evaluator", "meta"):
@@ -197,7 +218,9 @@ def test_missing_proposal_role_is_rejected_before_spending_write_access():
     before = rt.reserve.remaining()
     with pytest.raises(ValueError, match="answers_for"):
         rt._propose_amendment("author", {"id": "bad-card", "add": [card],
-                                         "predicted_effect": "test"})
+                                         "predicted_effect": {"card_id": "cost_per_return",
+                   "direction": "decrease",
+                    "window": 1}})
     assert rt.reserve.remaining() == before
 
 
@@ -330,7 +353,8 @@ def test_orders_cannot_commit_protected_novelty_collateral(mode):
 def test_learning_death_cannot_be_hidden_by_naming_a_card_registrations():
     rt = runtime()
     rt.charter = Charter(1, rt.charter.norms, (
-        MetricCard("registrations", rt.charter.norms[0], "quality", "fraction", "w",
+        MetricCard("registrations", rt.charter.norms[0], "quality", "fraction",
+                   MetricWindow("windows", 1, None),
                    "above 0.9", "well_formed_rate", answers_for="all"),
     ))
     rt._derive_regions()

@@ -79,6 +79,7 @@ class LiveRail:
             raise RailError("unsupported Hyperliquid endpoint")
         self.testnet = exchange.base_url == TESTNET_API_URL
         self.exchange, self.spec = exchange, spec
+        self._transport = transport
         self.reserve_address = address(spec.reserve_address)
         try:
             reserve = Account.from_key(os.environ["RESERVE_PRIVATE_KEY"])
@@ -108,22 +109,43 @@ class LiveRail:
             for row in spot.get("balances", [])
             if row["coin"] == "USDC"
         )
-        return {
+        result = {
             "venue": int(Decimal(state["marginSummary"]["accountValue"]) * 1_000_000) + spot_usdc,
             "venue_available": int(Decimal(state["withdrawable"]) * 1_000_000),
             "reserve": self.base.balance(self.base.chain.usdc),
             "hyperevm_reserve": self.hyper.balance(self.hyper.chain.usdc),
         }
+        if not self.testnet:
+            try:
+                result["venice"] = self._venice_client().venice_balance()
+            except Exception:
+                result["venice"] = None
+        return result
 
     def plan(self, direction: str) -> tuple[str, ...]:
+        if direction == "to_venice":
+            return ("venice_top_up",)
         if direction == "to_reserve":
             return ("withdraw_burn", "mint_base")
         if direction == "to_venue":
             return ("approve_base", "burn_base", "mint_hyper", "approve_core", "deposit_core")
-        raise RailError("direction must be to_reserve or to_venue")
+        raise RailError("direction must be to_reserve, to_venue or to_venice")
 
     def preflight(self, direction: str, amount: int, gas_spent: dict) -> None:
         self.plan(direction)
+        if direction == "to_venice":
+            from factorylab.world.x402 import TOP_UP_MICRO
+
+            if self.testnet:
+                raise RailError("Venice requires Base mainnet USDC; this rail uses Base Sepolia")
+            if os.environ.get("VENICE_API_KEY"):
+                raise RailError("Venice top-ups credit the reserve wallet, not an API-key account")
+            self.base.check_chain()
+            if amount != TOP_UP_MICRO:
+                raise RailError("to_venice requires the fixed $5 tranche")
+            if self.base.balance(self.base.chain.usdc) < amount:
+                raise RailError("amount exceeds available reserve pot")
+            return
         self.hyper.check_chain()
         self.base.check_chain()
         routes = self.exchange._info.post("/info", {"type": "usdcRouting"})
@@ -233,6 +255,14 @@ class LiveRail:
 
     def prepare(self, step: str, state: dict, gas_spent: dict) -> dict:
         """Return immutable replay references without broadcasting an external write."""
+        if step == "venice_top_up":
+            from factorylab.world.venice import prepare_top_up
+
+            client = self._venice_client()
+            return {**prepare_top_up(client, now_s=state["started_ns"] // 1_000_000_000,
+                                     nonce=os.urandom(32)),
+                    "network": "eip155:8453", "start_block": self.base.block(),
+                    "fee_ceiling_micro": 0}
         amount = state["received_micro"]
         if step == "burn_base" and state["route_data"].get("prepared_burn"):
             return deepcopy(state["route_data"]["prepared_burn"])
@@ -304,7 +334,11 @@ class LiveRail:
             ref["fee_ceiling_micro"] += gas_micro(approval["gas_ceiling_wei"], approval["gas_usd"])
         return ref
 
-    def send(self, step: str, reference: dict) -> None:
+    def send(self, step: str, reference: dict) -> dict | None:
+        if step == "venice_top_up":
+            from factorylab.world.venice import top_up
+
+            return top_up(self._venice_client(), reference)
         if step != "withdraw_burn":
             chain = self._evm(reference["chain_key"])
             if approval := reference.get("pending_approval"):
@@ -361,6 +395,52 @@ class LiveRail:
             raise Pending("withdrawal outcome unknown; reconcile the existing nonce") from None
         if response.get("status") != "ok":
             raise RailError("venue rejected withdrawal")
+
+    def _venice_client(self):
+        """Use the existing reserve signer and x402 client on the committed Base mainnet rail."""
+        from factorylab.world.x402 import X402Client
+
+        if self.testnet:
+            raise RailError("Venice requires Base mainnet USDC")
+        client = X402Client(transport=self._transport)
+        if client.address.lower() != self.reserve_address.lower():
+            raise RailError("Venice payer differs from the reserve")
+        return client
+
+    def _venice_receipt(self, state: dict) -> dict | None:
+        """Release principal only on the exact canonical debit and observed Venice credit."""
+        ref = state["reference"]
+        auth = ref["authorization"]
+        topics = [event_topic("AuthorizationUsed(address,bytes32)"),
+                  "0x" + word_address(self.reserve_address).hex(), auth["nonce"]]
+        for log in self.base.logs(self.base.chain.usdc, topics, ref["start_block"]):
+            if (log.get("removed") or log["address"].lower() != self.base.chain.usdc.lower()
+                    or [t.lower() for t in log["topics"]] != [t.lower() for t in topics]):
+                continue
+            receipt = self.base.proof(log["transactionHash"])
+            if receipt is None or int(receipt["status"], 16) != 1:
+                continue
+            if not any(
+                event.get("address", "").lower() == self.base.chain.usdc.lower()
+                and [t.lower() for t in event.get("topics", [])] == [t.lower() for t in topics]
+                for event in receipt.get("logs", [])
+            ):
+                continue
+            if not self.base.transferred(receipt, self.base.chain.usdc, self.reserve_address,
+                                         auth["to"], state["amount_micro"]):
+                continue
+            observed = state["route_data"].get("submission", {}).get("credit_after_micro")
+            if observed is None:
+                observed = self._venice_client().venice_balance()
+            if observed < ref["credit_before_micro"] + state["amount_micro"]:
+                return None
+            return {"confirmed": True, "received_micro": state["amount_micro"],
+                    "fee_micro": 0, "principal_moved": True,
+                    "evidence": {"network": ref["network"], "tx_hash": log["transactionHash"],
+                                 "block_hash": receipt["blockHash"], "nonce": auth["nonce"],
+                                 "venice_credit_micro": state["amount_micro"],
+                                 "credit_after_micro": observed}}
+        return None
 
     def _withdrawal(self, ref: dict, amount: int) -> dict | None:
         updates = self.exchange._info.user_non_funding_ledger_updates(
@@ -441,6 +521,8 @@ class LiveRail:
         }
 
     def poll(self, step: str, state: dict) -> dict | None:
+        if step == "venice_top_up":
+            return self._venice_receipt(state)
         ref, amount = state["reference"], state["received_micro"]
         if step == "withdraw_burn":
             return self._withdrawal(ref, amount)

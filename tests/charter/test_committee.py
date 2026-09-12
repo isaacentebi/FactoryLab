@@ -1,6 +1,6 @@
 import random
 from collections import Counter
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, asdict, replace
 
 import pytest
 
@@ -20,9 +20,9 @@ def candidate(**changes) -> Amendment:
             proposer_handle="decision-1",
             edition_base=1,
             add=(),
-            replace=(replace(seed_charter().cards[0], acceptable_region="below 100 micro-USD"),),
+            replace=(replace(seed_charter().cards[0], acceptable_region="below 100"),),
             remove=(),
-            predicted_effect="Lower cost per useful return, with potentially less exploration.",
+            predicted_effect={"card_id": "cost_per_return", "direction": "decrease", "window": 1},
         ),
         **changes,
     )
@@ -104,7 +104,7 @@ def test_amendment_rejects_malformed_fields(field, value):
 
 def test_amendment_bounds_and_freezing():
     cards = [replace(seed_charter().cards[0], id="new-card")]
-    amendment = candidate(id="a" * 48, add=cards, predicted_effect="x" * 2000)
+    amendment = candidate(id="a" * 48, add=cards)
     cards.clear()
     assert len(amendment.add) == 1
     assert isinstance(amendment.add, tuple)
@@ -347,7 +347,8 @@ def test_majority_thresholds_ties_and_abstention_arithmetic(book, size, votes, o
 def test_activation_waits_for_boundary_and_preserves_all_editions(book, ledger):
     original = book.current()
     original_render = original.render()
-    added = replace(original.cards[0], id="inquiry-cost", description="Cost of inquiry.")
+    added = replace(original.cards[0], id="inquiry-cost", description="Cost of inquiry.",
+                    answers_for="meta")
     first = seated(book, remove=(original.cards[1].id,), add=(added,))
     second_card = replace(original.cards[2], description="A better forecast metric.")
     second = seated(book, id="better-forecasts", replace=(second_card,))
@@ -405,7 +406,7 @@ def test_pending_is_detached_and_skips_failed_and_activated_proposals(book):
 
 def test_same_base_conflicts_use_later_approved_patch_in_proposal_order(book):
     original = book.current()
-    extra = replace(original.cards[0], id="extra-card")
+    extra = replace(original.cards[0], id="extra-card", answers_for="meta")
     first = seated(book, replace=(), remove=(original.cards[0].id,), add=(extra,))
     changed_extra = replace(extra, description="Later approved description.")
     second = seated(book, id="second-amendment", add=(changed_extra,))
@@ -462,7 +463,7 @@ def test_ledger_votes_use_only_aliases_and_seat_entry_seals_mapping(book, ledger
     proposal, seating, *votes = items
     assert proposal["kind"] == "charter.propose"
     assert proposal["proposer_handle"] == "decision-1"
-    assert proposal["predicted_effect"] == candidate().predicted_effect
+    assert proposal["predicted_effect"] == asdict(candidate().predicted_effect)
     assert proposal["replace"][0]["id"] == "cost_per_return"
     assert seating["kind"] == "charter.seat"
     assert seating["seats"] == [

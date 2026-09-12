@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from factorylab.charter.amendment import PredictedEffect
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.reserve import NoveltyReserve
 from factorylab.kernel.wallet import Infeasible, Wallet
@@ -105,7 +106,8 @@ def test_fatal_vote_overrun_cannot_invoke_another_seat(monkeypatch):
     monkeypatch.setattr(rt.charter_book, "vote", lambda *_: None)
     monkeypatch.setattr(rt.charter_book, "tally", lambda *_: "failed")
     am = SimpleNamespace(id="test", proposed_prices=(), add=(), replace=(), remove=(),
-                         predicted_effect="", tick_interval=None)
+                         predicted_effect=PredictedEffect("cost_per_return", "decrease", 1),
+                    tick_interval=None)
     committee = SimpleNamespace(seats=[("seat1", "seed-decider"), ("seat2", "seed-decider")])
     rt._hold_vote(am, committee)
     assert len(calls) == 1 and rt.wallet.balance == -100_000

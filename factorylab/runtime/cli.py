@@ -209,6 +209,12 @@ def _cmd_reserve(args: argparse.Namespace) -> int:
         print(account.address)
         return 0
     if args.reserve_cmd == "topup":
+        from factorylab.runtime.treasury_cli import world_ledger_exists
+
+        if world_ledger_exists(Path.cwd(), getattr(args, "ledger", None)):
+            print("World ledger exists: CLI top-up is pre-launch only; use the population's "
+                  "treasury.transfer to_venice contract.", file=sys.stderr)
+            return 2
         try:
             amount = Decimal(args.usd)
             if not amount.is_finite() or amount != Decimal("5"):
@@ -496,6 +502,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--base-url", help="Venice API root, including /api/v1")
         if name == "topup":
             command.add_argument("--usd", required=True, help="exactly 5; never rounded")
+            command.add_argument("--ledger", help="world ledger path to check before seed funding")
         command.set_defaults(func=_cmd_reserve)
 
     r = sub.add_parser("run", help="run a world's event loop")
@@ -616,6 +623,15 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     if is_reserve or is_venice_probe:
         try:
+            if is_reserve and args.reserve_cmd == "topup":
+                from pathlib import Path
+
+                from factorylab.runtime.treasury_cli import world_ledger_exists
+
+                if world_ledger_exists(Path.cwd(), args.ledger):
+                    print("World ledger exists: CLI top-up is pre-launch only; use the "
+                          "population's treasury.transfer to_venice contract.", file=sys.stderr)
+                    return 2
             if not (is_reserve and args.reserve_cmd == "init"):
                 _load_dotenv()
             return int(args.func(args))

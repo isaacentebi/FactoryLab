@@ -258,7 +258,7 @@ def test_manifest_card_requires_explicit_role(field):
         manifest_from_dict(raw)
 
 
-@pytest.mark.parametrize("value", [True, None, "", "antagonist", "unknown"])
+@pytest.mark.parametrize("value", [True, None, "", "unknown"])
 def test_manifest_card_rejects_unknown_role(value):
     raw = _with_charter()
     raw["charter"]["cards"][0]["answers_for"] = value

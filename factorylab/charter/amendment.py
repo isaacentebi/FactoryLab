@@ -10,9 +10,11 @@ from factorylab.charter.charter import MetricCard
 def proposed_answers_for(value: object, card_id: str) -> str:
     """Population cards explicitly name a supported scoring role, independent of card id."""
     if not isinstance(value, str) or value.strip().lower() not in (
-        "producer", "evaluator", "meta", "all",
+        "producer", "evaluator", "meta", "antagonist", "all",
     ):
-        raise ValueError(f"card {card_id} answers_for: expected producer, evaluator, meta or all")
+        raise ValueError(
+            f"card {card_id} answers_for: expected producer, evaluator, meta, antagonist or all"
+        )
     return value.strip().lower()
 
 
@@ -49,6 +51,41 @@ def proposed_tick_interval(value: object, min_ns: int, max_ns: int | float) -> i
 
 
 @dataclass(frozen=True)
+class PredictedEffect:
+    """A policy forecast binds a named card, strict direction and post-activation window count."""
+
+    card_id: str
+    direction: str
+    window: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.card_id, str) or not self.card_id.strip():
+            raise ValueError("predicted_effect.card_id is required")
+        if self.direction not in ("increase", "decrease"):
+            raise ValueError("predicted_effect.direction must be increase or decrease")
+        if type(self.window) is not int or self.window < 1:
+            raise ValueError("predicted_effect.window must be a positive count of closed windows")
+
+    @classmethod
+    def parse(cls, value: object) -> "PredictedEffect":
+        """Reject unfalsifiable prose without inventing a direction or evaluation horizon."""
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, dict) or set(value) != {"card_id", "direction", "window"}:
+            raise ValueError("predicted_effect needs card_id, direction and window")
+        return cls(**value)
+
+
+def effect_schema() -> dict:
+    """The accepted prediction schema names no preferred direction or horizon."""
+    return {"type": "object", "properties": {
+        "card_id": {"type": "string"},
+        "direction": {"enum": ["increase", "decrease"]},
+        "window": {"type": "integer", "minimum": 1},
+    }, "required": ["card_id", "direction", "window"], "additionalProperties": False}
+
+
+@dataclass(frozen=True)
 class Amendment:
     """A candidate's typed card changes and predicted effect cannot change after creation.
 
@@ -62,7 +99,7 @@ class Amendment:
     add: tuple[MetricCard, ...]
     replace: tuple[MetricCard, ...]
     remove: tuple[str, ...]
-    predicted_effect: str
+    predicted_effect: PredictedEffect
     proposed_prices: tuple[tuple[str, float], ...] = ()
     tick_interval: str | None = None
 
@@ -73,12 +110,7 @@ class Amendment:
             raise ValueError("proposer_handle is required")
         if type(self.edition_base) is not int or self.edition_base < 1:
             raise ValueError("edition_base must be a positive integer")
-        if (
-            not isinstance(self.predicted_effect, str)
-            or not self.predicted_effect.strip()
-            or len(self.predicted_effect) > 2000
-        ):
-            raise ValueError("predicted_effect must be non-empty and at most 2000 chars")
+        object.__setattr__(self, "predicted_effect", PredictedEffect.parse(self.predicted_effect))
         if self.tick_interval is not None:
             proposed_tick_interval(self.tick_interval, 1, float("inf"))
         ids = []

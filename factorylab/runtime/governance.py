@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
+from statistics import fmean
 from typing import Any
 
 from factorylab.charter.charter import Charter
+from factorylab.charter.measurement import measure_card, preflight_measurement
 from factorylab.cortex.assembly import AssemblySpec
 from factorylab.cortex.registration import (
     MAX_PROPOSALS_PER_RETURN,
@@ -25,12 +28,12 @@ from factorylab.world.x402 import X402Error
 
 try:
     from factorylab.charter.amendment import Amendment
-    from factorylab.charter.book import CharterBook
+    from factorylab.charter.book import CharterBook, Refusal
 except ImportError:  # pragma: no cover
-    Amendment = CharterBook = None  # type: ignore[assignment]
+    Amendment = CharterBook = Refusal = None  # type: ignore[assignment]
 
 
-from factorylab.runtime.shared import CH_FAST, DEF_FAST, PRODUCER_KINDS, _to_plain
+from factorylab.runtime.shared import PRODUCER_KINDS, _to_plain
 from factorylab.runtime.summary import _assembly_contract, _model_contract
 
 
@@ -76,6 +79,8 @@ class GovernanceMixin:
                     self._register(handle, prop)
                 self.stats.registrations_accepted += 1
                 self.window.registrations += 1
+                if item.get("kind") != "amendment":
+                    self.card_samples.revised(handle)
             except (Infeasible, PermissionError, ValueError, KeyError, TypeError, X402Error) as exc:
                 self._reject_registration(handle, f"{type(exc).__name__}: {exc}"[:300], index)
 
@@ -88,7 +93,8 @@ class GovernanceMixin:
             item["index"] = index
         self.ledger.append({**item, "ts": self.clock.now_ns})
         self.window.registration_rejections += 1
-        self.registration_feedback.append({k: v for k, v in item.items() if k != "kind"})
+        self.registration_feedback.append({k: v for k, v in item.items()
+                                           if k not in ("kind", "handle")})
 
     def _register(self, handle: str, prop: Any) -> None:
         amount = self.ev.trial_amount_micro
@@ -117,7 +123,7 @@ class GovernanceMixin:
                 self.tool_owner[prop.id] = owner
             self.tool_specs[prop.id] = as_spec(tool, self.m.tools.population_tool_micro_per_call)
             self.stats.population_tools_registered += 1
-            self._emit(EventKind.REGISTERED, {"kind": "tool", "id": prop.id, "by": handle})
+            self._emit(EventKind.REGISTERED, {"kind": "tool", "id": prop.id})
             return
         if isinstance(prop, ModelProposal):
             if prop.openrouter_id in self.prices.prices:
@@ -133,7 +139,6 @@ class GovernanceMixin:
                     {
                         "kind": "model",
                         "id": prop.openrouter_id,
-                        "by": handle,
                         "network": seller["network"],
                         "per_request_micro": price.per_request_micro,
                     },
@@ -164,7 +169,7 @@ class GovernanceMixin:
             self.registry.register(contract, by_handle=handle, reservation=res)
             self.prices.register(prop.openrouter_id, price)
             self._emit(
-                EventKind.REGISTERED, {"kind": "model", "id": prop.openrouter_id, "by": handle}
+                EventKind.REGISTERED, {"kind": "model", "id": prop.openrouter_id}
             )
         elif isinstance(prop, AssemblyProposal):
             contract = _assembly_contract(prop.id, prop.role, prop.accepts, prop.max_tokens)
@@ -191,7 +196,6 @@ class GovernanceMixin:
                     "id": prop.id,
                     "role": prop.role,
                     "accepts": list(prop.accepts),
-                    "by": handle,
                 },
             )
         else:
@@ -271,7 +275,7 @@ class GovernanceMixin:
                         str(c.get("norm", "")),
                         str(c.get("description", "")),
                         str(c.get("units", "")),
-                        str(c.get("window", "")),
+                        c.get("window"),
                         str(c.get("acceptable_region", "")),
                         str(c.get("observation", "")),
                         proposed_answers_for(c.get("answers_for"), str(c.get("id", ""))),
@@ -283,6 +287,7 @@ class GovernanceMixin:
                 if not parses(card):
                     raise ValueError("card acceptable_region has no finite usable bounds")
                 region_for(card, rolling={})
+                preflight_measurement(card)
             return tuple(out)
 
         remove = item.get("remove") or []
@@ -295,10 +300,19 @@ class GovernanceMixin:
             add=cards("add"),
             replace=cards("replace"),
             remove=tuple(remove),
-            predicted_effect=str(item.get("predicted_effect", "")),
+            predicted_effect=item.get("predicted_effect"),
             proposed_prices=tuple(prices),
             tick_interval=tick_interval,
         )
+        self.charter_book.validate(am)
+        resulting = {c.id: c for c in self.charter.cards if c.id not in am.remove}
+        resulting.update((c.id, c) for c in (*am.replace, *am.add))
+        clock_changed = am.tick_interval is not None and proposed_tick_interval(
+            am.tick_interval, self.m.clock.min_tick_ns, self.m.max_tick_ns
+        ) != self.tick_clock.interval_ns
+        if (resulting == {c.id: c for c in self.charter.cards} and not clock_changed
+                and not any(self.controller.price(cid) != value for cid, value in prices)):
+            raise ValueError("amendment leaves the charter unchanged")
         contract = Contract(
             id=f"amendment:{am.id}",
             version=1,
@@ -316,19 +330,46 @@ class GovernanceMixin:
         self.stats.amendments_proposed += 1
         self.window.amendments_proposed += 1
         eligible = self._committee_eligible()
-        committee = self.charter_book.seat(am.id, eligible, self.rng)
+        proposer = self.handle_to_assembly.get(handle)
+        if proposer is None:
+            try:
+                proposer = self.queue.get(handle).propensity.chosen
+            except KeyError:
+                pass
+        eligible.pop(proposer, None)
+        committee = self.charter_book.seat(am.id, eligible, self.rng, size=self.m.committee.seats)
         self._hold_vote(am, committee)
 
     def _committee_eligible(self) -> dict[str, str]:
-        """Only distinct settled decisions qualify an assembly for sortition."""
+        """Distinct independently requested decisions need settled consequences to qualify."""
         from collections import Counter
 
         from factorylab.charter.committee import experienced
 
-        settled = Counter(d.propensity.chosen for d in self.queue.state()["decisions"].values()
-                          if d.status is SettleStatus.SETTLED)
+        evidence = {(r.handle, self.handle_to_assembly.get(r.handle))
+                    for r in self.consequences.table.returns if r.payoff is not None}
+        for decision in self.queue.state()["decisions"].values():
+            if decision.channel == "consequence" and decision.status is SettleStatus.SETTLED:
+                if decision.parent_handle:
+                    evidence.add((decision.parent_handle, self.handle_to_assembly.get(
+                        decision.parent_handle, decision.actor)))
+        settled = Counter(assembly for handle, assembly in evidence
+                          if assembly is not None and self._independent_decision(handle, assembly))
         return experienced({a.spec.id: a.spec.role for a in self.assemblies.values()},
                            settled, self.m.committee.min_settled)
+
+    def _independent_decision(self, handle: str, assembly: str) -> bool:
+        """A self-request anywhere in the decision's ancestry cannot manufacture eligibility."""
+        try:
+            parent = self.queue.get(handle).parent_handle
+            while parent:
+                decision = self.queue.get(parent)
+                if self.handle_to_assembly.get(parent, decision.propensity.chosen) == assembly:
+                    return False
+                parent = decision.parent_handle
+        except KeyError:
+            return False
+        return True
 
     def _hold_vote(self, am: Any, committee: Any) -> None:
         if am.id in self.voted_amendments:
@@ -346,35 +387,43 @@ class GovernanceMixin:
                 self.queue.get(parent)
             except KeyError:
                 parent = None
-            lid = f"committee:{am.id}:{alias}"
+            lid = f"assembly:{assembly_id}"
+            # Policy outcomes may await cadence and then a declared number of windows.
+            # This covers the remaining experiment, rather than expiring after the ballot call.
+            deadline = self.clock.now_ns + (
+                self.events_budget + self.ev.consequence_backstop_events
+            ) * self.m.max_tick_ns + am.predicted_effect.window * self.m.novelty.window_ns
             handle = self.queue.open(
                 actor=lid, event_id=event_id,
                 propensity=PropensityRecord((assembly_id,), (1.,), assembly_id, 0, lid,
                                             "direct-committee-seat"),
-                channel=CH_FAST, deadline_ns=self.clock.now_ns + self.tick_clock.interval_ns * 10,
+                channel="policy", deadline_ns=deadline,
                 parent_handle=parent, cost_ceiling=max(0, self.wallet.available),
             )
             self.ledger.append({"kind": "committee.decision", "event_id": event_id,
                                 "handle": handle})
             self.vote_handles[event_id] = handle
+            self.handle_to_assembly[handle] = assembly_id
             self.stats.decisions += 1
             inputs = {
                 "amendment": {
                     "id": am.id,
                     "add": [
-                        {**vars(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
+                        {**asdict(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
                         for c in am.add
                     ],
                     "replace": [
-                        {**vars(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
+                        {**asdict(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
                         for c in am.replace
                     ],
                     "remove": list(am.remove),
-                    "predicted_effect": am.predicted_effect,
+                    "predicted_effect": asdict(am.predicted_effect),
                     **({"tick_interval": am.tick_interval} if am.tick_interval is not None else {}),
                 },
-                "charter": self.charter.render(),
+                "charter": self._charter_text(),
                 "world": self._world_block(),
+                "your_policy_returns": [asdict(lr) for lr in self.queue.returns_for(lid)
+                                        if lr.channel == "policy"],
             }
             schema = {
                 "type": "object",
@@ -387,7 +436,7 @@ class GovernanceMixin:
                 inputs,
                 schema,
                 self.clock.now_ns + self.tick_clock.interval_ns * 10,
-                CH_FAST,
+                "policy",
             )
             asm = self.assemblies.get(assembly_id)
             if asm is None:
@@ -411,19 +460,27 @@ class GovernanceMixin:
             )
             self.window.invocations += 1
             self.window.ok += int(ret.status == "ok")
+            self.card_samples.returned(handle=handle, assembly=assembly_id,
+                                       role=asm.spec.role if asm else "other",
+                                       window=self.window.index, ret=ret)
             self._check_compute_return(handle, ret)
             self._compute_routed = True
-            self.queue.settle(handle, channel=CH_FAST, score=float(ret.status == "ok"),
-                              status=SettleStatus.SETTLED, definition_version=DEF_FAST,
-                              sampling_ref=None)
             vote = ret.outputs.get("vote") if ret.status == "ok" else None
             if isinstance(vote, bool):
                 self.charter_book.vote(
                     committee, alias, vote, str(ret.outputs.get("reason", ""))[:1000]
                 )
                 self.stats.votes_cast += 1
+                cards = {c.id: c for c in (*self.charter.cards, *am.replace, *am.add)}
+                self.pending_votes.append({
+                    "handle": handle, "assembly": assembly_id, "amendment_id": am.id,
+                    "vote": vote, "prediction": am.predicted_effect,
+                    "card": cards[am.predicted_effect.card_id], "activation_window": None,
+                    "baseline": None,
+                })
             else:
                 self.charter_book.abstain(committee, alias)
+                self._settle_policy(handle, 0.0, SettleStatus.CENSORED)
         self.ledger.append({"kind": "committee.completed", "amendment_id": am.id})
         self.voted_amendments.add(am.id)
         outcome = self.charter_book.tally(committee)
@@ -435,6 +492,8 @@ class GovernanceMixin:
                 window=self.stats.reserve_windows,
             )
             self.stats.amendments_passed += 1
+        elif outcome == "failed":
+            self._censor_ballots(am.id)
 
     def _next_charter_activation(self) -> Charter | None:
         """Activate only at a boundary that meets the measured governance separation."""
@@ -445,10 +504,34 @@ class GovernanceMixin:
         ):
             return None
         new = self.charter_book.activate_due(self.clock.now_ns)
+        while isinstance(new, Refusal):
+            self._close_refused_ballots(new)
+            new = self.charter_book.activate_due(self.clock.now_ns)
         if new is not None:
             am = self.charter_book.activated_amendment(new.edition)
+            for vote in self.pending_votes:
+                if vote["amendment_id"] == am.id:
+                    values = measure_card(vote["card"], self.card_samples)
+                    activated = {**vote, "baseline": fmean(values.values()) if values else None,
+                                 "activation_window": self.window.index}
+                    self.ledger.append({"kind": "policy.activated", **activated})
+                    vote.update(activated)
             self.cadence.activated(am.id, self.clock.now_ns, self.tick_clock.interval_ns)
         return new
+
+    def _close_refused_ballots(self, refusal: Any) -> None:
+        """A refused activation leaves nothing to grade: close its ballots, release its card."""
+        self.ledger.append({"kind": "policy.refused", "amendment_id": refusal.amendment_id,
+                            "reason": refusal.reason, "window": self.window.index})
+        self._censor_ballots(refusal.amendment_id)
+
+    def _censor_ballots(self, amendment_id: str) -> None:
+        """Settle every pending ballot on an amendment that will never take effect."""
+        for vote in self.pending_votes:
+            if vote["amendment_id"] == amendment_id:
+                self._settle_policy(vote["handle"], 0.0, SettleStatus.CENSORED)
+        self.pending_votes[:] = [v for v in self.pending_votes
+                                 if v["amendment_id"] != amendment_id]
 
     def _activate_charter_if_due(self) -> None:
         new = self._next_charter_activation()
@@ -484,4 +567,62 @@ class GovernanceMixin:
                     self.stats.clock_changes += 1
             self.stats.amendments_activated += 1
             self.window.amendments_activated += 1
+            self.card_samples.revised(am.proposer_handle)
             new = self._next_charter_activation()
+
+    def _settle_policy(self, handle, score, status) -> None:
+        """Policy feedback reaches the original assembly's durable, private return channel."""
+        self.queue.settle(handle, channel="policy", score=score, status=status,
+                          definition_version="policy-direction-brier-v1", sampling_ref=None)
+
+    def _close_policy_window(self, index: int) -> None:
+        """Each vote is graded once at its declared post-activation boundary, or censored."""
+        remaining = []
+        for vote in self.pending_votes:
+            activation = vote["activation_window"]
+            effect = vote["prediction"]
+            if activation is None or index < activation + effect.window - 1:
+                remaining.append(vote)
+                continue
+            values = measure_card(vote["card"], self.card_samples)
+            value = fmean(values.values()) if values else None
+            baseline = vote["baseline"]
+            status = (SettleStatus.CENSORED if value is None or baseline is None
+                      else SettleStatus.SETTLED)
+            outcome = (value > baseline if effect.direction == "increase" else value < baseline
+                       ) if status is SettleStatus.SETTLED else None
+            score = float(vote["vote"] == outcome) if outcome is not None else 0.0
+            self.ledger.append({"kind": "policy.outcome", "handle": vote["handle"],
+                                "amendment_id": vote["amendment_id"], "baseline": baseline,
+                                "value": value, "window": index, "y": outcome,
+                                "score": score, "status": str(status)})
+            self._settle_policy(vote["handle"], score, status)
+        self.pending_votes[:] = remaining
+        pending_handles = {self.queue.get(f.handle).parent_handle for f in self.book.pending()}
+        self.card_samples.prune((*self.charter.cards, *(v["card"] for v in remaining)),
+                                pending_handles=pending_handles)
+
+    def _record_card_forecasts(self, pending, baseline) -> None:
+        """Paired Brier samples keep the pre-outcome baseline and the original judge identity."""
+        for event in self.internal:
+            if event.kind is not EventKind.FORECAST_SETTLED:
+                continue
+            row = event.payload
+            forecast = pending.get(row["handle"])
+            if forecast is None:
+                continue
+            skill = None
+            if row["brier"] is not None:
+                skill = row["brier"] - baseline.baseline_brier(row["predicate"], row["y"])
+                baseline.record(row["predicate"], row["y"])
+            parent = self.queue.get(forecast.handle).parent_handle
+            source = next((r for r in reversed(self.card_samples.returns)
+                           if r["handle"] == parent), {})
+            assembly = forecast.evaluator_id
+            role = (self.assemblies[assembly].spec.role
+                    if assembly in self.assemblies else "evaluator")
+            self.card_samples.forecasts.append({
+                "handle": forecast.handle, "assembly": assembly, "role": role,
+                "window": self.window.index, "skill": skill, "predicate": row["predicate"],
+                "y": row["y"], "status": row["status"], "verdict": source.get("verdict"),
+            })
