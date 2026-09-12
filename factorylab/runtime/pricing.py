@@ -272,6 +272,12 @@ class PricingMixin:
         self.stats.last_window_values = values
         self.controller.set_decay(self.m.prices.decay, ledger=self.ledger, window=w.index)
         close_window(self, values)
+        # A17: the window's public world block, ledgered once so the wake can read
+        # what the population already sees without unsealing a private item.
+        from factorylab.runtime.wake import public_window_item
+
+        self.ledger.append({**public_window_item(self, window=w.index, event=self.n),
+                            "ts": self.clock.now_ns})
         self._prune_price_evidence()
 
     def _penalty_terms(self, cards: str, handle: str | None) -> list[dict]:
