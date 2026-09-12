@@ -35,13 +35,13 @@ import json
 import random
 from collections import deque
 from dataclasses import dataclass, field, replace
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import ROUND_CEILING, ROUND_HALF_EVEN, Decimal
 from itertools import islice
 from statistics import median
 from typing import Any
 
 from factorylab.charter.charter import Charter
-from factorylab.charter.controller import CardRegion, PriceController
+from factorylab.charter.controller import CardRegion
 from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.registration import (
     AssemblyProposal,
@@ -65,6 +65,7 @@ from factorylab.learners.router import Router, Sample
 from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_threshold
+from factorylab.runtime.immune import ImmunePriceController, close_window, gamma
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
 from factorylab.runtime.observations import CATALOGUE, catalogue, observation_for
 from factorylab.runtime.resume import (
@@ -89,7 +90,7 @@ from factorylab.settlement import (
 from factorylab.settlement.consequence import FillCursor, ReturnConsequences
 from factorylab.world.clock import ClockIterator, ClockSource, DripSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
-from factorylab.world.exchange import FakeExchange, HyperliquidExchange, Order
+from factorylab.world.exchange import FakeExchange, HyperliquidExchange, Order, OrderResult
 from factorylab.world.market import MultiProvider, X402MeteredModel, X402Provider
 from factorylab.world.metering import Meter, Metered, MeteredModel
 from factorylab.world.models import FakeModel, ModelRequest, ModelResponse, TokenPrice
@@ -112,9 +113,6 @@ CH_FAST, CH_VERDICT, CH_CONFORMITY, CH_CONSEQUENCE = "fast", "verdict", "conform
 CH_EXPOSURE, DEF_EXPOSURE = "exposure", "exposure-v1"
 DEF_FAST, DEF_VERDICT, DEF_CONFORMITY = "fast-v1", "verdict-v1", "conformity-v1"
 PRODUCER_KINDS = frozenset({"Tick", "MarketMid", "Funding", "Fill", "OrderRejected"})
-# metric cards a judged return answers for, by the judged role (spec v0.6 section 8.1)
-PRODUCER_CARDS = frozenset({"cost_per_return", "well_formed_rate", "turnover"})
-EVALUATOR_CARDS = frozenset({"forecast_skill", "well_formed_rate"})
 EVALUATION_BOUNDARY = "producer → evaluator → meta"
 
 
@@ -246,6 +244,7 @@ class ScriptedProvider:
                             "window": "rolling 100 events",
                             "acceptable_region": "below 5",
                             "observation": "turnover",
+                            "answers_for": "producer",
                             "lambda": 0.6,
                         }
                     ],
@@ -340,6 +339,7 @@ class RouterState:
     learner: Any
     router: Router
     epoch: int = 1
+    seed_gamma: float = 0.1
 
     def state(self) -> dict:
         """Retain the exact learner, public universe order and comparator epoch."""
@@ -348,6 +348,7 @@ class RouterState:
             "universe": list(self.universe),
             "router": self.router.state(),
             "epoch": self.epoch,
+            "seed_gamma": self.seed_gamma,
         }
 
     @classmethod
@@ -363,7 +364,8 @@ class RouterState:
         )
         universe = list(state["universe"])
         router = Router(learner, lambda _k: [a for a in universe if a != NOOP])
-        return cls(state["kind"], universe, learner, router, state["epoch"])
+        return cls(state["kind"], universe, learner, router, state["epoch"],
+                   state.get("seed_gamma", 0.1))
 
 
 def _duration_str(ns: int) -> str:
@@ -479,6 +481,11 @@ class RunStats:
     invocation_status: dict[str, int] = field(default_factory=dict)
     invocations_by_role: dict[str, int] = field(default_factory=dict)
     stop_reasons: dict[str, int] = field(default_factory=dict)
+    invocations_by_assembly: dict[str, int] = field(default_factory=dict)
+    immune_windows: list[dict] = field(default_factory=list)
+    pathologies: dict[str, bool] = field(default_factory=lambda: {
+        "stable_failure": False, "thrash": False, "learning_death": False,
+    })
 
 
 def _usd_to_micro(value: str | Decimal) -> int:
@@ -575,6 +582,7 @@ class Runtime:
             ledger=self.ledger,
             clock_ns=self.clock,
         )
+        self.wallet.bind_novelty(self.reserve, self._novelty_compute)
         self.cadence = GovernanceCadence(
             self.ledger,
             sample=manifest.timing.cadence_sample,
@@ -785,7 +793,7 @@ class Runtime:
 
         # prices (spec v0.6 section 8.1): regions are parsed here, the controller only prices
         pr = manifest.prices
-        self.controller = PriceController(
+        self.controller = ImmunePriceController(
             self.ledger,
             eta=pr.eta,
             kappa=pr.kappa,
@@ -907,7 +915,7 @@ class Runtime:
         lid = f"router:{kind}" if index == 0 else f"router:{kind}#{index}"
         learner = self._make_learner(kind, learner_kind, gamma, universe, lid)
         router = Router(learner, lambda _k, u=universe: [x for x in u if x != NOOP])
-        state = RouterState(kind, universe, learner, router)
+        state = RouterState(kind, universe, learner, router, seed_gamma=gamma)
         if replace:
             self.routers[kind] = [state]
         else:
@@ -963,6 +971,7 @@ class Runtime:
                     "window": "…",
                     "acceptable_region": "…",
                     "observation": "one of world.observations ids",
+                    "answers_for": "producer | evaluator | meta | all (required)",
                     "lambda": "optional number in [0, prices.lambda_max], for add or replace",
                 }
             ],
@@ -1012,6 +1021,11 @@ class Runtime:
             "account": account,
             "tools": list(self.tool_specs.values()),
             "observations": catalogue(),
+            "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
+                        "trial_invocations": self.m.novelty.trial_invocations},
+            "committee": {"min_settled": self.m.committee.min_settled,
+                          "eligibility": "assemblies with at least min_settled settled decisions"},
+            "pathologies": dict(self.stats.pathologies),
             "novelty_reserve_remaining_usd": str(money_to_usd(self.reserve.remaining())),
             "models": [
                 {
@@ -1098,6 +1112,36 @@ class Runtime:
 
     # ---- feasibility and mixing
 
+    def _unhistoried(self, action_id: str) -> bool:
+        """No settled record, or an unspent population assembly trial, admits protected compute."""
+        if not self.queue.has_history(action_id):
+            return True
+        return (self.registry.get(action_id).provenance != "seed"
+                and self.stats.invocations_by_assembly.get(action_id, 0)
+                < self.m.novelty.trial_invocations)
+
+    def _novelty_compute(self, handle: str, reason: str) -> bool:
+        """Only an assembly's own model calls can use its novelty entitlement."""
+        if not reason.startswith("model:"):
+            return False
+        try:
+            action = self.queue.get(handle).propensity.chosen
+        except KeyError:
+            return False
+        return (action in self.assemblies and self._unhistoried(action)
+                and reason == f"model:{self.assemblies[action].spec.model_id}")
+
+    def _compute_available(self, handle: str) -> int:
+        """The request ceiling includes protection only for its sampled unhistoried assembly."""
+        try:
+            action = self.queue.get(handle).propensity.chosen
+        except KeyError:
+            return self.wallet.available
+        if action not in self.assemblies:
+            return self.wallet.available
+        model = self.assemblies[action].spec.model_id
+        return self.wallet.available_for(handle, f"model:{model}")
+
     def _is_feasible(self, action_id: str) -> tuple[bool, str]:
         asm = self.assemblies[action_id]
         probe = ModelRequest(
@@ -1108,8 +1152,10 @@ class Runtime:
         )
         is_market = asm.spec.model_id.startswith("x402:")
         ceiling = asm.model.ceiling(probe) * (1 if is_market else 2)
-        if ceiling > self.wallet.available:
-            return False, f"compute: ceiling {ceiling} exceeds wallet {self.wallet.available}"
+        available = (self.wallet.unhistoried_available if self._unhistoried(action_id)
+                     else self.wallet.available)
+        if ceiling > available:
+            return False, f"compute: ceiling {ceiling} exceeds wallet {available}"
         try:
             if is_market:
                 return self.market.affordable(asm.spec.model_id, ceiling)
@@ -1588,13 +1634,15 @@ class Runtime:
                 )
                 self.rolling[f"{card.id}_prev_median"] = float(median(samples))
         self.stats.last_window_values = values
+        self.controller.set_decay(self.m.prices.decay, ledger=self.ledger, window=w.index)
+        close_window(self, values)
 
-    def _penalty_for(self, cards: frozenset[str]) -> float:
+    def _penalty_for(self, cards: str) -> float:
         """Σ λ_j · violation_j over the latest window's values for cards the role answers for."""
         values = {
             card.id: self.stats.last_window_values[observation.id]
             for card in self.charter.cards
-            if card.id in cards
+            if card.answers_for in (cards, "all")
             and card.id in self.regions
             and (observation := observation_for(card.observation)) is not None
             and observation.id in self.stats.last_window_values
@@ -1609,7 +1657,7 @@ class Runtime:
         score: float,
         definition_version: str,
         sampling_ref: str | None,
-        cards: frozenset[str],
+        cards: str,
     ) -> None:
         """Settle a judged score less the card penalty, clipped to [0, 1]; both are ledgered."""
         penalty = self._penalty_for(cards)
@@ -1683,7 +1731,9 @@ class Runtime:
             )
         except (KeyError, ValueError, ArithmeticError):
             return
-        result = self.exchange.place(order)
+        reason = self._order_exclusion(ret.handle, order.coin, order.size, order.is_buy)
+        result = (OrderResult(None, "rejected", Decimal(0), None, reason) if reason
+                  else self.exchange.place(order))
         self.consequences.order_result(
             ret.handle,
             {
@@ -1699,6 +1749,50 @@ class Runtime:
             self.stats.orders_rejected += 1
         if hasattr(self.exchange, "drain_events"):  # fake venue fills synchronously
             self._settle_exchange_effects(self.exchange.drain_events())
+
+    def _order_exclusion(
+        self, handle: str, coin: str, size: Decimal, is_buy: bool,
+        price: Decimal | None = None, *, reduce_only: bool = False,
+    ) -> str | None:
+        """Protected compute is excluded from collateral available for new order exposure.
+
+        Existing margin and resting orders count before new exposure. Reductions
+        remain available to unwind risk; world-priced losses still settle in full.
+        """
+        if reduce_only or not self.reserve.remaining():
+            return None
+        try:
+            account = self.exchange.account()
+            mids = self.exchange.mids()
+            mark = max(mids[coin], price or mids[coin])
+            current = next((p.size for p in account.positions if p.coin == coin), Decimal(0))
+            target = current + (size if is_buy else -size)
+            increase = max(Decimal(0), abs(target) - abs(current)) * mark
+            if increase == 0:
+                return None
+            resting = sum((Decimal(str(o["size"])) * Decimal(str(o["price"]))
+                           / self._order_leverage(o["coin"])
+                           for o in self.exchange.open_orders()), Decimal(0))
+            required = account.margin_used_usd + increase / self._order_leverage(coin) + resting
+            ceiling = int((required * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
+            if ceiling <= self.wallet.available:
+                return None
+            reason = "order collateral exceeds available wallet balance"
+        except (AttributeError, KeyError, ValueError, ArithmeticError, RuntimeError) as exc:
+            reason = f"order collateral unavailable: {type(exc).__name__}"
+        self.ledger.append({"kind": "order.infeasible", "handle": handle, "reason": reason,
+                            "available": self.wallet.available, "ts": self.clock.now_ns})
+        return reason
+
+    def _order_leverage(self, coin: str) -> Decimal:
+        """Use acknowledged leverage; unknown live leverage receives no collateral discount."""
+        if self.venue_tools is not None:
+            for tool, args, ok in reversed(self.venue_tools.log):
+                if tool == "venue.set_leverage" and ok and args["coin"] == coin:
+                    return Decimal(args["leverage"])
+        if self.exchange.deterministic:
+            return Decimal(self.exchange.target.max_leverage)
+        return Decimal(1)
 
     # ---- routing
 
@@ -1808,7 +1902,9 @@ class Runtime:
             channel=channel,
             deadline_ns=deadline,
             parent_handle=None,
-            cost_ceiling=self.wallet.available,
+            cost_ceiling=(self.wallet.unhistoried_available
+                          if sample.chosen != NOOP and self._unhistoried(sample.chosen)
+                          else max(0, self.wallet.available)),
         )
         if isinstance(state.learner, _KeyedLearner):
             self.snapshot_keys[handle] = key
@@ -1862,6 +1958,15 @@ class Runtime:
 
         def execute() -> dict:
             if spec["kind"] == "venue":
+                if tool_id in ("venue.place_market", "venue.place_limit"):
+                    reason = self._order_exclusion(
+                        handle, str(args.get("coin")), Decimal(str(args.get("size"))),
+                        args.get("side") == "buy",
+                        Decimal(str(args["price"])) if "price" in args else None,
+                        reduce_only=args.get("reduce_only") is True,
+                    )
+                    if reason:
+                        return {"status": "rejected", "error": reason}
                 return self.venue_tools.call(tool_id, args)
             if spec["kind"] == "catalogue":
                 return {
@@ -1924,9 +2029,21 @@ class Runtime:
             isinstance(proposals, list) and any(isinstance(p, dict) for p in proposals)
         )
 
+    def _invoke_compute(self, action_id: str, req: Request) -> Return:
+        """Each attempted model invocation spends one lifetime trial, including follow-up calls."""
+        model_id = self.assemblies[action_id].spec.model_id
+        req = replace(req, cost_ceiling=min(
+            req.cost_ceiling, max(0, self.wallet.available_for(req.handle, f"model:{model_id}"))
+        ))
+        ret = self.assemblies[action_id].invoke(req)
+        count = self.stats.invocations_by_assembly.get(action_id, 0) + 1
+        self.ledger.append({"kind": "novelty.invocation", "assembly_id": action_id,
+                            "handle": req.handle, "count": count})
+        self.stats.invocations_by_assembly[action_id] = count
+        return ret
+
     def _invoke(self, action_id: str, req: Request, role: str) -> Return:
-        asm = self.assemblies[action_id]
-        ret = asm.invoke(req)
+        ret = self._invoke_compute(action_id, req)
         self._check_compute_return(req.handle, ret)
         revision = self._carries_revision(ret)
         if ret.status == "ok" and ret.tool_calls:
@@ -1968,7 +2085,7 @@ class Runtime:
                 scoring_channel=req.scoring_channel,
                 resource_liability=req.resource_liability,
             )
-            second = asm.invoke(follow)
+            second = self._invoke_compute(action_id, follow)
             self._check_compute_return(req.handle, second)
             revision = revision or self._carries_revision(second)
             if second.tool_calls:
@@ -2039,7 +2156,7 @@ class Runtime:
             capability_versions={},
             outcome_schema=schema,
             deadline_ns=deadline,
-            cost_ceiling=self.wallet.available,
+            cost_ceiling=max(0, self._compute_available(handle)),
             parent_handle=None,
             completion_criterion="a JSON object satisfying the outcome schema",
             scoring_channel=channel,
@@ -2226,7 +2343,7 @@ class Runtime:
                 score=verdict,
                 definition_version=DEF_VERDICT,
                 sampling_ref=handle,
-                cards=PRODUCER_CARDS,
+                cards="producer",
             )
             self.stats.verdicts += 1
             self.stats.max_settlement_latency_events = max(
@@ -2357,16 +2474,15 @@ class Runtime:
         self._apply_registrations(handle, ret)
         conformity = _as_unit(ret.outputs.get("conformity")) if ret.status == "ok" else None
         if channel == CH_FAST:
-            self.queue.settle(
+            self._settle_priced(
                 handle,
                 channel=CH_FAST,
                 score=1.0 if conformity is not None else 0.0,
-                status=SettleStatus.SETTLED,
                 definition_version=DEF_FAST,
                 sampling_ref=None,
+                cards="meta",
             )
             self.stats.fast_settlements += 1
-            self.window.outcomes += 1
         else:
             self.ledger.append(
                 {
@@ -2410,7 +2526,7 @@ class Runtime:
             score=payload["score"],
             definition_version=DEF_CONFORMITY,
             sampling_ref=payload["by"],
-            cards=EVALUATOR_CARDS,
+            cards="meta" if pend.tier > 1 else "evaluator",
         )
         del self.pending[about]
         self.stats.conformities += 1
@@ -2428,7 +2544,7 @@ class Runtime:
                 score=payload["score"],
                 definition_version=DEF_CONFORMITY,
                 sampling_ref=payload["by"],
-                cards=EVALUATOR_CARDS,
+                cards="meta" if sib.tier > 1 else "evaluator",
             )
             del self.pending[sibling]
             self.stats.conformities += 1
@@ -2656,7 +2772,11 @@ class Runtime:
             )
 
     def _propose_amendment(self, handle: str, item: dict[str, Any]) -> None:
-        from factorylab.charter.amendment import proposed_price, proposed_tick_interval
+        from factorylab.charter.amendment import (
+            proposed_answers_for,
+            proposed_price,
+            proposed_tick_interval,
+        )
         from factorylab.charter.charter import MetricCard
 
         tick_interval = None
@@ -2699,6 +2819,7 @@ class Runtime:
                         str(c.get("window", "")),
                         str(c.get("acceptable_region", "")),
                         str(c.get("observation", "")),
+                        proposed_answers_for(c.get("answers_for"), str(c.get("id", ""))),
                     )
                 )
             return tuple(out)
@@ -2733,9 +2854,20 @@ class Runtime:
         self.charter_book.propose(am)
         self.stats.amendments_proposed += 1
         self.window.amendments_proposed += 1
-        eligible = {a.spec.id: a.spec.role for a in self.assemblies.values()}
+        eligible = self._committee_eligible()
         committee = self.charter_book.seat(am.id, eligible, self.rng)
         self._hold_vote(am, committee)
+
+    def _committee_eligible(self) -> dict[str, str]:
+        """Only distinct settled decisions qualify an assembly for sortition."""
+        from collections import Counter
+
+        from factorylab.charter.committee import experienced
+
+        settled = Counter(d.propensity.chosen for d in self.queue.state()["decisions"].values()
+                          if d.status is SettleStatus.SETTLED)
+        return experienced({a.spec.id: a.spec.role for a in self.assemblies.values()},
+                           settled, self.m.committee.min_settled)
 
     def _hold_vote(self, am: Any, committee: Any) -> None:
         prices = dict(am.proposed_prices)
@@ -2884,13 +3016,16 @@ class Runtime:
                 self.ledger.append({**entry, "carried": True, "router": state.learner.id})
             else:  # snapshot learners cannot expand; rebuild fresh over the new universe
                 lid = state.learner.id
-                fresh = self._make_learner(kind, "blum_mansour", self.router_gamma, universe, lid)
+                fresh = self._make_learner(
+                    kind, "blum_mansour", gamma(state.learner), universe, lid
+                )
                 states[i] = RouterState(
                     kind,
                     universe,
                     fresh,
                     Router(fresh, lambda _k, u=universe: [x for x in u if x != NOOP]),
                     state.epoch + 1,
+                    state.seed_gamma,
                 )
                 self.ledger.append({**entry, "carried": False, "router": lid})
             self.stats.epochs += 1

@@ -13,14 +13,14 @@ def test_seed_charter_renders_norms_and_cards() -> None:
 
 
 def test_charter_validation() -> None:
-    card = MetricCard("x", "nope", "d", "u", "w", "a", "o")
+    card = MetricCard("x", "nope", "d", "u", "w", "a", "o", "all")
     with pytest.raises(ValueError):
         Charter(1, ("a norm",), (card,))
     with pytest.raises(ValueError):
         Charter(0, ("a norm",), ())
     with pytest.raises(ValueError):
-        MetricCard("", "n", "d", "u", "w", "a", "o")
-    ok = MetricCard("x", "a norm", "d", "u", "w", "a", "o")
+        MetricCard("", "n", "d", "u", "w", "a", "o", "all")
+    ok = MetricCard("x", "a norm", "d", "u", "w", "a", "o", "all")
     with pytest.raises(ValueError):
         Charter(1, ("a norm",), (ok, ok))
 
@@ -35,3 +35,8 @@ def test_duplicate_card_error_names_id():
     card = seed_charter().cards[0]
     with pytest.raises(ValueError, match="cost_per_return.*id"):
         Charter(1, seed_charter().norms, (card, card))
+
+
+def test_metric_card_cannot_silently_default_its_scoring_role():
+    with pytest.raises(TypeError, match="answers_for"):
+        MetricCard("x", "norm", "d", "u", "w", "above zero", "turnover")

@@ -63,6 +63,9 @@ class Wallet:
         self.__drip_count = 0
         self.__drips = self.__settlements = self.__commits = 0
         self.__pots_view: Callable[[], dict] | None = None
+        self.__novelty = None
+        self.__unhistoried: Callable[[str, str], bool] = lambda _h, _r: False
+        self.__novelty_holds: dict[str, tuple[int | None, Money]] = {}
         ledger._claim_wallet(self)
         self._log("initial", initial, initial, "", "initial")
 
@@ -78,8 +81,28 @@ class Wallet:
 
     @property
     def available(self) -> Money:
-        """Return booked balance minus all outstanding holds."""
+        """Historied spending excludes outstanding holds and the unused novelty share."""
+        protected = self.__novelty.remaining() if self.__novelty is not None else 0
+        return self.unhistoried_available - protected
+
+    @property
+    def unhistoried_available(self) -> Money:
+        """Unhistoried work can use either ordinary money or the protected share."""
         return self.__balance - sum(item.amount for item in self.__reservations.values())
+
+    def bind_novelty(self, reserve, unhistoried: Callable[[str, str], bool]) -> None:
+        """Bind one kernel reserve and a trusted action classifier for this wallet's lifetime."""
+        from factorylab.kernel.reserve import NoveltyReserve
+
+        if self.__novelty is not None or not isinstance(reserve, NoveltyReserve):
+            raise ValueError("novelty reserve can only be bound once")
+        if not callable(unhistoried) or not reserve._belongs_to(self.__ledger):
+            raise ValueError("novelty classifier and same-ledger reserve are required")
+        self.__novelty, self.__unhistoried = reserve, unhistoried
+
+    def available_for(self, handle: str, reason: str) -> Money:
+        """Only trusted unhistoried actions may include the protected share in their ceiling."""
+        return self.unhistoried_available if self.__unhistoried(handle, reason) else self.available
 
     def bind_pots(self, view: Callable[[], dict]) -> None:
         """Bind one observational view; it cannot mutate the conserved wallet balance."""
@@ -134,13 +157,15 @@ class Wallet:
             if not self.__ledger.final:
                 self._log("infeasible", amount, self.balance, handle, reason)
             raise
-        if amount > self.available:
+        if amount > self.available_for(handle, reason):
             self._log("infeasible", amount, self.balance, handle, reason)
             raise Infeasible("reservation exceeds available balance")
         reservation = Reservation(
             f"wallet-{self.__next_reservation}", amount, handle, reason, _issuer=self
         )
         self._log("reserve", amount, self.balance, handle, reason, reservation_id=reservation.id)
+        if self.__novelty is not None and self.__unhistoried(handle, reason):
+            self.__novelty_holds[reservation.id] = self.__novelty._allocate_compute(amount)
         self.__reservations[reservation.id] = reservation
         self.__next_reservation += 1
         return reservation
@@ -170,6 +195,7 @@ class Wallet:
         )
         self.__balance = balance
         self.__commits += actual
+        self._refund_novelty(reservation, actual)
         del self.__reservations[reservation.id]
 
     def release(self, reservation: Reservation) -> None:
@@ -183,7 +209,13 @@ class Wallet:
             reservation.reason,
             reservation_id=reservation.id,
         )
+        self._refund_novelty(reservation, 0)
         del self.__reservations[reservation.id]
+
+    def _refund_novelty(self, reservation: Reservation, spent: Money) -> None:
+        allocation = self.__novelty_holds.pop(reservation.id, None)
+        if allocation is not None:
+            self.__novelty._refund_compute(allocation, spent)
 
     def settle(self, delta: Money, handle: str, reason: str) -> None:
         """Book signed exchange P&L or funding only while the world remains alive."""
@@ -230,6 +262,7 @@ class Wallet:
             "reservations": [replace(r, _issuer=None) for r in self.__reservations.values()],
             "next_reservation": self.__next_reservation, "drip_count": self.__drip_count,
             "drips": self.__drips, "settlements": self.__settlements, "commits": self.__commits,
+            "novelty_holds": dict(self.__novelty_holds),
         }
 
     def _restore_state(self, state: dict) -> None:
@@ -250,6 +283,7 @@ class Wallet:
         ):
             setattr(self, f"_Wallet__{name}", state[name])
         self.__reservations = holds
+        self.__novelty_holds = dict(state.get("novelty_holds", {}))
 
     def _reservation_for_resume(self, reservation_id: str) -> Reservation:
         """Rebind an authenticated owner's saved hold to this wallet's actual reservation."""

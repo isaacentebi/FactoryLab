@@ -149,6 +149,7 @@ max_tokens = 800
 effort = "low"
 
 [novelty]
+trial_invocations = 3
 share = 0.1
 window = "1h"
 
@@ -198,6 +199,7 @@ units = "micro-USD per return"
 window = "rolling 100 returns"
 acceptable_region = "at most 500"
 observation = "cost_per_return"
+answers_for = "producer"
 
 [[charter.cards]]
 id = "revision_rate"
@@ -207,6 +209,7 @@ units = "fraction"
 window = "rolling 100 well-formed returns"
 acceptable_region = "above 0.05"
 observation = "revision_rate"
+answers_for = "producer"
 
 [[charter.cards]]
 id = "cost_per_return"
@@ -216,6 +219,7 @@ units = "micro-USD per return"
 window = "rolling 100 returns"
 acceptable_region = "below the median of the previous window"
 observation = "cost_per_return"
+answers_for = "producer"
 
 [[charter.cards]]
 id = "well_formed_rate"
@@ -225,6 +229,7 @@ units = "fraction"
 window = "rolling 100 returns"
 acceptable_region = "at least 0.9"
 observation = "well_formed_rate"
+answers_for = "all"
 
 [[charter.cards]]
 id = "verdict_mean_score"
@@ -234,3 +239,16 @@ units = "score (0-1)"
 window = "rolling 50 settled forecasts per evaluator"
 acceptable_region = "at least 0.8"
 observation = "verdict_mean"
+answers_for = "producer"
+
+[committee]
+min_settled = 5
+
+[immune]
+k = 3
+bins = 3
+tv_threshold = 0.2
+gap_threshold = 0.8
+gain_step = 0.05
+gamma_max = 0.5
+decay_step = 0.1

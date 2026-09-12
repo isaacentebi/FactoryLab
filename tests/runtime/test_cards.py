@@ -8,7 +8,7 @@ from factorylab.runtime.cards import parses, region_for
 
 
 def card(region: str, units: str = "ratio", id: str = "c") -> MetricCard:
-    return MetricCard(id, "useful inquiry", "d", units, "w", region, "turnover")
+    return MetricCard(id, "useful inquiry", "d", units, "w", region, "turnover", "all")
 
 
 @pytest.mark.parametrize(

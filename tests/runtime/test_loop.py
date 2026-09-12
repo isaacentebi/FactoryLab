@@ -6,7 +6,6 @@ import pytest
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.runtime.loop import (
-    EVALUATOR_CARDS,
     PendingJudgement,
     Runtime,
     ScriptedProvider,
@@ -497,7 +496,7 @@ def test_meta_timeout_boundary_first_judgement_and_evaluator_prices(monkeypatch)
     monkeypatch.setattr(runtime, "_settle_priced", priced)
 
     def penalty(cards):
-        assert cards == EVALUATOR_CARDS
+        assert cards == "meta"
         return 0.25
 
     monkeypatch.setattr(runtime, "_penalty_for", penalty)
@@ -512,7 +511,7 @@ def test_meta_timeout_boundary_first_judgement_and_evaluator_prices(monkeypatch)
         runtime.bus.publish(event)
         runtime._deliver_meta_verdict(event)
     assert len(calls) == 1
-    assert calls[0]["cards"] == EVALUATOR_CARDS
+    assert calls[0]["cards"] == "meta"
     result = runtime.queue.returns_for("test-router")[0]
     assert result.score == 0.55 and result.sampling_ref == "higher-handle"
 
@@ -1115,6 +1114,12 @@ def test_scripted_governance_waits_for_measured_periods_and_ledgers_both_forecas
     def run():
         rt = Runtime(manifest, events=26, seed=1, initial_balance_micro=None,
                      ledger_path=None, drip=False, router_gamma=0.1, kill_at_end=True)
+        # Cadence is tested with an experienced electorate; fresh seeds have no seats.
+        for _ in range(manifest.committee.min_settled):
+            qualified = _consequence_decision(rt, "eval-a", "conformity")
+            rt.queue.settle(qualified, channel="conformity", score=0.5,
+                            status=SettleStatus.SETTLED, definition_version="test",
+                            sampling_ref=None)
         about = None
 
         def route(event):
@@ -1225,7 +1230,7 @@ def test_unpriced_cards_report_unknown_field_once(monkeypatch, observation, regi
 
     rt = _recursive_runtime(events=0)
     rt.charter = Charter(1, rt.charter.norms, (
-        MetricCard("turnover", rt.charter.norms[0], "d", "ratio", "w", region, observation),
+        MetricCard("turnover", rt.charter.norms[0], "d", "ratio", "w", region, observation, "all"),
     ))
     entries = []
     append = rt.ledger.append
@@ -1253,10 +1258,12 @@ def test_two_cards_measure_same_observation_with_independent_bounds():
 
     rt = _recursive_runtime(events=0)
     rt.charter = Charter(1, rt.charter.norms, (
-        MetricCard("low", rt.charter.norms[0], "d", "fraction", "w", "below 0.2", " NOOP_SHARE "),
-        MetricCard("high", rt.charter.norms[0], "d", "fraction", "w", "below 0.9", "noop_share"),
+        MetricCard("low", rt.charter.norms[0], "d", "fraction", "w", "below 0.2",
+                   " NOOP_SHARE ", "producer"),
+        MetricCard("high", rt.charter.norms[0], "d", "fraction", "w", "below 0.9",
+                   "noop_share", "producer"),
         MetricCard("cost-alias", rt.charter.norms[0], "d", "micro-USD", "w",
-                   "below the median of the previous window", "cost_per_return"),
+                   "below the median of the previous window", "cost_per_return", "producer"),
     ))
     rt._derive_regions()
     rt.window = MeasureWindow(1, 100, producer_returns=4, noop_returns=2, costs=[100, 200, 900])
@@ -1266,7 +1273,7 @@ def test_two_cards_measure_same_observation_with_independent_bounds():
     assert cards["low"]["updates"] == cards["high"]["updates"] == 1
     assert cards["low"]["lambda"] > 0 and cards["high"]["lambda"] == 0
     assert rt.stats.last_window_values["noop_share"] == 0.5
-    assert rt._penalty_for(frozenset({"low", "high"})) > 0
+    assert rt._penalty_for("producer") > 0
     rt._derive_regions()
     assert rt.regions["cost-alias"].hi == 200.0
     items = _diary(rt)
@@ -1326,7 +1333,7 @@ def test_manifest_charter_is_edition_one_and_seeds_prices():
         "cards": [
             {"id": card_id, "norm": "population norm", "description": "Population draft",
              "units": "fraction", "window": "one window", "acceptable_region": region,
-             "observation": "well_formed_rate", **price}
+             "observation": "well_formed_rate", "answers_for": "all", **price}
             for card_id, region, price in [
                 ("draft", "at least 0.9", {"lambda": 0.4}),
                 ("deferred", "below the median of the previous window", {"lambda": 0.3}),

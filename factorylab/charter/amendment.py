@@ -7,6 +7,15 @@ from math import isfinite
 from factorylab.charter.charter import MetricCard
 
 
+def proposed_answers_for(value: object, card_id: str) -> str:
+    """Population cards explicitly name a supported scoring role, independent of card id."""
+    if not isinstance(value, str) or value.strip().lower() not in (
+        "producer", "evaluator", "meta", "all",
+    ):
+        raise ValueError(f"card {card_id} answers_for: expected producer, evaluator, meta or all")
+    return value.strip().lower()
+
+
 def proposed_price(value: object, lambda_max: float) -> float:
     """Return a finite proposed lambda within the inclusive bound, rejecting booleans."""
     reason = f"lambda must be a finite number in [0, {lambda_max}]; booleans are invalid"
