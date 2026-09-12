@@ -58,6 +58,12 @@ def _load_dotenv() -> None:
 def _cmd_manifest(args: argparse.Namespace) -> int:
     m = load_manifest(args.world)
     out = {"name": m.name, "hash": m.manifest_hash(), "models": [t.id for t in m.models]}
+    charter = json.loads(m.canonical_json())["charter"]
+    prices = dict(m.charter_prices)
+    for card in charter["cards"]:
+        if card["id"] in prices:
+            card["lambda"] = prices[card["id"]]
+    out["charter"] = charter
     print(json.dumps(out))
     return 0
 

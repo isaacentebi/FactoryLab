@@ -40,7 +40,7 @@ from itertools import islice
 from statistics import median
 from typing import Any
 
-from factorylab.charter.charter import Charter, seed_charter
+from factorylab.charter.charter import Charter
 from factorylab.charter.controller import CardRegion, PriceController
 from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.registration import (
@@ -540,7 +540,7 @@ class Runtime:
         self.clock = SimClock(0) if _journal is None else _journal.clock
         self.stats = RunStats()
         self.ev = manifest.evaluation
-        self.charter: Charter = seed_charter()
+        self.charter: Charter = manifest.charter
 
         # kernel
         self.ledger = _journal or RecoveryJournal(
@@ -796,6 +796,10 @@ class Runtime:
         )
         self.regions: dict[str, CardRegion] = {}  # cards of the current edition with a region
         self.priced: set[str] = set()  # card ids currently registered with the controller
+        for card_id, value in manifest.charter_prices:
+            self.controller.register_pending(card_id)
+            self.priced.add(card_id)
+            self.controller.set_price(card_id, value, amendment_id="manifest:edition1")
         self.rolling: dict[str, float] = {}
         self.unparsed_logged: set[tuple[str, int]] = set()
         self.window = MeasureWindow(0, self.wallet.balance)

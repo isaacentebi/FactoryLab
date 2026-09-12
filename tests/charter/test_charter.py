@@ -29,3 +29,9 @@ def test_seed_cards_name_runtime_observations():
     assert {c.observation for c in seed_charter().cards} == {
         "cost_per_return", "well_formed_rate", "forecast_skill",
     }
+
+
+def test_duplicate_card_error_names_id():
+    card = seed_charter().cards[0]
+    with pytest.raises(ValueError, match="cost_per_return.*id"):
+        Charter(1, seed_charter().norms, (card, card))

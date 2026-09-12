@@ -18,6 +18,9 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
+from factorylab.charter.charter import Charter, MetricCard, seed_charter
+from factorylab.runtime.cards import parses
+from factorylab.runtime.observations import observation_for
 from factorylab.world.market import DISCOVERY_URL
 from factorylab.world.models import PriceTable, TokenPrice
 
@@ -172,6 +175,9 @@ class WorldManifest:
     tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
+    charter: Charter = field(default_factory=seed_charter)
+    charter_prices: tuple[tuple[str, float], ...] = ()
+
     # ---- derived
 
     @property
@@ -280,6 +286,17 @@ class WorldManifest:
                 raise ValueError("shock step must be >= 1 and multiplier positive")
         if self.drip is not None and (self.drip.period_ns <= 0 or self.drip.amount_micro < 0):
             raise ValueError("drip period must be positive and amount non-negative")
+        for card in self.charter.cards:
+            if observation_for(card.observation) is None:
+                raise ValueError(f"card {card.id} observation: unknown catalogue id")
+            if not parses(card):
+                raise ValueError(f"card {card.id} acceptable_region: unparseable region")
+        for card_id, value in self.charter_prices:
+            if card_id not in {c.id for c in self.charter.cards}:
+                raise ValueError(f"card {card_id} lambda: unknown card id")
+            if (type(value) not in (int, float) or not isfinite(value)
+                    or not 0 <= value <= self.prices.lambda_max):
+                raise ValueError(f"card {card_id} lambda: must be in [0, prices.lambda_max]")
         p = self.prices
         if type(p.kappa) not in (int, float) or not isfinite(p.kappa) or p.kappa < 0:
             raise ValueError("prices.kappa must be finite and nonnegative")
@@ -298,7 +315,38 @@ def _ns(value: Any) -> int:
     return int(s)
 
 
+def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]:
+    """Explicit charter tables yield edition 1 and card-specific errors for invalid fields."""
+    if not isinstance(raw, dict):
+        raise ValueError("charter must be a table")
+    norms = raw.get("norms")
+    if (not isinstance(norms, list) or not norms
+            or any(not isinstance(n, str) or not n.strip() for n in norms)):
+        raise ValueError("charter.norms must be a nonempty list of nonempty strings")
+    if "edition" in raw and (type(raw["edition"]) is not int or raw["edition"] != 1):
+        raise ValueError("charter.edition must be 1")
+    rows = raw.get("cards", [])
+    if not isinstance(rows, list):
+        raise ValueError("charter.cards must be a list of tables")
+    cards = []
+    prices = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"card #{index} fields: expected a table")
+        card_id = row.get("id", f"#{index}")
+        for name in MetricCard.__dataclass_fields__:
+            if not isinstance(row.get(name), str) or not row[name].strip():
+                raise ValueError(f"card {card_id} {name}: must be a nonempty string")
+        cards.append(MetricCard(**{name: row[name] for name in MetricCard.__dataclass_fields__}))
+        if "lambda" in row:
+            prices.append((card_id, row["lambda"]))
+    return Charter(1, tuple(norms), tuple(cards)), tuple(prices)
+
+
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
+    charter, charter_prices = (
+        _manifest_charter(d["charter"]) if "charter" in d else (seed_charter(), ())
+    )
     clock = d.get("clock", {})
     if set(clock) - {"min_tick"}:
         raise ValueError("clock accepts only min_tick; max_tick is derived")
@@ -386,6 +434,8 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             usd_to_micro(term.get("balance_floor_usd", 0)),
             term.get("max_events"),
         ),
+        charter=charter,
+        charter_prices=charter_prices,
         evaluation=evaluation,
         tools=ToolsSpec(
             int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),

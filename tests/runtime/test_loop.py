@@ -1313,3 +1313,39 @@ def test_revision_requires_a_proposal_object(proposals, expected):
 
     ret = Return("h", {"register": proposals}, 0, "ok")
     assert Runtime._carries_revision(ret) is expected
+
+
+def test_manifest_charter_is_edition_one_and_seeds_prices():
+    import tomllib
+
+    from factorylab.runtime.worlds import WORLDS_DIR, manifest_from_dict
+
+    raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
+    raw["charter"] = {
+        "norms": ["population norm"],
+        "cards": [
+            {"id": card_id, "norm": "population norm", "description": "Population draft",
+             "units": "fraction", "window": "one window", "acceptable_region": region,
+             "observation": "well_formed_rate", **price}
+            for card_id, region, price in [
+                ("draft", "at least 0.9", {"lambda": 0.4}),
+                ("deferred", "below the median of the previous window", {"lambda": 0.3}),
+                ("default", "at least 0.9", {}),
+            ]
+        ],
+    }
+    manifest = manifest_from_dict(raw)
+    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=None,
+                 ledger_path=None, drip=False, router_gamma=0.1)
+    assert rt.charter == manifest.charter and rt.charter.edition == 1
+    assert "Population draft" in rt.charter.render()
+    assert "cost_per_return" not in rt.charter.render()
+    rt._derive_regions()
+    prices = rt.controller.snapshot()["cards"]
+    assert prices["draft"]["lambda"] == 0.4
+    assert prices["deferred"]["lambda"] == 0.3
+    assert prices["default"]["lambda"] == 0
+    rt.rolling["deferred_prev_median"] = 0.8
+    rt._derive_regions()
+    assert rt.controller.snapshot()["cards"]["deferred"]["lambda"] == 0.3
+    assert rt.run()["ledger_verify"]
