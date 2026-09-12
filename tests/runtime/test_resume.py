@@ -89,7 +89,7 @@ raise AssertionError('kill point was not reached')
     else:
         assert len(snapshots) >= 3  # launch, first reserve window, next reserve window
         assert last["n"] < before[-1]["n"]
-        assert decode(last["state"]["runtime"])["stats"].amendments_activated >= 1
+        assert decode(last["state"]["runtime"])["stats"].amendments_activated == 0
     resumed = resume_world(m, str(path))
     assert resumed["stats"]["resumes"] == 1
     resumed["stats"]["resumes"] = 0
@@ -109,10 +109,15 @@ class ClockAmendmentProvider(ScriptedProvider):
         return replace(response, text=json.dumps(body))
 
 
+def clock_manifest():
+    base = load_manifest("scripted")
+    return replace(base, evaluation=replace(base.evaluation, consequence_backstop_events=20))
+
+
 @pytest.fixture(scope="module")
 def amended_uninterrupted():
     return run_world(
-        load_manifest("scripted"), events=140, seed=1, provider=ClockAmendmentProvider()
+        clock_manifest(), events=140, seed=1, provider=ClockAmendmentProvider()
     )
 
 
@@ -126,10 +131,9 @@ def test_sigkill_after_clock_amendment_preserves_interval_and_summary(
     code = """
 import os, signal, sys
 sys.path.insert(0, 'tests/runtime')
-from test_resume import ClockAmendmentProvider
+from test_resume import ClockAmendmentProvider, clock_manifest
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.worlds import load_manifest
-rt = Runtime(load_manifest('scripted'), events=140, seed=1, initial_balance_micro=None,
+rt = Runtime(clock_manifest(), events=140, seed=1, initial_balance_micro=None,
              ledger_path=sys.argv[1], drip=True, router_gamma=.1,
              provider=ClockAmendmentProvider())
 snapshot = rt._snapshot
@@ -153,7 +157,7 @@ raise AssertionError('clock amendment kill point was not reached')
         [sys.executable, "-c", code, str(path), stop], capture_output=True, text=True, timeout=180
     )
     assert child.returncode == -signal.SIGKILL, child.stderr
-    m = load_manifest("scripted")
+    m = clock_manifest()
     before = items(path, m)
     assert sum(i["kind"] == "clock.changed" for i in before) == 1
     last = next(i for i in reversed(before) if i["kind"] == "snapshot")

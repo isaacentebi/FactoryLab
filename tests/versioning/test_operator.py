@@ -25,11 +25,12 @@ def test_terminal_cell_and_short_runs():
     assert total_variation([(0,)], [(0,), (1,), (1,)]) == pytest.approx(2 / 3)
 
 
-def test_quantiles_support_missing_dimensions_and_ties(diary):
+def test_fixed_cells_preserve_missing_dimensions_and_ignore_unpriced_channels(diary):
     report = summary(
         diary(
             [
-                {"verdict": 0, "fast": 2, "exposure": 1, "cards": {"cost": 7}},
+                {"verdict": 0, "fast": 2, "exposure": 1, "cards": {"cost": 7},
+                 "regions": {"cost": {"kind": "max", "hi": 6, "lo": None, "scale": 1}}},
                 {"verdict": 0, "fast": 2, "cards": {"cost": 7}},
                 {"verdict": 1, "cards": {}},
                 {"verdict": 1, "cards": {"cost": 7}},
@@ -38,22 +39,25 @@ def test_quantiles_support_missing_dimensions_and_ties(diary):
         bins=3,
     )
     op = report["operator"]
-    assert op["dimensions"] == ["verdict", "fast", "cost"]
-    assert op["cuts"]["fast"] == [2, 2]
-    assert report["windows"][0]["cell"] == [0, 0, 0]
-    assert report["windows"][2]["cell"] == [1, -1, -1]
+    assert op["dimensions"] == ["cost", "registrations", "revision"]
+    assert op["cuts"]["cost"] == [0, 1]
+    assert report["windows"][0]["cell"] == [1, 1, 0]
+    assert report["windows"][2]["cell"] == [-1, 1, 0]
 
 
-def test_two_cell_alternation_is_thrash_candidate(diary):
-    report = summary(diary([{"verdict": i % 2} for i in range(12)]), k=3, tv_threshold=0.2)
+def test_two_cell_alternation_needs_persistent_failure_not_a_tv_threshold(diary):
+    rows = [{"cards": {"quality": i % 2}, "regions": {
+        "quality": {"kind": "max", "hi": -1, "lo": None, "scale": 1},
+    }} for i in range(12)]
+    report = summary(diary(rows), k=3, tv_threshold=.2)
     assert report["operator"]["matrix"] == [[0, 1], [1, 0]]
     assert report["operator"]["delta"] == 1
     assert any(flag["kind"] == "thrash" for flag in report["pathologies"])
-    # With odd k=3, an alternating pair has block TV 1/3, not above default 0.5.
-    assert not any(
-        flag["kind"] == "thrash"
-        for flag in summary(diary([{"verdict": i % 2} for i in range(12)]))["pathologies"]
-    )
+    assert any(flag["kind"] == "thrash"
+               for flag in summary(diary(rows), tv_threshold=1)["pathologies"])
+    for row in rows:
+        row["regions"]["quality"]["hi"] = 0  # every other window is now compliant
+    assert not any(flag["kind"] == "thrash" for flag in summary(diary(rows))["pathologies"])
 
 
 @pytest.mark.parametrize("matrix", [[[0.2, 0.2], [0.5, 0.5]], [[1, 0]], [[-1]], [[float("nan")]]])

@@ -70,10 +70,13 @@ def test_population_authored_price_changes_a_settled_reward():
     })
     rt.clock.now_ns += (rt.m.timing.min_ratio * rt.ev.consequence_backstop_events
                         * rt.tick_clock.interval_ns)
+    rt.n = rt.cadence.earliest_event()
+    rt.cadence.advance(rt.n)
     rt._activate_charter_if_due()
     assert rt.charter.edition == 2
     rt.card_samples.values = {c.id: 0.5 for c in rt.charter.cards}
     handle = decision(rt, "seed-decider")
+    rt._contribution(handle, "producer").update(invocations=1, ok=0)
     rt._settle_priced(handle, channel="verdict", score=0.8,
                       definition_version="test", sampling_ref=None, cards="producer")
     earned = rt.queue.returns_for("test-router")[-1].score
@@ -117,7 +120,7 @@ def test_thrash_lowers_gain_live_and_temporarily_increases_decay():
     router = rt.routers["Tick"][0]
     router.learner.gamma = 0.5
     for i in range(8):
-        close(rt, i % 2)
+        close(rt, .2, registrations=3 * (i % 2))
     assert 0.1 <= router.learner.gamma < 0.5
     assert rt._world_block()["pathologies"]["thrash"]
     assert rt.controller.snapshot()["parameters"]["decay"] > rt.m.prices.decay
@@ -254,9 +257,9 @@ def test_immune_gain_is_bounded_and_decay_expires_after_one_window():
         close(rt, 0.2)
     assert all(st.learner.gamma == rt.m.immune.gamma_max for st in rt._all_router_states())
     for i in range(12):
-        close(rt, i % 2)
+        close(rt, .2, registrations=3 * (i % 2))
     assert rt.stats.pathologies["thrash"]
-    # A constant compliant stretch clears TV; extra decay is then removed.
+    # A constant compliant stretch clears sustained changes; extra decay is removed.
     for _ in range(12):
         close(rt, 1)
     assert not rt.stats.pathologies["thrash"]
@@ -303,7 +306,7 @@ def test_immune_and_novelty_state_survive_checkpoint_without_changing_future():
     restore_runtime(restored, runtime_state(original))
     for i in range(10):
         for rt in (original, restored):
-            close(rt, i % 2)
+            close(rt, .2, registrations=3 * (i % 2))
     assert original.stats == restored.stats
     assert original.controller.snapshot() == restored.controller.snapshot()
     assert [s.state() for s in original._all_router_states()] == [
@@ -450,7 +453,7 @@ def test_thrash_decay_reduces_next_windows_compliant_price():
     rt = runtime()
     rt._derive_regions()
     for i in range(8):
-        close(rt, i % 2)
+        close(rt, .2, registrations=3 * (i % 2))
     assert rt.stats.pathologies["thrash"]
     rt.controller.set_price("well_formed_rate", 0.8, amendment_id="test")
     close(rt, 1)

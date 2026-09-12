@@ -163,8 +163,8 @@ def test_input_and_outputs_are_detached_and_json_serialisable(diary):
     assert report["windows"][1]["regions"]["cost"]["hi"] == 3
 
 
-def test_empty_summary_is_explicit():
-    report = summary([])
+def test_empty_summary_is_explicit(immune_params):
+    report = summary([], **immune_params)
     for field in ("windows", "versions", "pathologies", "ews", "settling"):
         assert report[field] == []
     assert report["operator"]["gap_bound"] is None
@@ -184,9 +184,9 @@ def test_empty_summary_is_explicit():
         {"tv_threshold": -1},
     ],
 )
-def test_invalid_parameters_fail_even_without_data(params):
+def test_invalid_parameters_fail_even_without_data(params, immune_params):
     with pytest.raises(ValueError):
-        summary([], **params)
+        summary([], **(immune_params | params))
 
 
 def test_ambiguous_sequence_windows_and_names_fail(diary):

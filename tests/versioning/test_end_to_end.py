@@ -8,13 +8,13 @@ from factorylab.versioning import render, summary
 from factorylab.versioning.reader import read_diary
 
 
-def test_scripted_400_event_diaries_have_equal_summaries(tmp_path):
+def test_scripted_800_event_diaries_have_equal_summaries(tmp_path):
     reports = []
     for name in ("first", "second"):
         ledger_path = tmp_path / f"{name}.jsonl"
         world = run_world(
             load_manifest("scripted"),
-            events=400,
+            events=800,
             seed=1,
             ledger_path=str(ledger_path),
             kill_at_end=True,
@@ -35,7 +35,16 @@ def test_scripted_400_event_diaries_have_equal_summaries(tmp_path):
         assert len(report["windows"]) == sum(item.get("kind") == "price.window" for item in items)
         assert len(report["windows"]) >= 3
         assert report["operator"]["matrix"] and report["versions"]
-        assert "turnover" in report["operator"]["dimensions"]
+        # The scripted amendment adding the turnover card is approved at event 25, but A2's
+        # cadence floors the period at the consequence backstop (200 events) while fewer
+        # than timing.min_support forecasts have settled, so the next activation cannot
+        # precede launch + min_ratio * 200 = event 601. A3 opens a dimension only for a
+        # card with a live region in a closed window, and the scripted measurement window
+        # is 120 events, so the first window carrying the new card closes at event 721.
+        # The budget must therefore outrun that boundary, not merely the activation.
+        activation = [item for item in items if item.get("kind") == "charter.activate"]
+        assert [item["amendment_id"] for item in activation] == ["turnover-card"]
+        assert "card:turnover" in report["operator"]["dimensions"]
         assert any(w["profile"]["verdict"] is not None for w in report["windows"])
         assert report["settling"] and report["settling"][0]["edition"] == 2
         assert json.loads(json.dumps(report, allow_nan=False)) == report
@@ -56,6 +65,5 @@ def test_package_import_boundary():
                 names = [node.module or ""]
             for name in names:
                 if name.startswith("factorylab."):
-                    assert name == "factorylab.kernel.events" or name.startswith(
-                        "factorylab.versioning"
-                    )
+                    assert (name in ("factorylab.kernel.events", "factorylab.charter.controller")
+                            or name.startswith("factorylab.versioning"))

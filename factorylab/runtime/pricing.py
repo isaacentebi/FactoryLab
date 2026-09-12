@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from decimal import Decimal
 
-from factorylab.charter.controller import CardRegion
+from factorylab.charter.controller import CardRegion, violation
 from factorylab.charter.measurement import measure_cards
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.immune import close_window
 from factorylab.runtime.observations import CATALOGUE, observation_for
+from factorylab.runtime.shared import _usd_to_micro
 
 
 @dataclass
@@ -47,12 +49,68 @@ class MeasureWindow:
     censored: int = 0
     tool_calls: int = 0
     market_purchases: int = 0
+    decisions: dict[str, dict] = field(default_factory=dict)
+    closed_values: dict[str, float] | None = None
+    closed_regions: dict[str, CardRegion] = field(default_factory=dict)
 
 
 class PricingMixin:
     """Preserve runtime state and behavior for pricing operations."""
 
+    def _init_fidelity(self) -> None:
+        """Manifest settings and attributed observations are initialized before any decision."""
+        self.cadence.configure(min_support=self.m.timing.min_support)
+        self.price_windows: dict[int, MeasureWindow] = {}
+        self.price_origins: dict[str, dict[str, int]] = {}
+
+    def _contribution(self, handle: str, role: str) -> dict:
+        """Every original decision has one contribution record per measurement window."""
+        self.price_windows[self.window.index] = self.window
+        self.price_origins.setdefault(handle, {"origin": self.window.index})
+        return self.window.decisions.setdefault(handle, {
+            "role": role, "cost": 0, "ok": 0, "invocations": 0, "tool_calls": 0,
+            "notional_micro": 0,
+        })
+
+    def _invoke(self, action_id, req, role, *, child=False):
+        """Prices retain the completed decision's own cost, schema result and tool attempts."""
+        before_calls = self.window.tool_calls
+        before_children = sum(d["tool_calls"] for d in self.window.decisions.values())
+        ret = super()._invoke(action_id, req, role, child=child)
+        child_calls = sum(d["tool_calls"] for d in self.window.decisions.values()) - before_children
+        sample = self._contribution(req.handle, role)
+        evidence = {"cost": ret.cost, "ok": int(ret.status == "ok"), "invocations": 1,
+                    "tool_calls": self.window.tool_calls - before_calls - child_calls}
+        self.ledger.append({"kind": "price.contribution", "handle": req.handle,
+                            "window": self.window.index, "role": role, **evidence})
+        for name, value in evidence.items():
+            sample[name] += value
+        return ret
+
+    def _record_pricing_fills(self, events) -> None:
+        """Filled notional belongs to the order's original decision in the fill's window."""
+        if self.consequences.pending_orders:
+            # An unresolved order write defers these fills; acknowledgement replays them.
+            return
+        for ev in events:
+            if str(ev.kind) == "Fill":
+                self._record_fill_notional(dict(ev.payload))
+
+    def _record_fill_notional(self, payload: dict) -> None:
+        """One observed fill, priced on the same path whether it was deferred or not."""
+        owners = {order.order_id: order.handle for order in self.consequences.table.orders}
+        handle = owners.get(str(payload["order_id"]))
+        if handle is None:
+            return
+        notional = _usd_to_micro(Decimal(str(payload["size"])) * Decimal(str(payload["px"])))
+        sample = self._contribution(handle, "producer")
+        self.ledger.append({"kind": "price.contribution", "handle": handle,
+                            "window": self.window.index, "notional_micro": notional})
+        sample["notional_micro"] += notional
+        self.price_origins[handle]["turnover"] = self.window.index
+
     def _manage_reserve_window(self) -> None:
+        self.cadence.advance(self.n)
         if self.reserve_window_start is None:
             self.cadence.launch(self.clock.now_ns if self.live else 0)
         if (
@@ -67,6 +125,7 @@ class PricingMixin:
             self.stats.reserve_windows += 1
             self._issue_novelty_grant()
             self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro())
+            self.price_windows[self.window.index] = self.window
             self._observe_positions()
             self._activate_charter_if_due()
             self._derive_regions()
@@ -81,6 +140,15 @@ class PricingMixin:
         if flagged:
             self.ledger.append({"kind": "novelty.grant", "window": window,
                                 "ts": self.clock.now_ns})
+    def _prune_price_evidence(self) -> None:
+        """Completed decisions release old attribution windows after their totals are frozen."""
+        for handle in tuple(self.price_origins):
+            if (self.queue.get(handle).status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
+                    and handle not in self.pending and handle not in self.pending_exposure):
+                del self.price_origins[handle]
+        retained = {index for origins in self.price_origins.values() for index in origins.values()}
+        self.price_windows = {index: window for index, window in self.price_windows.items()
+                              if index == self.window.index or index in retained}
 
     def _observe_delivered_event(self, ev: Event) -> None:
         """Only ledgered event deliveries contribute raw verdict samples to this window."""
@@ -172,6 +240,9 @@ class PricingMixin:
         values = {o.id: value for o in CATALOGUE if (value := o.measure(w)) is not None}
         card_values = measure_cards(self.charter.cards, self.card_samples, w)  # A6: typed windows
         card_values = {cid: value for cid, value in card_values.items() if cid in self.regions}
+        # A4: a decision settling late is priced on the window it worked in.
+        self.window.closed_values = dict(card_values)
+        self.window.closed_regions = dict(self.regions)
         self.ledger.append(
             {
                 "kind": "price.window",
@@ -179,9 +250,12 @@ class PricingMixin:
                 "window_end_event": self.n,
                 "values": card_values,  # Diary dimensions are card ids, not catalogue ids.
                 "observations": values,
+                "regions": {cid: asdict(region) for cid, region in self.regions.items()},
+                "charter_edition": self.charter.edition,
                 "ts": self.clock.now_ns,
             }
         )
+        self.controller.expire_relief(window=w.index)
         before = self.controller.snapshot()["cards"]
         observed = sorted(card_values)
         for card_id in observed:
@@ -198,18 +272,67 @@ class PricingMixin:
         self.stats.last_window_values = values
         self.controller.set_decay(self.m.prices.decay, ledger=self.ledger, window=w.index)
         close_window(self, values)
+        self._prune_price_evidence()
 
-    def _penalty_for(self, cards: str) -> float:
-        """Σ λ_j · violation_j over the latest window's values for cards the role answers for."""
-        values = {
-            card.id: self.card_samples.values[card.id]
-            for card in self.charter.cards
-            if card.answers_for in (cards, "all")
-            and card.id in self.regions
-            and observation_for(card.observation) is not None
-            and card.id in self.card_samples.values
-        }
-        return self.controller.penalty(values) if values else 0.0
+    def _penalty_terms(self, cards: str, handle: str | None) -> list[dict]:
+        """Late decisions keep their own windows; current windows use observed causal prefixes."""
+        terms = []
+        origins = self.price_origins.get(handle, {})
+        for card in self.charter.cards:
+            observation = observation_for(card.observation)
+            if card.answers_for not in (cards, "all") or observation is None:
+                continue
+            window = self.price_windows.get(origins.get(observation.id, origins.get("origin")),
+                                            self.window)
+            # A6: the card's own typed measurement, from its decision's window when that closed.
+            values = (self.card_samples.values if window.closed_values is None
+                      else window.closed_values)
+            regions = self.regions if window.closed_values is None else window.closed_regions
+            region = regions.get(card.id)
+            if region is None or card.id not in values:
+                continue
+            amount = violation(region, values[card.id])
+            weight = self.controller.price(card.id) * amount
+            share = 1.0 if handle is None else self._decision_share(
+                window, handle, observation.id, card.answers_for, region, values[card.id]
+            )
+            terms.append({"card_id": card.id, "observation": observation.id,
+                          "window": window.index, "violation": amount,
+                          "lambda": self.controller.price(card.id), "weight": weight,
+                          "share": share})
+        return terms
+
+    @staticmethod
+    def _decision_share(window, handle, observation, role, region, value) -> float:
+        """Attributable violations use own contributions; other observations divide by support."""
+        samples = window.decisions
+        own = samples.get(handle, {})
+        numerator = denominator = 0
+        if observation == "cost_per_return":
+            eligible = {h: d["cost"] for h, d in samples.items()
+                        if d["role"] == "producer" and d["ok"]}
+            numerator, denominator = eligible.get(handle, 0), sum(eligible.values())
+        elif observation == "well_formed_rate":
+            deficit = region.kind in ("min", "band") and value < region.lo
+            contributions = {h: d["invocations"] - d["ok"] if deficit else d["ok"]
+                             for h, d in samples.items()}
+            numerator, denominator = contributions.get(handle, 0), sum(contributions.values())
+        elif observation in ("tool_calls", "turnover"):
+            key = "tool_calls" if observation == "tool_calls" else "notional_micro"
+            numerator, denominator = own.get(key, 0), getattr(window, key)
+        else:
+            n = sum(role == "all" or d["role"] == role for d in samples.values())
+            return 1 / max(1, n)
+        return min(1.0, numerator / denominator) if denominator > 0 else 0.0
+
+    def _penalty_for(self, cards: str, handle: str | None = None) -> float:
+        """Cap the total pressure, then allocate its penalty-weighted contribution share."""
+        terms = self._penalty_terms(cards, handle)
+        total = sum(t["weight"] for t in terms)
+        if total <= 0:
+            return 0.0
+        share = sum(t["weight"] * t["share"] for t in terms) / total
+        return min(total, self.m.prices.penalty_cap) * share
 
     def _settle_priced(
         self,
@@ -222,7 +345,9 @@ class PricingMixin:
         cards: str,
     ) -> None:
         """Settle a judged score less the card penalty, clipped to [0, 1]; both are ledgered."""
-        penalty = self._penalty_for(cards)
+        if handle not in self.price_origins:
+            self._contribution(handle, cards)
+        penalty = self._penalty_for(cards, handle)
         effective = min(1.0, max(0.0, score - penalty))
         self.queue.settle(
             handle,
@@ -241,6 +366,8 @@ class PricingMixin:
                 "raw": score,
                 "penalty": penalty,
                 "effective": effective,
+                "penalty_cap": self.m.prices.penalty_cap,
+                "terms": self._penalty_terms(cards, handle),
                 "ts": self.clock.now_ns,
             }
         )

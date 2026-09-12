@@ -406,7 +406,8 @@ def _cmd_wake(args: argparse.Namespace) -> int:
 
 def _cmd_versions(args: argparse.Namespace) -> int:
     """Behaviour-based versions, pathologies and early warnings over a dead world's diary
-    (spec v0.7 §1). Read-only; needs the released key like postmortem."""
+    (spec v0.8 A3). Thresholds come from the genesis manifest carried by Launch.
+    Read-only; needs the released key like postmortem."""
     from factorylab.versioning import render, summary
     from factorylab.versioning.reader import read_diary
 

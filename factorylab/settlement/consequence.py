@@ -28,7 +28,7 @@ class ReturnConsequences:
         self.ledger.append({"kind": "consequence.intent", "client_id": client_id, **item})
         self.pending_orders[client_id] = item
 
-    def order_acknowledged(self, client_id: str) -> None:
+    def order_acknowledged(self, client_id: str) -> list[tuple[str, dict, int]]:
         """Release deferred economic events in original order only after identity is resolved."""
         self.ledger.append({"kind": "consequence.acknowledged", "client_id": client_id})
         self.pending_orders.pop(client_id, None)
@@ -38,6 +38,8 @@ class ReturnConsequences:
             self.deferred_events = []
             for kind, payload, event in events:
                 self.observe(kind, payload, event)
+            return events
+        return []
 
     def _apply(self, kind: str, evidence: dict, table: LotTable) -> None:
         self.ledger.append({"kind": f"consequence.{kind}", **evidence})

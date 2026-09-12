@@ -1,4 +1,10 @@
+import hashlib
+import json
+from dataclasses import asdict
+
 import pytest
+
+from factorylab.runtime.worlds import ImmuneSpec
 
 
 @pytest.fixture
@@ -6,7 +12,12 @@ def diary():
     """Synthetic windows use exactly the runtime's persisted item shapes."""
 
     def make(rows):
-        items = []
+        manifest = {"immune": asdict(ImmuneSpec())}
+        digest = hashlib.sha256(json.dumps(manifest, sort_keys=True,
+                                           separators=(",", ":")).encode()).hexdigest()
+        items = [{"kind": "event", "event": {"kind": "Launch", "payload": {
+            "manifest": manifest, "manifest_hash": digest,
+        }}}]
         for i, row in enumerate(rows):
             items.extend(row.get("before", []))
             for card, region in row.get("regions", {}).items():
@@ -39,3 +50,10 @@ def diary():
         return [dict(item, seq=i) for i, item in enumerate(items)]
 
     return make
+
+
+@pytest.fixture
+def immune_params():
+    values = asdict(ImmuneSpec())
+    return {name: values[name] for name in ("k", "bins", "tv_threshold", "gap_threshold",
+                                           "registration_bins", "revision_bins")}

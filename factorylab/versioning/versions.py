@@ -4,7 +4,8 @@ from collections import Counter
 from math import fsum
 from statistics import fmean, pvariance
 
-from factorylab.versioning.operator import total_variation, transition_operator
+from factorylab.charter.controller import CardRegion, violation
+from factorylab.versioning.operator import cell_series, total_variation, transition_operator
 from factorylab.versioning.series import mean
 
 
@@ -37,7 +38,10 @@ def versions(windows: list[dict], cells: list[tuple], *, k: int, tv_threshold: f
         return []
     distances = block_distances(cells, k)
     starts = [0] + [
-        i for i, tv in enumerate(distances) if i > 0 and tv is not None and tv > tv_threshold
+        i for i, tv in enumerate(distances) if i > 0 and (
+            windows[i]["charter_edition"] != windows[i - 1]["charter_edition"]
+            or tv is not None and tv > tv_threshold
+        )
     ]
     result = []
     for start, stop in zip(starts, starts[1:] + [len(windows)], strict=True):
@@ -50,7 +54,8 @@ def versions(windows: list[dict], cells: list[tuple], *, k: int, tv_threshold: f
                 "dominant_cells": dominant_cells(cells[start:stop]),
                 "mean_profile": {
                     name: mean(
-                        [w["profile"][name] for w in group if w["profile"][name] is not None]
+                        [w["profile"].get(name) for w in group
+                         if w["profile"].get(name) is not None]
                     )
                     for name in group[0]["profile"]
                 },
@@ -58,16 +63,6 @@ def versions(windows: list[dict], cells: list[tuple], *, k: int, tv_threshold: f
             }
         )
     return result
-
-
-def violation(region: dict, value: float) -> float:
-    """Inclusive max/min/band bounds match PriceController's normalized distance."""
-    distance = 0.0
-    if region["kind"] in ("min", "band") and value < region["lo"]:
-        distance = region["lo"] - value
-    elif region["kind"] in ("max", "band") and value > region["hi"]:
-        distance = value - region["hi"]
-    return distance / region["scale"]
 
 
 def slope(values: list[float | None]) -> float | None:
@@ -95,117 +90,85 @@ def _runs(flags: list[bool]) -> list[tuple[int, int]]:
     return result
 
 
-def pathologies(
-    windows: list[dict],
-    cells: list[tuple],
-    spans: list[dict],
-    *,
-    k: int,
-    tv_threshold: float,
-    gap_threshold: float,
-) -> list[dict]:
-    """Flags retain their numeric evidence and may overlap; none is a causal verdict.
+def diagnose(
+    windows: list[dict], *, k: int,
+    registration_bins: tuple[float, ...], revision_bins: tuple[float, ...],
+) -> dict:
+    """One causal predicate serves live correction and offline reconstruction.
 
-    Stable failure requires a violating observed card in the most occupied cell
-    and the span's transition bound. Learning death uses maximal same-cell runs.
-    Thrash means consecutive changes (revisits allowed) with sustained block TV;
-    each reported window must have both a changed predecessor and supported TV.
+    New cards need k observations to establish failure; removing a dimension
+    preserves the remaining history. A region change is measured against the
+    region applicable in that window. Thrash needs k actual changes and no
+    compliant window, rather than volatility in a moving histogram partition.
     """
+    tail = windows[-k:]
+    supported = len(tail) == k
+    common = set.intersection(*(set(w["regions"]) for w in tail)) if tail else set()
+    fixed = cell_series(tail, sorted(common), registration_bins=registration_bins,
+                        revision_bins=revision_bins)
+    cells = fixed["cells"]
+    same = supported and len(set(cells)) == 1
+    violated = [
+        {cid for cid, region in w["regions"].items()
+         if w["profile"].get(cid) is not None
+         and violation(CardRegion(**dict(region, card_id=cid)), w["profile"][cid]) > 0}
+        for w in windows[-(k + 1):]
+    ]
+    failures = set.intersection(*violated[-k:]) if supported else set()
+    changes = []
+    recent = windows[-(k + 1):]
+    for previous, current in zip(recent, recent[1:], strict=False):
+        names = sorted(set(previous["regions"]) & set(current["regions"]))
+        pair = cell_series([previous, current], names, registration_bins=registration_bins,
+                           revision_bins=revision_bins)["cells"]
+        changes.append(pair[0] != pair[1])
+    flags = {
+        "stable_failure": bool(same and failures),
+        "learning_death": bool(same and all(
+            w["profile"].get("registrations") == 0 and w["profile"].get("revision") == 0
+            for w in tail
+        )),
+        "thrash": bool(len(changes) == k and all(changes) and all(violated)),
+    }
+    return {
+        "flags": flags, "cells": [list(c) for c in cells],
+        "dimensions": fixed["dimensions"],
+        "gap_bound": transition_operator(cells)["gap_bound"],
+        "violated_cards": sorted(failures), "changes": changes,
+    }
+
+
+def pathologies(
+    windows: list[dict], cells: list[tuple], spans: list[dict], *, k: int,
+    registration_bins: tuple[float, ...], revision_bins: tuple[float, ...],
+) -> list[dict]:
+    """Consecutive detection windows retain the same causal evidence used by the live organ."""
+    evidence = [diagnose(windows[:end + 1], k=k, registration_bins=registration_bins,
+                         revision_bins=revision_bins) for end in range(len(windows))]
     result = []
+    for kind in ("stable_failure", "learning_death", "thrash"):
+        for start, end in _runs([e["flags"][kind] for e in evidence]):
+            result.append({
+                "kind": kind, "start_window": start, "end_window": end,
+                "evidence": {"windows": evidence[start:end + 1]},
+            })
+    # This retrospective signal remains a separate diagnosis; it does not change
+    # the three convergence predicates or infer consequence from a raw verdict.
     for span in spans:
         start, end = span["start_window"], span["end_window"]
-        group = windows[start : end + 1]
-        bound = transition_operator(cells[start : end + 1])["gap_bound"]
-        dominant = tuple(span["dominant_cells"][0]["cell"])
-        violations = []
-        for i in range(start, end + 1):
-            if cells[i] != dominant:
-                continue
-            for card, region in sorted(windows[i]["regions"].items()):
-                value = windows[i]["profile"].get(card)
-                if value is not None and (amount := violation(region, value)) > 0:
-                    violations.append(
-                        {
-                            "window": i,
-                            "card": card,
-                            "value": value,
-                            "region": dict(region),
-                            "violation": amount,
-                        }
-                    )
-        if span["duration"] >= k and bound is not None and bound >= gap_threshold and violations:
-            result.append(
-                {
-                    "kind": "stable_failure",
-                    "start_window": start,
-                    "end_window": end,
-                    "evidence": {
-                        "gap_bound": bound,
-                        "dominant_cell": list(dominant),
-                        "violations": violations,
-                    },
-                }
-            )
-        consequence = (
-            "forecast_skill"
-            if any(w["profile"].get("forecast_skill") is not None for w in group)
-            else "consequence"
-        )
-        verdict_slope = slope([w["profile"]["verdict"] for w in group])
+        group = windows[start:end + 1]
+        consequence = ("forecast_skill" if any(
+            w["profile"].get("forecast_skill") is not None for w in group
+        ) else "consequence")
+        verdict_slope = slope([w["profile"].get("verdict") for w in group])
         outcome_slope = slope([w["profile"].get(consequence) for w in group])
-        if verdict_slope is not None and outcome_slope is not None:
-            if verdict_slope > 0 and outcome_slope < 0:
-                result.append(
-                    {
-                        "kind": "overfitting_divergence",
-                        "start_window": start,
-                        "end_window": end,
-                        "evidence": {
-                            "verdict_slope": verdict_slope,
-                            "outcome_series": consequence,
-                            "outcome_slope": outcome_slope,
-                        },
-                    }
-                )
-    start = 0
-    while start < len(windows):
-        end = start
-        while end + 1 < len(windows) and cells[end + 1] == cells[start]:
-            end += 1
-        quiet = [w["profile"]["registrations"] == 0 for w in windows[start : end + 1]]
-        for left, right in _runs(quiet):
-            if right - left + 1 >= k:
-                result.append(
-                    {
-                        "kind": "learning_death",
-                        "start_window": start + left,
-                        "end_window": start + right,
-                        "evidence": {
-                            "cell": list(cells[start]),
-                            "registrations": 0.0,
-                            "duration": right - left + 1,
-                        },
-                    }
-                )
-        start = end + 1
-    distances = block_distances(cells, k)
-    changing = [
-        i > 0 and cells[i] != cells[i - 1] and tv is not None and tv > tv_threshold
-        for i, tv in enumerate(distances)
-    ]
-    for start, end in _runs(changing):
-        if end - start + 1 >= k:
-            result.append(
-                {
-                    "kind": "thrash",
-                    "start_window": start,
-                    "end_window": end,
-                    "evidence": {
-                        "trailing_tv": distances[start : end + 1],
-                        "changes": end - start + 1,
-                    },
-                }
-            )
+        if (verdict_slope is not None and outcome_slope is not None
+                and verdict_slope > 0 and outcome_slope < 0):
+            result.append({
+                "kind": "overfitting_divergence", "start_window": start, "end_window": end,
+                "evidence": {"verdict_slope": verdict_slope, "outcome_series": consequence,
+                             "outcome_slope": outcome_slope},
+            })
     return sorted(result, key=lambda item: (item["start_window"], item["end_window"], item["kind"]))
 
 

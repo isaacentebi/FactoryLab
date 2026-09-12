@@ -2,9 +2,9 @@
 
 from bisect import bisect_left
 from collections import Counter
-from math import floor, fsum, isfinite
+from math import fsum, isfinite
 
-from factorylab.versioning.series import CHANNELS
+from factorylab.charter.controller import CardRegion, violation
 
 
 def total_variation(left: list[tuple], right: list[tuple]) -> float | None:
@@ -76,48 +76,32 @@ def transition_operator(cells: list[tuple]) -> dict:
     }
 
 
-def quantile_cuts(values: list[float], bins: int) -> list[float]:
-    """Linear empirical quantiles preserve ties; equal-to-cut values use the lower bin.
+def cell_series(
+    windows: list[dict], cards: list[str], *,
+    registration_bins: tuple[float, ...], revision_bins: tuple[float, ...],
+) -> dict:
+    """Fixed region-relative cells never recalibrate against the classified sample.
 
-    Repeated cuts are retained, so tied data can leave requested bins empty.
-    Unsupported dimensions have no cuts and always map to -1.
+    Cards without an observed, declared region remain unsupported (-1). Activity
+    uses absolute manifest cuts; a value equal to a cut stays in the lower bin.
+    Raw rewards remain in the profile for analysis, without becoming extra goals.
     """
-    values = sorted(values)
-    cuts = []
-    for i in range(1, bins):
-        if not values:
-            break
-        position = (len(values) - 1) * i / bins
-        low = floor(position)
-        fraction = position - low
-        cuts.append(values[low] * (1 - fraction) + values[min(low + 1, len(values) - 1)] * fraction)
-    return cuts
-
-
-def cell_series(windows: list[dict], cards: list[str], *, bins: int = 3) -> dict:
-    """Cells use whole-run quantiles of supported channels and all named cards.
-
-    Channel order follows the specification; cards are lexical. Support exactly
-    at half the retained windows qualifies. An empty run has no channel dimensions.
-    """
-    if type(bins) is not int or bins < 1:
-        raise ValueError("bins must be a positive integer")
-    dimensions = [
-        channel
-        for channel in CHANNELS
-        if windows and sum(w["profile"][channel] is not None for w in windows) * 2 >= len(windows)
-    ] + sorted(cards)
-    cuts = {
-        name: quantile_cuts(
-            [w["profile"][name] for w in windows if w["profile"][name] is not None], bins
-        )
-        for name in dimensions
-    }
-    cells = [
-        tuple(
-            -1 if w["profile"][name] is None else bisect_left(cuts[name], w["profile"][name])
-            for name in dimensions
-        )
-        for w in windows
-    ]
+    dimensions = sorted(cards) + ["registrations", "revision"]
+    cuts = {name: [0.0, 1.0] for name in cards}
+    cuts.update(registrations=list(registration_bins), revision=list(revision_bins))
+    cells = []
+    for window in windows:
+        cell = []
+        for name in dimensions:
+            value = window["profile"].get(name)
+            if value is None:
+                cell.append(-1)
+            elif name in ("registrations", "revision"):
+                cell.append(bisect_left(cuts[name], value))
+            elif (region := window["regions"].get(name)) is not None:
+                amount = violation(CardRegion(**dict(region, card_id=name)), value)
+                cell.append(0 if amount == 0 else 1 if amount <= 1 else 2)
+            else:
+                cell.append(-1)
+        cells.append(tuple(cell))
     return {"dimensions": dimensions, "cuts": cuts, "cells": cells}

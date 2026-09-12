@@ -55,6 +55,17 @@ class CardRegion:
             raise ValueError("band requires lo < hi")
 
 
+def violation(region: CardRegion, value: float) -> float:
+    """Return finite, nonnegative distance outside inclusive bounds in observation units."""
+    value = _number(value, "value")
+    distance = 0.0
+    if region.kind in ("min", "band") and value < region.lo:
+        distance = region.lo - value
+    elif region.kind in ("max", "band") and value > region.hi:
+        distance = value - region.hi
+    return _number(distance / region.scale, "violation")
+
+
 @dataclass(frozen=True)
 class _CardState:
     region: CardRegion | None
@@ -64,6 +75,7 @@ class _CardState:
     max_step: float = 0.0
     last_window_end_event: int | None = None
     previous_violation: float = 0.0
+    relief_window: int | None = None
 
 
 class PriceController:
@@ -153,6 +165,25 @@ class PriceController:
         })
         self.__cards[card_id] = replace(state, price=price)
 
+    def relieve(self, card_id: str, *, window: int) -> None:
+        """Halve the effective price for one window without erasing accumulated pressure."""
+        state = self.__cards[card_id]
+        self.__ledger.append({
+            "kind": "immune.price_relief", "card_id": card_id, "window": window,
+            "lambda": state.price, "effective_lambda": state.price / 2,
+        })
+        self.__cards[card_id] = replace(state, relief_window=window)
+
+    def expire_relief(self, *, window: int) -> None:
+        """Restore underlying prices after the relief window's settlements have completed."""
+        for card_id, state in tuple(self.__cards.items()):
+            if state.relief_window is not None and state.relief_window <= window:
+                self.__ledger.append({
+                    "kind": "immune.price_relief_expired", "card_id": card_id,
+                    "window": window, "lambda": state.price,
+                })
+                self.__cards[card_id] = replace(state, relief_window=None)
+
     def remove(self, card_id: str, *, amendment_id: str) -> None:
         """Drop a known card's price and region only after recording its removal."""
         state = self.__cards[card_id]
@@ -179,12 +210,7 @@ class PriceController:
         value = _number(value, "value")
         if region is None:
             return 0.0
-        distance = 0.0
-        if region.kind in ("min", "band") and value < region.lo:
-            distance = region.lo - value
-        elif region.kind in ("max", "band") and value > region.hi:
-            distance = value - region.hi
-        return _number(distance / region.scale, "violation")
+        return violation(region, value)
 
     def observe(self, card_id: str, value: float, window_end_event: int) -> None:
         """Ledger each accepted update or skipped window before any state/clock changes.
@@ -231,6 +257,7 @@ class PriceController:
             max_step=max(state.max_step, abs(price - state.price)),
             last_window_end_event=window_end_event,
             previous_violation=violation,
+            relief_window=state.relief_window,
         )
         self.__ledger.append(
             {
@@ -253,13 +280,15 @@ class PriceController:
     def price(self, card_id: str) -> float:
         """Return the current price, or zero for any unregistered identifier."""
         state = self.__cards.get(card_id) if isinstance(card_id, str) else None
-        return state.price if state is not None else 0.0
+        if state is None:
+            return 0.0
+        return state.price / 2 if state.relief_window is not None else state.price
 
     def penalty(self, values: dict[str, float]) -> float:
         """Return the unclipped sum for known cards only; callers own score clipping."""
         return sum(
             (
-                self.__cards[card_id].price * self.violation(card_id, value)
+                self.price(card_id) * self.violation(card_id, value)
                 for card_id, value in values.items()
                 if card_id in self.__cards
             ),
@@ -279,6 +308,8 @@ class PriceController:
             "cards": {
                 card_id: {
                     "lambda": state.price,
+                    "effective_lambda": self.price(card_id),
+                    "relief_window": state.relief_window,
                     "updates": state.updates,
                     "saturations": state.saturations,
                     "max_step": state.max_step,

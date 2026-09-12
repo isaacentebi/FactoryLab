@@ -12,6 +12,14 @@ additions and the changed charter contract; other sections retain their existing
 keys.
 
 ## Round-two W3: disclosure, governance, the treasury
+# Manifest parameters: round two
+
+The TOML manifest fixes the initial conditions. Money is stored as integer
+micro-USD after exact decimal parsing. These entries document the
+round-two additions and the changed charter contract; other sections retain
+their existing keys. The W3 governance and charter keys are below; the W1
+timing, pricing and immune keys follow under "Timing, pricing and immune
+settings".
 
 | Key | Type | Default / seed | Hard cast? |
 | --- | --- | --- | --- |
@@ -31,6 +39,8 @@ every request's `world.mechanics`. Their runtime values, including temporary
 controller decay, are used in that disclosure. W1 owns the penalty-cap change;
 until that parameter exists, the mechanics block reports it as null and the
 scoring block retains the actual uncapped formula.
+controller decay, are used in that disclosure. The scoring block states the
+capped, attributed formula recorded under "Observation units and attribution".
 
 ## Round-two W2: judges, consequences, the reserve
 
@@ -55,7 +65,8 @@ scoring block retains the actual uncapped formula.
 
 `route.excluded`, `tool.refused`, `consequence.refused` (A9); `exposure.settled` (A5);
 `cascade.sibling`, `meta.consequence`, `meta.awaiting_consequence`, `sampling.raise`,
-`sampling.lower` (A14); `novelty.release` (A13).
+`sampling.lower` (A14); `novelty.release`, `novelty.grant`,
+`novelty.grant_consumed` (A13).
 
 ## Exact measurement
 
@@ -138,3 +149,97 @@ surveyed roster hash. `worlds/edition1-example.toml` is only a schema migration 
 the historical example. The experimenter must re-draft edition 1 with the actual
 launch roster after the fix passes merge; this workstream does not ratify a new
 edition or run the paid survey.
+
+## Timing, pricing and immune settings
+
+The canonical manifest is recorded with its hash in the ledger's `Launch` event.
+`factorylab versions` verifies that record against genesis and uses its immune
+settings. A historical diary without those settings needs explicit analysis
+parameters; the observer never substitutes a second set of thresholds.
+
+| Key | Type | Seed default | Hard cast? |
+| --- | --- | --- | --- |
+| `timing.min_support` | positive integer, at most `timing.cadence_sample` | `30` | Yes: settled samples required before estimating p90; a larger support than the retained sample could never be reached, so it is refused at load. |
+| `timing.cadence_sample` | positive integer | `200` | Yes: retained event-latency sample length. |
+| `timing.min_ratio` | integer, at least 3 | `3` | Yes: cascade and governance separation. |
+| `evaluation.consequence_backstop_events` | positive integer | `200` | Yes: consequence horizon and conservative governance period floor. |
+| `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
+| `immune.k` | integer, at least 2 | `3` | Yes: consecutive windows or changes required for diagnosis. |
+| `immune.bins` | integer, exactly 3 | `3` | Yes: inside, up to one scale unit outside, more than one unit outside. |
+| `immune.registration_bins` | increasing nonnegative numeric array | `[0, 2]` | Yes: zero, 1–2, 3+ registrations. Values equal to a cut enter the lower bin. |
+| `immune.revision_bins` | increasing nonnegative numeric array | `[0]` | Yes: zero versus positive revision. |
+| `immune.tv_threshold` | finite number in (0, 1] | `0.2` | Yes: behavioral version boundaries, not the thrash predicate. |
+| `immune.gap_threshold` | finite number in (0, 1] | `0.8` | Yes: the operator's `durable` readout, not an additional pathology gate. |
+| `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment. |
+| `immune.gamma_max` | finite number in (0, 1] | `0.5` | Yes: exploration-gain ceiling. |
+| `immune.decay_step` | finite number in (0, 1] | `0.1` | Yes: extra price decay for the window following thrash. |
+
+These launch settings are immutable parameters of an experiment. Effective
+prices, gain, diagnoses and the currently negotiated tick interval remain runtime
+state. Relief halves the effective lambda on violated cards for one window; it
+preserves the controller's accumulated price and previous violation. That state
+resumes with the controller. Repeated failure can renew relief, while underlying
+pressure continues to ratchet.
+
+## Timing interpretation
+
+All measured latencies are `settled_event - opened_event`. The ledger also retains
+nanoseconds as provenance, but nanoseconds never determine the measured period.
+The period is `max(backstop, supported_p90, oldest_outstanding_age)` in events;
+unsupported p90 contributes nothing. Multiply by the current tick interval for
+the corresponding duration. Both that duration and `min_ratio * period` fresh
+events must pass after the previous activation. Activations at one boundary
+therefore cannot chain.
+
+The spec's p90-only estimate and its zero-timestamp reproduction pull in different
+directions: many same-tick settlements can have small positive event latencies.
+Keeping the already declared backstop as a floor satisfies the reproduction and
+the essay's requirement that governance relate to “the periodicity of the
+factory’s slowest loops” (Chapter II, IV.c). Fast completions cannot establish that
+an unobserved slow process has become fast.
+
+## Observation units and attribution
+
+The catalogue publishes `unit_range` and its width, `scale`; card prose cannot
+change either. Bounded fractions and scores use [0, 1], score differences use
+[-1, 1], and standard deviations of unit scores use [0, 0.5]. Unbounded counts
+and ratios use one count or one base quantity as their unit interval [0, 1];
+cost per return uses one dollar [0, 1,000,000] in micro-USD; signed dollar P&L
+uses [-1, 1] USD. These are unit definitions, not acceptable regions or clipping
+bounds: larger and negative observations remain measurable. The spec supplies
+no further calibration for unbounded observations, so none is fitted from live
+samples or inferred from the charter's requested bound.
+
+For card j, `v_j = distance_outside_region / observation.scale`, and
+`S = sum(lambda_j * v_j)`. A settlement receives
+`min(S, prices.penalty_cap) * share`. When cards measure different quantities,
+`share = sum(lambda_j * v_j * share_j) / S`, or zero when S is zero.
+
+Cost, tool attempts and turnover use the decision's contribution divided by the
+window total. A lower-bound well-formedness violation is allocated by malformed
+invocations, so a correct return does not pay for someone else's malformed one;
+an upper-bound violation uses well-formed invocations. A zero attributable total
+contributes zero. Other observations use `1/n` decisions for the card's role
+(or all roles for `answers_for = "all"`). The final score is
+`clip(raw_score - penalty, 0, 1)`.
+
+Closed windows retain their observations, regions and contributions for delayed
+settlements. Before a window closes, the most recent closed observations supply
+pressure and the current window's observed contribution totals supply shares.
+A settlement cannot depend on future returns. Each penalty item records the
+terms, window identifiers and shares actually used. Historical windows are
+released when no unresolved decision needs them.
+
+Fixed pathology cells include the priced card dimensions and the two activity
+dimensions. Raw reward channels remain available for retrospective analysis.
+Adding a card starts its support history; removing one drops that dimension
+without clearing surviving evidence. Thrash requires k consecutive changes with
+no compliant window. Stable failure requires k same-cell windows with a common
+violated card. Learning death requires k same-cell windows with zero registrations
+and revisions. Learning death's only response is that flag: the reserve reads it
+at the next window boundary and grants one extra novelty trial per assembly for
+the window that opens. A grant is spent by the first consequence delivered to an
+assembly beyond `novelty.trials`, and whatever is unspent expires at the next
+boundary, where the flag must be raised again to re-issue it. That single grant
+is part of the novelty lifetime policy (A13): ledger evidence `novelty.grant` and
+`novelty.grant_consumed`.

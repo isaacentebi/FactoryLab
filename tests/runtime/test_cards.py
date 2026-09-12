@@ -22,10 +22,10 @@ def card(region: str, units: str = "ratio", id: str = "c") -> MetricCard:
         ("below 5", "ratio", CardRegion("c", "max", None, 5.0, 1.0)),
         ("at most 2", "ratio", CardRegion("c", "max", None, 2.0, 1.0)),
         ("between -1 and 1", "ratio", CardRegion("c", "band", -1.0, 1.0, 1.0)),
-        # money cards are scaled by their own bound's magnitude, never below 1
-        ("below 2500", "micro-USD per return", CardRegion("c", "max", None, 2500.0, 2500.0)),
+        # Display prose cannot change the declared turnover observation scale.
+        ("below 2500", "micro-USD per return", CardRegion("c", "max", None, 2500.0, 1.0)),
         ("below 0.5", "USD", CardRegion("c", "max", None, 0.5, 1.0)),
-        ("between 100 and 3000", "micro-USD", CardRegion("c", "band", 100.0, 3000.0, 3000.0)),
+        ("between 100 and 3000", "micro-USD", CardRegion("c", "band", 100.0, 3000.0, 1.0)),
     ],
 )
 def test_region_phrasings(text: str, units: str, expected: CardRegion) -> None:
@@ -44,14 +44,15 @@ def test_unparseable_prose_carries_no_region(text: str) -> None:
 
 def test_median_of_previous_window_waits_for_the_rolling_record() -> None:
     c = card("below the median of the previous window", "micro-USD per return", "cost_per_return")
+    c = replace(c, observation="cost_per_return")
     assert parses(c) is True  # understood, just not yet bounded: no price.unparsed entry
     assert region_for(c, rolling={}) is None
     assert region_for(c, rolling={"other_prev_median": 9.0}) is None
     got = region_for(c, rolling={"cost_per_return_prev_median": 1000.0})
-    assert got == CardRegion("cost_per_return", "max", None, 1000.0, 1000.0)
-    # a tiny median still yields a unit scale
+    assert got == CardRegion("cost_per_return", "max", None, 1000.0, 1_000_000.0)
+    # The same declared dollar unit applies even to a tiny median.
     got = region_for(c, rolling={"cost_per_return_prev_median": 0.25})
-    assert got is not None and got.scale == 1.0 and got.hi == 0.25
+    assert got is not None and got.scale == 1_000_000.0 and got.hi == 0.25
 
 
 def test_seed_charter_cards_are_readable() -> None:
@@ -61,7 +62,7 @@ def test_seed_charter_cards_are_readable() -> None:
         "well_formed_rate", "min", 0.9, None, 1.0
     )
     assert region_for(cards["forecast_skill"], rolling={}) == CardRegion(
-        "forecast_skill", "min", 0.0, None, 1.0
+        "forecast_skill", "min", 0.0, None, 2.0
     )
     assert region_for(cards["cost_per_return"], rolling={}) is None
 

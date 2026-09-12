@@ -182,7 +182,8 @@ class SchematicsMixin:
             "registration_feedback": list(self.registration_feedback),
             "reserved_return_fields": reserved_return_fields(),
             "scoring": self._scoring_block(),
-            "prices": {"lambda_max": self.m.prices.lambda_max},
+            "prices": {"lambda_max": self.m.prices.lambda_max,
+                       "penalty_cap": self.m.prices.penalty_cap},
             "amendment_feedback": getattr(self, "amendment_feedback", None),
             "card_prices": [
                 {
@@ -342,9 +343,22 @@ class SchematicsMixin:
                 "conformity like an evaluator"
             ),
             "card_penalty": (
-                "effective = clip(score - sum(lambda_j * violation_j), 0, 1); each role's "
-                "cards use their declared typed windows; prices and region scales "
-                "are in card_prices"
+                "v_j = distance outside card j's inclusive region / observation.scale; "
+                "S = sum(lambda_j * v_j) over cards for the settlement's role or all; "
+                "each role's cards use their declared typed windows. "
+                f"penalty = min(S, {self.m.prices.penalty_cap}) * share; "
+                "share = sum(lambda_j * v_j * share_j) / S (zero when S = 0). "
+                "share_j is the decision's own cost, malformed-return deficit (well-formed "
+                "count for an upper-bound violation), tool attempts or filled notional "
+                "divided by that observation's window total; otherwise "
+                "1/n decisions for that role. A zero total contributes zero. "
+                "Closed decision windows retain their observations; open windows use the last "
+                "closed observations with current contribution totals. "
+                "score = clip(raw_score - penalty, 0, 1). Prices and region scales are in "
+                "card_prices. "
+                "Stable failure halves effective lambda on violated cards for the next window; "
+                "underlying duration pressure is retained. Duplicate observations on overlapping "
+                "roles are refused in amendments."
             ),
             "revision": (
                 "a producer return counts as a revision only when a registration it carried "
