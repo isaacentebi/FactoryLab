@@ -220,7 +220,15 @@ def _description_from_prompt(text: str) -> str:
 def _inputs_from_prompt(text: str) -> dict[str, Any]:
     try:
         start = text.index("INPUTS\n") + len("INPUTS\n")
-        end = text.index("\n\nOUTCOME SCHEMA", start)
+        # The request renders further sections after the inputs (A10 adds PROPENSITY
+        # between the inputs and the schema); stop at whichever comes first.
+        end = min(
+            (text.index(header, start) for header in ("\n\nPROPENSITY", "\n\nOUTCOME SCHEMA")
+             if header in text[start:]),
+            default=-1,
+        )
+        if end < 0:
+            return {}
         return json.loads(text[start:end])
     except (ValueError, json.JSONDecodeError):
         return {}

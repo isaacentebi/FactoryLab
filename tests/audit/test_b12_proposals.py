@@ -44,9 +44,10 @@ def test_reserved_names_and_types_are_published_from_the_validator():
     try:
         declared = rt._world_block()["reserved_return_fields"]
         assert declared == reserved_return_fields()
+        # A10 adds "propensity": a return's own account of the field it drew from.
         assert set(declared) == {"action", "rationale", "reason", "status", "coin", "side",
                                  "verdict", "payoff", "conformity", "vote", "register",
-                                 "tool_calls", "requests", "forecasts"}
+                                 "tool_calls", "requests", "forecasts", "propensity"}
         assert declared["status"] == {"type": "string"}
         with pytest.raises(ValueError):
             _validate_return({"status": {"done": True}}, {"type": "object"})

@@ -294,6 +294,8 @@ def reserved_return_fields() -> dict:
                        for k in ("verdict", "payoff", "conformity")})
     properties.update({
         "vote": {"type": "boolean"},
+        # A10: the deciding agent's own distribution over its own actions.
+        "propensity": {"type": "object"},
         "register": {"type": "array"},
         "tool_calls": {"type": "array", "maxItems": 4, "items": {
             "type": "object", "properties": {"tool": {"type": "string"},
@@ -338,11 +340,14 @@ def validate_proposal(proposal: dict) -> None:
     """Reject malformed proposal fields before any registration effect."""
     fields = {k: {"type": "string"} for k in (
         "kind", "id", "model_id", "openrouter_id", "role", "system_prompt", "effort",
-        "event_kind", "learner", "description", "code", "tick_interval")}
+        "event_kind", "learner", "description", "code", "tick_interval",
+        "unit", "assembly_id")}
     fields.update({"gamma": {"type": "number", "minimum": 1e-300, "maximum": 1},
                    "max_tokens": {"type": "integer", "minimum": 16, "maximum": 4096},
                    "timeout_s": {"type": "integer", "minimum": 1, "maximum": 5},
                    "accepts": {"type": "array", "items": {"type": "string"}},
+                   "range": {"type": "array", "items": {"type": "number"}},
+                   "actions": {"type": "array", "items": {"type": "string"}},
                    "args_schema": {"type": "object"}})
     _validate_schema(proposal, {"type": "object", "properties": fields, "required": ["kind"]})
     if proposal["kind"] == "router" and "add" in proposal:
