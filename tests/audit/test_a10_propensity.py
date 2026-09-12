@@ -7,14 +7,16 @@ of any request could price a road not taken, and Blum--Mansour could only form
 over executor selection.
 """
 
+import json
 import random
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from factorylab.cortex.request import Request, validate_propensity
 from factorylab.kernel.queue import PropensityRecord
-from factorylab.runtime.propensity import action_label, declared_record
+from factorylab.runtime.propensity import action_label, action_vocabulary, declared_record
 from factorylab.world.scripted import ScriptedProvider
 from tests.runtime.test_loop import (
     _consequence_judge,
@@ -143,12 +145,52 @@ def test_action_labels_name_what_a_return_decided():
     assert action_label("producer", {"action": "noop"}, "ok") == "hold"
     assert action_label("producer", {"action": "hold"}, "ok") == "hold"
     assert action_label(
-        "producer", {"action": "order", "side": "buy", "coin": "eth"}, "ok"
-    ) == "buy:ETH"
+        "producer", {"action": "order", "side": "buy", "coin": "eth", "size": "0.004"}, "ok"
+    ) == "buy:ETH:xs"
     assert action_label("producer", {"action": "order"}, "ok") == "malformed"
+    # an order with no placeable size named no action the kernel could take
+    assert action_label(
+        "producer", {"action": "order", "side": "buy", "coin": "ETH"}, "ok"
+    ) == "malformed"
+    assert action_label(
+        "producer", {"action": "order", "side": "buy", "coin": "ETH", "size": "0"}, "ok"
+    ) == "malformed"
     assert action_label("evaluator", {"verdict": 0.84}, "ok") == "verdict:0.8"
     assert action_label("meta", {"conformity": 0.25}, "ok") == "conformity:0.2"
     assert action_label("producer", {"action": "hold"}, "malformed") == "malformed"
+
+
+def test_two_orders_that_differ_only_in_size_are_two_different_actions():
+    """A sizing decision is a decision, so a declaration can hold an arm for it."""
+    def order(size):
+        return action_label(
+            "producer", {"action": "order", "side": "buy", "coin": "BTC", "size": size}, "ok",
+        )
+
+    assert order("0.005") == "buy:BTC:xs"
+    assert order("0.05") == "buy:BTC:s"
+    assert order("0.5") == "buy:BTC:m"
+    assert order("5") == "buy:BTC:l"
+    assert order("50") == "buy:BTC:xl"
+    assert order("0.005") != order("0.5")  # the bug: one label for both
+    # and a declaration bucketed the same way is accepted rather than refused
+    record, reason = declared_record(
+        order("0.5"), {"hold": 0.4, "buy:BTC:xs": 0.3, "buy:BTC:m": 0.3},
+        learner_id="assembly:x", state_hash="h",
+    )
+    assert reason is None and record.chosen == "buy:BTC:m"
+    assert set(record.action_ids) == {"hold", "buy:BTC:xs", "buy:BTC:m"}
+
+
+def test_the_size_bands_are_a_closed_vocabulary_the_world_block_publishes():
+    from factorylab.runtime.propensity import SIZE_BAND_MAX, SIZE_BANDS
+
+    bands = {name for _edge, name in SIZE_BANDS} | {SIZE_BAND_MAX}
+    assert bands == {"xs", "s", "m", "l", "xl"}
+    producer = action_vocabulary()["producer"]
+    assert "<side>:<COIN>:<size band>" in producer
+    for band in bands:
+        assert f'"{band}"' in producer
 
 
 def test_validate_propensity_bounds_the_action_set_without_naming_its_contents():
@@ -307,7 +349,37 @@ def test_window_facts_never_carry_per_decision_attribution():
     facts = window_facts(SimpleNamespace(index=1, decisions={"h": {}}, closed_values=None,
                                          costs=[1], revision_handles={"h"}))
     assert "decisions" not in facts and "closed_values" not in facts
-    assert facts["revision_handles"] == ["h"] and facts["costs"] == [1]
+    # the handles that were revised are a count, never the handles themselves
+    assert "revision_handles" not in facts
+    assert facts["revised_decisions"] == 1 and facts["costs"] == [1]
+
+
+def test_a_continuation_carries_the_propensity_the_first_call_was_given(monkeypatch):
+    """The billed second call produces the final verdict, so it sees the same field."""
+    from factorylab.world.models import ModelResponse
+    from tests.runtime.test_fa_defects import make_runtime
+    from tests.runtime.test_fc_children import parent_request
+
+    rt = make_runtime()
+    field = {"hold": 0.7, "buy:BTC:xs": 0.3}
+    req = replace(parent_request(rt), propensity=field, propensity_chosen="hold")
+    calls = []
+
+    def provider(request):
+        text = request.messages[-1]["content"]
+        calls.append(text)
+        body = ({"action": "hold"} if "tool_results" in text else
+                {"requests": [{"target": "nobody", "description": "d", "inputs": {},
+                               "outcome_schema": {"type": "object"}}]})
+        return ModelResponse(request.model_id, json.dumps(body), 1, 1, "stop")
+
+    monkeypatch.setattr(rt.provider.target, "complete", provider)
+    ret = rt._invoke("seed-decider", req, "producer")
+    assert ret.status == "ok" and len(calls) == 2  # first call, then the continuation
+    assert all("PROPENSITY" in text and "buy:BTC:xs" in text for text in calls)
+    follow = req.continuation(inputs={"tool_results": []}, cost_ceiling=1)
+    assert follow.propensity == field and follow.propensity_chosen == "hold"
+    assert follow.handle == req.handle and follow.scoring_channel == req.scoring_channel
 
 
 def test_the_reward_that_settles_a_decision_reaches_the_assemblys_own_learner():

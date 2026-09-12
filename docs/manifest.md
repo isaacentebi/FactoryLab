@@ -272,7 +272,9 @@ sampled it, so it carries no reproducible seed; what is checked is that it is a
 distribution and that the action actually taken carries positive mass in it.
 
 The action taken is named by the kernel, in the vocabulary published as
-`world.action_labels`: `hold` or `<side>:<COIN>` for a producer or antagonist,
+`world.action_labels`: `hold` or `<side>:<COIN>:<size band>` for a producer or
+antagonist — the size band buckets the declared size in base units into `xs`,
+`s`, `m`, `l`, `xl`, so that sizing is a decision the declaration can name —
 `verdict:<q>` and `conformity:<c>` rounded to one decimal for a judge, and
 `malformed` for a return that did not parse. A return that declares nothing, or
 declares something that is not a distribution or omits the action it took, is

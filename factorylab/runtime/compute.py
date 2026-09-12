@@ -408,18 +408,12 @@ class ComputeMixin:
                 )
                 tool_cost += cost
                 results.append(result)
-            follow = Request(
-                handle=req.handle,
-                description=req.description,
+            # A10: the continuation is the same request, and it is the billed call
+            # that produces the final verdict — so everything the first call was
+            # shown, the PROPENSITY block included, rides along unchanged.
+            follow = req.continuation(
                 inputs={**req.inputs, "tool_results": results},
-                capability_versions=req.capability_versions,
-                outcome_schema=req.outcome_schema,
-                deadline_ns=req.deadline_ns,
                 cost_ceiling=max(0, req.cost_ceiling - ret.cost - tool_cost),
-                parent_handle=req.parent_handle,
-                completion_criterion=req.completion_criterion,
-                scoring_channel=req.scoring_channel,
-                resource_liability=req.resource_liability,
             )
             second = (
                 Return(req.handle, {"reason": "wallet exhausted"}, 0, "failed")

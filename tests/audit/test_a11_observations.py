@@ -23,11 +23,16 @@ from factorylab.runtime.observations import (
     ObservationBook,
     observation_for,
     seed_book,
+    window_fact_names,
     window_facts,
 )
 from factorylab.runtime.pricing import MeasureWindow
 from tests.cortex.test_jail import require_jail
-from tests.runtime.test_loop import _consequence_produce, _consequence_runtime
+from tests.runtime.test_loop import (
+    _consequence_judge,
+    _consequence_produce,
+    _consequence_runtime,
+)
 
 DOWNSIDE = (
     "def observe(facts):\n"
@@ -149,6 +154,65 @@ def test_window_facts_are_the_public_window_and_nothing_private():
     json.dumps(facts)  # the contract is JSON: the code reads it from stdin
 
 
+def test_verdicts_reach_the_jail_as_scores_without_the_returns_or_the_judges():
+    window = MeasureWindow(3, 1000, verdicts={
+        "handle-a": {"eval-a": [0.8, 0.6], "eval-b": [0.4]},
+        "handle-b": {"eval-b": [0.9]},
+    })
+    facts = window_facts(window)
+    # one group per judged return, one list per judge inside it: the spread a seed
+    # observation computes survives, the handle and the assembly id do not
+    assert facts["verdicts"] == [[[0.8, 0.6], [0.4]], [[0.9]]]
+
+
+def test_the_published_fact_names_are_exactly_the_facts_that_are_disclosed():
+    assert window_fact_names() == sorted(window_facts(MeasureWindow(1, 1000)))
+    assert "revision_handles" not in window_fact_names()
+    assert "revised_decisions" in window_fact_names()
+    assert "decisions" not in window_fact_names()
+
+
+def test_no_identity_the_runtime_knows_survives_into_an_observations_facts():
+    """A registered observation is population code: it may read numbers, not topology."""
+    runtime = _consequence_runtime()
+    seen: list[dict] = []
+    runtime.observation_runner = SimpleNamespace(
+        run=lambda code, facts: (seen.append(facts), (0.5, None))[1]
+    )
+    runtime.registered_observations["downside-variance"] = {
+        "description": "Semivariance.", "units": "u", "unit_range": [0.0, 1.0],
+        "code": DOWNSIDE, "version": 1, "provenance": "population", "history": [1],
+    }
+    handle, event = _consequence_produce(runtime)
+    _consequence_judge(runtime, event, "eval-a")
+    runtime._close_price_window()
+    assert seen, "the registered observation was never measured"
+
+    identities = {handle, *runtime.assemblies, *runtime.prices.prices,
+                  *runtime.handle_to_assembly, *runtime.handle_to_assembly.values()}
+    identities |= {f"assembly:{a}" for a in runtime.assemblies}
+    identities = {i for i in identities if isinstance(i, str) and i}
+
+    def strings(value, path="facts"):
+        if isinstance(value, str):
+            yield path, value
+        elif isinstance(value, dict):
+            for key, sub in value.items():
+                yield from strings(key, f"{path}.<key>")
+                yield from strings(sub, f"{path}.{key}")
+        elif isinstance(value, list):
+            for index, sub in enumerate(value):
+                yield from strings(sub, f"{path}[{index}]")
+
+    for facts in seen:
+        # the fact names themselves are the published vocabulary; their contents
+        # are the strong form: every value is a number, so nothing can hide in one
+        found = [hit for key, value in facts.items() for hit in strings(value, f"facts.{key}")]
+        assert not found, f"a window fact carried text: {found[:3]}"
+        for identity in identities:
+            assert identity not in json.dumps(facts), identity
+
+
 # --- registration runs the code in the jail -----------------------------------
 
 
@@ -246,6 +310,34 @@ def test_a_value_that_leaves_its_declared_range_is_unsupported_never_clamped():
     rejected = [i for i in items if i["kind"] == "observation.out_of_range"]
     assert rejected and rejected[0]["observation"] == "downside-variance"
     assert rejected[0]["value"] == 5.0 and rejected[0]["range"] == [0.0, 1.0]
+
+
+def test_no_path_that_measures_a_registration_skips_the_declared_bound():
+    """Three paths can measure a registration, and none of them forwards an out-of-range value.
+
+    Preflight is the test above this one; the other two are here. Every
+    measurement of a registered observation goes through ``ObservationBook.value``
+    — the pricing sweep over the whole book, and a card's own measurement over a
+    windows-kind selector — so the bound is one check rather than three.
+    """
+    from factorylab.charter.measurement import measure_card
+
+    runtime = _consequence_runtime()
+    runtime._manage_reserve_window()
+    _consequence_produce(runtime)
+    runtime._close_price_window()
+    runtime.observation_runner = SimpleNamespace(run=lambda code, facts: (5.0, None))
+    runtime.registered_observations["downside-variance"] = {
+        "description": "Semivariance.", "units": "u", "unit_range": [0.0, 1.0],
+        "code": DOWNSIDE, "version": 1, "provenance": "population", "history": [1],
+    }
+    book = runtime.observations
+    observation = book.get("downside-variance")
+    assert book.value(observation, MeasureWindow(1, 1000, costs=[1])) is None
+    assert measure_card(_card("downside-variance"), runtime.card_samples, book) == {}
+    # and the catalogue is metadata: it publishes no measured value at all
+    row = next(r for r in book.catalogue() if r["id"] == "downside-variance")
+    assert "value" not in row and row["unit_range"] == [0.0, 1.0]
 
 
 def test_one_runtimes_registrations_are_invisible_to_another():

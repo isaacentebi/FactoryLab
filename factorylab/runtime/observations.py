@@ -24,6 +24,10 @@ if TYPE_CHECKING:
 # The per-decision attribution the runtime keeps on the same window object (A4)
 # is not a public window fact and never reaches a registered observation.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions")
+# Fields holding a public quantity filed under a private identity: a decision
+# handle, an evaluator's assembly id. The quantity is disclosed, the identity is
+# not, so these are rebuilt by hand rather than copied through.
+ANONYMISED_WINDOW_FIELDS = ("verdicts", "revision_handles")
 
 
 @dataclass(frozen=True)
@@ -260,27 +264,75 @@ def normalise(name: str) -> str:
 
 
 def window_facts(window: Any) -> dict:
-    """Return the public per-window facts as JSON, the same facts the seeds compute from.
+    """Return the public per-window facts as JSON, carrying no identity of any kind.
 
-    Sets become sorted lists and the per-decision attribution fields are dropped:
-    what a registered observation reads is exactly what a card's window discloses.
+    Sets become sorted lists and the per-decision attribution fields are dropped.
+    The two fields that index a real quantity *by identity* are republished with
+    the identity removed rather than kept: ``verdicts`` becomes one unlabelled
+    group of per-judge score lists per judged return, and ``revision_handles``
+    becomes the count ``revised_decisions``. No assembly sees the whole topology
+    (AGENTS.md), and population-authored ``observe(facts)`` code is an assembly:
+    it gets the numbers, never the handles, assembly ids, model ids or evaluator
+    ids they were filed under.
+
+    Guarantees no string survives into the facts. Every public window fact is a
+    number (or a list of numbers), so a field that arrives carrying text — now or
+    after some later field is added to the window — is withheld rather than
+    disclosed, because a name is the one thing an identity can hide in.
     """
     raw = dict(vars(window)) if not isinstance(window, dict) else dict(window)
     facts: dict[str, Any] = {}
     for key, value in raw.items():
-        if key in PRIVATE_WINDOW_FIELDS or key.startswith("_"):
+        if key in PRIVATE_WINDOW_FIELDS or key in ANONYMISED_WINDOW_FIELDS:
             continue
-        facts[key] = _plain(value)
+        if key.startswith("_"):
+            continue
+        plain = _plain(value)
+        if _carries_text(plain):
+            continue
+        facts[key] = plain
+    facts["verdicts"] = _anonymous_verdicts(raw.get("verdicts"))
+    facts["revised_decisions"] = len(raw.get("revision_handles") or ())
     return facts
 
 
 def window_fact_names() -> list[str]:
-    """The names a registered observation may read, without building the values."""
-    from dataclasses import fields
+    """The names a registered observation may read, taken from the facts themselves.
 
+    Built by rendering an empty window, so the published vocabulary cannot drift
+    from what ``window_facts`` actually discloses.
+    """
     from factorylab.runtime.pricing import MeasureWindow
 
-    return sorted(f.name for f in fields(MeasureWindow) if f.name not in PRIVATE_WINDOW_FIELDS)
+    return sorted(window_facts(MeasureWindow(index=0, equity_start_micro=0)))
+
+
+def _anonymous_verdicts(verdicts: Any) -> list[list[list[float]]]:
+    """Verdict scores grouped by judged return and by judge, under no name at all.
+
+    The grouping is what the seed observations compute from — the spread across
+    the judges of one return, the spread across all of them — so a registered
+    observation can compute the same quantities. Which return and which judge it
+    cannot: a position in a list is a position, not a handle and not an id.
+    """
+    if not isinstance(verdicts, Mapping):
+        return []
+    return [
+        [_plain(list(scores)) for scores in judges.values()]
+        for judges in verdicts.values()
+        if isinstance(judges, Mapping)
+    ]
+
+
+def _carries_text(value: Any) -> bool:
+    """True when a plain value holds a string anywhere, in a key or in a leaf."""
+    if isinstance(value, str):
+        return True
+    if isinstance(value, dict):
+        return any(_carries_text(k) or _carries_text(v) for k, v in value.items())
+    if isinstance(value, list):
+        return any(_carries_text(v) for v in value)
+    return False
 
 
 def _plain(value: Any) -> Any:

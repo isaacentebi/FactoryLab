@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 Money = int
@@ -92,6 +92,7 @@ class Request:
     resource_liability: str
     # The deciding agent's own distribution over its own actions, and the action it
     # took: the essay's one exception to privacy, carried on the request itself.
+    # Whatever rebuilds this request keeps the pair — see ``continuation``.
     propensity: dict[str, float] | None = None
     propensity_chosen: str | None = None
 
@@ -110,6 +111,17 @@ class Request:
                 self.propensity_chosen not in self.propensity
             ):
                 raise ValueError("the chosen action must belong to the declared action set")
+
+    def continuation(self, *, inputs: dict[str, Any], cost_ceiling: Money) -> Request:
+        """The same request again, after its tool calls and children answered.
+
+        Guarantees the continuation is this request with two fields changed and
+        nothing else lost: the second call is the billed one that produces the
+        final answer, so anything the first call was shown — the PROPENSITY block
+        above all — it is shown too. Rebuilding the request field by field is how
+        that silently stops being true.
+        """
+        return replace(self, inputs=inputs, cost_ceiling=cost_ceiling)
 
     def prompt_text(self) -> str:
         """Render the request as the executor sees it: description, inputs, schema, criterion.
