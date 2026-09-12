@@ -219,12 +219,14 @@ def test_terminated_world_exit_contract_and_wake(tmp_path, capsys):
 
 
 def test_resume_returns_final_code_when_world_dies_during_resume(world, monkeypatch, capsys):
-    monkeypatch.setattr("factorylab.runtime.resume.resume_world", lambda *a: {"terminated": True})
+    monkeypatch.setattr(
+        "factorylab.runtime.resume.resume_world", lambda *a, **kw: {"terminated": True},
+    )
     assert main(["resume", "--world", "scripted", "--ledger", str(world)]) == TERMINATED_EXIT
 
 
 def test_resume_other_failures_remain_retryable_and_sanitized(world, monkeypatch, capsys):
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise RuntimeError("PRIVATE KEY OR PROVIDER BODY")
 
     monkeypatch.setattr("factorylab.runtime.resume.resume_world", fail)

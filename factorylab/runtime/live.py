@@ -82,7 +82,7 @@ class LiveVenue:
     """
 
     exchange: Any
-    last_fill_ns: int = 0
+    last_fill_ns: int = field(default_factory=time.time_ns)
     seen_fills: set[str] = field(default_factory=set)
     ledger: Any = None
     last_funding_ns: int | None = None
@@ -147,7 +147,7 @@ class LiveVenue:
         except RuntimeError:  # no account: read-only venue
             fills = []
         for fl in fills:
-            if fl.order_id in self.seen_fills:
+            if fl.ts_ns < self.last_fill_ns or fl.order_id in self.seen_fills:
                 continue
             self.seen_fills.add(fl.order_id)
             self.last_fill_ns = max(self.last_fill_ns, fl.ts_ns)

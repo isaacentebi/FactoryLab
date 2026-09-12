@@ -146,9 +146,13 @@ class FillCursor:
     counts need retaining because the next poll includes that timestamp.
     """
 
-    def __init__(self, ledger: Ledger) -> None:
+    def __init__(self, ledger: Ledger, *, start_ns: int) -> None:
+        """Exclude pre-launch executions, persisting the initial inclusive boundary."""
+        if type(start_ns) is not int or start_ns < 0:
+            raise ValueError("start_ns must be nonnegative integer nanoseconds")
+        ledger.append({"kind": "consequence.fill_cursor", "since_ns": start_ns, "seen": []})
         self.ledger = ledger
-        self.since_ns = 0
+        self.since_ns = start_ns
         self.seen: dict[tuple, int] = {}
 
     def poll(self, exchange) -> list[tuple[int, dict]]:

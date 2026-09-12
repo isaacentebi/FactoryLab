@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from factorylab.cortex.sandbox import jail_available
+
 SLUG = re.compile(r"^[a-z][a-z0-9-]{1,47}$")
 MAX_PROMPT_CHARS = 4000
 MAX_PROPOSALS_PER_RETURN = 3
@@ -69,6 +71,7 @@ def parse_proposals(
     known_models: frozenset[str],
     known_assemblies: frozenset[str],
     known_tools: frozenset[str] = frozenset(),
+    tool_jail: bool | None = None,
 ) -> tuple[list[Proposal], list[Rejected]]:
     """Return well-formed proposals and the reasons the rest were refused.
 
@@ -101,7 +104,7 @@ def parse_proposals(
             elif kind == "router":
                 accepted.append(_router(item, event_kinds))
             elif kind == "tool":
-                accepted.append(_tool(item, known_tools))
+                accepted.append(_tool(item, known_tools, jail=tool_jail))
             else:
                 raise ValueError("unknown proposal kind")
         except ValueError as exc:
@@ -180,7 +183,9 @@ def _router(item: dict[str, Any], event_kinds: frozenset[str]) -> RouterProposal
     return RouterProposal(kind, learner, float(gamma), add)
 
 
-def _tool(item: dict[str, Any], known_tools: frozenset[str]) -> ToolProposal:
+def _tool(
+    item: dict[str, Any], known_tools: frozenset[str], *, jail: bool | None = None,
+) -> ToolProposal:
     tid = item.get("id")
     if not isinstance(tid, str) or not SLUG.fullmatch(tid):
         raise ValueError("id must be a slug of 2-48 chars")
@@ -203,19 +208,9 @@ def _tool(item: dict[str, Any], known_tools: frozenset[str]) -> ToolProposal:
         raise ValueError("code must be a string")
     if len(code) > 8000:
         raise ValueError("code exceeds 8000 chars")
-    if any(
-        name in code
-        for name in (
-            "import socket",
-            "import urllib",
-            "import http",
-            "import requests",
-            "subprocess",
-            "os.system",
-        )
-    ):
-        raise ValueError("code names a forbidden module")
     timeout_s = item.get("timeout_s")
     if type(timeout_s) is not int or not 1 <= timeout_s <= 5:
         raise ValueError("timeout_s must be an int in [1, 5]")
+    if not (jail_available() if jail is None else jail):
+        raise ValueError("no jail on this host")
     return ToolProposal(tid, description, schema, code, timeout_s)

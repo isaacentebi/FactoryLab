@@ -2,7 +2,7 @@
 # BEFORE PROVISIONING replace REPO_URL and PINNED_COMMIT with the reviewed release.
 # No private repository token, wallet key, backup identity or webhook belongs here.
 package_update: true
-packages: [git, curl, ca-certificates, age, rclone, python3]
+packages: [git, curl, ca-certificates, age, rclone, python3, bubblewrap]
 users:
   - default
   - name: factory

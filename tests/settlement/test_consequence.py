@@ -231,7 +231,7 @@ def test_fill_cursor_keeps_partial_and_identical_fills_and_deduplicates_polls(le
             return [f for f in self.rows if f.ts_ns >= since_ns]
 
     exchange = Exchange()
-    cursor = FillCursor(ledger)
+    cursor = FillCursor(ledger, start_ns=0)
     assert len(cursor.poll(exchange)) == 2
     assert cursor.poll(exchange) == []
     exchange.rows.append(fill(1))
@@ -258,7 +258,7 @@ def test_fill_cursor_does_not_advance_on_failed_ledger_write(ledger, monkeypatch
         liquidation=False,
         ts_ns=1,
     )
-    cursor = FillCursor(ledger)
+    cursor = FillCursor(ledger, start_ns=0)
     exchange = SimpleNamespace(fills=lambda _: [fill])
 
     def fail(item):
@@ -270,3 +270,28 @@ def test_fill_cursor_does_not_advance_on_failed_ledger_write(ledger, monkeypatch
             cursor.poll(exchange)
     assert cursor.since_ns == 0 and cursor.seen == {}
     assert len(cursor.poll(exchange)) == 1
+
+
+def test_fill_cursor_filters_history_keeps_launch_peers_and_failed_poll_boundary(ledger):
+    from types import SimpleNamespace
+
+    from factorylab.settlement.consequence import FillCursor
+
+    def fill(ts, order):
+        return SimpleNamespace(order_id=order, coin="BTC", is_buy=True, size="1", px="1",
+                               fee="0", realized="0", liquidation=False, ts_ns=ts)
+
+    rows = [fill(9, "old"), fill(10, "launch"), fill(11, "new")]
+    calls = []
+
+    def fills(since):
+        calls.append(since)
+        return rows  # even an adapter returning older rows cannot bypass the boundary
+
+    cursor = FillCursor(ledger, start_ns=10)
+    exchange = SimpleNamespace(fills=fills)
+    assert [p["order_id"] for _, p in cursor.poll(exchange)] == ["launch", "new"]
+    assert calls == [10]
+    assert cursor.poll(exchange) == []
+    rows.append(fill(11, "late-peer"))
+    assert [p["order_id"] for _, p in cursor.poll(exchange)] == ["late-peer"]

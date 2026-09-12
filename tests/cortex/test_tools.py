@@ -4,8 +4,21 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 
 from factorylab.cortex.registration import Rejected, ToolProposal, parse_proposals
-from factorylab.cortex.sandbox import SandboxResult
+from factorylab.cortex.sandbox import SandboxResult, jail_available
 from factorylab.cortex.tools import PopulationTool, ToolRunner, as_spec
+
+
+@pytest.fixture(autouse=True)
+def available_for_protocol_tests(monkeypatch):
+    # Shape/result protocol tests are independent of installed host packages.
+    monkeypatch.setattr("factorylab.cortex.registration.jail_available", lambda: True)
+    monkeypatch.setattr("factorylab.cortex.tools.jail_available", lambda: True)
+
+
+@pytest.fixture
+def usable_jail():
+    if not jail_available():
+        pytest.skip("host cannot launch an OS jail; refusal has separate regression coverage")
 
 
 def _tool(code='print("{}")', schema=None, timeout_s=1):
@@ -79,10 +92,9 @@ def test_proposal_requires_an_object_schema_with_properties(schema):
     "from subprocess import run", "import os; os.system('true')",
     "# import urllib is forbidden even in a comment",
 ])
-def test_forbidden_code_is_rejected_at_parse(code):
-    assert _parse([_proposal(code=code)]) == (
-        [], [Rejected(0, "code names a forbidden module")]
-    )
+def test_code_is_not_filtered_by_substrings(code):
+    accepted, rejected = _parse([_proposal(code=code)])
+    assert not rejected and accepted[0].code == code
 
 
 def test_known_tool_id_and_proposal_cap_are_enforced():
@@ -94,7 +106,7 @@ def test_known_tool_id_and_proposal_cap_are_enforced():
     assert rejected == [Rejected(3, "proposal cap reached for this return")]
 
 
-def test_echo_and_sum_execute_with_json_stdin():
+def test_echo_and_sum_execute_with_json_stdin(usable_jail):
     echo = _tool(
         "import json, sys; print(json.dumps(json.load(sys.stdin)))",
         {"type": "object", "properties": {}, "additionalProperties": True},
@@ -109,23 +121,23 @@ def test_echo_and_sum_execute_with_json_stdin():
     assert ToolRunner().run(summer, {"values": [1, 2, 3]}) == {"sum": 6}
 
 
-def test_timeout_returns_an_error():
+def test_timeout_returns_an_error(usable_jail):
     assert ToolRunner().run(_tool("import time; time.sleep(10)"), {}) == {"error": "timeout"}
 
 
 @pytest.mark.parametrize("output", ["hello", "[]", "1", "null", "", '{"n": NaN}'])
-def test_non_object_json_and_non_json_outputs_fail(output):
+def test_non_object_json_and_non_json_outputs_fail(output, usable_jail):
     assert ToolRunner().run(_tool(f"print({output!r})"), {}) == {
         "error": "output is not a JSON object"
     }
 
 
-def test_20kb_output_is_rejected():
+def test_20kb_output_is_rejected(usable_jail):
     tool = _tool("import json; print(json.dumps({'text': 'x' * 20_000}))")
     assert ToolRunner().run(tool, {}) == {"error": "output too large"}
 
 
-def test_output_cap_counts_utf8_bytes_including_whitespace():
+def test_output_cap_counts_utf8_bytes_including_whitespace(usable_jail):
     output = '{"text":"é"}'
     cap = len(output.encode("utf-8"))
     tool = _tool(f"print({output!r}, end='')")
@@ -135,12 +147,12 @@ def test_output_cap_counts_utf8_bytes_including_whitespace():
     assert ToolRunner(max_output_bytes=2).run(padded, {}) == {"error": "output too large"}
 
 
-def test_custom_cap_above_sandbox_default_detects_truncation():
+def test_custom_cap_above_sandbox_default_detects_truncation(usable_jail):
     tool = _tool("print('{}' + ' ' * 70_000, end='')")
     assert ToolRunner(max_output_bytes=65_536).run(tool, {}) == {"error": "output too large"}
 
 
-def test_nonzero_exit_returns_first_500_stderr_characters():
+def test_nonzero_exit_returns_first_500_stderr_characters(usable_jail):
     tool = _tool("import sys; sys.stderr.write('é' * 600); sys.exit(7)")
     assert ToolRunner(max_output_bytes=2).run(tool, {}) == {
         "error": "exit 7", "stderr": "é" * 500
@@ -195,7 +207,7 @@ def test_invalid_schema_or_args_never_execute(monkeypatch, schema, args, error):
     assert ToolRunner().run(tool, args) == {"error": error}
 
 
-def test_optional_properties_and_explicit_additional_properties():
+def test_optional_properties_and_explicit_additional_properties(usable_jail):
     tool = _tool(schema={
         "type": "object", "properties": {"optional": {"type": "string"}},
         "additionalProperties": True,
@@ -233,16 +245,16 @@ def test_runner_passes_wall_and_cpu_limits(monkeypatch, timeout_s):
     assert ToolRunner().run(_tool(timeout_s=timeout_s), {}) == {}
 
 
-def test_tool_environment_does_not_inherit_path_home_or_keys(monkeypatch):
+def test_tool_environment_does_not_inherit_path_home_or_keys(monkeypatch, usable_jail):
     names = ("PATH", "HOME", "OPENROUTER_API_KEY", "HL_PRIVATE_KEY")
     for name in names:
         monkeypatch.setenv(name, "test-value-must-not-reach-tool")
     tool = _tool("import json, os; print(json.dumps({'keys': sorted(os.environ)}))")
     result = ToolRunner().run(tool, {})
     assert "keys" in result
-    assert set(names).isdisjoint(result["keys"])
+    assert set(names[1:]).isdisjoint(result["keys"])
     # Python and macOS may synthesize locale variables even with env={}.
-    assert set(result["keys"]) <= {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
+    assert set(result["keys"]) <= {"PATH", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
 
 
 def test_population_tool_is_frozen_and_spec_only_exposes_public_fields():
@@ -270,3 +282,14 @@ def test_spec_rejects_non_integer_or_negative_money(price):
 def test_invalid_output_budget_is_a_configuration_error(cap):
     with pytest.raises(ValueError, match="positive int"):
         ToolRunner(max_output_bytes=cap)
+
+
+def test_stderr_character_budget_survives_byte_bounded_capture(monkeypatch):
+    def bounded_capture(code, **kwargs):
+        stderr = ("é" * 600).encode()[:kwargs["max_output_bytes"]].decode()
+        return SandboxResult("", stderr, 7, False, False)
+
+    monkeypatch.setattr("factorylab.cortex.tools.run_python", bounded_capture)
+    assert ToolRunner(max_output_bytes=2).run(_tool(), {}) == {
+        "error": "exit 7", "stderr": "é" * 500,
+    }

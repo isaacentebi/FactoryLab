@@ -6,7 +6,7 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass
 
-from factorylab.cortex.sandbox import run_python
+from factorylab.cortex.sandbox import NoJail, jail_available, run_python
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,7 @@ class ToolRunner:
         if type(max_output_bytes) is not int or max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be a positive int")
         self.max_output_bytes = max_output_bytes
+        self.available = jail_available()
 
     def run(self, tool: PopulationTool, args: dict) -> dict:
         """Return a JSON object or an error; tool failures never escape as exceptions.
@@ -42,14 +43,15 @@ class ToolRunner:
                 stdin = json.dumps(args, allow_nan=False)
             except (TypeError, ValueError, RecursionError):
                 return {"error": "invalid args: must be JSON serializable"}
+            if not self.available:
+                return {"error": "no jail on this host"}
             result = run_python(
                 tool.code,
                 stdin=stdin,
                 timeout_s=tool.timeout_s,
                 cpu_s=min(tool.timeout_s, 2),
-                # The sandbox truncates by characters. One extra character
-                # ensures truncation cannot hide a UTF-8 byte-budget overflow.
-                max_output_bytes=max(self.max_output_bytes + 1, 500),
+                # One extra byte makes truncation detectable by the result cap.
+                max_output_bytes=max(self.max_output_bytes + 1, 2000),
             )
             if result.timed_out:
                 return {"error": "timeout"}
@@ -64,6 +66,8 @@ class ToolRunner:
             if not isinstance(output, dict):
                 return {"error": "output is not a JSON object"}
             return output
+        except NoJail:
+            return {"error": "no jail on this host"}
         except Exception:
             # Launch, decoding and malformed tool failures stay within the
             # result protocol without exposing host exception details.

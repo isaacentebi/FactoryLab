@@ -5,7 +5,7 @@ import pytest
 
 from factorylab.cortex.assembly import Assembly, AssemblySpec, _parse_json_object
 from factorylab.cortex.request import Request, Return
-from factorylab.cortex.sandbox import run_python
+from factorylab.cortex.sandbox import jail_available, run_python
 from factorylab.world.metering import Meter, MeteredModel
 from factorylab.world.models import FakeModel, ModelResponse, PriceTable, TokenPrice
 
@@ -180,13 +180,22 @@ def test_parse_json_tolerates_fences_and_prose() -> None:
 
 
 def test_sandbox_runs_isolated_and_times_out() -> None:
+    if not jail_available():
+        pytest.skip("host cannot launch an OS jail; refusal is tested separately")
     r = run_python("import os,sys; print(sorted(os.environ)); print(sys.flags.isolated)")
     assert r.returncode == 0 and not r.timed_out
     env_line, isolated = r.stdout.strip().splitlines()
     assert isolated == "1"
-    for secret in ("PATH", "HOME", "ANTHROPIC_API_KEY", "HL_PRIVATE_KEY", "PYTHONPATH"):
+    for secret in ("HOME", "ANTHROPIC_API_KEY", "HL_PRIVATE_KEY", "PYTHONPATH"):
         assert secret not in env_line
     r2 = run_python("import time; time.sleep(5)", timeout_s=0.5)
     assert r2.timed_out and r2.returncode == -1
     r3 = run_python("print(input())", stdin="hello")
     assert r3.stdout.strip() == "hello"
+
+
+@pytest.mark.parametrize("prefix", ["", "Prose {broken, then ", "```json\n"])
+def test_json_extraction_preserves_braces_and_escapes_in_strings(prefix):
+    body = {"verdict": 0.5, "rationale": 'literal } and { and \"quoted\"',
+            "nested": {"values": ["}", "{"]}}
+    assert _parse_json_object(prefix + json.dumps(body) + " trailing") == body

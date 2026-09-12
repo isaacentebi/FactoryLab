@@ -41,6 +41,13 @@ class TinyWallet:
         r.open = False
         self.log.append(("commit", actual))
 
+    def commit_reported(self, r, actual):
+        assert r.open
+        self.reserved -= r.amount
+        self.balance -= actual
+        r.open = False
+        self.log.append(("commit", actual))
+
     def release(self, r):
         assert r.open
         self.reserved -= r.amount
@@ -116,12 +123,12 @@ def test_metering_infeasible_when_wallet_cannot_cover_ceiling() -> None:
     assert ran == [] and w.log == []
 
 
-def test_metering_overrun_commits_ceiling_and_reports_debt() -> None:
+def test_metering_overrun_debits_the_full_reported_cost() -> None:
     w = TinyWallet(balance=1000)
     out = Meter(w).run(
         handle="h", reason="t", ceiling=100, execute=lambda: "r", cost_of=lambda r: 130
     )
-    assert out.cost == 100 and out.overrun == 30 and w.balance == 900
+    assert out.cost == 130 and out.overrun == 30 and w.balance == 870
 
 
 def test_metered_model_prices_the_serving_model() -> None:
