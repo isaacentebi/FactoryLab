@@ -45,7 +45,8 @@ class Charter:
             raise ValueError("a charter needs at least one norm")
         ids = [c.id for c in self.cards]
         if len(set(ids)) != len(ids):
-            raise ValueError("metric card ids must be unique")
+            duplicate = next(card_id for card_id in ids if ids.count(card_id) > 1)
+            raise ValueError(f"card {duplicate} id: metric card ids must be unique")
         for c in self.cards:
             if c.norm not in self.norms:
                 raise ValueError(f"card {c.id} references an unknown norm")

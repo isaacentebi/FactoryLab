@@ -172,3 +172,79 @@ def test_invalid_cadence_sample_is_rejected(value):
     raw["timing"] = {"cadence_sample": value}
     with pytest.raises(ValueError, match="cadence_sample"):
         manifest_from_dict(raw)
+
+
+def _with_charter():
+    from dataclasses import asdict
+
+    from factorylab.charter.charter import seed_charter
+
+    raw = _base()
+    raw["charter"] = asdict(seed_charter())
+    raw["charter"]["norms"] = list(raw["charter"]["norms"])
+    raw["charter"]["cards"] = list(raw["charter"]["cards"])
+    return raw
+
+
+def test_manifest_charter_defaults_and_explicit_hash():
+    from factorylab.charter.charter import seed_charter
+
+    default = manifest_from_dict(_base())
+    assert default.charter == seed_charter()
+    raw = _with_charter()
+    assert manifest_from_dict(raw).manifest_hash() == default.manifest_hash()
+    for field, value in (("description", "Population draft"), ("lambda", 0.4)):
+        changed = _with_charter()
+        changed["charter"]["cards"][0][field] = value
+        assert manifest_from_dict(changed).manifest_hash() != default.manifest_hash()
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("observation", "missing"), ("acceptable_region", "roughly adequate"),
+    ("norm", "unknown"), ("description", None), ("observation", 12),
+    ("lambda", -0.1), ("lambda", 1.1), ("lambda", True), ("lambda", "0.5"),
+    ("lambda", float("nan")), ("lambda", float("inf")),
+])
+def test_manifest_charter_rejects_card_field_with_identity(field, value):
+    raw = _with_charter()
+    raw["charter"]["cards"][0][field] = value
+    with pytest.raises(ValueError, match=f"cost_per_return.*{field}"):
+        manifest_from_dict(raw)
+
+
+def test_manifest_charter_duplicate_ids_and_lambda_bounds():
+    raw = _with_charter()
+    raw["charter"]["cards"].append(raw["charter"]["cards"][0])
+    with pytest.raises(ValueError, match="cost_per_return.*id"):
+        manifest_from_dict(raw)
+    for value in (0, 2):
+        raw = _with_charter()
+        raw["prices"] = {"lambda_max": 2}
+        raw["charter"]["cards"][0]["lambda"] = value
+        assert manifest_from_dict(raw).charter_prices == (("cost_per_return", value),)
+
+
+@pytest.mark.parametrize("norms", [None, [], "a norm", [1], [""]])
+def test_manifest_charter_requires_norm_list(norms):
+    raw = _with_charter()
+    raw["charter"]["norms"] = norms
+    with pytest.raises(ValueError, match="norms"):
+        manifest_from_dict(raw)
+
+
+def test_example_manifest_and_cli_resolve_population_charter(capsys):
+    import json
+    from dataclasses import replace
+
+    example = load_manifest("edition1-example")
+    base = load_manifest("testnet")
+    assert replace(example, charter=base.charter) == base
+    assert {c.id: c.observation for c in example.charter.cards} == {
+        "model_cost_efficiency": "cost_per_return", "revision_rate": "revision_rate",
+        "cost_per_return": "cost_per_return", "well_formed_rate": "well_formed_rate",
+        "verdict_mean_score": "verdict_mean",
+    }
+    assert main(["manifest", "--world", "edition1-example"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["charter"] == json.loads(example.canonical_json())["charter"]
+    assert out["charter"]["edition"] == 1
