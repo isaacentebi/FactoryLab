@@ -579,7 +579,9 @@ class Runtime:
             "exchange",
             deterministic=isinstance(self.exchange, FakeExchange) and not self.live,
         )
-        self.venue = LiveVenue(self.exchange) if self.live else None
+        # Fills before launch belong to nobody: the cursor starts at the launch clock (run 6
+        # picked up the experimenter's manual test order from a cursor of zero).
+        self.venue = LiveVenue(self.exchange, last_fill_ns=self.clock.now_ns) if self.live else None
         self.prices = manifest.price_table()
         self.meter = Meter(self.wallet)
         if provider is None:
@@ -678,6 +680,22 @@ class Runtime:
             },
             "price_micro_per_call": 0,
             "kind": "treasury",
+        }
+        self.tool_specs["catalogue.search"] = {
+            "id": "catalogue.search",
+            "description": "Search the model catalogues (OpenRouter, Venice, registered sellers) "
+            "by substring; returns ids with prices per million tokens and context length.",
+            "args_schema": {
+                "type": "object",
+                "properties": {
+                    "substring": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                },
+                "required": ["substring"],
+                "additionalProperties": False,
+            },
+            "price_micro_per_call": manifest.tools.population_tool_micro_per_call,
+            "kind": "catalogue",
         }
         self.tool_specs["market.discover"] = {
             "id": "market.discover",
@@ -1228,6 +1246,45 @@ class Runtime:
         self.termination.kill(reason)
         return True
 
+    def _catalogue_search(self, substring: str, limit: int) -> list[dict[str, Any]]:
+        """Case-insensitive substring over every catalogue the provider exposes plus registered
+        prices; a world fact, never a recommendation. Unavailable catalogues yield nothing."""
+        needle = substring.lower()
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        entries: list[Any] = []
+        if hasattr(self.provider, "catalogue"):
+            try:
+                entries = list(self.provider.catalogue())
+            except Exception:  # catalogue unavailable: the search is simply empty
+                entries = []
+        for e in entries:
+            if needle in e.id.lower() or needle in (e.name or "").lower():
+                seen.add(e.id)
+                p = e.price()
+                out.append(
+                    {
+                        "id": e.id,
+                        "name": e.name,
+                        "usd_per_million_input_tokens": _price_str(p.input_micro),
+                        "usd_per_million_output_tokens": _price_str(p.output_micro),
+                        "context_length": e.context_length,
+                    }
+                )
+        for mid, p in self.prices.prices.items():
+            if mid not in seen and needle in mid.lower():
+                out.append(
+                    {
+                        "id": mid,
+                        "name": mid,
+                        "usd_per_million_input_tokens": _price_str(p.input_micro),
+                        "usd_per_million_output_tokens": _price_str(p.output_micro),
+                        "per_request_micro": p.per_request_micro,
+                    }
+                )
+        out.sort(key=lambda m: m["id"])
+        return out[: max(1, min(limit, 50))]
+
     def _record_market(self, item: dict) -> None:
         """Payment and pricing evidence is ledgered before dependent runtime state changes."""
         self.ledger.append({**item, "ts": self.clock.now_ns})
@@ -1646,6 +1703,12 @@ class Runtime:
         def execute() -> dict:
             if spec["kind"] == "venue":
                 return self.venue_tools.call(tool_id, args)
+            if spec["kind"] == "catalogue":
+                return {
+                    "models": self._catalogue_search(
+                        str(args["substring"]), int(args.get("limit", 20))
+                    )
+                }
             if spec["kind"] == "market":
                 return {
                     "sellers": self.market.discover(
