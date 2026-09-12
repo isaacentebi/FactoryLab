@@ -117,7 +117,8 @@ class PricingMixin:
             self.reserve_window_start is None
             or self.clock.now_ns >= self.reserve_window_start + self.m.novelty.window_ns
         ):
-            if self.reserve_window_start is not None:
+            closed = self.window.index if self.reserve_window_start is not None else None
+            if closed is not None:
                 self._close_price_window()
             self.reserve.open_window(self.clock.now_ns, self.wallet.balance)
             self.reserve_window_start = self.clock.now_ns
@@ -129,6 +130,14 @@ class PricingMixin:
             self._observe_positions()
             self._activate_charter_if_due()
             self._derive_regions()
+            if closed is not None:
+                # A17: the closed window's public world block, ledgered once, after any
+                # charter activation at this boundary, so the wake never shows an
+                # activated amendment against the edition it replaced.
+                from factorylab.runtime.wake import public_window_item
+
+                self.ledger.append({**public_window_item(self, window=closed, event=self.n),
+                                    "ts": self.clock.now_ns})
 
     def _issue_novelty_grant(self) -> None:
         """Learning death in the window that closed grants one extra novelty trial per
@@ -272,12 +281,6 @@ class PricingMixin:
         self.stats.last_window_values = values
         self.controller.set_decay(self.m.prices.decay, ledger=self.ledger, window=w.index)
         close_window(self, values)
-        # A17: the window's public world block, ledgered once so the wake can read
-        # what the population already sees without unsealing a private item.
-        from factorylab.runtime.wake import public_window_item
-
-        self.ledger.append({**public_window_item(self, window=w.index, event=self.n),
-                            "ts": self.clock.now_ns})
         self._prune_price_evidence()
 
     def _penalty_terms(self, cards: str, handle: str | None) -> list[dict]:
