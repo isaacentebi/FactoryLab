@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from factorylab.charter.charter import MetricCard, seed_charter
@@ -6,7 +8,7 @@ from factorylab.runtime.cards import parses, region_for
 
 
 def card(region: str, units: str = "ratio", id: str = "c") -> MetricCard:
-    return MetricCard(id, "useful inquiry", "d", units, "w", region, "o")
+    return MetricCard(id, "useful inquiry", "d", units, "w", region, "turnover")
 
 
 @pytest.mark.parametrize(
@@ -60,3 +62,12 @@ def test_seed_charter_cards_are_readable() -> None:
         "forecast_skill", "min", 0.0, None, 1.0
     )
     assert region_for(cards["cost_per_return"], rolling={}) is None
+
+
+def test_observation_is_required_for_a_region_and_is_normalized():
+    c = card("below 5")
+    assert region_for(replace(c, observation=" TURNOVER "), rolling={}) is not None
+    for name in ("", "venue fills", "computed_per_window/turnover"):
+        unknown = replace(c, observation=name)
+        assert parses(unknown)  # The region is readable; the observation is not.
+        assert region_for(unknown, rolling={}) is None

@@ -75,7 +75,8 @@ def test_crash_world_dies_and_releases_seal_spec_condition_3() -> None:
 
 
 def test_determinism_same_seed_same_summary() -> None:
-    m = load_manifest("scripted")
+    base = load_manifest("scripted")
+    m = replace(base, novelty=replace(base.novelty, window_ns=20_000_000_000))
     a = run_world(m, events=60, seed=7)
     b = run_world(m, events=60, seed=7)
     a.pop("aggregates", None)
@@ -171,6 +172,26 @@ def test_scripted_amendment_lambda_is_voted_adopted_and_visible(monkeypatch):
         if e["kind"] == "price.update" and e["card_id"] == "turnover"
     ]
     assert updates and updates[0]["lambda_before"] == 0.6
+    from factorylab.runtime.observations import catalogue
+
+    assert all(w["observations"] == catalogue() for w in worlds)
+    assert all(am["add"][0]["observation"] == "turnover" for am in votes)
+    windows = [e for e in entries if e["kind"] == "price.window"]
+    assert windows and all("revision_rate" in e["observations"] for e in windows)
+    assert any(e["observations"].get("consequence_paid_off_rate") is not None for e in windows)
+    for observation, stat in (
+        ("registrations", "registrations_accepted"),
+        ("registration_rejections", "registrations_rejected"),
+        ("amendments_proposed", "amendments_proposed"),
+        ("amendments_activated", "amendments_activated"),
+        ("fills", "fills"), ("tool_calls", "tool_calls"),
+    ):
+        measured = sum(e["observations"][observation] for e in windows)
+        measured += getattr(rt.window, observation)
+        assert measured == result["stats"][stat]
+    assert sum(e["observations"]["realized_pnl_usd"] for e in windows) == pytest.approx(
+        (rt.realized_to_date - rt.window.realized_pnl_micro) / 1_000_000
+    )
 
 
 # Recursive depth is introduced by a population return, never by changing the seeds.
@@ -674,6 +695,9 @@ def test_tool_order_and_close_belong_to_calling_returns_and_tool_charge_decides_
     assert not payoff.marked
     assert runtime.consequences.payoff(closer).y == 0
     assert runtime.consequences.table.lots == ()
+    assert runtime.window.producer_returns == runtime.window.noop_returns == 2
+    assert runtime.window.revision_returns == 2  # Tool evidence survives both noop follow-ups.
+    assert runtime.window.tool_calls == runtime.window.fills == 2
     items = _consequence_diary(runtime)
     commits = [i for i in items if i["kind"] == "wallet.commit" and i["handle"] == opener]
     assert sum(i["amount"] for i in commits) == payoff.cost_micro
@@ -894,6 +918,7 @@ def test_population_registers_x402_seller_through_scripted_returns(market_http):
     assert runtime._is_feasible("market-buyer") == (True, "")
     assert runtime._world_block()["sellers"][0]["per_request_micro"] == 1734
     assert market_http.payments
+    assert runtime.window.market_purchases == len(market_http.payments)
     items = _diary(runtime)
     assert any(i["kind"] == "event" and i["event"]["kind"] == "Registered"
                and i["event"]["payload"]["id"] == MODEL
@@ -1188,3 +1213,103 @@ def test_governance_live_time_anchor_does_not_treat_epoch_time_as_elapsed():
         rt.clock.now_ns
         + rt.m.timing.min_ratio * rt.ev.consequence_backstop_events * rt.tick_clock.interval_ns
     )
+
+
+@pytest.mark.parametrize(("observation", "region", "unknown"), [
+    ("unavailable", "below 5", ["observation"]),
+    ("turnover", "roughly stable", ["region"]),
+    ("unavailable", "roughly stable", ["region", "observation"]),
+])
+def test_unpriced_cards_report_unknown_field_once(monkeypatch, observation, region, unknown):
+    from factorylab.charter.charter import Charter, MetricCard
+
+    rt = _recursive_runtime(events=0)
+    rt.charter = Charter(1, rt.charter.norms, (
+        MetricCard("turnover", rt.charter.norms[0], "d", "ratio", "w", region, observation),
+    ))
+    entries = []
+    append = rt.ledger.append
+
+    def capture(item):
+        result = append(item)
+        entries.append(dict(item))
+        return result
+
+    monkeypatch.setattr(rt.ledger, "append", capture)
+    rt._derive_regions()
+    rt._derive_regions()
+    assert not rt.regions and not rt.priced
+    unparsed = [e for e in entries if e["kind"] == "price.unparsed"]
+    assert len(unparsed) == 1 and unparsed[0]["unparsed"] == unknown
+    assert all(field in unparsed[0]["reason"] for field in unknown)
+    rt.n = 100
+    rt._close_price_window()
+    assert not any(e["kind"] == "price.update" for e in entries)
+
+
+def test_two_cards_measure_same_observation_with_independent_bounds():
+    from factorylab.charter.charter import Charter, MetricCard
+    from factorylab.runtime.loop import MeasureWindow
+
+    rt = _recursive_runtime(events=0)
+    rt.charter = Charter(1, rt.charter.norms, (
+        MetricCard("low", rt.charter.norms[0], "d", "fraction", "w", "below 0.2", " NOOP_SHARE "),
+        MetricCard("high", rt.charter.norms[0], "d", "fraction", "w", "below 0.9", "noop_share"),
+        MetricCard("cost-alias", rt.charter.norms[0], "d", "micro-USD", "w",
+                   "below the median of the previous window", "cost_per_return"),
+    ))
+    rt._derive_regions()
+    rt.window = MeasureWindow(1, 100, producer_returns=4, noop_returns=2, costs=[100, 200, 900])
+    rt.n = 100
+    rt._close_price_window()
+    cards = rt.controller.snapshot()["cards"]
+    assert cards["low"]["updates"] == cards["high"]["updates"] == 1
+    assert cards["low"]["lambda"] > 0 and cards["high"]["lambda"] == 0
+    assert rt.stats.last_window_values["noop_share"] == 0.5
+    assert rt._penalty_for(frozenset({"low", "high"})) > 0
+    rt._derive_regions()
+    assert rt.regions["cost-alias"].hi == 200.0
+    items = _diary(rt)
+    window = next(e for e in items if e["kind"] == "price.window")
+    assert window["observations"]["noop_share"] == 0.5
+    assert window["values"] == {"low": 0.5, "high": 0.5}
+    from factorylab.versioning import summary
+
+    report = summary(items)
+    assert "low" in report["operator"]["dimensions"]
+    assert report["windows"][0]["profile"]["low"] == 0.5
+
+
+def test_position_peak_is_ledger_first_and_survives_flat_account(monkeypatch):
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    rt = _recursive_runtime(events=0)
+    rt.window.equity_start_micro = 10_000_000
+    positions = [SimpleNamespace(coin="BTC", size=Decimal("-2"))]
+    monkeypatch.setattr(rt.exchange, "account", lambda: SimpleNamespace(positions=positions))
+    monkeypatch.setattr(rt.exchange, "mids", lambda: {"BTC": Decimal("3")})
+    append = rt.ledger.append
+
+    def capture(item):
+        if item["kind"] == "observation.position_peak":
+            assert rt.window.max_position_notional_micro is None
+        return append(item)
+
+    monkeypatch.setattr(rt.ledger, "append", capture)
+    rt._observe_positions()
+    assert rt.window.max_position_notional_micro == 6_000_000
+    positions.clear()
+    rt._observe_positions()
+    assert rt.window.max_position_notional_micro == 6_000_000
+
+
+@pytest.mark.parametrize(("proposals", "expected"), [
+    (None, False), ([], False), ("not a proposal", False), (["not a proposal"], False),
+    ([{"kind": "unknown"}], True),
+])
+def test_revision_requires_a_proposal_object(proposals, expected):
+    from factorylab.cortex.request import Return
+
+    ret = Return("h", {"register": proposals}, 0, "ok")
+    assert Runtime._carries_revision(ret) is expected

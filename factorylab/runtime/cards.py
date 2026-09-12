@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.controller import CardRegion
+from factorylab.runtime.observations import observation_for
 
 _NUMBER = r"([-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?|zero|one)"
 _WORDS = {"zero": 0.0, "one": 1.0}
@@ -61,7 +62,7 @@ def parses(card: MetricCard) -> bool:
 
 
 def region_for(card: MetricCard, *, rolling: dict[str, float]) -> CardRegion | None:
-    """Return the card's numeric region, or None when it has no usable bound yet.
+    """Return a region only for a catalogue observation with a usable bound.
 
     Exclusive phrasings ("above zero") are treated as inclusive bounds. "Below
     the median of the previous window" reads ``rolling[f"{card.id}_prev_median"]``
@@ -69,7 +70,7 @@ def region_for(card: MetricCard, *, rolling: dict[str, float]) -> CardRegion | N
     fractions and ``max(1, |bound|)`` for cards whose units mention USD.
     """
     bounds = _parse(card.acceptable_region)
-    if bounds is None:
+    if bounds is None or observation_for(card.observation) is None:
         return None
     lo, hi = bounds.lo, bounds.hi
     if bounds.deferred:

@@ -84,7 +84,7 @@ def seed_charter() -> Charter:
                 units="micro-USD per return",
                 window="rolling 100 returns",
                 acceptable_region="below the median of the previous window",
-                observation="ledger: wallet.commit joined to invocation records",
+                observation="cost_per_return",
             ),
             MetricCard(
                 id="well_formed_rate",
@@ -93,7 +93,7 @@ def seed_charter() -> Charter:
                 units="fraction",
                 window="rolling 100 returns",
                 acceptable_region="at least 0.9",
-                observation="ledger: invocation status",
+                observation="well_formed_rate",
             ),
             MetricCard(
                 id="forecast_skill",
@@ -102,7 +102,7 @@ def seed_charter() -> Charter:
                 units="score difference in [-1, 1]",
                 window="rolling 50 settled forecasts per evaluator",
                 acceptable_region="above zero",
-                observation="settlement: consequence standing",
+                observation="forecast_skill",
             ),
         ),
     )

@@ -23,3 +23,9 @@ def test_charter_validation() -> None:
     ok = MetricCard("x", "a norm", "d", "u", "w", "a", "o")
     with pytest.raises(ValueError):
         Charter(1, ("a norm",), (ok, ok))
+
+
+def test_seed_cards_name_runtime_observations():
+    assert {c.observation for c in seed_charter().cards} == {
+        "cost_per_return", "well_formed_rate", "forecast_skill",
+    }
