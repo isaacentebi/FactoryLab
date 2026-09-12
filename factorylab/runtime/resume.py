@@ -79,6 +79,8 @@ def encode(value: Any) -> Any:
     """Preserve types, mapping order, integer keys and exact numeric representations in JSON."""
     if isinstance(value, Enum):
         return {"$enum": type(value).__name__, "value": value.value}
+    if type(value) is int and value.bit_length() > 12000:
+        return {"$int": hex(value)}
     if value is None or type(value) in (str, int, bool):
         return value
     if type(value) is float:
@@ -86,8 +88,12 @@ def encode(value: Any) -> Any:
             raise ValueError("nonfinite checkpoint number")
         return {"$float": repr(value)}
     if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("nonfinite checkpoint number")
         return {"$decimal": str(value)}
     if isinstance(value, Fraction):
+        if max(value.numerator.bit_length(), value.denominator.bit_length()) > 12000:
+            return {"$rational": [encode(value.numerator), encode(value.denominator)]}
         return {"$fraction": str(value)}
     if isinstance(value, random.Random):
         return {"$random": encode(value.getstate())}
@@ -117,6 +123,8 @@ def decode(value: Any) -> Any:
     if isinstance(value, list):
         return [decode(v) for v in value]
     if not isinstance(value, dict):
+        if type(value) is float and not math.isfinite(value):
+            raise ResumeError("nonfinite checkpoint number")
         return value
     if "$float" in value:
         result = float(value["$float"])
@@ -124,9 +132,17 @@ def decode(value: Any) -> Any:
             raise ResumeError("nonfinite checkpoint number")
         return result
     if "$decimal" in value:
-        return Decimal(value["$decimal"])
+        result = Decimal(value["$decimal"])
+        if not result.is_finite():
+            raise ResumeError("nonfinite checkpoint number")
+        return result
     if "$fraction" in value:
         return Fraction(value["$fraction"])
+    if "$int" in value:
+        return int(value["$int"], 16)
+    if "$rational" in value:
+        numerator, denominator = map(decode, value["$rational"])
+        return Fraction(numerator, denominator)
     if "$map" in value:
         return {decode(k): decode(v) for k, v in value["$map"]}
     if "$tuple" in value:
@@ -221,6 +237,18 @@ class RecoveryJournal:
                 if "error" in item:
                     raise _recorded_error(item["error"], item.get("reason"))
                 return result
+            if name in ("exchange.place", "exchange.close", "exchange.cancel"):
+                from factorylab.world.exchange import OrderResult
+
+                # Complete the interrupted journal call with uncertainty, then let
+                # the normal intent owner query the venue using its persisted identity.
+                result = ({"status": "uncertain"} if name == "exchange.cancel" else
+                          OrderResult(None, "uncertain", Decimal(0), None))
+                self.append({"kind": "io.result", "call": seq, "result": encode(result)})
+                return result
+            if name == "provider.complete":
+                self.append({"kind": "io.result", "call": seq, "error": "RuntimeError"})
+                raise _recorded_error("RuntimeError")
             if not _read_only(name) and name != "treasury.rail.send":
                 self.fail(f"unacknowledged external write {name} at seq {seq}; "
                           "refusing to submit it twice")
@@ -229,6 +257,7 @@ class RecoveryJournal:
             if self.recovering and not replayed and not deterministic and not _read_only(name):
                 raise RuntimeError("interrupted event: external write was never dispatched")
             result = function(*args, **kwargs)
+            encoded_result = encode(result)
         except Exception as exc:
             from factorylab.world.evm import Pending, RailError
 
@@ -244,7 +273,7 @@ class RecoveryJournal:
             self.append({"kind": "io.result", "call": seq, "error": error,
                          **({"reason": reason} if reason is not None else {})})
             raise _recorded_error(error, reason) from None
-        self.append({"kind": "io.result", "call": seq, "result": encode(result)})
+        self.append({"kind": "io.result", "call": seq, "result": encoded_result})
         return result
 
 
@@ -257,7 +286,7 @@ def _read_only(name: str) -> bool:
     return name.rsplit(".", 1)[-1] in (
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
         "open_orders", "balance_micro", "affordable", "catalogue", "discover", "quote",
-        "registration_price", "seller_models", "funding_payments",
+        "registration_price", "seller_models", "funding_payments", "lookup",
     )
 
 
@@ -317,7 +346,8 @@ _RUNTIME_FIELDS = (
     "pending", "balance_at", "events_log", "last_closure_ns", "reserve_window_start", "internal",
     "n", "emitted", "insolvency_count", "_compute_routed", "_compute_unaffordable",
     "world_consumed", "ticks_consumed", "drips_consumed", "started", "catalogue", "sellers",
-    "registration_feedback", "tool_jail_available",
+    "registration_feedback", "tool_jail_available", "vote_handles", "voted_amendments",
+    "order_intents",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
@@ -331,7 +361,7 @@ _COMPONENT_FIELDS = (
     ("controller", "_PriceController__", (
         "eta", "kappa", "decay", "lambda_max", "min_window_events", "cards",
     )),
-    ("consequences", "", ("backstop", "table", "mids")),
+    ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events")),
     ("consequence_fills", "", ("since_ns", "seen")),
     ("reconciler", "", ("every", "_ticks")),
 )
@@ -363,6 +393,7 @@ def runtime_state(rt) -> dict:
                               for a in rt.assemblies.values()]),
         "prices": encode(rt.prices.prices),
         "routers": [st.state() for st in rt._all_router_states()],
+        "retired_routers": [st.state() for st in rt.retired_routers.values()],
         "venue": encode({"last_fill_ns": rt.venue.last_fill_ns,
                          "seen_fills": rt.venue.seen_fills,
                          "last_funding_ns": rt.venue.last_funding_ns,
@@ -417,6 +448,10 @@ def restore_runtime(rt, state: dict) -> None:
     for saved in state["routers"]:
         router = RouterState.restore(saved)
         rt.routers.setdefault(router.kind, []).append(router)
+    rt.retired_routers = {}
+    for saved in state.get("retired_routers", []):
+        router = RouterState.restore(saved)
+        rt.retired_routers[router.learner.id] = router
     if rt.venue and state["venue"] is not None:
         for name, value in decode(state["venue"]).items():
             setattr(rt.venue, name, value)

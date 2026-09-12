@@ -178,6 +178,8 @@ def _router(item: dict[str, Any], event_kinds: frozenset[str]) -> RouterProposal
     if not isinstance(gamma, int | float) or isinstance(gamma, bool) or not 0 < gamma <= 1:
         raise ValueError("gamma must be in (0, 1]")
     add = item.get("add", False)
+    if isinstance(add, str) and add.lower() in ("true", "false"):
+        add = add.lower() == "true"
     if not isinstance(add, bool):
         raise ValueError("add must be a boolean")
     return RouterProposal(kind, learner, float(gamma), add)

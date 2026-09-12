@@ -8,7 +8,7 @@ from urllib import error, request
 
 import pytest
 
-from factorylab.world.metering import Meter, MeteredModel
+from factorylab.world.metering import BillingUncertain, Meter, MeteredModel
 from factorylab.world.models import ModelRequest, ModelResponse, PriceTable, TokenPrice
 from factorylab.world.openrouter import OpenRouterError, OpenRouterProvider
 
@@ -91,17 +91,17 @@ def test_reported_cost_boundaries(completion, req, cost, expected):
 
 
 @pytest.mark.parametrize("cost", [-0.000001, float("nan"), float("inf")])
-def test_invalid_reported_cost_releases_reservation(completion, req, cost):
+def test_invalid_reported_cost_books_uncertainty_without_a_live_hold(completion, req, cost):
     completion["usage"]["cost"] = cost
     wallet = TinyWallet(1000)
     model = MeteredModel(
         OpenRouterProvider(transport=FakeTransport([completion])),
         PriceTable({req.model_id: TokenPrice(1, 5)}), Meter(wallet),
     )
-    with pytest.raises(OpenRouterError, match="Invalid reported cost"):
+    with pytest.raises(BillingUncertain, match="billing uncertain"):
         model.complete(req, handle="invalid-cost")
-    assert wallet.balance == 1000 and wallet.reserved == 0
-    assert wallet.log == [("reserve", model.ceiling(req)), ("release", model.ceiling(req))]
+    assert wallet.balance == 1000 - model.ceiling(req) and wallet.reserved == 0
+    assert wallet.log == [("reserve", model.ceiling(req)), ("uncertain", model.ceiling(req))]
 
 
 def test_text_parts_and_optional_fields(completion, req):
@@ -351,6 +351,11 @@ class TinyWallet:
         self.reserved -= reservation
         self.balance -= actual
         self.log.append(("commit", actual))
+
+    def commit_uncertain(self, reservation):
+        self.reserved -= reservation
+        self.balance -= reservation
+        self.log.append(("uncertain", reservation))
 
     def release(self, reservation):
         self.reserved -= reservation

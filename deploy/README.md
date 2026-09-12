@@ -19,6 +19,27 @@ its checkout, or restore an older ledger over it.
    disk capacity for a year **before** launch. Snapshots and the five aggregate
    scans grow with the ledger. This implementation neither rotates evidence nor
    promises that a small fixed disk holds an arbitrarily long experiment.
+
+   Memory is also unbounded with diary length. `Ledger.reopen` retains encrypted
+   tokens and temporarily holds the file bytes plus all decrypted item objects;
+   `resume` then materializes the diary again to select the last snapshot and
+   replay tail. Each wake aggregate similarly materializes every item. The
+   working-space bound is O(L + D + S + T + A), where L is encrypted diary size,
+   D the Python objects for its decrypted contents (including every historical
+   snapshot), S restored runtime state, T replay-tail objects, and A aggregate
+   output. Streaming only the loop in `resume` or `wake` cannot remove the
+   kernel reader's full-file allocation. A bounded reader/aggregate API requires
+   a separate kernel-ledger change; this FC pass uses the documentation fallback.
+
+   The FC synthetic reader probe (1,000-character nested payloads) measured
+   approximately linear growth when doubling item count; this is an allocation
+   test, not a production sizing ratio. The cold audit measured 56 MB RSS for a
+   6.2 MB diary on its fixture. Neither coefficient is a guaranteed upper bound:
+   Python object overhead, nested snapshots, pending decisions and output series
+   vary by world. Budget RAM for the maximum intended diary at simultaneous
+   runtime + wake + backup load, and measure peak RSS in the pinned rehearsal.
+   A 4 GiB host does not support an indefinitely growing diary; disk capacity
+   alone cannot establish that resume and wake will remain available.
 3. Prepay: in DigitalOcean's team **Billing**, choose **Add funds**, select a
    supported payment method and deposit at least 12 times the droplet's displayed
    monthly price, plus tax, backup storage, expected transfer and a margin. Verify

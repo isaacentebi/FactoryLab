@@ -207,7 +207,11 @@ class X402Provider:
         rpc: str = BASE_RPC,
         discovery_url: str = DISCOVERY_URL,
         extra_body: Mapping[str, Any] | None = None,
+        max_request_micro: int = 500_000,
     ) -> None:
+        if type(max_request_micro) is not int or max_request_micro < 0:
+            raise X402Error("Request cap must be nonnegative integer micro-USD")
+        self.max_request_micro = max_request_micro
         self._private_key = private_key
         self._transport = transport or http_request
         self.rpc = rpc
@@ -229,6 +233,8 @@ class X402Provider:
         split_model_id(model_id)
         if type(ceiling_micro) is not int or ceiling_micro < 0:
             raise X402Error("Per-request ceiling must be nonnegative integer micro-USD")
+        if ceiling_micro > self.max_request_micro:
+            raise X402Error("Per-request ceiling exceeds treasury.max_request_micro")
         if model_id in self._ceilings and self._ceilings[model_id] != ceiling_micro:
             raise X402Error("Registered per-request ceiling is immutable")
         self._ceilings[model_id] = ceiling_micro
@@ -275,6 +281,8 @@ class X402Provider:
             ))
             ceiling = quote.amount_micro
             metadata = {"price_source": "x402-quote", "quote": asdict(quote)}
+        if ceiling > self.max_request_micro:
+            raise X402Error("Per-request ceiling exceeds treasury.max_request_micro")
         return TokenPrice(0, 0, ceiling), self._clean({
             "seller": seller, "model": model, "network": BASE_NETWORK,
             "per_request_micro": ceiling, **metadata,

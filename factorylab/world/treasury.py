@@ -247,11 +247,11 @@ class Treasury:
             # has its own budget and fee ledger; spending HYPE/ETH cannot burn
             # unrelated USDC a second time. The total economic fee remains capped.
             if wallet_fee:
-                self.wallet.commit(self.fee_hold, wallet_fee)
+                self.wallet.commit_reported(self.fee_hold, wallet_fee)
             else:
                 self.wallet.release(self.fee_hold)
-            remaining = self.fee_ceiling_micro - updated["fees_micro"]
-            self.fee_hold = self.wallet.reserve(remaining, updated["handle"], "treasury:fees")
+            self.fee_hold = None
+            self._reserve_fees()
         if not outcome["confirmed"]:
             return [self._fail(outcome.get("reason", "confirmed chain failure"))]
         if updated["index"] + 1 == len(updated["steps"]):
@@ -259,7 +259,8 @@ class Treasury:
             self._write("confirmed", state=finished, tx_refs=finished["receipts"], ts=now_ns)
             self.state = finished
             self.wallet.release(self.principal_hold)
-            self.wallet.release(self.fee_hold)
+            if self.fee_hold is not None:
+                self.wallet.release(self.fee_hold)
             self.principal_hold = self.fee_hold = None
             if hasattr(self.rail, "confirm"):
                 self.rail.confirm(finished)
@@ -292,6 +293,13 @@ class Treasury:
         try:
             ref = self.rail.prepare(state["steps"][state["index"]], deepcopy(state), self.gas_spent)
             self._check_fee(ref, state)
+            if ref.get("fee_ceiling_micro", 0) > (
+                self.fee_hold.amount if self.fee_hold is not None else 0
+            ):
+                self._write("fee_unfunded", transfer_id=state["id"], handle=state["handle"],
+                            required_micro=ref["fee_ceiling_micro"],
+                            reserved_micro=self.fee_hold.amount if self.fee_hold else 0)
+                return
         except Exception:
             return  # existing transfer and principal hold remain pending
         updated = {**state, "reference": ref}
@@ -299,8 +307,25 @@ class Treasury:
         self.state = updated
         self._send()
 
+    def _reserve_fees(self) -> None:
+        """A trading loss reduces the remaining fee hold without losing receipt reconciliation."""
+        remaining = self.fee_ceiling_micro - self.state["fees_micro"]
+        affordable = min(remaining, max(0, self.wallet.available))
+        if affordable < remaining:
+            self._write("fee_unfunded", transfer_id=self.state["id"],
+                        handle=self.state["handle"], required_micro=remaining,
+                        reserved_micro=affordable)
+        if not self.wallet.dead:
+            self.fee_hold = self.wallet.reserve(affordable, self.state["handle"], "treasury:fees")
+
     def tick(self, now_ns: int) -> list[dict]:
         if self.state and self.state["status"] == "submitted" and self.state["reference"] is None:
+            if self.fee_hold is not None and self.wallet.available > 0 and (
+                self.fee_hold.amount < self.fee_ceiling_micro - self.state["fees_micro"]
+            ):
+                self.wallet.release(self.fee_hold)
+                self.fee_hold = None
+                self._reserve_fees()
             self._prepare_next()
             return []
         result = self.reconcile(now_ns)
@@ -331,7 +356,8 @@ class Treasury:
         if not stranded:
             self.wallet.release(self.principal_hold)
             self.principal_hold = None
-        self.wallet.release(self.fee_hold)
+        if self.fee_hold is not None:
+            self.wallet.release(self.fee_hold)
         self.fee_hold = None
         return {"status": result["status"], "error": reason, "transfer_id": state["id"]}
 

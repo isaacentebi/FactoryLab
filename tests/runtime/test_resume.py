@@ -285,7 +285,7 @@ class RecordedProvider:
         return self.inner.complete(request)
 
 
-def test_unacknowledged_live_model_call_refuses_without_release_or_resubmission(tmp_path):
+def test_unacknowledged_live_model_call_books_uncertainty_without_resubmission(tmp_path):
     base = load_manifest("scripted")
     m = replace(base, exchange=replace(base.exchange, kind="hyperliquid"), drip=None)
     path = tmp_path / "unacknowledged.jsonl"
@@ -311,10 +311,14 @@ def test_unacknowledged_live_model_call_refuses_without_release_or_resubmission(
     prefix = b"".join(path.read_bytes().splitlines(keepends=True)[: call["seq"] + 2])
     path.write_bytes(prefix)
     calls, orders = provider.calls, venue.orders_sent
-    with pytest.raises(ResumeError, match="unacknowledged external write"):
-        resume_runtime(m, str(path), provider=provider, exchange=venue, now_ns=10**15)
+    restored = resume_runtime(m, str(path), provider=provider, exchange=venue, now_ns=10**15)
     assert (provider.calls, venue.orders_sent) == (calls, orders)
-    assert path.read_bytes() == prefix  # Meter's exception cleanup must not release the hold
+    assert path.read_bytes().startswith(prefix)
+    evidence = restored.ledger._recovery_items()
+    assert any(i["kind"] == "metering.uncertain" for i in evidence)
+    assert not restored.wallet.state()["reservations"]
+    assert restored.wallet.check_conservation()
+    restored._ledger_lock.close()
 
 
 def test_live_resume_reconciles_open_position_and_times_out_outage_deadlines(tmp_path):
@@ -514,3 +518,167 @@ def test_resume_books_the_entire_fatal_fill_batch_once(tmp_path, cut, recover_ca
     assert [item["amount"] for item in settlements] == [-20, -20 + 100 * recover_cash, -5]
     assert sum(item["kind"] == "consequence.fill" for item in diary) == 2
     assert sum(item["kind"] == "consequence.funding" for item in diary) == 1
+
+
+class CompositionProvider(ScriptedProvider):
+    def complete(self, request):
+        response = super().complete(request)
+        text = request.messages[-1]['content']
+        if self._producer_calls == 1:
+            return replace(response, text=json.dumps({'requests': [{
+                'target': 'self', 'description': 'child task', 'inputs': {},
+                'outcome_schema': {'type': 'object', 'properties': {'answer': {'type': 'integer'}},
+                                   'required': ['answer']}}]}))
+        if 'REQUEST\nchild task' in text:
+            return replace(response, text='{"answer":42}')
+        return response
+
+
+def test_child_dispatch_after_durable_intent_replays_without_duplicate_decisions(tmp_path):
+    m = load_manifest('scripted')
+    path = tmp_path / 'child.jsonl'
+    rt = make_runtime(m, path, provider=CompositionProvider())
+    rt.events_budget = 2
+    append = rt.ledger.append
+
+    def interrupt(entry):
+        seq = append(entry)
+        if entry['kind'] == 'request.child':
+            raise ProcessDeath
+        return seq
+
+    rt.ledger.append = interrupt
+    with pytest.raises(ProcessDeath):
+        rt.run()
+    restored = resume_runtime(m, str(path), provider=CompositionProvider())
+    children = [i for i in restored.ledger._recovery_items() if i['kind'] == 'request.child']
+    assert len(children) == 1
+    child = children[0]
+    assert restored.queue.get(child['handle']).parent_handle == child['resource_liability']
+    calls = [i for i in restored.ledger._recovery_items()
+             if i['kind'] == 'invocation' and i['handle'] == child['handle']]
+    assert len(calls) == 1 and json.loads(calls[0]['outputs']) == {'answer': 42}
+    assert restored.run()['ledger_verify']
+
+
+def test_fake_treasury_trading_shock_replays_fee_unfunded_cut(tmp_path, monkeypatch):
+    from factorylab.world.treasury import FakeRail
+
+    base = load_manifest('scripted')
+    m = replace(base, treasury=replace(base.treasury, fake_fee_micro=1_000_000))
+    path = tmp_path / 'treasury-shock.jsonl'
+    rt = Runtime(m, events=1, seed=1, initial_balance_micro=6_400_000,
+                 ledger_path=str(path), drip=False, router_gamma=.1)
+    poll = FakeRail.poll
+
+    def cheaper_receipt(rail, step, state):
+        return {**poll(rail, step, state), 'fee_micro': 10_000,
+                'received_micro': state['amount_micro'] - 10_000}
+
+    monkeypatch.setattr(FakeRail, 'poll', cheaper_receipt)
+    submitted = rt.treasury.transfer('to_reserve', '5', handle='parent', now_ns=0)
+    assert submitted['status'] == 'submitted'
+    rt._settle_exchange_effects([WorldEvent(WorldEventKind.FUNDING, 0, 'shock', {
+        'coin': 'BTC', 'paid_usd': '.9'})])
+    assert rt.wallet.available < 0
+    append = rt.ledger.append
+
+    def interrupt(entry):
+        seq = append(entry)
+        if entry['kind'] == 'treasury.fee_unfunded':
+            raise ProcessDeath
+        return seq
+
+    rt.ledger.append = interrupt
+    with pytest.raises(ProcessDeath):
+        rt.run()
+    restored = resume_runtime(m, str(path))
+    assert restored.treasury.state['status'] == 'confirmed'
+    assert restored.treasury.state['fees_micro'] == 10_000
+    assert restored.wallet.check_conservation()
+    assert not restored.wallet.state()['reservations']
+    assert restored.run()['ledger_verify']
+
+
+class OrderCutProvider(ScriptedProvider):
+    def __init__(self, operation, args):
+        super().__init__()
+        self.operation, self.args = operation, args
+
+    def complete(self, request):
+        response = super().complete(request)
+        if self._producer_calls == 1:
+            return replace(response, text=json.dumps({'tool_calls': [{
+                'tool': self.operation, 'args': self.args}]}))
+        return response
+
+
+@pytest.mark.parametrize('operation', ['place_market', 'close', 'cancel'])
+def test_live_order_process_cut_after_acceptance_recovers_original_handle(tmp_path, operation):
+    from factorylab.world.exchange import OrderKind
+
+    class Venue(FakeExchange):
+        def __getattribute__(self, name):
+            if name in ('drain_events', 'sync_cash'):
+                raise AttributeError(name)  # match the live adapter's pull-based fill surface
+            return super().__getattribute__(name)
+
+        def __init__(self):
+            super().__init__(coins=('BTC',))
+            self.armed = False
+            self.writes = 0
+
+        def place(self, order):
+            result = super().place(order)
+            if self.armed and operation == 'place_market':
+                self.writes += 1
+                raise ProcessDeath
+            return result
+
+        def close(self, *args, **kwargs):
+            result = super().close(*args, **kwargs)
+            if self.armed and operation == 'close':
+                self.writes += 1
+                raise ProcessDeath
+            return result
+
+        def cancel(self, *args, **kwargs):
+            result = super().cancel(*args, **kwargs)
+            if self.armed and operation == 'cancel':
+                self.writes += 1
+                raise ProcessDeath
+            return result
+
+    base = load_manifest('scripted')
+    m = replace(base, exchange=replace(base.exchange, kind='hyperliquid', coins=('BTC',)),
+                drip=None)
+    venue = Venue()
+    args = {'coin': 'BTC'}
+    if operation == 'cancel':
+        order = venue.place(Order('BTC', True, Decimal('.001'), OrderKind.LIMIT, Decimal(1)))
+        args['order_id'] = order.order_id
+    elif operation == 'close':
+        venue.place(Order('BTC', True, Decimal('.001')))
+    else:
+        args.update(side='buy', size='.001')
+    FakeExchange.drain_events(venue)
+    venue.armed = True
+    provider = OrderCutProvider(f'venue.{operation}', args)
+    path = tmp_path / 'order-cut.jsonl'
+    rt = make_runtime(m, path, provider=provider, exchange=venue,
+                      clock_source=ClockSource(1_000_000_000, 1_000_000_000, 2).events())
+    rt.events_budget = 2
+    with pytest.raises(ProcessDeath):
+        rt.run()
+    before = items(path, m)
+    intent = next(i for i in before if i['kind'] == 'order.intent')
+    assert venue.writes == 1
+    restored = resume_runtime(m, str(path), provider=provider, exchange=venue,
+                              now_ns=rt.clock.now_ns)
+    assert venue.writes == 1
+    saved = restored.order_intents[intent['client_id']]
+    assert saved['handle'] == intent['handle']
+    assert saved['result']['status'] == ('cancelled' if operation == 'cancel' else 'filled')
+    assert not restored.consequences.pending_orders
+    assert restored.wallet.check_conservation()
+    restored._ledger_lock.close()

@@ -275,7 +275,8 @@ def authorization_typed_data(
     _address(address)
     now = time.time_ns() // 1_000_000_000 if now is None else now
     nonce = os.urandom(32) if nonce is None else nonce
-    if type(now) is not int or now < 0 or now + accepted["maxTimeoutSeconds"] >= 2**256:
+    timeout = min(accepted["maxTimeoutSeconds"], 600)
+    if type(now) is not int or now < 0 or now + timeout >= 2**256:
         raise X402Error("Invalid authorization time")
     if not isinstance(nonce, bytes) or len(nonce) != 32:
         raise X402Error("Authorization nonce must be 32 bytes")
@@ -308,7 +309,7 @@ def authorization_typed_data(
             "to": accepted["payTo"],
             "value": int(accepted["amount"]),
             "validAfter": 0,
-            "validBefore": now + accepted["maxTimeoutSeconds"],
+            "validBefore": now + timeout,
             "nonce": "0x" + nonce.hex(),
         },
     }

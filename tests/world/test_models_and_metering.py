@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from factorylab.world.metering import Infeasible, Meter, MeteredModel
+from factorylab.world.metering import Infeasible, Meter, MeteredModel, UnbilledFailure
 from factorylab.world.models import (
     FakeModel,
     ModelRequest,
@@ -102,7 +102,7 @@ def test_metering_failure_releases_and_commits_nothing() -> None:
     failures: list[BaseException] = []
 
     def boom():
-        raise RuntimeError("vendor down")
+        raise UnbilledFailure("vendor did not run or bill")
 
     with pytest.raises(RuntimeError):
         meter.run(

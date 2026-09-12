@@ -1,7 +1,7 @@
 import json
 from dataclasses import FrozenInstanceError
 from decimal import Decimal
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 import pytest
 
@@ -456,7 +456,7 @@ def test_live_write_sdk_arguments_and_reduce_only(live_stub):
     }
     ex._exchange.update_leverage.return_value = {"status": "ok", "response": {"type": "default"}}
     assert ex.place(Order("BTC", True, Decimal("1.0009"))).status == "filled"
-    ex._exchange.market_open.assert_called_once_with("BTC", True, 1.0)
+    ex._exchange.market_open.assert_called_once_with("BTC", True, 1.0, cloid=ANY)
     assert (
         ex.place(
             Order("BTC", False, Decimal(1), OrderKind.LIMIT, Decimal(110), reduce_only=True)
@@ -470,11 +470,12 @@ def test_live_write_sdk_arguments_and_reduce_only(live_stub):
         110.0,
         {"limit": {"tif": "Gtc"}},
         reduce_only=True,
+        cloid=ANY,
     )
     assert ex.close("BTC").status == "filled"
-    ex._exchange.market_close.assert_called_with("BTC", sz=None)
+    ex._exchange.market_close.assert_called_with("BTC", sz=None, cloid=ANY)
     assert ex.close("BTC", Decimal("0.5009")).status == "filled"
-    ex._exchange.market_close.assert_called_with("BTC", sz=0.5)
+    ex._exchange.market_close.assert_called_with("BTC", sz=0.5, cloid=ANY)
     assert ex.cancel("7", coin="ETH")["status"] == "cancelled"
     ex._exchange.cancel.assert_called_once_with("ETH", 7)
     assert ex.set_leverage("BTC", 3)["status"] == "ok"
@@ -488,27 +489,28 @@ def test_live_write_sdk_arguments_and_reduce_only(live_stub):
         )
     )
     assert ex.place(Order("BTC", False, Decimal(2), reduce_only=True)).status == "filled"
-    ex._exchange.market_close.assert_called_with("BTC", sz=1.0)
+    ex._exchange.market_close.assert_called_with("BTC", sz=1.0, cloid=ANY)
     calls = ex._exchange.market_close.call_count
     assert ex.place(Order("BTC", True, Decimal(1), reduce_only=True)).status == "rejected"
     assert ex._exchange.market_close.call_count == calls
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("venue unavailable"), {"status": "err"}])
-def test_live_write_failures_are_rejections(live_stub, failure):
+def test_live_write_failures_distinguish_uncertainty_from_explicit_rejections(live_stub, failure):
     for method in ("market_open", "order", "market_close", "cancel", "update_leverage"):
         stub = getattr(live_stub._exchange, method)
         if isinstance(failure, Exception):
             stub.side_effect = failure
         else:
             stub.return_value = failure
-    assert live_stub.place(Order("BTC", True, Decimal(1))).status == "rejected"
+    expected = "uncertain" if isinstance(failure, Exception) else "rejected"
+    assert live_stub.place(Order("BTC", True, Decimal(1))).status == expected
     assert (
         live_stub.place(Order("BTC", True, Decimal(1), OrderKind.LIMIT, Decimal(95))).status
-        == "rejected"
+        == expected
     )
-    assert live_stub.close("BTC").status == "rejected"
-    assert live_stub.cancel("7", coin="BTC")["status"] == "rejected"
+    assert live_stub.close("BTC").status == expected
+    assert live_stub.cancel("7", coin="BTC")["status"] == expected
     assert live_stub.set_leverage("BTC", 2)["status"] == "rejected"
 
 
@@ -526,7 +528,7 @@ def test_live_tiny_close_is_rejected_instead_of_becoming_full_close(live_stub):
     assert not live_stub._exchange.mock_calls
 
 
-def test_live_malformed_fill_is_rejected(live_stub):
+def test_live_malformed_fill_requires_reconciliation(live_stub):
     live_stub._exchange.market_open.return_value = {
         "status": "ok",
         "response": {
@@ -537,7 +539,7 @@ def test_live_malformed_fill_is_rejected(live_stub):
             }
         },
     }
-    assert live_stub.place(Order("BTC", True, Decimal(1))).status == "rejected"
+    assert live_stub.place(Order("BTC", True, Decimal(1))).status == "uncertain"
 
 
 @pytest.mark.network

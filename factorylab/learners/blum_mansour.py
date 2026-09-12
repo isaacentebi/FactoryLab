@@ -69,6 +69,7 @@ class BlumMansourSnapshot:
     p: tuple[tuple[str, float], ...]
     rows: tuple[tuple[tuple[str, float], ...], ...]
     _owner: object = field(repr=False, compare=False)
+    executed: tuple[tuple[str, float], ...] | None = None
 
 
 def stationary_distribution(matrix: Sequence[Sequence[float]]) -> tuple[float, ...]:
@@ -221,6 +222,23 @@ class BlumMansour:
         """
         if not isinstance(snapshot, BlumMansourSnapshot) or snapshot._owner is not self:
             raise ValueError("snapshot must belong to this BlumMansour learner")
+        if snapshot.executed is not None and isinstance(feedback, BanditFeedback):
+            if not self._bandit:
+                raise TypeError("SR_MAB requires EXP3 bases satisfying Lemma 10")
+            executed, p = dict(snapshot.executed), dict(snapshot.p)
+            _probabilities(executed, snapshot.support)
+            k = feedback.action
+            if k not in executed or not math.isclose(feedback.propensity, executed[k],
+                                                     rel_tol=1e-12, abs_tol=0):
+                raise ValueError("feedback must carry the saved round's executed propensity")
+            # Off-policy extension: E[1{k=j} p_i r_k / executed_k] = p_i r_j.
+            # The row q cancels algebraically. Supplying p_i*r (bounded by one)
+            # directly avoids mislabelling an importance gain >1 as a bounded reward.
+            # External standing mixtures do not inherit the unmodified SR_MAB theorem.
+            for action, base in zip(self.actions, self._bases, strict=True):
+                base.update(BanditFeedback(k, p.get(action, 0.) * feedback.reward,
+                                            feedback.propensity))
+            return
         pending = self._pending
         self._pending = snapshot.support, dict(snapshot.p), tuple(map(dict, snapshot.rows))
         try:

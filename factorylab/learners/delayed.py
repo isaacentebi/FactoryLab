@@ -20,6 +20,7 @@ process recovery cannot reopen a spent handle.
 """
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 from .base import Feedback, Learner, _probabilities, _state, _support, restore_learner
 from .blum_mansour import BlumMansour, BlumMansourSnapshot
@@ -62,6 +63,22 @@ class SnapshotLearner:
             self.inner.update(feedback)
         del self._snapshots[handle]
 
+    def record_executed(self, handle: str, distribution: dict[str, float]) -> None:
+        """Freeze the actual sampling policy while retaining the learner's own row weights."""
+        snapshot = self._snapshots[handle]
+        support = snapshot.support if isinstance(snapshot, BlumMansourSnapshot) else tuple(snapshot)
+        _probabilities(distribution, support)
+        if isinstance(snapshot, BlumMansourSnapshot):
+            if any(dict(snapshot.p)[a] > 0 and distribution[a] <= 0 for a in support):
+                raise ValueError("executed policy must cover the learner's support")
+            self._snapshots[handle] = replace(snapshot, executed=tuple(distribution.items()))
+        else:
+            self._snapshots[handle] = dict(distribution)
+
+    def discard_for(self, handle: str) -> None:
+        """Close a censored round without fabricating reward or permitting handle reuse."""
+        del self._snapshots[handle]
+
     def update(self, feedback: Feedback) -> None:
         """Reject unaddressed feedback, which cannot identify a delayed decision."""
         raise TypeError("SnapshotLearner requires update_for(handle, feedback)")
@@ -69,7 +86,8 @@ class SnapshotLearner:
     def state(self) -> dict:
         """Include exact inner state, frozen rounds, identity and all spent-handle tombstones."""
         snapshots = {
-            handle: {"support": saved.support, "p": saved.p, "rows": saved.rows}
+            handle: {"support": saved.support, "p": saved.p, "rows": saved.rows,
+                     "executed": saved.executed}
             if isinstance(saved, BlumMansourSnapshot)
             else saved
             for handle, saved in self._snapshots.items()
@@ -106,7 +124,11 @@ class SnapshotLearner:
                 saved = BlumMansourSnapshot(
                     support, tuple(tuple(pair) for pair in saved["p"]),
                     tuple(tuple(tuple(pair) for pair in row) for row in saved["rows"]), inner,
+                    tuple(tuple(pair) for pair in saved["executed"])
+                    if saved.get("executed") is not None else None,
                 )
+                if saved.executed is not None:
+                    _probabilities(dict(saved.executed), support)
             else:
                 _probabilities(saved, tuple(saved))
                 saved = dict(saved)

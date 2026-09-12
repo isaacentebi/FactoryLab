@@ -133,7 +133,8 @@ def test_malformed_and_refused_still_return_with_cost() -> None:
 
 
 def test_children_are_built_through_factory_and_stripped_from_outputs() -> None:
-    reply = {"action": "investigate", "requests": [{"description": "check funding", "inputs": {}}]}
+    reply = {"action": "investigate", "requests": [{"description": "check funding", "inputs": {},
+                                                    "target": "self", "outcome_schema": {}}]}
     fake = FakeModel(default=json.dumps(reply), fixed_input_tokens=1, fixed_output_tokens=1)
     w = TinyWallet(balance=10_000_000)
     a = _assembly(fake, w, max_tokens=10)

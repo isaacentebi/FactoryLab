@@ -7,6 +7,7 @@ the exchange adapter never touches the wallet.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import random
 from collections.abc import Iterator
@@ -14,6 +15,7 @@ from dataclasses import dataclass, field, replace
 from decimal import ROUND_DOWN, Decimal
 from enum import StrEnum
 from typing import Any, Protocol
+from uuid import uuid4
 
 from factorylab.world.events import WorldEvent, WorldEventKind
 
@@ -54,8 +56,10 @@ class Order:
     reduce_only: bool = False
 
     def __post_init__(self) -> None:
-        if self.size <= 0:
-            raise ValueError("order size must be positive")
+        if not self.size.is_finite() or self.size <= 0:
+            raise ValueError("order size must be finite and positive")
+        if self.limit_px is not None and (not self.limit_px.is_finite() or self.limit_px <= 0):
+            raise ValueError("limit price must be finite and positive")
         if self.kind is OrderKind.LIMIT and self.limit_px is None:
             raise ValueError("limit orders need limit_px")
 
@@ -63,7 +67,7 @@ class Order:
 @dataclass(frozen=True)
 class OrderResult:
     order_id: str | None
-    status: str  # "filled" | "resting" | "rejected"
+    status: str  # "filled" | "resting" | "rejected" | "cancelled" | "uncertain"
     filled_size: Decimal
     avg_px: Decimal | None
     error: str | None = None
@@ -128,13 +132,16 @@ class Exchange(Protocol):
     def funding_payments(self, since_ns: int) -> list[FundingPayment]: ...
     def account(self) -> AccountState: ...
     def place(self, order: Order) -> OrderResult: ...
-    def cancel(self, order_id: str, *, coin: str | None = None) -> dict | None: ...
+    def cancel(self, order_id: str, *, coin: str | None = None,
+               client_id: str | None = None) -> dict | None: ...
+    def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult: ...
     def fills(self, since_ns: int) -> list[Fill]: ...
     def candles(self, coin: str, interval: str, n: int) -> list[dict]: ...
     def order_book(self, coin: str, depth: int) -> dict: ...
     def funding_history(self, coin: str, n: int) -> list[FundingEvent]: ...
     def open_orders(self) -> list[dict]: ...
-    def close(self, coin: str, size: Decimal | None = None) -> OrderResult: ...
+    def close(self, coin: str, size: Decimal | None = None, *,
+              client_id: str | None = None) -> OrderResult: ...
     def set_leverage(self, coin: str, leverage: int) -> dict: ...
 
 
@@ -181,6 +188,9 @@ class FakeExchange:
         self._positions: dict[str, Position] = {}
         self._fills: list[Fill] = []
         self._resting: dict[str, Order] = {}
+        self._client_results: dict[str, OrderResult] = {}
+        self._cancel_results: dict[str, dict] = {}
+        self._cancelled: set[str] = set()
         self._next_oid = 1
         self._last_funding_ns = 0
         self._pending_events: list[WorldEvent] = []
@@ -269,6 +279,15 @@ class FakeExchange:
         )
 
     def place(self, order: Order) -> OrderResult:
+        """A stable client id admits at most one order, including after a lost acknowledgement."""
+        client_id = order.client_id or f"fake-client-{self._next_oid}"
+        if client_id in self._client_results:
+            return self._client_results[client_id]
+        result = self._place(order)
+        self._client_results[client_id] = result
+        return result
+
+    def _place(self, order: Order) -> OrderResult:
         if order.coin not in self._mids:
             return OrderResult(None, "rejected", Decimal(0), None, "unknown coin")
         oid = str(self._next_oid)
@@ -284,15 +303,34 @@ class FakeExchange:
         px = mid + half if order.is_buy else mid - half
         return self._fill(oid, order, px)
 
-    def cancel(self, order_id: str, *, coin: str | None = None) -> dict | None:
-        """Coin-scoped cancellations cannot remove another coin's order."""
-        if coin is not None:
-            order = self._resting.get(order_id)
-            if order is None or order.coin != coin:
-                return {"status": "rejected", "error": "unknown order for coin"}
+    def cancel(self, order_id: str, *, coin: str | None = None,
+               client_id: str | None = None) -> dict:
+        """Coin-scoped, client-addressed cancellations are idempotent."""
+        if client_id is not None and client_id in self._cancel_results:
+            return dict(self._cancel_results[client_id])
+        order = self._resting.get(order_id)
+        if order is None or coin is not None and order.coin != coin:
+            result = {"status": "rejected", "error": "unknown order for coin"}
+        else:
             del self._resting[order_id]
-            return {"status": "cancelled", "order_id": order_id}
-        self._resting.pop(order_id, None)
+            self._cancelled.add(order_id)
+            result = {"status": "cancelled", "order_id": order_id}
+        if client_id is not None:
+            self._cancel_results[client_id] = result
+        return dict(result)
+
+    def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult:
+        """Resolve original order identity without placing or cancelling anything."""
+        result = self._client_results.get(client_id)
+        oid = order_id or (result.order_id if result else None)
+        if oid in self._cancelled:
+            return OrderResult(oid, "cancelled", Decimal(0), None)
+        fills = [f for f in self._fills if f.order_id == oid]
+        if fills and oid not in self._resting:
+            size = sum((f.size for f in fills), Decimal(0))
+            return OrderResult(oid, "filled", size,
+                               sum((f.size * f.px for f in fills), Decimal(0)) / size)
+        return result or OrderResult(oid, "uncertain", Decimal(0), None, "order not observed")
 
     def fills(self, since_ns: int) -> list[Fill]:
         return [f for f in self._fills if f.ts_ns >= since_ns]
@@ -371,15 +409,19 @@ class FakeExchange:
             for oid, order in self._resting.items()
         ]
 
-    def close(self, coin: str, size: Decimal | None = None) -> OrderResult:
+    def close(
+        self, coin: str, size: Decimal | None = None, *, client_id: str | None = None,
+    ) -> OrderResult:
         """Close at most the current position; flat or invalid requests are rejected."""
+        if client_id is not None and client_id in self._client_results:
+            return self._client_results[client_id]
         pos = self._positions.get(coin)
         if pos is None:
             return OrderResult(None, "rejected", Decimal(0), None, "no open position")
         if size is not None and (not size.is_finite() or size <= 0):
             return OrderResult(None, "rejected", Decimal(0), None, "size must be positive")
         amount = abs(pos.size) if size is None else min(size, abs(pos.size))
-        return self.place(Order(coin, pos.size < 0, amount, reduce_only=True))
+        return self.place(Order(coin, pos.size < 0, amount, client_id=client_id, reduce_only=True))
 
     def set_leverage(self, coin: str, leverage: int) -> dict:
         """Accept integer leverage within the venue cap without changing other coins."""
@@ -809,68 +851,135 @@ class HyperliquidExchange:
 
     # ---- writes
 
+    @staticmethod
+    def client_id(handle: str):
+        """Map a persistent decision identity to Hyperliquid's required 128-bit cloid."""
+        from hyperliquid.utils.types import Cloid
+
+        return Cloid.from_str("0x" + hashlib.sha256(handle.encode()).hexdigest()[:32])
+
+    def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult:
+        """Unknown or unavailable order status is uncertainty, never a negative acknowledgement."""
+        try:
+            response = (self._info.query_order_by_oid(self._address, int(order_id))
+                        if order_id is not None else
+                        self._info.query_order_by_cloid(self._address, self.client_id(client_id)))
+            if response.get("status") != "order":
+                return OrderResult(order_id, "uncertain", Decimal(0), None, "order not observed")
+            detail = response["order"]
+            order = detail["order"]
+            status, oid = detail["status"], self._order_id(order["oid"])
+            size = Decimal(str(order["origSz"]))
+            remaining = Decimal(str(order["sz"]))
+            if not size.is_finite() or not remaining.is_finite() or not 0 <= remaining <= size:
+                raise ValueError("invalid order quantity")
+            if status == "open":
+                return OrderResult(oid, "resting", size - remaining, None)
+            if status == "filled":
+                # Order status does not provide an execution price; fills supply accounting.
+                return OrderResult(oid, "filled", size, None)
+            if status == "canceled" or status.endswith("Canceled"):
+                return OrderResult(oid, "cancelled", size - remaining, None)
+            if status == "rejected" or status.endswith("Rejected"):
+                return OrderResult(oid, "rejected", Decimal(0), None, "venue rejected order")
+        except Exception:
+            pass
+        return OrderResult(order_id, "uncertain", Decimal(0), None, "order status unavailable")
+
+    def _submit(self, client_id: str, submit) -> OrderResult:
+        """Submit once per identity; a lost or malformed acknowledgement requires lookup."""
+        results = self.__dict__.setdefault("_client_results", {})
+        if client_id in results:
+            previous = results[client_id]
+            if previous.status != "uncertain":
+                return previous
+            result = self.lookup(client_id)
+        else:
+            results[client_id] = OrderResult(None, "uncertain", Decimal(0), None)
+            try:
+                result = self._parse_order_response(submit())
+            except Exception:
+                result = results[client_id]
+            if result.status == "uncertain":
+                result = self.lookup(client_id)
+        results[client_id] = result
+        return result
+
     def place(self, order: Order) -> OrderResult:
         if self._exchange is None:
             return OrderResult(None, "rejected", Decimal(0), None, "no signing key")
-        try:
-            if order.reduce_only and order.kind is OrderKind.MARKET:
+        client_id = order.client_id or str(uuid4())
+        if order.reduce_only and order.kind is OrderKind.MARKET:
+            try:
                 pos = next((p for p in self.account().positions if p.coin == order.coin), None)
-                if pos is None or (pos.size > 0) == order.is_buy:
-                    return OrderResult(None, "rejected", Decimal(0), None, "not reducing position")
-                return self.close(order.coin, min(order.size, abs(pos.size)))
-            rounded = self._round_size(order.coin, order.size)
-            if not rounded.is_finite() or rounded <= 0:
-                return OrderResult(None, "rejected", Decimal(0), None, "size below venue precision")
-            sz = float(rounded)  # SDK wire format only; venue/account arithmetic stays Decimal.
-            if order.kind is OrderKind.MARKET:
-                resp = self._exchange.market_open(order.coin, order.is_buy, sz)
-            else:
-                assert order.limit_px is not None
-                resp = self._exchange.order(
-                    order.coin,
-                    order.is_buy,
-                    sz,
-                    float(order.limit_px),
-                    {"limit": {"tif": "Gtc"}},
-                    reduce_only=order.reduce_only,
-                )
-        except Exception as exc:  # network or signing failure is a rejection, not a crash
-            return OrderResult(None, "rejected", Decimal(0), None, f"{type(exc).__name__}: {exc}")
-        return self._parse_order_response(resp)
+            except Exception:
+                return OrderResult(None, "rejected", Decimal(0), None, "position unavailable")
+            if pos is None or (pos.size > 0) == order.is_buy:
+                return OrderResult(None, "rejected", Decimal(0), None, "not reducing position")
+            return self.close(order.coin, min(order.size, abs(pos.size)), client_id=client_id)
+        rounded = self._round_size(order.coin, order.size)
+        if not rounded.is_finite() or rounded <= 0:
+            return OrderResult(None, "rejected", Decimal(0), None, "size below venue precision")
+        cloid = self.client_id(client_id)
+        sz = float(rounded)  # SDK wire format only; accounting remains exact Decimal.
+        if order.kind is OrderKind.MARKET:
+            return self._submit(client_id, lambda: self._exchange.market_open(
+                order.coin, order.is_buy, sz, cloid=cloid))
+        return self._submit(client_id, lambda: self._exchange.order(
+            order.coin, order.is_buy, sz, float(order.limit_px), {"limit": {"tif": "Gtc"}},
+            reduce_only=order.reduce_only, cloid=cloid))
 
-    def cancel(self, order_id: str, *, coin: str | None = None) -> dict:
-        """Return a cancellation result, including rejection when no signing key exists.
+    def cancel(self, order_id: str, *, coin: str | None = None,
+               client_id: str | None = None) -> dict:
+        """A cancel's stable decision identity retains its target oid through reconciliation.
 
-        An explicit coin targets only that market. Legacy calls without a coin
-        try configured markets until the venue confirms success.
+        Hyperliquid cancellations have no independent client-id wire field: the
+        target order's immutable oid is the venue's idempotency and lookup identity.
         """
         if self._exchange is None:
             return {"status": "rejected", "error": "no signing key"}
-        result = {"status": "rejected", "error": "unknown order"}
-        for name in (coin,) if coin is not None else self.coins:
-            try:
-                resp = self._exchange.cancel(name, int(order_id))
-                if resp.get("status") == "ok":
-                    statuses = resp["response"]["data"]["statuses"]
-                    if statuses == ["success"]:
-                        return {"status": "cancelled", "order_id": order_id}
-                result = {"status": "rejected", "error": str(resp)}
-            except Exception as exc:
-                result = {"status": "rejected", "error": f"{type(exc).__name__}: {exc}"}
-        return result
+        client_id = client_id or str(uuid4())
+        results = self.__dict__.setdefault("_cancel_results", {})
+        if client_id in results and results[client_id]["status"] != "uncertain":
+            return dict(results[client_id])
+        if client_id not in results:
+            results[client_id] = {"status": "uncertain", "order_id": order_id}
+            for name in (coin,) if coin is not None else self.coins:
+                try:
+                    response = self._exchange.cancel(name, int(order_id))
+                    if response.get("status") == "err":
+                        results[client_id] = {"status": "rejected", "error": "venue rejection"}
+                        return dict(results[client_id])
+                    statuses = response["response"]["data"]["statuses"]
+                    if response.get("status") == "ok" and statuses == ["success"]:
+                        results[client_id] = {"status": "cancelled", "order_id": order_id}
+                        return dict(results[client_id])
+                    if response.get("status") == "err" or any(
+                        isinstance(s, dict) and "error" in s for s in statuses
+                    ):
+                        results[client_id] = {"status": "rejected", "error": "venue rejection"}
+                        return dict(results[client_id])
+                except Exception:
+                    break  # Never try another market after an ambiguous submission.
+        result = self.lookup(client_id, order_id=order_id)
+        if result.status == "cancelled":
+            results[client_id] = {"status": "cancelled", "order_id": order_id}
+        elif result.status in ("filled", "rejected"):
+            results[client_id] = {"status": "rejected", "order_id": order_id,
+                                  "error": "order already terminal"}
+        return dict(results[client_id])
 
-    def close(self, coin: str, size: Decimal | None = None) -> OrderResult:
-        """Use the venue's reduce-only market close; never turn a tiny size into a full close."""
+    def close(self, coin: str, size: Decimal | None = None, *,
+              client_id: str | None = None) -> OrderResult:
+        """A reduce-only close is submitted once with its originating decision's cloid."""
         if self._exchange is None:
             return OrderResult(None, "rejected", Decimal(0), None, "no signing key")
-        try:
-            rounded = None if size is None else self._round_size(coin, size)
-            if rounded is not None and (not rounded.is_finite() or rounded <= 0):
-                return OrderResult(None, "rejected", Decimal(0), None, "size below venue precision")
-            resp = self._exchange.market_close(coin, sz=None if rounded is None else float(rounded))
-            return self._parse_order_response(resp)
-        except Exception as exc:
-            return OrderResult(None, "rejected", Decimal(0), None, f"{type(exc).__name__}: {exc}")
+        rounded = None if size is None else self._round_size(coin, size)
+        if rounded is not None and (not rounded.is_finite() or rounded <= 0):
+            return OrderResult(None, "rejected", Decimal(0), None, "size below venue precision")
+        client_id = client_id or str(uuid4())
+        return self._submit(client_id, lambda: self._exchange.market_close(
+            coin, sz=None if rounded is None else float(rounded), cloid=self.client_id(client_id)))
 
     def set_leverage(self, coin: str, leverage: int) -> dict:
         """Return venue acknowledgement or a rejected result without propagating failures."""
@@ -888,6 +997,14 @@ class HyperliquidExchange:
 
     # ---- helpers
 
+    @staticmethod
+    def _order_id(value: Any) -> str:
+        """Only a nonzero integer venue identity can acknowledge an order."""
+        if (type(value) not in (int, str) or not str(value).isascii()
+                or not str(value).isdecimal() or int(value) <= 0):
+            raise ValueError("invalid venue order identity")
+        return str(value)
+
     def _round_size(self, coin: str, size: Decimal) -> Decimal:
         d = self._sz_decimals.get(coin, 4)
         return size.quantize(Decimal(1).scaleb(-d), rounding=ROUND_DOWN)
@@ -895,17 +1012,23 @@ class HyperliquidExchange:
     @staticmethod
     def _parse_order_response(resp: Any) -> OrderResult:
         try:
+            if resp.get("status") == "err":
+                return OrderResult(None, "rejected", Decimal(0), None, "venue rejection")
             if resp.get("status") != "ok":
-                return OrderResult(None, "rejected", Decimal(0), None, str(resp))
+                return OrderResult(None, "uncertain", Decimal(0), None, "unknown response")
             statuses = resp["response"]["data"]["statuses"]
             st = statuses[0]
             if "filled" in st:
                 f = st["filled"]
+                size, px = Decimal(str(f["totalSz"])), Decimal(str(f["avgPx"]))
+                if not size.is_finite() or not px.is_finite() or size <= 0 or px <= 0:
+                    raise ValueError("invalid fill acknowledgement")
                 return OrderResult(
-                    str(f["oid"]), "filled", Decimal(str(f["totalSz"])), Decimal(str(f["avgPx"]))
+                    HyperliquidExchange._order_id(f["oid"]), "filled", size, px
                 )
             if "resting" in st:
-                return OrderResult(str(st["resting"]["oid"]), "resting", Decimal(0), None)
+                return OrderResult(HyperliquidExchange._order_id(st["resting"]["oid"]),
+                                   "resting", Decimal(0), None)
             if "error" in st:
                 return OrderResult(None, "rejected", Decimal(0), None, str(st["error"]))
         except (
@@ -915,9 +1038,9 @@ class HyperliquidExchange:
             AttributeError,
             ArithmeticError,
             ValueError,
-        ) as exc:
-            return OrderResult(None, "rejected", Decimal(0), None, f"unparseable: {exc}")
-        return OrderResult(None, "rejected", Decimal(0), None, "unknown response shape")
+        ):
+            return OrderResult(None, "uncertain", Decimal(0), None, "unparseable acknowledgement")
+        return OrderResult(None, "uncertain", Decimal(0), None, "unknown response shape")
 
 
 def stream_market(exchange: Exchange, clock: Iterator[WorldEvent]) -> Iterator[WorldEvent]:

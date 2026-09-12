@@ -61,6 +61,16 @@ class Request:
 
 
 @dataclass(frozen=True)
+class ChildRequest:
+    """A neutral composition contract names a target capability and its complete task."""
+
+    target: str
+    description: str
+    inputs: dict[str, Any]
+    outcome_schema: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class Return:
     """Spec 4.10 plus ``children``: requests the assembly wants routed next."""
 
@@ -68,7 +78,7 @@ class Return:
     outputs: dict[str, Any]
     cost: Money
     status: str  # "ok" | "malformed" | "refused" | "failed"
-    children: tuple[Request, ...] = field(default_factory=tuple)
+    children: tuple[ChildRequest | Request, ...] = field(default_factory=tuple)
     served_by: str | None = None
     stop_reason: str | None = None
     tool_calls: tuple[dict[str, Any], ...] = ()
