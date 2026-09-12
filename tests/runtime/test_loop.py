@@ -5,13 +5,10 @@ import pytest
 
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
-from factorylab.runtime.loop import (
-    PendingJudgement,
-    Runtime,
-    ScriptedProvider,
-    run_world,
-)
+from factorylab.runtime.feedback import PendingJudgement
+from factorylab.runtime.loop import Runtime, run_world
 from factorylab.runtime.worlds import load_manifest
+from factorylab.world.scripted import ScriptedProvider
 
 
 def _covered_evaluators(standing: dict) -> list[str]:
@@ -128,7 +125,8 @@ def test_scripted_world_phase3_spec_condition_2() -> None:
 
 
 def test_scripted_amendment_lambda_is_voted_adopted_and_visible(monkeypatch):
-    from factorylab.runtime.loop import Runtime, ScriptedProvider, _inputs_from_prompt
+    from factorylab.runtime.loop import Runtime
+    from factorylab.world.scripted import ScriptedProvider, _inputs_from_prompt
 
     requests = []
 
@@ -713,7 +711,7 @@ def test_tool_order_and_close_belong_to_calling_returns_and_tool_charge_decides_
 def test_antagonist_exposure_waits_past_verdict_timeout_for_marked_verdict_consequence():
     from dataclasses import replace
 
-    from factorylab.runtime.loop import ScriptedProvider
+    from factorylab.world.scripted import ScriptedProvider
 
     class Provider(ScriptedProvider):
         def _produce(self, desc, inputs):
@@ -1059,7 +1057,7 @@ def test_treasury_defaults_are_hashed_and_can_select_an_index(market_http):
 def test_scripted_clock_amendment_changes_next_tick_deterministically(monkeypatch):
     import json
 
-    from factorylab.runtime.loop import _inputs_from_prompt
+    from factorylab.world.scripted import _inputs_from_prompt
 
     def run():
         requests = []
@@ -1260,7 +1258,7 @@ def test_unpriced_cards_report_unknown_field_once(monkeypatch, observation, regi
 
 def test_two_cards_measure_same_observation_with_independent_bounds():
     from factorylab.charter.charter import Charter, MetricCard
-    from factorylab.runtime.loop import MeasureWindow
+    from factorylab.runtime.pricing import MeasureWindow
 
     rt = _recursive_runtime(events=0)
     rt.charter = Charter(1, rt.charter.norms, (

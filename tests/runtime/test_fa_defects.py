@@ -5,10 +5,11 @@ from types import SimpleNamespace
 
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.runtime.live import LiveClock
-from factorylab.runtime.loop import Runtime, ScriptedProvider
+from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange
+from factorylab.world.scripted import ScriptedProvider
 
 
 def make_runtime(*, balance=100_000_000, live=False, clock_source=None):

@@ -15,7 +15,7 @@ from factorylab.cortex.registration import ModelProposal
 from factorylab.cortex.request import Request
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.wallet import Wallet
-from factorylab.runtime.loop import Runtime, ScriptedProvider, run_world
+from factorylab.runtime.loop import Runtime, run_world
 from factorylab.runtime.resume import resume_runtime
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.clock import ClockSource
@@ -23,6 +23,7 @@ from factorylab.world.exchange import FakeExchange
 from factorylab.world.market import X402MeteredModel, X402Provider
 from factorylab.world.metering import Meter, MeteredModel
 from factorylab.world.models import ModelRequest, ModelResponse, PriceTable, TokenPrice
+from factorylab.world.scripted import ScriptedProvider
 from factorylab.world.x402 import HTTPResponse
 
 

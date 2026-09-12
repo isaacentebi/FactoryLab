@@ -1,0 +1,213 @@
+"""Deterministic model responses for the scripted world."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Any
+
+from factorylab.world.models import ModelRequest, ModelResponse
+
+
+@dataclass
+class ScriptedProvider:
+    """Deterministic stand-in for models in the scripted world, aware of the three roles.
+
+    Producers cycle buy / hold / sell / hold on ticks (sized to equity) and
+    occasionally propose registrations. Evaluators return a verdict and two
+    forecasts whose probabilities depend on the evaluator's own prompt, so
+    evaluators differ. Metas return a conformity score. Token usage is
+    declared so costs are exact. It exists to close the loop, not to be
+    clever.
+    """
+
+    name: str = "scripted"
+    notional_fraction: str = "0.8"
+    leverage: str = "3"
+    input_tokens: int = 300
+    output_tokens: int = 40
+    register_at_calls: tuple[int, ...] = (40, 60, 80)
+    tool_at_calls: tuple[int, ...] = (30, 50, 70, 90, 110, 130, 150)
+    treasury_at_call: int = 120
+    router_add_at_call: int = 100
+    _producer_calls: int = 0
+
+    def complete(self, req: ModelRequest) -> ModelResponse:
+        text = "\n".join(str(m.get("content", "")) for m in req.messages)
+        inputs = _inputs_from_prompt(text)
+        desc = _description_from_prompt(text)
+        if desc.startswith("Evaluate"):
+            reply = self._evaluate(req, inputs)
+        elif desc.startswith("Assess"):
+            reply = self._meta(inputs)
+        elif desc.startswith("Vote"):
+            reply = {"vote": True, "reason": "scripted yes"}
+        else:
+            reply = self._produce(desc, inputs)
+        return ModelResponse(
+            req.model_id, json.dumps(reply), self.input_tokens, self.output_tokens, "end_turn"
+        )
+
+    def _produce(self, desc: str, inputs: dict[str, Any]) -> dict[str, Any]:
+        self._producer_calls += 1
+        reply: dict[str, Any] = {"action": "hold"}
+        if "event Tick" in desc:
+            try:
+                payload = inputs["payload"]
+                equity = Decimal(str(payload["account"]["equity_usd"]))
+                mid = Decimal(str(payload["mids"]["BTC"]))
+                phase = int(payload["index"]) % 4
+            except (KeyError, ValueError, ArithmeticError, TypeError):
+                equity, mid, phase = Decimal(0), Decimal(0), 0
+            if mid > 0 and equity > 0 and phase in (1, 3):
+                notional = equity * Decimal(self.leverage) * Decimal(self.notional_fraction)
+                size = (notional / mid).quantize(Decimal("0.000001"))
+                if size > 0:
+                    side = "buy" if phase == 1 else "sell"
+                    reply = {"action": "order", "coin": "BTC", "side": side, "size": str(size)}
+        n = self._producer_calls
+        if "tool_results" in inputs:
+            reply["seen_tool_results"] = len(inputs["tool_results"])
+            return reply
+        if n in self.tool_at_calls:
+            # first the venue, then the population tool once it exists, then both
+            calls = [{"tool": "venue.candles", "args": {"coin": "BTC", "interval": "1m", "n": 5}}]
+            if n >= 50:
+                calls.append({"tool": "spread-check", "args": {"mid": 100.0, "bps": 3}})
+            reply["tool_calls"] = calls
+        if n == self.treasury_at_call:
+            reply["tool_calls"] = [
+                {
+                    "tool": "treasury.transfer",
+                    "args": {"direction": "to_venue", "usd": 5, "reason": "scripted"},
+                }
+            ]
+        if n == self.router_add_at_call:
+            reply["register"] = [
+                {
+                    "kind": "router",
+                    "event_kind": "Tick",
+                    "learner": "exp3",
+                    "gamma": 0.3,
+                    "add": True,
+                }
+            ]
+        if n == 45:
+            reply["register"] = [
+                {
+                    "kind": "tool",
+                    "id": "spread-check",
+                    "description": "Return the half-spread in price units for a mid and bps.",
+                    "args_schema": {
+                        "type": "object",
+                        "properties": {"mid": {"type": "number"}, "bps": {"type": "integer"}},
+                        "required": ["mid", "bps"],
+                    },
+                    "code": (
+                        "import json,sys\na=json.load(sys.stdin)\n"
+                        "print(json.dumps({'half_spread': a['mid']*a['bps']/20000}))"
+                    ),
+                    "timeout_s": 2,
+                }
+            ]
+        if n == 55:
+            reply["register"] = [
+                {
+                    "kind": "amendment",
+                    "id": "turnover-card",
+                    "add": [
+                        {
+                            "id": "turnover",
+                            "norm": "care with scarce resources",
+                            "description": "Notional traded per window relative to equity.",
+                            "units": "ratio",
+                            "window": "rolling 100 events",
+                            "acceptable_region": "below 5",
+                            "observation": "turnover",
+                            "answers_for": "producer",
+                            "lambda": 0.6,
+                        }
+                    ],
+                    "replace": [],
+                    "remove": [],
+                    "predicted_effect": "Evaluators will mark down churn; fewer round trips.",
+                }
+            ]
+        if n == 65:
+            reply["register"] = [
+                {
+                    "kind": "assembly",
+                    "id": "web-observer",
+                    "role": "producer",
+                    "model_id": "fake-haiku:online",
+                    "system_prompt": "Search for context on funding moves; reply with JSON.",
+                    "accepts": ["MarketMid"],
+                    "max_tokens": 128,
+                }
+            ]
+        if n == self.register_at_calls[0]:
+            reply["register"] = [
+                {
+                    "kind": "assembly",
+                    "id": "funding-watcher",
+                    "role": "producer",
+                    "model_id": "fake-haiku",
+                    "system_prompt": "Watch funding and mids; reply with a JSON action.",
+                    "accepts": ["Funding", "MarketMid"],
+                    "max_tokens": 128,
+                }
+            ]
+        elif n == self.register_at_calls[1]:
+            reply["register"] = [{"kind": "model", "openrouter_id": "meta/muse-spark-1.3"}]
+        elif n == self.register_at_calls[2]:
+            reply["register"] = [
+                {"kind": "router", "event_kind": "MarketMid", "learner": "exp3", "gamma": 0.2}
+            ]
+        return reply
+
+    @staticmethod
+    def _evaluate(req: ModelRequest, inputs: dict[str, Any]) -> dict[str, Any]:
+        producer = inputs.get("producer", {})
+        status = producer.get("status")
+        action = (producer.get("outputs") or {}).get("action")
+        verdict = 1.0 if status == "ok" and action in ("order", "hold") else 0.3
+        if action in ("noop", "hold"):
+            verdict = 0.9 if req.model_id == "fake-haiku" else 0.1
+        style = int(hashlib.sha256(req.system.encode()).hexdigest(), 16) % 4
+        q = (0.3, 0.45, 0.6, 0.75)[style]
+        return {
+            "verdict": verdict,
+            "rationale": "scripted judgement",
+            "forecasts": [
+                {"predicate": "wallet_up", "params": {"horizon_events": 10}, "q": q},
+                {"predicate": "fill_within", "params": {"horizon_events": 10}, "q": 1 - q},
+            ],
+        }
+
+    @staticmethod
+    def _meta(inputs: dict[str, Any]) -> dict[str, Any]:
+        v = inputs.get("verdict", {})
+        ok = isinstance(v.get("verdict"), int | float) and bool(v.get("rationale"))
+        return {"conformity": 0.8 if ok else 0.1, "rationale": "scripted meta"}
+
+
+
+def _description_from_prompt(text: str) -> str:
+    try:
+        start = text.index("REQUEST\n") + len("REQUEST\n")
+        end = text.index("\n\nINPUTS", start)
+        return text[start:end]
+    except ValueError:
+        return ""
+
+
+
+def _inputs_from_prompt(text: str) -> dict[str, Any]:
+    try:
+        start = text.index("INPUTS\n") + len("INPUTS\n")
+        end = text.index("\n\nOUTCOME SCHEMA", start)
+        return json.loads(text[start:end])
+    except (ValueError, json.JSONDecodeError):
+        return {}

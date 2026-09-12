@@ -44,9 +44,10 @@ def test_a_resume_snapshot_pins_the_venue_account_it_will_reattach_to(tmp_path):
     LiveRail pins the reserve address, the venue has no equivalent."""
     from decimal import Decimal
 
-    from factorylab.runtime.loop import Runtime, ScriptedProvider
+    from factorylab.runtime.loop import Runtime
     from factorylab.runtime.resume import runtime_state
     from factorylab.world.exchange import FakeExchange
+    from factorylab.world.scripted import ScriptedProvider
 
     class Venue(FakeExchange):
         name = "hyperliquid-testnet"

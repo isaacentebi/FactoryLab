@@ -8,8 +8,8 @@ from factorylab.learners.base import BanditFeedback
 from factorylab.learners.blum_mansour import BlumMansour
 from factorylab.learners.delayed import SnapshotLearner
 from factorylab.learners.exp3 import EXP3
-from factorylab.runtime.loop import _KeyedLearner
 from factorylab.runtime.resume import restore_runtime, runtime_state
+from factorylab.runtime.routing import _KeyedLearner
 from tests.runtime.test_fa_defects import make_runtime
 
 

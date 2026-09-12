@@ -2,8 +2,8 @@ from copy import deepcopy
 
 import pytest
 
-from factorylab.runtime.loop import MeasureWindow
 from factorylab.runtime.observations import CATALOGUE, catalogue, observation_for
+from factorylab.runtime.pricing import MeasureWindow
 
 
 def window():

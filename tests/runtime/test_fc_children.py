@@ -2,8 +2,8 @@ import json
 from dataclasses import replace
 
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
-from factorylab.runtime.loop import CH_VERDICT
 from factorylab.runtime.resume import restore_runtime, runtime_state
+from factorylab.runtime.shared import CH_VERDICT
 from factorylab.world.models import ModelResponse
 from tests.runtime.test_fa_defects import make_runtime
 

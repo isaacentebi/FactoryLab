@@ -9,9 +9,10 @@ import json
 from dataclasses import replace
 
 from factorylab.kernel.ledger import Ledger
-from factorylab.runtime.loop import ScriptedProvider, run_world
+from factorylab.runtime.loop import run_world
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.models import ModelRequest
+from factorylab.world.scripted import ScriptedProvider
 from factorylab.world.venice import VeniceProvider
 
 

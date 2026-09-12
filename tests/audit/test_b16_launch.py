@@ -4,10 +4,11 @@ from dataclasses import replace
 
 import pytest
 
-from factorylab.runtime.loop import Runtime, ScriptedProvider, run_world
+from factorylab.runtime.loop import Runtime, run_world
 from factorylab.runtime.resume import resume_world
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import VenueUnavailable
+from factorylab.world.scripted import ScriptedProvider
 
 
 def test_adapter_construction_failure_creates_no_ledger(tmp_path, monkeypatch):
@@ -18,7 +19,7 @@ def test_adapter_construction_failure_creates_no_ledger(tmp_path, monkeypatch):
     def unavailable(**kwargs):
         raise VenueUnavailable("offline startup failure")
 
-    monkeypatch.setattr("factorylab.runtime.loop.HyperliquidExchange", unavailable)
+    monkeypatch.setattr("factorylab.runtime.bootstrap.HyperliquidExchange", unavailable)
     with pytest.raises(VenueUnavailable):
         run_world(m, events=1, ledger_path=str(path), provider=ScriptedProvider())
     assert not path.exists() and not path.with_suffix(".jsonl.key").exists()
@@ -32,7 +33,7 @@ def test_market_construction_failure_creates_no_ledger(tmp_path, monkeypatch):
             raise RuntimeError("offline startup failure")
 
     path = tmp_path / "market-startup.jsonl"
-    monkeypatch.setattr("factorylab.runtime.loop.X402Provider", UnavailableMarket)
+    monkeypatch.setattr("factorylab.runtime.bootstrap.X402Provider", UnavailableMarket)
     with pytest.raises(RuntimeError, match="offline startup failure"):
         run_world(load_manifest("scripted"), events=1, ledger_path=str(path),
                   provider=ScriptedProvider())
