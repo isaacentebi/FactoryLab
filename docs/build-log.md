@@ -383,3 +383,13 @@ the paid proof must record finish reason and nonempty answer separately from
 successful settlement. It cannot count HTTP 200 with an empty answer as success.
 The authorized ceiling remains $6 total; no Hyperliquid mainnet activity is part
 of this compute proof.
+
+### Live run 8 (testnet, seed 8, scoring public, reward line delivered, GLM and DeepSeek 4.1 producers)
+
+1,110 events, 333 invocations, $0.70. **The population traded for the first time.** The antagonist sold 0.005 BTC short at 77,038; the observer bought ETH twice (one rejected, one filled at 2,491.6); both positions were open at the kill, so no return paid off yet and one lot was marked. A producer registered `trend-decider`, accepting every event kind, and it was woken 28 times. Three router proposals were refused because the proposal shape described `add` in prose and the models sent the string "true"; the shape now shows a boolean. Antagonist 31 of 40. Evaluator standing −0.20 to −0.44: judges still bless inaction while nothing pays off, as the audits predicted for this phase. The early fills are again the experimenter's pre-launch test orders, caught by the consequence cursor that still starts at zero (audit finding, fix in workstream FA).
+
+**Bewilderment (v0.5 §9 condition 6).** Partial, and the first time with skin in the game: an unscripted assembly with a broader event appetite than any seed, and trades nobody scripted. Still nothing we could not have predicted. The honest next test is a run long enough for a position to close.
+
+### Cold audits (12 September)
+
+Five seats: fidelity by Codex, Fable and Opus; defects by Fable and Opus (Codex was blocked twice by its provider's classifier on this code). Reports in `docs/audits/`. Convergent findings: population cards priced but never applied; the tool sandbox is not isolation; the consequence fill cursor starts at zero; no OS lock on a ledger; vendor overruns swallowed; a torn final append bricks resume; the JSON extractor censors returns with a `}` in a rationale; the novelty reserve's sign reversed; the immune system post-mortem only; lost order acknowledgements recorded as rejections; Blum–Mansour routers crash under the standing mix; the seed prompt advertises child requests nothing handles. Two fidelity arguments recorded as dissent rather than fixed: that the public scoring block over-discloses (the essay lists reward structures among public schematics) and that `return_paid_off` is an architect's objective (the essay makes money the numéraire; run 8 is the first evidence either way). Fix workstreams FA, FB, FC.

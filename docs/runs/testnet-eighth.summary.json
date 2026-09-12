@@ -1,0 +1,314 @@
+{
+  "world": "testnet",
+  "manifest_hash": "3546741c1dd854f325f2afa2f825297183d314d914ac39ce1cbb4ad4bf131cb1",
+  "seed": 8,
+  "drip": false,
+  "terminated": true,
+  "termination_reason": "explicit_kill:budget",
+  "seal_key_released": true,
+  "wallet_balance_micro": 99304325,
+  "wallet_conservation": true,
+  "ledger_verify": true,
+  "outstanding_decisions": 1,
+  "exchange_equity_usd": "983.864216",
+  "live": true,
+  "evaluation_boundary": "producer \u2192 evaluator \u2192 meta",
+  "charter_edition": 1,
+  "tools": [
+    "catalogue.search",
+    "market.discover",
+    "treasury.transfer",
+    "venue.cancel",
+    "venue.candles",
+    "venue.close",
+    "venue.funding_history",
+    "venue.open_orders",
+    "venue.order_book",
+    "venue.place_limit",
+    "venue.place_market",
+    "venue.positions",
+    "venue.set_leverage"
+  ],
+  "standing": {
+    "eval-a": {
+      "n": 135,
+      "sum_brier": 104.8127000000001,
+      "sum_baseline_brier": 133.24543154627398,
+      "settled": 135,
+      "requested": 135,
+      "mean_brier": 0.7763903703703712,
+      "mean_baseline_brier": 0.9870031966390665,
+      "skill": -0.21061282626869537,
+      "coverage": 1.0,
+      "weight": 0.2893871737313046
+    },
+    "eval-d": {
+      "n": 102,
+      "sum_brier": 75.72550000000004,
+      "sum_baseline_brier": 101.49775452768618,
+      "settled": 102,
+      "requested": 102,
+      "mean_brier": 0.7424068627450984,
+      "mean_baseline_brier": 0.9950760247812371,
+      "skill": -0.25266916203613876,
+      "coverage": 1.0,
+      "weight": 0.24733083796386124
+    },
+    "eval-b": {
+      "n": 111,
+      "sum_brier": 88.55377500000002,
+      "sum_baseline_brier": 110.99692910456545,
+      "settled": 111,
+      "requested": 111,
+      "mean_brier": 0.7977817567567569,
+      "mean_baseline_brier": 0.9999723342753645,
+      "skill": -0.20219057751860758,
+      "coverage": 1.0,
+      "weight": 0.2978094224813924
+    },
+    "eval-c": {
+      "n": 149,
+      "sum_brier": 83.96900000000008,
+      "sum_baseline_brier": 148.99372298420008,
+      "settled": 149,
+      "requested": 150,
+      "mean_brier": 0.5635503355704703,
+      "mean_baseline_brier": 0.9999578723771817,
+      "skill": -0.4364075368067114,
+      "coverage": 0.9933333333333333,
+      "weight": 0.0635924631932886
+    }
+  },
+  "prices": {
+    "parameters": {
+      "eta": 0.5,
+      "kappa": 0.5,
+      "decay": 0.1,
+      "lambda_max": 1.0,
+      "min_window_events": 1
+    },
+    "cards": {
+      "well_formed_rate": {
+        "lambda": 0.0,
+        "updates": 0,
+        "saturations": 0,
+        "max_step": 0.0,
+        "last_window_end_event": null
+      },
+      "forecast_skill": {
+        "lambda": 0.0,
+        "updates": 0,
+        "saturations": 0,
+        "max_step": 0.0,
+        "last_window_end_event": null
+      }
+    }
+  },
+  "routers": {
+    "router:Fill": {
+      "event_kind": "Fill",
+      "universe": [
+        "seed-decider",
+        "trend-decider",
+        "NOOP"
+      ],
+      "epoch": 2,
+      "learner": "EXP3"
+    },
+    "router:Funding": {
+      "event_kind": "Funding",
+      "universe": [
+        "seed-observer",
+        "trend-decider",
+        "NOOP"
+      ],
+      "epoch": 2,
+      "learner": "EXP3"
+    },
+    "router:MarketMid": {
+      "event_kind": "MarketMid",
+      "universe": [
+        "antagonist-a",
+        "seed-observer",
+        "trend-decider",
+        "NOOP"
+      ],
+      "epoch": 2,
+      "learner": "EXP3"
+    },
+    "router:ProducerReturn": {
+      "event_kind": "ProducerReturn",
+      "universe": [
+        "eval-a",
+        "eval-b",
+        "eval-c",
+        "eval-d",
+        "NOOP"
+      ],
+      "epoch": 1,
+      "learner": "EXP3"
+    },
+    "router:Tick": {
+      "event_kind": "Tick",
+      "universe": [
+        "antagonist-a",
+        "seed-decider",
+        "trend-decider",
+        "NOOP"
+      ],
+      "epoch": 2,
+      "learner": "EXP3"
+    },
+    "router:Verdict": {
+      "event_kind": "Verdict",
+      "universe": [
+        "meta-a",
+        "meta-b",
+        "NOOP"
+      ],
+      "epoch": 1,
+      "learner": "EXP3"
+    }
+  },
+  "stats": {
+    "resumes": 0,
+    "events": 1110,
+    "decisions": 456,
+    "invocations": 333,
+    "noops": 123,
+    "orders_placed": 3,
+    "orders_rejected": 1,
+    "fills": 5,
+    "producer_returns": 205,
+    "verdicts": 134,
+    "meta_verdicts": {
+      "2": 32
+    },
+    "conformities": 95,
+    "censored": 118,
+    "fast_settlements": 35,
+    "forecasts_sealed": 498,
+    "forecasts_settled": 497,
+    "timeouts": 0,
+    "upward_releases": 143,
+    "reserve_windows": 1,
+    "exclusions": 0,
+    "registrations_accepted": 1,
+    "registrations_rejected": 3,
+    "epochs": 4,
+    "routers_replaced": 0,
+    "reconciliations": 4,
+    "tool_calls": 2,
+    "tool_call_failures": 0,
+    "population_tools_registered": 0,
+    "amendments_proposed": 0,
+    "amendments_passed": 0,
+    "amendments_activated": 0,
+    "clock_changes": 0,
+    "votes_cast": 0,
+    "transfer_intents": 0,
+    "exposures_settled": 40,
+    "exposures_won": 31,
+    "price_updates": 0,
+    "price_skipped": 0,
+    "penalized_settlements": 0,
+    "max_settlement_latency_events": 18,
+    "last_window_values": {},
+    "sample_propensity": {
+      "handle": "decision-0",
+      "action_ids": [
+        "antagonist-a",
+        "seed-decider",
+        "NOOP"
+      ],
+      "probs": [
+        0.3333333333333333,
+        0.3333333333333333,
+        0.3333333333333333
+      ],
+      "chosen": "seed-decider",
+      "rng_seed": 127731606602957775792738959244254602547
+    },
+    "invocation_status": {
+      "ok": 311,
+      "malformed": 22
+    },
+    "invocations_by_role": {
+      "producer": 116,
+      "evaluator": 182,
+      "meta": 35
+    },
+    "stop_reasons": {
+      "stop": 322,
+      "length": 11
+    },
+    "paid_off": 0,
+    "not_paid_off": 204,
+    "marked": 1,
+    "consequences_pending": 1,
+    "lots_opened": 2,
+    "lots_closed": 0
+  },
+  "aggregates": {
+    "action_frequencies": {
+      "counts": {
+        "0.0": 48,
+        "0.1": 150,
+        "0.2": 24,
+        "0.3": 13,
+        "0.4": 5,
+        "0.5": 61,
+        "0.6": 51,
+        "0.7": 47,
+        "0.8": 22,
+        "0.9": 22,
+        "1.0": 55,
+        "NOOP": 123,
+        "antagonist-a": 40,
+        "eval-a": 45,
+        "eval-b": 53,
+        "eval-c": 50,
+        "eval-d": 34,
+        "meta-a": 11,
+        "meta-b": 24,
+        "seed-decider": 9,
+        "seed-observer": 39,
+        "trend-decider": 28
+      }
+    },
+    "invocations_by_assembly": {
+      "counts": {
+        "antagonist-a": 40,
+        "eval-a": 45,
+        "eval-b": 53,
+        "eval-c": 50,
+        "eval-d": 34,
+        "meta-a": 11,
+        "meta-b": 24,
+        "seed-decider": 9,
+        "seed-observer": 39,
+        "trend-decider": 28
+      }
+    },
+    "spend_by_capability": {
+      "spend": {
+        "antagonist-a": 66866,
+        "eval-a": 64342,
+        "eval-b": 100488,
+        "eval-c": 41394,
+        "eval-d": 86215,
+        "meta-a": 21799,
+        "meta-b": 7460,
+        "seed-decider": 18485,
+        "seed-observer": 39073,
+        "trend-decider": 47159
+      }
+    },
+    "settlement_latency": {
+      "count": 953,
+      "total_ns": 5515231302000,
+      "min_ns": 0,
+      "max_ns": 142432824000
+    }
+  }
+}

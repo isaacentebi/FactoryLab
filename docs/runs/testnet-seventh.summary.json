@@ -1,0 +1,306 @@
+{
+  "world": "testnet",
+  "manifest_hash": "9813a67bcf949321113ebbda6a1c8492eb10c65ae18cc139beac6d3945b7e4ac",
+  "seed": 7,
+  "drip": false,
+  "terminated": true,
+  "termination_reason": "explicit_kill:budget",
+  "seal_key_released": true,
+  "wallet_balance_micro": 99580902,
+  "wallet_conservation": true,
+  "ledger_verify": true,
+  "outstanding_decisions": 1,
+  "exchange_equity_usd": "973.976757",
+  "live": true,
+  "evaluation_boundary": "producer \u2192 evaluator \u2192 meta",
+  "charter_edition": 1,
+  "tools": [
+    "catalogue.search",
+    "market.discover",
+    "treasury.transfer",
+    "venue.cancel",
+    "venue.candles",
+    "venue.close",
+    "venue.funding_history",
+    "venue.open_orders",
+    "venue.order_book",
+    "venue.place_limit",
+    "venue.place_market",
+    "venue.positions",
+    "venue.set_leverage"
+  ],
+  "standing": {
+    "eval-c": {
+      "n": 207,
+      "sum_brier": 138.0625,
+      "sum_baseline_brier": 206.25,
+      "settled": 207,
+      "requested": 207,
+      "mean_brier": 0.6669685990338164,
+      "mean_baseline_brier": 0.9963768115942029,
+      "skill": -0.32940821256038644,
+      "coverage": 1.0,
+      "weight": 0.17059178743961356
+    },
+    "eval-d": {
+      "n": 159,
+      "sum_brier": 124.6595749999999,
+      "sum_baseline_brier": 158.75,
+      "settled": 159,
+      "requested": 159,
+      "mean_brier": 0.7840224842767289,
+      "mean_baseline_brier": 0.9984276729559748,
+      "skill": -0.21440518867924585,
+      "coverage": 1.0,
+      "weight": 0.28559481132075415
+    },
+    "eval-a": {
+      "n": 66,
+      "sum_brier": 38.992499999999986,
+      "sum_baseline_brier": 66.0,
+      "settled": 66,
+      "requested": 66,
+      "mean_brier": 0.5907954545454543,
+      "mean_baseline_brier": 1.0,
+      "skill": -0.40920454545454565,
+      "coverage": 1.0,
+      "weight": 0.09079545454545435
+    },
+    "eval-b": {
+      "n": 90,
+      "sum_brier": 79.74900000000004,
+      "sum_baseline_brier": 90.0,
+      "settled": 90,
+      "requested": 90,
+      "mean_brier": 0.8861000000000004,
+      "mean_baseline_brier": 1.0,
+      "skill": -0.11389999999999956,
+      "coverage": 1.0,
+      "weight": 0.38610000000000044
+    }
+  },
+  "prices": {
+    "parameters": {
+      "eta": 0.5,
+      "decay": 0.1,
+      "lambda_max": 1.0,
+      "min_window_events": 1
+    },
+    "cards": {
+      "well_formed_rate": {
+        "lambda": 0.0,
+        "updates": 0,
+        "saturations": 0,
+        "max_step": 0.0,
+        "last_window_end_event": null
+      },
+      "forecast_skill": {
+        "lambda": 0.0,
+        "updates": 0,
+        "saturations": 0,
+        "max_step": 0.0,
+        "last_window_end_event": null
+      }
+    }
+  },
+  "routers": {
+    "router:Fill": {
+      "event_kind": "Fill",
+      "universe": [
+        "seed-decider",
+        "NOOP"
+      ],
+      "epoch": 1,
+      "learner": "EXP3"
+    },
+    "router:Funding": {
+      "event_kind": "Funding",
+      "universe": [
+        "seed-observer",
+        "NOOP"
+      ],
+      "epoch": 1,
+      "learner": "EXP3"
+    },
+    "router:MarketMid": {
+      "event_kind": "MarketMid",
+      "universe": [
+        "antagonist-a",
+        "seed-observer",
+        "NOOP"
+      ],
+      "epoch": 1,
+      "learner": "EXP3"
+    },
+    "router:ProducerReturn": {
+      "event_kind": "ProducerReturn",
+      "universe": [
+        "eval-a",
+        "eval-b",
+        "eval-c",
+        "eval-d",
+        "NOOP"
+      ],
+      "epoch": 1,
+      "learner": "EXP3"
+    },
+    "router:Tick": {
+      "event_kind": "Tick",
+      "universe": [
+        "antagonist-a",
+        "seed-decider",
+        "NOOP"
+      ],
+      "epoch": 1,
+      "learner": "EXP3"
+    },
+    "router:Verdict": {
+      "event_kind": "Verdict",
+      "universe": [
+        "meta-a",
+        "meta-b",
+        "NOOP"
+      ],
+      "epoch": 1,
+      "learner": "EXP3"
+    }
+  },
+  "stats": {
+    "resumes": 0,
+    "events": 1151,
+    "decisions": 457,
+    "invocations": 349,
+    "noops": 108,
+    "orders_placed": 0,
+    "orders_rejected": 0,
+    "fills": 3,
+    "producer_returns": 203,
+    "verdicts": 138,
+    "meta_verdicts": {
+      "2": 45
+    },
+    "conformities": 124,
+    "censored": 82,
+    "fast_settlements": 45,
+    "forecasts_sealed": 522,
+    "forecasts_settled": 522,
+    "timeouts": 0,
+    "upward_releases": 150,
+    "reserve_windows": 1,
+    "exclusions": 0,
+    "registrations_accepted": 0,
+    "registrations_rejected": 4,
+    "epochs": 0,
+    "routers_replaced": 0,
+    "reconciliations": 4,
+    "tool_calls": 3,
+    "tool_call_failures": 0,
+    "population_tools_registered": 0,
+    "amendments_proposed": 0,
+    "amendments_passed": 0,
+    "amendments_activated": 0,
+    "clock_changes": 0,
+    "votes_cast": 0,
+    "transfer_intents": 0,
+    "exposures_settled": 43,
+    "exposures_won": 36,
+    "price_updates": 0,
+    "price_skipped": 0,
+    "penalized_settlements": 0,
+    "max_settlement_latency_events": 18,
+    "last_window_values": {},
+    "sample_propensity": {
+      "handle": "decision-1",
+      "action_ids": [
+        "antagonist-a",
+        "seed-observer",
+        "NOOP"
+      ],
+      "probs": [
+        0.3333333333333333,
+        0.3333333333333333,
+        0.3333333333333333
+      ],
+      "chosen": "antagonist-a",
+      "rng_seed": 279465158934149700935886463558486303824
+    },
+    "invocation_status": {
+      "ok": 335,
+      "malformed": 13,
+      "failed": 1
+    },
+    "invocations_by_role": {
+      "producer": 119,
+      "evaluator": 185,
+      "meta": 45
+    },
+    "stop_reasons": {
+      "stop": 342,
+      "length": 6,
+      "none": 1
+    },
+    "paid_off": 0,
+    "not_paid_off": 203,
+    "marked": 0,
+    "consequences_pending": 0,
+    "lots_opened": 0,
+    "lots_closed": 0
+  },
+  "aggregates": {
+    "action_frequencies": {
+      "counts": {
+        "0.0": 110,
+        "0.1": 210,
+        "0.2": 18,
+        "0.5": 33,
+        "0.6": 6,
+        "0.7": 14,
+        "0.8": 16,
+        "0.9": 18,
+        "1.0": 97,
+        "NOOP": 108,
+        "antagonist-a": 43,
+        "eval-a": 22,
+        "eval-b": 41,
+        "eval-c": 69,
+        "eval-d": 53,
+        "meta-a": 23,
+        "meta-b": 22,
+        "seed-decider": 17,
+        "seed-observer": 59
+      }
+    },
+    "invocations_by_assembly": {
+      "counts": {
+        "antagonist-a": 43,
+        "eval-a": 22,
+        "eval-b": 41,
+        "eval-c": 69,
+        "eval-d": 53,
+        "meta-a": 23,
+        "meta-b": 22,
+        "seed-decider": 17,
+        "seed-observer": 59
+      }
+    },
+    "spend_by_capability": {
+      "spend": {
+        "antagonist-a": 56654,
+        "eval-a": 25232,
+        "eval-b": 64532,
+        "eval-c": 75784,
+        "eval-d": 114159,
+        "meta-a": 33564,
+        "meta-b": 5524,
+        "seed-decider": 7774,
+        "seed-observer": 12422
+      }
+    },
+    "settlement_latency": {
+      "count": 978,
+      "total_ns": 1814428061000,
+      "min_ns": 0,
+      "max_ns": 96142870000
+    }
+  }
+}
