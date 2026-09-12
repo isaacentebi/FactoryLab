@@ -456,6 +456,9 @@ class Proof:
         self.directory.mkdir(parents=True, exist_ok=True)
         sync_directory(self.directory.parent)
         sync_directory(self.root)
+        # Credentials load once here, not inside the status step: a --continue run that
+        # skips status must still sign (12 September: the seller steps ran keyless).
+        self.load_credentials()
 
         def run_step(name: str, fn) -> bool:
             if self.continue_run and self._done(name):
