@@ -165,3 +165,33 @@ Built by Codex (`charter/controller.py`, PR #17, one attempt, 23 tests) and a Cl
 **Bewilderment check (v0.5 §9 condition 6): failed.** Nothing unscripted happened. Compared with run 3 (six registrations on GLM and DeepSeek 4.1 producers), the cheaper roster produced a duller world, which is itself information about what thinking costs.
 
 **What it taught us.** This is the essay's stable-failure attractor, and the cause is ours: the verdict channel prices charter conformity and the consequence channel prices the evaluators' separate forecasts, so no signal ties a verdict to money and blessing inaction is free. Fix approved as spec v0.7 §2: every verdict is also a sealed forecast that the judged return pays off, realized on close, net of fees, funding and the return's own compute. A second leak found while reviewing the same path: the `ProducerReturn` event republished the producer's whole input, including its private memory; judges now see only the event the producer answered (commit 2aff1cb).
+
+## Phase 4 — versioning, verdict as forecast, population λ, recursive evaluation, market compute, clock (11 September 2026)
+
+Merged PRs #19–#25, all Codex on `gpt-6-astra` in separate worktrees, one attempt each except recursive meta-evaluation (two passes: the cascade gate was a review finding) and resume (in flight: a semantic rebase against the clock change). Gate on main after #25: 1189 passed.
+
+- Versioning (`factorylab/versioning/`): windows, cells, transition operator with the Dobrushin bound as the spectral-gap bound, versions, the four pathologies, early-warning signals, settling time. Read-only over a diary.
+- Verdict as consequence forecast (spec v0.7 §2, approved by the experimenter after the fidelity argument in this log's run 4 entry): kernel predicate `return_paid_off`, FIFO lots, realized on close, backstop marking; reward-hacking review in `factorylab/settlement/REWARD_HACKING.md`.
+- Population-proposed λ; recursive meta-evaluation with a per-tier cascade gate (3:1 with jitter; the meta's score settles its whole window, a reviewer change from the free 1.0 the first pass gave siblings); the clock amendable by the committee within physics bounds.
+- Compute bought on the open market: x402 client (built for Venice, generalised), `market.discover`, `x402:` and `venice:` namespaces, metering at the paid quote, compute insolvency. Research in `docs/research/venice.md`; the card and OpenRouter routes verified dead.
+- Judges see only the event a producer answered; the Hyperliquid adapter retries and falls back to last-good values.
+
+### Fidelity check
+
+Every principle in `docs/design-audit-v2.md` marked missing is now built, with two remaining partials: the price controller has no integral or derivative term, and governance cadence is enforced by window rather than measured settling time (the versioning module now reports it). The one deliberate new deviation is the launch tick of five minutes, the architect's cast for edition 1, healed by the committee's power to amend it.
+
+### Live run 5 (testnet, seed 5, venue key, unfunded testnet account)
+
+896 events, $0.46, ended by kill. Two unscripted registrations (`eth-mid-analyzer`, invoked 23 times), the antagonist fooled a judge 44 times in 50, evaluator skill near baseline. Zero orders: the testnet account had no testnet USDC. Bewilderment partial.
+
+### Live run 6 (testnet, seed 6, 999 testnet USDC, new physics)
+
+1,117 events, 344 invocations, $0.40. Four registrations accepted (`btc-mid-analyzer`, `funding-analyzer`, `eth-mid-analyzer`, one more), sixteen refused: eleven re-proposals of ids that already existed, four malformed router proposals, one model id in the wrong shape. Antagonist fooled judges 27 of 39. Meta-verdicts at tier 2: 62 (the cascade gate held meta wakes to a third of verdicts). Twelve failed invocations were OpenRouter 429s on Qwen 3.8 Flash, weather the world now survives. Two fills at the start were the experimenter's manual test order, picked up because the fill cursor starts at zero rather than at launch (to fix in the reconciler).
+
+**The new physics bit.** Every one of 202 producer returns settled `not_paid_off`, so evaluator standing fell to −0.18 to −0.47 for blessing returns that placed nothing. Within one run nobody adapted; judges have no memory across runs and little within. That is the pressure the design intends and it will only resolve when something pays off.
+
+**Still zero orders, and the cause is ours again.** The producer contract said `action` is a string and nothing more; the only direct order shape, `{"action": "order", coin, side, size}`, was never in the public schematics, and the venue tools need a tool call the cheap models rarely attempt. Producers invented labels (`observe_market_mid`, `register`). Fixed the same way run 3 was fixed: the shape and an example are now public. No rule added.
+
+**Bewilderment (v0.5 §9 condition 6).** Partial: four assemblies the seed did not have, all observational. Nothing surprising yet. The honest reading is that the population cannot yet act on the world because we had not told it the shape of acting; run 7 is the first fair test.
+
+**Follow-ups:** fill cursor from launch time; registration rejection reasons public in the world block (the population re-proposes the same id because it cannot see why it was refused); the proposal parser should learn the model namespaces instead of the alias workaround.

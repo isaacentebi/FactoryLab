@@ -804,6 +804,13 @@ class Runtime:
         },
     }
     A_RETURN_MAY_INCLUDE: dict[str, str] = {
+        "action": (
+            '"noop" | "hold" | "order"; an "order" return also carries "coin" (one of the '
+            'world\'s coins), "side" ("buy" | "sell") and "size" (base units as a decimal '
+            'string, e.g. "0.005"), and is placed at market on return; limit, reduce-only, '
+            "close, leverage and cancel are tool_calls on the venue.* tools"
+        ),
+        "order_example": '{"action": "order", "coin": "ETH", "side": "buy", "size": "0.004"}',
         "register": "a list of proposals, each shaped like one of proposal_shapes",
         "tool_calls": (
             'a list of {"tool": id, "args": {...}} (max 4); results come back in a second call'
