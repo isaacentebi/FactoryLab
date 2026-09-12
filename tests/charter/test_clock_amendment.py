@@ -61,7 +61,7 @@ def test_activation_ledgers_before_clock_mutation(monkeypatch):
     assert rt.tick_clock.interval_ns == 2 * 10**9
     assert rt.stats.clock_changes == 1
     assert rt._world_block()["clock"] == {
-        "tick_interval": "2000000000ns", "min_tick": "1000000000ns", "max_tick": "40000000000ns",
+        "tick_interval": "2s", "min_tick": "1s", "max_tick": "40s",
     }
 
 

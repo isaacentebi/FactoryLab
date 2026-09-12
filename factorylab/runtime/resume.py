@@ -296,6 +296,7 @@ _RUNTIME_FIELDS = (
     "pending", "balance_at", "events_log", "last_closure_ns", "reserve_window_start", "internal",
     "n", "emitted", "insolvency_count", "_compute_routed", "_compute_unaffordable",
     "world_consumed", "ticks_consumed", "drips_consumed", "started", "catalogue", "sellers",
+    "registration_feedback",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
