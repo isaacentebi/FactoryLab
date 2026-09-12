@@ -4,9 +4,9 @@ Binding for fix passes 2 and 3 after the round-two cold audit (`docs/audits/v2/t
 
 The experimenter's decisions (12 September): A1 full composition with maximum freedom; A11 registrable observations; A16 verdict and payoff split, closers credited; A12 the population tops up Venice itself; A5, A10, A17 as recommended below.
 
-Prerequisite: the mechanical split of `runtime/loop.py` (seat 7 item 8) lands first, so the workstreams below touch disjoint modules. Module names below assume it: `runtime/pricing.py`, `runtime/feedback.py`, `runtime/governance.py`, `runtime/routing.py`, `runtime/venue.py`, `cortex/schematics.py`.
+Prerequisite: the mechanical split of `runtime/loop.py` (seat 7 item 8) lands first, so the sections below touch disjoint modules. Module names below assume it: `runtime/pricing.py`, `runtime/feedback.py`, `runtime/governance.py`, `runtime/routing.py`, `runtime/venue.py`, `cortex/schematics.py`.
 
-## Pass 2, workstream W1: time, immune organ, prices
+## Pass 2, W1: time, immune organ, prices
 
 ### A2. Governance cadence measures the slowest loop
 
@@ -53,7 +53,7 @@ Mechanism (`runtime/pricing.py`, `charter/controller.py`):
 
 Accept: seat 2's ten-window reproduction (cost 1,100 against a 500 ceiling) leaves a cheap successful return with a strictly higher settlement than an expensive failed one in the same window; the scripted run never clips 100% of a window's settlements to zero.
 
-## Pass 2, workstream W2: judges, consequences, the reserve
+## Pass 2, W2: judges, consequences, the reserve
 
 ### A16. Verdict and payoff are two numbers; closers are credited
 
@@ -105,7 +105,7 @@ Mechanism: `revision` counts only **accepted** registrations and activated amend
 
 Accept: one rejected registration per twenty returns leaves `revision` at 0; the divergence signal in the scripted run produces a `sampling.raise` item.
 
-## Pass 2, workstream W3: disclosure, governance, the treasury
+## Pass 2, W3: disclosure, governance, the treasury
 
 ### A7. Everyone can read the charter and the mechanics
 
@@ -115,7 +115,7 @@ Mechanism (`cortex/schematics.py`): the world block carries `charter` (the full 
 
 ### A8. No topology
 
-Essay II.I.b: transparency collapse. Spec v0.4 invariant 6.
+Essay II.I.b: transparency collapse. No assembly sees the whole topology.
 
 Mechanism: the world block publishes per event kind the **number** of routers and of assemblies, the contracts, prices and catalogue; `menu` and per-assembly `model_id` are removed. An assembly learns of another only through the exposure and consequence channels and public registrations (`Registered` events remain public: id, kind, accepts; not model, not prompt).
 
@@ -147,7 +147,7 @@ Essay I.III: the control tower reads the outcomes the factory produces.
 
 Mechanism (`runtime/wake.py`): venue equity, realised P&L to date, reserve and Venice balances, the five sealed aggregates with per-assembly names replaced by role counts; no positions, no entry prices, no assembly ids.
 
-## Pass 3, workstream W4: composition is the population's
+## Pass 3, W4: composition is the population's
 
 ### A1. Full composition, maximum freedom
 
@@ -164,7 +164,7 @@ Mechanism (`cortex/registration.py`, `runtime/routing.py`, the step methods):
 
 Accept: seat 1's reproduction (parent → helper → grandchild) executes all three; a registered producer accepting `ProducerReturn` is admitted; a retire proposal removes a seed evaluator and its pending feedback still settles; the scripted world exercises each once.
 
-## Pass 3, workstream W5: propensity and measurement
+## Pass 3, W5: propensity and measurement
 
 ### A10. The deciding agent's propensity rides on the request
 
@@ -182,7 +182,7 @@ Mechanism: a registration `{"kind": "observation", "id", "description", "unit", 
 
 Edition 1 re-draft with the launch roster (A6). Pass 4: seat 7's polish list. Round three: the same seven seats on the result.
 
-## Pass 3, workstream W8: registrable connectors (information sources are the population's)
+## Pass 3, W8: registrable connectors (information sources are the population's)
 
 Essay II.I: composability means the factory can discover primitives, assess their contracts and assemble them. I.I: what a factory can know must not be decided for it.
 
