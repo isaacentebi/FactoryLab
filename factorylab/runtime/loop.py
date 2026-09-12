@@ -41,7 +41,7 @@ from typing import Any
 
 from factorylab.charter.charter import Charter
 from factorylab.charter.controller import CardRegion
-from factorylab.cortex.assembly import Assembly, AssemblySpec
+from factorylab.cortex.assembly import Assembly, AssemblySpec, reserved_return_fields
 from factorylab.cortex.registration import (
     MAX_PROPOSALS_PER_RETURN,
     AssemblyProposal,
@@ -576,28 +576,79 @@ class Runtime:
         self.ev = manifest.evaluation
         self.charter: Charter = manifest.charter
 
-        # kernel
-        self.ledger = _journal or RecoveryJournal(
-            Ledger(
-                ledger_path,
-                manifest=json.loads(manifest.canonical_json()),
-                clock_ns=self.clock,
-                full_verify_every=1024,
-                key_path=(ledger_path + ".key") if ledger_path else None,
-            ),
-            self.clock,
-        )
-        self.use_drip = drip and manifest.drip is not None
-        schedule = None
-        if self.use_drip and manifest.drip is not None:
-            d = manifest.drip
-            schedule = DripSchedule(d.amount_micro, d.period_ns, d.start_ns, d.end_ns)
         self.initial = (
             manifest.initial_balance_micro
             if initial_balance_micro is None
             else initial_balance_micro
         )
-        self.wallet = Wallet(self.initial, self.ledger, schedule, clock_ns=self.clock)
+        # Adapter construction must succeed before a persistent world exists.
+        if exchange is not None:
+            self.exchange = exchange
+        elif self.live:
+            self.exchange = HyperliquidExchange(
+                mainnet=manifest.exchange.mainnet, coins=manifest.exchange.coins
+            )
+        else:
+            shocks: dict[int, dict[str, Decimal]] = {}
+            for sh in manifest.exchange.shocks:
+                shocks.setdefault(sh.step, {})[sh.coin] = Decimal(sh.multiplier)
+            self.exchange = FakeExchange(
+                seed=manifest.exchange.seed,
+                coins=manifest.exchange.coins,
+                start_cash_usd=money_to_usd(self.initial),
+                shocks=shocks,
+            )
+        if provider is None:
+            provider = build_provider(manifest)
+        self.provider = provider if provider is not None else ScriptedProvider()
+        self.market = (
+            market
+            if market is not None
+            else (
+                self.provider.x402
+                if isinstance(self.provider, MultiProvider)
+                else self.provider
+                if isinstance(self.provider, X402Provider)
+                else X402Provider(discovery_url=manifest.treasury.discovery_url)
+            )
+        )
+        self.market.max_request_micro = manifest.treasury.max_request_micro
+        from factorylab.world.treasury import UnconfiguredRail
+
+        if self.live:
+            if manifest.treasury.reserve_address is not None:
+                from factorylab.world.treasury_rails import LiveRail
+
+                rail = LiveRail(self.exchange, manifest.treasury)
+            else:
+                rail = UnconfiguredRail(self.exchange)
+
+        # kernel
+        if _journal is not None:
+            self.ledger = _journal
+        else:
+            manifest_data = json.loads(manifest.canonical_json())
+            from pathlib import Path
+
+            if ledger_path and Path(ledger_path).exists():
+                ledger = Ledger.reopen(ledger_path, manifest=manifest_data, clock_ns=self.clock)
+                if ledger._event_times()["launch"]:
+                    raise FileExistsError("world already launched; use resume")
+                ledger.append({"kind": "launch.retry"})
+            else:
+                ledger = Ledger(
+                    ledger_path, manifest=manifest_data, clock_ns=self.clock,
+                    full_verify_every=1024,
+                    key_path=(ledger_path + ".key") if ledger_path else None,
+                )
+            self.ledger = RecoveryJournal(ledger, self.clock)
+        self.use_drip = drip and manifest.drip is not None
+        schedule = None
+        if self.use_drip and manifest.drip is not None:
+            d = manifest.drip
+            schedule = DripSchedule(d.amount_micro, d.period_ns, d.start_ns, d.end_ns)
+        self.wallet = Wallet(self.initial, self.ledger, schedule, clock_ns=self.clock,
+                             reported_cost_multiple=manifest.treasury.reported_cost_multiple)
         self.bus = Bus(self.ledger)
         self.termination = Termination(ledger=self.ledger, bus=self.bus, clock_ns=self.clock)
         self.registry = Registry(self.ledger)
@@ -633,22 +684,6 @@ class Runtime:
         self.consequence_fills = FillCursor(self.ledger, start_ns=self.clock.now_ns)
 
         # world
-        if exchange is not None:
-            self.exchange = exchange
-        elif self.live:
-            self.exchange = HyperliquidExchange(
-                mainnet=manifest.exchange.mainnet, coins=manifest.exchange.coins
-            )
-        else:
-            shocks: dict[int, dict[str, Decimal]] = {}
-            for sh in manifest.exchange.shocks:
-                shocks.setdefault(sh.step, {})[sh.coin] = Decimal(sh.multiplier)
-            self.exchange = FakeExchange(
-                seed=manifest.exchange.seed,
-                coins=manifest.exchange.coins,
-                start_cash_usd=money_to_usd(self.initial),
-                shocks=shocks,
-            )
         self.exchange = JournalProxy(
             self.exchange,
             self.ledger,
@@ -664,22 +699,13 @@ class Runtime:
         )
         self.prices = manifest.price_table()
         self.meter = Meter(self.wallet)
-        if provider is None:
-            provider = build_provider(manifest)
-        self.provider = provider if provider is not None else ScriptedProvider()
-        from factorylab.world.treasury import FakeTreasury, Treasury, UnconfiguredRail
+        from factorylab.world.treasury import FakeTreasury, Treasury
 
         if not self.live:
             self.treasury = FakeTreasury(
                 self.ledger, self.wallet, fee_micro=manifest.treasury.fake_fee_micro
             )
         else:
-            if manifest.treasury.reserve_address is not None:
-                from factorylab.world.treasury_rails import LiveRail
-
-                rail = LiveRail(self.exchange, manifest.treasury)
-            else:
-                rail = UnconfiguredRail(self.exchange.target)
             self.treasury = Treasury(
                 self.ledger,
                 self.wallet,
@@ -691,18 +717,6 @@ class Runtime:
         self.treasury.rail = JournalProxy(
             self.treasury.rail, self.ledger, "treasury.rail", deterministic=not self.live
         )
-        self.market = (
-            market
-            if market is not None
-            else (
-                self.provider.x402
-                if isinstance(self.provider, MultiProvider)
-                else self.provider
-                if isinstance(self.provider, X402Provider)
-                else X402Provider(discovery_url=manifest.treasury.discovery_url)
-            )
-        )
-        self.market.max_request_micro = manifest.treasury.max_request_micro
         self.provider = JournalProxy(
             self.provider,
             self.ledger,
@@ -711,6 +725,8 @@ class Runtime:
         )
         self.market = JournalProxy(self.market, self.ledger, "market")
         self.sellers: dict[str, dict] = {}
+        self.market_index: list[dict] | None = None
+        self.unresolved_x402: dict[str, dict] = {}
         self.catalogue: dict[str, TokenPrice] | None = None
         if not self.ledger.bootstrap and hasattr(self.provider, "catalogue"):
             try:
@@ -822,6 +838,24 @@ class Runtime:
             "price_micro_per_call": manifest.tools.population_tool_micro_per_call,
             "kind": "market",
         }
+        coin = manifest.exchange.coins[0]
+        examples = {
+            "venue.candles": [{"coin": coin, "interval": "1m", "n": 20}],
+            "venue.order_book": [{"coin": coin, "depth": 5}],
+            "venue.funding_history": [{"coin": coin, "n": 10}],
+            "venue.open_orders": [{}], "venue.positions": [{}],
+            "venue.place_market": [{"coin": coin, "side": "buy", "size": "0.001"}],
+            "venue.place_limit": [{"coin": coin, "side": "buy", "size": "0.001", "price": "100"}],
+            "venue.cancel": [{"coin": coin, "order_id": "1"}],
+            "venue.close": [{"coin": coin}, {"coin": coin, "size": None}],
+            "venue.set_leverage": [{"coin": coin, "leverage": 1}],
+            "treasury.transfer": [{"direction": "to_reserve", "usd": amount}
+                                  for amount in ("5", 5)],
+            "catalogue.search": [{"substring": "flash", "limit": 20}],
+            "market.discover": [{"query": "inference", "limit": 20}],
+        }
+        for tool_id, spec in self.tool_specs.items():
+            spec["args_schema"]["examples"] = examples[tool_id]
         self.tool_runner = JournalProxy(ToolRunner(), self.ledger, "sandbox")
         available = self.tool_runner.available
         self.ledger.append({"kind": "sandbox.availability", "available": available})
@@ -928,11 +962,6 @@ class Runtime:
                             _positive_wire_decimal(call["args"][key])
                 else:
                     _validate_schema(call["args"], spec["args_schema"])
-        for proposal in parsed.get("register", []):
-            if proposal.get("kind") == "amendment":
-                for card in proposal.get("add", []) + proposal.get("replace", []):
-                    if "lambda" in card and card["lambda"] > self.m.prices.lambda_max:
-                        raise ValueError("proposal lambda exceeds manifest bound")
         known = {p.id: p for p in SEED_VOCABULARY}
         for forecast in parsed.get("forecasts", []):
             if forecast["predicate"] not in known:
@@ -1168,6 +1197,7 @@ class Runtime:
             },
             "governance": self.cadence.world_block(self.tick_clock.interval_ns),
             "registration_feedback": list(self.registration_feedback),
+            "reserved_return_fields": reserved_return_fields(),
             "scoring": self._scoring_block(),
             "prices": {"lambda_max": self.m.prices.lambda_max},
             "amendment_feedback": getattr(self, "amendment_feedback", None),
@@ -1333,17 +1363,9 @@ class Runtime:
         else:
             stream = merge_sources(*sources)
         if not self.started:
-            self.bus.publish(
-                Event(
-                    "launch",
-                    EventKind.LAUNCH,
-                    self.clock.now_ns,
-                    {"manifest_hash": self.m.manifest_hash()},
-                    "kernel",
-                )
-            )
-            self.started = True
-            self._snapshot("launch")
+            if self._snapshot("launch") is False:
+                raise ValueError("launch snapshot unavailable")
+            self._launch()
         while True:
             ev = self._next_event(stream)
             if ev is None or not self._process_event(ev):
@@ -1352,6 +1374,19 @@ class Runtime:
             # a budgeted rehearsal world ends by explicit kill so its diary becomes readable
             self.termination.kill("explicit_kill:budget")
         return self._summary()
+
+    def _launch(self) -> None:
+        """Publish Launch only after a recoverable pre-launch snapshot exists."""
+        self.bus.publish(
+            Event(
+                "launch",
+                EventKind.LAUNCH,
+                self.clock.now_ns,
+                {"manifest_hash": self.m.manifest_hash()},
+                "kernel",
+            )
+        )
+        self.started = True
 
     def _process_event(self, ev: Event) -> bool:
         """Normal execution and recovery use identical transitions after a durable input item."""
@@ -1372,6 +1407,7 @@ class Runtime:
         if ev.kind is EventKind.TICK:
             self._reconcile_orders()
             self.treasury.tick(self.clock.now_ns)
+            self._reconcile_x402()
             if self.venue is not None:
                 observed = [
                     we
@@ -1417,7 +1453,7 @@ class Runtime:
             self._snapshot("reserve_window")
         return True
 
-    def _snapshot(self, boundary: str) -> None:
+    def _snapshot(self, boundary: str) -> bool:
         """Persist a complete continuation at launch and after each boundary event finishes."""
         try:
             state = runtime_state(self)
@@ -1428,10 +1464,11 @@ class Runtime:
         except (ValueError, OverflowError, RecursionError):
             self.ledger.append({"kind": "snapshot.refused", "boundary": boundary, "n": self.n,
                                 "reason": "invalid checkpoint number or nesting"})
-            return
+            return False
         self.ledger.append(
             {"kind": "snapshot", "boundary": boundary, "n": self.n, "state": state}
         )
+        return True
 
     def _resume_at(self, now_ns: int) -> None:
         """Reconcile and ledger outage timeouts before admitting another world event."""
@@ -1567,8 +1604,46 @@ class Runtime:
     def _record_market(self, item: dict) -> None:
         """Payment and pricing evidence is ledgered before dependent runtime state changes."""
         self.ledger.append({**item, "ts": self.clock.now_ns})
+        if item["kind"] == "x402.unresolved":
+            self.unresolved_x402[item["reservation_id"]] = dict(item)
         if item["kind"] == "observation.market_purchase":
             self.window.market_purchases += 1
+
+    def _reconcile_x402(self) -> None:
+        """Observe the reserve after uncertain debits without inventing payment attribution."""
+        if not self.unresolved_x402:
+            return
+        try:
+            balance = self.market.reserve_balance()
+        except Exception:
+            return  # unavailable reserve is weather; retry on the next tick
+        pending = list(self.unresolved_x402.values())
+        self._record_market({
+            "kind": "x402.reconciled", "reserve_micro": balance,
+            "reservation_ids": [item["reservation_id"] for item in pending],
+            "provisional_micro": sum(item["reserved_micro"] for item in pending),
+            "status": "balance_observed_payment_unattributed",
+            "payments": [{
+                "reservation_id": item["reservation_id"],
+                "reserve_before_micro": item.get("reserve_before_micro"),
+                "observed_delta_micro": (balance - item["reserve_before_micro"]
+                                         if item.get("reserve_before_micro") is not None else None),
+                "expected_delta_micro": -item["reserved_micro"],
+            } for item in pending],
+        })
+        # A balance cannot prove which authorization settled, or that an unexpired
+        # authorization will never settle. Keep the wallet's uncertain bills;
+        # neither an automatic refund nor a second debit follows this observation.
+        self.unresolved_x402.clear()
+
+    def _discover_market(self, url_substring=None, query=None, limit=20) -> list[dict]:
+        """One bounded index read per reserve window serves every discovery query."""
+        from factorylab.world.market import filter_sellers
+
+        filter_sellers([], url_substring, query, limit)
+        if self.market_index is None:
+            self.market_index = self.market.discover_index()
+        return filter_sellers(self.market_index, url_substring, query, limit)
 
     def _seller_price(self, model_id: str) -> tuple[TokenPrice, dict]:
         """A seller ceiling is affordable by policy before any registration effect."""
@@ -1616,6 +1691,7 @@ class Runtime:
                 self._close_price_window()
             self.reserve.open_window(self.clock.now_ns, self.wallet.balance)
             self.reserve_window_start = self.clock.now_ns
+            self.market_index = None
             self.stats.reserve_windows += 1
             self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro())
             self._observe_positions()
@@ -2226,7 +2302,7 @@ class Runtime:
                 }
             if spec["kind"] == "market":
                 return {
-                    "sellers": self.market.discover(
+                    "sellers": self._discover_market(
                         url_substring=args.get("url_substring"),
                         query=args.get("query"),
                         limit=args.get("limit", 20),
@@ -2907,6 +2983,9 @@ class Runtime:
                 self._reject_registration(handle, "proposal cap reached for this return", index)
                 continue
             try:
+                from factorylab.cortex.assembly import validate_proposal
+
+                validate_proposal(item)
                 if isinstance(item, dict) and item.get("kind") == "amendment":
                     self._propose_amendment(handle, item)
                 else:
@@ -2973,9 +3052,9 @@ class Runtime:
             self._emit(EventKind.REGISTERED, {"kind": "tool", "id": prop.id, "by": handle})
             return
         if isinstance(prop, ModelProposal):
+            if prop.openrouter_id in self.prices.prices:
+                raise ValueError("model version already registered")
             if prop.openrouter_id.startswith("x402:"):
-                if prop.openrouter_id in self.prices.prices:
-                    raise ValueError("model already registered")
                 price, seller = self._seller_price(prop.openrouter_id)
                 contract = _model_contract(prop.openrouter_id, price, "x402")
                 res = self.reserve.reserve_for(contract, amount)
@@ -3130,6 +3209,12 @@ class Runtime:
                         proposed_answers_for(c.get("answers_for"), str(c.get("id", ""))),
                     )
                 )
+            from factorylab.runtime.cards import parses
+
+            for card in out:
+                if not parses(card):
+                    raise ValueError("card acceptable_region has no finite usable bounds")
+                region_for(card, rolling={})
             return tuple(out)
 
         remove = item.get("remove") or []

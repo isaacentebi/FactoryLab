@@ -23,14 +23,12 @@ def invoke(body, schema=None):
 @pytest.mark.parametrize('field,bad', [
     ('action', []), ('verdict', '0.5'), ('verdict', True), ('verdict', 2),
     ('conformity', -1), ('rationale', {}), ('vote', 'true'), ('register', {}),
-    ('register', [False]), ('tool_calls', [{'tool': [], 'args': {}}]),
+    ('tool_calls', [{'tool': [], 'args': {}}]),
     ('tool_calls', [{'tool': 'venue.order', 'args': []}]), ('forecasts', {}),
     ('forecasts', [{'predicate': [], 'q': .5, 'params': {}}]),
     ('forecasts', [{'predicate': 'wallet_up', 'q': '0.5', 'params': {}}]),
     ('forecasts', [{'predicate': 'wallet_up', 'q': .5, 'params': {'horizon_events': 201}}]),
     ('requests', [{'target': [], 'description': 'd', 'inputs': {}, 'outcome_schema': {}}]),
-    ('register', [{'kind': 'router', 'gamma': 2}]),
-    ('register', [{'kind': 'assembly', 'max_tokens': '512'}]),
 ])
 def test_wrong_structured_type_fails_before_memory_or_effects(field, bad):
     ret, assembly, wallet = invoke(json.dumps({field: bad, 'tool_calls': []}
@@ -80,3 +78,11 @@ def test_order_amount_must_fit_the_wire_format_before_any_effect(size):
     ret, assembly, wallet = invoke(json.dumps({'action': 'order', 'coin': 'BTC', 'size': size}))
     assert ret.status == 'malformed' and not assembly.memory
     assert wallet.state()['reservations'] == []
+
+
+@pytest.mark.parametrize('proposal', [False, {'kind': 'router', 'gamma': 2},
+                                      {'kind': 'assembly', 'max_tokens': '512'}])
+def test_proposal_shape_errors_reach_individual_runtime_admission(proposal):
+    ret, _, wallet = invoke(json.dumps({'action': 'hold', 'register': [proposal]}))
+    assert ret.status == 'ok' and ret.outputs['register'] == [proposal]
+    assert wallet.state()['reservations'] == [] and ret.cost == 2

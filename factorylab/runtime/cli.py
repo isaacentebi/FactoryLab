@@ -258,11 +258,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 1
     m = load_manifest(args.world)
     if args.tick_interval:
-        import dataclasses
-
         from factorylab.runtime.worlds import _ns
 
-        m = dataclasses.replace(m, tick_interval_ns=_ns(args.tick_interval))
+        if _ns(args.tick_interval) != m.tick_interval_ns:
+            print("factorylab run: tick_override_refused", file=sys.stderr)
+            return 2
     events = args.events
     if args.duration:
         from factorylab.runtime.worlds import _ns
@@ -351,18 +351,23 @@ def _cmd_resume(args: argparse.Namespace, *, load_keys: bool = False) -> int:
     try:
         with LedgerLock(args.ledger) as lock:
             return _cmd_resume_locked(args, load_keys=load_keys, lock=lock)
-    except LedgerBusyError as exc:
-        print(f"factorylab resume: {exc}", file=sys.stderr)
+    except LedgerBusyError:
+        print("factorylab resume: ledger_busy: ledger already in use", file=sys.stderr)
         return LEDGER_BUSY_EXIT
-    except KeyFileModeError as exc:
-        print(f"factorylab resume: {exc}", file=sys.stderr)
+    except KeyFileModeError:
+        print("factorylab resume: credentials_unavailable", file=sys.stderr)
         return 2
+    except Exception as exc:
+        from factorylab.runtime.resume import resume_reason
+
+        print(f"factorylab resume: {resume_reason(exc).value}", file=sys.stderr)
+        return 1
 
 
 def _cmd_resume_locked(args: argparse.Namespace, *, load_keys: bool, lock) -> int:
     """Continue only the authenticated original manifest and saved event budget."""
     from factorylab.kernel.ledger import Ledger, LedgerIntegrityError
-    from factorylab.runtime.resume import ResumeError, resume_world
+    from factorylab.runtime.resume import resume_reason, resume_world
 
     try:
         manifest = load_manifest(args.world)
@@ -371,12 +376,16 @@ def _cmd_resume_locked(args: argparse.Namespace, *, load_keys: bool, lock) -> in
             Ledger.reopen(args.ledger, manifest=json.loads(manifest.canonical_json()))
             _load_dotenv()
         summary = resume_world(manifest, args.ledger, _lock=lock)
-    except (ResumeError, LedgerIntegrityError) as exc:
+    except Exception as exc:
+        if isinstance(exc, KeyFileModeError):
+            print("factorylab resume: credentials_unavailable", file=sys.stderr)
+            return 2
         if isinstance(exc, LedgerIntegrityError) and str(exc) == "cannot resume a terminated world":
-            print("factorylab resume: world terminated", file=sys.stderr)
+            print("factorylab resume: terminated: world terminated", file=sys.stderr)
             return TERMINATED_EXIT
-        print("factorylab resume: recovery unavailable", file=sys.stderr)
-        return 1
+        reason = resume_reason(exc).value
+        print(f"factorylab resume: {reason}", file=sys.stderr)
+        return 5 if reason == "no_launch" else 1
     print(json.dumps(summary, indent=2, default=str))
     return TERMINATED_EXIT if summary["terminated"] else 0
 

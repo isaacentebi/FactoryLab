@@ -392,5 +392,5 @@ def test_resume_reports_insecure_key_metadata_without_reading_it(tmp_path, monke
     monkeypatch.setattr(Path, "read_text", lambda *_a, **_kw: pytest.fail("must not read key"))
     assert main(["resume", "--world", "scripted", "--ledger", str(path)]) == 2
     captured = capsys.readouterr()
-    assert "hyperliquid.key must be an owned regular file with mode 0400 or 0600" in captured.err
+    assert captured.err == "factorylab resume: credentials_unavailable\n"
     assert captured.out == ""

@@ -8,6 +8,7 @@ an unparsed card simply carries no price.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -50,8 +51,11 @@ def _parse(text: str) -> _Bounds | None:
             continue
         if kind == "band":
             lo, hi = _num(m.group(1)), _num(m.group(2))
-            return _Bounds("band", lo, hi) if lo < hi else None
+            return (_Bounds("band", lo, hi)
+                    if math.isfinite(lo) and math.isfinite(hi) and lo < hi else None)
         value = _num(m.group(1))
+        if not math.isfinite(value):
+            return None
         return _Bounds(kind, value, None) if kind == "min" else _Bounds(kind, None, value)
     return None
 
@@ -78,6 +82,8 @@ def region_for(card: MetricCard, *, rolling: dict[str, float]) -> CardRegion | N
         if prev is None:
             return None
         hi = float(prev)
+        if not math.isfinite(hi):
+            return None
     magnitude = max(abs(b) for b in (lo, hi) if b is not None)
     scale = max(1.0, magnitude) if "usd" in card.units.lower() else 1.0
     return CardRegion(card.id, bounds.kind, lo, hi, scale)  # type: ignore[arg-type]

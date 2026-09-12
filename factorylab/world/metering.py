@@ -23,7 +23,7 @@ class WalletLike(Protocol):
     def reserve(self, amount: int, handle: str, reason: str) -> Any: ...
     def commit(self, reservation: Any, actual: int) -> None: ...
     def release(self, reservation: Any) -> None: ...
-    def commit_reported(self, reservation: Any, actual: int) -> None: ...
+    def commit_reported(self, reservation: Any, actual: int) -> int: ...
     def commit_uncertain(self, reservation: Any) -> None: ...
 
 
@@ -61,7 +61,7 @@ class Meter:
 
     Guarantees: no result is returned before its cost is committed; a failed
     execution releases funds only when known unbilled. A reported vendor
-    overrun is debited in full before return, even when it exhausts the wallet.
+    overrun is bounded by the wallet's immutable reported-cost policy.
     """
 
     wallet: WalletLike
@@ -98,8 +98,10 @@ class Meter:
                 raise
             raise BillingUncertain(ceiling, exc) from None
         if actual > ceiling:
-            self.wallet.commit_reported(reservation, actual)
-            return Metered(result, actual, ceiling, handle, overrun=actual - ceiling)
+            booked = self.wallet.commit_reported(reservation, actual)
+            # Older injected WalletLike implementations return no booked amount.
+            booked = actual if booked is None else booked
+            return Metered(result, booked, ceiling, handle, overrun=max(0, booked - ceiling))
         self.wallet.commit(reservation, actual)
         return Metered(result, actual, ceiling, handle)
 

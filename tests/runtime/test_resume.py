@@ -444,7 +444,7 @@ def test_repeated_resume_replays_old_jail_availability_before_refresh(tmp_path, 
     assert resume_world(m, str(path))["stats"]["resumes"] == 3
 
 
-def test_resume_replays_an_overrun_commit_once_before_final_death(tmp_path):
+def test_resume_replays_a_disputed_vendor_bill_once_without_death(tmp_path):
     class Overrun(ScriptedProvider):
         def complete(self, request):
             return replace(super().complete(request), cost_micro=1_000_000_000)
@@ -464,14 +464,18 @@ def test_resume_replays_an_overrun_commit_once_before_final_death(tmp_path):
     rt.ledger.append = crash_after_commit
     with pytest.raises(ProcessDeath):
         rt.run()
+    first = next(i for i in rt.ledger._recovery_items() if i["kind"] == "wallet.commit")
     restored = resume_runtime(m, str(path), provider=Overrun())
     summary = restored.run()
-    assert summary["terminated"] and summary["termination_reason"] == "balance_zero"
-    assert summary["wallet_balance_micro"] < 0 and summary["wallet_conservation"]
+    assert not summary["terminated"] and summary["wallet_conservation"]
     diary = restored.ledger._recovery_items()
-    assert sum(i["kind"] == "metering.overrun" for i in diary) == 1
-    commits = [i for i in diary if i["kind"] == "wallet.commit"]
-    assert len(commits) == 1 and commits[0]["amount"] == 1_000_000_000
+    assert not any(i["kind"] == "metering.overrun" for i in diary)
+    commits = [i for i in diary if i["kind"] == "wallet.commit"
+               and i["reservation_id"] == first["reservation_id"]]
+    assert commits == [first]
+    dispute, = [i for i in diary if i["kind"] == "metering.disputed"
+                and i["reservation_id"] == first["reservation_id"]]
+    assert dispute["reported"] == 1_000_000_000 and dispute["booked"] == first["amount"]
 
 
 @pytest.mark.parametrize("cut", ["fill:0", "fill:1", "consequence.fill"])

@@ -18,7 +18,7 @@ from factorylab.world.market import (
     seller_models,
     split_model_id,
 )
-from factorylab.world.metering import Meter, MeteredModel
+from factorylab.world.metering import BillingUncertain, Meter, MeteredModel
 from factorylab.world.models import ModelRequest, PriceTable, TokenPrice
 from factorylab.world.x402 import (
     BASE_NETWORK,
@@ -161,7 +161,7 @@ def test_explicit_payment_rejection_does_not_retry(response):
     assert len(fake.payments) == 1
 
 
-def test_uncertain_submission_holds_reservation_and_suppresses_transport_secrets():
+def test_uncertain_submission_books_provisionally_and_suppresses_transport_secrets():
     fake = SellerHTTP()
     fake.paid_response = TimeoutError(TEST_KEY)
     ledger = Ledger()
@@ -171,10 +171,13 @@ def test_uncertain_submission_holds_reservation_and_suppresses_transport_secrets
         provider(fake), PriceTable({MODEL: TokenPrice(0, 0, 2000)}), Meter(wallet),
         record=events.append, on_unaffordable=lambda h: pytest.fail("uncertain, not insolvent"),
     )
-    with pytest.raises(PaymentOutcomeUnknown) as error:
+    with pytest.raises(BillingUncertain) as error:
         model.complete(ModelRequest(MODEL, "", ()), handle="decision-1")
-    assert wallet.balance == 10_000 and wallet.available == 8266
-    assert events[-1] == {"kind": "x402.unresolved", "handle": "decision-1", "reserved_micro": 1734}
+    assert wallet.balance == wallet.available == 8266
+    assert wallet.state()["reservations"] == []
+    assert events[-1] == {"kind": "x402.unresolved", "handle": "decision-1",
+                          "reserved_micro": 1734, "reservation_id": "wallet-0",
+                          "reserve_before_micro": 10_000}
     assert len(fake.payments) == 1
     assert TEST_KEY[2:] not in "".join(traceback.format_exception(error.value))
 

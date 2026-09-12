@@ -10,6 +10,25 @@ from factorylab.kernel.money import money_to_usd, usd_to_money
 from factorylab.world.evm import Pending, RailError
 
 
+def _seed_credits(provider: Any) -> int | None:
+    """Account credits are independent of an API key's optional spending allowance."""
+    if getattr(provider, "name", "") != "openrouter":
+        return provider.balance_micro()
+    try:
+        data = provider._request("GET", "/credits")["data"]
+        remaining = Decimal(str(data["total_credits"])) - Decimal(str(data["total_usage"]))
+    except Exception:
+        # A scoped key may not read account credits. A finite limit minus usage
+        # is still a valid available allowance; an unlimited key remains unknown.
+        data = provider._request("GET", "/key")["data"]
+        if data.get("limit") is None:
+            return None
+        remaining = Decimal(str(data["limit"])) - Decimal(str(data["usage"]))
+    if not remaining.is_finite():
+        return None
+    return int(remaining * 1_000_000)
+
+
 def provider_pots(provider: Any) -> tuple[int | None, dict[str, int | None]]:
     """OpenRouter credits and wallet-bound seller credits are counted once in separate pots."""
     seed, sellers = 0, {}
@@ -21,7 +40,7 @@ def provider_pots(provider: Any) -> tuple[int | None, dict[str, int | None]]:
         openrouter = provider
     if openrouter is not None:
         try:
-            seed = openrouter.balance_micro()
+            seed = _seed_credits(openrouter)
         except Exception:
             seed = None
     if venice is not None:

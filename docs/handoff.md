@@ -12,7 +12,7 @@ Written 11 September 2026 so that any session (or a compacted one) can resume fr
 
 ## State on main
 
-12 September 2026, end of the fix cycle. Everything is merged (PRs #1–#37); no branch, worktree or background task is open. Everyday gate: `uv run pytest` (parallel by default) 1685 passed in about three minutes; the kill-and-resume tests are marked `slow` and run with `uv run pytest -m slow -p no:xdist tests/runtime/test_resume.py` before any merge to main (30 passed).
+12 September 2026, end of the fix cycle. Everything is merged (PRs #1–#37); no branch, worktree or background task is open. Everyday gate: `uv run pytest` (parallel by default) 1685 passed in about three minutes; the kill-and-resume tests are marked `slow` and run with `uv run pytest -m slow -o addopts="" tests/runtime/test_resume.py` before any merge to main (30 passed).
 
 Phase 4 delivered: versioning, verdict-as-consequence-forecast, population λ, recursive evaluation with the cascade gate, the amendable clock, measured governance cadence, damping, the observations catalogue, the charter in the manifest, the x402 client, Venice and market compute, resume, hosting, the live wake. The reward line reaches every primitive; scoring physics is public in every request.
 
@@ -33,7 +33,7 @@ Live runs 1–8 logged; run 8 was the first with population trades (docs/build-l
 uv run pytest
 uv run factorylab run --world scripted --events 500 --seed 1
 uv run factorylab run --world scripted-crash --events 600 --seed 2
-uv run python -m factorylab.runtime.cli run --world testnet --events 30 --seed 4 --tick-interval 10s --ledger runs/x.jsonl --kill-at-end
+uv run python -m factorylab.runtime.cli run --world testnet --events 30 --seed 4 --ledger runs/x.jsonl --kill-at-end
 uv run python -m factorylab.runtime.cli report runs/x.summary.json
 uv run python -m factorylab.runtime.cli postmortem runs/x.jsonl runs/x.jsonl.key --kinds event:Registered,invocation
 ```

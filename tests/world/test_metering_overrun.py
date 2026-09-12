@@ -11,22 +11,22 @@ from factorylab.world.models import ModelResponse
 from tests.runtime.test_fa_defects import make_runtime
 
 
-@pytest.mark.parametrize("initial,ceiling,actual", [
-    (1000, 100, 1300), (100, 100, 130), (100, 0, 130), (1000, 100, 1000),
+@pytest.mark.parametrize("initial,ceiling,actual,booked", [
+    (1000, 100, 1300, 100), (100, 100, 130, 130), (100, 0, 130, 0), (1000, 100, 1000, 1000),
 ])
-def test_reported_overrun_is_fully_debited_before_return(initial, ceiling, actual):
+def test_reported_overrun_is_bounded_and_debited_before_return(initial, ceiling, actual, booked):
     ledger = Ledger()
     wallet = Wallet(initial, ledger)
     result = Meter(wallet).run(handle="caller", reason="model:vendor", ceiling=ceiling,
                                execute=lambda: "paid response", cost_of=lambda _: actual)
-    assert result.cost == actual and result.overrun == actual - ceiling
-    assert wallet.balance == initial - actual and wallet.dead
+    assert result.cost == booked and result.overrun == max(0, booked - ceiling)
+    assert wallet.balance == initial - booked and wallet.dead == (initial <= booked)
     assert wallet.available == wallet.balance and wallet.check_conservation()
     evidence = ledger._recovery_items()
-    assert evidence[-2]["kind"] == "metering.overrun"
-    assert evidence[-2]["handle"] == "caller" and evidence[-2]["overrun"] == actual - ceiling
-    assert evidence[-1]["kind"] == "wallet.commit" and evidence[-1]["amount"] == actual
-    assert sum(ledger.aggregate("spend_by_capability")["spend"].values()) == actual
+    assert evidence[-2]["kind"] == ("metering.disputed" if booked != actual else "metering.overrun")
+    assert evidence[-2]["handle"] == "caller"
+    assert evidence[-1]["kind"] == "wallet.commit" and evidence[-1]["amount"] == booked
+    assert sum(ledger.aggregate("spend_by_capability")["spend"].values()) == booked
 
 
 def test_overrun_does_not_relax_normal_commit_or_reservation_identity():
@@ -73,24 +73,23 @@ def test_invalid_batch_cannot_partially_write_or_create_money(invalid):
     assert wallet.state() == before and ledger._recovery_items() == evidence
 
 
-def test_runtime_records_overrun_and_cannot_execute_its_order_after_exhaustion(monkeypatch):
+def test_runtime_records_dispute_before_return_without_exhaustion(monkeypatch):
     rt = make_runtime(balance=1_000_000)
     monkeypatch.setattr(rt.provider.target, "complete", lambda req: ModelResponse(
         req.model_id, '{"action":"order","coin":"BTC","size":"1"}', 1, 1,
         "stop", cost_micro=1_100_000,
     ))
-    monkeypatch.setattr(rt.exchange.target, "place", lambda *_: pytest.fail("order after death"))
     req = rt._request("caller", "test", {}, {}, 100, "test")
+    assembly = rt.assemblies["seed-decider"]
+    ceiling = assembly.model.ceiling(assembly.build_model_request(req))
     ret = rt._invoke("seed-decider", req, "producer")
-    assert ret.cost == 1_100_000 and rt.wallet.balance == -100_000
-    rt._execute_outputs(ret)
-    assert rt._check_termination() and rt.termination.reason == "balance_zero"
+    assert ret.cost == ceiling and rt.wallet.balance == 1_000_000 - ceiling
+    assert not rt._check_termination()
     evidence = rt.ledger._recovery_items()
-    bill = next(i for i in evidence if i["kind"] == "metering.overrun")
-    observed = next(i for i in evidence if i["kind"] == "compute.overrun")
+    dispute = next(i for i in evidence if i["kind"] == "metering.disputed")
     invocation = next(i for i in evidence if i["kind"] == "invocation")
-    assert bill["seq"] < observed["seq"] < invocation["seq"]
-    assert observed["overrun"] == bill["overrun"]
+    assert dispute["seq"] < invocation["seq"] and dispute["reported"] == 1_100_000
+    assert not any(i["kind"] == "compute.overrun" for i in evidence)
 
 
 def test_fatal_vote_overrun_cannot_invoke_another_seat(monkeypatch):

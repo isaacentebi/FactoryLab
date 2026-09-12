@@ -17,7 +17,7 @@ from collections import deque
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from decimal import Decimal
-from enum import Enum
+from enum import Enum, StrEnum
 from fractions import Fraction
 from typing import Any
 
@@ -26,6 +26,42 @@ from factorylab.kernel.ledger import Ledger, LedgerLock, _canonical
 
 class ResumeError(RuntimeError):
     """Recovery refuses invalid evidence or an ambiguous external side effect."""
+
+    def __init__(self, message: str, *, code: str = "invalid_snapshot") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class ResumeReason(StrEnum):
+    """Refusal diagnostics expose only this closed set, never exception text."""
+
+    INVALID_SNAPSHOT = "invalid_snapshot"
+    LEDGER_INTEGRITY = "ledger_integrity"
+    MANIFEST_UNAVAILABLE = "manifest_unavailable"
+    VENUE_ACCOUNT_MISMATCH = "venue_account_mismatch"
+    ADAPTER_MISMATCH = "adapter_mismatch"
+    REPLAY_DIVERGED = "replay_diverged"
+    NO_LAUNCH = "no_launch"
+    ADAPTER_UNAVAILABLE = "adapter_unavailable"
+    TERMINATED = "terminated"
+    LEDGER_BUSY = "ledger_busy"
+    CREDENTIALS_UNAVAILABLE = "credentials_unavailable"
+
+
+def resume_reason(exc: Exception) -> ResumeReason:
+    """Translate internal failures to bounded, non-secret operational diagnostics."""
+    from factorylab.kernel.ledger import LedgerIntegrityError
+
+    if isinstance(exc, ResumeError):
+        try:
+            return ResumeReason(exc.code)
+        except ValueError:
+            return ResumeReason.INVALID_SNAPSHOT
+    if isinstance(exc, LedgerIntegrityError):
+        return ResumeReason.LEDGER_INTEGRITY
+    if isinstance(exc, (FileNotFoundError, ValueError)):
+        return ResumeReason.MANIFEST_UNAVAILABLE
+    return ResumeReason.ADAPTER_UNAVAILABLE
 
 
 class _ReplayFault(BaseException):
@@ -172,7 +208,7 @@ class RecoveryJournal:
     def __init__(self, ledger: Ledger, clock) -> None:
         self.ledger = ledger
         self.clock = clock
-        self.tail: list[dict] = []
+        self.tail = iter(())
         self.position = 0
         self.active = False
         self.bootstrap = False
@@ -182,9 +218,20 @@ class RecoveryJournal:
     def __getattr__(self, name):
         return getattr(self.ledger, name)
 
+    @property
+    def tail(self):
+        return self._tail
+
+    @tail.setter
+    def tail(self, items):
+        self._tail = iter(items)
+        self._next = None
+
     def peek(self) -> dict | None:
         """Return the next replay item internally, without advancing past its state change."""
-        return self.tail[self.position] if self.position < len(self.tail) else None
+        if self._next is None:
+            self._next = next(self._tail, None)
+        return self._next
 
     def append(self, entry: dict) -> int:
         """Verify historical appends in order, otherwise durably append to the existing chain."""
@@ -204,6 +251,7 @@ class RecoveryJournal:
                 f"expected {saved.get('kind')}, produced {actual.get('kind')}"
             )
         self.position += 1
+        self._next = None
         return expected["seq"]
 
     def fail(self, message: str) -> None:
@@ -222,11 +270,13 @@ class RecoveryJournal:
         fingerprint = hashlib.sha256(_canonical(encode((args, arguments)))).hexdigest()
         seq = self.append({"kind": "io.call", "name": name, "input_hash": fingerprint})
         if replayed and not deterministic:
+            payment_submitted = False
             while (item := self.peek()) is not None and item.get("kind") != "io.result":
                 if "record" not in kwargs or not item.get("kind", "").startswith("x402."):
                     self.fail(f"missing result for recorded call {name} at seq {seq}")
-                self.append({k: v for k, v in item.items()
-                             if k not in ("seq", "prev_hash", "hash")})
+                payment_submitted |= item.get("kind") == "x402.submitted"
+                kwargs["record"]({k: v for k, v in item.items()
+                                  if k not in ("seq", "prev_hash", "hash")})
             if item is not None:
                 if item.get("call") != seq:
                     self.fail(f"mismatched call result at seq {item['seq']}")
@@ -246,6 +296,10 @@ class RecoveryJournal:
                           OrderResult(None, "uncertain", Decimal(0), None))
                 self.append({"kind": "io.result", "call": seq, "result": encode(result)})
                 return result
+            if name == "market.complete":
+                error = "PaymentOutcomeUnknown" if payment_submitted else "UnbilledFailure"
+                self.append({"kind": "io.result", "call": seq, "error": error})
+                raise _recorded_error(error)
             if name == "provider.complete":
                 self.append({"kind": "io.result", "call": seq, "error": "RuntimeError"})
                 raise _recorded_error("RuntimeError")
@@ -255,7 +309,9 @@ class RecoveryJournal:
             ambiguous_retry = name == "treasury.rail.send"
         try:
             if self.recovering and not replayed and not deterministic and not _read_only(name):
-                raise RuntimeError("interrupted event: external write was never dispatched")
+                from factorylab.world.metering import UnbilledFailure
+
+                raise UnbilledFailure("interrupted event: external write was never dispatched")
             result = function(*args, **kwargs)
             encoded_result = encode(result)
         except Exception as exc:
@@ -287,15 +343,19 @@ def _read_only(name: str) -> bool:
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
         "open_orders", "balance_micro", "affordable", "catalogue", "discover", "quote",
         "registration_price", "seller_models", "funding_payments", "lookup",
+        "reserve_balance", "discover_index",
     )
 
 
 def _recorded_error(name: str, reason: str | None = None) -> Exception:
     from factorylab.world.evm import Pending, RailError
+    from factorylab.world.exchange import VenueUnavailable
     from factorylab.world.market import PaymentOutcomeUnknown
+    from factorylab.world.metering import UnbilledFailure
     from factorylab.world.x402 import InsufficientReserve, X402Error
 
-    classes = (ValueError, TypeError, KeyError, RuntimeError, PermissionError,
+    classes = (VenueUnavailable, UnbilledFailure, ConnectionError, TimeoutError, OSError,
+               ValueError, TypeError, KeyError, RuntimeError, PermissionError,
                InsufficientReserve, X402Error, PaymentOutcomeUnknown)
     cls = next((c for c in classes if c.__name__ == name), RuntimeError)
     if name in ("RailError", "Pending"):
@@ -347,7 +407,7 @@ _RUNTIME_FIELDS = (
     "n", "emitted", "insolvency_count", "_compute_routed", "_compute_unaffordable",
     "world_consumed", "ticks_consumed", "drips_consumed", "started", "catalogue", "sellers",
     "registration_feedback", "tool_jail_available", "vote_handles", "voted_amendments",
-    "order_intents",
+    "order_intents", "market_index", "unresolved_x402",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
@@ -367,6 +427,11 @@ _COMPONENT_FIELDS = (
 )
 
 
+def _venue_address(exchange) -> str | None:
+    address = getattr(exchange, "address", getattr(exchange, "_address", None))
+    return address.lower() if isinstance(address, str) else None
+
+
 def runtime_state(rt) -> dict:
     """Retain learning, FIFO lots, private memory and exact source cursors in one checkpoint."""
     runtime = {name: getattr(rt, name) for name in _RUNTIME_FIELDS}
@@ -382,7 +447,9 @@ def runtime_state(rt) -> dict:
             "drip": rt.use_drip, "router_gamma": rt.router_gamma, "kill_at_end": rt.kill_at_end,
         },
         "adapters": {name: {"name": getattr(getattr(rt, name).target, "name", name),
-                            "deterministic": getattr(rt, name).deterministic}
+                            "deterministic": getattr(rt, name).deterministic,
+                            **({"address": _venue_address(rt.exchange.target)}
+                               if name == "exchange" else {})}
                      for name in ("exchange", "provider")},
         "runtime": encode(runtime), "clock_ns": rt.clock.now_ns,
         "tick_clock": rt.tick_clock.state(),
@@ -416,7 +483,12 @@ def restore_runtime(rt, state: dict) -> None:
         current = getattr(rt, name)
         if (saved["name"] != getattr(current.target, "name", name)
                 or saved["deterministic"] != current.deterministic):
-            raise ResumeError(f"{name} adapter differs from the saved world")
+            raise ResumeError(f"{name} adapter differs from the saved world",
+                              code="adapter_mismatch")
+    saved_venue = state["adapters"]["exchange"]
+    if (saved_venue.get("address") != _venue_address(rt.exchange.target)):
+        raise ResumeError("venue account differs from the saved world",
+                          code="venue_account_mismatch")
     for name, value in decode(state["runtime"]).items():
         setattr(rt, name, value)
     rt.clock.now_ns = state["clock_ns"]
@@ -489,9 +561,10 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     ledger = Ledger.reopen(
         ledger_path, manifest=json.loads(manifest.canonical_json()), clock_ns=clock,
     )
-    items = ledger._recovery_items()
-    snapshot = next((i for i in reversed(items) if i.get("kind") == "snapshot"), None)
+    snapshot, tail = ledger._recovery_tail()
     if snapshot is None:
+        if not ledger._event_times()["launch"]:
+            raise ResumeError("ledger has not launched", code="no_launch")
         raise ResumeError("ledger has no recoverable snapshot")
     state = snapshot["state"]
     if state.get("manifest_hash") != manifest.manifest_hash():
@@ -503,9 +576,11 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     restore_runtime(rt, state)
     journal.bootstrap = False
     journal.active = journal.recovering = True
-    journal.tail = [item for item in items[snapshot["seq"] + 1:]
-                    if item.get("kind") != "ledger.repaired"]
+    journal.tail = (item for item in tail
+                    if item.get("kind") != "ledger.repaired")
     try:
+        if not rt.started:
+            rt._launch()
         while (item := journal.peek()) is not None:
             if item["kind"] == "runtime.input":
                 if not rt._process_event(rt._next_event(iter(()))):
@@ -520,7 +595,7 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
         resume_time = (time.time_ns() if now_ns is None else now_ns) if rt.live else rt.clock.now_ns
         rt._resume_at(resume_time)
     except _ReplayFault as exc:
-        raise ResumeError(str(exc)) from None
+        raise ResumeError(str(exc), code="replay_diverged") from None
     return rt
 
 

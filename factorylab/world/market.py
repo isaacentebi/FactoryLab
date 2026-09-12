@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib import parse
 
-from factorylab.world.metering import Infeasible, Metered, MeteredModel
+from factorylab.world.metering import BillingUncertain, Infeasible, Metered, MeteredModel
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
 from factorylab.world.venice import VeniceAndOpenRouter
 from factorylab.world.x402 import (
@@ -34,7 +34,7 @@ DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resourc
 
 
 class PaymentOutcomeUnknown(X402Error):
-    """A submitted authorization may have settled; its wallet reservation must remain held."""
+    """A submitted authorization may have settled; its provisional debit requires reconciliation."""
 
 
 def seller_root(seller_url: str) -> str:
@@ -72,49 +72,40 @@ def _request(transport: Transport, method: str, url: str, payload=None, headers=
         raise X402Error("Market HTTP transport or response decoding failed") from None
 
 
-def discover(
-    url_substring: str | None = None,
-    query: str | None = None,
-    limit: int = 20,
-    *,
-    transport: Transport | None = None,
-    discovery_url: str = DISCOVERY_URL,
-) -> list[dict]:
-    """Public offset pages yield at most limit matching sellers, without authentication.
-
-    Query is a case-insensitive substring of the URL or description. Filters run
-    locally because the listing API only promises type, limit and offset filters.
-    Price strings retain the asset's base units, including unsupported networks.
-    """
-    if type(limit) is not int or not 1 <= limit <= 100:
-        raise X402Error("Discovery limit must be an integer in [1, 100]")
-    if any(v is not None and not isinstance(v, str) for v in (url_substring, query)):
-        raise X402Error("Discovery filters must be strings")
-    transport = transport or http_request
+def _discovery_index(*, transport: Transport, discovery_url: str,
+                     page_budget: int = 5) -> list[dict]:
+    """At most five pages enter the index; repeated resources cannot keep paging alive."""
     out, seen = [], set()
     offset = 0
-    while True:
+    for _ in range(page_budget):
         params = parse.urlencode({"type": "http", "limit": 100, "offset": offset})
         response = _request(transport, "GET", discovery_url + "?" + params)
         if response.status != 200:
             raise X402Error(f"Discovery failed (HTTP {response.status})")
         items = response.body.get("items")
         pagination = response.body.get("pagination", {})
-        if not isinstance(items, list) or not isinstance(pagination, dict):
+        if not isinstance(items, list) or not isinstance(pagination, dict) or len(items) > 100:
             raise X402Error("Invalid discovery page")
+        page_offset = pagination.get("offset", offset)
+        page_limit = pagination.get("limit", 100)
+        total = pagination.get("total")
+        if (
+            type(page_offset) is not int or page_offset != offset
+            or type(page_limit) is not int or not 1 <= page_limit <= 100
+            or (total is not None and (type(total) is not int or total < 0))
+        ):
+            raise X402Error("Invalid discovery pagination")
+        before = len(seen)
         for item in items:
             if not isinstance(item, dict) or not isinstance(item.get("resource"), str):
                 continue
             resource = item["resource"]
+            if resource in seen:
+                continue
+            seen.add(resource)
             description = item.get("description") or ""
             if not isinstance(description, str):
                 description = ""
-            if url_substring and url_substring.casefold() not in resource.casefold():
-                continue
-            if query and query.casefold() not in (resource + " " + description).casefold():
-                continue
-            if resource in seen:
-                continue
             accepts = item.get("accepts") or []
             if not isinstance(accepts, list):
                 continue
@@ -128,23 +119,33 @@ def discover(
                 ],
                 "description": description[:1000],
             })
-            seen.add(resource)
-            if len(out) == limit:
-                return out
-        if not items:
-            return out
-        page_offset = pagination.get("offset", offset)
-        page_limit = pagination.get("limit", len(items))
-        total = pagination.get("total")
-        if (
-            type(page_offset) is not int or page_offset != offset
-            or type(page_limit) is not int or page_limit < 1
-            or (total is not None and (type(total) is not int or total < 0))
-        ):
-            raise X402Error("Invalid discovery pagination")
         offset += page_limit
-        if (total is not None and offset >= total) or (total is None and len(items) < page_limit):
-            return out
+        if (len(seen) == before or (total is not None and offset >= total)
+                or (total is None and len(items) < page_limit)):
+            break
+    return out
+
+
+def filter_sellers(index: list[dict], url_substring=None, query=None, limit=20) -> list[dict]:
+    """Filters apply to a detached bounded index without another network read."""
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise X402Error("Discovery limit must be an integer in [1, 100]")
+    if any(v is not None and not isinstance(v, str) for v in (url_substring, query)):
+        raise X402Error("Discovery filters must be strings")
+    return deepcopy([
+        row for row in index
+        if (not url_substring or url_substring.casefold() in row["resource"].casefold())
+        and (not query or query.casefold() in
+             (row["resource"] + " " + row["description"]).casefold())
+    ][:limit])
+
+
+def discover(url_substring=None, query=None, limit=20, *, transport: Transport | None = None,
+             discovery_url: str = DISCOVERY_URL) -> list[dict]:
+    """A discovery has a fixed page budget and exact base-unit price strings."""
+    filter_sellers([], url_substring, query, limit)  # validate before any I/O
+    index = _discovery_index(transport=transport or http_request, discovery_url=discovery_url)
+    return filter_sellers(index, url_substring, query, limit)
 
 
 @dataclass(frozen=True)
@@ -194,6 +195,20 @@ def seller_models(seller_url: str, *, transport: Transport | None = None) -> lis
         raise X402Error("Invalid seller model catalogue or per-token price") from None
 
 
+class _ObservedReserveClient(X402Client):
+    """The same affordability read used by signing is recorded before authorization."""
+
+    def __init__(self, *, record=None, **kwargs):
+        super().__init__(**kwargs)
+        self._record_balance = record
+
+    def usdc_balance(self, address=None) -> int:
+        balance = super().usdc_balance(address)
+        if self._record_balance is not None:
+            self._record_balance({"kind": "x402.reserve_before", "reserve_micro": balance})
+        return balance
+
+
 class X402Provider:
     """Each call signs at most one bounded authorization; quoted USDC is the entire cost."""
 
@@ -221,8 +236,9 @@ class X402Provider:
         if self._extra_body.keys() & {"model", "messages", "max_tokens", "stream"}:
             raise X402Error("Extra body cannot override the bounded completion request")
 
-    def _client(self) -> X402Client:
-        return X402Client(private_key=self._private_key, rpc=self.rpc, transport=self._transport)
+    def _client(self, *, record=None) -> X402Client:
+        return _ObservedReserveClient(private_key=self._private_key, rpc=self.rpc,
+                                      transport=self._transport, record=record)
 
     def _clean(self, value: Any) -> Any:
         clean = redact(value, (self._private_key or os.environ.get("RESERVE_PRIVATE_KEY", ""),))
@@ -243,6 +259,14 @@ class X402Provider:
         """Discovery uses only this provider's injected transport and configured index."""
         return discover(url_substring, query, limit, transport=self._transport,
                         discovery_url=self.discovery_url)
+
+    def discover_index(self) -> list[dict]:
+        """Return the bounded index for one runtime window's local searches."""
+        return _discovery_index(transport=self._transport, discovery_url=self.discovery_url)
+
+    def reserve_balance(self) -> int:
+        """Return an observed Base USDC balance without authorizing a payment."""
+        return self._client().usdc_balance()
 
     def seller_models(self, seller_url: str) -> list[SellerModel]:
         """Seller catalogue reads use the same injected transport as inference."""
@@ -304,7 +328,7 @@ class X402Provider:
 
         Only the unsigned request and one payment submission are sent. Successful
         paid responses remain chargeable even if their completion is malformed.
-        Unknown submission outcomes raise separately so metering can hold funds.
+        Unknown submission outcomes raise separately so metering can book uncertainty.
         """
         if req.model_id not in self._ceilings:
             raise X402Error("x402 model has no registered per-request ceiling")
@@ -325,7 +349,7 @@ class X402Provider:
             if record:
                 record({"kind": "x402.quote", "model_id": req.model_id,
                         "quote": self._clean(asdict(quote))})
-            client = self._client()
+            client = self._client(record=record)
             encoded = client.authorize(quote, ceiling_micro=self._ceilings[req.model_id])
             if record:
                 record({"kind": "x402.submitted", "model_id": req.model_id,
@@ -392,7 +416,7 @@ class X402Provider:
 
 
 class X402MeteredModel(MeteredModel):
-    """Paid amounts commit before return; uncertain payments retain their reservations."""
+    """Paid and uncertain amounts commit before return; no payment leaks an open hold."""
 
     def __init__(self, provider, prices, meter, *, record, on_unaffordable) -> None:
         super().__init__(provider, prices, meter)
@@ -401,7 +425,12 @@ class X402MeteredModel(MeteredModel):
 
     def complete(self, req: ModelRequest, *, handle: str) -> Metered[ModelResponse]:
         """Every payment has handle-linked ledger evidence, without any signing material."""
+        reserve_before = None
+
         def record(item):
+            nonlocal reserve_before
+            if item["kind"] == "x402.reserve_before":
+                reserve_before = item["reserve_micro"]
             self.record({**item, "handle": handle})
 
         ceiling = self.ceiling(req)
@@ -418,9 +447,11 @@ class X402MeteredModel(MeteredModel):
             raise Infeasible(str(exc)) from None
         try:
             response = self.provider.complete(req, record=record, quoted=quote)
-        except PaymentOutcomeUnknown:
-            record({"kind": "x402.unresolved", "reserved_micro": reserved})
-            raise
+        except PaymentOutcomeUnknown as exc:
+            self.meter.wallet.commit_uncertain(reservation)
+            record({"kind": "x402.unresolved", "reserved_micro": reserved,
+                    "reservation_id": reservation.id, "reserve_before_micro": reserve_before})
+            raise BillingUncertain(reserved, exc) from None
         except Exception as exc:
             self.meter.wallet.release(reservation)
             if isinstance(exc, InsufficientReserve):

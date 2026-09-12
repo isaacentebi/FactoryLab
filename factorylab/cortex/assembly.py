@@ -214,8 +214,11 @@ def _validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None
     kind = schema.get("type")
     types = {"object": dict, "array": list, "string": str, "boolean": bool,
              "integer": int, "number": (int, float), "null": type(None)}
-    if kind is not None and (kind not in types or not isinstance(value, types[kind])
-                             or kind in ("number", "integer") and isinstance(value, bool)):
+    kinds = kind if isinstance(kind, list) else [kind]
+    if kind is not None and not any(
+        isinstance(k, str) and k in types and isinstance(value, types[k])
+        and not (k in ("number", "integer") and isinstance(value, bool)) for k in kinds
+    ):
         raise ValueError("wrong field type")
     if "enum" in schema and not any(type(value) is type(v) and value == v
                                     for v in schema["enum"]):
@@ -246,15 +249,15 @@ def _validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None
             _validate_schema(item, schema.get("items", {}))
 
 
-def _validate_return(parsed: dict, schema: dict) -> None:
-    """Validate the entire reply before any memory, child, tool, forecast or proposal effect."""
+def reserved_return_fields() -> dict:
+    """Publish the same reserved names and types enforced on every return."""
     properties = {k: {"type": "string"} for k in
                   ("action", "rationale", "reason", "status", "coin", "side")}
     properties.update({k: {"type": "number", "minimum": 0, "maximum": 1}
                        for k in ("verdict", "conformity")})
     properties.update({
         "vote": {"type": "boolean"},
-        "register": {"type": "array", "items": {"type": "object"}},
+        "register": {"type": "array"},
         "tool_calls": {"type": "array", "maxItems": 4, "items": {
             "type": "object", "properties": {"tool": {"type": "string"},
                                                 "args": {"type": "object"}},
@@ -271,6 +274,12 @@ def _validate_return(parsed: dict, schema: dict) -> None:
                 "horizon_events": {"type": "integer", "minimum": 1, "maximum": 200}}}},
             "required": ["predicate", "q", "params"]}},
     })
+    return properties
+
+
+def _validate_return(parsed: dict, schema: dict) -> None:
+    """Validate reply effects; each registration is admitted independently by the runtime."""
+    properties = reserved_return_fields()
     _validate_schema(parsed, {"type": "object", "properties": properties})
     if parsed.get("action") == "order":
         _validate_schema(parsed, {"properties": {
@@ -280,38 +289,41 @@ def _validate_return(parsed: dict, schema: dict) -> None:
     continuation = bool(parsed.get("tool_calls") or parsed.get("requests"))
     cannot = parsed.get("status") == "cannot" and isinstance(parsed.get("reason"), str)
     _validate_schema(parsed, schema, partial=continuation or cannot)
-    for proposal in parsed.get("register", []):
-        fields = {k: {"type": "string"} for k in (
-            "kind", "id", "model_id", "openrouter_id", "role", "system_prompt", "effort",
-            "event_kind", "learner", "description", "code", "predicted_effect", "tick_interval")}
-        fields.update({"gamma": {"type": "number", "minimum": 1e-300, "maximum": 1},
-                       "max_tokens": {"type": "integer", "minimum": 16, "maximum": 4096},
-                       "timeout_s": {"type": "integer", "minimum": 1, "maximum": 5},
-                       "accepts": {"type": "array", "items": {"type": "string"}},
-                       "args_schema": {"type": "object"}})
-        _validate_schema(proposal, {"properties": fields, "required": ["kind"]})
-        if proposal["kind"] == "router" and "add" in proposal:
-            add = proposal["add"]
-            if not isinstance(add, bool) and not (isinstance(add, str)
-                                                  and add.lower() in ("true", "false")):
-                raise ValueError("add must be a boolean")
-        if proposal["kind"] == "amendment":
-            _validate_schema(proposal, {"properties": {
-                "add": {"type": "array", "items": {"type": "object"}},
-                "replace": {"type": "array", "items": {"type": "object"}},
-                "remove": {"type": "array", "items": {"type": "string"}}}})
-            for card in proposal.get("add", []) + proposal.get("replace", []):
-                _validate_schema(card, {"properties": {
-                    **{k: {"type": "string"} for k in (
-                        "id", "norm", "description", "units", "window", "acceptable_region",
-                        "observation", "answers_for")},
-                    "lambda": {"type": "number", "minimum": 0}}})
     for child in parsed.get("requests", []):
         if not child["target"] or not child["description"].strip():
             raise ValueError("child needs target and description")
         if any(k in child["inputs"] for k in ("author", "author_id", "requester", "lineage")):
             raise ValueError("child inputs contain author metadata")
         _schema_definition(child["outcome_schema"])
+
+
+def validate_proposal(proposal: dict) -> None:
+    """Reject malformed proposal fields before any registration effect."""
+    fields = {k: {"type": "string"} for k in (
+        "kind", "id", "model_id", "openrouter_id", "role", "system_prompt", "effort",
+        "event_kind", "learner", "description", "code", "predicted_effect", "tick_interval")}
+    fields.update({"gamma": {"type": "number", "minimum": 1e-300, "maximum": 1},
+                   "max_tokens": {"type": "integer", "minimum": 16, "maximum": 4096},
+                   "timeout_s": {"type": "integer", "minimum": 1, "maximum": 5},
+                   "accepts": {"type": "array", "items": {"type": "string"}},
+                   "args_schema": {"type": "object"}})
+    _validate_schema(proposal, {"type": "object", "properties": fields, "required": ["kind"]})
+    if proposal["kind"] == "router" and "add" in proposal:
+        add = proposal["add"]
+        if not isinstance(add, bool) and not (isinstance(add, str)
+                                              and add.lower() in ("true", "false")):
+            raise ValueError("add must be a boolean")
+    if proposal["kind"] == "amendment":
+        _validate_schema(proposal, {"properties": {
+            "add": {"type": "array", "items": {"type": "object"}},
+            "replace": {"type": "array", "items": {"type": "object"}},
+            "remove": {"type": "array", "items": {"type": "string"}}}})
+        for card in proposal.get("add", []) + proposal.get("replace", []):
+            _validate_schema(card, {"properties": {
+                **{k: {"type": "string"} for k in (
+                    "id", "norm", "description", "units", "window", "acceptable_region",
+                    "observation", "answers_for")},
+                "lambda": {"type": "number", "minimum": 0}}})
 
 
 def _positive_wire_decimal(value: Any) -> None:

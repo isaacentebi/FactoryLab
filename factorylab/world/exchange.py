@@ -662,22 +662,29 @@ class HyperliquidExchange:
         import time
 
         try:
-            meta, ctxs = self._guarded("meta_and_asset_ctxs", self._info.meta_and_asset_ctxs)
+            raw = self._guarded("meta_and_asset_ctxs", self._info.meta_and_asset_ctxs)
         except VenueUnavailable:
             return []
-        names = [a["name"] for a in meta["universe"]]
+        if not isinstance(raw, (list, tuple)) or len(raw) != 2:
+            raise VenueUnavailable("invalid funding response")
+        meta, ctxs = raw
+        if (not isinstance(meta, dict) or not isinstance(meta.get("universe"), list)
+                or not isinstance(ctxs, list)):
+            raise VenueUnavailable("invalid funding response")
         now_ns = time.time_ns()
         out: list[FundingEvent] = []
-        for name, ctx in zip(names, ctxs, strict=False):
-            if name in self.coins:
-                out.append(
-                    FundingEvent(
-                        name,
-                        Decimal(str(ctx["funding"])),
-                        Decimal(str(ctx["premium"])) if ctx.get("premium") is not None else None,
-                        now_ns,
-                    )
-                )
+        for asset, ctx in zip(meta["universe"], ctxs, strict=False):
+            if not isinstance(asset, dict) or asset.get("name") not in self.coins:
+                continue
+            name = asset["name"]
+            try:
+                rate = Decimal(str(ctx["funding"]))
+                premium = Decimal(str(ctx["premium"])) if ctx.get("premium") is not None else None
+                if not rate.is_finite() or premium is not None and not premium.is_finite():
+                    continue
+                out.append(FundingEvent(name, rate, premium, now_ns))
+            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
+                continue
         return out
 
     def account(self) -> AccountState:
@@ -724,22 +731,33 @@ class HyperliquidExchange:
                                  self._info.user_funding_history(self._address, start))
             if not isinstance(page, list):
                 raise ValueError("invalid user funding response")
+            timestamps = []
             for row in page:
-                delta = row["delta"]
-                if delta.get("type") != "funding":
+                try:
+                    stamp = int(row["time"])
+                    if stamp < 0:
+                        continue
+                    timestamps.append(stamp)
+                    delta = row["delta"]
+                    if delta.get("type") != "funding":
+                        continue
+                    ts_ns = stamp * NS_PER_MS
+                    if ts_ns < since_ns:
+                        continue
+                    coin = delta["coin"]
+                    if not isinstance(coin, str) or not coin or not row["hash"]:
+                        continue
+                    ident = f"{row['hash']}:{coin}"
+                    paid = -Decimal(str(delta["usdc"]))
+                    rate = Decimal(str(delta["fundingRate"]))
+                    if not paid.is_finite() or not rate.is_finite():
+                        continue
+                    payments[ident] = FundingPayment(ident, coin, paid, rate, ts_ns)
+                except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
                     continue
-                ts_ns = int(row["time"]) * NS_PER_MS
-                if ts_ns < since_ns:
-                    continue
-                coin = str(delta["coin"])
-                ident = f"{row['hash']}:{coin}"
-                paid, rate = -Decimal(str(delta["usdc"])), Decimal(str(delta["fundingRate"]))
-                if not paid.is_finite() or not rate.is_finite():
-                    raise ValueError("nonfinite funding payment")
-                payments[ident] = FundingPayment(ident, coin, paid, rate, ts_ns)
             if len(page) < 500:
                 break
-            latest = max(int(row["time"]) for row in page)
+            latest = max(timestamps, default=start)
             if latest <= start:
                 raise ValueError("funding pagination stalled at a full timestamp")
             start = latest
@@ -757,21 +775,27 @@ class HyperliquidExchange:
             )
         except VenueUnavailable:
             return []
+        if not isinstance(raw, list):
+            raise VenueUnavailable("invalid fill response")
         out: list[Fill] = []
         for f in raw:
-            out.append(
-                Fill(
-                    order_id=str(f["oid"]),
-                    coin=f["coin"],
-                    is_buy=f["side"] == "B",
-                    size=Decimal(str(f["sz"])),
-                    px=Decimal(str(f["px"])),
-                    fee=Decimal(str(f.get("fee", "0"))),
-                    ts_ns=int(f["time"]) * NS_PER_MS,
-                    realized=Decimal(str(f.get("closedPnl", "0"))),
+            try:
+                values = [Decimal(str(f.get(key, "0")))
+                          for key in ("sz", "px", "fee", "closedPnl")]
+                size, px, fee, realized = values
+                stamp = int(f["time"]) * NS_PER_MS
+                if (any(not value.is_finite() for value in values)
+                        or size <= 0 or px <= 0 or stamp < 0
+                        or f["side"] not in ("B", "A")
+                        or not isinstance(f["coin"], str) or not f["coin"]):
+                    continue
+                out.append(Fill(
+                    order_id=str(f["oid"]), coin=f["coin"], is_buy=f["side"] == "B",
+                    size=size, px=px, fee=fee, ts_ns=stamp, realized=realized,
                     liquidation=bool(f.get("liquidation")),
-                )
-            )
+                ))
+            except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
+                continue
         return out
 
     def candles(self, coin: str, interval: str, n: int) -> list[dict]:
