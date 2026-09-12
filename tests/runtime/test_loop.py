@@ -40,7 +40,8 @@ def test_scripted_world_phase2_spec_condition_2() -> None:
     counts = s["aggregates"]["invocations_by_assembly"]["counts"]
     assert counts.get("funding-watcher", 0) >= 1
     assert st["routers_replaced"] >= 1
-    assert s["evaluation_boundary"] == "producer → evaluator → meta"
+    # A1: the boundary is the registered contract, not a fixed three-tier pipeline.
+    assert s["evaluation_boundary"] == "registered accepts → selected emits → return channel"
     assert st["sample_propensity"] is not None
     assert sum(s["aggregates"]["spend_by_capability"]["spend"].values()) > 0
     # Verdicts themselves now answer to the judged return's FIFO consequence.
@@ -279,7 +280,9 @@ def test_population_registers_recursive_meta_and_settles_higher_tiers():
     # Once the recursive tier exists, a meta it can judge opens on conformity; the
     # recursive judge itself is terminal (nothing judges its own output) and opens on
     # the consequence-graded channel instead of waiting for a verdict no one can give.
-    later = [o for o in meta_opens if o["seq"] > registration]
+    # A1 gives NOOP no judging contract when the entire judging menu is excluded.
+    later = [o for o in meta_opens if o["seq"] > registration
+             and o["propensity"]["chosen"] != "NOOP"]
     assert later and any(o["propensity"]["chosen"] == "recursive-meta" for o in later)
     assert all(
         o["channel"] == ("fast" if o["propensity"]["chosen"] == "recursive-meta"
@@ -821,11 +824,12 @@ def test_self_crossing_limit_tools_cannot_manufacture_paid_off_return():
             start_prices={"BTC": Decimal("100")},
         )
     )
-    runtime.consequences.start("wash", 0)
+    wash = _consequence_decision(runtime, "seed-decider", "verdict")
+    runtime.consequences.start(wash, 0)
     for side in ("buy", "sell"):
         result, _ = runtime._run_tool(
             "seed-decider",
-            "wash",
+            wash,
             {
                 "tool": "venue.place_limit",
                 "args": {"coin": "BTC", "side": side, "size": "1", "price": "100"},
@@ -833,9 +837,9 @@ def test_self_crossing_limit_tools_cannot_manufacture_paid_off_return():
             slot=f"test:{side}",
         )
         assert result["status"] == "filled"
-    runtime.consequences.finish("wash", 500)
+    runtime.consequences.finish(wash, 500)
     runtime.consequences.resolve(0)
-    payoff = runtime.consequences.payoff("wash")
+    payoff = runtime.consequences.payoff(wash)
     assert payoff.net_micro == -70_000 and payoff.y == 0
     assert runtime.wallet.balance == runtime.initial - 70_000
 
@@ -851,36 +855,38 @@ def test_resting_limit_fill_and_reduce_only_tool_keep_original_return_attributio
         price_path={"BTC": [Decimal("100"), Decimal("110")]},
     )
     runtime = _consequence_runtime(exchange=exchange)
-    runtime.consequences.start("limit", 0)
+    limit = _consequence_decision(runtime, "seed-decider", "verdict")
+    runtime.consequences.start(limit, 0)
     result, _ = runtime._run_tool(
         "seed-decider",
-        "limit",
+        limit,
         {
             "tool": "venue.place_limit",
             "args": {"coin": "BTC", "side": "buy", "size": "1", "price": "100"},
         },
     )
     assert result["status"] == "resting"
-    runtime.consequences.finish("limit", 500)
+    runtime.consequences.finish(limit, 500)
     runtime.consequences.resolve(0)
-    assert runtime.consequences.payoff("limit") is None
+    assert runtime.consequences.payoff(limit) is None
     runtime._settle_exchange_effects(exchange.advance(1_000_000_000))
-    assert runtime.consequences.table.lots[0].handle == "limit"
+    assert runtime.consequences.table.lots[0].handle == limit
     runtime._settle_exchange_effects(exchange.advance(2_000_000_000))
-    runtime.consequences.start("reduce", 1)
+    reduce = _consequence_decision(runtime, "seed-decider", "verdict")
+    runtime.consequences.start(reduce, 1)
     result, _ = runtime._run_tool(
         "seed-decider",
-        "reduce",
+        reduce,
         {
             "tool": "venue.place_market",
             "args": {"coin": "BTC", "side": "sell", "size": "2", "reduce_only": True},
         },
     )
     assert result["filled_size"] == "1"
-    runtime.consequences.finish("reduce", 500)
+    runtime.consequences.finish(reduce, 500)
     runtime.consequences.resolve(1)
-    assert runtime.consequences.payoff("limit").y == 1
-    assert runtime.consequences.payoff("reduce").y == 1  # the closer is credited (A16)
+    assert runtime.consequences.payoff(limit).y == 1
+    assert runtime.consequences.payoff(reduce).y == 1  # the closer is credited (A16)
     assert runtime.consequences.table.lots == ()
 
 

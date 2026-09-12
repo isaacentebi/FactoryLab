@@ -26,6 +26,19 @@ def test_every_published_tool_accepts_its_examples():
         rt._ledger_lock.close()
 
 
+def _decision(rt):
+    """Open an ordinary producing decision so a tool call has a real resource liability."""
+    from factorylab.kernel.queue import PropensityRecord
+
+    return rt.queue.open(
+        actor="test-router", event_id="test-transfer",
+        propensity=PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0,
+                                    "test-router", "state"),
+        channel="verdict", deadline_ns=rt.clock.now_ns + 100_000_000_000,
+        parent_handle=None, cost_ceiling=rt.wallet.available,
+    )
+
+
 @pytest.mark.parametrize("amount", ["5", 5])
 def test_treasury_transfer_survives_assembly_and_reaches_the_rail(amount, monkeypatch):
     rt = make_runtime()
@@ -36,7 +49,9 @@ def test_treasury_transfer_survives_assembly_and_reaches_the_rail(amount, monkey
         }}]}
         monkeypatch.setattr(rt.provider.target, "complete", lambda req: ModelResponse(
             req.model_id, json.dumps(body), 1, 1, "stop"))
-        req = rt._request("transfer", "transfer", {}, {}, 100, "test")
+        # A1 routes write authority through the decision's own ancestry, so the caller
+        # must be a real kernel decision, not a bare handle with an account attached.
+        req = rt._request(_decision(rt), "transfer", {}, {}, 100, "test")
         rt.consequences.start(req.handle, 0)  # treasury writes need an open account (A9)
         ret = rt.assemblies["seed-decider"].invoke(req)
         assert ret.status == "ok" and len(ret.tool_calls) == 1

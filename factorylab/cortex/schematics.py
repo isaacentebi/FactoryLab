@@ -5,9 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from factorylab.charter.measurement import measurement_catalogue
-from factorylab.cortex.assembly import reserved_return_fields
+from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, reserved_return_fields
 from factorylab.kernel.money import money_to_usd
-from factorylab.runtime.shared import PRODUCER_KINDS
 from factorylab.runtime.summary import _duration_str, _price_str
 from factorylab.settlement import SEED_VOCABULARY
 
@@ -29,6 +28,8 @@ class SchematicsMixin:
             "model_id": "a registered model id",
             "system_prompt": "text, at most 4000 chars",
             "accepts": ["Tick"],
+            "emits": ["ProducerReturn"],
+            "schemas": {},
             "max_tokens": 512,
             "effort": "low",
         },
@@ -39,6 +40,7 @@ class SchematicsMixin:
             "gamma": 0.1,
             "add": False,
         },
+        "retire": {"kind": "retire", "assembly_id": "a registered assembly id"},
         "tool": {
             "kind": "tool",
             "id": "slug",
@@ -91,7 +93,8 @@ class SchematicsMixin:
         ),
         "register": "a list of up to three proposals, including amendments, shaped like "
         "proposal_shapes; router add=false replaces, add=true adds a router. Learners: exp3 or "
-        "blum_mansour. Assembly roles: producer, evaluator, meta, antagonist; effort: low, medium, "
+        "blum_mansour. Roles are descriptive labels; accepts and emits define the contract. "
+        "A retired id may be registered again as its next version. Effort: low, medium, "
         "high. Cards answer for producer, evaluator, meta, antagonist or all; window is "
         "{kind: returns|forecasts|windows, n: positive integer, per: role|assembly|null}. "
         "Insufficient samples are unmeasured. Lambda is optional and bounded by prices.lambda_max; "
@@ -100,12 +103,24 @@ class SchematicsMixin:
         "Unmeasurable windows, duplicate role/observation bindings and unchanged amendments "
         "are refused before a vote.",
         "tool_calls": (
-            'a list of {"tool": id, "args": {...}} (max 4); results come back in a second call'
+            'a list of {"tool": id, "args": {...}} bounded by mechanics.tools.max_tool_calls; '
+            'results come back in one continuation per request'
+        ),
+        "emits": (
+            "the selected return kind from your registered emits; optional for a single kind. "
+            "ProducerReturn uses verdict feedback, Verdict uses conformity and payoff, "
+            "MetaVerdict uses conformity or terminal consequence, Exposure uses exposure. "
+            "A custom kind is declared in registration.schemas[kind] as a JSON object schema "
+            "and receives verdict feedback. Event kind names keep their schema; a changed "
+            "schema uses a new name. Built-in world and kernel events cannot be emitted."
         ),
         "requests": (
-            'up to two objects: {"target":"assembly-id or self","description":"task",'
-            '"inputs":{},"outcome_schema":{"type":"object"}}; targets answer once, '
-            'without further requests. Outputs arrive in tool_results as '
+            'objects: {"target":"assembly-id or self","description":"task",'
+            '"inputs":{},"outcome_schema":{"type":"object"}}; children have tools and '
+            'may request children to mechanics.tools.max_depth (root depth 0), with '
+            'mechanics.tools.max_children children per request. Each depth has one '
+            'continuation and spends within its parent\'s remaining cost ceiling. '
+            'Outputs arrive in tool_results as '
             '{"tool":"assembly:<target>","args":<inputs>,"result":{"outputs":{},'
             '"status":"ok","cost_micro":0}} before your second call. '
             'Outcome schemas support object/array/scalar types, properties, required, enum, '
@@ -138,6 +153,7 @@ class SchematicsMixin:
             "charter_edition": self.charter.edition,
             "charter": self._charter_text(),
             "mechanics": self._mechanics_block(),
+            "composition": SEED_SYSTEM_PROMPT,
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
             "tools": list(self.tool_specs.values()),
@@ -165,10 +181,19 @@ class SchematicsMixin:
             "assemblies": [
                 {
                     "event_kind": kind,
-                    "count": sum(kind in a.spec.accepts for a in self.assemblies.values()),
+                    "count": sum(kind in a.spec.accepts for a in self.assemblies.values()
+                                 if a.spec.id not in self.retired_assemblies),
                 }
                 for kind in sorted({k for a in self.assemblies.values() for k in a.spec.accepts})
             ],
+            "contracts": [
+                {"accepts": list(accepts), "emits": list(emits)}
+                for accepts, emits in sorted({
+                    (tuple(sorted(a.spec.accepts)), tuple(a.spec.emits))
+                    for a in self.assemblies.values()
+                    if a.spec.id not in self.retired_assemblies})
+            ],
+            "event_schemas": dict(self.event_schemas),
             "routers": [
                 {"event_kind": kind, "count": len(states)}
                 for kind, states in sorted(self.routers.items())
@@ -180,7 +205,9 @@ class SchematicsMixin:
             },
             "governance": self.cadence.world_block(self.tick_clock.interval_ns),
             "registration_feedback": list(self.registration_feedback),
-            "reserved_return_fields": reserved_return_fields(),
+            "reserved_return_fields": reserved_return_fields(
+                max_children=self.m.tools.max_children,
+                max_tool_calls=self.m.tools.max_tool_calls),
             "scoring": self._scoring_block(),
             "prices": {"lambda_max": self.m.prices.lambda_max,
                        "penalty_cap": self.m.prices.penalty_cap},
@@ -197,7 +224,7 @@ class SchematicsMixin:
                 }
                 for cid in sorted(self.priced)
             ],
-            "event_kinds": sorted(PRODUCER_KINDS | {"ProducerReturn", "Verdict", "MetaVerdict"}),
+            "event_kinds": sorted(self._event_kinds()),
             "meta_input": (
                 "A meta judges the released representative verdict. Its window describes "
                 "the arrivals it represents: count, mean score, min, max, and decision handles."
@@ -214,6 +241,10 @@ class SchematicsMixin:
         """Expose the committed parameters and operative formulas without learner state."""
         pr, nov = self.m.prices, self.m.novelty
         return {
+            "tools": {"max_depth": self.m.tools.max_depth,
+                      "max_children": self.m.tools.max_children,
+                      "max_tool_calls": self.m.tools.max_tool_calls,
+                      "continuations_per_request": 1},
             "committee": {
                 "seats": self.m.committee.seats,
                 "threshold": "floor(number of seated delegates / 2) + 1 yes votes",
@@ -223,7 +254,9 @@ class SchematicsMixin:
                 "liability": "yes votes forecast the predicted direction; no votes its negation. "
                 "Brier = 1 - (vote - outcome)^2, measured at the declared window after activation "
                 "against the pre-activation value. No activation or missing evidence is censored. "
-                "Feedback returns to the voting assembly's durable identity.",
+                "Feedback returns to the voting assembly's durable identity. Retirements "
+                "use the same eligibility, draw, majority and cadence; with no predicted "
+                "effect in a retire proposal, their ballots are unscored and censored.",
             },
             "novelty": {"share": nov.share, "window_ns": nov.window_ns,
                         "window": _duration_str(nov.window_ns),
@@ -260,7 +293,7 @@ class SchematicsMixin:
             "items": {
                 "type": "object",
                 "properties": {"kind": {"enum": ["model", "assembly", "router", "tool",
-                                                   "amendment"]}},
+                                                   "amendment", "retire"]}},
                 "required": ["kind"],
             },
         }
@@ -293,19 +326,21 @@ class SchematicsMixin:
         ev = self.ev
         return {
             "producer_or_antagonist_return": (
-                "settles on the verdict channel: the score is the verdict (0 to 1) an evaluator "
+                "ProducerReturn and custom return kinds settle on the verdict channel: "
+                "the score is the verdict (0 to 1) a judging return "
                 f"gives it within {ev.verdict_timeout_events} events, less the card penalty; "
                 "unjudged returns are censored (no score, no learning)"
             ),
             "antagonist_exposure": (
-                "an antagonist return settles on the exposure channel, less the antagonist's "
+                "an Exposure return settles on the exposure channel, less the antagonist's "
                 "card penalty: 1 only when the judge's mandatory payoff forecast about it "
                 "scored a worse Brier than the prevalence baseline and the antagonist's own "
                 "payoff forecast about it scored better; a judge's optional forecasts never "
                 "count; otherwise 0 once nothing about the return is pending"
             ),
             "antagonist_routing": (
-                "router probability mass on antagonist assemblies is renormalised to at most "
+                "router probability mass on contracts declaring Exposure is renormalised to "
+                "at most "
                 f"{ev.adversarial_share} before every draw"
             ),
             "verdict_and_payoff": (
@@ -322,7 +357,8 @@ class SchematicsMixin:
             ),
             "payoff_standing": (
                 "mean Brier of the evaluator's payoff forecasts minus the prevalence "
-                "baseline's, capped below minimum coverage; it enters evaluator selection with "
+                "baseline's, capped below minimum coverage; it enters selection among contracts "
+                "declaring Verdict on any accepted event kind with "
                 f"weight consequence_mix (now {self.consequence_mix}, manifest "
                 f"{ev.consequence_share}) beside the learned selection; when the verdict mean "
                 f"rises while payoff skill falls over {self.m.immune.k} windows the mix rises by "
@@ -368,8 +404,9 @@ class SchematicsMixin:
             "venue_and_treasury_writes": (
                 "venue.place_market, venue.place_limit, venue.close, venue.cancel, "
                 "venue.set_leverage and treasury.transfer act only for a decision with an open "
-                "consequence account (producer, antagonist and child returns); a judging "
-                "decision is refused; nothing judges its own output or its child's"
+                "consequence account and producing return kind; judging decisions and their "
+                "children cannot write to the venue or treasury. Nothing judges its own "
+                "output, its ancestors' output or a descendant it requested"
             ),
             "policy": self._mechanics_block()["committee"]["liability"],
             "novelty_reserve": (

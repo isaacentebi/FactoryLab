@@ -11,6 +11,52 @@ micro-USD after exact decimal parsing. The entries below document the round-two
 additions and the changed charter contract; other sections retain their existing
 keys.
 
+## Round-two W4: composition contracts (A1)
+
+| Key | Type | Default / seed | Hard cast? |
+| --- | --- | --- | --- |
+| `assemblies[].accepts` | Nonempty array of event-kind strings | Required; shipped subscriptions unchanged | No: a registration may accept any kind, including return kinds |
+| `assemblies[].emits` | Nonempty array of return-kind strings | Legacy labels expand once: producer → `ProducerReturn`, evaluator → `Verdict`, meta → `MetaVerdict`, antagonist → `Exposure`; explicit in `scripted.toml` | No: chosen by each registration; labels do not dispatch |
+| `assemblies[].schemas` | Object mapping custom emits kinds to object schemas | `{}`; every custom kind requires a schema | No: population declares new kinds; an existing kind retains its meaning |
+| `tools.max_depth` | Integer ≥ 0, never boolean or float | `4` | Yes: root depth is 0; zero disables children |
+| `tools.max_children` | Integer ≥ 0, never boolean or float | `3` | Yes: per-request fan-out; zero disables children |
+| `tools.max_tool_calls` | Integer ≥ 0, never boolean or float | `4` (the existing limit, now a manifest key) | Yes: per request; zero disables tool calls |
+
+The assembly proposal uses the same accepts/emits/schemas contract. A custom
+schema validates the returned payload, excluding the protocol fields `emits`,
+`about_handle`, `register`, `requests`, `tool_calls`, `status` and `reason`. Custom returns receive
+verdict feedback. A changed schema requires a new kind name; built-in world or
+kernel events cannot be impersonated. A producer may process its own event;
+judgement against its own or an ancestor's output is refused. Public registrations
+include ids and versions without identifying the author of a judged return.
+
+A multi-kind return must select `emits` on its first response, before any tools
+or children run, and cannot change it on continuation. The kernel queue keeps
+its original channel (`emits` for a sum of channels); `decision.contract` and
+`decision.emits` record the alternatives and one-time selection. Runtime reads
+and feedback expose the selected channel. Single-channel seed contracts keep
+their original channels. Exposure also publishes the producer-shaped event used
+by the shipped evaluator registrations. Judge cost accounts do not add novelty
+trials to the forecast and meta-feedback trials they already receive.
+
+`register: [{"kind":"retire","assembly_id":"eval-a"}]` proposes retirement
+of the current version. It uses amendment eligibility, sortition, majority and
+activation cadence, with the proposer excluded. Retirement ballots carry no
+predicted-effect field, so they are censored without inventing a new reward.
+Retirement removes future routing and child admission, retains old handles,
+accounts and feedback identity, and allows the id's next version to register.
+
+Each depth has one continuation. It returns the final answer after its tool and
+child results; additional requests at that continuation are refused. Descendant
+costs accumulate against the original parent's remaining ceiling. These are
+protocol semantics from A1, not additional population objectives.
+
+The deterministic scripted fixture reuses its existing call schedule: the third
+registration slot installs a helper and a producer accepting `ProducerReturn`;
+the fourth tool slot requests helper → grandchild with a catalogue tool; the
+router-add slot also replaces the custom `Finding` router and proposes retiring
+`eval-a`. The earlier scripted replies and seed probabilities are preserved.
+
 ## Round-two W3: disclosure, governance, the treasury
 # Manifest parameters: round two
 

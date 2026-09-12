@@ -1,20 +1,14 @@
-"""The event loop: world → nervous system → cortex → evaluation → settlement.
+"""The event loop dispatches public events through registered accepts/emits contracts.
 
 Spec v0.4 section 4.11 and v0.5 sections 3, 4. The loop owns no money, no
 scores and no rules; it is glue over kernel physics.
 
-Roles. Producers respond to world events. Every producer decision, including
-NOOP, is published as a ``ProducerReturn`` and judged by an evaluator chosen
-by the evaluator router (whose executed distribution blends a protected
-share weighted by payoff standing, with antagonist mass capped). An
-evaluator returns two numbers: a ``verdict`` (charter quality), which settles
-the producer decision on its ``verdict`` channel, and a ``payoff`` (the
-probability the return pays off), sealed as a forecast on the ``consequence``
-channel and settled later by the world; optional public-predicate forecasts
-settle the same way. A meta assembly judges the verdict and settles the
-evaluator decision on ``conformity``; a top meta is itself graded against
-the verdict's eventual consequence. Anything nobody judged in time is
-censored: no score, no learning, no manufactured outcome.
+Contracts. Any assembly may accept any event kind and select a declared
+output kind. Producer-shaped and custom returns receive verdict feedback;
+verdicts carry independent quality and payoff values; meta verdicts receive
+conformity or terminal consequence feedback; exposures retain their exposure
+channel. The shipped registrations preserve the seeded evaluation chain.
+Unjudged returns are censored, and retirement preserves delayed feedback.
 
 Prices. At each reserve-window boundary the runtime measures the window
 that closed using the observation catalogue
@@ -52,7 +46,7 @@ from factorylab.runtime.governance import GovernanceMixin
 from factorylab.runtime.live import LiveClock, Reconciler
 from factorylab.runtime.pricing import PricingMixin
 from factorylab.runtime.resume import decode, encode, runtime_state
-from factorylab.runtime.routing import RoutingMixin
+from factorylab.runtime.routing import ContractQueue, PopulationEvent, RoutingMixin
 from factorylab.runtime.shared import (
     CH_CONFORMITY,
     CH_EXPOSURE,
@@ -88,6 +82,7 @@ class Runtime(
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.queue = ContractQueue(self.queue, self)
         self._init_fidelity()
 
     def _invoke(self, action_id, req, role, *, child=False):
@@ -338,11 +333,30 @@ class Runtime(
             f"ev-{self.emitted}", EventKind(str(we.kind)), we.ts_ns, dict(we.payload), we.source
         )
 
-    def _emit(self, kind: EventKind, payload: dict[str, Any], source: str = "runtime") -> None:
+    def _emit(self, kind: EventKind | str, payload: dict[str, Any],
+              source: str = "runtime") -> None:
+        from factorylab.cortex.assembly import _validate_schema
+
+        if str(kind) not in {str(k) for k in EventKind}:
+            if kind != "Exposure":
+                if kind not in self.event_schemas:
+                    raise ValueError("population event has no declared schema")
+                if payload.get("status") == "ok":
+                    _validate_schema({k: v for k, v in payload["outputs"].items()
+                                      if k not in ("emits", "register", "about_handle",
+                                                   "status", "reason")},
+                                     self.event_schemas[kind])
+            event_type = PopulationEvent
+        else:
+            kind = EventKind(kind)
+            event_type = Event
         self.emitted += 1
-        self.internal.append(
-            Event(f"{kind.value.lower()}-{self.emitted}", kind, self.clock.now_ns, payload, source)
-        )
+        event = event_type(f"{str(kind).lower()}-{self.emitted}", kind,
+                           self.clock.now_ns, payload, source)
+        self.internal.append(event)
+        subject = self._event_subject(event)
+        if subject is not None and source == "runtime":
+            self.return_events[subject] = event
 
     def _check_termination(self) -> bool:
         reason = self.termination.check(self.wallet, self.clock.now_ns)
@@ -354,8 +368,98 @@ class Runtime(
         self.termination.kill(reason)
         return True
 
-    def _producer_step(self, ev: Event, handle: str, sample: Sample, deadline: int) -> None:
-        self.consequences.start(handle, self.n)
+    def _start_return(self, handle: str) -> None:
+        """Each decision has one consequence account before compute or effects."""
+        try:
+            self.consequences.table.account(handle)
+        except KeyError:
+            self.consequences.start(handle, self.n)
+
+    def _assembly_step(self, ev: Event, handle: str, sample: Sample, deadline: int) -> None:
+        """Only an assembly's declared output contract chooses its request and reward path."""
+        self._start_return(handle)
+        if sample.chosen == NOOP:
+            if self._event_subject(ev) is not None:
+                self.stats.noops += 1
+                self.consequences.finish(handle, 0)
+                self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
+                                  status=SettleStatus.INAPPLICABLE,
+                                  definition_version=DEF_VERDICT, sampling_ref=None)
+            else:
+                self._producer_step(ev, handle, sample, deadline)
+            return
+        self.handle_to_assembly[handle] = sample.chosen
+        subject = self._event_subject(ev)
+        if subject is not None:
+            self.decision_subjects[handle] = subject
+        emits = self.assemblies[sample.chosen].spec.emits
+        if emits == ("Verdict",):
+            self._evaluator_step(ev, handle, sample, deadline)
+        elif emits == ("MetaVerdict",):
+            self._meta_step(ev, handle, sample, deadline)
+        else:
+            self._producer_step(ev, handle, sample, deadline)
+
+    def _contract_schema(self, assembly_id: str) -> dict[str, Any]:
+        """A polymorphic request publishes all its variants without choosing one for the model."""
+        from factorylab.cortex.assembly import reserved_return_fields
+
+        spec = self.assemblies[assembly_id].spec
+        schemas = []
+        unit = {"type": "number", "minimum": 0, "maximum": 1}
+        for kind in spec.emits:
+            if kind in spec.schemas:
+                schema = _to_plain(spec.schemas[kind])
+            else:
+                fields = ({"verdict": unit, "payoff": unit,
+                           "rationale": {"type": "string"}, "forecasts": self._forecast_schema()}
+                          if kind == "Verdict" else
+                          {"conformity": unit} if kind == "MetaVerdict" else
+                          {"action": {"type": "string"}})
+                schema = {"type": "object", "properties": fields, "required": list(fields)}
+            schemas.append({**schema, "properties": {
+                **{k: v for k, v in reserved_return_fields(
+                    max_children=self.m.tools.max_children,
+                    max_tool_calls=self.m.tools.max_tool_calls).items()
+                   if k in ("requests", "tool_calls", "status", "reason")},
+                **schema.get("properties", {}), "emits": {"enum": [kind]},
+                "about_handle": {"type": "string"}, "register": self._register_schema(),
+            }, "required": [*schema.get("required", []),
+                            *(["emits"] if len(spec.emits) > 1 else [])]})
+        return schemas[0] if len(schemas) == 1 else {"anyOf": schemas}
+
+    def _judged_event(self, ev: Event, handle: str, ret: Return) -> Event | None:
+        """A judgement may address a public return handle, excluding its complete ancestry."""
+        about = ret.outputs.get("about_handle", self._event_subject(ev))
+        try:
+            self.queue.get(about)
+        except (KeyError, TypeError):
+            self.ledger.append({"kind": "return.refused", "handle": handle,
+                                "reason": "judgement needs an addressable return handle"})
+            return None
+        target = self.return_events.get(about)
+        if target is None and about == self._event_subject(ev):
+            target = ev
+        author = self.handle_to_assembly.get(handle)
+        if target is None or author in self._subject_authors(str(target.kind), target):
+            self.ledger.append({"kind": "return.refused", "handle": handle,
+                                "about_handle": about,
+                                "reason": "judgement needs an independent, addressable return"})
+            return None
+        # A child cannot judge the requester or any earlier request ancestor either.
+        parents = self._ancestry(self.queue.get(handle).parent_handle)
+        if about in parents or self.handle_to_assembly.get(about) in {
+            self.handle_to_assembly.get(p) for p in parents
+        }:
+            self.ledger.append({"kind": "return.refused", "handle": handle,
+                                "about_handle": about, "reason": "self-judgement: ancestor"})
+            return None
+        self.decision_subjects[handle] = about
+        return target
+
+    def _producer_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
+                       *, returned: Return | None = None) -> None:
+        self._start_return(handle)
         payload = _to_plain(ev.payload)
         if ev.kind is EventKind.TICK:
             try:
@@ -374,7 +478,8 @@ class Runtime(
                 }
             payload["mids"] = {c: str(m) for c, m in self.exchange.mids().items()}
         description = f"Respond to event {ev.kind} on {ev.source}."
-        adversarial = self.queue.get(handle).channel == CH_EXPOSURE
+        adversarial = (sample.chosen != NOOP
+                       and self.assemblies[sample.chosen].spec.emits == ("Exposure",))
         if adversarial:
             description += (
                 " You may include payoff: your probability that return_paid_off, the "
@@ -401,9 +506,30 @@ class Runtime(
                 },
                 "required": ["action"],
             }
-            req = self._request(handle, description, inputs, schema, deadline, CH_VERDICT)
-            ret = self._invoke(sample.chosen, req, "producer")
-            self._execute_outputs(ret)
+            kinds = self.assemblies[sample.chosen].spec.emits
+            if len(kinds) > 1 or kinds[0] in self.event_schemas:
+                schema = self._contract_schema(sample.chosen)
+                description += " Select one of your declared emits kinds."
+            req = self._request(handle, description, inputs, schema, deadline,
+                                self.queue.get(handle).channel)
+            ret = (returned if returned is not None
+                   else self._invoke(sample.chosen, req, "producer"))
+            emitted = self.return_kinds.get(handle, kinds[0] if len(kinds) == 1 else None)
+            if emitted == "Verdict":
+                self._evaluator_step(ev, handle, sample, deadline, returned=ret)
+                return
+            if emitted == "MetaVerdict":
+                self._meta_step(ev, handle, sample, deadline, returned=ret)
+                return
+            if emitted is None:
+                self.consequences.finish(handle, ret.cost)
+                self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
+                                  status=SettleStatus.CENSORED,
+                                  definition_version="unselected-return-v1", sampling_ref=None)
+                return
+            adversarial = emitted == "Exposure"
+            if self._may_write(handle):
+                self._execute_outputs(ret)
             self._apply_registrations(handle, ret)
             self.handle_to_assembly[handle] = sample.chosen
             self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
@@ -438,9 +564,9 @@ class Runtime(
         else:
             self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
         self.stats.producer_returns += 1
-        self._emit(
-            EventKind.PRODUCER_RETURN,
-            {
+        emitted = self.return_kinds.get(handle, "ProducerReturn" if sample.chosen == NOOP
+                                        else self.assemblies[sample.chosen].spec.emits[0])
+        payload = {
                 "about_handle": handle,
                 "description": description,
                 # Judges see the event the producer answered, never the producer's private
@@ -449,12 +575,18 @@ class Runtime(
                 "outputs": ret.outputs,
                 "cost": ret.cost,
                 "status": ret.status,
-            },
-        )
+            }
+        # Exposure retains its producer-shaped judgment route for the shipped seeds;
+        # assemblies may also subscribe to its explicit kind.
+        self._emit(EventKind.PRODUCER_RETURN if emitted == "Exposure" else emitted, payload)
+        if emitted == "Exposure" and self.routers.get("Exposure"):
+            self._emit("Exposure", payload)
 
-    def _evaluator_step(self, ev: Event, handle: str, sample: Sample, deadline: int) -> None:
+    def _evaluator_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
+                        *, returned: Return | None = None) -> None:
+        self._start_return(handle)
         payload = _to_plain(ev.payload)
-        about = payload["about_handle"]
+        about = self._event_subject(ev)
         if sample.chosen == NOOP:
             self.stats.noops += 1
             self.queue.settle(
@@ -468,11 +600,11 @@ class Runtime(
             return
         inputs = {
             "producer": {
-                "description": payload["description"],
-                "inputs": payload["inputs"],
-                "outputs": payload["outputs"],
-                "cost_micro_usd": payload["cost"],
-                "status": payload["status"],
+                "description": payload.get("description", f"Return on {ev.kind}"),
+                "inputs": payload.get("inputs", {}),
+                "outputs": payload.get("outputs", payload),
+                "cost_micro_usd": payload.get("cost", 0),
+                "status": payload.get("status", "ok"),
             },
             "charter": self._charter_text(),
             "predicates": [
@@ -488,6 +620,10 @@ class Runtime(
             "your_recent_returns": list(self.memory.get(sample.chosen, ())),
             "your_consequence_standing": self._standing_for(sample.chosen),
         }
+        generic = ev.kind is not EventKind.PRODUCER_RETURN
+        if generic:
+            inputs["event"] = {"kind": str(ev.kind), "payload": payload}
+            inputs["subject_handle"] = about
         schema = {
             "type": "object",
             "properties": {
@@ -496,12 +632,16 @@ class Runtime(
                 "rationale": {"type": "string"},
                 "forecasts": self._forecast_schema(),
                 "register": self._register_schema(),
+                "about_handle": {"type": "string"},
             },
             "required": ["verdict", "payoff", "rationale", "forecasts"],
         }
         req = self._request(
             handle,
-            "Evaluate a producer return. Give two numbers: verdict = its quality against "
+            ("Evaluate the public return addressed by about_handle. The input's subject_handle "
+             "is the default when present. Give two numbers: verdict = its quality against "
+             if generic else
+             "Evaluate a producer return. Give two numbers: verdict = its quality against ") +
             "the charter (0 to 1); payoff = your probability that return_paid_off, the "
             "kernel's consequence predicate, resolves true for the return. Then give "
             f"{self.ev.max_forecasts_per_verdict} forecasts: for each, a predicate from the "
@@ -511,7 +651,9 @@ class Runtime(
             deadline,
             CH_CONFORMITY,
         )
-        ret = self._invoke(sample.chosen, req, "evaluator")
+        ret = (returned if returned is not None
+               else self._invoke(sample.chosen, req, "evaluator"))
+        self.consequences.finish(handle, ret.cost)
         self._apply_registrations(handle, ret)
         self.handle_to_assembly[handle] = sample.chosen
         self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
@@ -519,6 +661,12 @@ class Runtime(
         )
         verdict = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
         payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
+        target = self._judged_event(ev, handle, ret) if verdict is not None else None
+        if target is not None:
+            about = self._event_subject(target)
+            payload = _to_plain(target.payload)
+        else:
+            verdict = None
         if verdict is None or payoff is None:
             # a malformed verdict is objectively non-conforming; the producer stays unjudged
             self.queue.settle(
@@ -542,16 +690,17 @@ class Runtime(
                         entry["verdict"] = verdict
         if (
             pend is not None
-            and about_decision.channel == CH_VERDICT
+            and about_decision.channel in (CH_VERDICT, CH_CONFORMITY)
             and about_decision.status is SettleStatus.PENDING
         ):
             self._settle_priced(
                 about,
-                channel=CH_VERDICT,
+                channel=about_decision.channel,
                 score=verdict,
-                definition_version=DEF_VERDICT,
+                definition_version=(DEF_VERDICT if about_decision.channel == CH_VERDICT
+                                    else DEF_CONFORMITY),
                 sampling_ref=handle,
-                cards="producer",
+                cards="producer" if about_decision.channel == CH_VERDICT else "evaluator",
             )
             self.stats.verdicts += 1
             self.stats.max_settlement_latency_events = max(
@@ -585,14 +734,16 @@ class Runtime(
                 "payoff": payoff,
                 "payoff_handle": forecast.handle,
                 "rationale": str(ret.outputs.get("rationale", ""))[:2000],
-                "producer_outputs": payload["outputs"],
+                "producer_outputs": payload.get("outputs", payload),
             },
         )
 
-    def _meta_step(self, ev: Event, handle: str, sample: Sample, deadline: int) -> None:
+    def _meta_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
+                   *, returned: Return | None = None) -> None:
+        self._start_return(handle)
         payload = _to_plain(ev.payload)
         recursive = ev.kind is EventKind.META_VERDICT
-        about = payload["by"] if recursive else payload["evaluator_handle"]
+        about = self._event_subject(ev)
         tier = payload["tier"] + 1 if recursive else 2
         channel = self.queue.get(handle).channel
         definition = DEF_FAST if channel == CH_FAST else DEF_CONFORMITY
@@ -609,7 +760,7 @@ class Runtime(
             return
         inputs = {
             "verdict": {
-                "verdict": payload["score"] if recursive else payload["verdict"],
+                "verdict": payload.get("score") if recursive else payload.get("verdict"),
                 **({} if recursive else {"payoff": payload.get("payoff")}),
                 "rationale": payload.get("rationale", ""),
             },
@@ -621,6 +772,10 @@ class Runtime(
             inputs["window"] = payload["window"]
         if recursive:
             inputs["meta_verdict"] = payload
+        generic = ev.kind not in (EventKind.VERDICT, EventKind.META_VERDICT)
+        if generic:
+            inputs["event"] = {"kind": str(ev.kind), "payload": payload}
+            inputs["subject_handle"] = about
         # The root judge whose payoff forecast eventually grades this tier's top meta.
         judge_handle = payload.get("evaluator_handle", about)
         schema = {
@@ -629,25 +784,38 @@ class Runtime(
                 "conformity": {"type": "number"},
                 "rationale": {"type": "string"},
                 "register": self._register_schema(),
+                "about_handle": {"type": "string"},
             },
             "required": ["conformity"],
         }
         req = self._request(
             handle,
-            "Assess the released representative verdict for conformity with the charter, "
-            "using its window as context.",
+            ("Assess the public return addressed by about_handle for conformity with the charter. "
+             "The input's subject_handle is the default when present." if generic else
+             "Assess the released representative verdict for conformity with the charter, "
+             "using its window as context."),
             inputs,
             schema,
             deadline,
             channel,
         )
-        ret = self._invoke(sample.chosen, req, "meta")
+        ret = (returned if returned is not None else self._invoke(sample.chosen, req, "meta"))
+        self.consequences.finish(handle, ret.cost)
         self.handle_to_assembly[handle] = sample.chosen
         self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
             {"handle": handle, "outputs": ret.outputs, "verdict": None}
         )
         self._apply_registrations(handle, ret)
         conformity = _as_unit(ret.outputs.get("conformity")) if ret.status == "ok" else None
+        target = self._judged_event(ev, handle, ret) if conformity is not None else None
+        if target is not None:
+            about = self._event_subject(target)
+            if target is not ev:
+                payload = _to_plain(target.payload)
+                tier = payload.get("tier", 1) + 1
+                judge_handle = payload.get("evaluator_handle", about)
+        else:
+            conformity = None
         if channel == CH_FAST and conformity is None:
             # a malformed conformity is objectively non-conforming
             self._settle_priced(

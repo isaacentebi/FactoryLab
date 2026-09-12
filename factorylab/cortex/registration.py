@@ -10,7 +10,7 @@ are about shape, not merit.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from factorylab.cortex.sandbox import jail_available
@@ -20,6 +20,50 @@ MAX_PROMPT_CHARS = 4000
 MAX_PROPOSALS_PER_RETURN = 3
 LEARNERS = ("exp3", "blum_mansour")
 ROLES = ("producer", "evaluator", "meta", "antagonist")
+
+
+def seed_emits(role: str) -> tuple[str, ...]:
+    """Expand a legacy seed label into an ordinary, replaceable output contract."""
+    return {"producer": ("ProducerReturn",), "evaluator": ("Verdict",),
+            "meta": ("MetaVerdict",), "antagonist": ("Exposure",)}.get(
+                role, ("ProducerReturn",))
+
+
+BUILTIN_RETURNS = frozenset({"ProducerReturn", "Verdict", "MetaVerdict", "Exposure"})
+
+
+def event_name(value: Any) -> str:
+    """An event kind is a nonempty name, independent of any role label."""
+    if (not isinstance(value, str) or not value
+            or any(c.isspace() or not c.isprintable() for c in value)):
+        raise ValueError("event kind must be a nonempty name without whitespace")
+    return value
+
+
+def output_contracts(emits: Any, schemas: Any) -> tuple[tuple[str, ...], dict[str, dict]]:
+    """Custom return kinds require executable schemas; built-in meanings cannot be replaced."""
+    from factorylab.cortex.assembly import _schema_definition
+    from factorylab.kernel.events import EventKind
+
+    if not isinstance(emits, (list, tuple)) or not emits:
+        raise ValueError("emits must be a non-empty list of return kinds")
+    kinds = tuple(dict.fromkeys(event_name(k) for k in emits))
+    if not isinstance(schemas, dict) or any(k not in kinds for k in schemas):
+        raise ValueError("schemas must map declared emits kinds to outcome schemas")
+    custom = {}
+    for kind in kinds:
+        if kind in BUILTIN_RETURNS:
+            if kind in schemas:
+                raise ValueError("built-in return schemas cannot be replaced")
+            continue
+        if kind in {str(k) for k in EventKind}:
+            raise ValueError("a population return cannot impersonate a world or kernel event")
+        schema = schemas.get(kind)
+        _schema_definition(schema)
+        if schema.get("type") != "object":
+            raise ValueError("a population return schema must have type object")
+        custom[kind] = schema
+    return kinds, custom
 
 
 @dataclass(frozen=True)
@@ -36,6 +80,13 @@ class AssemblyProposal:
     accepts: tuple[str, ...]
     max_tokens: int
     effort: str
+    emits: tuple[str, ...] = ()
+    schemas: dict[str, dict] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RetireProposal:
+    assembly_id: str
 
 
 @dataclass(frozen=True)
@@ -55,7 +106,7 @@ class ToolProposal:
     timeout_s: int
 
 
-Proposal = ModelProposal | AssemblyProposal | RouterProposal | ToolProposal
+Proposal = ModelProposal | AssemblyProposal | RouterProposal | ToolProposal | RetireProposal
 
 
 @dataclass(frozen=True)
@@ -72,12 +123,13 @@ def parse_proposals(
     known_assemblies: frozenset[str],
     known_tools: frozenset[str] = frozenset(),
     tool_jail: bool | None = None,
+    retired_assemblies: frozenset[str] = frozenset(),
 ) -> tuple[list[Proposal], list[Rejected]]:
     """Return well-formed proposals and the reasons the rest were refused.
 
     Guarantees: at most ``MAX_PROPOSALS_PER_RETURN`` proposals are accepted,
-    in order; an assembly proposal never reuses an existing id or names an
-    unknown model; a router proposal names a known event kind and learner;
+    in order; an assembly proposal reuses an id only after retirement and never
+    names an unknown model; a router proposal names an event kind and learner;
     prompts are bounded; tools have fresh ids, bounded source and timeouts;
     nothing here has side effects.
     """
@@ -100,11 +152,19 @@ def parse_proposals(
             if kind == "model":
                 accepted.append(_model(item))
             elif kind == "assembly":
-                accepted.append(_assembly(item, event_kinds, known_models, known_assemblies))
+                accepted.append(_assembly(item, event_kinds, known_models,
+                                          known_assemblies - retired_assemblies))
             elif kind == "router":
                 accepted.append(_router(item, event_kinds))
             elif kind == "tool":
                 accepted.append(_tool(item, known_tools, jail=tool_jail))
+            elif kind == "retire":
+                aid = item.get("assembly_id")
+                if not isinstance(aid, str) or aid not in known_assemblies:
+                    raise ValueError("assembly_id must name a registered assembly")
+                if aid in retired_assemblies:
+                    raise ValueError("assembly is already retired")
+                accepted.append(RetireProposal(aid))
             else:
                 raise ValueError("unknown proposal kind")
         except ValueError as exc:
@@ -133,8 +193,8 @@ def _assembly(
     if aid in known_assemblies or aid == "NOOP":
         raise ValueError("id already registered")
     role = item.get("role", "producer")
-    if role not in ROLES:
-        raise ValueError("role must be producer, evaluator, meta or antagonist")
+    if not isinstance(role, str) or not SLUG.fullmatch(role):
+        raise ValueError("role must be a descriptive slug")
     model_id = item.get("model_id")
     if not isinstance(model_id, str) or model_id not in known_models:
         raise ValueError("model_id must name a registered model")
@@ -146,16 +206,9 @@ def _assembly(
     accepts = item.get("accepts")
     if not isinstance(accepts, list) or not accepts:
         raise ValueError("accepts must be a non-empty list of event kinds")
-    if any(not isinstance(k, str) or k not in event_kinds for k in accepts):
-        raise ValueError("accepts contains an unknown event kind")
-    if role == "evaluator" and set(accepts) != {"ProducerReturn"}:
-        raise ValueError("evaluators accept exactly ProducerReturn")
-    if role == "meta" and accepts not in (["Verdict"], ["MetaVerdict"]):
-        raise ValueError("metas accept exactly one of Verdict or MetaVerdict")
-    if role in ("producer", "antagonist") and {
-        "ProducerReturn", "Verdict", "MetaVerdict"
-    } & set(accepts):
-        raise ValueError("producers do not accept evaluation events")
+    accepts = tuple(dict.fromkeys(event_name(k) for k in accepts))
+    emits, schemas = output_contracts(item.get("emits", seed_emits(role)),
+                                      item.get("schemas", {}))
     max_tokens = item.get("max_tokens", 512)
     if type(max_tokens) is not int or not 16 <= max_tokens <= 4096:
         raise ValueError("max_tokens must be an int in [16, 4096]")
@@ -163,14 +216,14 @@ def _assembly(
     if effort not in ("low", "medium", "high"):
         raise ValueError("effort must be low, medium or high")
     return AssemblyProposal(
-        aid, role, model_id, prompt, tuple(dict.fromkeys(accepts)), max_tokens, effort
+        aid, role, model_id, prompt, accepts, max_tokens, effort, emits, schemas
     )
 
 
 def _router(item: dict[str, Any], event_kinds: frozenset[str]) -> RouterProposal:
-    kind = item.get("event_kind")
-    if not isinstance(kind, str) or kind not in event_kinds:
-        raise ValueError("event_kind must be a known event kind")
+    kind = event_name(item.get("event_kind"))
+    if kind not in event_kinds:
+        raise ValueError("event_kind must name a world or population-declared event kind")
     learner = item.get("learner")
     if learner not in LEARNERS:
         raise ValueError("learner must be exp3 or blum_mansour")

@@ -7,7 +7,6 @@ from decimal import Decimal
 from typing import Any
 
 from factorylab.kernel.registry import Contract, PriceSpec, ResourceBounds
-from factorylab.runtime.shared import EVALUATION_BOUNDARY
 from factorylab.world.models import TokenPrice
 
 
@@ -127,14 +126,20 @@ def _model_contract(model_id: str, price: TokenPrice, provider: str) -> Contract
     )
 
 
-def _assembly_contract(aid: str, role: str, accepts: tuple[str, ...], max_tokens: int) -> Contract:
+def _assembly_contract(aid: str, role: str, accepts: tuple[str, ...], max_tokens: int,
+                       *, emits: tuple[str, ...] | None = None,
+                       schemas: dict[str, dict] | None = None, version: int = 1) -> Contract:
+    """Publish accepts/emits and custom schemas without exposing assembly internals."""
+    from factorylab.cortex.registration import seed_emits
+
     return Contract(
         id=aid,
-        version=1,
+        version=version,
         kind="assembly",
         description=f"{role} assembly",
         input_schema={"type": "object", "properties": {"kind": {"enum": list(accepts)}}},
-        output_schema={"type": "object"},
+        output_schema={"type": "object", "emits": list(emits or seed_emits(role)),
+                       "schemas": schemas or {}},
         price=PriceSpec({}),
         permissions=frozenset({"model.complete", "exchange.order"}),
         resource_bounds=ResourceBounds(max_output_tokens=max_tokens),
@@ -159,7 +164,7 @@ class SummaryMixin:
             "outstanding_decisions": len(self.queue.outstanding()),
             "exchange_equity_usd": _equity_or_none(self.exchange.target),
             "live": self.live,
-            "evaluation_boundary": EVALUATION_BOUNDARY,
+            "evaluation_boundary": "registered accepts → selected emits → return channel",
             "charter_edition": self.charter.edition,
             "tools": sorted(self.tool_specs),
             "standing": self.standing.snapshot(),

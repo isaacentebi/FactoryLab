@@ -20,7 +20,7 @@ def parent_request(rt, ceiling=1000000):
                    cost_ceiling=ceiling)
 
 
-def test_child_target_is_called_once_judged_and_returned_to_parent(monkeypatch):
+def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
     rt = make_runtime()
     spec = rt.assemblies['seed-decider'].spec
     rt._instantiate(replace(spec, id='helper'))
@@ -30,10 +30,14 @@ def test_child_target_is_called_once_judged_and_returned_to_parent(monkeypatch):
     def provider(request):
         text = request.messages[-1]['content']
         calls.append(text)
-        if 'REQUEST\nchild task' in text:
+        if 'REQUEST\ngrandchild' in text:
+            body = {'answer': 42}
+        elif 'REQUEST\nchild task' in text and '"continuation":' not in text:
             body = {'answer': 42, 'requests': [{'target': 'self', 'description': 'grandchild',
                                               'inputs': {}, 'outcome_schema': {}}]}
-        elif 'tool_results' in text:
+        elif 'REQUEST\nchild task' in text:
+            body = {'answer': 42}
+        elif '"continuation":' in text:
             assert '42' in text and 'assembly:helper' in text
             body = {'action': 'hold', 'answer': 'used child'}
         else:
@@ -47,7 +51,7 @@ def test_child_target_is_called_once_judged_and_returned_to_parent(monkeypatch):
     monkeypatch.setattr(rt.provider.target, 'complete', provider)
     ret = rt._invoke('seed-decider', req, 'producer')
     assert ret.status == 'ok' and ret.outputs['answer'] == 'used child'
-    assert len(calls) == 3  # parent, one child, parent continuation
+    assert len(calls) == 5  # parent, child, grandchild, child continuation, parent continuation
     items = rt.ledger._recovery_items()
     children = [i for i in items if i['kind'] == 'decision.open'
                 and i['parent_handle'] == req.handle]
@@ -57,7 +61,7 @@ def test_child_target_is_called_once_judged_and_returned_to_parent(monkeypatch):
     evidence = next(i for i in items if i['kind'] == 'request.child')
     assert evidence['resource_liability'] == req.handle
     assert child['cost_ceiling'] <= req.cost_ceiling
-    assert any(i['kind'] == 'requests.refused' and i['handle'] == child['handle'] for i in items)
+    assert not any(i['kind'] == 'requests.refused' for i in items)
     event = next(ev for ev in rt.internal if ev.payload.get('about_handle') == child['handle'])
     assert str(event.kind) == 'ProducerReturn' and event.payload['outputs']['answer'] == 42
     restored = make_runtime()
@@ -93,11 +97,11 @@ def test_self_request_and_unavailable_target_are_addressable(monkeypatch):
     assert any(e.payload.get('status') == 'failed' for e in rt.internal)
 
 
-def test_three_children_are_malformed_before_any_child_effect(monkeypatch):
+def test_children_above_manifest_cap_are_malformed_before_any_child_effect(monkeypatch):
     rt = make_runtime()
     req = parent_request(rt)
     body = {'requests': [{'target': 'self', 'description': 'child', 'inputs': {},
-                           'outcome_schema': {}}] * 3}
+                           'outcome_schema': {}}] * (rt.m.tools.max_children + 1)}
     monkeypatch.setattr(rt.provider.target, 'complete', lambda r: ModelResponse(
         r.model_id, json.dumps(body), 1, 1, 'stop'))
     assert rt._invoke('seed-decider', req, 'producer').status == 'malformed'

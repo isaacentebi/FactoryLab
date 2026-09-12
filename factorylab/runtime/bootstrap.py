@@ -34,7 +34,7 @@ from factorylab.settlement import (
     PrevalenceBaseline,
     Settler,
 )
-from factorylab.settlement.consequence import FillCursor, ReturnConsequences
+from factorylab.settlement.consequence import FillCursor
 from factorylab.world.clock import ClockIterator, ClockSource
 from factorylab.world.exchange import FakeExchange, HyperliquidExchange
 from factorylab.world.market import MultiProvider, X402Provider
@@ -56,6 +56,7 @@ except ImportError:  # pragma: no cover
     Amendment = CharterBook = None  # type: ignore[assignment]
 
 
+from factorylab.runtime.compute import ContractConsequences
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.routing import RouterState
@@ -196,7 +197,7 @@ class BootstrapMixin:
         self.reserve = NoveltyReserve(
             manifest.novelty.share,
             manifest.novelty.window_ns,
-            has_history=self.queue.has_history,
+            has_history=self._registration_has_history,
             ledger=self.ledger,
             clock_ns=self.clock,
         )
@@ -220,7 +221,8 @@ class BootstrapMixin:
         self.standing = ConsequenceStanding(self.ev.min_coverage)
         self.observer = Observer()
         self.settler = Settler(self.book, self.queue, self.standing, self.baseline, self.observer)
-        self.consequences = ReturnConsequences(self.ledger, self.ev.consequence_backstop_events)
+        self.consequences = ContractConsequences(
+            self.ledger, self.ev.consequence_backstop_events, self)
         self.consequence_fills = FillCursor(self.ledger, start_ns=self.clock.now_ns)
 
         # world
@@ -279,6 +281,13 @@ class BootstrapMixin:
         if not self.ledger.bootstrap:
             self._register_seed_contracts()
         self.assemblies: dict[str, Assembly] = {}
+        self.retired_assemblies: set[str] = set()
+        self.retirement_proposals: dict[str, dict] = {}
+        self.return_kinds: dict[str, str] = {}
+        self.return_bindings: dict[str, dict] = {}
+        self.return_events: dict[str, Event] = {}
+        self.decision_subjects: dict[str, str] = {}
+        self.event_schemas: dict[str, dict] = {}
         for a in manifest.assemblies:
             self._instantiate(
                 AssemblySpec(
@@ -290,6 +299,8 @@ class BootstrapMixin:
                     memory_policy=a.memory_policy,
                     accepts=frozenset(a.accepts),
                     role=a.role,
+                    emits=a.emits,
+                    schemas=a.schemas,
                 )
             )
 
@@ -469,7 +480,8 @@ class BootstrapMixin:
             self.registry.register(_model_contract(tier.id, price, tier.provider))
         for seed in self.m.assemblies:
             self.registry.register(
-                _assembly_contract(seed.id, seed.role, seed.accepts, seed.max_tokens)
+                _assembly_contract(seed.id, seed.role, seed.accepts, seed.max_tokens,
+                                   emits=seed.emits, schemas=seed.schemas)
             )
         self.registry.register(
             Contract(

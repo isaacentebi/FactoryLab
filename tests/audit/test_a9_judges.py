@@ -82,7 +82,8 @@ def test_a_judge_is_never_routed_to_its_own_childs_return_nor_to_its_own_output(
     spec = runtime.assemblies["eval-a"].spec
     # A judge that also accepts producer returns as a child target, and a parent producer.
     runtime._instantiate(replace(spec, id="eval-child", role="evaluator",
-                                 accepts=frozenset({"ProducerReturn", "Tick"})))
+                                 accepts=frozenset({"ProducerReturn", "Tick"}),
+                                 emits=("ProducerReturn",)))
     parent = _consequence_decision(runtime, "seed-decider", CH_VERDICT)
     runtime.handle_to_assembly[parent] = "seed-decider"
     runtime.consequences.start(parent, 0)
@@ -99,6 +100,9 @@ def test_a_judge_is_never_routed_to_its_own_childs_return_nor_to_its_own_output(
     runtime._invoke_child("seed-decider", request, child_item, 1000)
     child_return = next(e for e in runtime.internal if e.kind is EventKind.PRODUCER_RETURN
                         and e.payload["about_handle"] == child_handle)
+    # A1 permits producing on one's own event. A judging contract still cannot judge it.
+    assert "eval-child" in runtime._universe_for("ProducerReturn", child_return)
+    runtime._instantiate(replace(runtime.assemblies["eval-child"].spec, emits=("Verdict",)))
     universe = runtime._universe_for("ProducerReturn", child_return)
     assert "eval-child" not in universe  # the child cannot judge its own return
     assert "seed-decider" not in universe  # the parent cannot judge the child it requested

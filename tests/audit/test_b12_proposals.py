@@ -43,10 +43,12 @@ def test_reserved_names_and_types_are_published_from_the_validator():
     rt = make_runtime()
     try:
         declared = rt._world_block()["reserved_return_fields"]
-        assert declared == reserved_return_fields()
+        # A1: the published fan-out and tool-call caps are the manifest's own bounds.
+        assert declared == reserved_return_fields(
+            max_children=rt.m.tools.max_children, max_tool_calls=rt.m.tools.max_tool_calls)
         assert set(declared) == {"action", "rationale", "reason", "status", "coin", "side",
                                  "verdict", "payoff", "conformity", "vote", "register",
-                                 "tool_calls", "requests", "forecasts"}
+                                 "tool_calls", "requests", "forecasts", "emits", "about_handle"}
         assert declared["status"] == {"type": "string"}
         with pytest.raises(ValueError):
             _validate_return({"status": {"done": True}}, {"type": "object"})

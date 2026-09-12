@@ -80,7 +80,7 @@ def test_rejections_carry_reasons_and_cap_is_enforced() -> None:
                 "role": "evaluator",
                 "model_id": "ds-flash",
                 "system_prompt": "x",
-                "accepts": ["Tick"],
+                "accepts": [],
             },
             {
                 "kind": "assembly",
@@ -101,9 +101,9 @@ def test_rejections_carry_reasons_and_cap_is_enforced() -> None:
     assert "id already registered" in reasons
     assert "id must be a slug of 2-48 chars" in reasons
     assert "model_id must name a registered model" in reasons
-    assert "evaluators accept exactly ProducerReturn" in reasons
+    assert "accepts must be a non-empty list of event kinds" in reasons
     assert any("exceeds" in r for r in reasons)
-    assert "event_kind must be a known event kind" in reasons
+    assert "event_kind must name a world or population-declared event kind" in reasons
     assert "gamma must be in (0, 1]" in reasons
     assert "openrouter_id must look like vendor/model" in reasons
     assert "unknown proposal kind" in reasons
@@ -137,10 +137,13 @@ def test_meta_accepts_one_evaluation_kind(accepts):
     ("producer", ["MetaVerdict"]), ("antagonist", ["MetaVerdict"]),
     ("evaluator", ["MetaVerdict"]),
 ])
-def test_evaluation_registration_boundaries(role, accepts):
+def test_role_labels_do_not_restrict_accepted_kinds(role, accepts):
     accepted, rejected = _parse([{
         "kind": "assembly", "id": "bad-meta", "role": role,
         "model_id": "ds-flash", "system_prompt": "Judge.", "accepts": accepts,
     }])
-    assert not accepted
-    assert len(rejected) == 1
+    if not accepts:
+        assert not accepted and len(rejected) == 1
+    else:
+        assert not rejected
+        assert accepted[0].accepts == tuple(dict.fromkeys(accepts))
