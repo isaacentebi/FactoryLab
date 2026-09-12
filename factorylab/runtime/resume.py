@@ -54,6 +54,7 @@ def _record_types() -> dict[str, type]:
         AccountState,
         Fill,
         FundingEvent,
+        FundingPayment,
         Order,
         OrderResult,
         Position,
@@ -68,7 +69,7 @@ def _record_types() -> dict[str, type]:
         SettleStatus, Contract, PriceSpec, ResourceBounds, DistributionSummary, DripSchedule,
         Reservation, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast, Lot,
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
-        AccountState, Fill, FundingEvent, Order, OrderResult, Position, SellerModel,
+        AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position, SellerModel,
         CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote,
     )
     return {cls.__name__: cls for cls in classes}
@@ -201,6 +202,7 @@ class RecoveryJournal:
         # The x402 evidence callback appends ledger-only payment evidence inside complete().
         arguments = {k: v for k, v in kwargs.items() if k != "record"}
         replayed = self.peek() is not None
+        ambiguous_retry = False
         fingerprint = hashlib.sha256(_canonical(encode((args, arguments)))).hexdigest()
         seq = self.append({"kind": "io.call", "name": name, "input_hash": fingerprint})
         if replayed and not deterministic:
@@ -217,39 +219,58 @@ class RecoveryJournal:
                 result = decode(item["result"]) if "error" not in item else None
                 self.append(result_entry)
                 if "error" in item:
-                    raise _recorded_error(item["error"])
+                    raise _recorded_error(item["error"], item.get("reason"))
                 return result
-            if not _read_only(name):
+            if not _read_only(name) and name != "treasury.rail.send":
                 self.fail(f"unacknowledged external write {name} at seq {seq}; "
                           "refusing to submit it twice")
+            ambiguous_retry = name == "treasury.rail.send"
         try:
             if self.recovering and not replayed and not deterministic and not _read_only(name):
                 raise RuntimeError("interrupted event: external write was never dispatched")
             result = function(*args, **kwargs)
         except Exception as exc:
+            from factorylab.world.evm import Pending, RailError
+
+            failure = exc
+            if ambiguous_retry:
+                # A used-nonce rejection after a lost acknowledgement cannot prove failure.
+                failure = Pending("replayed submission requires receipt reconciliation")
+
             # Client exceptions can contain credentials. Preserve only a safe exception class.
-            error = type(exc).__name__
-            self.append({"kind": "io.result", "call": seq, "error": error})
-            raise _recorded_error(error) from None
+            error = type(failure).__name__
+            # RailError messages are locally generated bounded reasons, never provider bodies.
+            reason = str(failure) if isinstance(failure, RailError) else None
+            self.append({"kind": "io.result", "call": seq, "error": error,
+                         **({"reason": reason} if reason is not None else {})})
+            raise _recorded_error(error, reason) from None
         self.append({"kind": "io.result", "call": seq, "result": encode(result)})
         return result
 
 
 def _read_only(name: str) -> bool:
+    if name == "treasury.provider_pots" or (
+        name.startswith("treasury.rail.")
+        and name.rsplit(".", 1)[-1] in ("balances", "preflight", "plan", "prepare", "poll")
+    ):
+        return True
     return name.rsplit(".", 1)[-1] in (
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
         "open_orders", "balance_micro", "affordable", "catalogue", "discover", "quote",
-        "registration_price", "seller_models",
+        "registration_price", "seller_models", "funding_payments",
     )
 
 
-def _recorded_error(name: str) -> Exception:
+def _recorded_error(name: str, reason: str | None = None) -> Exception:
+    from factorylab.world.evm import Pending, RailError
     from factorylab.world.market import PaymentOutcomeUnknown
     from factorylab.world.x402 import InsufficientReserve, X402Error
 
     classes = (ValueError, TypeError, KeyError, RuntimeError, PermissionError,
                InsufficientReserve, X402Error, PaymentOutcomeUnknown)
     cls = next((c for c in classes if c.__name__ == name), RuntimeError)
+    if name in ("RailError", "Pending"):
+        return (Pending if name == "Pending" else RailError)(reason or "treasury rail unavailable")
     return cls(f"external call failed ({name})")
 
 
@@ -337,12 +358,15 @@ def runtime_state(rt) -> dict:
         "tick_clock": rt.tick_clock.state(),
         "kernel": {name: encode(getattr(rt, name).state()) for name in _KERNEL_FIELDS},
         "components": encode(components),
+        "treasury": encode(rt.treasury.snapshot()),
         "assemblies": encode([{"spec": a.spec, "memory": a.memory}
                               for a in rt.assemblies.values()]),
         "prices": encode(rt.prices.prices),
         "routers": [st.state() for st in rt._all_router_states()],
         "venue": encode({"last_fill_ns": rt.venue.last_fill_ns,
-                         "seen_fills": rt.venue.seen_fills}) if rt.venue else None,
+                         "seen_fills": rt.venue.seen_fills,
+                         "last_funding_ns": rt.venue.last_funding_ns,
+                         "seen_funding": rt.venue.seen_funding}) if rt.venue else None,
         "venue_tool_log": encode(rt.venue_tools.log) if rt.venue_tools else None,
         "fake_exchange": encode(vars(rt.exchange.target)) if rt.exchange.deterministic else None,
         "fake_provider": encode(vars(rt.provider.target)) if rt.provider.deterministic else None,
@@ -376,6 +400,7 @@ def restore_runtime(rt, state: dict) -> None:
         rt.clock_source = rt.tick_clock
     for name in _KERNEL_FIELDS:
         getattr(rt, name)._restore_state(decode(state["kernel"][name]))
+    rt.treasury.restore(decode(state["treasury"]))
     components = decode(state["components"])
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:

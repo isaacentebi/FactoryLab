@@ -97,6 +97,13 @@ class TreasurySpec:
 
     insolvency_events: int = 20
     discovery_url: str = DISCOVERY_URL
+    reserve_address: str | None = None
+    hyperevm_gas_budget_wei: int = 0
+    base_gas_budget_wei: int = 0
+    max_transfer_fee_micro: int = 2_000_000
+    withdrawal_fee_micro: int = 1_000_000
+    cctp_max_fee_micro: int = 100_000
+    fake_fee_micro: int = 10_000
 
 
 @dataclass(frozen=True)
@@ -211,6 +218,22 @@ class WorldManifest:
             raise ValueError("initial balance must be non-negative")
         if type(self.treasury.insolvency_events) is not int or self.treasury.insolvency_events < 1:
             raise ValueError("treasury.insolvency_events must be a positive integer")
+        if self.treasury.reserve_address is not None:
+            import re
+
+            if (not isinstance(self.treasury.reserve_address, str)
+                    or not re.fullmatch(r"0x[0-9a-fA-F]{40}", self.treasury.reserve_address)
+                    or int(self.treasury.reserve_address, 16) == 0):
+                raise ValueError("treasury.reserve_address must be a nonzero EVM address")
+        for budget_field in ("hyperevm_gas_budget_wei", "base_gas_budget_wei",
+                      "max_transfer_fee_micro", "withdrawal_fee_micro", "cctp_max_fee_micro",
+                      "fake_fee_micro"):
+            value = getattr(self.treasury, budget_field)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"treasury.{budget_field} must be nonnegative integer money")
+        if (self.treasury.withdrawal_fee_micro + self.treasury.cctp_max_fee_micro
+                > self.treasury.max_transfer_fee_micro):
+            raise ValueError("withdrawal fee exceeds maximum transfer fee")
         from urllib.parse import urlsplit
 
         discovery = urlsplit(self.treasury.discovery_url)
@@ -373,6 +396,16 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         treasury=TreasurySpec(
             (d.get("treasury") or {}).get("insolvency_events", 20),
             (d.get("treasury") or {}).get("discovery_url", DISCOVERY_URL),
+            reserve_address=(d.get("treasury") or {}).get("reserve_address"),
+            hyperevm_gas_budget_wei=(d.get("treasury") or {}).get("hyperevm_gas_budget_wei", 0),
+            base_gas_budget_wei=(d.get("treasury") or {}).get("base_gas_budget_wei", 0),
+            max_transfer_fee_micro=usd_to_micro(
+                (d.get("treasury") or {}).get("max_transfer_fee_usd", "2")),
+            withdrawal_fee_micro=usd_to_micro(
+                (d.get("treasury") or {}).get("withdrawal_fee_usd", "1")),
+            cctp_max_fee_micro=usd_to_micro(
+                (d.get("treasury") or {}).get("cctp_max_fee_usd", "0.10")),
+            fake_fee_micro=usd_to_micro((d.get("treasury") or {}).get("fake_fee_usd", "0.01")),
         ),
         clock=ClockSpec(_ns(clock.get("min_tick", default_min_tick))),
         tick_interval_ns=_ns(d.get("tick_interval", "10s")),
