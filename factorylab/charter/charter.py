@@ -23,11 +23,19 @@ class MetricCard:
     window: str
     acceptable_region: str
     observation: str  # where the number would come from; informational in this phase
+    answers_for: str
 
     def __post_init__(self) -> None:
         for name in ("id", "norm", "description", "units", "window", "acceptable_region"):
             if not getattr(self, name):
                 raise ValueError(f"metric card needs {name}")
+        if not isinstance(self.answers_for, str) or self.answers_for.strip().lower() not in (
+            "producer", "evaluator", "meta", "all",
+        ):
+            raise ValueError(
+                f"card {self.id} answers_for: expected producer, evaluator, meta or all"
+            )
+        object.__setattr__(self, "answers_for", self.answers_for.strip().lower())
 
 
 @dataclass(frozen=True)
@@ -60,6 +68,7 @@ class Charter:
                 f"- {c.id} (norm: {c.norm})",
                 f"  {c.description}",
                 f"  units: {c.units}; window: {c.window}; acceptable: {c.acceptable_region}",
+                f"  observation: {c.observation}; answers_for: {c.answers_for}",
             ]
         return "\n".join(lines)
 
@@ -86,6 +95,7 @@ def seed_charter() -> Charter:
                 window="rolling 100 returns",
                 acceptable_region="below the median of the previous window",
                 observation="cost_per_return",
+                answers_for="producer",
             ),
             MetricCard(
                 id="well_formed_rate",
@@ -95,6 +105,7 @@ def seed_charter() -> Charter:
                 window="rolling 100 returns",
                 acceptable_region="at least 0.9",
                 observation="well_formed_rate",
+                answers_for="all",
             ),
             MetricCard(
                 id="forecast_skill",
@@ -104,6 +115,7 @@ def seed_charter() -> Charter:
                 window="rolling 50 settled forecasts per evaluator",
                 acceptable_region="above zero",
                 observation="forecast_skill",
+                answers_for="evaluator",
             ),
         ),
     )

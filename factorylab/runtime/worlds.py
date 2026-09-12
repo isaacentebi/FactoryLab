@@ -135,6 +135,25 @@ class EvaluationSpec:
 class NoveltySpec:
     share: float
     window_ns: int
+    trial_invocations: int = 3
+
+
+@dataclass(frozen=True)
+class CommitteeSpec:
+    min_settled: int = 5
+
+
+@dataclass(frozen=True)
+class ImmuneSpec:
+    """Detection horizons and bounded interventions are immutable launch casts."""
+
+    k: int = 3
+    bins: int = 3
+    tv_threshold: float = 0.2
+    gap_threshold: float = 0.8
+    gain_step: float = 0.05
+    gamma_max: float = 0.5
+    decay_step: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -172,6 +191,8 @@ class WorldManifest:
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
     clock: ClockSpec = ClockSpec()
+    committee: CommitteeSpec = CommitteeSpec()
+    immune: ImmuneSpec = ImmuneSpec()
     tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -254,8 +275,20 @@ class WorldManifest:
         for a in self.assemblies:
             if a.model_id not in ids:
                 raise ValueError(f"assembly {a.id} uses unpriced model {a.model_id}")
-        if not 0 <= self.novelty.share <= 1:
-            raise ValueError("novelty share must be in [0, 1]")
+        if (type(self.novelty.share) not in (int, float)
+                or not isfinite(self.novelty.share) or not 0 < self.novelty.share <= 1):
+            raise ValueError("novelty share must be in (0, 1]")
+        for name, value, minimum in (
+            ("novelty.trial_invocations", self.novelty.trial_invocations, 1),
+            ("committee.min_settled", self.committee.min_settled, 1),
+            ("immune.k", self.immune.k, 2), ("immune.bins", self.immune.bins, 2),
+        ):
+            if type(value) is not int or value < minimum:
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+        for name in ("tv_threshold", "gap_threshold", "gain_step", "gamma_max", "decay_step"):
+            value = getattr(self.immune, name)
+            if type(value) not in (int, float) or not isfinite(value) or not 0 < value <= 1:
+                raise ValueError(f"immune.{name} must be finite and in (0, 1]")
         if not 0 <= self.evaluation.consequence_share < 1:
             raise ValueError("consequence share must be in [0, 1)")
         backstop = self.evaluation.consequence_backstop_events
@@ -425,7 +458,10 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         exchange=exchange,
         models=models,
         assemblies=assemblies,
-        novelty=NoveltySpec(float(nov.get("share", 0.1)), _ns(nov.get("window", "1d"))),
+        novelty=NoveltySpec(nov.get("share", 0.1), _ns(nov.get("window", "1d")),
+                            nov.get("trial_invocations", 3)),
+        committee=CommitteeSpec(**d.get("committee", {})),
+        immune=ImmuneSpec(**d.get("immune", {})),
         timing=TimingSpec(
             int(tim.get("min_ratio", 3)), float(tim.get("jitter_fraction", 0.2)),
             tim.get("cadence_sample", 200),

@@ -59,6 +59,14 @@ class Ballot:
             raise ValueError("ballot reason must be a string")
 
 
+def experienced(roles: dict[str, str], settled: dict[str, int], min_settled: int) -> dict[str, str]:
+    """Fresh identities cannot affect the draw; only completed decisions qualify a seat."""
+    if type(min_settled) is not int or min_settled < 1:
+        raise ValueError("committee.min_settled must be a positive integer")
+    return {assembly: role for assembly, role in roles.items()
+            if settled.get(assembly, 0) >= min_settled}
+
+
 def draw(eligible: dict[str, str], rng: random.Random, size: int = 5) -> tuple[Seat, ...]:
     """Sample without replacement, covering each available core role before filling uniformly.
 

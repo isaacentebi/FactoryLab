@@ -248,3 +248,51 @@ def test_example_manifest_and_cli_resolve_population_charter(capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["charter"] == json.loads(example.canonical_json())["charter"]
     assert out["charter"]["edition"] == 1
+
+
+@pytest.mark.parametrize("field", ["answers_for"])
+def test_manifest_card_requires_explicit_role(field):
+    raw = _with_charter()
+    del raw["charter"]["cards"][0][field]
+    with pytest.raises(ValueError, match="cost_per_return.*answers_for"):
+        manifest_from_dict(raw)
+
+
+@pytest.mark.parametrize("value", [True, None, "", "antagonist", "unknown"])
+def test_manifest_card_rejects_unknown_role(value):
+    raw = _with_charter()
+    raw["charter"]["cards"][0]["answers_for"] = value
+    with pytest.raises(ValueError, match="cost_per_return.*answers_for"):
+        manifest_from_dict(raw)
+
+
+@pytest.mark.parametrize("section,field,value", [
+    ("novelty", "trial_invocations", True), ("novelty", "trial_invocations", 0),
+    ("novelty", "trial_invocations", 1.5), ("committee", "min_settled", 0),
+    ("committee", "min_settled", False), ("immune", "k", 1), ("immune", "k", 3.0),
+    ("immune", "bins", 1), ("immune", "tv_threshold", -1),
+    ("immune", "gamma_max", 1.1), ("immune", "gap_threshold", float("nan")),
+    ("immune", "gain_step", True), ("immune", "decay_step", 0),
+])
+def test_fidelity_casts_reject_invalid_values(section, field, value):
+    raw = _base()
+    raw.setdefault(section, {})[field] = value
+    with pytest.raises(ValueError, match=rf"{section}\.{field}"):
+        manifest_from_dict(raw)
+
+
+def test_fidelity_casts_are_explicit_in_all_worlds_and_hashed():
+    import tomllib
+
+    from factorylab.runtime.worlds import WORLDS_DIR
+
+    for path in WORLDS_DIR.glob("*.toml"):
+        raw = tomllib.loads(path.read_text())
+        manifest = manifest_from_dict(raw)
+        assert raw["novelty"]["trial_invocations"] == manifest.novelty.trial_invocations == 3
+        assert raw["committee"]["min_settled"] == manifest.committee.min_settled == 5
+        for key in ("k", "bins", "tv_threshold", "gap_threshold", "gain_step", "gamma_max",
+                    "decay_step"):
+            assert raw["immune"][key] == getattr(manifest.immune, key)
+        raw["immune"]["k"] += 1
+        assert manifest.manifest_hash() != manifest_from_dict(raw).manifest_hash()

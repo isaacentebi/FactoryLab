@@ -91,3 +91,89 @@ def test_reserve_arithmetic_uses_integers_even_at_low_decimal_precision(ledger, 
 def test_reserve_cannot_be_abolished_or_malformed(share, ledger):
     with pytest.raises((ValueError, TypeError)):
         NoveltyReserve(share, 10, has_history=lambda _: False, ledger=ledger)
+
+
+def protected_wallet(ledger, clock):
+    wallet = Wallet(100, ledger, clock_ns=clock)
+    reserve = NoveltyReserve(0.25, 10, has_history=lambda _: False,
+                             ledger=ledger, clock_ns=clock)
+    wallet.bind_novelty(reserve, lambda handle, reason: handle == "new" and reason == "model")
+    reserve.open_window(clock.now, 100)
+    return wallet, reserve
+
+
+@pytest.mark.parametrize("reason", ["model", "tool", "order", "treasury:principal"])
+def test_protected_money_is_not_available_to_historied_spending(ledger, clock, reason):
+    wallet, reserve = protected_wallet(ledger, clock)
+    assert wallet.available == 75
+    hold = wallet.reserve(75, "incumbent", reason)
+    wallet.commit(hold, 75)
+    with pytest.raises(Infeasible):
+        wallet.reserve(1, "incumbent", reason)
+    assert reserve.remaining() == 25 and wallet.balance == 25
+    # A fresh actor cannot launder protected compute into tool calls or orders either.
+    with pytest.raises(Infeasible):
+        wallet.reserve(1, "new", "tool")
+
+
+def test_unused_compute_ceiling_returns_to_protection_not_to_incumbents(ledger, clock):
+    wallet, reserve = protected_wallet(ledger, clock)
+    hold = wallet.reserve(30, "new", "model")
+    assert reserve.remaining() == 0 and wallet.available == 70
+    wallet.commit(hold, 10)
+    assert reserve.remaining() == 15 and wallet.available == 75
+    hold = wallet.reserve(15, "new", "model")
+    wallet.release(hold)
+    assert reserve.remaining() == 15 and wallet.available == 75
+    assert wallet.check_conservation()
+
+
+def test_compute_hold_prevents_double_allocation_to_registration(ledger, clock, contract_factory):
+    wallet, reserve = protected_wallet(ledger, clock)
+    hold = wallet.reserve(25, "new", "model")
+    with pytest.raises(Infeasible):
+        reserve.reserve_for(contract_factory(), 1)
+    wallet.release(hold)
+    assert reserve.reserve_for(contract_factory(), 25).amount == 25
+
+
+def test_old_compute_refund_cannot_replenish_the_next_window(ledger, clock):
+    wallet, reserve = protected_wallet(ledger, clock)
+    hold = wallet.reserve(25, "new", "model")
+    clock.now += 10
+    reserve.open_window(clock.now, 20)
+    wallet.release(hold)
+    assert reserve.remaining() == 5
+    assert wallet.balance == 100 and wallet.available == 95
+
+
+def test_protection_changes_only_after_wallet_ledger_item(ledger, clock, monkeypatch):
+    wallet, reserve = protected_wallet(ledger, clock)
+    append = ledger.append
+
+    def fail(_):
+        raise RuntimeError("ledger unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ledger, "append", fail)
+        with pytest.raises(RuntimeError):
+            wallet.reserve(25, "new", "model")
+    assert wallet.available == 75 and reserve.remaining() == 25
+    hold = wallet.reserve(25, "new", "model")
+    for operation in (lambda: wallet.commit(hold, 10), lambda: wallet.release(hold)):
+        with monkeypatch.context() as patch:
+            patch.setattr(ledger, "append", fail)
+            with pytest.raises(RuntimeError):
+                operation()
+        assert wallet.balance == 100 and reserve.remaining() == 0
+    entries = []
+
+    def capture(entry):
+        entries.append(entry)
+        assert reserve.remaining() == 0 and wallet.balance == 100
+        return append(entry)
+
+    monkeypatch.setattr(ledger, "append", capture)
+    wallet.commit(hold, 10)
+    assert entries[0]["kind"] == "wallet.commit"
+    assert reserve.remaining() == 15

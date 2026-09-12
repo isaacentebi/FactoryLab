@@ -122,6 +122,25 @@ class NoveltyReserve:
         """Return the active window's unallocated entitlement, or zero after expiry."""
         return self.__remaining if self._active() else 0
 
+    def _belongs_to(self, ledger: Ledger) -> bool:
+        return self.__ledger is ledger
+
+    def _allocate_compute(self, amount: Money) -> tuple[int | None, Money]:
+        """A preceding wallet.reserve item entitles one hold to protected compute.
+
+        The wallet classifies the action before this call. Its existing reservation
+        id, handle and reason are the audit evidence; no second money item is needed.
+        """
+        protected = min(amount, self.remaining())
+        self.__remaining -= protected
+        return self.__start, protected
+
+    def _refund_compute(self, allocation: tuple[int | None, Money], spent: Money) -> None:
+        """A preceding wallet.commit/release returns unused protection only to its own window."""
+        start, amount = allocation
+        if start == self.__start and self._active():
+            self.__remaining += max(0, amount - spent)
+
     def _validate_registration(
         self, receipt: Reservation, contract: Contract, ledger: Ledger
     ) -> None:
