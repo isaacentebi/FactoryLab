@@ -15,7 +15,7 @@ class Seat(NamedTuple):
 
 @dataclass(frozen=True)
 class Committee:
-    """A frozen round has at most five distinct assemblies and distinct aliases."""
+    """A frozen round has distinct assemblies and distinct aliases."""
 
     amendment_id: str
     round: int
@@ -29,8 +29,6 @@ class Committee:
         if not isinstance(self.seats, (tuple, list)):
             raise ValueError("seats must be a sequence of Seat records")
         object.__setattr__(self, "seats", tuple(self.seats))
-        if len(self.seats) > 5:
-            raise ValueError("a committee has at most five seats")
         for seat in self.seats:
             if not isinstance(seat, Seat) or any(
                 not isinstance(value, str) or not value.strip() for value in seat

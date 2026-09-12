@@ -236,8 +236,12 @@ service logging after launch.
 Exactly these fields are published: `wallet_series`, `spend_by_capability`,
 `invocations_by_assembly`, `action_frequencies`, `settlement_latency`, `world`,
 `manifest_hash`, `uptime_ns`, `last_event_time_ns`, plus `venue` when a venue key is
-present and `reserve` when a reserve key is present. The five views are returned
-by `Ledger.aggregate`, each verifying the same frozen chain. Incomplete input or
+present and `reserve` when a reserve key is present. The five views originate
+from `Ledger.aggregate`, each verifying the same frozen chain. The three identity-bearing
+views (`spend_by_capability`, `invocations_by_assembly`, `action_frequencies`) are projected
+to role totals (`producer`, `evaluator`, `meta`, `antagonist`, `noop`, `other`).
+Registered assemblies join their declared role; unknown identities join `other`.
+No assembly ids, model bindings, positions or entry prices are published. Incomplete input or
 verification failure retries once after 100 ms; a second failure replaces all
 ledger-derived fields with `"unavailable"` and exits 1. Optional account failures
 mark only their unavailable fields. There is no exception text in the artifacts.
@@ -246,7 +250,8 @@ Each output file is atomically replaced; the pair is not a transactional bundle.
 The snapshot adapter is isolated in `runtime/wake.py` and couples to Ledger's
 private read state because its public reopen API is a writer-only recovery API.
 It reads the existing adjacent key as the unattended process, never exposes it,
-and only inspects event timestamps for timing. Aggregates are not reimplemented
+and only inspects event timestamps for timing and authenticated role declarations
+for the aggregate projection. Aggregates are not reimplemented
 outside the kernel. The genesis must match a manifest in the pinned checkout's
 `worlds/`; an unknown or command-line-modified manifest reports unavailable.
 
@@ -255,8 +260,7 @@ and stops at the terminal event. Before the first tick it is zero. Scripted
 uptime and event time are simulated nanoseconds from launch. Event time is the
 last recorded event's timestamp, not file mtime or last wallet movement.
 
-Venue equity and realized amounts are integer micro-USD; position sizes and entry
-prices are decimal strings. `realized_to_date_micro` is gross closed trading P&L
+Venue fields are `equity_micro` and `realized_to_date_micro`, both integer micro-USD. `realized_to_date_micro` is gross closed trading P&L
 from venue fills over the account's retained history (fees/funding excluded), not
 wallet growth. The query paginates with an overlapping timestamp boundary; if
 history reaches the venue's 10,000-fill retention cap, or a saturated timestamp

@@ -38,7 +38,10 @@ def test_clock_duration_exact_and_inclusive():
 
 def test_activation_ledgers_before_clock_mutation(monkeypatch):
     rt = runtime()
-    am = Amendment("new-clock", "decision-1", 1, (), (), (), "Slower ticks.", tick_interval="2s")
+    am = Amendment("new-clock", "decision-1", 1, (), (), (),
+                   {"card_id": "cost_per_return", "direction": "decrease",
+                    "window": 1},
+                    tick_interval="2s")
     rt.charter_book.propose(am)
     rt._activate_charter_if_due()
     assert rt.tick_clock.interval_ns == 10**9
@@ -79,7 +82,10 @@ def test_activation_ledgers_before_clock_mutation(monkeypatch):
 
 def test_clock_unchanged_when_ledger_write_fails(monkeypatch):
     rt = runtime()
-    am = Amendment("new-clock", "decision-1", 1, (), (), (), "Slower ticks.", tick_interval="2s")
+    am = Amendment("new-clock", "decision-1", 1, (), (), (),
+                   {"card_id": "cost_per_return", "direction": "decrease",
+                    "window": 1},
+                    tick_interval="2s")
     rt.charter_book.propose(am)
     committee = rt.charter_book.seat(am.id, {"one": "producer"}, random.Random(1))
     rt.charter_book.vote(committee, "seat-1", True, "yes")

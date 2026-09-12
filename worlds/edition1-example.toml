@@ -1,3 +1,4 @@
+# Typed schema migration of the historical example; re-draft with the launch roster before use.
 # The testnet world: live Hyperliquid testnet, real models through OpenRouter at
 # real prices, a fake-USD wallet. Rehearsal only. No real money moves.
 name = "edition1-example"
@@ -196,7 +197,7 @@ id = "model_cost_efficiency"
 norm = "care with scarce resources"
 description = "Total compute cost in micro-USD incurred per well-formed return generated."
 units = "micro-USD per return"
-window = "rolling 100 returns"
+window = { kind = "returns", n = 100, per = "role" }
 acceptable_region = "at most 500"
 observation = "cost_per_return"
 answers_for = "producer"
@@ -206,7 +207,7 @@ id = "revision_rate"
 norm = "the capacity to revise inadequate practices"
 description = "Proportion of returns that include a tool call amendment or register proposal in the window"
 units = "fraction"
-window = "rolling 100 well-formed returns"
+window = { kind = "returns", n = 100, per = "role" }
 acceptable_region = "above 0.05"
 observation = "revision_rate"
 answers_for = "producer"
@@ -216,7 +217,7 @@ id = "well_formed_rate"
 norm = "truthful commitments"
 description = "Share of returns that satisfy their declared outcome schema."
 units = "fraction"
-window = "rolling 100 returns"
+window = { kind = "returns", n = 100, per = "role" }
 acceptable_region = "at least 0.9"
 observation = "well_formed_rate"
 answers_for = "all"
@@ -226,7 +227,7 @@ id = "verdict_mean_score"
 norm = "truthful commitments"
 description = "The mean verdict score assigned by evaluators to the producer's returns, reflecting adherence to declared outcomes."
 units = "score (0-1)"
-window = "rolling 50 settled forecasts per evaluator"
+window = { kind = "forecasts", n = 50, per = "assembly" }
 acceptable_region = "at least 0.8"
 observation = "verdict_mean"
 answers_for = "producer"

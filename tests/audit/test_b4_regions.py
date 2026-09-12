@@ -1,6 +1,6 @@
 """B4: impossible bounds have no region and are refused before amendment admission."""
 
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -18,7 +18,9 @@ def test_unusable_region_gets_a_public_refusal(prose):
         card = replace(rt.charter.cards[0], acceptable_region=prose)
         assert region_for(card, rolling={}) is None
         proposal = {"kind": "amendment", "id": "invalid-region", "add": [],
-                    "replace": [vars(card)], "predicted_effect": "test"}
+                    "replace": [asdict(card)],
+                    "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease",
+                    "window": 1}}
         before = rt.reserve.remaining()
         rt._apply_registrations("proposal", Return("proposal", {"register": [proposal]}, 0, "ok"))
         assert rt.stats.amendments_proposed == 0 and rt.reserve.remaining() == before

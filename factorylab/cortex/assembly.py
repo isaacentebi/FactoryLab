@@ -30,7 +30,9 @@ SEED_SYSTEM_PROMPT = (
     'containing "status": "cannot" and "reason". Optionally include a "requests" '
     "array (up to two), each with target (an assembly id or \"self\"), description, inputs "
     "and outcome_schema. Their outputs arrive as tool_results in a second call. "
-    "Child invocations answer once; they cannot request further invocations."
+    "Child invocations answer once; they cannot request further invocations. "
+    "The world input contains the full charter and public mechanics. Assembly identities "
+    "are learned through public registrations and the request's exposure/consequence channels."
 )
 
 
@@ -336,7 +338,7 @@ def validate_proposal(proposal: dict) -> None:
     """Reject malformed proposal fields before any registration effect."""
     fields = {k: {"type": "string"} for k in (
         "kind", "id", "model_id", "openrouter_id", "role", "system_prompt", "effort",
-        "event_kind", "learner", "description", "code", "predicted_effect", "tick_interval")}
+        "event_kind", "learner", "description", "code", "tick_interval")}
     fields.update({"gamma": {"type": "number", "minimum": 1e-300, "maximum": 1},
                    "max_tokens": {"type": "integer", "minimum": 16, "maximum": 4096},
                    "timeout_s": {"type": "integer", "minimum": 1, "maximum": 5},
@@ -349,15 +351,20 @@ def validate_proposal(proposal: dict) -> None:
                                               and add.lower() in ("true", "false")):
             raise ValueError("add must be a boolean")
     if proposal["kind"] == "amendment":
+        from factorylab.charter.amendment import effect_schema
+        from factorylab.charter.windows import window_schema
+
         _validate_schema(proposal, {"properties": {
+            "predicted_effect": effect_schema(),
             "add": {"type": "array", "items": {"type": "object"}},
             "replace": {"type": "array", "items": {"type": "object"}},
             "remove": {"type": "array", "items": {"type": "string"}}}})
         for card in proposal.get("add", []) + proposal.get("replace", []):
             _validate_schema(card, {"properties": {
                 **{k: {"type": "string"} for k in (
-                    "id", "norm", "description", "units", "window", "acceptable_region",
+                    "id", "norm", "description", "units", "acceptable_region",
                     "observation", "answers_for")},
+                "window": window_schema(),
                 "lambda": {"type": "number", "minimum": 0}}})
 
 

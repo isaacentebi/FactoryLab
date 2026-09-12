@@ -20,7 +20,10 @@ def runtime():
 
 def amendment(**changes):
     return replace(Amendment("priced-card", "decision-1", 1, (),
-                             (seed_charter().cards[1],), (), "Less churn."), **changes)
+                             (replace(seed_charter().cards[1], acceptable_region="above 0.8"),), (),
+                   {"card_id": "cost_per_return", "direction": "decrease",
+                    "window": 1}),
+                   **changes)
 
 
 def pass_amendment(rt, am):
@@ -156,19 +159,13 @@ def test_activation_preserves_unpriced_changes_removes_and_readds_cards():
     assert "well_formed_rate" in rt.regions
 
 
-def test_proposed_price_survives_unreadable_then_readable_bounds():
+def test_unreadable_bounds_are_refused_before_prices_change():
     rt = runtime()
-    rt._derive_regions()
     card = replace(rt.charter.cards[1], acceptable_region="use judgment")
-    pass_amendment(rt, amendment(replace=(card,), proposed_prices=((card.id, 0.8),)))
-    activate_after_backstop(rt)
-    public = next(c for c in rt._world_block()["card_prices"] if c["card_id"] == card.id)
-    assert public["lambda"] == 0.8 and public["region"] is None
-    assert rt.controller.penalty({card.id: -10}) == 0
-    pass_amendment(rt, amendment(id="readable-again", edition_base=2))
-    activate_after_backstop(rt)
-    assert rt.controller.price(card.id) == 0.8
-    assert card.id in rt.regions
+    with pytest.raises(ValueError, match="bounds"):
+        pass_amendment(rt, amendment(replace=(card,), proposed_prices=((card.id, 0.8),)))
+    assert rt.charter.edition == 1
+    assert rt.controller.price(card.id) == 0
 
 
 def test_prices_wait_for_approval_and_later_passed_proposals_win():
@@ -193,11 +190,10 @@ def test_prices_wait_for_approval_and_later_passed_proposals_win():
     assert rt.controller.price("well_formed_rate") == 0.9
 
 
-def test_added_unreadable_card_retains_adopted_price():
+def test_added_unreadable_card_is_refused_before_prices_change():
     rt = runtime()
     card = replace(rt.charter.cards[1], id="new-card", acceptable_region="use judgment")
-    pass_amendment(rt, amendment(replace=(), add=(card,), proposed_prices=((card.id, 0.6),)))
-    activate_after_backstop(rt)
-    assert rt.controller.price(card.id) == 0.6
-    assert card.id not in rt.regions
-    assert rt.controller.penalty({card.id: -10}) == 0
+    with pytest.raises(ValueError, match="bounds"):
+        pass_amendment(rt, amendment(replace=(), add=(card,), proposed_prices=((card.id, 0.6),)))
+    assert rt.charter.edition == 1
+    assert rt.controller.price(card.id) == 0

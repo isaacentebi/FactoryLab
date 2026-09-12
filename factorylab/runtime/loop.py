@@ -81,6 +81,25 @@ class Runtime(
 ):
     """One world, from launch to the end of its event budget or its death."""
 
+    def _invoke(self, action_id, req, role, *, child=False):
+        """A6: retain one typed measurement sample for each completed return."""
+        tool_calls = self.window.tool_calls
+        ret = super()._invoke(action_id, req, role, child=child)
+        self.card_samples.returned(handle=req.handle, assembly=action_id,
+                                   role=self.assemblies[action_id].spec.role,
+                                   window=self.window.index, ret=ret)
+        self.card_samples.returns[-1]["tool_calls"] = self.window.tool_calls - tool_calls
+        return ret
+
+    def _settle_due_forecasts(self):
+        """A6: retain paired forecast samples without changing the settlement implementation."""
+        from copy import deepcopy
+
+        pending = {f.handle: f for f in self.book.pending()}
+        baseline = deepcopy(self.baseline)
+        super()._settle_due_forecasts()
+        self._record_card_forecasts(pending, baseline)
+
     def run(self) -> dict[str, Any]:
         """Keep exclusive ledger ownership through the last runtime action or process death."""
         try:
@@ -158,6 +177,7 @@ class Runtime(
 
         self.wallet.drip(self.clock.now_ns)
         self._manage_reserve_window()
+        self.treasury.open_window(self.stats.reserve_windows)  # A12: reserve-window top-up cap
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
             self._reconcile_orders()
@@ -420,7 +440,7 @@ class Runtime(
                 "cost_micro_usd": payload["cost"],
                 "status": payload["status"],
             },
-            "charter": self.charter.render(),
+            "charter": self._charter_text(),
             "predicates": [
                 {"predicate": p.id, "description": p.description, "params": list(p.param_schema)}
                 for p in SEED_VOCABULARY
@@ -553,7 +573,7 @@ class Runtime(
                 "rationale": payload.get("rationale", ""),
             },
             "producer_outputs": payload.get("producer_outputs", {}),
-            "charter": self.charter.render(),
+            "charter": self._charter_text(),
             "world": self._world_block(),
         }
         if "window" in payload:

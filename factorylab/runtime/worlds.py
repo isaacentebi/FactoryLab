@@ -109,6 +109,7 @@ class TreasurySpec:
     fake_fee_micro: int = 10_000
     max_request_micro: int = 500_000
     reported_cost_multiple: int = 10
+    max_venice_per_window: int = 10_000_000
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,7 @@ class NoveltySpec:
 @dataclass(frozen=True)
 class CommitteeSpec:
     min_settled: int = 5
+    seats: int = 5
 
 
 @dataclass(frozen=True)
@@ -259,7 +261,7 @@ class WorldManifest:
                 raise ValueError("treasury.reserve_address must be a nonzero EVM address")
         for budget_field in ("hyperevm_gas_budget_wei", "base_gas_budget_wei",
                       "max_transfer_fee_micro", "withdrawal_fee_micro", "cctp_max_fee_micro",
-                      "fake_fee_micro", "max_request_micro"):
+                      "fake_fee_micro", "max_request_micro", "max_venice_per_window"):
             value = getattr(self.treasury, budget_field)
             if type(value) is not int or value < 0:
                 raise ValueError(f"treasury.{budget_field} must be nonnegative integer money")
@@ -286,6 +288,7 @@ class WorldManifest:
         for name, value, minimum in (
             ("novelty.trial_invocations", self.novelty.trial_invocations, 1),
             ("committee.min_settled", self.committee.min_settled, 1),
+            ("committee.seats", self.committee.seats, 3),
             ("immune.k", self.immune.k, 2), ("immune.bins", self.immune.bins, 2),
         ):
             if type(value) is not int or value < minimum:
@@ -324,11 +327,17 @@ class WorldManifest:
                 raise ValueError("shock step must be >= 1 and multiplier positive")
         if self.drip is not None and (self.drip.period_ns <= 0 or self.drip.amount_micro < 0):
             raise ValueError("drip period must be positive and amount non-negative")
+        from factorylab.charter.book import validate_observation_bindings
+
+        validate_observation_bindings(self.charter.cards)
         for card in self.charter.cards:
             if observation_for(card.observation) is None:
                 raise ValueError(f"card {card.id} observation: unknown catalogue id")
             if not parses(card):
                 raise ValueError(f"card {card.id} acceptable_region: unparseable region")
+            from factorylab.charter.measurement import preflight_card
+
+            preflight_card(card)
         for card_id, value in self.charter_prices:
             if card_id not in {c.id for c in self.charter.cards}:
                 raise ValueError(f"card {card_id} lambda: unknown card id")
@@ -373,15 +382,24 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
             raise ValueError(f"card #{index} fields: expected a table")
         card_id = row.get("id", f"#{index}")
         for name in MetricCard.__dataclass_fields__:
+            if name == "window":
+                continue
             if not isinstance(row.get(name), str) or not row[name].strip():
                 raise ValueError(f"card {card_id} {name}: must be a nonempty string")
-        cards.append(MetricCard(**{name: row[name] for name in MetricCard.__dataclass_fields__}))
+        window = row.get("window")
+        if isinstance(window, dict) and "per" not in window:
+            window = {**window, "per": None}  # TOML has no null literal.
+        cards.append(MetricCard(**{name: row[name] for name in MetricCard.__dataclass_fields__
+                                   if name != "window"}, window=window))
         if "lambda" in row:
             prices.append((card_id, row["lambda"]))
     return Charter(1, tuple(norms), tuple(cards)), tuple(prices)
 
 
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
+    venice_cap = (d.get("treasury") or {}).get("max_venice_per_window", "10")
+    if type(venice_cap) not in (str, int):
+        raise ValueError("treasury.max_venice_per_window must be exact USD text or integer")
     charter, charter_prices = (
         _manifest_charter(d["charter"]) if "charter" in d else (seed_charter(), ())
     )
@@ -499,6 +517,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             fake_fee_micro=usd_to_micro((d.get("treasury") or {}).get("fake_fee_usd", "0.01")),
             max_request_micro=(d.get("treasury") or {}).get("max_request_micro", 500_000),
             reported_cost_multiple=(d.get("treasury") or {}).get("reported_cost_multiple", 10),
+            max_venice_per_window=usd_to_micro(venice_cap),
         ),
         clock=ClockSpec(_ns(clock.get("min_tick", default_min_tick))),
         tick_interval_ns=_ns(d.get("tick_interval", "10s")),

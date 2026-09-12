@@ -9,6 +9,7 @@ import os
 import stat
 import tempfile
 import time
+from collections import Counter
 from decimal import Decimal
 from pathlib import Path
 
@@ -51,6 +52,30 @@ class _Snapshot(Ledger):
         end = now_ns if live and not times["terminated"] else last
         uptime = max(0, end - start) if start is not None and end is not None else 0
         return {"uptime_ns": uptime, "last_event_time_ns": last}
+
+    def public_aggregates(self, manifest) -> dict:
+        """Only role totals escape identity-bearing views, including new assemblies."""
+        aggregates = {view: self.aggregate(view) for view in VIEWS}
+        roles = {a.id: a.role for a in manifest.assemblies}
+        allowed = {"producer", "evaluator", "meta", "antagonist"}
+        # Streaming projection avoids materialising the item diary. Identities
+        # are only join keys here; unknown provenance never becomes public text.
+        for item in self._iter_items():
+            if item.get("kind") == "event":
+                event = item.get("event", {})
+                payload = event.get("payload", {})
+                if event.get("kind") == "Registered" and payload.get("kind") == "assembly":
+                    roles[payload["id"]] = payload.get("role", "other")
+            elif item.get("kind") == "invocation" and item.get("role") in allowed:
+                roles.setdefault(item["assembly_id"], item["role"])
+        for view, field in (("invocations_by_assembly", "counts"), ("action_frequencies", "counts"),
+                            ("spend_by_capability", "spend")):
+            totals = Counter()
+            for name, value in aggregates[view][field].items():
+                role = roles.get(name, "noop" if name == "NOOP" else "other")
+                totals[role if role in allowed | {"noop"} else "other"] += value
+            aggregates[view] = {field: dict(sorted(totals.items()))}
+        return aggregates
 
 
 def _open_snapshot(path: Path):
@@ -98,17 +123,14 @@ def _realized(exchange) -> int | str:
 def _venue(manifest) -> dict:
     from factorylab.world.exchange import HyperliquidExchange
 
-    result = {"equity_micro": UNAVAILABLE, "positions": UNAVAILABLE,
+    result = {"equity_micro": UNAVAILABLE,
               "realized_to_date_micro": UNAVAILABLE}
     try:
         exchange = HyperliquidExchange(
             mainnet=manifest.exchange.mainnet, coins=manifest.exchange.coins,
         )
         account = exchange.account()
-        result.update(equity_micro=_micro(account.equity_usd), positions=[
-            {"coin": p.coin, "size": str(p.size), "entry_px": str(p.entry_px)}
-            for p in account.positions
-        ])
+        result.update(equity_micro=_micro(account.equity_usd))
         result["realized_to_date_micro"] = _realized(exchange)
     except Exception:
         pass  # Provider exceptions can contain credentials or response bodies.
@@ -140,7 +162,7 @@ def collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.slee
     for attempt in range(2):
         try:
             ledger, candidate = _open_snapshot(Path(path))
-            aggregates = {view: ledger.aggregate(view) for view in VIEWS}
+            aggregates = ledger.public_aggregates(candidate)
             timing = ledger.timing(live=candidate.exchange.kind != "fake",
                                    now_ns=time.time_ns() if now_ns is None else now_ns)
             result.update(aggregates, **timing, world=candidate.name,
@@ -152,7 +174,7 @@ def collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.slee
                 sleep(0.1)
     if os.environ.get("HL_PRIVATE_KEY"):
         result["venue"] = _venue(manifest) if manifest else {
-            "equity_micro": UNAVAILABLE, "positions": UNAVAILABLE,
+            "equity_micro": UNAVAILABLE,
             "realized_to_date_micro": UNAVAILABLE,
         }
     if os.environ.get("RESERVE_PRIVATE_KEY"):

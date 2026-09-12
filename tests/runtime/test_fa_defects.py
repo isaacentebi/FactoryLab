@@ -3,6 +3,7 @@
 from dataclasses import replace
 from types import SimpleNamespace
 
+from factorylab.charter.amendment import PredictedEffect
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.runtime.live import LiveClock
 from factorylab.runtime.loop import Runtime
@@ -79,7 +80,8 @@ def test_unaffordable_committee_vote_counts_toward_insolvency(monkeypatch):
     monkeypatch.setattr(rt.charter_book, "abstain", lambda *_: None)
     monkeypatch.setattr(rt.charter_book, "tally", lambda *_: "failed")
     am = SimpleNamespace(id="test", proposed_prices=(), add=(), replace=(), remove=(),
-                         predicted_effect="", tick_interval=None)
+                         predicted_effect=PredictedEffect("cost_per_return", "decrease", 1),
+                    tick_interval=None)
     committee = SimpleNamespace(seats=[("seat", next(iter(rt.assemblies)))])
     rt._hold_vote(am, committee)
     assert rt._compute_routed and rt._compute_unaffordable

@@ -8,6 +8,7 @@ from typing import Any
 
 from factorylab.kernel.money import money_to_usd, usd_to_money
 from factorylab.world.evm import Pending, RailError
+from factorylab.world.x402 import TOP_UP_MICRO
 
 
 def _seed_credits(provider: Any) -> int | None:
@@ -67,11 +68,17 @@ class Treasury:
         *,
         provider=None,
         fee_ceiling_micro=2_000_000,
+        max_venice_per_window=10_000_000,
     ):
         self.ledger, self.wallet, self.rail, self.provider = ledger, wallet, rail, provider
         if type(fee_ceiling_micro) is not int or fee_ceiling_micro < 0:
             raise ValueError("fee ceiling must be nonnegative integer micro-USD")
         self.fee_ceiling_micro = fee_ceiling_micro
+        if type(max_venice_per_window) is not int or max_venice_per_window < 0:
+            raise ValueError("Venice window budget must be nonnegative integer micro-USD")
+        self.max_venice_per_window = max_venice_per_window
+        self.venice_window = 0
+        self.venice_spent = 0
         self.state: dict | None = None
         self.next_id = 0
         self.last_nonce = 0
@@ -81,6 +88,14 @@ class Treasury:
 
     def _write(self, kind: str, **fields) -> None:
         self.ledger.append({"kind": "treasury." + kind, **fields})
+
+    def open_window(self, index: int) -> None:
+        """A forward reserve-window boundary renews the Venice submission budget once."""
+        if type(index) is not int or index < self.venice_window:
+            raise ValueError("treasury window must advance monotonically")
+        if index != self.venice_window:
+            self._write("venice_window", window=index, spent_micro=0)
+            self.venice_window, self.venice_spent = index, 0
 
     def pots(self) -> dict:
         """Return a detached observed view; unknown balances are never converted to zero."""
@@ -106,6 +121,8 @@ class Treasury:
         try:
             observed = self.rail.balances()
             venue, reserve = observed["venue"], observed["reserve"]
+            if "venice" in observed:
+                sellers["venice"] = observed["venice"]
         except Exception:
             venue = reserve = None
         pots = {"venue": venue, "reserve": reserve, "seed": seed, "sellers": sellers}
@@ -119,13 +136,18 @@ class Treasury:
         """A refusal has a reason; a submitted result has references but never promises arrival."""
         direction = "to_reserve" if direction == "to_compute" else direction
         try:
-            if direction not in {"to_reserve", "to_venue"}:
-                raise RailError("direction must be to_reserve or to_venue")
+            if direction not in {"to_reserve", "to_venue", "to_venice"}:
+                raise RailError("direction must be to_reserve, to_venue or to_venice")
             if isinstance(usd, bool) or not isinstance(usd, str | Decimal | int):
                 raise RailError("usd must be an exact decimal string or integer, not a float")
             amount = usd_to_money(str(usd))
             if amount <= 0:
                 raise RailError("usd must be positive")
+            if direction == "to_venice":
+                if amount != TOP_UP_MICRO:
+                    raise RailError("to_venice requires the fixed $5 tranche")
+                if self.venice_spent + amount > self.max_venice_per_window:
+                    raise RailError("treasury.max_venice_per_window exhausted")
             if self.state and self.state["status"] in {"submitted", "stranded"}:
                 raise RailError("a previous transfer is still pending or stranded")
             self.rail.preflight(direction, amount, self.gas_spent)
@@ -149,9 +171,13 @@ class Treasury:
                 "attempts": 0,
                 "last_send_ns": now_ns,
             }
+            if direction == "to_venice":
+                state.update(venice_window=self.venice_window,
+                             venice_spent_after=self.venice_spent + amount)
             reference = self.rail.prepare(steps[0], state, self.gas_spent)
             self._check_fee(reference, state)
-            if amount + self.fee_ceiling_micro > self.wallet.available:
+            fee_budget = 0 if direction == "to_venice" else self.fee_ceiling_micro
+            if amount + fee_budget > self.wallet.available:
                 raise RailError("wallet cannot reserve principal plus transfer fee ceiling")
         except (RailError, ValueError, TypeError, ArithmeticError) as exc:
             # All RailError messages are generated locally; never propagate vendor bodies.
@@ -165,7 +191,7 @@ class Treasury:
             return {"status": "refused", "error": "rail preflight unavailable"}
         self.principal_hold = self.wallet.reserve(amount, handle, "treasury:principal")
         try:
-            self.fee_hold = self.wallet.reserve(self.fee_ceiling_micro, handle, "treasury:fees")
+            self.fee_hold = self.wallet.reserve(fee_budget, handle, "treasury:fees")
             state["reference"] = reference
             self._write("submitted", state=state, tx_refs=[reference])
         except Exception:
@@ -177,6 +203,8 @@ class Treasury:
         self.state = deepcopy(state)
         self.next_id += 1
         self.last_nonce = nonce
+        if direction == "to_venice":
+            self.venice_spent = state["venice_spent_after"]
         self._send()
         return {
             "status": self.state["status"],
@@ -188,6 +216,8 @@ class Treasury:
         ceiling = reference.get("fee_ceiling_micro", 0)
         if type(ceiling) is not int or ceiling < 0:
             raise RailError("route fee ceiling must be nonnegative integer micro-USD")
+        if state["direction"] == "to_venice" and ceiling:
+            raise RailError("the fixed Venice tranche has no separate transfer fee")
         if ceiling + state["fees_micro"] > self.fee_ceiling_micro:
             raise RailError("step fee ceiling exceeds remaining transfer fee budget")
 
@@ -198,7 +228,11 @@ class Treasury:
         self._write("broadcast", state=state)
         self.state = state
         try:
-            self.rail.send(state["steps"][state["index"]], state["reference"])
+            result = self.rail.send(state["steps"][state["index"]], state["reference"])
+            if result is not None:
+                updated = {**state, "route_data": {**state["route_data"], "submission": result}}
+                self._write("acknowledged", state=updated)
+                self.state = updated
         except Pending:
             self._write("pending", transfer_id=state["id"], reason="submission outcome unknown")
         except RailError as exc:
@@ -393,6 +427,9 @@ class Treasury:
                 "fee_hold_id": self.fee_hold.id if self.fee_hold else None,
                 "rail_name": self.rail.name,
                 "fake_reserve": self.rail.reserve if self.rail.name == "scripted" else None,
+                "fake_venice": self.rail.venice if self.rail.name == "scripted" else None,
+                "venice_window": self.venice_window,
+                "venice_spent": self.venice_spent,
             }
         )
 
@@ -412,8 +449,10 @@ class Treasury:
         self.state = saved["state"]
         self.next_id, self.last_nonce = saved["next_id"], saved["last_nonce"]
         self.gas_spent, self._pots = saved["gas_spent"], saved["pots"]
+        self.venice_window, self.venice_spent = saved["venice_window"], saved["venice_spent"]
         if saved["fake_reserve"] is not None:
             self.rail.reserve = saved["fake_reserve"]
+            self.rail.venice = saved["fake_venice"]
 
 
 class FakeRail:
@@ -424,20 +463,23 @@ class FakeRail:
     def __init__(self, wallet, *, fee_micro: int = 10_000):
         self.wallet, self.fee_micro = wallet, fee_micro
         self.reserve = 0
+        self.venice = 0
 
     def balances(self) -> dict:
-        return {"venue": self.wallet.balance - self.reserve, "reserve": self.reserve}
+        return {"venue": self.wallet.balance - self.reserve - self.venice,
+                "reserve": self.reserve, "venice": self.venice}
 
     def plan(self, direction: str) -> tuple[str, ...]:
         return (direction,)
 
     def preflight(self, direction: str, amount: int, gas_spent: dict) -> None:
-        if direction not in {"to_reserve", "to_venue"}:
+        if direction not in {"to_reserve", "to_venue", "to_venice"}:
             raise RailError("unsupported scripted direction")
         pot = self.balances()["venue" if direction == "to_reserve" else "reserve"]
         if amount < 5_000_000:
             raise RailError("amount is below venue minimum")
-        if amount > pot or amount <= self.fee_micro:
+        fee = 0 if direction == "to_venice" else self.fee_micro
+        if amount > pot or amount <= fee:
             raise RailError("amount exceeds source pot or does not cover the fixed fee")
 
     def prepare(self, step: str, state: dict, gas_spent: dict) -> dict:
@@ -447,10 +489,11 @@ class FakeRail:
         pass
 
     def poll(self, step: str, state: dict) -> dict:
+        fee = 0 if step == "to_venice" else self.fee_micro
         return {
             "confirmed": True,
-            "received_micro": state["amount_micro"] - self.fee_micro,
-            "fee_micro": self.fee_micro,
+            "received_micro": state["amount_micro"] - fee,
+            "fee_micro": fee,
             "principal_moved": True,
             "evidence": state["reference"],
         }
@@ -460,12 +503,15 @@ class FakeRail:
             self.reserve += state["received_micro"]
         else:
             self.reserve -= state["amount_micro"]
+            if state["direction"] == "to_venice":
+                self.venice += state["received_micro"]
 
 
 class FakeTreasury(Treasury):
-    def __init__(self, ledger, wallet, *, fee_micro=10_000):
+    def __init__(self, ledger, wallet, *, fee_micro=10_000, max_venice_per_window=10_000_000):
         super().__init__(
-            ledger, wallet, FakeRail(wallet, fee_micro=fee_micro), fee_ceiling_micro=fee_micro
+            ledger, wallet, FakeRail(wallet, fee_micro=fee_micro), fee_ceiling_micro=fee_micro,
+            max_venice_per_window=max_venice_per_window,
         )
         self.refresh_pots()
 
@@ -473,9 +519,9 @@ class FakeTreasury(Treasury):
         result = super().pots()
         if not result["pending"]:
             result.update(
-                self.rail.balances(),
+                {k: v for k, v in self.rail.balances().items() if k != "venice"},
                 seed=0,
-                sellers={},
+                sellers={"venice": self.rail.venice},
                 complete=True,
                 total_micro=self.wallet.balance,
             )
@@ -483,7 +529,7 @@ class FakeTreasury(Treasury):
 
     @property
     def venue_balance_usd(self) -> Decimal:
-        return money_to_usd(self.wallet.balance - self.rail.reserve)
+        return money_to_usd(self.rail.balances()["venue"])
 
 
 class UnconfiguredRail:
