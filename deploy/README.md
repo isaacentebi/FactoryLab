@@ -86,7 +86,13 @@ ssh root@DROPLET /usr/local/sbin/factorylab-provision
 Alternatively a public, credential-free release clone URL provisions directly.
 The provisioner checks out the exact SHA detached, installs pinned uv 0.12.13,
 installs Python 3.13 through uv in `/opt/factorylab-python`, synchronizes the lock
-with `uv sync --frozen`, and runs the gate. Python and package patch versions are
+with `uv sync --frozen`, runs the gate, and then runs `deploy/jail-check.sh`: the
+population jail (bubblewrap with the unit's `NoNewPrivileges`, `ProtectSystem=strict`,
+`ProtectHome`, `PrivateTmp`, and Ubuntu 24.04's AppArmor policy on unprivileged user
+namespaces) must start a confined interpreter **as the `factory` user**, or the
+provisioner exits non-zero with the reason. The gate's own jail tests run as root and
+prove nothing about that user; a world offering population tools refuses to launch
+without a working jail. Python and package patch versions are
 selected once during provisioning; record them with the launch record. No sync,
 Git fetch or dependency upgrade occurs on service restarts. The standard-library
 static server and backup helper use Ubuntu's system Python; the factory uses the
@@ -99,7 +105,13 @@ cloud-init status --long
 git -C /srv/factorylab/repo rev-parse HEAD
 /srv/factorylab/repo/.venv/bin/python --version
 systemd-analyze verify /etc/systemd/system/factorylab*.service /etc/systemd/system/factorylab*.timer
+bash /srv/factorylab/repo/deploy/jail-check.sh
 ```
+
+The last line must print `factorylab jail-check: ok (...)`; any other output names
+the stage at which the jail failed (executable, interpreter prefix, launch, or the
+confined interpreter's own exit and streams). `start.sh` repeats the probe before
+the first `run` and exits 3 (final, alerted) rather than looping on a refusal.
 
 For the bundle flow, the cloud-init error is expected; require the manual
 provisioner to exit 0. The service and timers remain disabled until launch.

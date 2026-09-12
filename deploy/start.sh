@@ -5,6 +5,9 @@ ledger=/srv/factorylab/runs/funded.jsonl
 cli=/srv/factorylab/repo/.venv/bin/factorylab
 # systemd owns the directory. Only the mode is recorded, never a summary.
 if [[ ! -e "$ledger" ]]; then
+    # A first launch on a host whose jail cannot start is final (exit 3), not a
+    # restart loop: run would refuse the manifest on every attempt.
+    /srv/factorylab/repo/.venv/bin/python -m factorylab.cortex.sandbox || exit 3
     printf 'run\n' > /run/factorylab/mode
     "$cli" run --world funded --events 9223372036854775807 --ledger "$ledger" || true
 fi

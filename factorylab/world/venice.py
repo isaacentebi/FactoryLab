@@ -109,8 +109,15 @@ class VeniceProvider:
         metadata: dict[str, Any] = {}
         effort = reasoning.get("effort")
         if reasoning.get("enabled") is False or effort == "none":
+            # Venice's own toggle: it withholds reasoning parameters from the upstream
+            # model instead of forwarding an effort. ``reasoning_effort: none`` is
+            # forwarded, may become the model's minimum effort, and is ignored by
+            # ``reasoning.enabled`` (an effort level takes precedence over it). The
+            # recorded probe with ``reasoning_effort: none`` still spent the whole
+            # budget on hidden reasoning; this shape is the documented switch.
+            payload["reasoning"] = {"enabled": False}
             params["disable_thinking"] = True
-            payload["reasoning_effort"] = "none"
+            metadata["thinking"] = "disabled"
         else:
             if "max_tokens" in reasoning:
                 effort = "low"
