@@ -323,6 +323,7 @@ _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
     ("book", "_ForecastBook__", ("forecasts", "settled", "requested")),
     ("baseline", "_PrevalenceBaseline__", ("counts",)),
+    ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
     ("charter_book", "_CharterBook__", (
         "editions", "proposals", "committees", "ballots", "activated", "activations",

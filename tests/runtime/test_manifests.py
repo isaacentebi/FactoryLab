@@ -131,3 +131,44 @@ def test_clock_seed_intervals_remain_unchanged():
     assert load_manifest("scripted-crash").tick_interval_ns == 1_000_000_000
     assert load_manifest("testnet").tick_interval_ns == 60_000_000_000
     assert load_manifest("testnet").clock.min_tick_ns == 10_000_000_000
+
+
+@pytest.mark.parametrize("world", ["scripted", "scripted-crash", "testnet"])
+def test_damping_and_cadence_are_explicit_manifest_parameters(world):
+    import tomllib
+
+    from factorylab.runtime.worlds import WORLDS_DIR
+
+    with (WORLDS_DIR / f"{world}.toml").open("rb") as source:
+        raw = tomllib.load(source)
+    assert raw["prices"]["kappa"] == 0.5
+    assert raw["timing"]["cadence_sample"] == 200
+    m = load_manifest(world)
+    assert m.prices.kappa == 0.5 and m.timing.cadence_sample == 200
+
+
+def test_damping_and_cadence_defaults_overrides_and_hashes():
+    default = manifest_from_dict(_base())
+    assert default.prices.kappa == 0.5 and default.timing.cadence_sample == 200
+    for section, key, value in (("prices", "kappa", 0), ("timing", "cadence_sample", 10)):
+        raw = _base()
+        raw[section] = {key: value}
+        changed = manifest_from_dict(raw)
+        assert getattr(getattr(changed, section), key) == value
+        assert changed.manifest_hash() != default.manifest_hash()
+
+
+@pytest.mark.parametrize("value", [-1, True, "0.5", float("nan"), float("inf")])
+def test_invalid_kappa_is_rejected(value):
+    raw = _base()
+    raw["prices"] = {"kappa": value}
+    with pytest.raises(ValueError, match="kappa"):
+        manifest_from_dict(raw)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "200", None])
+def test_invalid_cadence_sample_is_rejected(value):
+    raw = _base()
+    raw["timing"] = {"cadence_sample": value}
+    with pytest.raises(ValueError, match="cadence_sample"):
+        manifest_from_dict(raw)

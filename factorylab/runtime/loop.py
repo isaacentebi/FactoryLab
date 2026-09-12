@@ -62,6 +62,7 @@ from factorylab.kernel.wallet import DripSchedule, Infeasible, Wallet
 from factorylab.learners.base import BanditFeedback
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
+from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_threshold
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
@@ -540,6 +541,12 @@ class Runtime:
             ledger=self.ledger,
             clock_ns=self.clock,
         )
+        self.cadence = GovernanceCadence(
+            self.ledger,
+            sample=manifest.timing.cadence_sample,
+            min_ratio=manifest.timing.min_ratio,
+            backstop=self.ev.consequence_backstop_events,
+        )
         self.timing = TimingRegistry()
         self.timing.register_loop("leaf", [])
         self.timing.register_loop("governance", ["leaf"])
@@ -579,7 +586,11 @@ class Runtime:
             "exchange",
             deterministic=isinstance(self.exchange, FakeExchange) and not self.live,
         )
-        self.venue = LiveVenue(self.exchange, ledger=self.ledger) if self.live else None
+        # Fills before launch belong to nobody; funding uses the same launch boundary.
+        self.venue = (
+            LiveVenue(self.exchange, last_fill_ns=self.clock.now_ns, ledger=self.ledger)
+            if self.live else None
+        )
         self.prices = manifest.price_table()
         self.meter = Meter(self.wallet)
         if provider is None:
@@ -696,6 +707,22 @@ class Runtime:
             "price_micro_per_call": 0,
             "kind": "treasury",
         }
+        self.tool_specs["catalogue.search"] = {
+            "id": "catalogue.search",
+            "description": "Search the model catalogues (OpenRouter, Venice, registered sellers) "
+            "by substring; returns ids with prices per million tokens and context length.",
+            "args_schema": {
+                "type": "object",
+                "properties": {
+                    "substring": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                },
+                "required": ["substring"],
+                "additionalProperties": False,
+            },
+            "price_micro_per_call": manifest.tools.population_tool_micro_per_call,
+            "kind": "catalogue",
+        }
         self.tool_specs["market.discover"] = {
             "id": "market.discover",
             "description": "Discover compute sellers with their resource URLs and listed prices.",
@@ -720,6 +747,7 @@ class Runtime:
         self.controller = PriceController(
             self.ledger,
             eta=pr.eta,
+            kappa=pr.kappa,
             decay=pr.decay,
             lambda_max=pr.lambda_max,
             min_window_events=pr.min_window_events,
@@ -967,7 +995,9 @@ class Runtime:
                 "min_tick": _duration_str(self.m.clock.min_tick_ns),
                 "max_tick": _duration_str(self.m.max_tick_ns),
             },
+            "governance": self.cadence.world_block(self.tick_clock.interval_ns),
             "registration_feedback": list(self.registration_feedback),
+            "scoring": self._scoring_block(),
             "prices": {"lambda_max": self.m.prices.lambda_max},
             "amendment_feedback": getattr(self, "amendment_feedback", None),
             "card_prices": [
@@ -1256,6 +1286,45 @@ class Runtime:
         self.termination.kill(reason)
         return True
 
+    def _catalogue_search(self, substring: str, limit: int) -> list[dict[str, Any]]:
+        """Case-insensitive substring over every catalogue the provider exposes plus registered
+        prices; a world fact, never a recommendation. Unavailable catalogues yield nothing."""
+        needle = substring.lower()
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        entries: list[Any] = []
+        if hasattr(self.provider, "catalogue"):
+            try:
+                entries = list(self.provider.catalogue())
+            except Exception:  # catalogue unavailable: the search is simply empty
+                entries = []
+        for e in entries:
+            if needle in e.id.lower() or needle in (e.name or "").lower():
+                seen.add(e.id)
+                p = e.price()
+                out.append(
+                    {
+                        "id": e.id,
+                        "name": e.name,
+                        "usd_per_million_input_tokens": _price_str(p.input_micro),
+                        "usd_per_million_output_tokens": _price_str(p.output_micro),
+                        "context_length": e.context_length,
+                    }
+                )
+        for mid, p in self.prices.prices.items():
+            if mid not in seen and needle in mid.lower():
+                out.append(
+                    {
+                        "id": mid,
+                        "name": mid,
+                        "usd_per_million_input_tokens": _price_str(p.input_micro),
+                        "usd_per_million_output_tokens": _price_str(p.output_micro),
+                        "per_request_micro": p.per_request_micro,
+                    }
+                )
+        out.sort(key=lambda m: m["id"])
+        return out[: max(1, min(limit, 50))]
+
     def _record_market(self, item: dict) -> None:
         """Payment and pricing evidence is ledgered before dependent runtime state changes."""
         self.ledger.append({**item, "ts": self.clock.now_ns})
@@ -1288,6 +1357,8 @@ class Runtime:
         self.insolvency_count = count
 
     def _manage_reserve_window(self) -> None:
+        if self.reserve_window_start is None:
+            self.cadence.launch(self.clock.now_ns if self.live else 0)
         if (
             self.reserve_window_start is None
             or self.clock.now_ns >= self.reserve_window_start + self.m.novelty.window_ns
@@ -1675,6 +1746,12 @@ class Runtime:
         def execute() -> dict:
             if spec["kind"] == "venue":
                 return self.venue_tools.call(tool_id, args)
+            if spec["kind"] == "catalogue":
+                return {
+                    "models": self._catalogue_search(
+                        str(args["substring"]), int(args.get("limit", 20))
+                    )
+                }
             if spec["kind"] == "market":
                 return {
                     "sellers": self.market.discover(
@@ -1942,6 +2019,7 @@ class Runtime:
             },
             "world": self._world_block(),
             "your_recent_returns": list(self.memory.get(sample.chosen, ())),
+            "your_consequence_standing": self._standing_for(sample.chosen),
         }
         schema = {
             "type": "object",
@@ -2573,10 +2651,30 @@ class Runtime:
                 self.charter_book.abstain(committee, alias)
         outcome = self.charter_book.tally(committee)
         if outcome == "passed":
+            self.cadence.approve(am.id)
+            self.cadence.ready(
+                now_ns=self.clock.now_ns,
+                tick_interval_ns=self.tick_clock.interval_ns,
+                window=self.stats.reserve_windows,
+            )
             self.stats.amendments_passed += 1
 
-    def _activate_charter_if_due(self) -> None:
+    def _next_charter_activation(self) -> Charter | None:
+        """Activate only at a boundary that meets the measured governance separation."""
+        if not self.cadence.ready(
+            now_ns=self.clock.now_ns,
+            tick_interval_ns=self.tick_clock.interval_ns,
+            window=self.stats.reserve_windows,
+        ):
+            return None
         new = self.charter_book.activate_due(self.clock.now_ns)
+        if new is not None:
+            am = self.charter_book.activated_amendment(new.edition)
+            self.cadence.activated(am.id, self.clock.now_ns, self.tick_clock.interval_ns)
+        return new
+
+    def _activate_charter_if_due(self) -> None:
+        new = self._next_charter_activation()
         while new is not None:
             self.charter = new
             am = self.charter_book.activated_amendment(new.edition)
@@ -2608,7 +2706,7 @@ class Runtime:
                     self.tick_clock.set_interval(interval)
                     self.stats.clock_changes += 1
             self.stats.amendments_activated += 1
-            new = self.charter_book.activate_due(self.clock.now_ns)
+            new = self._next_charter_activation()
 
     def _open_epoch(self, kind: str) -> None:
         universe = self._universe_for(kind)
@@ -2658,6 +2756,97 @@ class Runtime:
             events=tuple(self.events_log[start + 1 : self.n + 1]),
         )
 
+    def _scoring_block(self) -> dict[str, Any]:
+        """How decisions settle, stated as facts about the world (v0.4 §1.6: schematics are
+        public; no goals). Run 7 showed judges grading conformity alone because nothing told
+        them a verdict is also a forecast, and producers reinforced by verdicts that never
+        answered to money."""
+        ev = self.ev
+        return {
+            "producer_or_antagonist_return": (
+                "settles on the verdict channel: the score is the verdict (0 to 1) an evaluator "
+                f"gives it within {ev.verdict_timeout_events} events, less the card penalty; "
+                "unjudged returns are censored (no score, no learning)"
+            ),
+            "antagonist_exposure": (
+                "an antagonist return also settles 1 on the exposure channel when a judge's "
+                "forecast about it scores worse than the prevalence baseline, else 0"
+            ),
+            "verdict": (
+                "a verdict is also sealed as a forecast, with q = verdict, that the judged "
+                "return pays off; it settles on the evaluator's consequence standing"
+            ),
+            "return_paid_off": (
+                "1 when the lots the return's own fills opened are closed with realized gain "
+                "net of fees, funding and the return's own compute cost; a return that placed "
+                "no fills settles 0; lots still open after "
+                f"{ev.consequence_backstop_events} events are marked to mid"
+            ),
+            "consequence_standing": (
+                "Brier score of the evaluator's forecasts against the prevalence baseline; "
+                f"it enters evaluator selection with weight {ev.consequence_share} beside the "
+                "learned selection"
+            ),
+            "evaluator_return": (
+                "settles on the conformity channel: the score a meta gives the verdict within "
+                f"{ev.verdict_timeout_events} events, less the card penalty; metas judge one "
+                f"verdict in every {self.m.timing.min_ratio} (with jitter) as the window's "
+                "representative and its score settles the whole window"
+            ),
+            "meta_return": (
+                "settles on the fast channel (well-formed = 1) unless a higher tier of metas "
+                "exists, in which case on conformity like an evaluator"
+            ),
+            "card_penalty": (
+                "each priced metric card subtracts its price times the window's violation "
+                "from verdict and conformity scores; prices are in card_prices"
+            ),
+            "novelty_reserve": (
+                "registrations draw on the novelty reserve at the trial amount; refused "
+                "proposals carry a reason in registration_feedback"
+            ),
+        }
+
+    def _standing_for(self, evaluator_id: str) -> dict[str, Any] | None:
+        """A judge's own consequence standing: skill against the prevalence baseline, sample
+        size, selection weight. Its own running score, private to it (v0.4 §1.6)."""
+        st = self.standing.snapshot().get(evaluator_id)
+        if not st or not st.get("n"):
+            return None
+        return {
+            "skill_vs_baseline": round(float(st["skill"]), 4),
+            "settled_forecasts": st["n"],
+            "selection_weight": round(float(st["weight"]), 4),
+        }
+
+    def _deliver_consequence_to_memory(self, s: Any) -> None:
+        """The reward line must reach the primitive that acted, not only its router (essay
+        II.I.b: memory across rounds, reward attributable to the decision). A producer learns
+        whether its return paid off; a judge learns whether the return it blessed paid off and
+        how its verdict scored. Private local state, never public. Run 7 showed judges blessing
+        inaction at 1.0 while their standing fell, because nothing ever told them."""
+        if s.predicate_id != "return_paid_off":
+            return
+        producer = self.handle_to_assembly.get(s.about_handle)
+        if producer is not None:
+            for entry in self.memory.get(producer, ()):
+                if entry["handle"] == s.about_handle:
+                    entry["paid_off"] = s.y
+        prefix = "verdict-"
+        if not s.handle.startswith(prefix):
+            return
+        judge_handle = s.handle[len(prefix) :]
+        judge = self.handle_to_assembly.get(judge_handle)
+        if judge is None:
+            return
+        for entry in self.memory.get(judge, ()):
+            if entry["handle"] == judge_handle:
+                entry["judged_return_paid_off"] = s.y
+                entry["your_consequence_brier"] = round(float(s.brier), 4)
+                entry["baseline_brier"] = (
+                    round(float(s.baseline_brier), 4) if s.baseline_brier is not None else None
+                )
+
     def _settle_exposures(self, settled: list[Any]) -> None:
         """An antagonist wins when a judge's forecast about its return scored below baseline."""
         for s in settled:
@@ -2694,10 +2883,21 @@ class Runtime:
 
     def _settle_due_forecasts(self) -> None:
         self.consequences.resolve(self.n)
+        pending = {f.handle: f for f in self.book.pending()}
         settled = self.settler.settle_due(self.n, self._facts_for)
         settled.extend(self.settler.settle_consequences(self.consequences.payoff))
         self._settle_exposures(settled)
         for s in settled:
+            forecast = pending[s.handle]
+            self.cadence.record(
+                handle=s.handle,
+                predicate_id=s.predicate_id,
+                opened_event=forecast.made_at_event,
+                settled_event=self.n,
+                opened_ns=self.queue.get(s.handle).opened_ns,
+                settled_ns=self.clock.now_ns,
+                status=str(s.status),
+            )
             self.stats.forecasts_settled += 1
             self._emit(
                 EventKind.FORECAST_SETTLED,
@@ -2713,6 +2913,7 @@ class Runtime:
             )
             if s.brier is None:
                 continue
+            self._deliver_consequence_to_memory(s)
             self.last_closure_ns = max(self.clock.now_ns, self.last_closure_ns + 1)
             self.timing.record_closure("leaf", self.last_closure_ns)
             self.buffer.add(

@@ -72,20 +72,23 @@ output_usd_per_mtok = "4.25"
 reasoning = { effort = "low" }
 
 # Seeds: five families across the three roles, cheapest tiers first.
+# Producers seeded on the two most capable flash tiers (run 3's unscripted registrations came
+# from GLM and DeepSeek 4.1 producers; runs 4-7's cheapest producers only ever held). Both are
+# on Venice at parity, so the seed is not tied to one seller.
 [[assemblies]]
 id = "seed-observer"
 role = "producer"
-model_id = "qwen/qwen3.7-flash"
+model_id = "z-ai/glm-5.3-flash"
 accepts = ["MarketMid", "Funding"]
-max_tokens = 800
+max_tokens = 1000
 effort = "low"
 
 [[assemblies]]
 id = "seed-decider"
 role = "producer"
-model_id = "deepseek/deepseek-v4-flash-0731"
+model_id = "deepseek/deepseek-v4.1-flash"
 accepts = ["Tick", "Fill"]
-max_tokens = 1000
+max_tokens = 1200
 effort = "low"
 
 [[assemblies]]
@@ -150,6 +153,7 @@ share = 0.1
 window = "1h"
 
 [timing]
+cadence_sample = 200
 min_ratio = 3
 jitter_fraction = 0.2
 
@@ -166,6 +170,7 @@ population_tool_micro_per_call = 50
 max_leverage = 3
 
 [prices]
+kappa = 0.5
 eta = 0.5
 decay = 0.1
 lambda_max = 1.0

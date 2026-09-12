@@ -196,10 +196,23 @@ Every principle in `docs/design-audit-v2.md` marked missing is now built, with t
 
 **Follow-ups:** fill cursor from launch time; registration rejection reasons public in the world block (the population re-proposes the same id because it cannot see why it was refused); the proposal parser should learn the model namespaces instead of the alias workaround.
 
+### Live run 7 (testnet, seed 7, order shape public) and the diagnosis of the noop attractor
+
+1,151 events, 349 invocations, $0.42. Producers returned `noop` or `hold` 112 times in 119 with the order shape in front of them; evaluators graded that 0.95 to 1.0; evaluator standing fell to −0.11 to −0.41; the antagonist fooled judges 36 of 43. Four registrations refused (malformed ids), none accepted. Bewilderment: failed. The equity drop and three fills in this run were the treasury build's live tests on the same testnet account, not the population's.
+
+**Diagnosis, as a system, not a bug.** Four links, each traced in the code:
+
+1. *Nobody is told how they are scored.* The seed prompt asks for JSON satisfying a schema; a judge's request says "evaluate against the charter". Nothing tells a judge that its verdict is also a forecast that the return pays off, nor tells a producer that its score is the verdict. The physics existed only in the kernel. Fixed by publishing a `scoring` block in every world block: what settles on which channel and how, as facts, no goals (v0.4 §1.6).
+2. *The reward line stopped at the router.* Producers saw verdicts (1.0 for noop, reinforcing it); judges never saw the consequence of their verdicts or their standing. The essay: reward must reach the decision that earned it. Fixed: realized payoff, the judge's Brier and its standing now land in the primitive's private memory.
+3. *The seed cards all favour inaction* (cost, well-formedness, forecast skill: a noop wins each), and metas grade judges on the same cards. The population's own edition-1 draft (`docs/charter/edition1-draft.md`, branch p4-E, 24 proposals, 8 passed for $0.019) proposed the antidote: a revision rate, a cap on inaction, registration flow. The runtime could measure only four quantities, so their cards would sit unpriced. Fix in flight: an observations catalogue (workstream O) so a card names what it measures and proposers see what can be measured.
+4. *The seed producers were the two cheapest tiers with reasoning off.* Reseeded on GLM 5.3 Flash and DeepSeek 4.1 Flash, at parity on Venice, an architect's cast before the button.
+
+Run 8 follows the catalogue merge, with the population's passing cards where measurable.
+
 ## T2 live acceptance
 
 11 September 2026, America/Mexico_City. Worktree `FactoryLab-p4T2`, branch `p4-T2`;
-integrated main through `e92207e` (including H/resume). This is infrastructure
+integrated main through `ff941fb` (including H/resume, governance cadence and run-7 fixes). This is infrastructure
 acceptance, not a population run or evidence of Class 3 behaviour.
 
 **Wallet identity.** The CLI derives
