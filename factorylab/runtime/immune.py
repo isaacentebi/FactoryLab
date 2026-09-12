@@ -97,9 +97,9 @@ def close_window(rt, values: dict[str, float]) -> None:
     rt.ledger.append({"kind": "immune.window", **evidence, "profile": profile, "flags": flags,
                       "regions": current["regions"], "charter_edition": rt.charter.edition})
     rt.stats.immune_windows = windows
+    # Learning death's response is this flag alone: the reserve reads it at the next
+    # window boundary and issues the one extra novelty trial per assembly (A13).
     rt.stats.pathologies = flags
-    if flags["learning_death"]:
-        grant_novelty(rt, current["index"] + 1)
     # Oscillation has priority if coarse cells make the two signals overlap.
     if flags["thrash"]:
         _gain(rt, "thrash", current["index"])
@@ -109,33 +109,3 @@ def close_window(rt, values: dict[str, float]) -> None:
         _gain(rt, "stable_failure", current["index"])
         for cid in diagnosed["violated_cards"]:
             rt.controller.relieve(cid.removeprefix("card:"), window=current["index"] + 1)
-
-
-def grant_novelty(rt, window: int) -> None:
-    """One extra trial per existing assembly is available only in the next window.
-
-    A trial ends when its first own producer consequence settles; continuations
-    share that trial. The A13 reserve lifetime policy can consume this allowance
-    without changing the detection mechanism.
-    """
-    rt.ledger.append({"kind": "immune.novelty", "window": window,
-                      "trials_per_assembly": 1, "assemblies": sorted(rt.assemblies)})
-    rt.immune_trials = {"window": window, "assemblies": dict.fromkeys(rt.assemblies)}
-
-
-def novelty_available(rt, action_id: str) -> bool:
-    """Extra exploratory access ends after its own consequence settles or its window expires."""
-    grants = rt.immune_trials
-    if rt.window.index != grants.get("window") or action_id not in grants.get("assemblies", {}):
-        return False
-    trial = grants["assemblies"][action_id]
-    return trial is None or not trial["settled"]
-
-
-def settle_novelty(rt, handles: tuple[str | None, ...]) -> None:
-    """Only delivery of an attributed consequence consumes an extra exploratory trial."""
-    for action, trial in rt.immune_trials.get("assemblies", {}).items():
-        if trial is not None and not trial["settled"] and trial["handle"] in handles:
-            rt.ledger.append({"kind": "immune.novelty_settled", "assembly_id": action,
-                              "handle": trial["handle"], "window": rt.immune_trials["window"]})
-            trial["settled"] = True

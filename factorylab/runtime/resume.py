@@ -416,7 +416,7 @@ _RUNTIME_FIELDS = (
     "card_samples",
     "exposure_evidence", "pending_meta", "verdict_outcomes", "consequence_mix",
     "sampling_history", "novelty_grant",
-    "card_samples", "price_windows", "price_origins", "immune_trials",
+    "card_samples", "price_windows", "price_origins",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (

@@ -62,7 +62,6 @@ class PricingMixin:
         self.cadence.configure(min_support=self.m.timing.min_support)
         self.price_windows: dict[int, MeasureWindow] = {}
         self.price_origins: dict[str, dict[str, int]] = {}
-        self.immune_trials: dict = {}
 
     def _contribution(self, handle: str, role: str) -> dict:
         """Every original decision has one contribution record per measurement window."""
@@ -86,12 +85,6 @@ class PricingMixin:
                             "window": self.window.index, "role": role, **evidence})
         for name, value in evidence.items():
             sample[name] += value
-        grants = self.immune_trials
-        if (not child and grants.get("window") == self.window.index
-                and action_id in grants["assemblies"] and grants["assemblies"][action_id] is None):
-            self.ledger.append({"kind": "immune.novelty_trial", "assembly_id": action_id,
-                                "handle": req.handle, "window": self.window.index})
-            grants["assemblies"][action_id] = {"handle": req.handle, "settled": False}
         return ret
 
     def _record_pricing_fills(self, events) -> None:

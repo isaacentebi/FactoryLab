@@ -109,11 +109,6 @@ class Runtime(
         settle_forecasts(self, super()._settle_due_forecasts)
         self._record_card_forecasts(pending, baseline)
 
-    def _unhistoried(self, action_id: str) -> bool:
-        from factorylab.runtime.immune import novelty_available
-
-        return novelty_available(self, action_id) or super()._unhistoried(action_id)
-
     def _settle_exchange_effects(self, events) -> None:
         super()._settle_exchange_effects(events)
         self._record_pricing_fills(events)

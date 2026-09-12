@@ -65,7 +65,8 @@ capped, attributed formula recorded under "Observation units and attribution".
 
 `route.excluded`, `tool.refused`, `consequence.refused` (A9); `exposure.settled` (A5);
 `cascade.sibling`, `meta.consequence`, `meta.awaiting_consequence`, `sampling.raise`,
-`sampling.lower` (A14); `novelty.release` (A13).
+`sampling.lower` (A14); `novelty.release`, `novelty.grant`,
+`novelty.grant_consumed` (A13).
 
 ## Exact measurement
 
@@ -235,7 +236,10 @@ Adding a card starts its support history; removing one drops that dimension
 without clearing surviving evidence. Thrash requires k consecutive changes with
 no compliant window. Stable failure requires k same-cell windows with a common
 violated card. Learning death requires k same-cell windows with zero registrations
-and revisions. One extra exploratory trial per assembly is then granted for the
-next window, with continuations covered until an attributed consequence settles;
-the grant expires at that window's end. W2 owns the general novelty lifetime
-policy (A13).
+and revisions. Learning death's only response is that flag: the reserve reads it
+at the next window boundary and grants one extra novelty trial per assembly for
+the window that opens. A grant is spent by the first consequence delivered to an
+assembly beyond `novelty.trials`, and whatever is unspent expires at the next
+boundary, where the flag must be raised again to re-issue it. That single grant
+is part of the novelty lifetime policy (A13): ledger evidence `novelty.grant` and
+`novelty.grant_consumed`.

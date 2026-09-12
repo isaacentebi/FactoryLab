@@ -46,7 +46,12 @@ def test_a3_frozen_run_flags_failure_and_learning_death():
     assert rt.stats.pathologies == {"stable_failure": True, "learning_death": True, "thrash": False}
     assert rt.controller.price("cost") == .5
     assert rt.routers["Tick"][0].learner.gamma > rt.router_gamma
-    assert rt.immune_trials["window"] == 4
+    # A3's learning-death response is that flag alone; the reserve reads it at the next
+    # boundary and issues the one extra novelty trial per assembly for the window that
+    # opens (A13, the single novelty_grant implementation).
+    rt.stats.reserve_windows += 1
+    rt._issue_novelty_grant()
+    assert rt.novelty_grant == {"window": rt.stats.reserve_windows, "consumed": []}
 
 
 def test_a3_noisy_frozen_synthetic_never_flags_thrash():
@@ -88,9 +93,7 @@ def test_a3_new_card_needs_its_own_support():
         "stable_failure"]
 
 
-def test_a3_extra_novelty_and_price_relief_expire_and_resume():
-    from factorylab.runtime.immune import settle_novelty
-
+def test_a3_flags_and_price_relief_expire_and_resume():
     rt = runtime()
     for i in range(1, 4):
         freeze(rt, i)
@@ -98,10 +101,9 @@ def test_a3_extra_novelty_and_price_relief_expire_and_resume():
     restore_runtime(restored, runtime_state(rt))
     for world in (rt, restored):
         world.window.index = 4
-        assert world._unhistoried("seed-decider")
-        world.immune_trials["assemblies"]["seed-decider"] = {"handle": "trial", "settled": False}
-        settle_novelty(world, ("trial",))
-        assert world.immune_trials["assemblies"]["seed-decider"]["settled"]
+        # The diagnosis itself is what resumes; the extra trial is derived from it by the
+        # reserve, so there is no second piece of novelty state to restore.
+        assert world.stats.pathologies["learning_death"]
         world.controller.expire_relief(window=4)
         assert world.controller.price("cost") == 1
         assert world.controller.snapshot()["cards"]["cost"]["relief_window"] is None

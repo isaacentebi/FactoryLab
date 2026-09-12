@@ -167,12 +167,3 @@ def settle_forecasts(rt, settle) -> None:
     for forecast in pending:
         rt.cadence.record_open(forecast.handle, forecast.made_at_event)
     settle()
-    remaining = {f.handle for f in rt.book.pending()}
-    for forecast in pending:
-        if (forecast.handle in remaining or forecast.predicate_id != "return_paid_off"
-                or rt.queue.get(forecast.handle).status != "settled"):
-            continue
-        from factorylab.runtime.immune import settle_novelty
-
-        parent = rt.queue.get(forecast.handle).parent_handle
-        settle_novelty(rt, (forecast.about_handle, parent))
