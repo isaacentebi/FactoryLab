@@ -1064,7 +1064,7 @@ def test_scripted_clock_amendment_changes_next_tick_deterministically(monkeypatc
         assert ticks_after[0]["ts"] - ticks_before[-1]["ts"] == 2_000_000_000
         assert all(b["ts"] - a["ts"] == 2_000_000_000
                    for a, b in zip(ticks_after, ticks_after[1:], strict=False))
-        assert rt._world_block()["clock"]["tick_interval"] == "2000000000ns"
+        assert rt._world_block()["clock"]["tick_interval"] == "2s"
         return summary, entries
 
     first, entries = run()

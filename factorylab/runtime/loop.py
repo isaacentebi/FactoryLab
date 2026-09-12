@@ -332,6 +332,17 @@ class RouterState:
     epoch: int = 1
 
 
+def _duration_str(ns: int) -> str:
+    """Whole seconds/minutes/hours where exact, else seconds with a decimal."""
+    if ns % 3_600_000_000_000 == 0:
+        return f"{ns // 3_600_000_000_000}h"
+    if ns % 60_000_000_000 == 0:
+        return f"{ns // 60_000_000_000}m"
+    if ns % 1_000_000_000 == 0:
+        return f"{ns // 1_000_000_000}s"
+    return f"{ns / 1_000_000_000:g}s"
+
+
 @dataclass
 class MeasureWindow:
     """Raw material for one reserve window's metric-card observations."""
@@ -660,6 +671,7 @@ class Runtime:
         self.n = 0
         self.emitted = 0
         self.insolvency_count = 0
+        self.registration_feedback: deque[dict[str, Any]] = deque(maxlen=8)
         self._compute_routed = False
         self._compute_unaffordable = False
 
@@ -770,7 +782,7 @@ class Runtime:
         "assembly": {
             "kind": "assembly",
             "id": "slug-2-to-48-chars",
-            "role": "producer | evaluator | meta",
+            "role": "producer | evaluator | meta | antagonist",
             "model_id": "a registered model id",
             "system_prompt": "text, at most 4000 chars",
             "accepts": ["event kinds this assembly is woken for"],
@@ -876,10 +888,11 @@ class Runtime:
                 for st in self._all_router_states()
             ],
             "clock": {
-                "tick_interval": f"{self.tick_clock.interval_ns}ns",
-                "min_tick": f"{self.m.clock.min_tick_ns}ns",
-                "max_tick": f"{self.m.max_tick_ns}ns",
+                "tick_interval": _duration_str(self.tick_clock.interval_ns),
+                "min_tick": _duration_str(self.m.clock.min_tick_ns),
+                "max_tick": _duration_str(self.m.max_tick_ns),
             },
+            "registration_feedback": list(self.registration_feedback),
             "prices": {"lambda_max": self.m.prices.lambda_max},
             "amendment_feedback": getattr(self, "amendment_feedback", None),
             "card_prices": [
@@ -2110,40 +2123,27 @@ class Runtime:
                 self._propose_amendment(handle, item)
                 self.stats.registrations_accepted += 1
             except (Infeasible, PermissionError, ValueError, KeyError, TypeError) as exc:
-                self.stats.registrations_rejected += 1
-                self.ledger.append(
-                    {
-                        "kind": "registration.rejected",
-                        "handle": handle,
-                        "reason": f"amendment: {type(exc).__name__}: {exc}"[:300],
-                        "ts": self.clock.now_ns,
-                    }
+                self._reject_registration(
+                    handle, f"amendment: {type(exc).__name__}: {exc}"[:300], None
                 )
         for r in rejected:
-            self.stats.registrations_rejected += 1
-            self.ledger.append(
-                {
-                    "kind": "registration.rejected",
-                    "handle": handle,
-                    "index": r.index,
-                    "reason": r.reason,
-                    "ts": self.clock.now_ns,
-                }
-            )
+            self._reject_registration(handle, r.reason, r.index)
         for prop in accepted:
             try:
                 self._register(handle, prop)
                 self.stats.registrations_accepted += 1
             except (Infeasible, PermissionError, ValueError, KeyError, X402Error) as exc:
-                self.stats.registrations_rejected += 1
-                self.ledger.append(
-                    {
-                        "kind": "registration.rejected",
-                        "handle": handle,
-                        "reason": f"{type(exc).__name__}: {exc}",
-                        "ts": self.clock.now_ns,
-                    }
-                )
+                self._reject_registration(handle, f"{type(exc).__name__}: {exc}", None)
+
+    def _reject_registration(self, handle: str, reason: str, index: int | None) -> None:
+        """Ledger a refused proposal and keep the reason public: a proposer that cannot see
+        why it was refused re-proposes the same thing (run 6, eleven times)."""
+        self.stats.registrations_rejected += 1
+        item = {"kind": "registration.rejected", "handle": handle, "reason": reason}
+        if index is not None:
+            item["index"] = index
+        self.ledger.append({**item, "ts": self.clock.now_ns})
+        self.registration_feedback.append({k: v for k, v in item.items() if k != "kind"})
 
     def _register(self, handle: str, prop: Any) -> None:
         amount = self.ev.trial_amount_micro
