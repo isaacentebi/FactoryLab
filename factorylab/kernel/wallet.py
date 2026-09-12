@@ -67,6 +67,7 @@ class Wallet:
         self.__novelty = None
         self.__unhistoried: Callable[[str, str], bool] = lambda _h, _r: False
         self.__novelty_holds: dict[str, tuple[int | None, Money]] = {}
+        self.__uncertain_bills: dict[str, dict] = {}
         ledger._claim_wallet(self)
         self._log("initial", initial, initial, "", "initial")
 
@@ -148,7 +149,7 @@ class Wallet:
         )
 
     def reserve(self, amount: Money, handle: str, reason: str) -> Reservation:
-        """Hold an affordable nonnegative ceiling without changing booked balance."""
+        """Hold affordable funds; a zero fee hold permits reconciliation after a trading loss."""
         require_money(amount, nonnegative=True)
         if not isinstance(handle, str) or not handle or not isinstance(reason, str) or not reason:
             raise ValueError("handle and reason are required")
@@ -158,7 +159,8 @@ class Wallet:
             if not self.__ledger.final:
                 self._log("infeasible", amount, self.balance, handle, reason)
             raise
-        if amount > self.available_for(handle, reason):
+        reconcile_only = amount == 0 and reason == "treasury:fees"
+        if amount > self.available_for(handle, reason) and not reconcile_only:
             self._log("infeasible", amount, self.balance, handle, reason)
             raise Infeasible("reservation exceeds available balance")
         reservation = Reservation(
@@ -221,6 +223,15 @@ class Wallet:
         self.__commits += actual
         self._refund_novelty(reservation, actual)
         del self.__reservations[reservation.id]
+
+    def commit_uncertain(self, reservation: Reservation) -> None:
+        """Book the held ceiling provisionally; retain billing uncertainty without a live hold."""
+        self._held(reservation)
+        bill = {"handle": reservation.handle, "reason": reservation.reason,
+                "reservation_id": reservation.id, "provisional_micro": reservation.amount}
+        self.__ledger.append({"kind": "metering.uncertain", **bill, "ts": self.__clock()})
+        self._commit(reservation, reservation.amount)
+        self.__uncertain_bills[reservation.id] = bill
 
     def release(self, reservation: Reservation) -> None:
         """Cancel one hold without moving money, including after balance exhaustion."""
@@ -305,6 +316,7 @@ class Wallet:
             "next_reservation": self.__next_reservation, "drip_count": self.__drip_count,
             "drips": self.__drips, "settlements": self.__settlements, "commits": self.__commits,
             "novelty_holds": dict(self.__novelty_holds),
+            "uncertain_bills": {k: dict(v) for k, v in self.__uncertain_bills.items()},
         }
 
     def _restore_state(self, state: dict) -> None:
@@ -330,6 +342,7 @@ class Wallet:
         self.__reservations = holds
         self.__exhausted = exhausted or self.__balance <= 0
         self.__novelty_holds = dict(state.get("novelty_holds", {}))
+        self.__uncertain_bills = dict(state.get("uncertain_bills", {}))
 
     def _reservation_for_resume(self, reservation_id: str) -> Reservation:
         """Rebind an authenticated owner's saved hold to this wallet's actual reservation."""

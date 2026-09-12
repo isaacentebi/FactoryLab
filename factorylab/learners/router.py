@@ -68,6 +68,8 @@ class Router:
         if mix is not None:
             distribution = mix(distribution)
         _probabilities(distribution, result.feasible)
+        if mix is not None and hasattr(self.learner, "record_executed"):
+            self.learner.record_executed(distribution)
         action_ids = tuple(result.feasible)
         probs = tuple(distribution[a] for a in action_ids)
         state_hash = hashlib.sha256(state_bytes(self.learner.state())).hexdigest()

@@ -19,6 +19,25 @@ class ReturnConsequences:
         self.backstop = backstop
         self.table = LotTable()
         self.mids: dict[str, str] = {}
+        self.pending_orders: dict[str, dict] = {}
+        self.deferred_events: list[tuple[str, dict, int]] = []
+
+    def order_intent(self, client_id: str, handle: str, coin: str) -> None:
+        """An unacknowledged order keeps attribution and dependent economic outcomes pending."""
+        item = {"handle": handle, "coin": coin}
+        self.ledger.append({"kind": "consequence.intent", "client_id": client_id, **item})
+        self.pending_orders[client_id] = item
+
+    def order_acknowledged(self, client_id: str) -> None:
+        """Release deferred economic events in original order only after identity is resolved."""
+        self.ledger.append({"kind": "consequence.acknowledged", "client_id": client_id})
+        self.pending_orders.pop(client_id, None)
+        if not self.pending_orders and self.deferred_events:
+            events = self.deferred_events
+            self.ledger.append({"kind": "consequence.replay", "count": len(events)})
+            self.deferred_events = []
+            for kind, payload, event in events:
+                self.observe(kind, payload, event)
 
     def _apply(self, kind: str, evidence: dict, table: LotTable) -> None:
         self.ledger.append({"kind": f"consequence.{kind}", **evidence})
@@ -42,6 +61,11 @@ class ReturnConsequences:
             return
         size = args.get("size") if result["status"] == "resting" else result.get("filled_size")
         oid = str(result["order_id"])
+        existing = next((o for o in self.table.orders if o.order_id == oid), None)
+        if existing is not None:
+            if existing.handle != handle:
+                raise ValueError("order already belongs to another decision")
+            return
         self._apply(
             "order",
             {"handle": handle, "order_id": oid, "size": str(size), "event": event},
@@ -54,6 +78,11 @@ class ReturnConsequences:
 
     def observe(self, kind: str, payload: dict, event: int) -> None:
         """Only observed fills and signed funding payments change lot economics."""
+        if self.pending_orders and kind in ("Fill", "Funding"):
+            self.ledger.append({"kind": "consequence.deferred", "event_kind": kind,
+                                "payload": dict(payload), "event": event})
+            self.deferred_events.append((kind, dict(payload), event))
+            return
         if kind == "MarketMid":
             self.ledger.append({"kind": "consequence.mid", "event": event, **payload})
             self.mids[payload["coin"]] = str(payload["mid"])
@@ -76,6 +105,8 @@ class ReturnConsequences:
 
     def resolve(self, event: int) -> None:
         """Persist all newly fixed outcomes before publishing the successor accounting state."""
+        if self.pending_orders:
+            return  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         table = self.table.resolve(event, self.backstop, self.mids)
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:

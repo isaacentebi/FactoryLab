@@ -811,6 +811,7 @@ def test_self_crossing_limit_tools_cannot_manufacture_paid_off_return():
                 "tool": "venue.place_limit",
                 "args": {"coin": "BTC", "side": side, "size": "1", "price": "100"},
             },
+            slot=f"test:{side}",
         )
         assert result["status"] == "filled"
     runtime.consequences.finish("wash", 500)

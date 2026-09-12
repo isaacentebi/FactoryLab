@@ -1,0 +1,82 @@
+import json
+
+import pytest
+
+from factorylab.cortex.assembly import Assembly, AssemblySpec
+from factorylab.cortex.request import Request
+from factorylab.kernel.ledger import Ledger
+from factorylab.kernel.wallet import Wallet
+from factorylab.world.metering import Meter, MeteredModel
+from factorylab.world.models import FakeModel, PriceTable, TokenPrice
+
+
+def invoke(body, schema=None):
+    wallet = Wallet(100000, Ledger())
+    provider = FakeModel(default=body, fixed_input_tokens=1, fixed_output_tokens=1)
+    assembly = Assembly(AssemblySpec('a', 1, 'v', memory_policy='handle-scoped', max_tokens=16),
+                        MeteredModel(provider, PriceTable({'v': TokenPrice(1, 1)}), Meter(wallet)))
+    req = Request('h', 'test', {}, {}, schema or {}, 100, 100000, None, 'JSON', 'test', 'h')
+    ret = assembly.invoke(req)
+    return ret, assembly, wallet
+
+
+@pytest.mark.parametrize('field,bad', [
+    ('action', []), ('verdict', '0.5'), ('verdict', True), ('verdict', 2),
+    ('conformity', -1), ('rationale', {}), ('vote', 'true'), ('register', {}),
+    ('register', [False]), ('tool_calls', [{'tool': [], 'args': {}}]),
+    ('tool_calls', [{'tool': 'venue.order', 'args': []}]), ('forecasts', {}),
+    ('forecasts', [{'predicate': [], 'q': .5, 'params': {}}]),
+    ('forecasts', [{'predicate': 'wallet_up', 'q': '0.5', 'params': {}}]),
+    ('forecasts', [{'predicate': 'wallet_up', 'q': .5, 'params': {'horizon_events': 201}}]),
+    ('requests', [{'target': [], 'description': 'd', 'inputs': {}, 'outcome_schema': {}}]),
+    ('register', [{'kind': 'router', 'gamma': 2}]),
+    ('register', [{'kind': 'assembly', 'max_tokens': '512'}]),
+])
+def test_wrong_structured_type_fails_before_memory_or_effects(field, bad):
+    ret, assembly, wallet = invoke(json.dumps({field: bad, 'tool_calls': []}
+                                            if field != 'tool_calls' else {field: bad}))
+    assert ret.status == 'malformed'
+    assert not ret.children and not ret.tool_calls and not assembly.memory
+    assert wallet.state()['reservations'] == [] and ret.cost == 2
+
+
+@pytest.mark.parametrize('number', ['1e309', 'NaN', '-Infinity'])
+@pytest.mark.parametrize('template', [
+    '{{"verdict":{n}}}',
+    '{{"forecasts":[{{"predicate":"wallet_up","params":{{}},"q":{n}}}]}}',
+    '{{"register":[{{"kind":"router","gamma":{n}}}]}}',
+    '{{"tool_calls":[{{"tool":"x","args":{{"nested":[{n}]}}}}]}}',
+])
+def test_nonfinite_nested_numbers_are_malformed(number, template):
+    ret, assembly, _ = invoke(template.format(n=number))
+    assert ret.status == 'malformed' and not assembly.memory
+    assert not ret.children and not ret.tool_calls
+
+
+def test_declared_nested_schema_and_required_fields_are_checked():
+    schema = {'type': 'object', 'properties': {'result': {'type': 'array',
+              'items': {'type': 'integer', 'minimum': 0}}}, 'required': ['result']}
+    assert invoke('{"result":[1,"2"]}', schema)[0].status == 'malformed'
+    assert invoke('{}', schema)[0].status == 'malformed'
+    assert invoke('{"result":[0,2]}', schema)[0].status == 'ok'
+
+
+def test_valid_brace_strings_remain_valid():
+    assert invoke('{"verdict":0.5,"rationale":"a}b"}')[0].status == 'ok'
+
+
+@pytest.mark.parametrize('field', ['action', 'verdict', 'conformity', 'rationale', 'vote',
+                                   'register', 'requests', 'tool_calls', 'forecasts'])
+def test_boundary_type_fuzz_is_total(field):
+    # Deterministic wrong-shape corpus includes all JSON container/scalar kinds.
+    for value in [None, True, 7, 0.25, 'text', [], {}, [None], {'x': [False]}]:
+        ret, _, wallet = invoke(json.dumps({field: value}))
+        assert ret.status in ('ok', 'malformed')
+        assert wallet.available == wallet.balance and ret.cost == 2
+
+
+@pytest.mark.parametrize('size', ['not-a-number', '1e-999', '1e999', 'NaN', 'Infinity'])
+def test_order_amount_must_fit_the_wire_format_before_any_effect(size):
+    ret, assembly, wallet = invoke(json.dumps({'action': 'order', 'coin': 'BTC', 'size': size}))
+    assert ret.status == 'malformed' and not assembly.memory
+    assert wallet.state()['reservations'] == []

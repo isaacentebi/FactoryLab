@@ -107,6 +107,7 @@ class TreasurySpec:
     withdrawal_fee_micro: int = 1_000_000
     cctp_max_fee_micro: int = 100_000
     fake_fee_micro: int = 10_000
+    max_request_micro: int = 500_000
 
 
 @dataclass(frozen=True)
@@ -254,7 +255,7 @@ class WorldManifest:
                 raise ValueError("treasury.reserve_address must be a nonzero EVM address")
         for budget_field in ("hyperevm_gas_budget_wei", "base_gas_budget_wei",
                       "max_transfer_fee_micro", "withdrawal_fee_micro", "cctp_max_fee_micro",
-                      "fake_fee_micro"):
+                      "fake_fee_micro", "max_request_micro"):
             value = getattr(self.treasury, budget_field)
             if type(value) is not int or value < 0:
                 raise ValueError(f"treasury.{budget_field} must be nonnegative integer money")
@@ -492,6 +493,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             cctp_max_fee_micro=usd_to_micro(
                 (d.get("treasury") or {}).get("cctp_max_fee_usd", "0.10")),
             fake_fee_micro=usd_to_micro((d.get("treasury") or {}).get("fake_fee_usd", "0.01")),
+            max_request_micro=(d.get("treasury") or {}).get("max_request_micro", 500_000),
         ),
         clock=ClockSpec(_ns(clock.get("min_tick", default_min_tick))),
         tick_interval_ns=_ns(d.get("tick_interval", "10s")),

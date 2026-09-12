@@ -30,7 +30,6 @@ router whose menu grew.
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 import random
 from collections import deque
@@ -44,12 +43,13 @@ from factorylab.charter.charter import Charter
 from factorylab.charter.controller import CardRegion
 from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.registration import (
+    MAX_PROPOSALS_PER_RETURN,
     AssemblyProposal,
     ModelProposal,
     ToolProposal,
     parse_proposals,
 )
-from factorylab.cortex.request import Request, Return
+from factorylab.cortex.request import ChildRequest, Request, Return
 from factorylab.kernel.events import Bus, Event, EventKind
 from factorylab.kernel.ledger import Ledger, LedgerLock
 from factorylab.kernel.money import money_to_usd, usd_to_money
@@ -90,9 +90,15 @@ from factorylab.settlement import (
 from factorylab.settlement.consequence import FillCursor, ReturnConsequences
 from factorylab.world.clock import ClockIterator, ClockSource, DripSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
-from factorylab.world.exchange import FakeExchange, HyperliquidExchange, Order, OrderResult
+from factorylab.world.exchange import (
+    FakeExchange,
+    HyperliquidExchange,
+    Order,
+    OrderKind,
+    OrderResult,
+)
 from factorylab.world.market import MultiProvider, X402MeteredModel, X402Provider
-from factorylab.world.metering import Meter, Metered, MeteredModel
+from factorylab.world.metering import BillingUncertain, Meter, Metered, MeteredModel
 from factorylab.world.models import FakeModel, ModelRequest, ModelResponse, TokenPrice
 from factorylab.world.x402 import X402Error
 
@@ -696,6 +702,7 @@ class Runtime:
                 else X402Provider(discovery_url=manifest.treasury.discovery_url)
             )
         )
+        self.market.max_request_micro = manifest.treasury.max_request_micro
         self.provider = JournalProxy(
             self.provider,
             self.ledger,
@@ -731,12 +738,16 @@ class Runtime:
         # nervous system
         self.router_gamma = router_gamma
         self.routers: dict[str, list[RouterState]] = {}
+        self.retired_routers: dict[str, RouterState] = {}
         for kind in self._routable_kinds():
             self._build_router(kind, "exp3", router_gamma)
         self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened event
         self.delivered_seen: dict[str, int] = {
             st.learner.id: 0 for st in self._all_router_states()
         }
+        self.vote_handles: dict[str, str] = {}
+        self.order_intents: dict[str, dict] = {}
+        self.voted_amendments: set[str] = set()
         self.snapshot_keys: dict[str, str] = {}  # decision handle -> snapshot key
 
         # world memory (public facts) and assembly memory (private to each assembly)
@@ -863,7 +874,7 @@ class Runtime:
         for tier in self.m.models:
             price = self.prices.price(tier.id)
             if tier.id.startswith("x402:"):
-                price, seller = self.market.registration_price(tier.id)
+                price, seller = self._seller_price(tier.id)
                 self.registry.register(_model_contract(tier.id, price, "x402"))
                 self._record_seller(tier.id, price, seller)
                 continue
@@ -898,9 +909,37 @@ class Runtime:
                 record=self._record_market,
                 on_unaffordable=self._compute_failure,
             )
-        asm = Assembly(spec, model)
+        asm = Assembly(spec, model, validator=self._validate_output_contract)
         self.assemblies[spec.id] = asm
         return asm
+
+    def _validate_output_contract(self, parsed: dict, req: Request) -> None:
+        """Every tool argument and proposal bound is checked before any effect in a reply."""
+        from factorylab.cortex.assembly import _positive_wire_decimal, _validate_schema
+        from factorylab.world.venue_tools import _validate
+
+        for call in parsed.get("tool_calls", []):
+            spec = self.tool_specs.get(call["tool"])
+            if spec is not None:
+                if spec["kind"] == "venue":
+                    _validate(call["args"], spec["args_schema"])
+                    for key in ("size", "price"):
+                        if call["args"].get(key) is not None:
+                            _positive_wire_decimal(call["args"][key])
+                else:
+                    _validate_schema(call["args"], spec["args_schema"])
+        for proposal in parsed.get("register", []):
+            if proposal.get("kind") == "amendment":
+                for card in proposal.get("add", []) + proposal.get("replace", []):
+                    if "lambda" in card and card["lambda"] > self.m.prices.lambda_max:
+                        raise ValueError("proposal lambda exceeds manifest bound")
+        known = {p.id: p for p in SEED_VOCABULARY}
+        for forecast in parsed.get("forecasts", []):
+            if forecast["predicate"] not in known:
+                raise ValueError("unknown forecast predicate")
+            _validate_schema(
+                forecast["params"], _to_plain(known[forecast["predicate"]].param_schema)
+            )
 
     def _routable_kinds(self) -> list[str]:
         kinds = {k for a in self.assemblies.values() for k in a.spec.accepts}
@@ -950,7 +989,7 @@ class Runtime:
                             "replaces": [st.learner.id for st in existing] if replace else []})
         if replace:
             for retired in existing:
-                self.queue.retire_actor(retired.learner.id)
+                self._retain_router(retired)
             self.routers[kind] = [state]
         else:
             self.routers.setdefault(kind, []).append(state)
@@ -958,6 +997,17 @@ class Runtime:
             self.delivered_seen = {}
         self.delivered_seen.setdefault(learner.id, 0)
         return state
+
+    def _retain_router(self, state: RouterState) -> None:
+        """Stop sampling an old router while its original decisions can still train it."""
+        lid = state.learner.id
+        if self.queue.outstanding(lid) or (
+            len(self.queue.returns_for(lid)) > self.delivered_seen.get(lid, 0)
+        ):
+            self.ledger.append({"kind": "router.retained", "learner_id": lid})
+            self.retired_routers[lid] = state
+        else:
+            self.queue.retire_actor(lid)
 
     def _fresh_router_id(self, base: str) -> str:
         """Fresh learners never receive an active or retired learner's delayed returns."""
@@ -981,19 +1031,19 @@ class Runtime:
         "assembly": {
             "kind": "assembly",
             "id": "slug-2-to-48-chars",
-            "role": "producer | evaluator | meta | antagonist",
+            "role": "producer",
             "model_id": "a registered model id",
             "system_prompt": "text, at most 4000 chars",
-            "accepts": ["event kinds this assembly is woken for"],
+            "accepts": ["Tick"],
             "max_tokens": 512,
-            "effort": "low | medium | high",
+            "effort": "low",
         },
         "router": {
             "kind": "router",
-            "event_kind": "an event kind",
-            "learner": "exp3 | blum_mansour",
+            "event_kind": "Tick",
+            "learner": "exp3",
             "gamma": 0.1,
-            "add": "false replaces the kind's routers; true adds another (several wake at once)",
+            "add": False,
         },
         "tool": {
             "kind": "tool",
@@ -1015,14 +1065,14 @@ class Runtime:
                     "window": "…",
                     "acceptable_region": "…",
                     "observation": "one of world.observations ids",
-                    "answers_for": "producer | evaluator | meta | all (required)",
-                    "lambda": "optional number in [0, prices.lambda_max], for add or replace",
+                    "answers_for": "producer",
+                    "lambda": 0.1,
                 }
             ],
             "replace": [],
             "remove": ["card-id"],
             "predicted_effect": "what you expect to change and why",
-            "tick_interval": "optional duration string, e.g. 30s",
+            "tick_interval": "30s",
         },
     }
     A_RETURN_MAY_INCLUDE: dict[str, str] = {
@@ -1033,9 +1083,22 @@ class Runtime:
             "close, leverage and cancel are tool_calls on the venue.* tools"
         ),
         "order_example": '{"action": "order", "coin": "ETH", "side": "buy", "size": "0.004"}',
-        "register": "a list of proposals, each shaped like one of proposal_shapes",
+        "register": "a list of up to three proposals, including amendments, shaped like "
+        "proposal_shapes; router add=false replaces, add=true adds a router. Learners: exp3 or "
+        "blum_mansour. Assembly roles: producer, evaluator, meta, antagonist; effort: low, medium, "
+        "high. Cards answer for producer, evaluator, meta or all; lambda is optional and bounded "
+        "by prices.lambda_max; tick_interval is an optional duration within world.clock bounds.",
         "tool_calls": (
             'a list of {"tool": id, "args": {...}} (max 4); results come back in a second call'
+        ),
+        "requests": (
+            'up to two objects: {"target":"assembly-id or self","description":"task",'
+            '"inputs":{},"outcome_schema":{"type":"object"}}; targets answer once, '
+            'without further requests. Outputs arrive in tool_results as '
+            '{"tool":"assembly:<target>","args":<inputs>,"result":{"outputs":{},'
+            '"status":"ok","cost_micro":0}} before your second call. '
+            'Outcome schemas support object/array/scalar types, properties, required, enum, '
+            'minimum, maximum, minItems, maxItems and additionalProperties.'
         ),
     }
 
@@ -1135,7 +1198,8 @@ class Runtime:
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"kind": {"enum": ["model", "assembly", "router"]}},
+                "properties": {"kind": {"enum": ["model", "assembly", "router", "tool",
+                                                   "amendment"]}},
                 "required": ["kind"],
             },
         }
@@ -1306,6 +1370,7 @@ class Runtime:
         self._manage_reserve_window()
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
+            self._reconcile_orders()
             self.treasury.tick(self.clock.now_ns)
             if self.venue is not None:
                 observed = [
@@ -1354,8 +1419,18 @@ class Runtime:
 
     def _snapshot(self, boundary: str) -> None:
         """Persist a complete continuation at launch and after each boundary event finishes."""
+        try:
+            state = runtime_state(self)
+            # Router states contain ordinary JSON floats as well as tagged codec values.
+            from factorylab.cortex.assembly import _finite_json
+
+            _finite_json(state)
+        except (ValueError, OverflowError, RecursionError):
+            self.ledger.append({"kind": "snapshot.refused", "boundary": boundary, "n": self.n,
+                                "reason": "invalid checkpoint number or nesting"})
+            return
         self.ledger.append(
-            {"kind": "snapshot", "boundary": boundary, "n": self.n, "state": runtime_state(self)}
+            {"kind": "snapshot", "boundary": boundary, "n": self.n, "state": state}
         )
 
     def _resume_at(self, now_ns: int) -> None:
@@ -1363,6 +1438,7 @@ class Runtime:
         now_ns = max(now_ns, self.clock.now_ns)
         self.ledger.append({"kind": "resume.begin", "now_ns": now_ns, "n": self.n})
         self.clock.now_ns = now_ns
+        self._reconcile_orders()
         available = self.tool_runner.available
         if self.ledger.recovering:
             saved = self.ledger.peek()
@@ -1493,6 +1569,14 @@ class Runtime:
         self.ledger.append({**item, "ts": self.clock.now_ns})
         if item["kind"] == "observation.market_purchase":
             self.window.market_purchases += 1
+
+    def _seller_price(self, model_id: str) -> tuple[TokenPrice, dict]:
+        """A seller ceiling is affordable by policy before any registration effect."""
+        price, seller = self.market.registration_price(model_id)
+        ceiling = price.per_request_micro
+        if type(ceiling) is not int or not 0 <= ceiling <= self.m.treasury.max_request_micro:
+            raise ValueError("Per-request ceiling exceeds treasury.max_request_micro")
+        return price, seller
 
     def _record_seller(self, model_id: str, price: TokenPrice, seller: dict) -> None:
         """Registered seller metadata and the provider ceiling follow durable pricing evidence."""
@@ -1803,27 +1887,109 @@ class Runtime:
                 str(out["coin"]),
                 str(out.get("side", "buy")).lower() == "buy",
                 Decimal(str(out["size"])),
+                client_id=ret.handle,
             )
         except (KeyError, ValueError, ArithmeticError):
             return
         reason = self._order_exclusion(ret.handle, order.coin, order.size, order.is_buy)
-        result = (OrderResult(None, "rejected", Decimal(0), None, reason) if reason
-                  else self.exchange.place(order))
-        self.consequences.order_result(
-            ret.handle,
-            {
-                "status": result.status,
-                "order_id": result.order_id,
-                "filled_size": str(result.filled_size),
-            },
-            {"size": str(order.size)},
-            self.n,
-        )
+        result = ({"status": "rejected", "error": reason} if reason else self._venue_write(
+            ret.handle, "venue.place_market", {"coin": order.coin,
+                "side": "buy" if order.is_buy else "sell", "size": str(order.size)}, slot="output"
+        ))
         self.stats.orders_placed += 1
-        if result.status == "rejected":
+        if result["status"] == "rejected":
             self.stats.orders_rejected += 1
         if hasattr(self.exchange, "drain_events"):  # fake venue fills synchronously
             self._settle_exchange_effects(self.exchange.drain_events())
+
+    def _venue_write(self, handle: str, operation: str, args: dict, *, slot: str) -> dict:
+        """Every venue write has a durable intent and a stable identity before submission."""
+        client_id = handle if slot == "output" else f"{handle}:{slot}"
+        previous = self.order_intents.get(client_id)
+        if previous is not None:
+            if previous["operation"] != operation or previous["args"] != args:
+                self.ledger.append({"kind": "order.refused", "handle": handle,
+                                    "reason": "client id already binds another intent"})
+                return {"status": "rejected", "error": "client id already binds another intent"}
+            if previous["result"]["status"] == "uncertain":
+                return self._recover_order(client_id)
+            return dict(previous["result"])
+        if any(i["result"]["status"] == "uncertain" and i["args"]["coin"] == args["coin"]
+               for i in self.order_intents.values()):
+            self.ledger.append({"kind": "order.refused", "handle": handle,
+                                "reason": "prior order on this coin is still uncertain"})
+            return {"status": "rejected", "error": "prior order on this coin is still uncertain"}
+        intent = {"handle": handle, "client_id": client_id, "operation": operation,
+                  "args": dict(args), "result": {"status": "uncertain"}}
+        self.ledger.append({"kind": "order.intent", **intent})
+        self.order_intents[client_id] = intent
+        self.consequences.order_intent(client_id, handle, args["coin"])
+        try:
+            if operation == "venue.cancel":
+                result = self.exchange.cancel(args["order_id"], coin=args["coin"],
+                                              client_id=client_id)
+            elif operation == "venue.close":
+                size = None if args.get("size") is None else Decimal(str(args["size"]))
+                result = self.exchange.close(args["coin"], size, client_id=client_id)
+            else:
+                limit = operation == "venue.place_limit"
+                result = self.exchange.place(Order(
+                    args["coin"], args["side"] == "buy", Decimal(str(args["size"])),
+                    OrderKind.LIMIT if limit else OrderKind.MARKET,
+                    Decimal(str(args["price"])) if limit else None, client_id,
+                    reduce_only=args.get("reduce_only", False),
+                ))
+            result = _to_plain(vars(result)) if isinstance(result, OrderResult) else result
+        except Exception:
+            result = {"status": "uncertain"}
+        if not isinstance(result, dict) or result.get("status") == "uncertain":
+            return self._recover_order(client_id)
+        return self._record_order_result(client_id, result)
+
+    def _recover_order(self, client_id: str) -> dict:
+        """Query an ambiguous intent; never resubmit it or replace its originating handle."""
+        intent = self.order_intents[client_id]
+        try:
+            cancel = intent["operation"] == "venue.cancel"
+            result = self.exchange.lookup(client_id, **(
+                {"order_id": intent["args"]["order_id"]} if cancel else {}
+            ))
+            result = _to_plain(vars(result))
+            if cancel:
+                if result["status"] in ("filled", "rejected"):
+                    result = {"status": "rejected", "error": "target order already terminal"}
+                elif result["status"] != "cancelled":
+                    result = {"status": "uncertain"}
+        except Exception:
+            result = {"status": "uncertain"}
+        return self._record_order_result(client_id, result)
+
+    def _record_order_result(self, client_id: str, result: dict) -> dict:
+        result = json.loads(json.dumps(result, default=str))
+        intent = self.order_intents[client_id]
+        if result.get("status") not in ("filled", "resting", "cancelled", "rejected"):
+            result = {"status": "uncertain", "error": "venue acknowledgement unavailable"}
+        self.ledger.append({"kind": "order.uncertain" if result["status"] == "uncertain"
+                            else "order.acknowledged", "client_id": client_id,
+                            "handle": intent["handle"], "result": result})
+        self.order_intents[client_id] = {**intent, "result": dict(result)}
+        if result["status"] != "uncertain":
+            if intent["operation"] == "venue.cancel":
+                if result["status"] == "cancelled":
+                    self.consequences.cancel(intent["args"]["order_id"], self.n)
+            else:
+                attributed = result
+                if result["status"] == "cancelled" and Decimal(str(result["filled_size"])) > 0:
+                    attributed = {**result, "status": "filled"}
+                self.consequences.order_result(intent["handle"], attributed, intent["args"], self.n)
+            self.consequences.order_acknowledged(client_id)
+        return dict(result)
+
+    def _reconcile_orders(self) -> None:
+        """Pending identities are reconciled before consuming newly observed venue fills."""
+        for client_id, intent in list(self.order_intents.items()):
+            if intent["result"]["status"] == "uncertain":
+                self._recover_order(client_id)
 
     def _order_exclusion(
         self, handle: str, coin: str, size: Decimal, is_buy: bool,
@@ -2024,7 +2190,8 @@ class Runtime:
         """Every registered tool is a public primitive; schematics are public (v0.4 §1.6)."""
         return set(self.tool_specs)
 
-    def _run_tool(self, action_id: str, handle: str, call: dict[str, Any]) -> tuple[dict, int]:
+    def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
+                  slot: str = "tool:0") -> tuple[dict, int]:
         """Execute one tool call through metering. Returns (result, cost)."""
         tool_id = str(call.get("tool"))
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
@@ -2035,6 +2202,9 @@ class Runtime:
 
         def execute() -> dict:
             if spec["kind"] == "venue":
+                from factorylab.world.venue_tools import _validate
+
+                _validate(args, spec["args_schema"])
                 if tool_id in ("venue.place_market", "venue.place_limit"):
                     reason = self._order_exclusion(
                         handle, str(args.get("coin")), Decimal(str(args.get("size"))),
@@ -2044,6 +2214,9 @@ class Runtime:
                     )
                     if reason:
                         return {"status": "rejected", "error": reason}
+                if tool_id in ("venue.place_market", "venue.place_limit", "venue.close",
+                               "venue.cancel"):
+                    return self._venue_write(handle, tool_id, args, slot=slot)
                 return self.venue_tools.call(tool_id, args)
             if spec["kind"] == "catalogue":
                 return {
@@ -2088,12 +2261,11 @@ class Runtime:
                 execute=execute,
                 cost_of=lambda _r: price,
             )
-        except Exception as exc:  # infeasible reservation or tool crash: no result, no charge
+        except BillingUncertain as exc:
+            return {"error": str(exc)}, exc.cost
+        except Exception as exc:  # reservation refused or execution known unbilled
             return {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0
         if spec["kind"] == "venue":
-            self.consequences.order_result(handle, metered.result, args, self.n)
-            if tool_id == "venue.cancel" and metered.result.get("status") == "cancelled":
-                self.consequences.cancel(str(args["order_id"]), self.n)
             if hasattr(self.exchange, "drain_events"):
                 self._settle_exchange_effects(self.exchange.drain_events())
         return metered.result, metered.cost
@@ -2119,17 +2291,32 @@ class Runtime:
         self.stats.invocations_by_assembly[action_id] = count
         return ret
 
-    def _invoke(self, action_id: str, req: Request, role: str) -> Return:
+    def _invoke(self, action_id: str, req: Request, role: str, *, child: bool = False) -> Return:
         ret = self._invoke_compute(action_id, req)
         self._check_compute_return(req.handle, ret)
         revision = self._carries_revision(ret)
-        if not self.wallet.dead and ret.status == "ok" and ret.tool_calls:
+        if child and (ret.children or ret.tool_calls):
+            self.ledger.append({"kind": "requests.refused", "handle": req.handle,
+                                "reason": "child invocations answer once; no continuation"})
+            from factorylab.cortex.assembly import _validate_schema
+
+            try:
+                _validate_schema(ret.outputs, req.outcome_schema)
+            except (ValueError, TypeError, RecursionError):
+                ret = replace(ret, outputs={"reason": "child answer requires continuation"},
+                              status="malformed")
+            ret = replace(ret, children=(), tool_calls=())
+        if not self.wallet.dead and ret.status == "ok" and (ret.tool_calls or ret.children):
             results = []
             tool_cost = 0
-            for call in ret.tool_calls:
+            for index, call in enumerate(ret.tool_calls):
                 if self.wallet.dead:
                     break
-                result, cost = self._run_tool(action_id, req.handle, call)
+                price = self.tool_specs.get(call["tool"], {}).get("price_micro_per_call", 0)
+                if price > max(0, req.cost_ceiling - ret.cost - tool_cost):
+                    result, cost = {"error": "request cost ceiling exhausted"}, 0
+                else:
+                    result, cost = self._run_tool(action_id, req.handle, call, slot=f"tool:{index}")
                 tool_cost += cost
                 ok = not (isinstance(result, dict) and "error" in result)
                 self.stats.tool_calls += 1
@@ -2151,6 +2338,14 @@ class Runtime:
                 results.append(
                     {"tool": call.get("tool"), "args": call.get("args"), "result": result}
                 )
+            for item in ret.children:
+                if self.wallet.dead:
+                    break
+                result, cost = self._invoke_child(
+                    action_id, req, item, max(0, req.cost_ceiling - ret.cost - tool_cost)
+                )
+                tool_cost += cost
+                results.append(result)
             follow = Request(
                 handle=req.handle,
                 description=req.description,
@@ -2158,7 +2353,7 @@ class Runtime:
                 capability_versions=req.capability_versions,
                 outcome_schema=req.outcome_schema,
                 deadline_ns=req.deadline_ns,
-                cost_ceiling=req.cost_ceiling,
+                cost_ceiling=max(0, req.cost_ceiling - ret.cost - tool_cost),
                 parent_handle=req.parent_handle,
                 completion_criterion=req.completion_criterion,
                 scoring_channel=req.scoring_channel,
@@ -2174,12 +2369,22 @@ class Runtime:
                 self.ledger.append(
                     {"kind": "tool.calls_ignored", "handle": req.handle, "ts": self.clock.now_ns}
                 )
+            if second.children:
+                self.ledger.append({"kind": "requests.refused", "handle": req.handle,
+                                    "reason": "continuation already consumed"})
+            if second.status == "ok":
+                from factorylab.cortex.assembly import _validate_schema
+
+                try:
+                    _validate_schema(second.outputs, req.outcome_schema)
+                except (ValueError, TypeError, RecursionError):
+                    second = replace(second, status="malformed",
+                                     outputs={"reason": "incomplete continuation answer"})
             ret = Return(
                 req.handle,
                 second.outputs,
                 ret.cost + tool_cost + second.cost,
                 second.status,
-                children=second.children,
                 served_by=second.served_by,
                 stop_reason=second.stop_reason,
             )
@@ -2212,6 +2417,50 @@ class Runtime:
         if role == "producer" and revision:
             self.window.revision_handles.add(req.handle)
         return ret
+
+    def _invoke_child(
+        self, action_id: str, parent: Request, item: ChildRequest, ceiling: int,
+    ) -> tuple[dict, int]:
+        """One parent-selected child has its own decision, liability and ordinary judgment route."""
+        target = action_id if item.target == "self" else item.target
+        actor = f"composition:{parent.handle}"
+        handle = self.queue.open(
+            actor=actor, event_id=f"child-{parent.handle}",
+            propensity=PropensityRecord((target,), (1.,), target, 0, actor, "parent-selected"),
+            channel=CH_VERDICT, deadline_ns=parent.deadline_ns,
+            parent_handle=parent.handle, cost_ceiling=ceiling,
+        )
+        self.ledger.append({"kind": "request.child", "handle": handle, "target": target,
+                            "resource_liability": parent.handle, "cost_ceiling": ceiling,
+                            "description": item.description, "inputs": item.inputs,
+                            "outcome_schema": item.outcome_schema})
+        self.stats.decisions += 1
+        self.consequences.start(handle, self.n)
+        req = Request(handle, item.description, item.inputs, {}, item.outcome_schema,
+                      parent.deadline_ns, ceiling, parent.handle,
+                      "a JSON object satisfying the outcome schema", CH_VERDICT, parent.handle)
+        if target in self.assemblies:
+            self.handle_to_assembly[handle] = target
+            ret = self._invoke(target, req, "child", child=True)
+            self._execute_outputs(ret)
+            self._apply_registrations(handle, ret)
+            self.memory.setdefault(target, deque(maxlen=3)).append(
+                {"handle": handle, "outputs": ret.outputs, "verdict": None}
+            )
+        else:
+            ret = Return(handle, {"reason": "target assembly unavailable"}, 0, "failed")
+            self.ledger.append({"kind": "request.failed", "handle": handle,
+                                "reason": "target assembly unavailable"})
+        self.consequences.finish(handle, ret.cost)
+        self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
+        self.stats.producer_returns += 1
+        self._emit(EventKind.PRODUCER_RETURN, {
+            "about_handle": handle, "description": item.description, "inputs": item.inputs,
+            "outputs": ret.outputs, "cost": ret.cost, "status": ret.status,
+        })
+        return {"tool": f"assembly:{target}", "args": item.inputs,
+                "result": {"outputs": ret.outputs, "status": ret.status,
+                           "cost_micro": ret.cost}}, ret.cost
 
     def _check_compute_return(self, handle: str, ret: Return) -> None:
         """Assembly-wrapped affordability failures join the enclosing event's insolvency count."""
@@ -2473,13 +2722,16 @@ class Runtime:
             pid = item.get("predicate")
             q = _as_unit(item.get("q"))
             params = item.get("params") if isinstance(item.get("params"), dict) else {}
-            if pid not in known or q is None:
+            if not isinstance(pid, str) or pid not in known or q is None:
                 continue
             horizon = params.get(known[pid].horizon_param, self.ev.forecast_horizon_events)
             if type(horizon) is not int or not 1 <= horizon <= 200:
                 continue
             params = dict(params, **{known[pid].horizon_param: horizon})
             try:
+                from factorylab.settlement.vocabulary import _validate_params
+
+                _validate_params(pid, params)
                 fh = open_forecast_decision(
                     self.queue,
                     evaluator_id=evaluator_id,
@@ -2645,69 +2897,40 @@ class Runtime:
         if ret.status != "ok":
             return
         raw = ret.outputs.get("register")
-        amendments = []
-        if isinstance(raw, list):
-            amendments = [x for x in raw if isinstance(x, dict) and x.get("kind") == "amendment"]
-            raw = [x for x in raw if not (isinstance(x, dict) and x.get("kind") == "amendment")]
-        # Keep the shared parser's proposal cap and ordering while adapting its legacy
-        # vendor/model field validation to opaque seller URLs and Venice model ids.
-        namespaced = {}
-        if isinstance(raw, list):
-            original_ids = {
-                item.get("openrouter_id")
-                for item in raw
-                if isinstance(item, dict) and isinstance(item.get("openrouter_id"), str)
-            }
-            adapted = []
-            for index, item in enumerate(raw):
-                mid = item.get("openrouter_id") if isinstance(item, dict) else None
-                if (
-                    isinstance(mid, str)
-                    and item.get("kind") == "model"
-                    and mid.startswith(("x402:", "venice:"))
-                ):
-                    alias = f"namespace/{index}"
-                    while alias in original_ids:
-                        alias += "-"
-                    namespaced[alias] = mid
-                    item = {**item, "openrouter_id": alias}
-                adapted.append(item)
-            raw = adapted
-        extra: dict[str, Any] = {}
-        if "known_tools" in inspect.signature(parse_proposals).parameters:
-            extra["known_tools"] = frozenset(self.tool_specs)
-        extra["tool_jail"] = self.tool_jail_available
-        accepted, rejected = parse_proposals(
-            {**ret.outputs, "register": raw} if raw is not None else ret.outputs,
-            event_kinds=PRODUCER_KINDS | {"ProducerReturn", "Verdict", "MetaVerdict"},
-            known_models=frozenset(self.prices.prices),
-            known_assemblies=frozenset(self.assemblies),
-            **extra,
-        )
-        accepted = [
-            ModelProposal(namespaced[prop.openrouter_id])
-            if isinstance(prop, ModelProposal) and prop.openrouter_id in namespaced
-            else prop
-            for prop in accepted
-        ]
-        for item in amendments:
+        if raw is None:
+            return
+        if not isinstance(raw, list):
+            self._reject_registration(handle, "register must be a list", -1)
+            return
+        for index, item in enumerate(raw):
+            if index >= MAX_PROPOSALS_PER_RETURN:
+                self._reject_registration(handle, "proposal cap reached for this return", index)
+                continue
             try:
-                self._propose_amendment(handle, item)
+                if isinstance(item, dict) and item.get("kind") == "amendment":
+                    self._propose_amendment(handle, item)
+                else:
+                    mid = item.get("openrouter_id") if isinstance(item, dict) else None
+                    namespaced = (isinstance(mid, str) and item.get("kind") == "model"
+                                  and mid.startswith(("x402:", "venice:")))
+                    adapted = {**item, "openrouter_id": "namespace/model"} if namespaced else item
+                    accepted, rejected = parse_proposals(
+                        {"register": [adapted]},
+                        event_kinds=PRODUCER_KINDS | {"ProducerReturn", "Verdict", "MetaVerdict"},
+                        known_models=frozenset(self.prices.prices),
+                        known_assemblies=frozenset(self.assemblies),
+                        known_tools=frozenset(self.tool_specs),
+                        tool_jail=self.tool_jail_available,
+                    )
+                    if rejected:
+                        self._reject_registration(handle, rejected[0].reason, index)
+                        continue
+                    prop = ModelProposal(mid) if namespaced else accepted[0]
+                    self._register(handle, prop)
                 self.stats.registrations_accepted += 1
                 self.window.registrations += 1
-            except (Infeasible, PermissionError, ValueError, KeyError, TypeError) as exc:
-                self._reject_registration(
-                    handle, f"amendment: {type(exc).__name__}: {exc}"[:300], None
-                )
-        for r in rejected:
-            self._reject_registration(handle, r.reason, r.index)
-        for prop in accepted:
-            try:
-                self._register(handle, prop)
-                self.stats.registrations_accepted += 1
-                self.window.registrations += 1
-            except (Infeasible, PermissionError, ValueError, KeyError, X402Error) as exc:
-                self._reject_registration(handle, f"{type(exc).__name__}: {exc}", None)
+            except (Infeasible, PermissionError, ValueError, KeyError, TypeError, X402Error) as exc:
+                self._reject_registration(handle, f"{type(exc).__name__}: {exc}"[:300], index)
 
     def _reject_registration(self, handle: str, reason: str, index: int | None) -> None:
         """Ledger a refused proposal and keep the reason public: a proposer that cannot see
@@ -2753,7 +2976,7 @@ class Runtime:
             if prop.openrouter_id.startswith("x402:"):
                 if prop.openrouter_id in self.prices.prices:
                     raise ValueError("model already registered")
-                price, seller = self.market.registration_price(prop.openrouter_id)
+                price, seller = self._seller_price(prop.openrouter_id)
                 contract = _model_contract(prop.openrouter_id, price, "x402")
                 res = self.reserve.reserve_for(contract, amount)
                 self.registry.register(contract, by_handle=handle, reservation=res)
@@ -2955,12 +3178,33 @@ class Runtime:
                            settled, self.m.committee.min_settled)
 
     def _hold_vote(self, am: Any, committee: Any) -> None:
+        if am.id in self.voted_amendments:
+            return
         prices = dict(am.proposed_prices)
         for seat in committee.seats:
             if self.wallet.dead:
                 break
             alias, assembly_id = seat[0], seat[1]
-            handle = f"vote-{am.id}-{alias}"
+            event_id = f"vote-{am.id}-{alias}"
+            if event_id in self.vote_handles:
+                continue
+            parent = getattr(am, "proposer_handle", None)
+            try:
+                self.queue.get(parent)
+            except KeyError:
+                parent = None
+            lid = f"committee:{am.id}:{alias}"
+            handle = self.queue.open(
+                actor=lid, event_id=event_id,
+                propensity=PropensityRecord((assembly_id,), (1.,), assembly_id, 0, lid,
+                                            "direct-committee-seat"),
+                channel=CH_FAST, deadline_ns=self.clock.now_ns + self.tick_clock.interval_ns * 10,
+                parent_handle=parent, cost_ceiling=max(0, self.wallet.available),
+            )
+            self.ledger.append({"kind": "committee.decision", "event_id": event_id,
+                                "handle": handle})
+            self.vote_handles[event_id] = handle
+            self.stats.decisions += 1
             inputs = {
                 "amendment": {
                     "id": am.id,
@@ -2994,9 +3238,9 @@ class Runtime:
             )
             asm = self.assemblies.get(assembly_id)
             if asm is None:
-                self.charter_book.abstain(committee, alias)
-                continue
-            ret = asm.invoke(req)
+                ret = Return(handle, {"reason": "assembly unavailable"}, 0, "failed")
+            else:
+                ret = self._invoke_compute(assembly_id, req)
             self.stats.invocations += 1
             self.ledger.append(
                 {
@@ -3012,8 +3256,13 @@ class Runtime:
                     "ts": self.clock.now_ns,
                 }
             )
+            self.window.invocations += 1
+            self.window.ok += int(ret.status == "ok")
             self._check_compute_return(handle, ret)
             self._compute_routed = True
+            self.queue.settle(handle, channel=CH_FAST, score=float(ret.status == "ok"),
+                              status=SettleStatus.SETTLED, definition_version=DEF_FAST,
+                              sampling_ref=None)
             vote = ret.outputs.get("vote") if ret.status == "ok" else None
             if isinstance(vote, bool):
                 self.charter_book.vote(
@@ -3022,6 +3271,8 @@ class Runtime:
                 self.stats.votes_cast += 1
             else:
                 self.charter_book.abstain(committee, alias)
+        self.ledger.append({"kind": "committee.completed", "amendment_id": am.id})
+        self.voted_amendments.add(am.id)
         outcome = self.charter_book.tally(committee)
         if outcome == "passed":
             self.cadence.approve(am.id)
@@ -3109,7 +3360,7 @@ class Runtime:
                     kind, "blum_mansour", gamma(state.learner), universe, lid
                 )
                 self.ledger.append({**entry, "carried": False, "router": lid})
-                self.queue.retire_actor(state.learner.id)
+                self._retain_router(state)
                 self.delivered_seen[lid] = 0
                 states[i] = RouterState(
                     kind,
@@ -3338,11 +3589,15 @@ class Runtime:
             del self.pending[p.handle]
 
     def _deliver_returns(self) -> None:
-        for state in self._all_router_states():
+        for state in self._all_router_states() + list(self.retired_routers.values()):
             lid = state.learner.id
             returns = self.queue.returns_for(lid)
             for lr in returns[self.delivered_seen.get(lid, 0) :]:
                 if lr.status not in (SettleStatus.SETTLED, SettleStatus.TIMED_OUT):
+                    if isinstance(state.learner, _KeyedLearner):
+                        key = self.snapshot_keys.pop(lr.handle, None)
+                        if key is not None:
+                            state.learner.inner.discard_for(key)
                     continue  # censored or inapplicable: no evidence, no update
                 decision = self.queue.get(lr.handle)
                 prop = decision.propensity
@@ -3361,6 +3616,10 @@ class Runtime:
                 elif set(prop.action_ids) <= set(state.universe):
                     learner.update(fb)
             self.delivered_seen[lid] = len(returns)
+            if lid in self.retired_routers and not self.queue.outstanding(lid):
+                self.queue.retire_actor(lid)
+                self.ledger.append({"kind": "router.drained", "learner_id": lid})
+                del self.retired_routers[lid]
 
     # ---- summary
 
@@ -3424,6 +3683,11 @@ class _KeyedLearner:
 
     def update(self, feedback) -> None:
         raise TypeError("use inner.update_for(key, feedback)")
+
+    def record_executed(self, distribution: dict[str, float]) -> None:
+        """The current keyed round retains the policy the router actually sampled."""
+        if self.current_key is not None:
+            self.inner.record_executed(self.current_key, distribution)
 
     def state(self) -> dict:
         """Preserve the adapter's current decision key as well as all frozen learning rounds."""
