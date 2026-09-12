@@ -25,6 +25,7 @@ from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cascade import CascadeGate
 from factorylab.runtime.immune import ImmunePriceController
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
+from factorylab.runtime.observations import SEED_BOOK
 from factorylab.runtime.resume import JournalProxy, RecoveryJournal
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement import (
@@ -47,7 +48,7 @@ except ImportError:  # pragma: no cover
     VenueTools = None  # type: ignore[assignment]
 
 
-from factorylab.cortex.tools import ToolRunner
+from factorylab.cortex.tools import ObservationRunner, ToolRunner
 
 try:
     from factorylab.charter.amendment import Amendment
@@ -415,6 +416,12 @@ class BootstrapMixin:
         available = self.tool_runner.available
         self.ledger.append({"kind": "sandbox.availability", "available": available})
         self.tool_jail_available = available
+        # A11: population measurements run in the same jail, under the tool limits.
+        self.observation_runner = JournalProxy(ObservationRunner(), self.ledger, "observation")
+        self.registered_observations: dict[str, dict[str, Any]] = {}
+        # A10: a learner over an assembly's own declared action set, and its open rounds.
+        self.assembly_learners: dict[str, Any] = {}
+        self.assembly_rounds: dict[str, str] = {}
         self.charter_book = CharterBook(self.ledger, self.charter)
         self.pending_votes: list[Any] = []  # committees awaiting tally
 
@@ -470,6 +477,24 @@ class BootstrapMixin:
         for seed in self.m.assemblies:
             self.registry.register(
                 _assembly_contract(seed.id, seed.role, seed.accepts, seed.max_tokens)
+            )
+        # A11: the seed catalogue is registered the same way the population's own
+        # measurements are, so the vocabulary has one registry and one versioning
+        # rule. What a seed does not carry is code: the kernel measures it natively.
+        for observation in SEED_BOOK.all():
+            self.registry.register(
+                Contract(
+                    id=f"observation:{observation.id}",
+                    version=1,
+                    kind="observation",
+                    description=observation.description,
+                    input_schema={"type": "object", "description": "public per-window facts"},
+                    output_schema={"type": "number", "minimum": observation.unit_range[0],
+                                   "maximum": observation.unit_range[1]},
+                    price=PriceSpec({}),
+                    permissions=frozenset(),
+                    resource_bounds=ResourceBounds(),
+                )
             )
         self.registry.register(
             Contract(

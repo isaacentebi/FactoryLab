@@ -9,6 +9,7 @@ are about shape, not merit.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -20,6 +21,9 @@ MAX_PROMPT_CHARS = 4000
 MAX_PROPOSALS_PER_RETURN = 3
 LEARNERS = ("exp3", "blum_mansour")
 ROLES = ("producer", "evaluator", "meta", "antagonist")
+# A10: an assembly's declared action set is its own; the kernel bounds only its size.
+MAX_DECLARED_ACTIONS = 32
+MAX_ACTION_ID_CHARS = 64
 
 
 @dataclass(frozen=True)
@@ -55,7 +59,31 @@ class ToolProposal:
     timeout_s: int
 
 
-Proposal = ModelProposal | AssemblyProposal | RouterProposal | ToolProposal
+@dataclass(frozen=True)
+class ObservationProposal:
+    """Spec A11: a measurement the population writes, priced like any other card input."""
+
+    id: str
+    description: str
+    unit: str
+    unit_range: tuple[float, float]
+    code: str
+
+
+@dataclass(frozen=True)
+class LearnerProposal:
+    """Spec A10: a learner over an assembly's own declared action set."""
+
+    assembly_id: str
+    learner: str
+    actions: tuple[str, ...]
+    gamma: float
+
+
+Proposal = (
+    ModelProposal | AssemblyProposal | RouterProposal | ToolProposal
+    | ObservationProposal | LearnerProposal
+)
 
 
 @dataclass(frozen=True)
@@ -72,6 +100,7 @@ def parse_proposals(
     known_assemblies: frozenset[str],
     known_tools: frozenset[str] = frozenset(),
     tool_jail: bool | None = None,
+    seed_observations: frozenset[str] = frozenset(),
 ) -> tuple[list[Proposal], list[Rejected]]:
     """Return well-formed proposals and the reasons the rest were refused.
 
@@ -105,6 +134,10 @@ def parse_proposals(
                 accepted.append(_router(item, event_kinds))
             elif kind == "tool":
                 accepted.append(_tool(item, known_tools, jail=tool_jail))
+            elif kind == "observation":
+                accepted.append(_observation(item, seed_observations, jail=tool_jail))
+            elif kind == "learner":
+                accepted.append(_learner(item, known_assemblies))
             else:
                 raise ValueError("unknown proposal kind")
         except ValueError as exc:
@@ -216,3 +249,85 @@ def _tool(
     if not (jail_available() if jail is None else jail):
         raise ValueError("no jail on this host")
     return ToolProposal(tid, description, schema, code, timeout_s)
+
+
+# --- spec A10/A11: propensity and measurement (workstream W5) -----------------
+# Kept in its own section: the two kinds below are independent of the assembly,
+# model, router and tool kinds above.
+
+
+def _observation(
+    item: dict[str, Any], seed_observations: frozenset[str], *, jail: bool | None = None,
+) -> ObservationProposal:
+    """A11: shape-check a population measurement before the runtime preflights it.
+
+    Merit is not decided here: whether the code actually measures the last closed
+    window is settled by running it in the jail at registration.
+    """
+    from factorylab.runtime.observations import (
+        MAX_OBSERVATION_CODE_CHARS,
+        MAX_OBSERVATION_DESCRIPTION_CHARS,
+        normalise,
+    )
+
+    oid = item.get("id")
+    if not isinstance(oid, str) or not SLUG.fullmatch(normalise(oid)):
+        raise ValueError("id must be a slug of 2-48 chars")
+    oid = normalise(oid)
+    if oid in seed_observations:
+        raise ValueError("seed observation ids cannot be redefined")
+    description = item.get("description")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError("description is required")
+    if len(description) > MAX_OBSERVATION_DESCRIPTION_CHARS:
+        raise ValueError(f"description exceeds {MAX_OBSERVATION_DESCRIPTION_CHARS} chars")
+    unit = item.get("unit")
+    if not isinstance(unit, str) or not unit.strip() or len(unit) > 64:
+        raise ValueError("unit is required and is at most 64 chars")
+    unit_range = item.get("range")
+    if not isinstance(unit_range, list | tuple) or len(unit_range) != 2:
+        raise ValueError("range must be [lo, hi]")
+    lo, hi = unit_range
+    if any(type(v) not in (int, float) or isinstance(v, bool) or not math.isfinite(v)
+           for v in (lo, hi)):
+        raise ValueError("range bounds must be finite numbers")
+    if not float(lo) < float(hi):
+        raise ValueError("range must have lo below hi")
+    code = item.get("code")
+    if not isinstance(code, str):
+        raise ValueError("code must be a string")
+    if len(code) > MAX_OBSERVATION_CODE_CHARS:
+        raise ValueError(f"code exceeds {MAX_OBSERVATION_CODE_CHARS} chars")
+    if "observe" not in code:
+        raise ValueError("code must define observe(facts)")
+    if not (jail_available() if jail is None else jail):
+        raise ValueError("no jail on this host")
+    return ObservationProposal(oid, description, unit.strip(), (float(lo), float(hi)), code)
+
+
+def _learner(item: dict[str, Any], known_assemblies: frozenset[str]) -> LearnerProposal:
+    """A10: a learner over an assembly's own declared action set.
+
+    The action set is declared here because a Blum--Mansour construction needs one
+    copy per action before the first round; the assembly's returns then declare a
+    propensity over it, and the reward on the same handle trains it off-policy.
+    """
+    aid = item.get("assembly_id")
+    if not isinstance(aid, str) or aid not in known_assemblies:
+        raise ValueError("assembly_id must name a registered assembly")
+    learner = item.get("learner")
+    if learner not in LEARNERS:
+        raise ValueError("learner must be exp3 or blum_mansour")
+    actions = item.get("actions")
+    if not isinstance(actions, list) or not 2 <= len(actions) <= MAX_DECLARED_ACTIONS:
+        raise ValueError(f"actions must be 2 to {MAX_DECLARED_ACTIONS} action ids")
+    if any(not isinstance(a, str) or not a.strip() or len(a) > MAX_ACTION_ID_CHARS
+           for a in actions):
+        raise ValueError(f"action ids are nonempty strings of at most {MAX_ACTION_ID_CHARS} chars")
+    ordered = tuple(dict.fromkeys(a.strip() for a in actions))
+    if len(ordered) != len(actions):
+        raise ValueError("action ids must be unique")
+    gamma = item.get("gamma", 0.1)
+    if not isinstance(gamma, int | float) or isinstance(gamma, bool) or not 0 < gamma <= 1:
+        raise ValueError("gamma must be in (0, 1]")
+    return LearnerProposal(aid, learner, ordered, float(gamma))

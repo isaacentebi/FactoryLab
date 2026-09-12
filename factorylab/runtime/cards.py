@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.controller import CardRegion
-from factorylab.runtime.observations import observation_for
+from factorylab.runtime.observations import SEED_BOOK, ObservationBook
 
 _NUMBER = r"([-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?|zero|one)"
 _WORDS = {"zero": 0.0, "one": 1.0}
@@ -65,16 +65,23 @@ def parses(card: MetricCard) -> bool:
     return _parse(card.acceptable_region) is not None
 
 
-def region_for(card: MetricCard, *, rolling: dict[str, float]) -> CardRegion | None:
-    """Return a region only for a catalogue observation with a usable bound.
+def region_for(
+    card: MetricCard,
+    *,
+    rolling: dict[str, float],
+    observations: ObservationBook | None = None,
+) -> CardRegion | None:
+    """Return a region only for a registered observation with a usable bound.
 
     Exclusive phrasings ("above zero") are treated as inclusive bounds. "Below
     the median of the previous window" reads ``rolling[f"{card.id}_prev_median"]``
     and yields None until that record exists. Scale is the width of the
-    observation catalogue's unit range; card prose and bound magnitude cannot change it.
+    observation's declared unit range; card prose and bound magnitude cannot
+    change it, and a population-registered observation declares that range too
+    (A11). Without a book only the seed vocabulary is readable.
     """
     bounds = _parse(card.acceptable_region)
-    observation = observation_for(card.observation)
+    observation = (observations or SEED_BOOK).get(card.observation)
     if bounds is None or observation is None:
         return None
     lo, hi = bounds.lo, bounds.hi

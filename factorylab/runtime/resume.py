@@ -417,6 +417,8 @@ _RUNTIME_FIELDS = (
     "exposure_evidence", "pending_meta", "verdict_outcomes", "consequence_mix",
     "sampling_history", "novelty_grant",
     "card_samples", "price_windows", "price_origins",
+    # W5: A11's registered measurements and A10's open assembly-learner rounds.
+    "registered_observations", "assembly_rounds",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
@@ -471,6 +473,9 @@ def runtime_state(rt) -> dict:
                               for a in rt.assemblies.values()]),
         "prices": encode(rt.prices.prices),
         "routers": [st.state() for st in rt._all_router_states()],
+        # A10: an assembly's own learner over its declared action set, frozen rounds included.
+        "assembly_learners": {aid: learner.state()
+                              for aid, learner in rt.assembly_learners.items()},
         "retired_routers": [st.state() for st in rt.retired_routers.values()],
         "venue": encode({"last_fill_ns": rt.venue.last_fill_ns,
                          "seen_fills": rt.venue.seen_fills,
@@ -533,6 +538,10 @@ def restore_runtime(rt, state: dict) -> None:
     for saved in state["routers"]:
         router = RouterState.restore(saved)
         rt.routers.setdefault(router.kind, []).append(router)
+    from factorylab.learners.base import restore_learner
+
+    rt.assembly_learners = {aid: restore_learner(saved)
+                            for aid, saved in state.get("assembly_learners", {}).items()}
     rt.retired_routers = {}
     for saved in state.get("retired_routers", []):
         router = RouterState.restore(saved)

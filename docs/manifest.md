@@ -243,3 +243,79 @@ assembly beyond `novelty.trials`, and whatever is unspent expires at the next
 boundary, where the flag must be raised again to re-issue it. That single grant
 is part of the novelty lifetime policy (A13): ledger evidence `novelty.grant` and
 `novelty.grant_consumed`.
+
+## Round-three W5: propensity and measurement (A10, A11)
+
+Neither section adds a manifest key: the spec supplies no number for either, and
+nothing here tells the population what to optimise. What they add are kernel
+resource bounds of the same class as the existing registration caps (prompt
+length, tool source length, tool timeout), stated here so they are readable in
+one place. All are fixed in code for the world's life.
+
+| Bound | Where | Value | What it bounds |
+| --- | --- | --- | --- |
+| `MAX_DECLARED_ACTIONS` | `cortex/request.py`, `cortex/registration.py` | `32` | Actions in one declared propensity, and in one registered assembly action set |
+| `MAX_ACTION_ID_CHARS` | same | `64` | Length of one action id; the ids themselves are the population's |
+| `PROPENSITY_TOLERANCE` | `cortex/request.py` | `1e-6` | How far a declared distribution may sum from one before it is refused |
+| `MAX_OBSERVATION_CODE_CHARS` | `runtime/observations.py` | `8000` | Source length of a registered observation (the tool source bound) |
+| `MAX_OBSERVATION_DESCRIPTION_CHARS` | `runtime/observations.py` | `500` | Description length (the tool description bound) |
+| `OBSERVATION_TIMEOUT_S` / `OBSERVATION_CPU_S` | `runtime/observations.py` | `5` / `2` | Wall and CPU seconds for one observation run: the tool jail's own ceilings |
+
+### A10: the deciding agent's propensity
+
+Every decision now carries two propensities. The first is unchanged: the
+router's distribution over which assembly to wake, sampled by the kernel and
+replayable from its seed (`source = "sampled"`). The second is the woken
+assembly's own distribution over its own actions (`source = "declared"`), logged
+on the same handle as `decision.propensity` evidence. Nothing in the kernel
+sampled it, so it carries no reproducible seed; what is checked is that it is a
+distribution and that the action actually taken carries positive mass in it.
+
+The action taken is named by the kernel, in the vocabulary published as
+`world.action_labels`: `hold` or `<side>:<COIN>` for a producer or antagonist,
+`verdict:<q>` and `conformity:<c>` rounded to one decimal for a judge, and
+`malformed` for a return that did not parse. A return that declares nothing, or
+declares something that is not a distribution or omits the action it took, is
+recorded degenerate — that action at 1.0 — and the reason reaches the population
+in `registration_feedback`.
+
+The declared propensity travels forward on the request about that decision: the
+`ProducerReturn`, `Verdict` and `MetaVerdict` events carry it, and the judge's
+`Request` carries it as a first-class field rendered in its own `PROPENSITY`
+block. This is the essay's single exception to privacy (II.I.b), so nothing else
+of an agent's local state moves with it.
+
+A `{"kind": "learner", "assembly_id", "learner", "actions", "gamma"}`
+registration gives one assembly a learner over the action set it declares.
+Blum--Mansour needs one copy per action before the first round, which is why the
+set is declared at registration rather than inferred. The learner proposes; the
+assembly decides; the reward that settles the decision trains the learner
+off-policy through the declared propensity, via the same snapshot machinery the
+routers use. Ledger evidence: `propensity.refused`, `propensity.unlearned`,
+`propensity.learned`.
+
+### A11: registrable observations
+
+A `{"kind": "observation", "id", "description", "unit", "range": [lo, hi],
+"code"}` registration adds a measurement. `code` defines `observe(facts)` over
+the public per-window facts as JSON — the same facts the seed observations
+compute from, with the per-decision attribution (`decisions`, `closed_values`,
+`closed_regions`) removed and sets rendered as sorted lists. It runs in the tool
+jail under the tool limits above, and is admitted only after a preflight run on
+the last closed window returns a finite number; the preflight and its reason are
+ledgered as `observation.preflight`. Nothing is registrable before a window has
+closed, and nothing is registrable on a host without a jail.
+
+The declared `range` is the observation's unit interval, so `scale` — the
+divisor in `v_j` above — is the population's to declare for its own
+measurements, exactly as the seed table fixes it for the twenty-two.
+
+Registration is versioned in the registry as `observation:<id>`: re-registering
+an id supersedes it with the next version and cards then measure with the new
+code. The twenty-two seed observations are registered the same way at bootstrap
+(`observation:<id>`, version 1, provenance `seed`) and cannot be redefined: the
+charter's own cards are measured by them, and their ids are not even slug-shaped,
+so a proposal cannot name one. A registered observation is measured over closed
+windows only; the `returns` and `forecasts` selectors remain the seed row
+vocabulary, and `preflight_card` refuses any other binding. A card naming an
+unregistered observation is refused before the vote, with the reason.

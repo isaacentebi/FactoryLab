@@ -13,7 +13,9 @@ from factorylab.cortex.assembly import AssemblySpec
 from factorylab.cortex.registration import (
     MAX_PROPOSALS_PER_RETURN,
     AssemblyProposal,
+    LearnerProposal,
     ModelProposal,
+    ObservationProposal,
     ToolProposal,
     parse_proposals,
 )
@@ -24,6 +26,11 @@ from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.registry import Contract, PriceSpec, ResourceBounds
 from factorylab.kernel.wallet import Infeasible
 from factorylab.runtime.cards import region_for
+from factorylab.runtime.observations import (
+    OBSERVATION_TIMEOUT_S,
+    SEED_IDS,
+    window_facts,
+)
 from factorylab.world.x402 import X402Error
 
 try:
@@ -71,6 +78,7 @@ class GovernanceMixin:
                         known_assemblies=frozenset(self.assemblies),
                         known_tools=frozenset(self.tool_specs),
                         tool_jail=self.tool_jail_available,
+                        seed_observations=SEED_IDS,
                     )
                     if rejected:
                         self._reject_registration(handle, rejected[0].reason, index)
@@ -99,8 +107,103 @@ class GovernanceMixin:
         self.registration_feedback.append({k: v for k, v in item.items()
                                            if k not in ("kind", "handle")})
 
+    def _register_observation(self, handle: str, prop: Any) -> None:
+        """A11: admit a population measurement only after it measures the last closed window.
+
+        The code is the population's; the preflight is the kernel's, and it is the
+        same execution the pricing path will make: the last closed window's public
+        facts as JSON, the tool jail, the tool limits. A definition that cannot
+        produce a finite number on real evidence is refused with the reason. A new
+        version of an already registered observation supersedes it; a seed id is
+        not redefinable, because the charter's own cards are measured by those.
+        """
+        if not self.tool_jail_available:
+            raise Infeasible("no jail on this host")
+        if prop.id in SEED_IDS:
+            raise ValueError("seed observation ids cannot be redefined")
+        closed = self.card_samples.windows[-1] if self.card_samples.windows else None
+        if closed is None:
+            raise ValueError("no closed window to preflight the observation against")
+        value, error = self.observation_runner.run(prop.code, window_facts(closed))
+        self.ledger.append({"kind": "observation.preflight", "handle": handle,
+                            "observation": prop.id, "window": closed.get("index"),
+                            "value": value, "error": error, "ts": self.clock.now_ns})
+        if value is None:
+            raise ValueError(f"observation preflight failed: {error}")
+        version = len(self.registered_observations.get(prop.id, {}).get("history", ())) + 1
+        contract = Contract(
+            id=f"observation:{prop.id}",
+            version=version,
+            kind="observation",
+            description=prop.description,
+            input_schema={"type": "object", "description": "public per-window facts"},
+            output_schema={"type": "number", "minimum": prop.unit_range[0],
+                           "maximum": prop.unit_range[1]},
+            price=PriceSpec({}),
+            permissions=frozenset({"sandbox.run"}),
+            resource_bounds=ResourceBounds(max_duration_ns=OBSERVATION_TIMEOUT_S * 1_000_000_000),
+        )
+        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        history = list(self.registered_observations.get(prop.id, {}).get("history", ()))
+        history.append(version)
+        self.registered_observations[prop.id] = {
+            "description": prop.description, "units": prop.unit,
+            "unit_range": [prop.unit_range[0], prop.unit_range[1]], "code": prop.code,
+            "version": version, "provenance": "population", "history": history,
+        }
+        self.stats.observations_registered += 1
+        self._emit(EventKind.REGISTERED, {"kind": "observation", "id": prop.id,
+                                          "version": version, "preflight_value": value})
+
+    def _register_learner(self, handle: str, prop: Any) -> None:
+        """A10: give an assembly a learner over its own declared action set.
+
+        Blum--Mansour builds a no-swap-regret learner out of one ordinary learner
+        per action (essay II.I.a), so the action set has to be declared before the
+        first round. From here the assembly's returns declare a propensity over
+        that set and the reward that settles each decision trains the learner
+        off-policy through the declared propensity.
+        """
+        from factorylab.learners.delayed import SnapshotLearner
+        from factorylab.learners.exp3 import EXP3
+
+        if prop.assembly_id not in self.assemblies:
+            raise ValueError("assembly_id must name a registered assembly")
+        if prop.assembly_id in self.assembly_learners:
+            raise ValueError("assembly already has a learner")
+        contract = Contract(
+            id=f"learner:{prop.assembly_id}",
+            version=1,
+            kind="router",
+            description=f"{prop.learner} over {prop.assembly_id}'s declared action set",
+            input_schema={"type": "object", "properties": {"actions": {"type": "array"}}},
+            output_schema={"type": "object"},
+            price=PriceSpec({}),
+            permissions=frozenset(),
+            resource_bounds=ResourceBounds(),
+        )
+        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        lid = self._assembly_learner_id(prop.assembly_id)
+        if prop.learner == "blum_mansour":
+            from factorylab.learners.blum_mansour import BlumMansour
+
+            inner = BlumMansour(lambda acts: EXP3(acts, prop.gamma), prop.actions, id=lid)
+        else:
+            inner = EXP3(prop.actions, prop.gamma, id=lid)
+        self.assembly_learners[prop.assembly_id] = SnapshotLearner(inner, id=lid)
+        self.stats.assembly_learners_registered += 1
+        self._emit(EventKind.REGISTERED, {"kind": "learner", "id": prop.assembly_id,
+                                          "learner": prop.learner,
+                                          "actions": list(prop.actions)})
+
     def _register(self, handle: str, prop: Any) -> None:
         amount = self.ev.trial_amount_micro
+        if isinstance(prop, ObservationProposal):
+            self._register_observation(handle, prop)
+            return
+        if isinstance(prop, LearnerProposal):
+            self._register_learner(handle, prop)
+            return
         if isinstance(prop, ToolProposal):
             if not self.tool_jail_available:
                 raise Infeasible("no jail on this host")
@@ -291,8 +394,10 @@ class GovernanceMixin:
             for card in out:
                 if not parses(card):
                     raise ValueError("card acceptable_region has no finite usable bounds")
-                region_for(card, rolling={})
-                preflight_measurement(card)
+                # A11: a card may name a registered observation; an unregistered one
+                # is refused here, before a vote, with the reason.
+                region_for(card, rolling={}, observations=self.observations)
+                preflight_measurement(card, self.observations)
             return tuple(out)
 
         remove = item.get("remove") or []
@@ -515,7 +620,7 @@ class GovernanceMixin:
             am = self.charter_book.activated_amendment(new.edition)
             for vote in self.pending_votes:
                 if vote["amendment_id"] == am.id:
-                    values = measure_card(vote["card"], self.card_samples)
+                    values = measure_card(vote["card"], self.card_samples, self.observations)
                     activated = {**vote, "baseline": fmean(values.values()) if values else None,
                                  "activation_window": self.window.index}
                     self.ledger.append({"kind": "policy.activated", **activated})
@@ -589,7 +694,7 @@ class GovernanceMixin:
             if activation is None or index < activation + effect.window - 1:
                 remaining.append(vote)
                 continue
-            values = measure_card(vote["card"], self.card_samples)
+            values = measure_card(vote["card"], self.card_samples, self.observations)
             value = fmean(values.values()) if values else None
             baseline = vote["baseline"]
             status = (SettleStatus.CENSORED if value is None or baseline is None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import deque
 from dataclasses import dataclass, replace
@@ -471,7 +472,105 @@ class ComputeMixin:
             self.window.ok += 1
             if role == "producer":
                 self.window.costs.append(ret.cost)
+        self._record_declared_propensity(action_id, req, ret, role)
         return ret
+
+    # --- spec A10: the deciding agent's propensity rides on the request ---------
+
+    def _assembly_learner_id(self, assembly_id: str) -> str:
+        """One durable learning identity per assembly, distinct from any router's."""
+        return f"assembly:{assembly_id}"
+
+    def _action_policy(self, assembly_id: str) -> dict[str, Any] | None:
+        """An assembly's own learner's current recommendation, private to that assembly.
+
+        Local state stays local (essay II.I.b): this is the one learner whose rounds
+        this assembly's own decisions opened, so it is its own running score and
+        nobody else's. It is read from a detached copy, so disclosing it can never
+        disturb a round that is waiting for its reward.
+        """
+        from factorylab.learners.base import restore_learner
+
+        learner = self.assembly_learners.get(assembly_id)
+        if learner is None:
+            return None
+        try:
+            detached = restore_learner(learner.inner.state())
+            policy = detached.distribution(tuple(detached.actions))
+        except (ValueError, RuntimeError, TypeError, ArithmeticError):
+            return None
+        return {"over": {a: round(p, 6) for a, p in policy.items()},
+                "note": "your own learner's current policy over the action set you registered; "
+                        "declare a propensity on your return to train it"}
+
+    def _record_declared_propensity(self, action_id: str, req: Request, ret: Return, role: str):
+        """Log the woken assembly's own distribution as a second propensity on the handle.
+
+        Absent or unusable, it is recorded degenerate: the action taken at 1.0
+        (spec A10). The reason an offered declaration could not be used goes back
+        to the population, because a refusal nobody can read is repeated.
+        """
+        from factorylab.learners.base import state_bytes
+        from factorylab.runtime.propensity import action_label, declared_record
+
+        try:
+            self.queue.get(req.handle)
+        except KeyError:
+            return None
+        label = action_label("producer" if role == "child" else role, ret.outputs, ret.status)
+        learner = self.assembly_learners.get(action_id)
+        state_hash = (
+            hashlib.sha256(state_bytes(learner.state())).hexdigest()
+            if learner is not None else "declared"
+        )
+        record, reason = declared_record(
+            label, ret.outputs.get("propensity") if isinstance(ret.outputs, dict) else None,
+            learner_id=self._assembly_learner_id(action_id), state_hash=state_hash,
+        )
+        try:
+            self.queue.record_propensity(req.handle, record)
+        except (KeyError, ValueError):
+            return None
+        if reason is not None:
+            self.ledger.append({"kind": "propensity.refused", "handle": req.handle,
+                                "reason": reason, "ts": self.clock.now_ns})
+            self.registration_feedback.append({"reason": f"propensity: {reason}"})
+        self._open_assembly_round(action_id, req.handle, record)
+        return record
+
+    def _open_assembly_round(self, action_id: str, handle: str, record) -> None:
+        """Freeze the assembly learner's own round against the policy the agent declared.
+
+        The learner proposes; the agent decides. So the learner's round is scored
+        off-policy: its frozen distribution is the target, the declared propensity
+        is the behaviour, and the reward that eventually settles this handle trains
+        it through the importance ratio. A declaration outside the registered
+        action set trains nothing, and says so.
+        """
+        learner = self.assembly_learners.get(action_id)
+        if learner is None or record.source != "declared":
+            return
+        support = tuple(a for a, p in zip(record.action_ids, record.probs, strict=True) if p > 0)
+        universe = set(getattr(learner.inner, "actions", ()))
+        if not set(support) <= universe:
+            self.ledger.append({
+                "kind": "propensity.unlearned", "handle": handle, "assembly_id": action_id,
+                "reason": "declared actions outside the registered action set",
+                "ts": self.clock.now_ns,
+            })
+            return
+        executed = {a: p for a, p in zip(record.action_ids, record.probs, strict=True) if p > 0}
+        total = sum(executed.values())
+        executed = {a: p / total for a, p in executed.items()}
+        try:
+            learner.distribution_for(handle, support)
+            learner.record_executed(handle, executed)
+        except (KeyError, ValueError, RuntimeError, TypeError) as exc:
+            self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
+                                "assembly_id": action_id, "reason": str(exc)[:200],
+                                "ts": self.clock.now_ns})
+            return
+        self.assembly_rounds[handle] = action_id
 
     def _invoke_child(
         self, action_id: str, parent: Request, item: ChildRequest, ceiling: int,
@@ -512,6 +611,7 @@ class ComputeMixin:
         self._emit(EventKind.PRODUCER_RETURN, {
             "about_handle": handle, "description": item.description, "inputs": item.inputs,
             "outputs": ret.outputs, "cost": ret.cost, "status": ret.status,
+            "propensity": self._public_propensity(handle),  # A10
         })
         return {"tool": f"assembly:{target}", "args": item.inputs,
                 "result": {"outputs": ret.outputs, "status": ret.status,
@@ -534,7 +634,12 @@ class ComputeMixin:
         schema: dict[str, Any],
         deadline: int,
         channel: str,
+        propensity: dict[str, Any] | None = None,
     ) -> Request:
+        """A10: a request about someone else's decision carries that decision's propensity."""
+        declared = chosen = None
+        if isinstance(propensity, dict) and isinstance(propensity.get("over"), dict):
+            declared, chosen = propensity["over"], propensity.get("chosen")
         return Request(
             handle=handle,
             description=description,
@@ -547,4 +652,16 @@ class ComputeMixin:
             completion_criterion="a JSON object satisfying the outcome schema",
             scoring_channel=channel,
             resource_liability=handle,
+            propensity=declared,
+            propensity_chosen=chosen if isinstance(chosen, str) else None,
         )
+
+    def _public_propensity(self, handle: str) -> dict[str, Any] | None:
+        """The deciding agent's propensity as it travels forward on the next request."""
+        from factorylab.runtime.propensity import as_public
+
+        try:
+            record = self.queue.declared_propensity(handle)
+        except KeyError:
+            return None
+        return None if record is None else as_public(record)

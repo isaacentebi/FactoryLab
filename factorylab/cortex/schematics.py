@@ -7,6 +7,8 @@ from typing import Any
 from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import reserved_return_fields
 from factorylab.kernel.money import money_to_usd
+from factorylab.runtime.observations import window_fact_names
+from factorylab.runtime.propensity import action_vocabulary
 from factorylab.runtime.shared import PRODUCER_KINDS
 from factorylab.runtime.summary import _duration_str, _price_str
 from factorylab.settlement import SEED_VOCABULARY
@@ -46,6 +48,22 @@ class SchematicsMixin:
             "args_schema": {"type": "object", "properties": {"x": {"type": "number"}}},
             "code": "python: read a JSON object from stdin, print a JSON object",
             "timeout_s": 2,
+        },
+        "observation": {
+            "kind": "observation",
+            "id": "slug",
+            "description": "what it measures",
+            "unit": "fraction | count | micro-USD | …",
+            "range": [0.0, 1.0],
+            "code": "python defining observe(facts) -> float over the public window facts; "
+            "the same facts a closed window publishes",
+        },
+        "learner": {
+            "kind": "learner",
+            "assembly_id": "a registered assembly id",
+            "learner": "blum_mansour",
+            "actions": ["hold", "buy:BTC", "sell:BTC"],
+            "gamma": 0.1,
         },
         "amendment": {
             "kind": "amendment",
@@ -89,10 +107,25 @@ class SchematicsMixin:
             "same probability about your own return. Either is sealed as the kernel's payoff "
             "forecast and graded by Brier against the realised predicate (see scoring)"
         ),
+        "propensity": (
+            "optional on any return: your own distribution over the actions you were "
+            "choosing among, as {action_id: probability} summing to one, including the "
+            "action you took (see action_labels for how the kernel names it). It is "
+            "logged as a second propensity on this decision, travels forward on the "
+            "request your return becomes, and trains your assembly learner if you "
+            "registered one. Declare nothing and the kernel records the action you took "
+            "at 1.0"
+        ),
         "register": "a list of up to three proposals, including amendments, shaped like "
         "proposal_shapes; router add=false replaces, add=true adds a router. Learners: exp3 or "
         "blum_mansour. Assembly roles: producer, evaluator, meta, antagonist; effort: low, medium, "
-        "high. Cards answer for producer, evaluator, meta, antagonist or all; window is "
+        "high. An observation registers a measurement: its code runs in the tool jail over a "
+        "closed window's public facts and is admitted only if it produces a finite number on "
+        "the last closed window; a card may then name it, and re-registering the same id "
+        "supersedes it with a new version. A learner gives one assembly a learner over the "
+        "action set it declares, trained by that assembly's declared propensities and the "
+        "rewards its decisions settle at. Cards answer for producer, evaluator, meta, "
+        "antagonist or all; window is "
         "{kind: returns|forecasts|windows, n: positive integer, per: role|assembly|null}. "
         "Insufficient samples are unmeasured. Lambda is optional and bounded by prices.lambda_max; "
         "tick_interval is an optional duration within world.clock bounds. A prediction names a "
@@ -145,7 +178,9 @@ class SchematicsMixin:
                 "available": self.tool_jail_available,
                 "reason": None if self.tool_jail_available else "no jail on this host",
             },
-            "observations": measurement_catalogue(),
+            "observations": measurement_catalogue(self.observations),
+            "observation_facts": window_fact_names(),
+            "action_labels": action_vocabulary(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
                         "max_lifetime_windows": self.m.novelty.max_lifetime_windows},
@@ -260,7 +295,7 @@ class SchematicsMixin:
             "items": {
                 "type": "object",
                 "properties": {"kind": {"enum": ["model", "assembly", "router", "tool",
-                                                   "amendment"]}},
+                                                   "observation", "learner", "amendment"]}},
                 "required": ["kind"],
             },
         }
@@ -359,6 +394,25 @@ class SchematicsMixin:
                 "Stable failure halves effective lambda on violated cards for the next window; "
                 "underlying duration pressure is retained. Duplicate observations on overlapping "
                 "roles are refused in amendments."
+            ),
+            "propensity": (
+                "every decision carries two propensities: the router's distribution over "
+                "which assembly to wake, and the woken assembly's own distribution over its "
+                "own actions. The second is whatever that return declared in propensity, "
+                "renormalised, or the action it took at 1.0 when it declared nothing or "
+                "declared something malformed. It is logged on the decision's handle, it "
+                "travels forward on the request about that return, and where the assembly "
+                "registered a learner it is the behaviour policy that learner is trained "
+                "against: reward r on action a updates it with weight r / propensity(a)"
+            ),
+            "observations": (
+                "a card's observation is a seed measurement or one the population "
+                "registered. A registered observation's code runs in the tool jail over "
+                "the public facts of a closed window, with no attribution and no private "
+                "learner state in them; it is admitted only after it returns a finite "
+                "number for the last closed window, and its declared range is the scale a "
+                "card's violation is divided by. A card naming an unregistered observation "
+                "is refused before the vote"
             ),
             "revision": (
                 "a producer return counts as a revision only when a registration it carried "

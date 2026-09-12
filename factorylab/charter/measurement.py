@@ -20,9 +20,13 @@ FORECAST_OBSERVATIONS = frozenset({
 })
 
 
-def measurement_catalogue() -> list[dict]:
-    """Public card metadata states selector semantics separately from raw window diagnostics."""
-    from factorylab.runtime.observations import catalogue
+def measurement_catalogue(observations=None) -> list[dict]:
+    """Public card metadata states selector semantics separately from raw window diagnostics.
+
+    A11: a population-registered observation appears here beside the seeds, with
+    its declared units and range, so a card can name it the same way.
+    """
+    from factorylab.runtime.observations import SEED_BOOK
 
     descriptions = {
         "cost_per_return": "Mean successful response cost in the selected rows; global closed "
@@ -44,7 +48,7 @@ def measurement_catalogue() -> list[dict]:
         "censored_share": "Censored outcomes over resolved outcomes; forecast selectors use "
         "forecast records, global closed windows also include judgements and exposures.",
     }
-    result = catalogue()
+    result = (observations or SEED_BOOK).catalogue()
     for row in result:
         observation = row["id"]
         row["description"] = descriptions.get(observation, row["description"])
@@ -113,17 +117,18 @@ class CardSamples:
             )]
 
 
-def preflight_card(card: MetricCard) -> None:
+def preflight_card(card: MetricCard, observations=None) -> None:
     """Unmeasurable observations, scopes and regions are rejected before a vote."""
     from factorylab.runtime.cards import parses, region_for
-    from factorylab.runtime.observations import observation_for
+    from factorylab.runtime.observations import SEED_BOOK
 
-    observation = observation_for(card.observation)
+    book = observations or SEED_BOOK
+    observation = book.get(card.observation)
     if observation is None:
         raise ValueError(f"card {card.id} observation: unregistered observation")
     if not parses(card):
         raise ValueError(f"card {card.id} acceptable_region: no finite usable bounds")
-    region_for(card, rolling={f"{card.id}_prev_median": 1.0})
+    region_for(card, rolling={f"{card.id}_prev_median": 1.0}, observations=book)
     kind = card.window.kind
     supported = RETURN_OBSERVATIONS if kind == "returns" else FORECAST_OBSERVATIONS
     if kind != "windows" and observation.id not in supported:
@@ -134,13 +139,13 @@ def preflight_card(card: MetricCard) -> None:
         raise ValueError(f"card {card.id} window: {observation.id} has no role/assembly samples")
 
 
-def preflight_measurement(card: MetricCard) -> None:
+def preflight_measurement(card: MetricCard, observations=None) -> None:
     """Execute the pricing measurement with one synthetic unit of the proposed selector."""
     from dataclasses import replace
 
     from factorylab.runtime.pricing import MeasureWindow
 
-    preflight_card(card)
+    preflight_card(card, observations)
     unit = replace(card, window=replace(card.window, n=1))
     samples = CardSamples(
         returns=[{"handle": "sample", "assembly": "sample", "role": card.answers_for,
@@ -154,7 +159,7 @@ def preflight_measurement(card: MetricCard) -> None:
                            consequences_settled=1, exposures_settled=1, outcomes=1,
                            meta_verdicts=[0.0], max_position_notional_micro=0,
                            verdicts={"sample": {"a": [0.0], "b": [0.0]}})
-    if unit.id not in measure_cards((unit,), samples, window):
+    if unit.id not in measure_cards((unit,), samples, window, observations=observations):
         raise ValueError(f"card {card.id} window: measurement preflight produced no value")
 
 
@@ -197,12 +202,13 @@ def _measure_rows(observation: str, rows: list[dict]) -> float | None:
     return pstdev(values) if observation == "verdict_std" else fmean(values)
 
 
-def measure_card(card: MetricCard, samples: CardSamples) -> dict[str, float]:
+def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> dict[str, float]:
     """Return each fully supported scope's measurement without pooling its sample selector."""
-    from factorylab.runtime.observations import observation_for
+    from factorylab.runtime.observations import SEED_BOOK
 
-    preflight_card(card)
-    observation = observation_for(card.observation)
+    book = observations or SEED_BOOK
+    preflight_card(card, book)
+    observation = book.get(card.observation)
     window = card.window
     if window.kind == "windows":
         selected = samples.windows[-window.n:]
@@ -235,7 +241,8 @@ def measure_card(card: MetricCard, samples: CardSamples) -> dict[str, float]:
                         <= selected[-1]["index"]]
                 value = _measure_rows(observation.id, rows)
             else:
-                value = observation.measure(SimpleNamespace(**merged))
+                # A11: a registered observation is measured by its own code here.
+                value = book.value(observation, SimpleNamespace(**merged))
             return {"all": value} if value is not None else {}
         kind = "returns" if observation.id in RETURN_OBSERVATIONS else "forecasts"
         rows = [r for r in getattr(samples, kind)
@@ -254,13 +261,13 @@ def measure_card(card: MetricCard, samples: CardSamples) -> dict[str, float]:
     return result
 
 
-def measure_cards(cards, samples: CardSamples, window) -> dict[str, float]:
+def measure_cards(cards, samples: CardSamples, window, observations=None) -> dict[str, float]:
     """Pricing observes equal-scope means; private scope values remain available for attribution."""
     samples.closed(window)
     samples.scopes = {}
     for card in cards:
         try:
-            samples.scopes[card.id] = measure_card(card, samples)
+            samples.scopes[card.id] = measure_card(card, samples, observations)
         except ValueError:
             # Admission refuses these; legacy/manually supplied cards stay unpriced.
             samples.scopes[card.id] = {}

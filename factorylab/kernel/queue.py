@@ -22,7 +22,14 @@ class SettleStatus(StrEnum):
 
 @dataclass(frozen=True)
 class PropensityRecord:
-    """A validated record identifies the exact ordered distribution and reproducible sample."""
+    """A validated record identifies the exact ordered distribution and reproducible sample.
+
+    ``source`` is ``sampled`` for a distribution the kernel drew from itself, which
+    must replay exactly from its seed. It is ``declared`` for the deciding agent's
+    own accounting of the field it drew from (spec A10): nothing in the kernel
+    sampled it, so the seed cannot reproduce it; the chosen action must simply
+    carry positive mass in the distribution the agent disclosed.
+    """
 
     action_ids: tuple[str, ...]
     probs: tuple[float, ...]
@@ -30,6 +37,7 @@ class PropensityRecord:
     rng_seed: int
     learner_id: str
     learner_state_hash: str
+    source: str = "sampled"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "action_ids", tuple(self.action_ids))
@@ -38,6 +46,8 @@ class PropensityRecord:
 
     def validate(self) -> None:
         """Reject malformed support, impossible choices and samples inconsistent with the seed."""
+        if self.source not in ("sampled", "declared"):
+            raise ValueError("propensity source is sampled or declared")
         if not self.action_ids or len(self.action_ids) != len(self.probs):
             raise ValueError("action support and probabilities must have matching nonzero lengths")
         if any(not isinstance(action, str) or not action for action in self.action_ids):
@@ -60,6 +70,12 @@ class PropensityRecord:
             or not self.learner_state_hash
         ):
             raise ValueError("learner identity and state hash are required")
+        if self.source == "declared":
+            if self.chosen not in self.action_ids:
+                raise ValueError("chosen action is outside the declared action set")
+            if self.probs[self.action_ids.index(self.chosen)] <= 0:
+                raise ValueError("a declared propensity gives the chosen action positive mass")
+            return
         executed = random.Random(self.rng_seed).choices(self.action_ids, weights=self.probs, k=1)[0]
         if self.chosen != executed:
             raise ValueError("chosen action does not match the logged seeded distribution")
@@ -117,6 +133,9 @@ class DecisionQueue:
         self.__deliveries: dict[str, list[LearningReturn]] = {}
         self.__returns: dict[str, list[LearningReturn]] = {}
         self.__settled_contracts: set[str] = set()
+        # A10: the deciding agent's own distribution over its own actions, recorded
+        # as a second propensity on the handle the router already opened.
+        self.__declared: dict[str, list[PropensityRecord]] = {}
 
     def open(
         self,
@@ -167,6 +186,35 @@ class DecisionQueue:
     def get(self, handle: str) -> Decision:
         """Return immutable original addressing and current completion status."""
         return self.__decisions[handle]
+
+    def record_propensity(self, handle: str, propensity: PropensityRecord) -> None:
+        """Log a deciding agent's own propensity as a second record on an open handle.
+
+        Spec A10. The router's record stays exactly as it was: this one is about
+        the action the woken assembly took, over the action set it declared. It is
+        evidence, not addressing, so it never changes the decision's channel,
+        actor or status, and it can only be added while the decision is open.
+        """
+        if not isinstance(propensity, PropensityRecord):
+            raise TypeError("a logged propensity record is required")
+        propensity.validate()
+        decision = self.__decisions[handle]
+        if decision.status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
+            raise ValueError("decision already has a final outcome")
+        self.__ledger.append({
+            "kind": "decision.propensity", "ts": self.__clock(), "handle": handle,
+            "propensity": propensity, "index": len(self.__declared.get(handle, ())) + 1,
+        })
+        self.__declared.setdefault(handle, []).append(propensity)
+
+    def propensities(self, handle: str) -> tuple[PropensityRecord, ...]:
+        """Return every propensity on a handle: the router's first, then the agents'."""
+        return (self.__decisions[handle].propensity, *self.__declared.get(handle, ()))
+
+    def declared_propensity(self, handle: str) -> PropensityRecord | None:
+        """Return the deciding agent's own latest propensity, or None if it declared none."""
+        records = self.__declared.get(handle)
+        return records[-1] if records else None
 
     def outstanding(self, actor: str | None = None) -> list[Decision]:
         """Return pending decisions in opening order, optionally filtered by original actor."""
@@ -316,6 +364,7 @@ class DecisionQueue:
             "deliveries": {k: list(v) for k, v in self.__deliveries.items()},
             "returns": {k: list(v) for k, v in self.__returns.items()},
             "settled_contracts": set(self.__settled_contracts),
+            "declared": {k: list(v) for k, v in self.__declared.items()},
         }
 
     def _restore_state(self, state: dict) -> None:
@@ -325,3 +374,4 @@ class DecisionQueue:
         for name in ("decisions", "retired", "successors", "deliveries", "returns",
                      "settled_contracts"):
             setattr(self, f"_DecisionQueue__{name}", state[name])
+        self.__declared = state.get("declared", {})

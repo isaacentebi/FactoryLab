@@ -17,7 +17,8 @@ the verdict's eventual consequence. Anything nobody judged in time is
 censored: no score, no learning, no manufactured outcome.
 
 Prices. At each reserve-window boundary the runtime measures the window
-that closed using the observation catalogue
+that closed using the factory's observation vocabulary — the twenty-two seeds
+and whatever measurements the population has registered (A11) —
 and hands each priced metric card one observation. The price controller
 (spec v0.6 section 8.1) revises a bounded λ per card; verdict and conformity
 scores settle net of Σ λ·violation, clipped to [0, 1]. The consequence and
@@ -386,6 +387,7 @@ class Runtime(
             "payload": payload,
             "world": self._world_block(),
             "your_recent_returns": list(self.memory.get(sample.chosen, ())),
+            "your_action_policy": self._action_policy(sample.chosen),  # A10, private
         }
         if sample.chosen == NOOP:
             self.stats.noops += 1
@@ -395,6 +397,7 @@ class Runtime(
                 "type": "object",
                 "properties": {
                     "action": {"type": "string"},
+                    "propensity": {"type": "object"},  # A10
                     "register": self._register_schema(),
                     **({"payoff": {"type": "number", "minimum": 0, "maximum": 1}}
                        if adversarial else {}),
@@ -449,6 +452,9 @@ class Runtime(
                 "outputs": ret.outputs,
                 "cost": ret.cost,
                 "status": ret.status,
+                # A10: the one private thing the essay directs forward (II.I.b), so the
+                # judge can price the roads this return did not take.
+                "propensity": self._public_propensity(handle),
             },
         )
 
@@ -473,6 +479,8 @@ class Runtime(
                 "outputs": payload["outputs"],
                 "cost_micro_usd": payload["cost"],
                 "status": payload["status"],
+                # A10: what it says it was choosing among, and what it chose.
+                "propensity": payload.get("propensity"),
             },
             "charter": self._charter_text(),
             "predicates": [
@@ -487,6 +495,7 @@ class Runtime(
             "world": self._world_block(),
             "your_recent_returns": list(self.memory.get(sample.chosen, ())),
             "your_consequence_standing": self._standing_for(sample.chosen),
+            "your_action_policy": self._action_policy(sample.chosen),  # A10, private
         }
         schema = {
             "type": "object",
@@ -494,6 +503,7 @@ class Runtime(
                 "verdict": {"type": "number", "minimum": 0, "maximum": 1},
                 "payoff": {"type": "number", "minimum": 0, "maximum": 1},
                 "rationale": {"type": "string"},
+                "propensity": {"type": "object"},  # A10
                 "forecasts": self._forecast_schema(),
                 "register": self._register_schema(),
             },
@@ -510,6 +520,7 @@ class Runtime(
             schema,
             deadline,
             CH_CONFORMITY,
+            propensity=payload.get("propensity"),
         )
         ret = self._invoke(sample.chosen, req, "evaluator")
         self._apply_registrations(handle, ret)
@@ -586,6 +597,7 @@ class Runtime(
                 "payoff_handle": forecast.handle,
                 "rationale": str(ret.outputs.get("rationale", ""))[:2000],
                 "producer_outputs": payload["outputs"],
+                "propensity": self._public_propensity(handle),
             },
         )
 
@@ -612,11 +624,14 @@ class Runtime(
                 "verdict": payload["score"] if recursive else payload["verdict"],
                 **({} if recursive else {"payoff": payload.get("payoff")}),
                 "rationale": payload.get("rationale", ""),
+                # A10: the judge's own account of the verdicts it was choosing among.
+                "propensity": payload.get("propensity"),
             },
             "producer_outputs": payload.get("producer_outputs", {}),
             "charter": self._charter_text(),
             "world": self._world_block(),
         }
+        inputs["your_action_policy"] = self._action_policy(sample.chosen)  # A10, private
         if "window" in payload:
             inputs["window"] = payload["window"]
         if recursive:
@@ -628,6 +643,7 @@ class Runtime(
             "properties": {
                 "conformity": {"type": "number"},
                 "rationale": {"type": "string"},
+                "propensity": {"type": "object"},  # A10
                 "register": self._register_schema(),
             },
             "required": ["conformity"],
@@ -640,6 +656,7 @@ class Runtime(
             schema,
             deadline,
             channel,
+            propensity=payload.get("propensity"),
         )
         ret = self._invoke(sample.chosen, req, "meta")
         self.handle_to_assembly[handle] = sample.chosen
@@ -690,6 +707,7 @@ class Runtime(
                     "score": conformity,
                     "by": handle,
                     "evaluator_handle": judge_handle,
+                    "propensity": self._public_propensity(handle),
                     "rationale": str(ret.outputs.get("rationale", ""))[:2000],
                 },
             )

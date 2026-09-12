@@ -11,7 +11,7 @@ from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.immune import close_window
-from factorylab.runtime.observations import CATALOGUE, observation_for
+from factorylab.runtime.observations import ObservationBook
 from factorylab.runtime.shared import _usd_to_micro
 
 
@@ -56,6 +56,16 @@ class MeasureWindow:
 
 class PricingMixin:
     """Preserve runtime state and behavior for pricing operations."""
+
+    @property
+    def observations(self) -> ObservationBook:
+        """The factory's live measurement vocabulary: the seeds plus what it registered.
+
+        A11. Every consumer of a card's observation reads through this book, so a
+        registered measurement is priced, published and diagnosed exactly like a
+        seed one; only the way it is computed differs.
+        """
+        return ObservationBook(self.registered_observations, run=self.observation_runner.run)
 
     def _init_fidelity(self) -> None:
         """Manifest settings and attributed observations are initialized before any decision."""
@@ -173,7 +183,7 @@ class PricingMixin:
         """
         regions: dict[str, CardRegion] = {}
         for card in self.charter.cards:
-            region = region_for(card, rolling=self.rolling)
+            region = region_for(card, rolling=self.rolling, observations=self.observations)
             if region is None:
                 if card.id in self.regions:
                     self.controller.clear_region(card.id)
@@ -181,7 +191,7 @@ class PricingMixin:
                 unknown = []
                 if not parses(card):
                     unknown.append("region")
-                if observation_for(card.observation) is None:
+                if self.observations.get(card.observation) is None:
                     unknown.append("observation")
                 if unknown and key not in self.unparsed_logged:
                     self.ledger.append(
@@ -237,8 +247,10 @@ class PricingMixin:
             if eid in evaluators and v.get("n")
         ]
         w = replace(self.window, forecast_skills=skills)
-        values = {o.id: value for o in CATALOGUE if (value := o.measure(w)) is not None}
-        card_values = measure_cards(self.charter.cards, self.card_samples, w)  # A6: typed windows
+        book = self.observations
+        values = {o.id: value for o in book.all() if (value := book.value(o, w)) is not None}
+        # A6: typed windows. A11: a card may name a registered observation.
+        card_values = measure_cards(self.charter.cards, self.card_samples, w, observations=book)
         card_values = {cid: value for cid, value in card_values.items() if cid in self.regions}
         # A4: a decision settling late is priced on the window it worked in.
         self.window.closed_values = dict(card_values)
@@ -279,7 +291,7 @@ class PricingMixin:
         terms = []
         origins = self.price_origins.get(handle, {})
         for card in self.charter.cards:
-            observation = observation_for(card.observation)
+            observation = self.observations.get(card.observation)
             if card.answers_for not in (cards, "all") or observation is None:
                 continue
             window = self.price_windows.get(origins.get(observation.id, origins.get("origin")),

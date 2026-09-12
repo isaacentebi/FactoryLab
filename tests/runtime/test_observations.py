@@ -69,8 +69,12 @@ def test_disagreement_requires_distinct_judges_and_weights_returns_equally():
 def test_catalogue_is_exact_and_public_metadata_cannot_mutate_it():
     public = catalogue()
     assert len(public) == len({o.id for o in CATALOGUE}) == 22
-    assert all(set(item) == {"id", "description", "units", "unit_range", "scale"}
+    # A11: the public row now also names where the observation came from and which
+    # version of it this is, because the population can register its own.
+    assert all(set(item) == {"id", "description", "units", "unit_range", "scale",
+                             "provenance", "version"}
                for item in public)
+    assert all(item["provenance"] == "seed" and item["version"] == 1 for item in public)
     public[0]["id"] = "changed"
     assert catalogue()[0]["id"] == "cost_per_return"
     assert observation_for("  NoOp_ShArE \n").id == "noop_share"
