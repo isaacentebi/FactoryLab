@@ -85,6 +85,7 @@ class ComputeMixin:
     """Preserve runtime state and behavior for compute operations."""
 
     def _instantiate(self, spec: AssemblySpec) -> Assembly:
+        self._init_connectors()
         model = _ObservedMeteredModel(
             self.provider, self.prices, self.meter, record=self._record_market,
         )
@@ -243,6 +244,102 @@ class ComputeMixin:
         )
         self.insolvency_count = count
 
+    def _init_connectors(self) -> None:
+        """The proxy matches the immutable manifest; restored accounting is never reset."""
+        if not hasattr(self, "connector_proxy"):
+            from factorylab.world.connector import ConnectorProxy, FakeConnectorTransport
+
+            offline = all(m.provider == "fake" for m in self.m.models)
+            self.connector_proxy = ConnectorProxy(
+                self.m.connectors, FakeConnectorTransport() if offline else None,
+            )
+            # Scripted transports re-run in replay; live reads return their journalled result.
+            self.connector_deterministic = offline
+        if not hasattr(self, "connector_calls"):
+            self.connector_calls = {}  # assembly -> (reserve window, attempted calls)
+            self.connector_calls_day = {}  # UTC day -> count, public aggregate
+
+    def _ensure_connector_tool(self) -> None:
+        """Expose the fixed fetch tool without provisioning a connector origin."""
+        from factorylab.cortex.tools import connector_spec
+
+        self._init_connectors()
+        self.tool_specs.setdefault(
+            "connector.fetch", connector_spec(self.m.connectors.call_price_micro))
+
+    def _connector_catalogue(self) -> list[dict]:
+        """Public connector contracts expose latest versions, descriptions and origins."""
+        return [{"id": c.id.removeprefix("connector:"), "version": c.version,
+                 "description": c.description, "origin": c.input_schema["origin"]}
+                for c in self.registry.available("connector")]
+
+    def _connector_refused(self, handle: str, reason: str, **fields) -> tuple[dict, int]:
+        """Refusals are ledgered before their public reason is returned."""
+        self.ledger.append({"kind": "connector.refused", "handle": handle,
+                            "reason": reason, **fields, "ts": self.clock.now_ns})
+        return {"error": reason}, 0
+
+    def _fetch_connector(self, action_id: str, handle: str, args: dict, *,
+                         origin: str | None = None) -> tuple[dict, int]:
+        """Reserve first; count attempts durably; return text only after the flat debit."""
+        from factorylab.cortex.tools import _validate_args, connector_spec
+        from factorylab.world.connector import ConnectorRefused
+
+        error = _validate_args(connector_spec(0)["args_schema"], args)
+        if error:
+            return self._connector_refused(handle, error)
+        preflight = origin is not None
+        cid, path = args["id"], args["path"]
+        fields = {"id": cid, "path": path, "assembly_id": action_id}
+        try:
+            if origin is None:
+                contract = self.registry.get(f"connector:{cid}")
+                if contract.kind != "connector":
+                    raise KeyError(cid)
+                origin = contract.input_schema["origin"]
+            self.connector_proxy.validate(origin, path)
+        except (KeyError, ConnectorRefused, ValueError) as exc:
+            reason = "unknown connector" if isinstance(exc, KeyError) else str(exc)
+            return self._connector_refused(handle, reason, **fields)
+        window, count = self.connector_calls.get(action_id, (self.window.index, 0))
+        if window != self.window.index:
+            count = 0
+        if count >= self.m.connectors.max_calls_per_window:
+            return self._connector_refused(handle, "connector window call cap reached", **fields)
+        price = self.m.connectors.call_price_micro
+
+        def execute():
+            self.connector_calls[action_id] = (self.window.index, count + 1)
+            day = self.clock.now_ns // 86_400_000_000_000
+            self.connector_calls_day[day] = self.connector_calls_day.get(day, 0) + 1
+            # Recovery evidence, exactly as for a paid model call or an x402 purchase:
+            # the io.call/io.result pair reproduces the read without fetching it again
+            # and without repeating the debit, so replay stays deterministic.
+            result = self.ledger.call("connector.fetch", self.connector_proxy.fetch,
+                                      (origin, path), {},
+                                      deterministic=self.connector_deterministic)
+            if preflight:
+                result = {key: value for key, value in result.items() if key != "body"}
+            if "body" in result:
+                self.ledger.protect_connector_body(result["body"])
+            return result
+
+        try:
+            paid = self.meter.run(handle=handle, reason="tool:connector.fetch", ceiling=price,
+                                  execute=execute, cost_of=lambda _: price)
+        except BillingUncertain as exc:
+            result, cost = {"error": str(exc), "status": "uncertain", "bytes": 0}, exc.cost
+        except Exception:
+            return self._connector_refused(handle, "connector call unaffordable", **fields)
+        else:
+            result, cost = paid.result, paid.cost
+        self.ledger.append({"kind": "connector.call", "handle": handle, **fields,
+                            "status": result["status"], "bytes": result["bytes"], "cost": cost,
+                            "ts": self.clock.now_ns})
+        if "error" in result:
+            self._connector_refused(handle, result["error"], **fields)
+        return result, cost
+
     CONSEQUENCE_WRITES = frozenset({
         "venue.place_market", "venue.place_limit", "venue.close", "venue.cancel",
         "venue.set_leverage", "treasury.transfer",
@@ -258,10 +355,13 @@ class ComputeMixin:
     def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
                   slot: str = "tool:0") -> tuple[dict, int]:
         """Execute one tool call through metering. Returns (result, cost)."""
+        self._ensure_connector_tool()
         tool_id = str(call.get("tool"))
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
         if tool_id not in self.tool_specs or tool_id not in self._allowed_tools(action_id):
             return {"error": "unknown or disallowed tool"}, 0
+        if tool_id == "connector.fetch":
+            return self._fetch_connector(action_id, handle, args)
         if tool_id in self.CONSEQUENCE_WRITES and not self.consequences.account_open(handle):
             # No judge trades what it judges (essay II.III): the refusal is public.
             self.ledger.append({"kind": "tool.refused", "handle": handle,
@@ -355,9 +455,13 @@ class ComputeMixin:
         return ret
 
     def _invoke(self, action_id: str, req: Request, role: str, *, child: bool = False) -> Return:
+        self._ensure_connector_tool()
+        body_mark = len(self.ledger.connector_bodies)
         ret = self._invoke_compute(action_id, req)
         self._check_compute_return(req.handle, ret)
-        if child and (ret.children or ret.tool_calls):
+        connector_child = (ret.tool_calls and not ret.children
+                           and all(c["tool"] == "connector.fetch" for c in ret.tool_calls))
+        if child and (ret.children or ret.tool_calls) and not connector_child:
             self.ledger.append({"kind": "requests.refused", "handle": req.handle,
                                 "reason": "child invocations answer once; no continuation"})
             from factorylab.cortex.assembly import _validate_schema
@@ -368,82 +472,93 @@ class ComputeMixin:
                 ret = replace(ret, outputs={"reason": "child answer requires continuation"},
                               status="malformed")
             ret = replace(ret, children=(), tool_calls=())
-        if not self.wallet.dead and ret.status == "ok" and (ret.tool_calls or ret.children):
+        total_cost = ret.cost
+        seen_results = []
+        tool_round = 0
+        round_limit = 1
+        while (not self.wallet.dead and ret.status == "ok" and (ret.tool_calls or ret.children)
+               and tool_round < round_limit):
             results = []
             tool_cost = 0
             for index, call in enumerate(ret.tool_calls):
                 if self.wallet.dead:
                     break
                 price = self.tool_specs.get(call["tool"], {}).get("price_micro_per_call", 0)
-                if price > max(0, req.cost_ceiling - ret.cost - tool_cost):
+                if price > max(0, req.cost_ceiling - total_cost - tool_cost):
                     result, cost = {"error": "request cost ceiling exhausted"}, 0
+                    if call["tool"] == "connector.fetch":
+                        self._connector_refused(req.handle, result["error"])
                 else:
-                    result, cost = self._run_tool(action_id, req.handle, call, slot=f"tool:{index}")
+                    slot = f"tool:{index}" if tool_round == 0 else f"connector-parse:{index}"
+                    result, cost = self._run_tool(action_id, req.handle, call, slot=slot)
                 tool_cost += cost
                 ok = not (isinstance(result, dict) and "error" in result)
+                if call["tool"] == "connector.fetch" and ok:
+                    round_limit = 2
                 self.stats.tool_calls += 1
                 if not ok:
                     self.stats.tool_call_failures += 1
-                self.ledger.append(
-                    {
-                        "kind": "tool.call",
-                        "handle": req.handle,
-                        "assembly_id": action_id,
-                        "tool": call.get("tool"),
-                        "args": json.dumps(call.get("args"), default=str)[:1000],
-                        "ok": ok,
-                        "cost": cost,
-                        "ts": self.clock.now_ns,
-                    }
-                )
+                # Parser arguments can contain a connector body. They are transient.
+                logged_args = ("[connector continuation]" if tool_round else
+                               json.dumps(self.ledger.without_connector_bodies(call.get("args")),
+                                          default=str)[:1000])
+                self.ledger.append({
+                    "kind": "tool.call", "handle": req.handle, "assembly_id": action_id,
+                    "tool": call.get("tool"), "args": logged_args,
+                    "ok": ok, "cost": cost, "ts": self.clock.now_ns,
+                })
                 self.window.tool_calls += 1
-                results.append(
-                    {"tool": call.get("tool"), "args": call.get("args"), "result": result}
-                )
+                results.append({"tool": call.get("tool"), "args": call.get("args"),
+                                "result": result})
             for item in ret.children:
                 if self.wallet.dead:
                     break
                 result, cost = self._invoke_child(
-                    action_id, req, item, max(0, req.cost_ceiling - ret.cost - tool_cost)
+                    action_id, req, item, max(0, req.cost_ceiling - total_cost - tool_cost)
                 )
                 tool_cost += cost
                 results.append(result)
-            # A10: the continuation is the same request, and it is the billed call
-            # that produces the final verdict — so everything the first call was
-            # shown, the PROPENSITY block included, rides along unchanged.
+            seen_results.extend(results)
             follow = req.continuation(
-                inputs={**req.inputs, "tool_results": results},
-                cost_ceiling=max(0, req.cost_ceiling - ret.cost - tool_cost),
+                inputs={**req.inputs, "tool_results": results, "seen_tool_results": seen_results},
+                cost_ceiling=max(0, req.cost_ceiling - total_cost - tool_cost),
             )
-            second = (
-                Return(req.handle, {"reason": "wallet exhausted"}, 0, "failed")
-                if self.wallet.dead else self._invoke_compute(action_id, follow)
-            )
-            self._check_compute_return(req.handle, second)
-            if second.tool_calls:
-                self.ledger.append(
-                    {"kind": "tool.calls_ignored", "handle": req.handle, "ts": self.clock.now_ns}
-                )
-            if second.children:
+            ret = (Return(req.handle, {"reason": "wallet exhausted"}, 0, "failed")
+                   if self.wallet.dead else self._invoke_compute(action_id, follow))
+            total_cost += tool_cost + ret.cost
+            self._check_compute_return(req.handle, ret)
+            tool_round += 1
+            if ret.children:
                 self.ledger.append({"kind": "requests.refused", "handle": req.handle,
                                     "reason": "continuation already consumed"})
-            if second.status == "ok":
+                ret = replace(ret, children=())
+            # The extra round composes the retrieved text through ordinary jailed tools.
+            if tool_round < round_limit and ret.tool_calls:
+                if any(self.tool_specs.get(c["tool"], {}).get("kind") != "population"
+                       for c in ret.tool_calls):
+                    round_limit = tool_round
+            if ret.tool_calls and tool_round >= round_limit:
+                self.ledger.append({"kind": "tool.calls_ignored", "handle": req.handle,
+                                    "ts": self.clock.now_ns})
+            if not ret.tool_calls or tool_round >= round_limit:
                 from factorylab.cortex.assembly import _validate_schema
 
-                try:
-                    _validate_schema(second.outputs, req.outcome_schema)
-                except (ValueError, TypeError, RecursionError):
-                    second = replace(second, status="malformed",
-                                     outputs={"reason": "incomplete continuation answer"})
-            ret = Return(
-                req.handle,
-                second.outputs,
-                ret.cost + tool_cost + second.cost,
-                second.status,
-                served_by=second.served_by,
-                stop_reason=second.stop_reason,
-                provider=second.provider,
-            )
+                if ret.status == "ok":
+                    try:
+                        _validate_schema(ret.outputs, req.outcome_schema)
+                    except (ValueError, TypeError, RecursionError):
+                        ret = replace(ret, status="malformed",
+                                      outputs={"reason": "incomplete continuation answer"})
+                break
+        if self.ledger.without_connector_bodies(ret.outputs) != ret.outputs:
+            # A body cannot become durable output. Refuse rather than rewriting an
+            # action (for example, a short response that happens to equal its side).
+            ret = replace(ret, status="malformed",
+                          outputs={"reason": "connector body in durable output"})
+        ret = replace(ret, cost=total_cost, tool_calls=(), children=())
+        # Handle-scoped model memory is another durable surface: retain parsed outcomes only.
+        for assembly in self.assemblies.values():
+            assembly.memory = self.ledger.without_connector_bodies(assembly.memory)
         self.stats.invocations += 1
         self.stats.invocation_status[ret.status] = (
             self.stats.invocation_status.get(ret.status, 0) + 1
@@ -487,6 +602,7 @@ class ComputeMixin:
             if role == "producer":
                 self.window.costs.append(ret.cost)
         self._record_declared_propensity(action_id, req, ret, role)
+        del self.ledger.connector_bodies[body_mark:]
         return ret
 
     # --- spec A10: the deciding agent's propensity rides on the request ---------

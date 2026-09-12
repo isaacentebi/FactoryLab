@@ -80,9 +80,34 @@ class LearnerProposal:
     gamma: float
 
 
+# --- connectors: admission policy lives in the runtime sortition path --------
+
+@dataclass(frozen=True)
+class ConnectorProposal:
+    """A connector specifies only its identity, description and HTTPS origin."""
+
+    id: str
+    description: str
+    origin: str
+
+
+def _connector(item: dict[str, Any]) -> ConnectorProposal:
+    from factorylab.world.connector import origin_host
+
+    if set(item) != {"kind", "id", "description", "origin"}:
+        raise ValueError("connector fields are kind, id, description, origin")
+    if not isinstance(item["id"], str) or not SLUG.fullmatch(item["id"]):
+        raise ValueError("connector id must be a slug")
+    if (not isinstance(item["description"], str) or not item["description"].strip()
+            or len(item["description"]) > 500):
+        raise ValueError("connector description must contain 1..500 characters")
+    origin_host(item["origin"])
+    return ConnectorProposal(item["id"], item["description"], item["origin"])
+
+
 Proposal = (
     ModelProposal | AssemblyProposal | RouterProposal | ToolProposal
-    | ObservationProposal | LearnerProposal
+    | ObservationProposal | LearnerProposal | ConnectorProposal
 )
 
 
@@ -134,6 +159,8 @@ def parse_proposals(
                 accepted.append(_router(item, event_kinds))
             elif kind == "tool":
                 accepted.append(_tool(item, known_tools, jail=tool_jail))
+            elif kind == "connector":
+                accepted.append(_connector(item))
             elif kind == "observation":
                 accepted.append(_observation(item, seed_observations, jail=tool_jail))
             elif kind == "learner":

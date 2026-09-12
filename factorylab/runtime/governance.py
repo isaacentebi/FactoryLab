@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict
 from statistics import fmean
 from typing import Any
@@ -13,6 +12,7 @@ from factorylab.cortex.assembly import AssemblySpec
 from factorylab.cortex.registration import (
     MAX_PROPOSALS_PER_RETURN,
     AssemblyProposal,
+    ConnectorProposal,
     LearnerProposal,
     ModelProposal,
     ObservationProposal,
@@ -81,6 +81,8 @@ class GovernanceMixin:
                         seed_observations=SEED_IDS,
                     )
                     if rejected:
+                        if item.get("kind") == "connector":
+                            self._connector_refused(handle, rejected[0].reason)
                         self._reject_registration(handle, rejected[0].reason, index)
                         continue
                     prop = ModelProposal(mid) if namespaced else accepted[0]
@@ -94,6 +96,8 @@ class GovernanceMixin:
                     self.card_samples.revised(handle)
             except (Infeasible, PermissionError, ValueError, OverflowError, KeyError,
                     TypeError, X402Error) as exc:
+                if isinstance(item, dict) and item.get("kind") == "connector":
+                    self._connector_refused(handle, str(exc)[:300])
                 self._reject_registration(handle, f"{type(exc).__name__}: {exc}"[:300], index)
 
     def _reject_registration(self, handle: str, reason: str, index: int | None) -> None:
@@ -206,6 +210,9 @@ class GovernanceMixin:
 
     def _register(self, handle: str, prop: Any) -> None:
         amount = self.ev.trial_amount_micro
+        if isinstance(prop, ConnectorProposal):
+            self._register_connector(handle, prop)
+            return
         if isinstance(prop, ObservationProposal):
             self._register_observation(handle, prop)
             return
@@ -345,6 +352,55 @@ class GovernanceMixin:
                     "by": handle,
                 },
             )
+
+    def _register_connector(self, handle: str, prop: ConnectorProposal) -> None:
+        """Only bounded preflight and a proposer-excluding sortition majority admit an origin."""
+        from types import SimpleNamespace
+
+        from factorylab.charter.committee import Committee, draw
+
+        owner = self.handle_to_assembly.get(handle)
+        if owner is None:
+            try:
+                owner = self.queue.get(handle).propensity.chosen
+            except KeyError:
+                raise ValueError("connector proposal needs a caller decision") from None
+        result, _ = self._fetch_connector(owner, handle, {"id": prop.id, "path": "/"},
+                                          origin=prop.origin)
+        # Preflight establishes bounds, not information for the proposer.
+        if "error" in result:
+            raise ValueError(f"connector preflight: {result['error']}")
+        try:
+            version = self.registry.get(f"connector:{prop.id}").version + 1
+        except KeyError:
+            version = 1
+        eligible = self._committee_eligible()
+        eligible.pop(owner, None)
+        vote_id = f"connector:{prop.id}:v{version}:{handle}"
+        committee = Committee(vote_id, 1, draw(eligible, self.rng, self.m.committee.seats))
+        self.ledger.append({"kind": "connector.seated", "id": prop.id,
+                            "vote_id": vote_id, "handle": handle,
+                            "seats": [seat._asdict() for seat in committee.seats]})
+        proposal = SimpleNamespace(id=vote_id, proposer_handle=handle)
+        if not self._hold_vote(proposal, committee, connector=prop):
+            raise ValueError("connector sortition vote did not reach a majority")
+        contract = Contract(
+            id=f"connector:{prop.id}", version=version, kind="connector",
+            description=prop.description, input_schema={"origin": prop.origin},
+            output_schema={"type": "string"},
+            price=PriceSpec({"call": self.m.connectors.call_price_micro}),
+            permissions=frozenset({"connector.fetch"}),
+            resource_bounds=ResourceBounds(
+                max_duration_ns=self.m.connectors.timeout_s * 1_000_000_000,
+                max_memory_bytes=self.m.connectors.max_bytes),
+        )
+        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        self.ledger.append({"kind": "connector.registered", "id": prop.id,
+                            "version": version, "description": prop.description,
+                            "origin": prop.origin, "handle": handle, "vote_id": vote_id,
+                            "ts": self.clock.now_ns})
+        self._emit(EventKind.REGISTERED, {"kind": "connector", "id": prop.id,
+                                          "version": version, "origin": prop.origin})
 
     def _propose_amendment(self, handle: str, item: dict[str, Any]) -> None:
         from factorylab.charter.amendment import (
@@ -488,10 +544,13 @@ class GovernanceMixin:
             return False
         return True
 
-    def _hold_vote(self, am: Any, committee: Any) -> None:
+    def _hold_vote(self, am: Any, committee: Any, *,
+                   connector: ConnectorProposal | None = None) -> bool | None:
+        """Amendments and connectors share seats, metered ballot requests and majority counting."""
         if am.id in self.voted_amendments:
             return
-        prices = dict(am.proposed_prices)
+        prices = dict(am.proposed_prices) if connector is None else {}
+        connector_yes = 0
         for seat in committee.seats:
             if self.wallet.dead:
                 break
@@ -509,7 +568,8 @@ class GovernanceMixin:
             # This covers the remaining experiment, rather than expiring after the ballot call.
             deadline = self.clock.now_ns + (
                 self.events_budget + self.ev.consequence_backstop_events
-            ) * self.m.max_tick_ns + am.predicted_effect.window * self.m.novelty.window_ns
+            ) * self.m.max_tick_ns + (am.predicted_effect.window if connector is None else 1
+                                     ) * self.m.novelty.window_ns
             handle = self.queue.open(
                 actor=lid, event_id=event_id,
                 propensity=PropensityRecord((assembly_id,), (1.,), assembly_id, 0, lid,
@@ -522,26 +582,31 @@ class GovernanceMixin:
             self.vote_handles[event_id] = handle
             self.handle_to_assembly[handle] = assembly_id
             self.stats.decisions += 1
-            inputs = {
-                "amendment": {
-                    "id": am.id,
-                    "add": [
-                        {**asdict(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
-                        for c in am.add
-                    ],
-                    "replace": [
-                        {**asdict(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
-                        for c in am.replace
-                    ],
-                    "remove": list(am.remove),
-                    "predicted_effect": asdict(am.predicted_effect),
-                    **({"tick_interval": am.tick_interval} if am.tick_interval is not None else {}),
-                },
-                "charter": self._charter_text(),
-                "world": self._world_block(),
-                "your_policy_returns": [asdict(lr) for lr in self.queue.returns_for(lid)
-                                        if lr.channel == "policy"],
-            }
+            if connector is None:
+                inputs = {
+                    "amendment": {
+                        "id": am.id,
+                        "add": [
+                            {**asdict(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
+                            for c in am.add
+                        ],
+                        "replace": [
+                            {**asdict(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
+                            for c in am.replace
+                        ],
+                        "remove": list(am.remove),
+                        "predicted_effect": asdict(am.predicted_effect),
+                        **({"tick_interval": am.tick_interval}
+                           if am.tick_interval is not None else {}),
+                    },
+                    "charter": self._charter_text(),
+                    "world": self._world_block(),
+                    "your_policy_returns": [asdict(lr) for lr in self.queue.returns_for(lid)
+                                            if lr.channel == "policy"],
+                }
+            else:
+                inputs = {"connector": asdict(connector), "world": self._world_block(),
+                          "charter": self._charter_text()}
             schema = {
                 "type": "object",
                 "properties": {"vote": {"type": "boolean"}, "reason": {"type": "string"}},
@@ -549,7 +614,8 @@ class GovernanceMixin:
             }
             req = self._request(
                 handle,
-                "Vote on an amendment to the charter's metric cards.",
+                ("Vote on a connector registration." if connector is not None else
+                 "Vote on an amendment to the charter's metric cards."),
                 inputs,
                 schema,
                 self.clock.now_ns + self.tick_clock.interval_ns * 10,
@@ -559,31 +625,23 @@ class GovernanceMixin:
             if asm is None:
                 ret = Return(handle, {"reason": "assembly unavailable"}, 0, "failed")
             else:
-                ret = self._invoke_compute(assembly_id, req)
-            self.stats.invocations += 1
-            self.ledger.append(
-                {
-                    "kind": "invocation",
-                    "assembly_id": assembly_id,
-                    "role": "voter",
-                    "handle": handle,
-                    "cost": ret.cost,
-                    "status": ret.status,
-                    "stop_reason": ret.stop_reason or "none",
-                    "served_by": ret.served_by,
-                    "outputs": json.dumps(ret.outputs, default=str)[:2000],
-                    "ts": self.clock.now_ns,
-                }
-            )
-            self.window.invocations += 1
-            self.window.ok += int(ret.status == "ok")
-            self.card_samples.returned(handle=handle, assembly=assembly_id,
-                                       role=asm.spec.role if asm else "other",
-                                       window=self.window.index, ret=ret)
+                ret = self._invoke(assembly_id, req, "voter", child=True)
+            if asm is None:
+                self.card_samples.returned(handle=handle, assembly=assembly_id, role="other",
+                                           window=self.window.index, ret=ret)
             self._check_compute_return(handle, ret)
             self._compute_routed = True
             vote = ret.outputs.get("vote") if ret.status == "ok" else None
-            if isinstance(vote, bool):
+            if connector is not None:
+                ballot = vote if type(vote) is bool else None
+                self.ledger.append({"kind": "connector.vote", "vote_id": am.id,
+                                    "alias": alias, "handle": handle, "vote": ballot,
+                                    "reason": str(ret.outputs.get("reason", ""))[:1000]})
+                connector_yes += ballot is True
+                self.stats.votes_cast += ballot is not None
+                # Connector shape has no predicted metric effect to grade later.
+                self._settle_policy(handle, 0.0, SettleStatus.CENSORED)
+            elif isinstance(vote, bool):
                 self.charter_book.vote(
                     committee, alias, vote, str(ret.outputs.get("reason", ""))[:1000]
                 )
@@ -600,6 +658,12 @@ class GovernanceMixin:
                 self._settle_policy(handle, 0.0, SettleStatus.CENSORED)
         self.ledger.append({"kind": "committee.completed", "amendment_id": am.id})
         self.voted_amendments.add(am.id)
+        if connector is not None:
+            passed = connector_yes >= len(committee.seats) // 2 + 1
+            self.ledger.append({"kind": "connector.tally", "vote_id": am.id,
+                                "yes": connector_yes, "seats": len(committee.seats),
+                                "passed": passed})
+            return passed
         outcome = self.charter_book.tally(committee)
         if outcome == "passed":
             self.cadence.approve(am.id)

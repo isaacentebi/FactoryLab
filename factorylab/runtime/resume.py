@@ -221,6 +221,7 @@ class RecoveryJournal:
         self.bootstrap = False
         self.recovering = False
         self.failure: str | None = None
+        self.connector_bodies: list[str] = []  # transient, never checkpointed
 
     def __getattr__(self, name):
         return getattr(self.ledger, name)
@@ -240,12 +241,44 @@ class RecoveryJournal:
             self._next = next(self._tail, None)
         return self._next
 
+    def protect_connector_body(self, body: str) -> None:
+        """Body copies and JSON-escaped copies stay out of subsequent durable surfaces."""
+        if body:
+            self.connector_bodies.append(body)
+
+    def without_connector_bodies(self, value):
+        """Return a detached redacted value; fetched bytes are never recovery material."""
+        if not self.connector_bodies:
+            return value
+        if isinstance(value, str):
+            for body in self.connector_bodies:
+                variants = [body]
+                for _ in range(3):
+                    variants.append(json.dumps(variants[-1], ensure_ascii=True)[1:-1])
+                for variant in sorted(set(variants), key=len, reverse=True):
+                    value = value.replace(variant, "[connector body omitted]")
+            return value
+        if isinstance(value, dict):
+            return {k: self.without_connector_bodies(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [self.without_connector_bodies(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(self.without_connector_bodies(v) for v in value)
+        return value
+
     def append(self, entry: dict) -> int:
         """Verify historical appends in order, otherwise durably append to the existing chain."""
         if self.failure is not None:
             raise _ReplayFault(self.failure)
         if self.bootstrap:
             return 0
+        # Redact content surfaces, never routing ids, paths or financial metadata:
+        # a hostile body such as "/" cannot rewrite the meaning of a ledger item.
+        # The recovery plane is exempt: io.call/io.result is how a read is replayed.
+        if self.connector_bodies and entry.get("kind") not in ("io.call", "io.result"):
+            entry = {key: self.without_connector_bodies(value)
+                     if key in {"result", "args", "inputs", "outputs"} else value
+                     for key, value in entry.items()}
         expected = self.peek()
         if expected is None:
             return self.ledger.append(entry)
@@ -348,7 +381,7 @@ def _read_only(name: str) -> bool:
         return True
     return name.rsplit(".", 1)[-1] in (
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
-        "open_orders", "balance_micro", "affordable", "catalogue", "discover", "quote",
+        "open_orders", "balance_micro", "affordable", "catalogue", "discover", "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
         "reserve_balance", "discover_index",
     )
@@ -422,6 +455,7 @@ _RUNTIME_FIELDS = (
     "card_samples", "price_windows", "price_origins",
     # W5: A11's registered measurements and A10's open assembly-learner rounds.
     "registered_observations", "assembly_rounds",
+    "connector_calls", "connector_calls_day",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
@@ -450,6 +484,7 @@ def _venue_address(exchange) -> str | None:
 
 def runtime_state(rt) -> dict:
     """Retain learning, FIFO lots, private memory and exact source cursors in one checkpoint."""
+    rt._ensure_connector_tool()
     runtime = {name: getattr(rt, name) for name in _RUNTIME_FIELDS}
     runtime["amendment_feedback"] = getattr(rt, "amendment_feedback", None)
     components = {

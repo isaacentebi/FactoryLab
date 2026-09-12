@@ -71,6 +71,12 @@ class ScriptedProvider:
                     reply = {"action": "order", "coin": "BTC", "side": side, "size": str(size)}
         n = self._producer_calls
         if "tool_results" in inputs:
+            for row in inputs["tool_results"]:
+                if row.get("tool") == "connector.fetch" and "body" in row.get("result", {}):
+                    return {"tool_calls": [{"tool": "connector-parser",
+                             "args": {"body": row["result"]["body"]}}]}
+                if row.get("tool") == "connector-parser":
+                    reply["connector_value"] = row.get("result", {}).get("value")
             reply["seen_tool_results"] = len(inputs["tool_results"])
             return reply
         if n in self.tool_at_calls:
@@ -94,6 +100,20 @@ class ScriptedProvider:
                     "coin": self.spot_pair, "market": "spot",
                     "side": "buy" if n == 15 else "sell", "size": "0.0001"}}
             ]}
+        if n == 160:
+            reply["register"] = [
+                {"kind": "connector", "id": "scripted-source", "description": "Scripted data",
+                 "origin": "https://example.org"},
+                {"kind": "tool", "id": "connector-parser", "description": "Parse a data value",
+                 "args_schema": {"type": "object", "properties": {"body": {"type": "string"}},
+                                 "required": ["body"]},
+                 "code": "import json,sys\na=json.load(sys.stdin)\n"
+                         "print(json.dumps({'value': json.loads(a['body'])['value']}))",
+                 "timeout_s": 2},
+            ]
+        if n == 161:
+            reply["tool_calls"] = [{"tool": "connector.fetch",
+                                    "args": {"id": "scripted-source", "path": "/data"}}]
         if n == self.router_add_at_call:
             reply["register"] = [
                 {

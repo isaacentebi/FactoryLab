@@ -189,6 +189,17 @@ def _validate_args(schema: dict, args: dict) -> str | None:
     return None
 
 
+def connector_spec(price_micro_per_call: int) -> dict:
+    """The fetch primitive publishes only an id, path and flat call price."""
+    return {
+        "id": "connector.fetch", "description": "GET a registered connector path as text",
+        "kind": "connector", "price_micro_per_call": price_micro_per_call,
+        "args_schema": {"type": "object", "properties": {
+            "id": {"type": "string"}, "path": {"type": "string"}},
+            "required": ["id", "path"], "additionalProperties": False},
+    }
+
+
 def as_spec(tool: PopulationTool, price_micro_per_call: int) -> dict:
     """Return public ToolSpec fields without source, provenance or schema aliases."""
     if type(price_micro_per_call) is not int or price_micro_per_call < 0:
