@@ -112,7 +112,9 @@ An x402 seller is any OpenAI-compatible chat-completions endpoint that answers a
 
 ### 5.3 Venue ↔ reserve, for real
 
-`treasury.transfer(to_reserve, usd)`: a real Hyperliquid withdrawal (SDK, main-wallet key) to the reserve address on Arbitrum, then Circle CCTP burn on Arbitrum and mint on Base to the same address (contract calls through raw JSON-RPC with `eth_account`; the reserve holds a small ETH gas budget on Arbitrum and Base, booked as a fee when spent). `treasury.transfer(to_venue, usd)`: the reverse. Two-phase and ledgered: `treasury.submitted` with tx references, then `treasury.confirmed` or `treasury.failed` on reconcile; pots move on confirmation. Amounts below the venue minimum or above the pot are refused with the reason in the tool result.
+Route decided 11 September on the implementer's finding that Hyperliquid now recommends native CCTP and marks the Arbitrum bridge deprecated: Hyperliquid ↔ HyperEVM ↔ Base through Circle's CCTP, no Arbitrum hop. The route lives behind one module with a narrow interface; the ledger, pots and reconciler never know which bridge is underneath.
+
+`treasury.transfer(to_reserve, usd)`: a real Hyperliquid withdrawal (SDK, main-wallet key) to the reserve address on HyperEVM, then a CCTP burn on HyperEVM and mint on Base to the same address (contract calls through raw JSON-RPC with `eth_account`; the reserve holds a small gas budget on HyperEVM and Base, booked as a fee when spent). `treasury.transfer(to_venue, usd)`: the reverse. Two-phase and ledgered: `treasury.submitted` with tx references, then `treasury.confirmed` or `treasury.failed` on reconcile; pots move on confirmation. Amounts below the venue minimum or above the pot are refused with the reason in the tool result. Live acceptance on Hyperliquid testnet, HyperEVM testnet and Base Sepolia, tx references in the build log; mainnet only under the `funded` manifest.
 
 ### 5.4 Insolvency
 
