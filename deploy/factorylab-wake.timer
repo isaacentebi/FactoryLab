@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly sealed wake
+
+[Timer]
+OnBootSec=2min
+OnCalendar=hourly
+Persistent=true
+Unit=factorylab-wake.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,43 @@
+#cloud-config
+# BEFORE PROVISIONING replace REPO_URL and PINNED_COMMIT with the reviewed release.
+# No private repository token, wallet key, backup identity or webhook belongs here.
+package_update: true
+packages: [git, curl, ca-certificates, age, rclone, python3]
+users:
+  - default
+  - name: factory
+    system: true
+    shell: /usr/sbin/nologin
+    homedir: /srv/factorylab
+    lock_passwd: true
+write_files:
+  - path: /usr/local/sbin/factorylab-provision
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      repo_url='REPO_URL'
+      revision='PINNED_COMMIT'
+      [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
+      install -d -o root -g root -m 0755 /srv/factorylab
+      install -d -o factory -g factory -m 0700 /srv/factorylab/runs
+      install -d -o factory -g factory -m 0755 /srv/factorylab/www
+      # Private repos: use an operator-prepared read-only bundle URL without credentials.
+      git clone --no-checkout "$repo_url" /srv/factorylab/repo
+      git -C /srv/factorylab/repo checkout --detach "$revision"
+      test "$(git -C /srv/factorylab/repo rev-parse HEAD)" = "$revision"
+      curl --fail --silent --show-error --location https://astral.sh/uv/0.12.13/install.sh -o /tmp/uv-install.sh
+      UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh /tmp/uv-install.sh
+      export UV_PYTHON_INSTALL_DIR=/opt/factorylab-python
+      uv python install 3.13
+      cd /srv/factorylab/repo
+      uv sync --frozen --python 3.13
+      uv run --no-sync ruff check .
+      uv run --no-sync pytest
+      chmod -R a+rX /opt/factorylab-python
+      install -m 0644 deploy/*.service deploy/*.timer /etc/systemd/system/
+      systemctl daemon-reload
+      # No enable/start: launch requires keys, paid hosting and the approved funded manifest.
+      systemctl disable --now apt-daily.timer apt-daily-upgrade.timer
+runcmd:
+  - [/usr/local/sbin/factorylab-provision]

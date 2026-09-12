@@ -1,0 +1,21 @@
+[Unit]
+Description=Publish Factory Lab sealed wake
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=factory
+Group=factory
+WorkingDirectory=/srv/factorylab
+ExecStart=/srv/factorylab/repo/.venv/bin/factorylab wake --ledger /srv/factorylab/runs/funded.jsonl --out /srv/factorylab/www
+UMask=0077
+TimeoutStartSec=15min
+StandardOutput=null
+StandardError=null
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/factorylab/www

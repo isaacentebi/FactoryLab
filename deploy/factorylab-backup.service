@@ -1,0 +1,19 @@
+[Unit]
+Description=Encrypted Factory Lab backup
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/srv/factorylab/ops.env
+ExecStart=/bin/bash /srv/factorylab/repo/deploy/backup.sh
+UMask=0077
+TimeoutStartSec=2h
+StandardOutput=null
+StandardError=null
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
