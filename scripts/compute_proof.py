@@ -323,7 +323,9 @@ class Proof:
         if self.dry_run:
             return {"payment_outcome": "not_sent"}
         provider.register(model, CEILING_MICRO)
-        response = provider.complete(req, quoted=quote)
+        # Quote again inside complete(): re-wrapping the saved quote broke on sellers whose
+        # extension blobs carry decimals (FarOuter, 12 September). The unpaid 402 is free.
+        response = provider.complete(req)
         return {
             **self.completion(response),
             "settlement": response.raw.get("settlement"),
