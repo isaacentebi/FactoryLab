@@ -29,6 +29,21 @@ def seed_emits(role: str) -> tuple[str, ...]:
                 role, ("ProducerReturn",))
 
 
+CONTRACT_ROLES = {"Verdict": "evaluator", "MetaVerdict": "meta", "Exposure": "antagonist"}
+
+
+def measured_role(emits: str | tuple[str, ...] | None) -> str:
+    """Name the measurement scope of an emitted contract, never of a free-form label.
+
+    A registration's ``role`` is a display name; what a return is measured
+    against follows the kind it emits, by the same mapping that chooses its
+    settlement channel. A contract with several declared kinds is measured, like
+    it is settled, under the first one until the return selects its kind.
+    """
+    kinds = (emits,) if isinstance(emits, str) else tuple(emits or ())
+    return CONTRACT_ROLES.get(kinds[0], "producer") if kinds else "producer"
+
+
 BUILTIN_RETURNS = frozenset({"ProducerReturn", "Verdict", "MetaVerdict", "Exposure"})
 
 
@@ -192,6 +207,7 @@ def _assembly(
         raise ValueError("id must be a slug of 2-48 chars")
     if aid in known_assemblies or aid == "NOOP":
         raise ValueError("id already registered")
+    # A display name only: measurement and settlement both follow ``emits``.
     role = item.get("role", "producer")
     if not isinstance(role, str) or not SLUG.fullmatch(role):
         raise ValueError("role must be a descriptive slug")

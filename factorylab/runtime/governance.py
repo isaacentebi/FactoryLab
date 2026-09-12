@@ -16,6 +16,7 @@ from factorylab.cortex.registration import (
     ModelProposal,
     RetireProposal,
     ToolProposal,
+    measured_role,
     parse_proposals,
 )
 from factorylab.cortex.request import Return
@@ -550,7 +551,7 @@ class GovernanceMixin:
             self.window.invocations += 1
             self.window.ok += int(ret.status == "ok")
             self.card_samples.returned(handle=handle, assembly=assembly_id,
-                                       role=asm.spec.role if asm else "other",
+                                       role=measured_role(asm.spec.emits) if asm else "other",
                                        window=self.window.index, ret=ret)
             self._check_compute_return(handle, ret)
             self._compute_routed = True
@@ -733,7 +734,7 @@ class GovernanceMixin:
             source = next((r for r in reversed(self.card_samples.returns)
                            if r["handle"] == parent), {})
             assembly = forecast.evaluator_id
-            role = (self.assemblies[assembly].spec.role
+            role = (measured_role(self.assemblies[assembly].spec.emits)
                     if assembly in self.assemblies else "evaluator")
             self.card_samples.forecasts.append({
                 "handle": forecast.handle, "assembly": assembly, "role": role,

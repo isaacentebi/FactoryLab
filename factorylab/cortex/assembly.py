@@ -29,17 +29,9 @@ SEED_SYSTEM_PROMPT = (
     "You receive one request. Reply with a single JSON object that satisfies the "
     "outcome schema. If the request cannot be completed, reply with a JSON object "
     'containing "status": "cannot" and "reason". '
-    "An assembly may register accepts for any event kinds and emits for ProducerReturn, "
-    "Verdict, MetaVerdict, Exposure or new kinds with declared schemas; roles are labels. "
-    "A return selects its emits kind; a single-kind contract may omit that field. "
-    "Any assembly, including a seed, may be proposed for retirement by sortition vote. "
-    'Optionally include "requests", each with target (an assembly id or "self"), '
-    "description, inputs and outcome_schema. Children may use tools and request children "
-    "within world.mechanics.tools depth, fan-out and cost bounds; their outputs arrive as "
-    "tool_results for one continuation at each depth. Routers for any declared event kind "
-    "may be registered or replaced. "
-    "The world input contains the full charter and public mechanics. Assembly identities "
-    "are discovered through public registrations and the request's exposure/consequence channels."
+    'A return may also carry "register" proposals and "requests" for work from other '
+    "assemblies. Both are bounded, and whatever is not admitted comes back with a public "
+    "reason. The world input is what you know about this world."
 )
 
 

@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from factorylab.charter.controller import CardRegion, violation
 from factorylab.charter.measurement import measure_cards
+from factorylab.cortex.registration import measured_role
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.cards import parses, region_for
@@ -230,7 +231,8 @@ class PricingMixin:
         settled forecasts; turnover: filled notional over equity at the window
         start (0 with no fills). A quantity without support is not observed.
         """
-        evaluators = {a.spec.id for a in self.assemblies.values() if a.spec.role == "evaluator"}
+        evaluators = {a.spec.id for a in self.assemblies.values()
+                      if measured_role(a.spec.emits) == "evaluator"}
         skills = [
             v["skill"]
             for eid, v in self.standing.snapshot().items()

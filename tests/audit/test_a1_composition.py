@@ -6,7 +6,12 @@ from dataclasses import replace
 import pytest
 
 from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT
-from factorylab.cortex.registration import AssemblyProposal, RetireProposal, parse_proposals
+from factorylab.cortex.registration import (
+    AssemblyProposal,
+    RetireProposal,
+    measured_role,
+    parse_proposals,
+)
 from factorylab.cortex.request import ChildRequest, Return
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
@@ -287,7 +292,15 @@ def test_a1_public_seed_contracts_and_manifest_bounds_are_truthful():
         'max_depth': 4, 'max_children': 3, 'max_tool_calls': 4, 'continuations_per_request': 1}
     assert world['reserved_return_fields']['requests']['maxItems'] == 3
     assert world['proposal_shapes']['retire']['kind'] == 'retire'
+    # The prompt composes; the mechanics it used to announce are published as data only.
     assert 'cannot request further' not in SEED_SYSTEM_PROMPT
+    for announced in ('depth', 'fan-out', 'children', 'continuation', 'cost', 'ceiling',
+                      'router', 'Routers', 'retirement', 'sortition', 'tool', 'accepts',
+                      'emits', 'ProducerReturn', 'Verdict', 'MetaVerdict', 'Exposure',
+                      'charter', 'mechanics', 'world.mechanics'):
+        assert announced not in SEED_SYSTEM_PROMPT
+    assert 'outcome schema' in SEED_SYSTEM_PROMPT and '"register"' in SEED_SYSTEM_PROMPT
+    assert '"requests"' in SEED_SYSTEM_PROMPT and 'public' in SEED_SYSTEM_PROMPT
     for aid, kind in [('seed-decider', 'ProducerReturn'), ('eval-a', 'Verdict'),
                       ('meta-a', 'MetaVerdict'), ('antagonist-a', 'Exposure')]:
         assert tuple(rt.registry.get(aid).output_schema['emits']) == (kind,)
@@ -295,6 +308,37 @@ def test_a1_public_seed_contracts_and_manifest_bounds_are_truthful():
         replace(rt.m, tools=replace(rt.m.tools, max_depth=True)).validate()
     with pytest.raises(ValueError):
         rt._register(parent_request(rt).handle, RetireProposal('unknown'))
+
+
+def test_a1_a_free_form_role_label_never_moves_a_returns_measurement(monkeypatch):
+    """A registration's role is a display name; cards measure the contract it emits."""
+    from factorylab.charter.charter import MetricCard
+    from factorylab.charter.measurement import _groups
+    from factorylab.charter.windows import MetricWindow
+
+    rt = make_runtime()
+    origin = parent_request(rt).handle
+    rt._register(origin, AssemblyProposal('desk-researcher', 'researcher', 'fake-haiku',
+                                          'Reply with JSON.', ('Tick',), 128, 'low',
+                                          ('ProducerReturn',), {}))
+    rt._register(origin, AssemblyProposal('desk-critic', 'researcher', 'fake-haiku',
+                                          'Reply with JSON.', ('ProducerReturn',), 128, 'low',
+                                          ('Verdict',), {}))
+    assert [rt.assemblies[a].spec.role for a in ('desk-researcher', 'desk-critic')] == [
+        'researcher', 'researcher']  # the label survives as a display name
+    monkeypatch.setattr(rt.provider.target, 'complete', lambda request: ModelResponse(
+        request.model_id, '{"action":"hold"}', 1, 1, 'end_turn'))
+    handle = routed(rt, 'desk-researcher', Event('t', EventKind.TICK, 0, {'index': 0}, 'fake'))
+    row = next(r for r in rt.card_samples.returns if r['handle'] == handle)
+    assert row['role'] == 'producer' and rt.queue.get(handle).channel == CH_VERDICT
+    card = MetricCard('cost-producer', 'thrift', 'producer cost', 'micro-USD',
+                      MetricWindow('returns', 1, 'role'), 'below 1000', 'cost_per_return',
+                      'producer')
+    assert handle in [r['handle'] for r in _groups(card, rt.card_samples.returns)['producer']]
+    # The evaluator-scoped card and the evaluator forecast-skill set follow emits too.
+    assert measured_role(rt.assemblies['desk-critic'].spec.emits) == 'evaluator'
+    assert 'desk-critic' in {a.spec.id for a in rt.assemblies.values()
+                             if measured_role(a.spec.emits) == 'evaluator'}
 
 
 def test_a1_custom_child_schema_cannot_be_weakened_to_execute_effects(monkeypatch):

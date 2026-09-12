@@ -31,6 +31,7 @@ from collections import deque
 from itertools import islice
 from typing import Any
 
+from factorylab.cortex.registration import measured_role
 from factorylab.cortex.request import Return
 from factorylab.cortex.sandbox import NoJail, jail_probe
 from factorylab.cortex.schematics import SchematicsMixin
@@ -90,7 +91,9 @@ class Runtime(
         tool_calls = self.window.tool_calls
         ret = super()._invoke(action_id, req, role, child=child)
         self.card_samples.returned(handle=req.handle, assembly=action_id,
-                                   role=self.assemblies[action_id].spec.role,
+                                   role=measured_role(
+                                       self.return_kinds.get(req.handle)
+                                       or self.assemblies[action_id].spec.emits),
                                    window=self.window.index, ret=ret)
         self.card_samples.returns[-1]["tool_calls"] = self.window.tool_calls - tool_calls
         return ret
@@ -428,9 +431,33 @@ class Runtime(
                             *(["emits"] if len(spec.emits) > 1 else [])]})
         return schemas[0] if len(schemas) == 1 else {"anyOf": schemas}
 
-    def _judged_event(self, ev: Event, handle: str, ret: Return) -> Event | None:
+    def _hindsight_reason(self, handle: str, about: str) -> str | None:
+        """Name why a chosen target cannot carry a payoff forecast, or None if it can.
+
+        A forecast precedes its outcome. The router's subject is not chosen, but a
+        return that names an older target instead may not name one whose
+        consequence is already fixed, one at or past its backstop, or one whose
+        backstop falls before this judgement's own decision deadline.
+        """
+        try:
+            account = self.consequences.table.account(about)
+        except KeyError:
+            return None
+        if account.payoff is not None:
+            return "judgement needs a chosen return whose consequence is still open"
+        due = account.opened_at_event + self.consequences.backstop
+        if self.n >= due:
+            return "judgement needs a chosen return inside its consequence backstop"
+        backstop_ns = self.clock.now_ns + (due - self.n) * self.tick_clock.interval_ns
+        if self.queue.get(handle).deadline_ns > backstop_ns:
+            return "judgement would settle after the chosen return's consequence backstop"
+        return None
+
+    def _judged_event(self, ev: Event, handle: str, ret: Return,
+                      *, seals_payoff: bool = False) -> Event | None:
         """A judgement may address a public return handle, excluding its complete ancestry."""
-        about = ret.outputs.get("about_handle", self._event_subject(ev))
+        subject = self._event_subject(ev)
+        about = ret.outputs.get("about_handle", subject)
         try:
             self.queue.get(about)
         except (KeyError, TypeError):
@@ -438,7 +465,7 @@ class Runtime(
                                 "reason": "judgement needs an addressable return handle"})
             return None
         target = self.return_events.get(about)
-        if target is None and about == self._event_subject(ev):
+        if target is None and about == subject:
             target = ev
         author = self.handle_to_assembly.get(handle)
         if target is None or author in self._subject_authors(str(target.kind), target):
@@ -453,6 +480,13 @@ class Runtime(
         }:
             self.ledger.append({"kind": "return.refused", "handle": handle,
                                 "about_handle": about, "reason": "self-judgement: ancestor"})
+            return None
+        # A payoff forecast on a target this return chose for itself, rather than the
+        # one the router delivered, must still be sealed before the outcome is fixed.
+        if seals_payoff and about != subject and (
+                reason := self._hindsight_reason(handle, about)) is not None:
+            self.ledger.append({"kind": "return.refused", "handle": handle,
+                                "about_handle": about, "reason": reason})
             return None
         self.decision_subjects[handle] = about
         return target
@@ -661,7 +695,8 @@ class Runtime(
         )
         verdict = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
         payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
-        target = self._judged_event(ev, handle, ret) if verdict is not None else None
+        target = (self._judged_event(ev, handle, ret, seals_payoff=True)
+                  if verdict is not None else None)
         if target is not None:
             about = self._event_subject(target)
             payload = _to_plain(target.payload)
