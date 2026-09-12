@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -205,12 +206,16 @@ class X402Provider:
         transport: Transport | None = None,
         rpc: str = BASE_RPC,
         discovery_url: str = DISCOVERY_URL,
+        extra_body: Mapping[str, Any] | None = None,
     ) -> None:
         self._private_key = private_key
         self._transport = transport or http_request
         self.rpc = rpc
         self.discovery_url = discovery_url
         self._ceilings: dict[str, int] = {}
+        self._extra_body = deepcopy(dict(extra_body or {}))
+        if self._extra_body.keys() & {"model", "messages", "max_tokens", "stream"}:
+            raise X402Error("Extra body cannot override the bounded completion request")
 
     def _client(self) -> X402Client:
         return X402Client(private_key=self._private_key, rpc=self.rpc, transport=self._transport)
@@ -237,12 +242,12 @@ class X402Provider:
         """Seller catalogue reads use the same injected transport as inference."""
         return seller_models(seller_url, transport=self._transport)
 
-    @staticmethod
-    def _payload(req: ModelRequest) -> tuple[str, dict]:
+    def _payload(self, req: ModelRequest) -> tuple[str, dict]:
         root, model = split_model_id(req.model_id)
         return root + "/v1/chat/completions", {
             "model": model, "messages": [{"role": "system", "content": req.system}, *req.messages],
             "max_tokens": req.max_tokens,
+            **deepcopy(self._extra_body),
         }
 
     def quote(self, req: ModelRequest) -> PaymentQuote:
