@@ -65,6 +65,11 @@ class StubExchange:
     def account(self):
         return AccountState(Decimal("100"), Decimal("100"), (), Decimal(0))
 
+    def instruments(self):
+        return {"perp": [{"coin": "BTC", "lot_size": "0.00001", "tick_size": "0.1"},
+                         {"coin": "ETH", "lot_size": "0.0001", "tick_size": "0.01"}],
+                "spot": []}
+
     def place(self, order: Order) -> OrderResult:
         return OrderResult(None, "rejected", Decimal(0), None, "no signing key")
 

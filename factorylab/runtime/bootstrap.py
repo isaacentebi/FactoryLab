@@ -126,7 +126,8 @@ class BootstrapMixin:
             self.exchange = exchange
         elif self.live:
             self.exchange = HyperliquidExchange(
-                mainnet=manifest.exchange.mainnet, coins=manifest.exchange.coins
+                mainnet=manifest.exchange.mainnet, coins=manifest.exchange.coins,
+                spot_pairs=manifest.exchange.spot_pairs
             )
         else:
             shocks: dict[int, dict[str, Decimal]] = {}
@@ -135,12 +136,15 @@ class BootstrapMixin:
             self.exchange = FakeExchange(
                 seed=manifest.exchange.seed,
                 coins=manifest.exchange.coins,
+                spot_pairs=manifest.exchange.spot_pairs,
                 start_cash_usd=money_to_usd(self.initial),
                 shocks=shocks,
             )
         if provider is None:
             provider = build_provider(manifest)
         self.provider = provider if provider is not None else ScriptedProvider()
+        if isinstance(self.provider, ScriptedProvider) and manifest.exchange.spot_pairs:
+            self.provider.spot_pair = manifest.exchange.spot_pairs[0]
         self.market = (
             market
             if market is not None
@@ -243,7 +247,8 @@ class BootstrapMixin:
 
         if not self.live:
             self.treasury = FakeTreasury(
-                self.ledger, self.wallet, fee_micro=manifest.treasury.fake_fee_micro,
+                self.ledger, self.wallet, exchange=self.exchange,
+                fee_micro=manifest.treasury.fake_fee_micro,
                 max_venice_per_window=manifest.treasury.max_venice_per_window,
             )
         else:
@@ -323,6 +328,7 @@ class BootstrapMixin:
         self.realized_to_date = 0
         self.fees_to_date = 0
         self.funding_to_date = 0
+        self.spot_inventory = {}
         self.memory: dict[str, deque[dict[str, Any]]] = {}
         self.handle_to_assembly: dict[str, str] = {}
         self.tool_specs: dict[str, dict[str, Any]] = {}  # tool id -> spec dict (world block)
@@ -333,6 +339,7 @@ class BootstrapMixin:
             self.venue_tools = VenueTools(
                 self.exchange,
                 coins=manifest.exchange.coins,
+                spot_pairs=manifest.exchange.spot_pairs,
                 max_leverage=manifest.tools.max_leverage,
             )
             for spec in self.venue_tools.contracts():
@@ -345,14 +352,16 @@ class BootstrapMixin:
                 }
         self.tool_specs["treasury.transfer"] = {
             "id": "treasury.transfer",
-            "description": "Submit a transfer between venue and reserve, or to_venice from "
+            "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, "
+            "or to_venice from "
             "reserve in a fixed $5 tranche, within treasury.max_venice_per_window. "
             "Principal stays held "
             "until receipt-confirmed arrival. The result carries references or a refusal reason.",
             "args_schema": {
                 "type": "object",
                 "properties": {
-                    "direction": {"enum": ["to_reserve", "to_venue", "to_venice"]},
+                    "direction": {"enum": ["to_reserve", "to_venue", "to_venice",
+                                           "spot_to_perps", "perps_to_spot"]},
                     "usd": {"type": ["string", "integer"], "description": "Exact positive USD"},
                     "reason": {"type": "string"},
                 },

@@ -48,6 +48,7 @@ class Lot:
     size: Fraction
     px: Fraction
     charges_micro: Fraction
+    market: str = "perp"
 
 
 @dataclass(frozen=True)
@@ -138,6 +139,8 @@ class LotTable:
         px: str,
         fee_usd: str,
         liquidation: bool = False,
+        market: str = "perp",
+        order_size: str | None = None,
     ) -> "LotTable":
         """Close opposite lots FIFO, crediting the realised P&L to opener and closer alike.
 
@@ -149,6 +152,12 @@ class LotTable:
         whose order belongs to no open account is refused rather than pooled.
         """
         _require_id(order_id)
+        if "/" in coin:
+            market = "spot"
+        if market not in ("perp", "spot"):
+            raise ValueError("unknown market")
+        if market == "spot" and liquidation:
+            raise ValueError("spot lots cannot be liquidated")
         _require_id(coin)
         if type(is_buy) is not bool or type(liquidation) is not bool:
             raise ValueError("fill side and liquidation must be booleans")
@@ -160,12 +169,17 @@ class LotTable:
         accounts = {r.handle: r for r in self.returns}
         if not liquidation and owner not in accounts:
             raise ValueError("fill without an open consequence account")
+        if market == "spot" and not is_buy and quantity > sum(
+            (lot.size for lot in self.lots if lot.coin == coin and lot.market == market),
+            Fraction(0),
+        ):
+            raise ValueError("spot sell exceeds long inventory")
         remainder = quantity
         lots = []
         closer_net = Fraction(0)
         closes = 0
         for lot in self.lots:
-            if remainder <= 0 or lot.coin != coin or lot.is_buy == is_buy:
+            if remainder <= 0 or lot.coin != coin or lot.market != market or lot.is_buy == is_buy:
                 lots.append(lot)
                 continue
             closed = min(remainder, lot.size)
@@ -198,13 +212,17 @@ class LotTable:
                 closes=accounts[owner].closes + closes,
             )
         if remainder and not liquidation:
-            lots.append(Lot(owner, coin, is_buy, remainder, price, fee * remainder / quantity))
+            lots.append(Lot(owner, coin, is_buy, remainder, price,
+                            fee * remainder / quantity, market))
             if owner in accounts:
                 accounts[owner] = replace(
                     accounts[owner], opened_lots=accounts[owner].opened_lots + 1
                 )
+        executed = quantity if order_size is None else exact(order_size)
+        if executed <= 0:
+            raise ValueError("executed order size must be positive")
         orders = tuple(
-            replace(o, remaining=max(Fraction(0), o.remaining - quantity))
+            replace(o, remaining=max(Fraction(0), o.remaining - executed))
             if o.order_id == order_id
             else o
             for o in self.orders
