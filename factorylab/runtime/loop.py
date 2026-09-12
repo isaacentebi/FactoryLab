@@ -542,8 +542,10 @@ class Runtime:
             clock_ns=self.clock,
         )
         self.cadence = GovernanceCadence(
-            self.ledger, sample=manifest.timing.cadence_sample,
-            min_ratio=manifest.timing.min_ratio, backstop=self.ev.consequence_backstop_events,
+            self.ledger,
+            sample=manifest.timing.cadence_sample,
+            min_ratio=manifest.timing.min_ratio,
+            backstop=self.ev.consequence_backstop_events,
         )
         self.timing = TimingRegistry()
         self.timing.register_loop("leaf", [])
@@ -975,6 +977,7 @@ class Runtime:
             },
             "governance": self.cadence.world_block(self.tick_clock.interval_ns),
             "registration_feedback": list(self.registration_feedback),
+            "scoring": self._scoring_block(),
             "prices": {"lambda_max": self.m.prices.lambda_max},
             "amendment_feedback": getattr(self, "amendment_feedback", None),
             "card_prices": [
@@ -1988,6 +1991,7 @@ class Runtime:
             },
             "world": self._world_block(),
             "your_recent_returns": list(self.memory.get(sample.chosen, ())),
+            "your_consequence_standing": self._standing_for(sample.chosen),
         }
         schema = {
             "type": "object",
@@ -2621,7 +2625,8 @@ class Runtime:
         if outcome == "passed":
             self.cadence.approve(am.id)
             self.cadence.ready(
-                now_ns=self.clock.now_ns, tick_interval_ns=self.tick_clock.interval_ns,
+                now_ns=self.clock.now_ns,
+                tick_interval_ns=self.tick_clock.interval_ns,
                 window=self.stats.reserve_windows,
             )
             self.stats.amendments_passed += 1
@@ -2629,7 +2634,8 @@ class Runtime:
     def _next_charter_activation(self) -> Charter | None:
         """Activate only at a boundary that meets the measured governance separation."""
         if not self.cadence.ready(
-            now_ns=self.clock.now_ns, tick_interval_ns=self.tick_clock.interval_ns,
+            now_ns=self.clock.now_ns,
+            tick_interval_ns=self.tick_clock.interval_ns,
             window=self.stats.reserve_windows,
         ):
             return None
@@ -2722,6 +2728,97 @@ class Runtime:
             events=tuple(self.events_log[start + 1 : self.n + 1]),
         )
 
+    def _scoring_block(self) -> dict[str, Any]:
+        """How decisions settle, stated as facts about the world (v0.4 §1.6: schematics are
+        public; no goals). Run 7 showed judges grading conformity alone because nothing told
+        them a verdict is also a forecast, and producers reinforced by verdicts that never
+        answered to money."""
+        ev = self.ev
+        return {
+            "producer_or_antagonist_return": (
+                "settles on the verdict channel: the score is the verdict (0 to 1) an evaluator "
+                f"gives it within {ev.verdict_timeout_events} events, less the card penalty; "
+                "unjudged returns are censored (no score, no learning)"
+            ),
+            "antagonist_exposure": (
+                "an antagonist return also settles 1 on the exposure channel when a judge's "
+                "forecast about it scores worse than the prevalence baseline, else 0"
+            ),
+            "verdict": (
+                "a verdict is also sealed as a forecast, with q = verdict, that the judged "
+                "return pays off; it settles on the evaluator's consequence standing"
+            ),
+            "return_paid_off": (
+                "1 when the lots the return's own fills opened are closed with realized gain "
+                "net of fees, funding and the return's own compute cost; a return that placed "
+                "no fills settles 0; lots still open after "
+                f"{ev.consequence_backstop_events} events are marked to mid"
+            ),
+            "consequence_standing": (
+                "Brier score of the evaluator's forecasts against the prevalence baseline; "
+                f"it enters evaluator selection with weight {ev.consequence_share} beside the "
+                "learned selection"
+            ),
+            "evaluator_return": (
+                "settles on the conformity channel: the score a meta gives the verdict within "
+                f"{ev.verdict_timeout_events} events, less the card penalty; metas judge one "
+                f"verdict in every {self.m.timing.min_ratio} (with jitter) as the window's "
+                "representative and its score settles the whole window"
+            ),
+            "meta_return": (
+                "settles on the fast channel (well-formed = 1) unless a higher tier of metas "
+                "exists, in which case on conformity like an evaluator"
+            ),
+            "card_penalty": (
+                "each priced metric card subtracts its price times the window's violation "
+                "from verdict and conformity scores; prices are in card_prices"
+            ),
+            "novelty_reserve": (
+                "registrations draw on the novelty reserve at the trial amount; refused "
+                "proposals carry a reason in registration_feedback"
+            ),
+        }
+
+    def _standing_for(self, evaluator_id: str) -> dict[str, Any] | None:
+        """A judge's own consequence standing: skill against the prevalence baseline, sample
+        size, selection weight. Its own running score, private to it (v0.4 §1.6)."""
+        st = self.standing.snapshot().get(evaluator_id)
+        if not st or not st.get("n"):
+            return None
+        return {
+            "skill_vs_baseline": round(float(st["skill"]), 4),
+            "settled_forecasts": st["n"],
+            "selection_weight": round(float(st["weight"]), 4),
+        }
+
+    def _deliver_consequence_to_memory(self, s: Any) -> None:
+        """The reward line must reach the primitive that acted, not only its router (essay
+        II.I.b: memory across rounds, reward attributable to the decision). A producer learns
+        whether its return paid off; a judge learns whether the return it blessed paid off and
+        how its verdict scored. Private local state, never public. Run 7 showed judges blessing
+        inaction at 1.0 while their standing fell, because nothing ever told them."""
+        if s.predicate_id != "return_paid_off":
+            return
+        producer = self.handle_to_assembly.get(s.about_handle)
+        if producer is not None:
+            for entry in self.memory.get(producer, ()):
+                if entry["handle"] == s.about_handle:
+                    entry["paid_off"] = s.y
+        prefix = "verdict-"
+        if not s.handle.startswith(prefix):
+            return
+        judge_handle = s.handle[len(prefix) :]
+        judge = self.handle_to_assembly.get(judge_handle)
+        if judge is None:
+            return
+        for entry in self.memory.get(judge, ()):
+            if entry["handle"] == judge_handle:
+                entry["judged_return_paid_off"] = s.y
+                entry["your_consequence_brier"] = round(float(s.brier), 4)
+                entry["baseline_brier"] = (
+                    round(float(s.baseline_brier), 4) if s.baseline_brier is not None else None
+                )
+
     def _settle_exposures(self, settled: list[Any]) -> None:
         """An antagonist wins when a judge's forecast about its return scored below baseline."""
         for s in settled:
@@ -2765,9 +2862,12 @@ class Runtime:
         for s in settled:
             forecast = pending[s.handle]
             self.cadence.record(
-                handle=s.handle, predicate_id=s.predicate_id,
-                opened_event=forecast.made_at_event, settled_event=self.n,
-                opened_ns=self.queue.get(s.handle).opened_ns, settled_ns=self.clock.now_ns,
+                handle=s.handle,
+                predicate_id=s.predicate_id,
+                opened_event=forecast.made_at_event,
+                settled_event=self.n,
+                opened_ns=self.queue.get(s.handle).opened_ns,
+                settled_ns=self.clock.now_ns,
                 status=str(s.status),
             )
             self.stats.forecasts_settled += 1
@@ -2785,6 +2885,7 @@ class Runtime:
             )
             if s.brier is None:
                 continue
+            self._deliver_consequence_to_memory(s)
             self.last_closure_ns = max(self.clock.now_ns, self.last_closure_ns + 1)
             self.timing.record_closure("leaf", self.last_closure_ns)
             self.buffer.add(
