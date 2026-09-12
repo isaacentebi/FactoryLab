@@ -186,16 +186,16 @@ Edition 1 re-draft with the launch roster (A6). Pass 4: seat 7's polish list. Ro
 
 Essay II.I: composability means the factory can discover primitives, assess their contracts and assemble them. I.I: what a factory can know must not be decided for it.
 
-Defect: population code runs in a jail with no network, and the only things that reach the world are rails the architect chose (venue, treasury, compute market, catalogue). The set of information sources is fixed at the first move.
+Defect: population code runs in a jail with no network, and the only things that reach the world are rails the architect chose. The set of information sources is fixed at the first move.
 
-Decision: the jail is unchanged. A **connector** is a read-only rail the population registers and the kernel executes on its behalf through a proxy that holds no keys.
+Decision: the jail is unchanged. A **connector** is the simplest possible read-only rail: an https origin the population registers by vote, which the kernel fetches from on the population's behalf.
 
-Mechanism:
-- Registration kind `connector`: `{id, description, origin, path_prefix, params_schema, max_bytes, cache_s}`. `origin` is `https://<host>` only; `path_prefix` bounds the paths; GET only; no request headers beyond `Accept` and `User-Agent`; no credentials of any kind; response capped at `max_bytes` (bounded by the manifest), timeout bounded by the manifest.
-- Admission: a connector adds a rail, so it passes the same sortition vote as an amendment, after a kernel preflight fetch that must return 2xx within the bounds. Public reason on refusal. Versioned in the registry as `connector:<id>`; re-registration supersedes.
-- Use: a tool call `connector.fetch {id, path, params}` from any return, executed by the runtime's proxy (never inside the jail), metered from the caller's reservation at `connectors.call_price_usd` per call plus `connectors.byte_price_usd_per_kb`, rate-limited by `connectors.max_calls_per_window` per assembly and per connector. The response body reaches the caller as text in `seen_tool_results` on its continuation, truncated at `max_bytes`; a population tool may then parse it in the jail via the ordinary tool path.
-- Ledger: `connector.registered`, `connector.call` (id, path, status, bytes, cost, cache hit; never the body), `connector.refused`. The wake's observatory lists registered connectors and calls per day.
-- Manifest keys (seed values): `connectors.max_bytes = 262144`, `connectors.timeout_s = 10`, `connectors.call_price_usd = "0.001"`, `connectors.byte_price_usd_per_kb = "0.00001"`, `connectors.max_calls_per_window = 60`, `connectors.origin_denylist` (the venue's and providers' own hosts and any private range, so a connector cannot be used to reach a rail's authenticated surface).
-- Seed: none. The architect registers no connector; the population does.
+Mechanism, deliberately minimal:
+- Registration kind `connector`: `{id, description, origin}`. `origin` is `https://<host>` only. Nothing else is configurable.
+- Admission: the same sortition vote as an amendment, after a kernel preflight `GET origin/` that must answer within the bounds. Public reason on refusal. Versioned in the registry as `connector:<id>`.
+- Use: a tool call `connector.fetch {id, path}` from any return. The runtime fetches `origin + path` with GET, no headers beyond `Accept` and `User-Agent`, no credentials, https only, response cut at `connectors.max_bytes`, timeout `connectors.timeout_s`, hosts in `connectors.origin_denylist` (the venue's and providers' hosts, private ranges) refused. Metered at the flat `connectors.call_price_usd` per call from the caller's reservation; at most `connectors.max_calls_per_window` per assembly. The body reaches the caller as text in `seen_tool_results` on its continuation; a population tool may parse it in the jail via the ordinary tool path.
+- Ledger: `connector.registered`, `connector.call` (id, path, status, bytes, cost; never the body), `connector.refused`. The observatory lists connectors and calls per day.
+- Manifest keys (seed values): `connectors.max_bytes = 262144`, `connectors.timeout_s = 10`, `connectors.call_price_usd = "0.001"`, `connectors.max_calls_per_window = 60`, `connectors.origin_denylist`.
+- No cache, no byte pricing, no params schema, no path prefix. Seed: none; the architect registers no connector.
 
-Accept: the scripted world (with a fake proxy) registers a connector by vote, calls it from a producer, parses the body in a jailed tool, and the ledger shows the chain; a registration with a credential header, a non-https origin, a denylisted host, or a body over the cap is refused with a reason; the jail test proving population code has no network still passes.
+Accept: the scripted world (fake transport) registers a connector by vote, calls it from a producer, parses the body in a jailed tool, and the ledger shows the chain; a non-https origin, a denylisted host, or a body over the cap is refused with a reason; the jail test proving population code has no network still passes.
