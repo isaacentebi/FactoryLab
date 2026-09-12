@@ -23,6 +23,8 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.clock import ClockSource
 from factorylab.world.exchange import FakeExchange, Order
 
+pytestmark = pytest.mark.slow
+
 
 def make_runtime(manifest, path, **kwargs):
     return Runtime(
@@ -54,7 +56,6 @@ import os, signal, sys
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 
-pytestmark = pytest.mark.slow
 rt = Runtime(load_manifest('scripted'), events=140, seed=1, initial_balance_micro=None,
              ledger_path=sys.argv[1], drip=True, router_gamma=.1)
 original = rt._process_event
