@@ -4,6 +4,7 @@ import pytest
 from factorylab.cortex.request import Return
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from tests.runtime.test_fa_defects import make_runtime
+from tests.runtime.test_fc_children import parent_request
 
 
 def test_lost_ack_is_intented_before_submission_and_fill_keeps_original_handle(monkeypatch):
@@ -66,9 +67,9 @@ def test_unknown_ack_defers_fill_attribution_until_recovery(monkeypatch):
                                  'venue.cancel'])
 def test_venue_tool_writes_have_handle_intents(tool):
     rt = make_runtime()
-    rt.consequences.start('caller', 0)
+    caller = parent_request(rt).handle
     if tool in ('venue.close', 'venue.cancel'):
-        rt._run_tool('seed-decider', 'caller', {'tool': 'venue.place_limit', 'args': {
+        rt._run_tool('seed-decider', caller, {'tool': 'venue.place_limit', 'args': {
             'coin': 'ETH', 'side': 'buy', 'size': '.001', 'price': '3000' if tool.endswith('close')
             else '1'}}, slot='setup')
     args = {'coin': 'ETH'}
@@ -78,7 +79,7 @@ def test_venue_tool_writes_have_handle_intents(tool):
         args['price'] = '1'
     if tool == 'venue.cancel':
         args['order_id'] = rt.exchange.open_orders()[0]['order_id']
-    result, cost = rt._run_tool('seed-decider', 'caller', {'tool': tool, 'args': args})
+    result, cost = rt._run_tool('seed-decider', caller, {'tool': tool, 'args': args})
     assert result['status'] in ('filled', 'resting', 'cancelled') and cost == 0
-    assert any(i['kind'] == 'order.intent' and i['handle'] == 'caller'
+    assert any(i['kind'] == 'order.intent' and i['handle'] == caller
                and i['operation'] == tool for i in rt.ledger._recovery_items())

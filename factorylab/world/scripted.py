@@ -13,7 +13,7 @@ from factorylab.world.models import ModelRequest, ModelResponse
 
 @dataclass
 class ScriptedProvider:
-    """Deterministic stand-in for models in the scripted world, aware of the three roles.
+    """Deterministic stand-in for seed contracts and the A1 composition exercise.
 
     Producers cycle buy / hold / sell / hold on ticks (sized to equity) and
     occasionally propose registrations; every produce reply carries a low
@@ -40,7 +40,16 @@ class ScriptedProvider:
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
         inputs = _inputs_from_prompt(text)
         desc = _description_from_prompt(text)
-        if desc.startswith("Evaluate"):
+        if desc == "A1 helper":
+            reply = ({"emits": "Finding", "answer": 1} if "tool_results" in inputs else {
+                "emits": "Finding", "requests": [{
+                    "target": "funding-watcher", "description": "A1 grandchild", "inputs": {},
+                    "outcome_schema": {"type": "object", "required": ["action"]}}]})
+        elif desc == "A1 grandchild":
+            reply = ({"action": "hold"} if "tool_results" in inputs else {
+                "tool_calls": [{"tool": "catalogue.search",
+                                "args": {"substring": "fake", "limit": 1}}]})
+        elif desc.startswith("Evaluate"):
             reply = self._evaluate(req, inputs)
         elif desc.startswith("Assess"):
             reply = self._meta(inputs)
@@ -104,6 +113,15 @@ class ScriptedProvider:
                     "add": True,
                 }
             ]
+            reply["register"].extend([
+                {"kind": "router", "event_kind": "Finding", "learner": "exp3", "gamma": 0.3},
+                {"kind": "retire", "assembly_id": "eval-a"},
+            ])
+        if n == self.tool_at_calls[3]:
+            reply["requests"] = [{
+                "target": "composition-helper", "description": "A1 helper", "inputs": {},
+                "outcome_schema": {"type": "object", "required": ["answer"]},
+            }]
         if n == 45:
             reply["register"] = [
                 {
@@ -174,7 +192,17 @@ class ScriptedProvider:
             reply["register"] = [{"kind": "model", "openrouter_id": "meta/muse-spark-1.3"}]
         elif n == self.register_at_calls[2]:
             reply["register"] = [
-                {"kind": "router", "event_kind": "MarketMid", "learner": "exp3", "gamma": 0.2}
+                {"kind": "router", "event_kind": "MarketMid", "learner": "exp3", "gamma": 0.2},
+                {"kind": "assembly", "id": "composition-helper", "role": "producer",
+                 "model_id": "fake-haiku", "system_prompt": "Answer the requested helper task.",
+                 "accepts": ["CompositionRequest"], "emits": ["Finding"], "max_tokens": 128,
+                 "schemas": {"Finding": {
+                     "type": "object", "properties": {"answer": {"type": "integer"}},
+                     "required": ["answer"], "additionalProperties": False}}},
+                {"kind": "assembly", "id": "return-observer", "role": "producer",
+                 "model_id": "fake-haiku", "system_prompt": "Reply with a JSON action.",
+                 "accepts": ["ProducerReturn", "Finding"], "emits": ["ProducerReturn"],
+                 "max_tokens": 128},
             ]
         return reply
 

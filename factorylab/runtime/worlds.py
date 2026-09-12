@@ -86,6 +86,16 @@ class AssemblySeed:
     effort: str = "medium"
     memory_policy: str = "none"
     role: str = "producer"
+    emits: tuple[str, ...] | None = None
+    schemas: dict[str, dict] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        from factorylab.cortex.registration import output_contracts, seed_emits
+
+        emits, schemas = output_contracts(
+            self.emits if self.emits is not None else seed_emits(self.role), self.schemas)
+        object.__setattr__(self, "emits", emits)
+        object.__setattr__(self, "schemas", schemas)
 
 
 @dataclass(frozen=True)
@@ -93,6 +103,9 @@ class ToolsSpec:
     population_tool_micro_per_call: int = 50
     max_leverage: int = 3
     max_routers_per_kind: int = 3
+    max_depth: int = 4
+    max_children: int = 3
+    max_tool_calls: int = 4
 
 
 @dataclass(frozen=True)
@@ -300,6 +313,9 @@ class WorldManifest:
             ("novelty.max_lifetime_windows", self.novelty.max_lifetime_windows, 1),
             ("committee.min_settled", self.committee.min_settled, 1),
             ("committee.seats", self.committee.seats, 3),
+            ("tools.max_depth", self.tools.max_depth, 0),
+            ("tools.max_children", self.tools.max_children, 0),
+            ("tools.max_tool_calls", self.tools.max_tool_calls, 0),
             ("immune.k", self.immune.k, 2), ("immune.bins", self.immune.bins, 2),
         ):
             if type(value) is not int or value < minimum:
@@ -330,8 +346,8 @@ class WorldManifest:
         if type(backstop) is not int or backstop < 1:
             raise ValueError("consequence_backstop_events must be a positive integer")
         for a in self.assemblies:
-            if a.role not in ("producer", "evaluator", "meta", "antagonist"):
-                raise ValueError(f"assembly {a.id} has unknown role {a.role}")
+            if not isinstance(a.role, str) or not a.role.strip():
+                raise ValueError(f"assembly {a.id} has an empty role label")
         if self.novelty.window_ns <= 0:
             raise ValueError("novelty window must be positive")
         if type(self.timing.cadence_sample) is not int or self.timing.cadence_sample < 1:
@@ -489,6 +505,8 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             effort=a.get("effort", "medium"),
             memory_policy=a.get("memory_policy", "none"),
             role=a.get("role", "producer"),
+            emits=tuple(a["emits"]) if "emits" in a else None,
+            schemas=a.get("schemas", {}),
         )
         for a in d.get("assemblies", [])
     )
@@ -551,6 +569,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
             int((d.get("tools") or {}).get("max_leverage", 3)),
             int((d.get("tools") or {}).get("max_routers_per_kind", 3)),
+            (d.get("tools") or {}).get("max_depth", 4),
+            (d.get("tools") or {}).get("max_children", 3),
+            (d.get("tools") or {}).get("max_tool_calls", 4),
         ),
         prices=prices,
         treasury=TreasurySpec(

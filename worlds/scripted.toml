@@ -29,6 +29,7 @@ id = "seed-observer"
 role = "producer"
 model_id = "fake-haiku"
 accepts = ["MarketMid", "Funding"]
+emits = ["ProducerReturn"]
 max_tokens = 256
 
 [[assemblies]]
@@ -36,6 +37,7 @@ id = "seed-decider"
 role = "producer"
 model_id = "fake-opus"
 accepts = ["Tick", "Fill"]
+emits = ["ProducerReturn"]
 max_tokens = 512
 
 # Evaluators outnumber producers; two run on the other model family.
@@ -44,6 +46,7 @@ id = "eval-a"
 role = "evaluator"
 model_id = "fake-haiku"
 accepts = ["ProducerReturn"]
+emits = ["Verdict"]
 max_tokens = 256
 
 [[assemblies]]
@@ -51,6 +54,7 @@ id = "eval-b"
 role = "evaluator"
 model_id = "fake-haiku"
 accepts = ["ProducerReturn"]
+emits = ["Verdict"]
 max_tokens = 256
 
 [[assemblies]]
@@ -58,6 +62,7 @@ id = "eval-c"
 role = "evaluator"
 model_id = "fake-opus"
 accepts = ["ProducerReturn"]
+emits = ["Verdict"]
 max_tokens = 256
 
 [[assemblies]]
@@ -65,6 +70,7 @@ id = "eval-d"
 role = "evaluator"
 model_id = "fake-opus"
 accepts = ["ProducerReturn"]
+emits = ["Verdict"]
 max_tokens = 256
 
 [[assemblies]]
@@ -72,6 +78,7 @@ id = "antagonist-a"
 role = "antagonist"
 model_id = "fake-haiku"
 accepts = ["Tick", "MarketMid"]
+emits = ["Exposure"]
 max_tokens = 256
 
 [[assemblies]]
@@ -79,6 +86,7 @@ id = "meta-a"
 role = "meta"
 model_id = "fake-haiku"
 accepts = ["Verdict"]
+emits = ["MetaVerdict"]
 max_tokens = 128
 
 [[assemblies]]
@@ -86,6 +94,7 @@ id = "meta-b"
 role = "meta"
 model_id = "fake-haiku"
 accepts = ["Verdict"]
+emits = ["MetaVerdict"]
 max_tokens = 128
 
 [evaluation]
@@ -123,6 +132,11 @@ balance_floor_usd = "0"
 
 [committee]
 min_settled = 5
+
+[tools]
+max_depth = 4
+max_children = 3
+max_tool_calls = 4
 
 [immune]
 k = 3

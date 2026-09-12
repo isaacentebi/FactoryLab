@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from factorylab.cortex.request import ChildRequest, Return
 from factorylab.kernel.events import Event, EventKind
-from factorylab.kernel.queue import PropensityRecord
+from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.runtime.shared import CH_CONFORMITY, CH_VERDICT
 from factorylab.world.exchange import FakeExchange
 from tests.runtime.test_loop import _consequence_decision, _consequence_runtime
@@ -82,7 +82,8 @@ def test_a_judge_is_never_routed_to_its_own_childs_return_nor_to_its_own_output(
     spec = runtime.assemblies["eval-a"].spec
     # A judge that also accepts producer returns as a child target, and a parent producer.
     runtime._instantiate(replace(spec, id="eval-child", role="evaluator",
-                                 accepts=frozenset({"ProducerReturn", "Tick"})))
+                                 accepts=frozenset({"ProducerReturn", "Tick"}),
+                                 emits=("ProducerReturn",)))
     parent = _consequence_decision(runtime, "seed-decider", CH_VERDICT)
     runtime.handle_to_assembly[parent] = "seed-decider"
     runtime.consequences.start(parent, 0)
@@ -99,6 +100,9 @@ def test_a_judge_is_never_routed_to_its_own_childs_return_nor_to_its_own_output(
     runtime._invoke_child("seed-decider", request, child_item, 1000)
     child_return = next(e for e in runtime.internal if e.kind is EventKind.PRODUCER_RETURN
                         and e.payload["about_handle"] == child_handle)
+    # A1 permits producing on one's own event. A judging contract still cannot judge it.
+    assert "eval-child" in runtime._universe_for("ProducerReturn", child_return)
+    runtime._instantiate(replace(runtime.assemblies["eval-child"].spec, emits=("Verdict",)))
     universe = runtime._universe_for("ProducerReturn", child_return)
     assert "eval-child" not in universe  # the child cannot judge its own return
     assert "seed-decider" not in universe  # the parent cannot judge the child it requested
@@ -136,3 +140,58 @@ def test_child_target_and_parent_are_excluded_for_meta_and_producer_kinds_alike(
     event = Event("r", EventKind.PRODUCER_RETURN, 0, {"about_handle": child}, "runtime")
     assert runtime._subject_authors("ProducerReturn", event) == {"meta-a", "seed-decider"}
     assert runtime._subject_authors("Tick", Event("t", EventKind.TICK, 0, {}, "w")) == set()
+
+
+def test_a_chosen_target_whose_consequence_is_fixed_seals_no_payoff_forecast():
+    """A9: a judge that picks its own target cannot pick one whose outcome already exists."""
+    from types import SimpleNamespace
+
+    from tests.runtime.test_loop import _consequence_produce
+
+    runtime = _consequence_runtime()
+    stale, _stale_event = _consequence_produce(runtime, "NOOP")
+    assert runtime.consequences.payoff(stale) is not None  # resolved before any judge saw it
+    _fresh, event = _consequence_produce(runtime, "NOOP")
+
+    runtime.n += 1
+    handle = _judge_handle(runtime)
+    hindsight = Return(handle, {"verdict": 0.8, "payoff": 1.0, "rationale": "after the fact",
+                                "forecasts": [], "about_handle": stale}, 0, "ok")
+    runtime._evaluator_step(event, handle, SimpleNamespace(chosen="eval-a"),
+                            runtime.queue.get(handle).deadline_ns, returned=hindsight)
+    refused = [i for i in runtime.ledger._recovery_items() if i["kind"] == "return.refused"]
+    assert [(i["handle"], i["about_handle"]) for i in refused] == [(handle, stale)]
+    assert "consequence is still open" in refused[0]["reason"]
+    # Nothing was sealed, the stale return keeps its own outcome, and the judge is
+    # settled as non-conforming rather than rewarded for the hindsight.
+    assert runtime.stats.forecasts_sealed == 0 and not list(runtime.book.pending())
+    assert runtime.queue.get(handle).status is SettleStatus.SETTLED
+    assert runtime.queue.history(handle)[0].score == 0.0
+    assert runtime.decision_subjects.get(handle) is None
+
+
+def test_a_chosen_target_with_an_open_consequence_is_judged_and_sealed():
+    """The refusal is about the fixed outcome, not about choosing a target at all."""
+    from types import SimpleNamespace
+
+    from tests.runtime.test_loop import _consequence_produce
+
+    runtime = _consequence_runtime()
+    _about, event = _consequence_produce(runtime, "NOOP")
+    # A second return whose consequence has not been resolved yet.
+    runtime.n += 1
+    open_handle = _consequence_decision(runtime, "NOOP", CH_VERDICT)
+    runtime._producer_step(
+        Event(f"tick-{runtime.n}", EventKind.TICK, runtime.clock.now_ns, {"index": 0}, "test"),
+        open_handle, SimpleNamespace(chosen="NOOP"), runtime.queue.get(open_handle).deadline_ns)
+    assert runtime.consequences.payoff(open_handle) is None
+
+    runtime.n += 1
+    handle = _judge_handle(runtime)
+    chosen = Return(handle, {"verdict": 0.8, "payoff": 0.4, "rationale": "on time",
+                             "forecasts": [], "about_handle": open_handle}, 0, "ok")
+    runtime._evaluator_step(event, handle, SimpleNamespace(chosen="eval-a"),
+                            runtime.queue.get(handle).deadline_ns, returned=chosen)
+    assert not [i for i in runtime.ledger._recovery_items() if i["kind"] == "return.refused"]
+    assert runtime.stats.forecasts_sealed == 1
+    assert [f.about_handle for f in runtime.book.pending()] == [open_handle]

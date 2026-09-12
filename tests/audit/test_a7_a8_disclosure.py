@@ -45,6 +45,9 @@ def test_a8_registration_discloses_contract_without_prompt_model_or_author():
         system_prompt="PRIVATE PROMPT", max_tokens=128, effort="low",
     ))
     event = rt.internal[-1]
-    assert dict(event.payload) == {"kind": "assembly", "id": "new-public",
-                                   "role": "producer", "accepts": ("Tick",)}
+    # A1 makes emits, its custom schemas and the contract version part of the public
+    # contract; the prompt, the model and the proposing handle stay private (A8).
+    assert dict(event.payload) == {"kind": "assembly", "id": "new-public", "version": 1,
+                                   "role": "producer", "accepts": ("Tick",),
+                                   "emits": ("ProducerReturn",), "schemas": {}}
     assert "PRIVATE PROMPT" not in json.dumps(rt._world_block())

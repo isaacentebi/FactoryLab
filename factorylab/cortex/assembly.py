@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 
+from factorylab.cortex.registration import output_contracts, seed_emits
 from factorylab.cortex.request import ChildRequest, Request, Return
 from factorylab.kernel.ledger import utf8_text
 from factorylab.world.metering import BillingUncertain, Infeasible, MeteredModel
@@ -27,12 +28,10 @@ from factorylab.world.models import ModelRequest
 SEED_SYSTEM_PROMPT = (
     "You receive one request. Reply with a single JSON object that satisfies the "
     "outcome schema. If the request cannot be completed, reply with a JSON object "
-    'containing "status": "cannot" and "reason". Optionally include a "requests" '
-    "array (up to two), each with target (an assembly id or \"self\"), description, inputs "
-    "and outcome_schema. Their outputs arrive as tool_results in a second call. "
-    "Child invocations answer once; they cannot request further invocations. "
-    "The world input contains the full charter and public mechanics. Assembly identities "
-    "are learned through public registrations and the request's exposure/consequence channels."
+    'containing "status": "cannot" and "reason". '
+    'A return may also carry "register" proposals and "requests" for work from other '
+    "assemblies. Both are bounded, and whatever is not admitted comes back with a public "
+    "reason. The world input is what you know about this world."
 )
 
 
@@ -47,13 +46,19 @@ class AssemblySpec:
     max_tokens: int = 2048
     effort: str = "medium"
     accepts: frozenset[str] = frozenset({"Tick", "MarketMid", "Funding", "Fill", "Verdict"})
-    role: str = "producer"  # "producer" | "evaluator" | "meta"
+    role: str = "producer"  # descriptive label; dispatch depends only on accepts/emits
+    emits: tuple[str, ...] | None = None
+    schemas: dict[str, dict] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.memory_policy not in ("none", "handle-scoped"):
             raise ValueError("unknown memory policy")
-        if self.role not in ("producer", "evaluator", "meta", "antagonist"):
-            raise ValueError("unknown assembly role")
+        if not isinstance(self.role, str) or not self.role.strip():
+            raise ValueError("assembly role must be a nonempty label")
+        emits, schemas = output_contracts(
+            self.emits if self.emits is not None else seed_emits(self.role), self.schemas)
+        object.__setattr__(self, "emits", emits)
+        object.__setattr__(self, "schemas", schemas)
         if self.max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
 
@@ -146,9 +151,7 @@ class Assembly:
         children = self._children(req, parsed)
         raw_calls = parsed.get("tool_calls")
         tool_calls = (
-            tuple(c for c in raw_calls if isinstance(c, dict) and isinstance(c.get("tool"), str))[
-                :4
-            ]
+            tuple(c for c in raw_calls if isinstance(c, dict) and isinstance(c.get("tool"), str))
             if isinstance(raw_calls, list)
             else ()
         )
@@ -286,10 +289,12 @@ def _validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None
             _validate_schema(item, schema.get("items", {}))
 
 
-def reserved_return_fields() -> dict:
+def reserved_return_fields(*, max_children: int | None = None,
+                           max_tool_calls: int | None = None) -> dict:
     """Publish the same reserved names and types enforced on every return."""
     properties = {k: {"type": "string"} for k in
-                  ("action", "rationale", "reason", "status", "coin", "side")}
+                  ("action", "rationale", "reason", "status", "coin", "side", "emits",
+                   "about_handle")}
     properties.update({k: {"type": "number", "minimum": 0, "maximum": 1}
                        for k in ("verdict", "payoff", "conformity")})
     properties.update({
@@ -297,11 +302,11 @@ def reserved_return_fields() -> dict:
         # A10: the deciding agent's own distribution over its own actions.
         "propensity": {"type": "object"},
         "register": {"type": "array"},
-        "tool_calls": {"type": "array", "maxItems": 4, "items": {
+        "tool_calls": {"type": "array", "items": {
             "type": "object", "properties": {"tool": {"type": "string"},
                                                 "args": {"type": "object"}},
             "required": ["tool", "args"]}},
-        "requests": {"type": "array", "maxItems": 2, "items": {
+        "requests": {"type": "array", "items": {
             "type": "object", "properties": {
                 "target": {"type": "string"}, "description": {"type": "string"},
                 "inputs": {"type": "object"}, "outcome_schema": {"type": "object"}},
@@ -313,6 +318,10 @@ def reserved_return_fields() -> dict:
                 "horizon_events": {"type": "integer", "minimum": 1, "maximum": 200}}}},
             "required": ["predicate", "q", "params"]}},
     })
+    if max_children is not None:
+        properties["requests"]["maxItems"] = max_children
+    if max_tool_calls is not None:
+        properties["tool_calls"]["maxItems"] = max_tool_calls
     return properties
 
 
@@ -346,6 +355,8 @@ def validate_proposal(proposal: dict) -> None:
                    "max_tokens": {"type": "integer", "minimum": 16, "maximum": 4096},
                    "timeout_s": {"type": "integer", "minimum": 1, "maximum": 5},
                    "accepts": {"type": "array", "items": {"type": "string"}},
+                   "emits": {"type": "array", "items": {"type": "string"}},
+                   "schemas": {"type": "object"},
                    "range": {"type": "array", "items": {"type": "number"}},
                    "actions": {"type": "array", "items": {"type": "string"}},
                    "args_schema": {"type": "object"}})

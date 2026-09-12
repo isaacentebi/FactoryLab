@@ -163,9 +163,9 @@ def test_a_refused_duplicate_proposal_returns_its_trial_to_the_window():
     rt._manage_reserve_window()
     rt._register("author", EXPLORER)
     before = rt.reserve.remaining()
-    # The same id again: the reserve issues a receipt (no history yet), the registry
-    # refuses the duplicate, and the receipt goes back to the window.
-    with pytest.raises(ValueError, match="version"):
+    # The same id again: the reserve issues a receipt (no history yet), the duplicate is
+    # refused (A1 re-registers an id only after retirement), and the receipt goes back.
+    with pytest.raises(ValueError, match="already registered"):
         rt._register("author", EXPLORER)
     assert rt.reserve.remaining() == before
     release = next(i for i in rt.ledger._recovery_items() if i["kind"] == "novelty.release")

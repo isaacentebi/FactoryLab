@@ -14,10 +14,12 @@ from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.request import ChildRequest, Request, Return
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord
+from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.shared import CH_VERDICT, _to_plain
 from factorylab.runtime.summary import _price_str
 from factorylab.settlement import SEED_VOCABULARY
+from factorylab.settlement.consequence import ReturnConsequences
 from factorylab.world.market import X402MeteredModel
 from factorylab.world.metering import BillingUncertain, Metered, MeteredModel
 from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
@@ -81,10 +83,29 @@ def _provider_fault(ret: Return) -> str | None:
     return None
 
 
+class ContractConsequences(ReturnConsequences):
+    """All decisions keep cost accounts; producing outcomes alone deliver producer trials.
+
+    Judges already receive their consequence trials through their sealed forecasts
+    and terminal meta scores. Their additional cost accounts must not double-count
+    those trials. Every account still resolves in the underlying economic table.
+    """
+
+    def __init__(self, ledger, backstop, runtime):
+        super().__init__(ledger, backstop)
+        self.runtime = runtime
+
+    def resolve(self, event):
+        resolved = super().resolve(event)
+        return [payoff for payoff in resolved
+                if self.runtime.queue.get(payoff.handle).channel in (CH_VERDICT, "exposure")]
+
+
 class ComputeMixin:
     """Preserve runtime state and behavior for compute operations."""
 
     def _instantiate(self, spec: AssemblySpec) -> Assembly:
+        self._check_event_schemas(spec)
         model = _ObservedMeteredModel(
             self.provider, self.prices, self.meter, record=self._record_market,
         )
@@ -98,15 +119,55 @@ class ComputeMixin:
             )
         asm = Assembly(spec, model, validator=self._validate_output_contract)
         self.assemblies[spec.id] = asm
+        self.event_schemas.update(spec.schemas)
         if not self.ledger.bootstrap:
             self.stats.registered_window.setdefault(spec.id, self.stats.reserve_windows)
         return asm
 
+    def _check_event_schemas(self, spec: AssemblySpec) -> None:
+        """A named event keeps one public meaning; a changed schema needs a new kind."""
+        for kind, schema in spec.schemas.items():
+            if kind in self.event_schemas and self.event_schemas[kind] != schema:
+                raise ValueError(f"event schema already declared differently: {kind}")
+
     def _validate_output_contract(self, parsed: dict, req: Request) -> None:
         """Every tool argument and proposal bound is checked before any effect in a reply."""
-        from factorylab.cortex.assembly import _positive_wire_decimal, _validate_schema
+        from factorylab.cortex.assembly import (
+            _positive_wire_decimal,
+            _validate_schema,
+            reserved_return_fields,
+        )
         from factorylab.world.venue_tools import _validate
 
+        _validate_schema(parsed, {"type": "object", "properties": reserved_return_fields(
+            max_children=self.m.tools.max_children, max_tool_calls=self.m.tools.max_tool_calls)})
+        binding = self.return_bindings.get(req.handle)
+        if binding is not None:
+            emits = parsed.get("emits")
+            if emits is None and len(binding["channels"]) == 1:
+                emits = next(iter(binding["channels"]))
+            if emits not in binding["channels"]:
+                raise ValueError("select a declared emits kind")
+            if binding["selected"] not in (None, emits):
+                raise ValueError("return kind cannot change after tools or children run")
+        owner = self.handle_to_assembly.get(req.handle)
+        # The request's own channel says whether this is a contract return; a policy ballot
+        # is not one, and a handle the kernel queue never opened cannot be looked up at all.
+        if owner in self.assemblies and req.scoring_channel != "policy":
+            spec = self.assemblies[owner].spec
+            emits = parsed.get("emits", spec.emits[0] if len(spec.emits) == 1 else None)
+            if emits not in spec.emits:
+                raise ValueError("select a declared emits kind")
+            if emits in spec.schemas:
+                # The caller's outcome schema cannot weaken a custom event's declaration.
+                _validate_schema(
+                    {k: v for k, v in parsed.items()
+                     if k not in ("emits", "register", "requests", "tool_calls", "about_handle",
+                                  "status", "reason")},
+                    spec.schemas[emits],
+                    partial=bool(parsed.get("requests") or parsed.get("tool_calls")
+                                 or parsed.get("status") == "cannot"),
+                )
         for call in parsed.get("tool_calls", []):
             spec = self.tool_specs.get(call["tool"])
             if spec is not None:
@@ -247,9 +308,33 @@ class ComputeMixin:
         "venue.place_market", "venue.place_limit", "venue.close", "venue.cancel",
         "venue.set_leverage", "treasury.transfer",
     })
-    WRITE_REFUSAL = ("venue and treasury writes belong to decisions with an open consequence "
-                     "account (producer, antagonist and child returns); a judging decision "
-                     "has none")
+    WRITE_REFUSAL = ("venue and treasury writes require a producing return kind and an open "
+                     "consequence account; judging decisions and their children cannot write")
+
+    def _may_write(self, handle: str) -> bool:
+        """A judging decision cannot acquire venue authority by requesting a producing child."""
+        from factorylab.runtime.shared import CH_CONFORMITY, CH_FAST
+
+        ancestors = []
+        cursor = handle
+        while cursor is not None:
+            ancestors.append(cursor)
+            try:
+                cursor = self.queue.get(cursor).parent_handle
+            except KeyError:
+                return False
+        for ancestor in ancestors:
+            try:
+                decision = self.queue.get(ancestor)
+            except KeyError:
+                continue
+            if self.return_kinds.get(ancestor) in ("Verdict", "MetaVerdict"):
+                return False
+            if ancestor not in self.return_kinds and decision.channel in (
+                CH_CONFORMITY, CH_FAST, "policy", "emits"
+            ):
+                return False
+        return self.consequences.account_open(handle)
 
     def _allowed_tools(self, action_id: str) -> set[str]:
         """Every registered tool is a public primitive; schematics are public (v0.4 §1.6)."""
@@ -262,7 +347,7 @@ class ComputeMixin:
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
         if tool_id not in self.tool_specs or tool_id not in self._allowed_tools(action_id):
             return {"error": "unknown or disallowed tool"}, 0
-        if tool_id in self.CONSEQUENCE_WRITES and not self.consequences.account_open(handle):
+        if tool_id in self.CONSEQUENCE_WRITES and not self._may_write(handle):
             # No judge trades what it judges (essay II.III): the refusal is public.
             self.ledger.append({"kind": "tool.refused", "handle": handle,
                                 "assembly_id": action_id, "tool": tool_id,
@@ -342,7 +427,7 @@ class ComputeMixin:
         return metered.result, metered.cost
 
     def _invoke_compute(self, action_id: str, req: Request) -> Return:
-        """Each attempted model invocation spends one lifetime trial, including follow-up calls."""
+        """Each model call is metered and counted; lifetime trials count settled consequences."""
         model_id = self.assemblies[action_id].spec.model_id
         req = replace(req, cost_ceiling=min(
             req.cost_ceiling, max(0, self.wallet.available_for(req.handle, f"model:{model_id}"))
@@ -355,19 +440,21 @@ class ComputeMixin:
         return ret
 
     def _invoke(self, action_id: str, req: Request, role: str, *, child: bool = False) -> Return:
+        self.handle_to_assembly[req.handle] = action_id
         ret = self._invoke_compute(action_id, req)
         self._check_compute_return(req.handle, ret)
-        if child and (ret.children or ret.tool_calls):
-            self.ledger.append({"kind": "requests.refused", "handle": req.handle,
-                                "reason": "child invocations answer once; no continuation"})
-            from factorylab.cortex.assembly import _validate_schema
-
-            try:
-                _validate_schema(ret.outputs, req.outcome_schema)
-            except (ValueError, TypeError, RecursionError):
-                ret = replace(ret, outputs={"reason": "child answer requires continuation"},
-                              status="malformed")
-            ret = replace(ret, children=(), tool_calls=())
+        if (ret.status == "ok" and ret.outputs.get("status") == "cannot"
+                and isinstance(ret.outputs.get("reason"), str)):
+            ret = replace(ret, status="refused", children=(), tool_calls=())
+        if ret.status == "ok":
+            kinds = self.assemblies[action_id].spec.emits
+            emitted = ret.outputs.get("emits", kinds[0] if len(kinds) == 1 else None)
+            if emitted not in kinds:
+                ret = replace(ret, status="malformed", outputs={"reason": "undeclared emits"},
+                              children=(), tool_calls=())
+            else:
+                self.queue.bind(req.handle, emitted)
+                self.return_kinds[req.handle] = emitted
         if not self.wallet.dead and ret.status == "ok" and (ret.tool_calls or ret.children):
             results = []
             tool_cost = 0
@@ -412,7 +499,9 @@ class ComputeMixin:
             # that produces the final verdict — so everything the first call was
             # shown, the PROPENSITY block included, rides along unchanged.
             follow = req.continuation(
-                inputs={**req.inputs, "tool_results": results},
+                inputs={**req.inputs, "tool_results": results,
+                        "continuation": "Return the final answer; this request's continuation "
+                        "has been consumed. Further tool calls and requests are refused."},
                 cost_ceiling=max(0, req.cost_ceiling - ret.cost - tool_cost),
             )
             second = (
@@ -420,9 +509,13 @@ class ComputeMixin:
                 if self.wallet.dead else self._invoke_compute(action_id, follow)
             )
             self._check_compute_return(req.handle, second)
+            if (second.status == "ok" and second.outputs.get("status") == "cannot"
+                    and isinstance(second.outputs.get("reason"), str)):
+                second = replace(second, status="refused", children=(), tool_calls=())
             if second.tool_calls:
                 self.ledger.append(
-                    {"kind": "tool.calls_ignored", "handle": req.handle, "ts": self.clock.now_ns}
+                    {"kind": "tool.calls_ignored", "handle": req.handle,
+                     "reason": "continuation already consumed", "ts": self.clock.now_ns}
                 )
             if second.children:
                 self.ledger.append({"kind": "requests.refused", "handle": req.handle,
@@ -432,6 +525,7 @@ class ComputeMixin:
 
                 try:
                     _validate_schema(second.outputs, req.outcome_schema)
+                    self._validate_output_contract(second.outputs, req)
                 except (ValueError, TypeError, RecursionError):
                     second = replace(second, status="malformed",
                                      outputs={"reason": "incomplete continuation answer"})
@@ -589,14 +683,27 @@ class ComputeMixin:
     def _invoke_child(
         self, action_id: str, parent: Request, item: ChildRequest, ceiling: int,
     ) -> tuple[dict, int]:
-        """One parent-selected child has its own decision, liability and ordinary judgment route."""
+        """A bounded child retains its own decision and spends only its parent's remaining cap."""
         target = action_id if item.target == "self" else item.target
+        depth = 0
+        cursor = parent.handle
+        while self.queue.get(cursor).parent_handle is not None:
+            depth += 1
+            cursor = self.queue.get(cursor).parent_handle
+        if depth >= self.m.tools.max_depth:
+            reason = "tools.max_depth reached"
+            self.ledger.append({"kind": "requests.refused", "handle": parent.handle,
+                                "reason": reason, "depth": depth})
+            return {"tool": f"assembly:{target}", "args": item.inputs,
+                    "result": {"error": reason}}, 0
         actor = f"composition:{parent.handle}"
+        channels = self._return_channels(target) if target in self.assemblies else {}
         handle = self.queue.open(
             actor=actor, event_id=f"child-{parent.handle}",
             propensity=PropensityRecord((target,), (1.,), target, 0, actor, "parent-selected"),
-            channel=CH_VERDICT, deadline_ns=parent.deadline_ns,
+            channel=next(iter(channels.values()), CH_VERDICT), deadline_ns=parent.deadline_ns,
             parent_handle=parent.handle, cost_ceiling=ceiling,
+            return_channels=channels,
         )
         self.ledger.append({"kind": "request.child", "handle": handle, "target": target,
                             "resource_liability": parent.handle, "cost_ceiling": ceiling,
@@ -604,29 +711,61 @@ class ComputeMixin:
                             "outcome_schema": item.outcome_schema})
         self.stats.decisions += 1
         self.consequences.start(handle, self.n)
-        req = Request(handle, item.description, item.inputs, {}, item.outcome_schema,
+        req = Request(handle, item.description, {**item.inputs, "world": self._world_block()},
+                      {}, item.outcome_schema,
                       parent.deadline_ns, ceiling, parent.handle,
                       "a JSON object satisfying the outcome schema", CH_VERDICT, parent.handle)
-        if target in self.assemblies:
+        if target in self.assemblies and target not in self.retired_assemblies:
             self.handle_to_assembly[handle] = target
             ret = self._invoke(target, req, "child", child=True)
-            self._execute_outputs(ret)
-            self._apply_registrations(handle, ret)
-            self.memory.setdefault(target, deque(maxlen=3)).append(
-                {"handle": handle, "outputs": ret.outputs, "verdict": None}
-            )
         else:
             ret = Return(handle, {"reason": "target assembly unavailable"}, 0, "failed")
             self.ledger.append({"kind": "request.failed", "handle": handle,
                                 "reason": "target assembly unavailable"})
-        self.consequences.finish(handle, ret.cost)
-        self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
-        self.stats.producer_returns += 1
-        self._emit(EventKind.PRODUCER_RETURN, {
-            "about_handle": handle, "description": item.description, "inputs": item.inputs,
-            "outputs": ret.outputs, "cost": ret.cost, "status": ret.status,
-            "propensity": self._public_propensity(handle),  # A10
-        })
+        emitted = self.return_kinds.get(handle, next(iter(channels), "ProducerReturn"))
+        if len(channels) > 1 and handle not in self.return_kinds:
+            from factorylab.kernel.queue import SettleStatus
+
+            self.consequences.finish(handle, ret.cost)
+            self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
+                              status=SettleStatus.CENSORED,
+                              definition_version="unselected-return-v1", sampling_ref=None)
+            return {"tool": f"assembly:{target}", "args": item.inputs,
+                    "result": {"outputs": ret.outputs, "status": ret.status,
+                               "cost_micro": ret.cost}}, ret.cost
+        if emitted in ("Verdict", "MetaVerdict"):
+            sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
+            event = Event(f"child-input-{handle}", EventKind.REGISTERED,
+                          self.clock.now_ns, item.inputs, "request")
+            step = self._evaluator_step if emitted == "Verdict" else self._meta_step
+            step(event, handle, sample, parent.deadline_ns, returned=ret)
+        else:
+            if target in self.assemblies:
+                if self._may_write(handle):
+                    self._execute_outputs(ret)
+                self._apply_registrations(handle, ret)
+                self.memory.setdefault(target, deque(maxlen=3)).append(
+                    {"handle": handle, "outputs": ret.outputs, "verdict": None})
+            self.consequences.finish(handle, ret.cost)
+            if emitted == "Exposure":
+                self.pending_exposure[handle] = self.n
+                payoff = ret.outputs.get("payoff") if ret.status == "ok" else None
+                if payoff is not None:
+                    self.consequences.seal_self_forecast(
+                        self.book, self.queue, handle=handle, assembly_id=target, payoff=payoff,
+                        event=self.n, now_ns=self.clock.now_ns,
+                        tick_ns=self.tick_clock.interval_ns)
+                    self.stats.forecasts_sealed += 1
+            else:
+                self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
+            self.stats.producer_returns += 1
+            payload = {"about_handle": handle, "description": item.description,
+                       "inputs": item.inputs, "outputs": ret.outputs,
+                       "cost": ret.cost, "status": ret.status,
+                       "propensity": self._public_propensity(handle)}  # A10
+            self._emit("ProducerReturn" if emitted == "Exposure" else emitted, payload)
+            if emitted == "Exposure" and self.routers.get("Exposure"):
+                self._emit("Exposure", payload)
         return {"tool": f"assembly:{target}", "args": item.inputs,
                 "result": {"outputs": ret.outputs, "status": ret.status,
                            "cost_micro": ret.cost}}, ret.cost
