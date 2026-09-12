@@ -414,6 +414,8 @@ _RUNTIME_FIELDS = (
     "registration_feedback", "tool_jail_available", "vote_handles", "voted_amendments",
     "order_intents", "market_index", "unresolved_x402",
     "card_samples",
+    "exposure_evidence", "pending_meta", "verdict_outcomes", "consequence_mix",
+    "sampling_history",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (

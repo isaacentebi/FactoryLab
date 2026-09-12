@@ -73,8 +73,7 @@ def test_three_forecasts_two_evaluators_settle_at_due_events_with_ledger_first(
         )
     ]
     assert baseline.baseline_q("wallet_up") == 1.0
-    assert standing.coverage("judge-a") == 0.5
-    assert standing.weight("judge-a") == 0.5
+    assert standing.snapshot() == {}  # public predicates never train standing (A16)
     assert book.outstanding() == 2
     clock.now = 103
     assert settler.settle_due(3, facts_for) == []
@@ -86,10 +85,8 @@ def test_three_forecasts_two_evaluators_settle_at_due_events_with_ledger_first(
     assert [result.brier for result in remaining] == pytest.approx([0.96, 0.19])
     assert seen == [first, second, third]
     assert baseline.baseline_q("wallet_up") == pytest.approx(1 / 3)
-    assert standing.coverage("judge-a") == standing.coverage("judge-b") == 1.0
-    assert standing.skill("judge-a") == pytest.approx(-0.175)
-    assert standing.weight("judge-a") == pytest.approx(0.325)
-    assert standing.weight("judge-b") == 1.0
+    assert standing.snapshot() == {}
+    assert standing.weight("judge-a") == standing.weight("judge-b") == 0.5
     assert book.outstanding() == 0
     assert book.requested("judge-a") == 2 and book.requested("judge-b") == 1
     for result in first_results + remaining:
@@ -135,11 +132,8 @@ def test_censored_forecast_has_no_outcome_or_score_and_does_not_train(
     )
     assert not queue.has_history(queue.get(forecast.handle).propensity.chosen)
     assert baseline.baseline_q("wallet_up") == 0.5
-    snapshot = standing.snapshot()[forecast.evaluator_id]
-    assert snapshot["n"] == snapshot["settled"] == 0
-    assert snapshot["sum_brier"] == snapshot["sum_baseline_brier"] == 0.0
-    assert snapshot["requested"] == 1
-    assert snapshot["weight"] == 0.5 and snapshot["coverage"] == 0.0
+    assert standing.snapshot() == {}
+    assert standing.weight(forecast.evaluator_id) == 0.5
     assert book.outstanding() == 0
     with pytest.raises(FrozenInstanceError):
         result.y = 0
@@ -155,9 +149,7 @@ def test_censored_windows_leave_existing_history_unchanged_and_reduce_coverage(
     )
     assert [result.status for result in results] == [SettleStatus.SETTLED, SettleStatus.CENSORED]
     assert baseline.baseline_q("wallet_up") == 1.0
-    assert standing.snapshot()["judge-a"]["n"] == 1
-    assert standing.skill("judge-a") == 0.25
-    assert standing.coverage("judge-a") == 0.5
+    assert standing.snapshot() == {}
     assert standing.weight("judge-a") == 0.5
 
 
@@ -212,7 +204,7 @@ def test_failed_queue_write_leaves_baseline_and_standing_retryable(
     (result,) = settler.settle_due(10, lambda forecast: WindowFacts(1, 2, 1, ()))
     assert result.baseline_brier == 0.75
     assert baseline.baseline_q("wallet_up") == 1.0
-    assert standing.snapshot()["judge-a"]["n"] == 1
+    assert standing.snapshot() == {}
 
 
 def test_facts_callback_error_does_not_manufacture_censoring(seal_forecast, settler, book, queue):
@@ -251,4 +243,4 @@ def test_retired_evaluator_keeps_attribution_and_historical_feedback(
     assert result.status == SettleStatus.SETTLED
     assert queue.history(forecast.handle)[0].status == SettleStatus.HISTORICAL
     assert queue.history(forecast.handle)[0].score == result.brier
-    assert standing.snapshot()[forecast.evaluator_id]["n"] == 1
+    assert standing.snapshot() == {}

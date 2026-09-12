@@ -37,6 +37,7 @@ def test_treasury_transfer_survives_assembly_and_reaches_the_rail(amount, monkey
         monkeypatch.setattr(rt.provider.target, "complete", lambda req: ModelResponse(
             req.model_id, json.dumps(body), 1, 1, "stop"))
         req = rt._request("transfer", "transfer", {}, {}, 100, "test")
+        rt.consequences.start(req.handle, 0)  # treasury writes need an open account (A9)
         ret = rt.assemblies["seed-decider"].invoke(req)
         assert ret.status == "ok" and len(ret.tool_calls) == 1
         result, _ = rt._run_tool("seed-decider", req.handle, ret.tool_calls[0])

@@ -101,10 +101,18 @@ class ForecastBook:
         """Return the count of sealed forecasts without a book settlement."""
         return len(self.__forecasts) - len(self.__settled)
 
-    def requested(self, evaluator_id: str) -> int:
-        """Return all distinct sealed forecasts for this evaluator, including censored ones."""
+    def requested(self, evaluator_id: str, predicate_id: str | None = None) -> int:
+        """Return distinct sealed forecasts for this evaluator, including censored ones.
+
+        With a predicate the count is restricted to that predicate's commitments.
+        """
         _require_id(evaluator_id)
-        return self.__requested.get(evaluator_id, 0)
+        if predicate_id is None:
+            return self.__requested.get(evaluator_id, 0)
+        return sum(
+            f.evaluator_id == evaluator_id and f.predicate_id == predicate_id
+            for f in self.__forecasts.values()
+        )
 
 
 def open_forecast_decision(

@@ -70,6 +70,9 @@ class RunStats:
     invocations_by_role: dict[str, int] = field(default_factory=dict)
     stop_reasons: dict[str, int] = field(default_factory=dict)
     invocations_by_assembly: dict[str, int] = field(default_factory=dict)
+    # settled consequences delivered per assembly (novelty trials, A13)
+    consequences_by_assembly: dict[str, int] = field(default_factory=dict)
+    registered_window: dict[str, int] = field(default_factory=dict)  # assembly -> window index
     immune_windows: list[dict] = field(default_factory=list)
     pathologies: dict[str, bool] = field(default_factory=lambda: {
         "stable_failure": False, "thrash": False, "learning_death": False,

@@ -177,7 +177,7 @@ def test_role_prices_are_not_card_id_conventions():
         assert rt._penalty_for(role) == pytest.approx(0.2)
 
 
-def test_new_assembly_gets_three_compute_trials_even_after_early_settlement():
+def test_new_assembly_keeps_protected_compute_until_its_consequences_settle():
     from factorylab.cortex.registration import AssemblyProposal
 
     rt = runtime()
@@ -191,11 +191,11 @@ def test_new_assembly_gets_three_compute_trials_even_after_early_settlement():
     hold = rt.wallet.reserve(rt.wallet.available, incumbent, "model:fake-opus")
     rt.wallet.commit(hold, hold.amount)
     assert rt.wallet.available == 0
-    # An early settled result must not erase the remaining two compute trials.
+    # An early settled verdict must not erase protection: trials are settled consequences.
     decision(rt, "new-explorer", settled=True)
     assert rt._is_feasible("new-explorer")[0]
     assert not rt._is_feasible("seed-decider")[0]
-    for _ in range(3):
+    for _ in range(5):  # invocations, continuations included, are not trials (A13)
         handle = decision(rt, "new-explorer")
         req = rt._request(handle, "Observe.", {}, {}, 10**18, "verdict")
         before = rt.reserve.remaining()
@@ -203,6 +203,14 @@ def test_new_assembly_gets_three_compute_trials_even_after_early_settlement():
         assert result.cost > 0
         assert rt.reserve.remaining() == before - result.cost
         assert rt.wallet.available == 0
+    assert rt._is_feasible("new-explorer")[0]
+    for _ in range(rt.m.novelty.trials):
+        handle = decision(rt, "new-explorer")
+        rt.handle_to_assembly[handle] = "new-explorer"
+        rt.consequences.start(handle, rt.n)
+        rt.consequences.finish(handle, 0)
+        rt._settle_due_forecasts()
+    assert rt.stats.consequences_by_assembly["new-explorer"] == rt.m.novelty.trials
     assert not rt._is_feasible("new-explorer")[0]
     handle = decision(rt, "new-explorer")
     req = rt._request(handle, "Observe.", {}, {}, 10**18, "verdict")
@@ -328,6 +336,7 @@ def test_orders_cannot_commit_protected_novelty_collateral(mode):
     rt = runtime()
     rt._manage_reserve_window()
     incumbent = decision(rt, "seed-decider", settled=True)
+    rt.consequences.start(incumbent, 0)
     hold = rt.wallet.reserve(rt.wallet.available, incumbent, "model:fake-opus")
     rt.wallet.commit(hold, hold.amount)
     before = rt.exchange.account().positions
@@ -404,6 +413,7 @@ def test_order_protection_uses_acknowledged_leverage_not_the_maximum():
     rt = runtime()
     rt._manage_reserve_window()
     handle = decision(rt, "seed-decider", settled=True)
+    rt.consequences.start(handle, 0)
     result, _ = rt._run_tool("seed-decider", handle, {
         "tool": "venue.set_leverage", "args": {"coin": "BTC", "leverage": 1},
     })

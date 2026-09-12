@@ -27,7 +27,12 @@ class Settled:
 
 
 class Settler:
-    """Each due forecast is scored at most once and missing facts never become performance."""
+    """Each due forecast is scored at most once and missing facts never become performance.
+
+    Only the kernel payoff commitment (``return_paid_off``) trains consequence
+    standing; optional public-predicate forecasts settle to their handles and the
+    prevalence baseline but never enter a judge's selection weight.
+    """
 
     def __init__(
         self,
@@ -70,11 +75,7 @@ class Settler:
             )
             if y is not None:
                 self.__baseline.record(forecast.predicate_id, y)
-                self.__standing.record(forecast.evaluator_id, score, baseline_score)
             self.__book.mark_settled(forecast.handle)
-            self.__standing.set_requested(
-                forecast.evaluator_id, self.__book.requested(forecast.evaluator_id)
-            )
             results.append(
                 Settled(
                     forecast.handle,
@@ -120,7 +121,8 @@ class Settler:
             self.__standing.record(forecast.evaluator_id, score, baseline)
             self.__book.mark_settled(forecast.handle)
             self.__standing.set_requested(
-                forecast.evaluator_id, self.__book.requested(forecast.evaluator_id)
+                forecast.evaluator_id,
+                self.__book.requested(forecast.evaluator_id, RETURN_PAID_OFF.id),
             )
             results.append(
                 Settled(forecast.handle, forecast.evaluator_id, forecast.about_handle,

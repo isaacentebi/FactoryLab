@@ -132,13 +132,18 @@ class EvaluationSpec:
     trial_amount_micro: int = 100_000  # novelty trial paid per registration
     forecast_horizon_events: int = 10
     consequence_backstop_events: int = 200
+    adversarial_share: float = 0.15  # cap on router mass over antagonist assemblies
+    sibling_share: float = 0.5  # share of the representative's meta score a sibling settles at
+    sampling_step: float = 0.1  # consequence-mix step per divergent window
+    sampling_cap: float = 0.7  # ceiling of the raised consequence mix
 
 
 @dataclass(frozen=True)
 class NoveltySpec:
     share: float
     window_ns: int
-    trial_invocations: int = 3
+    trials: int = 3  # settled consequences that end an assembly's protected trial
+    max_lifetime_windows: int = 6  # windows after registration that end it regardless
 
 
 @dataclass(frozen=True)
@@ -286,7 +291,8 @@ class WorldManifest:
                 or not isfinite(self.novelty.share) or not 0 < self.novelty.share <= 1):
             raise ValueError("novelty share must be in (0, 1]")
         for name, value, minimum in (
-            ("novelty.trial_invocations", self.novelty.trial_invocations, 1),
+            ("novelty.trials", self.novelty.trials, 1),
+            ("novelty.max_lifetime_windows", self.novelty.max_lifetime_windows, 1),
             ("committee.min_settled", self.committee.min_settled, 1),
             ("committee.seats", self.committee.seats, 3),
             ("immune.k", self.immune.k, 2), ("immune.bins", self.immune.bins, 2),
@@ -299,6 +305,14 @@ class WorldManifest:
                 raise ValueError(f"immune.{name} must be finite and in (0, 1]")
         if not 0 <= self.evaluation.consequence_share < 1:
             raise ValueError("consequence share must be in [0, 1)")
+        for name in ("adversarial_share", "sibling_share", "sampling_step"):
+            value = getattr(self.evaluation, name)
+            if type(value) not in (int, float) or not isfinite(value) or not 0 <= value <= 1:
+                raise ValueError(f"evaluation.{name} must be finite and in [0, 1]")
+        cap = self.evaluation.sampling_cap
+        if (type(cap) not in (int, float) or not isfinite(cap)
+                or not self.evaluation.consequence_share <= cap < 1):
+            raise ValueError("evaluation.sampling_cap must be in [consequence_share, 1)")
         backstop = self.evaluation.consequence_backstop_events
         if type(backstop) is not int or backstop < 1:
             raise ValueError("consequence_backstop_events must be a positive integer")
@@ -459,6 +473,10 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10")),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
         consequence_backstop_events=ev.get("consequence_backstop_events", 200),
+        adversarial_share=ev.get("adversarial_share", 0.15),
+        sibling_share=ev.get("sibling_share", 0.5),
+        sampling_step=ev.get("sampling_step", 0.1),
+        sampling_cap=ev.get("sampling_cap", 0.7),
     )
     pr = d.get("prices") or {}
     prices = PricesSpec(
@@ -471,6 +489,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     # Scripted providers run in virtual time, including live-shaped test fixtures.
     default_min_tick = "1s" if all(m.provider == "fake" for m in models) else "10s"
     nov = d.get("novelty", {})
+    if "trial_invocations" in nov:
+        raise ValueError("novelty.trial_invocations was replaced by novelty.trials "
+                         "(settled consequences, not invocations)")
     tim = d.get("timing", {})
     term = d.get("termination", {})
     m = WorldManifest(
@@ -482,7 +503,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         models=models,
         assemblies=assemblies,
         novelty=NoveltySpec(nov.get("share", 0.1), _ns(nov.get("window", "1d")),
-                            nov.get("trial_invocations", 3)),
+                            nov.get("trials", 3), nov.get("max_lifetime_windows", 6)),
         committee=CommitteeSpec(**d.get("committee", {})),
         immune=ImmuneSpec(**d.get("immune", {})),
         timing=TimingSpec(

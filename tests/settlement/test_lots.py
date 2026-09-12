@@ -18,7 +18,7 @@ def fill(table, owner, oid, *, size="1", px="100", buy=True, fee="0", coin="BTC"
     )
 
 
-def test_fifo_partial_closes_charge_both_fees_and_funding_to_openers():
+def test_fifo_partial_closes_credit_openers_net_of_their_fees_and_funding_and_the_closer():
     table = LotTable().start("first", 1).finish("first", 100_000)
     table = table.start("second", 2).finish("second", 100_000)
     table = table.start("closer", 3).finish("closer", 100_000)
@@ -27,15 +27,18 @@ def test_fifo_partial_closes_charge_both_fees_and_funding_to_openers():
     table = fill(table, "second", "2", px="110", fee="1")
     table = table.funding("BTC", "3")  # first pays 2, second pays 1
     table = fill(table, "closer", "3", px="120", buy=False, fee="1")
-    assert table.account("first").realized_micro == 17_000_000
+    # P&L 20 on the closed unit: first pays half its fee and funding (2); the closer its fee.
+    assert table.account("first").realized_micro == 18_000_000
+    assert table.account("closer").realized_micro == 19_000_000
     assert table.account("second").realized_micro == 0
     assert table.resolve(4, 200, {}).account("first").payoff is None
     table = fill(table, "closer", "4", size="2", px="115", buy=False, fee="2")
     table = table.resolve(5, 200, {})
-    assert table.account("first").payoff.net_micro == 29_000_000
-    assert table.account("second").payoff.net_micro == 2_000_000
+    assert table.account("first").payoff.net_micro == 31_000_000
+    assert table.account("second").payoff.net_micro == 3_000_000
     assert table.account("first").payoff.y == table.account("second").payoff.y == 1
-    assert table.account("closer").payoff.y == 0
+    assert table.account("closer").payoff.net_micro == 37_000_000  # 19 + (15 + 5 - 2)
+    assert table.account("closer").payoff.y == 1 and table.account("closer").closes == 3
     assert table.lots == () and original.lots == ()
     with pytest.raises(FrozenInstanceError):
         table.account("first").cost_micro = 0
@@ -47,7 +50,7 @@ def test_reversal_closes_short_then_opens_only_residual_long_for_new_owner():
     table = fill(table, "short", "1", buy=False, size="2", fee="2")
     table = fill(table, "reverse", "2", size="3", px="90", fee="3")
     table = table.resolve(3, 20, {"BTC": "90"})
-    assert table.account("short").payoff.net_micro == 16_000_000
+    assert table.account("short").payoff.net_micro == 18_000_000  # 20 less its own fee
     assert table.account("short").payoff.y == 1
     assert table.account("reverse").payoff is None
     assert len(table.lots) == 1
@@ -60,6 +63,7 @@ def test_reversal_closes_short_then_opens_only_residual_long_for_new_owner():
 
 def test_all_coins_and_all_lots_must_close_and_strict_cost_threshold_applies():
     table = LotTable().start("return", 1).finish("return", 1_000_000)
+    table = table.start("other", 1).finish("other", 0)
     table = fill(table, "return", "1")
     table = fill(table, "return", "2", coin="ETH")
     table = fill(table, "other", "3", buy=False, px="102")
@@ -80,6 +84,7 @@ def test_no_fill_is_zero_immediately_once_cost_known(cost):
 
 def test_backstop_marks_only_remainder_with_funding_and_keeps_inventory_owned():
     table = LotTable().start("loser", 1).finish("loser", 10)
+    table = table.start("other", 1).finish("other", 0)
     table = fill(table, "loser", "1", size="2", fee="2")
     table = fill(table, "other", "2", buy=False, px="110", fee="1")
     table = table.funding("BTC", "2")
@@ -87,12 +92,12 @@ def test_backstop_marks_only_remainder_with_funding_and_keeps_inventory_owned():
     assert table.resolve(11, 10, {}).account("loser").payoff is None
     table = table.resolve(11, 10, {"BTC": "80"})
     payoff = table.account("loser").payoff
-    assert payoff.net_micro == -15_000_000 and payoff.y == 0 and payoff.marked
+    assert payoff.net_micro == -14_000_000 and payoff.y == 0 and payoff.marked
     table = table.start("late", 12).finish("late", 0)
     table = fill(table, "late", "3", buy=False, px="200")
     table = table.resolve(12, 10, {})
-    assert table.account("loser").payoff == payoff
-    assert table.account("late").payoff.y == 0
+    assert table.account("loser").payoff == payoff  # a mark is fixed; the late close is not
+    assert table.account("late").payoff.y == 1  # the closer is credited what it realised
     assert table.lots == ()
 
 
@@ -118,6 +123,7 @@ def test_liquidation_closes_and_prices_loss_without_opening_a_liquidator_lot(buy
 def test_funding_receipts_reduce_cost_and_never_flow_to_closed_lots():
     table = LotTable().start("first", 1).finish("first", 0)
     table = table.start("second", 2).finish("second", 0)
+    table = table.start("closer", 2).finish("closer", 0)
     table = fill(table, "first", "1", buy=False)
     table = fill(table, "second", "2", buy=False)
     table = table.funding("BTC", "-2")
@@ -130,6 +136,7 @@ def test_funding_receipts_reduce_cost_and_never_flow_to_closed_lots():
 
 def test_accepted_unfilled_and_partially_filled_orders_wait_until_cancel_or_backstop():
     table = LotTable().start("limit", 1).finish("limit", 1).order("1", "limit", "2")
+    table = table.start("other", 1).finish("other", 0)
     assert table.resolve(2, 10, {}).account("limit").payoff is None
     cancelled = table.cancel("1").resolve(2, 10, {})
     assert cancelled.account("limit").payoff.y == 0
@@ -140,23 +147,17 @@ def test_accepted_unfilled_and_partially_filled_orders_wait_until_cancel_or_back
     assert table.cancel("1").resolve(4, 10, {}).account("limit").payoff.y == 1
 
 
-def test_unknown_open_inventory_cannot_be_appropriated_by_a_later_closer():
-    table = (
-        LotTable()
-        .fill(
-            order_id="external",
-            coin="BTC",
-            is_buy=True,
-            size="1",
-            px="100",
-            fee_usd="0",
-        )
-        .start("closer", 1)
-        .finish("closer", 0)
-    )
+def test_fill_without_an_open_account_never_enters_the_shared_fifo():
+    with pytest.raises(ValueError, match="open consequence account"):
+        LotTable().fill(order_id="external", coin="BTC", is_buy=True, size="1", px="100",
+                        fee_usd="0")
+    with pytest.raises(ValueError, match="open consequence account"):
+        LotTable().order("1", "nobody", "1")
+    table = LotTable().start("closer", 1).finish("closer", 0)
+    # With nothing owned to close, the "closer" merely opens its own short.
     table = fill(table, "closer", "2", buy=False, px="200").resolve(2, 200, {})
-    assert table.account("closer").payoff.y == 0
-    assert table.lots == ()
+    assert table.account("closer").payoff is None
+    assert [lot.handle for lot in table.lots] == ["closer"]
 
 
 def test_wash_trades_are_negative_after_both_fees():
@@ -168,7 +169,7 @@ def test_wash_trades_are_negative_after_both_fees():
 
 
 def test_split_fills_preserve_submicro_charges_and_cannot_round_up_a_payoff():
-    table = LotTable().start("owner", 1).finish("owner", 0)
+    table = LotTable().start("owner", 1).finish("owner", 0).start("closer", 1).finish("closer", 0)
     table = fill(table, "owner", "open", size="3", fee="0.000001")
     whole = fill(table, "closer", "close", size="3", px="100.0000005", buy=False)
     split = table
@@ -181,13 +182,16 @@ def test_split_fills_preserve_submicro_charges_and_cannot_round_up_a_payoff():
 
 
 def test_splitting_returns_cannot_amplify_fractional_gain_or_erase_fractional_loss():
-    table = LotTable()
+    table = LotTable().start("closer", 0).finish("closer", 0)
     for i in range(3):
         table = table.start(str(i), i).finish(str(i), 0)
         table = fill(table, str(i), f"open-{i}", fee="0.0000006")
     table = fill(table, "closer", "close", size="3", px="100.0000005", buy=False)
     table = table.resolve(4, 200, {})
-    assert all(r.payoff.net_micro == -1 and r.payoff.y == 0 for r in table.returns)
+    openers = [r for r in table.returns if r.handle != "closer"]
+    assert all(r.payoff.net_micro == -1 and r.payoff.y == 0 for r in openers)
+    closer = table.account("closer").payoff
+    assert closer.net_micro == 1 and closer.y == 1  # 1.5 realised, floored once
 
 
 @pytest.mark.parametrize("value", [1.0, True, "NaN", "Infinity", "0", "-1"])

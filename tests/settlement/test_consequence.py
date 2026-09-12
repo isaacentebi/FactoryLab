@@ -68,7 +68,7 @@ def test_verdict_commitment_uses_raw_q_original_evaluator_and_return_backstop(
         evaluator_handle=parent,
         evaluator_id="judge",
         about="producer",
-        verdict=0.876,
+        payoff=0.876,
         event=10,
         now_ns=100,
         tick_ns=1,
@@ -135,6 +135,10 @@ def test_failed_ledger_write_leaves_accounting_unchanged(operation, ledger, monk
         consequences.start("owner", 0)
     if operation == "outcome":
         consequences.finish("owner", 1)
+    if operation == "fill":  # only an attributed order's fill reaches the book
+        consequences.order_result(
+            "owner", {"order_id": "1", "status": "filled", "filled_size": "1"}, {}, 0,
+        )
     before = consequences.table
     append = ledger.append
 

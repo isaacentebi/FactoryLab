@@ -55,6 +55,13 @@ class ReturnConsequences:
             self.table.finish(handle, cost_micro),
         )
 
+    def account_open(self, handle: str) -> bool:
+        """Only a return admitted here and not yet resolved may create venue exposure."""
+        try:
+            return self.table.account(handle).payoff is None
+        except KeyError:
+            return False
+
     def order_result(self, handle: str, result: dict, args: dict, event: int) -> None:
         """Attribute accepted market, limit and close orders before processing their fills."""
         if result.get("status") not in ("filled", "resting") or result.get("order_id") is None:
@@ -65,6 +72,10 @@ class ReturnConsequences:
         if existing is not None:
             if existing.handle != handle:
                 raise ValueError("order already belongs to another decision")
+            return
+        if not self.account_open(handle):
+            self.ledger.append({"kind": "consequence.refused", "handle": handle,
+                                "order_id": oid, "reason": "no open consequence account"})
             return
         self._apply(
             "order",
@@ -87,15 +98,23 @@ class ReturnConsequences:
             self.ledger.append({"kind": "consequence.mid", "event": event, **payload})
             self.mids[payload["coin"]] = str(payload["mid"])
         elif kind == "Fill":
-            table = self.table.fill(
-                order_id=str(payload["order_id"]),
-                coin=payload["coin"],
-                is_buy=payload["is_buy"],
-                size=str(payload["size"]),
-                px=str(payload["px"]),
-                fee_usd=str(payload["fee_usd"]),
-                liquidation=payload.get("liquidation", False),
-            )
+            try:
+                table = self.table.fill(
+                    order_id=str(payload["order_id"]),
+                    coin=payload["coin"],
+                    is_buy=payload["is_buy"],
+                    size=str(payload["size"]),
+                    px=str(payload["px"]),
+                    fee_usd=str(payload["fee_usd"]),
+                    liquidation=payload.get("liquidation", False),
+                )
+            except ValueError as exc:
+                if "open consequence account" not in str(exc):
+                    raise
+                # A fill nobody with an account ordered never enters the shared FIFO.
+                self.ledger.append({"kind": "consequence.refused", "event": event,
+                                    "order_id": str(payload["order_id"]), "reason": str(exc)})
+                return
             self._apply("fill", {"event": event, "payload": dict(payload)}, table)
         elif kind == "Funding" and payload.get("paid_usd") is not None:
             table = self.table.funding(payload["coin"], str(payload["paid_usd"]))
@@ -103,15 +122,18 @@ class ReturnConsequences:
         elif kind == "OrderRejected" and payload.get("order_id") is not None:
             self.cancel(str(payload["order_id"]), event)
 
-    def resolve(self, event: int) -> None:
+    def resolve(self, event: int) -> list[Payoff]:
         """Persist all newly fixed outcomes before publishing the successor accounting state."""
         if self.pending_orders:
-            return  # Unknown inventory ownership cannot manufacture a no-fill outcome.
+            return []  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         table = self.table.resolve(event, self.backstop, self.mids)
+        fixed = []
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})
+                fixed.append(after.payoff)
         self.table = table
+        return fixed
 
     def payoff(self, handle: str) -> Payoff | None:
         """Return the fixed economic outcome, or None while a known return remains open."""
@@ -125,32 +147,61 @@ class ReturnConsequences:
         evaluator_handle: str,
         evaluator_id: str,
         about: str,
-        verdict: float,
+        payoff: float,
         event: int,
         now_ns: int,
         tick_ns: int,
     ) -> Forecast:
-        """Bind q to the raw delivered verdict on a separate original-evaluator decision."""
+        """Bind q to the judge's raw payoff probability on a separate original-judge decision."""
+        return self._seal_payoff(
+            book, queue, forecaster_id=evaluator_id, event_id=f"verdict-{evaluator_handle}",
+            parent_handle=evaluator_handle, about=about, q=payoff, event=event,
+            now_ns=now_ns, tick_ns=tick_ns,
+        )
+
+    def seal_self_forecast(
+        self,
+        book: ForecastBook,
+        queue: DecisionQueue,
+        *,
+        handle: str,
+        assembly_id: str,
+        payoff: float,
+        event: int,
+        now_ns: int,
+        tick_ns: int,
+    ) -> Forecast:
+        """Bind q to a return's own payoff probability, scored like a judge's on the same y."""
+        return self._seal_payoff(
+            book, queue, forecaster_id=assembly_id, event_id=f"self-{handle}",
+            parent_handle=handle, about=handle, q=payoff, event=event,
+            now_ns=now_ns, tick_ns=tick_ns,
+        )
+
+    def _seal_payoff(
+        self, book, queue, *, forecaster_id, event_id, parent_handle, about, q, event, now_ns,
+        tick_ns,
+    ) -> Forecast:
         account = self.table.account(about)
         horizon = max(1, account.opened_at_event + self.backstop - event)
         handle = open_forecast_decision(
             queue,
-            evaluator_id=evaluator_id,
-            event_id=f"verdict-{evaluator_handle}",
-            q=verdict,
+            evaluator_id=forecaster_id,
+            event_id=event_id,
+            q=q,
             deadline_ns=now_ns + (horizon + 2) * tick_ns * 4,
-            parent_handle=evaluator_handle,
+            parent_handle=parent_handle,
             now_event=event,
             horizon=horizon,
         )
         return book.seal(
             Forecast(
                 handle,
-                evaluator_id,
+                forecaster_id,
                 about,
                 RETURN_PAID_OFF.id,
                 {"horizon_events": horizon},
-                verdict,
+                q,
                 event,
                 event + horizon,
             )
@@ -166,6 +217,7 @@ class ReturnConsequences:
             "consequences_pending": sum(r.payoff is None for r in self.table.returns),
             "lots_opened": sum(r.opened_lots for r in self.table.returns),
             "lots_closed": sum(r.closed_lots for r in self.table.returns),
+            "closes_credited": sum(r.closes for r in self.table.returns),
         }
 
 

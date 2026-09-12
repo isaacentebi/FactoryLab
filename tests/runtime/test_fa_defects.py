@@ -108,7 +108,10 @@ def test_fatal_fill_does_not_drop_later_fills_or_funding():
     settlements = [item for item in evidence if item["kind"] == "wallet.settle"]
     assert [item["amount"] for item in settlements] == [-20, -20, -5]
     assert [item["balance_after"] for item in settlements] == [-10, -30, -35]
-    assert sum(item["kind"] == "consequence.fill" for item in evidence) == 2
+    # Fills nobody with an open account ordered are refused by the book (A9), yet the
+    # wallet, the stats and the funding observation still see every event.
+    assert sum(item["kind"] == "consequence.fill" for item in evidence) == 0
+    assert sum(item["kind"] == "consequence.refused" for item in evidence) == 2
     assert sum(item["kind"] == "consequence.funding" for item in evidence) == 1
     assert rt.wallet.dead and rt.wallet.check_conservation()
     assert rt._check_termination()

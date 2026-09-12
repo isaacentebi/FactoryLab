@@ -300,6 +300,14 @@ class BootstrapMixin:
         for kind in self._routable_kinds():
             self._build_router(kind, "exp3", router_gamma)
         self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened event
+        # antagonist handle -> which of the two exposure facts have arrived (A5)
+        self.exposure_evidence: dict[str, dict[str, bool]] = {}
+        # judge handle -> top-meta (handle, conformity) pairs awaiting the judge's payoff (A14)
+        self.pending_meta: dict[str, list[tuple[str, float]]] = {}
+        # judge handle -> (verdict beat baseline, event, forecast handle), pruned by backstop
+        self.verdict_outcomes: dict[str, tuple[int, int, str]] = {}
+        self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator (A14)
+        self.sampling_history: list[dict[str, Any]] = []
         self.delivered_seen: dict[str, int] = {
             st.learner.id: 0 for st in self._all_router_states()
         }

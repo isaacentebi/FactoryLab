@@ -77,6 +77,8 @@ class ComputeMixin:
             )
         asm = Assembly(spec, model, validator=self._validate_output_contract)
         self.assemblies[spec.id] = asm
+        if not self.ledger.bootstrap:
+            self.stats.registered_window.setdefault(spec.id, self.stats.reserve_windows)
         return asm
 
     def _validate_output_contract(self, parsed: dict, req: Request) -> None:
@@ -220,6 +222,14 @@ class ComputeMixin:
         )
         self.insolvency_count = count
 
+    CONSEQUENCE_WRITES = frozenset({
+        "venue.place_market", "venue.place_limit", "venue.close", "venue.cancel",
+        "venue.set_leverage", "treasury.transfer",
+    })
+    WRITE_REFUSAL = ("venue and treasury writes belong to decisions with an open consequence "
+                     "account (producer, antagonist and child returns); a judging decision "
+                     "has none")
+
     def _allowed_tools(self, action_id: str) -> set[str]:
         """Every registered tool is a public primitive; schematics are public (v0.4 §1.6)."""
         return set(self.tool_specs)
@@ -231,6 +241,12 @@ class ComputeMixin:
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
         if tool_id not in self.tool_specs or tool_id not in self._allowed_tools(action_id):
             return {"error": "unknown or disallowed tool"}, 0
+        if tool_id in self.CONSEQUENCE_WRITES and not self.consequences.account_open(handle):
+            # No judge trades what it judges (essay II.III): the refusal is public.
+            self.ledger.append({"kind": "tool.refused", "handle": handle,
+                                "assembly_id": action_id, "tool": tool_id,
+                                "reason": self.WRITE_REFUSAL, "ts": self.clock.now_ns})
+            return {"error": self.WRITE_REFUSAL}, 0
         spec = self.tool_specs[tool_id]
         price = int(spec["price_micro_per_call"])
 
@@ -304,14 +320,6 @@ class ComputeMixin:
                 self._settle_exchange_effects(self.exchange.drain_events())
         return metered.result, metered.cost
 
-    @staticmethod
-    def _carries_revision(ret: Return) -> bool:
-        """A return counts once for a proposal object or tool call, even if later rejected."""
-        proposals = ret.outputs.get("register")
-        return bool(ret.tool_calls) or (
-            isinstance(proposals, list) and any(isinstance(p, dict) for p in proposals)
-        )
-
     def _invoke_compute(self, action_id: str, req: Request) -> Return:
         """Each attempted model invocation spends one lifetime trial, including follow-up calls."""
         model_id = self.assemblies[action_id].spec.model_id
@@ -328,7 +336,6 @@ class ComputeMixin:
     def _invoke(self, action_id: str, req: Request, role: str, *, child: bool = False) -> Return:
         ret = self._invoke_compute(action_id, req)
         self._check_compute_return(req.handle, ret)
-        revision = self._carries_revision(ret)
         if child and (ret.children or ret.tool_calls):
             self.ledger.append({"kind": "requests.refused", "handle": req.handle,
                                 "reason": "child invocations answer once; no continuation"})
@@ -398,7 +405,6 @@ class ComputeMixin:
                 if self.wallet.dead else self._invoke_compute(action_id, follow)
             )
             self._check_compute_return(req.handle, second)
-            revision = revision or self._carries_revision(second)
             if second.tool_calls:
                 self.ledger.append(
                     {"kind": "tool.calls_ignored", "handle": req.handle, "ts": self.clock.now_ns}
@@ -465,8 +471,6 @@ class ComputeMixin:
             self.window.ok += 1
             if role == "producer":
                 self.window.costs.append(ret.cost)
-        if role == "producer" and revision:
-            self.window.revision_handles.add(req.handle)
         return ret
 
     def _invoke_child(

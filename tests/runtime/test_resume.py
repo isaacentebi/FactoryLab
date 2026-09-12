@@ -479,7 +479,7 @@ def test_resume_replays_a_disputed_vendor_bill_once_without_death(tmp_path):
     assert dispute["reported"] == 1_000_000_000 and dispute["booked"] == first["amount"]
 
 
-@pytest.mark.parametrize("cut", ["fill:0", "fill:1", "consequence.fill"])
+@pytest.mark.parametrize("cut", ["fill:0", "fill:1", "consequence.refused"])
 @pytest.mark.parametrize("recover_cash", [False, True])
 def test_resume_books_the_entire_fatal_fill_batch_once(tmp_path, cut, recover_cash):
     class BatchVenue(FakeExchange):
@@ -521,7 +521,10 @@ def test_resume_books_the_entire_fatal_fill_batch_once(tmp_path, cut, recover_ca
     diary = restored.ledger._recovery_items()
     settlements = [item for item in diary if item["kind"] == "wallet.settle"]
     assert [item["amount"] for item in settlements] == [-20, -20 + 100 * recover_cash, -5]
-    assert sum(item["kind"] == "consequence.fill" for item in diary) == 2
+    # Fills nobody with an open account ordered are refused by the book (A9); the refusal
+    # is booked once, like the fill it replaces, and the wallet still saw every event.
+    assert sum(item["kind"] == "consequence.fill" for item in diary) == 0
+    assert sum(item["kind"] == "consequence.refused" for item in diary) == 2
     assert sum(item["kind"] == "consequence.funding" for item in diary) == 1
 
 
