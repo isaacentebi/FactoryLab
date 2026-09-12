@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly encrypted Factory Lab backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+Unit=factorylab-backup.service
+
+[Install]
+WantedBy=timers.target

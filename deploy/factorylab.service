@@ -1,0 +1,37 @@
+[Unit]
+Description=Factory Lab funded world
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=factory
+Group=factory
+WorkingDirectory=/srv/factorylab
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/srv/factorylab/ops.env
+RuntimeDirectory=factorylab
+RuntimeDirectoryMode=0700
+UMask=0077
+ExecStart=/bin/bash /srv/factorylab/repo/deploy/start.sh
+ExecStopPost=-/bin/bash /srv/factorylab/repo/deploy/alert.sh
+Restart=always
+RestartSec=30s
+RestartSteps=6
+RestartMaxDelaySec=15min
+SuccessExitStatus=3
+RestartPreventExitStatus=3
+TimeoutStopSec=90s
+KillMode=control-group
+StandardOutput=null
+StandardError=null
+LimitCORE=0
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/factorylab/runs
+
+[Install]
+WantedBy=multi-user.target

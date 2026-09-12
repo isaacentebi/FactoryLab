@@ -1,0 +1,22 @@
+[Unit]
+Description=Localhost-only Factory Lab wake
+After=network.target
+
+[Service]
+Type=simple
+DynamicUser=true
+WorkingDirectory=/srv/factorylab/www
+ExecStart=/usr/bin/python3 -m http.server 8080 --bind 127.0.0.1 --directory /srv/factorylab/www
+Restart=always
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+InaccessiblePaths=/srv/factorylab/runs /srv/factorylab/repo /srv/factorylab/openrouter.key /srv/factorylab/hyperliquid.key /srv/factorylab/reserve.key /srv/factorylab/ops.env /srv/factorylab/rclone.conf
+StandardOutput=null
+StandardError=null
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

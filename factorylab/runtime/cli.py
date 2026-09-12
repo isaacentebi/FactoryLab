@@ -14,6 +14,8 @@ import sys
 
 from factorylab.runtime.worlds import load_manifest
 
+TERMINATED_EXIT = 3  # deploy/factorylab.service: SuccessExitStatus + RestartPreventExitStatus
+
 
 def _load_dotenv() -> None:
     """Load KEY=VALUE lines from a .env file in the working directory into the environment.
@@ -72,7 +74,10 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         model_id = f"x402:{seller_root(args.seller)}#{args.model}"
         provider = X402Provider(rpc=args.rpc or BASE_RPC)
         req = ModelRequest(
-            model_id, "Reply briefly.", ({"role": "user", "content": "Reply with OK."},), 32,
+            model_id,
+            "Reply briefly.",
+            ({"role": "user", "content": "Reply with OK."},),
+            32,
         )
         quote = provider.quote(req)
         if quote.amount_micro > usd_micro(args.max_cost_usd):
@@ -80,12 +85,21 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         provider.register(model_id, quote.amount_micro)
         response = provider.complete(req, quoted=quote)
         settlement = response.raw.get("settlement") or {}
-        print(json.dumps({
-            "provider": "x402", "model": model_id, "text": response.text,
-            "cost_micro": response.cost_micro, "cost_source": response.raw["cost_source"],
-            "quote": response.raw["quote"], "settlement": settlement,
-            "settlement_reference": settlement.get("transaction"),
-        }, default=str))
+        print(
+            json.dumps(
+                {
+                    "provider": "x402",
+                    "model": model_id,
+                    "text": response.text,
+                    "cost_micro": response.cost_micro,
+                    "cost_source": response.raw["cost_source"],
+                    "quote": response.raw["quote"],
+                    "settlement": settlement,
+                    "settlement_reference": settlement.get("transaction"),
+                },
+                default=str,
+            )
+        )
         return 0
     if args.provider == "venice":
         from factorylab.world.models import ModelRequest
@@ -99,17 +113,28 @@ def _cmd_probe(args: argparse.Namespace) -> int:
             base_url=args.base_url or VENICE_URL,
             reasoning_config={args.model: {"enabled": False}},
         )
-        response = provider.complete(ModelRequest(
-            args.model, "Reply briefly.", ({"role": "user", "content": "Reply with OK."},),
-            max_tokens=32,
-        ))
-        print(json.dumps({
-            "provider": "venice", "model": response.model_id,
-            "text": response.text, "input_tokens": response.input_tokens,
-            "output_tokens": response.output_tokens, "cost_micro": response.cost_micro,
-            "cost_source": response.raw["cost_source"],
-            "request_id": response.raw.get("request_id"),
-        }))
+        response = provider.complete(
+            ModelRequest(
+                args.model,
+                "Reply briefly.",
+                ({"role": "user", "content": "Reply with OK."},),
+                max_tokens=32,
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "provider": "venice",
+                    "model": response.model_id,
+                    "text": response.text,
+                    "input_tokens": response.input_tokens,
+                    "output_tokens": response.output_tokens,
+                    "cost_micro": response.cost_micro,
+                    "cost_source": response.raw["cost_source"],
+                    "request_id": response.raw.get("request_id"),
+                }
+            )
+        )
         return 0
     if not args.world:
         print("probe requires --world or --provider venice --model venice:<id>", file=sys.stderr)
@@ -129,10 +154,18 @@ def _cmd_market(args: argparse.Namespace) -> int:
     """Public discovery prints compact sellers without loading credentials or paying."""
     from factorylab.world.market import DISCOVERY_URL, discover
 
-    print(json.dumps(discover(
-        url_substring=args.url_substring, query=args.query, limit=args.limit,
-        discovery_url=args.discovery_url or DISCOVERY_URL,
-    ), indent=2, default=str))
+    print(
+        json.dumps(
+            discover(
+                url_substring=args.url_substring,
+                query=args.query,
+                limit=args.limit,
+                discovery_url=args.discovery_url or DISCOVERY_URL,
+            ),
+            indent=2,
+            default=str,
+        )
+    )
     return 0
 
 
@@ -172,23 +205,34 @@ def _cmd_reserve(args: argparse.Namespace) -> int:
     client = X402Client(base_url=args.base_url or VENICE_URL, rpc=args.rpc or BASE_RPC)
     if args.reserve_cmd == "status":
         usdc, eth, venice = client.usdc_balance(), client.eth_balance(), client.venice_balance()
-        print(json.dumps({
-            "address": client.address, "network": "eip155:8453",
-            "usdc_micro": usdc, "usdc_usd": format(Decimal(usdc) / 1_000_000, ".6f"),
-            "eth_wei": eth, "eth": format(Decimal(eth) / 10**18, ".18f"),
-            "venice_balance_micro": venice,
-            "venice_balance_usd": format(Decimal(venice) / 1_000_000, ".6f"),
-            "topup_5_affordable": usdc >= TOP_UP_MICRO,
-        }))
+        print(
+            json.dumps(
+                {
+                    "address": client.address,
+                    "network": "eip155:8453",
+                    "usdc_micro": usdc,
+                    "usdc_usd": format(Decimal(usdc) / 1_000_000, ".6f"),
+                    "eth_wei": eth,
+                    "eth": format(Decimal(eth) / 10**18, ".18f"),
+                    "venice_balance_micro": venice,
+                    "venice_balance_usd": format(Decimal(venice) / 1_000_000, ".6f"),
+                    "topup_5_affordable": usdc >= TOP_UP_MICRO,
+                }
+            )
+        )
         return 0
     settlement = client.top_up(TOP_UP_MICRO)
     # Preserve the reference even if the subsequent balance read fails.
     print(json.dumps({"address": client.address, "settlement": settlement}, default=str))
     balance = client.venice_balance()
-    print(json.dumps({
-        "venice_balance_micro": balance,
-        "venice_balance_usd": format(Decimal(balance) / 1_000_000, ".6f"),
-    }))
+    print(
+        json.dumps(
+            {
+                "venice_balance_micro": balance,
+                "venice_balance_usd": format(Decimal(balance) / 1_000_000, ".6f"),
+            }
+        )
+    )
     return 0
 
 
@@ -286,18 +330,34 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_resume(args: argparse.Namespace) -> int:
+def _cmd_resume(args: argparse.Namespace, *, load_keys: bool = False) -> int:
     """Continue only the authenticated original manifest and saved event budget."""
-    from factorylab.kernel.ledger import LedgerIntegrityError
+    from factorylab.kernel.ledger import Ledger, LedgerIntegrityError
     from factorylab.runtime.resume import ResumeError, resume_world
 
     try:
-        summary = resume_world(load_manifest(args.world), args.ledger)
+        manifest = load_manifest(args.world)
+        if load_keys:
+            # Finality must win even if an unrelated provider credential has become invalid.
+            Ledger.reopen(args.ledger, manifest=json.loads(manifest.canonical_json()))
+            _load_dotenv()
+        summary = resume_world(manifest, args.ledger)
     except (ResumeError, LedgerIntegrityError) as exc:
-        print(f"factorylab resume: {exc}", file=sys.stderr)
+        if isinstance(exc, LedgerIntegrityError) and str(exc) == "cannot resume a terminated world":
+            print("factorylab resume: world terminated", file=sys.stderr)
+            return TERMINATED_EXIT
+        print("factorylab resume: recovery unavailable", file=sys.stderr)
         return 1
     print(json.dumps(summary, indent=2, default=str))
-    return 0
+    return TERMINATED_EXIT if summary["terminated"] else 0
+
+
+def _cmd_wake(args: argparse.Namespace) -> int:
+    """Publish only the sealed wake; failed verification replaces stale data with unavailable."""
+    from factorylab.runtime.wake import UNAVAILABLE, write_wake
+
+    data = write_wake(args.ledger, args.out)
+    return 1 if data["wallet_series"] == UNAVAILABLE else 0
 
 
 def _cmd_postmortem(args: argparse.Namespace) -> int:
@@ -422,6 +482,11 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--ledger", required=True, help="ledger with an adjacent .key file")
     resume.set_defaults(func=_cmd_resume)
 
+    wake = sub.add_parser("wake", help="publish sealed aggregates and account balances")
+    wake.add_argument("--ledger", required=True)
+    wake.add_argument("--out", required=True)
+    wake.set_defaults(func=_cmd_wake)
+
     rp = sub.add_parser("report", help="print a run summary readably")
     rp.add_argument("summary")
     rp.set_defaults(func=_cmd_report)
@@ -447,10 +512,21 @@ def main(argv: list[str] | None = None) -> int:
         except RailError as exc:
             print(str(exc), file=sys.stderr)
         except Exception:
-            print("Testnet treasury unavailable; preserve the journal and reconcile its references."
-                  " No new transfer should be submitted to replace an uncertain one.",
-                  file=sys.stderr)
+            print(
+                "Testnet treasury unavailable; preserve the journal and reconcile its references."
+                " No new transfer should be submitted to replace an uncertain one.",
+                file=sys.stderr,
+            )
         return 1
+    if args.cmd in {"wake", "resume"}:
+        try:
+            if args.cmd == "resume":
+                return _cmd_resume(args, load_keys=True)
+            _load_dotenv()
+            return int(args.func(args))
+        except Exception:
+            print(f"factorylab {args.cmd}: unavailable", file=sys.stderr)
+            return 1
     is_reserve = args.cmd == "reserve"
     is_venice_probe = args.cmd == "probe" and args.provider == "venice"
     is_x402 = args.cmd == "market" or (args.cmd == "probe" and args.provider == "x402")
@@ -465,8 +541,11 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
         except Exception:
-            print("Market command failed; check endpoint and reserve configuration. "
-                  "A submitted payment may have settled; do not blindly retry.", file=sys.stderr)
+            print(
+                "Market command failed; check endpoint and reserve configuration. "
+                "A submitted payment may have settled; do not blindly retry.",
+                file=sys.stderr,
+            )
             return 1
     if is_reserve or is_venice_probe:
         try:
@@ -475,8 +554,11 @@ def main(argv: list[str] | None = None) -> int:
             return int(args.func(args))
         except Exception:
             # Loading/signing/transport exceptions can include secrets. No traceback or body.
-            print("Reserve/Venice command failed; check key setup and endpoint status. "
-                  "After a top-up submission, check balances before retrying.", file=sys.stderr)
+            print(
+                "Reserve/Venice command failed; check key setup and endpoint status. "
+                "After a top-up submission, check balances before retrying.",
+                file=sys.stderr,
+            )
             return 1
     _load_dotenv()
     return int(args.func(args))
