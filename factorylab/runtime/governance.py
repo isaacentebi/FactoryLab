@@ -28,9 +28,9 @@ from factorylab.world.x402 import X402Error
 
 try:
     from factorylab.charter.amendment import Amendment
-    from factorylab.charter.book import CharterBook
+    from factorylab.charter.book import CharterBook, Refusal
 except ImportError:  # pragma: no cover
-    Amendment = CharterBook = None  # type: ignore[assignment]
+    Amendment = CharterBook = Refusal = None  # type: ignore[assignment]
 
 
 from factorylab.runtime.shared import PRODUCER_KINDS, _to_plain
@@ -493,10 +493,7 @@ class GovernanceMixin:
             )
             self.stats.amendments_passed += 1
         elif outcome == "failed":
-            for vote in self.pending_votes:
-                if vote["amendment_id"] == am.id:
-                    self._settle_policy(vote["handle"], 0.0, SettleStatus.CENSORED)
-            self.pending_votes[:] = [v for v in self.pending_votes if v["amendment_id"] != am.id]
+            self._censor_ballots(am.id)
 
     def _next_charter_activation(self) -> Charter | None:
         """Activate only at a boundary that meets the measured governance separation."""
@@ -507,6 +504,9 @@ class GovernanceMixin:
         ):
             return None
         new = self.charter_book.activate_due(self.clock.now_ns)
+        while isinstance(new, Refusal):
+            self._close_refused_ballots(new)
+            new = self.charter_book.activate_due(self.clock.now_ns)
         if new is not None:
             am = self.charter_book.activated_amendment(new.edition)
             for vote in self.pending_votes:
@@ -518,6 +518,20 @@ class GovernanceMixin:
                     vote.update(activated)
             self.cadence.activated(am.id, self.clock.now_ns, self.tick_clock.interval_ns)
         return new
+
+    def _close_refused_ballots(self, refusal: Any) -> None:
+        """A refused activation leaves nothing to grade: close its ballots, release its card."""
+        self.ledger.append({"kind": "policy.refused", "amendment_id": refusal.amendment_id,
+                            "reason": refusal.reason, "window": self.window.index})
+        self._censor_ballots(refusal.amendment_id)
+
+    def _censor_ballots(self, amendment_id: str) -> None:
+        """Settle every pending ballot on an amendment that will never take effect."""
+        for vote in self.pending_votes:
+            if vote["amendment_id"] == amendment_id:
+                self._settle_policy(vote["handle"], 0.0, SettleStatus.CENSORED)
+        self.pending_votes[:] = [v for v in self.pending_votes
+                                 if v["amendment_id"] != amendment_id]
 
     def _activate_charter_if_due(self) -> None:
         new = self._next_charter_activation()

@@ -119,3 +119,99 @@ def test_a15_duplicate_observation_binding_is_refused_before_seating():
     }]}, 0, "ok"))
     assert "already named" in rt.registration_feedback[-1]["reason"]
     assert not rt.vote_handles
+
+
+def all_yes_committee(rt, monkeypatch) -> list[str]:
+    """Seat the same five eligible assemblies and have every seat vote yes."""
+    members = list(rt.assemblies)[:5]
+    monkeypatch.setattr(rt, "_committee_eligible",
+                        lambda: {a: rt.assemblies[a].spec.role for a in members})
+    monkeypatch.setattr(rt, "_invoke_compute", lambda assembly, request: Return(
+        request.handle, {"vote": True, "reason": "fixture"}, 0, "ok"))
+    return members
+
+
+def boundary(rt, index: int) -> None:
+    """Advance to the next activation boundary and offer it to governance."""
+    rt.clock.now_ns += (rt.m.timing.min_ratio * rt.ev.consequence_backstop_events
+                        * rt.tick_clock.interval_ns)
+    rt.window = MeasureWindow(index, rt.wallet.balance, costs=[100], invocations=1, ok=1)
+    rt._activate_charter_if_due()
+
+
+def refusals(rt) -> list[dict]:
+    return [item for item in rt.ledger._recovery_items() if item["kind"] == "charter.refused"]
+
+
+def ballots_on(rt, amendment_id: str) -> list[dict]:
+    return [v for v in rt.pending_votes if v["amendment_id"] == amendment_id]
+
+
+def test_a15_activation_conflict_is_refused_and_censors_the_amendment_ballots(monkeypatch):
+    """A patch a prior activation made conflicting owes its seats a closed ballot."""
+    rt = runtime()
+    rt._manage_reserve_window()
+    rt.n = 10
+    rt.window = MeasureWindow(1, rt.wallet.balance, costs=[100], invocations=1, ok=1)
+    rt._close_price_window()
+    members = all_yes_committee(rt, monkeypatch)
+    skill = rt.charter.cards[2]
+    # Each is valid against edition 1: "producer" and "evaluator" are distinct roles.
+    rt._propose_amendment("external-author", {
+        "id": "skill-for-all", "replace": [asdict(replace(skill, answers_for="all"))],
+        "predicted_effect": {"card_id": skill.id, "direction": "increase", "window": 1}})
+    shadow = replace(skill, id="shadow-skill", answers_for="producer")
+    rt._propose_amendment("external-author", {
+        "id": "shadow-skill", "add": [asdict(shadow)],
+        "predicted_effect": {"card_id": shadow.id, "direction": "increase", "window": 1}})
+    assert len(ballots_on(rt, "shadow-skill")) == len(members)
+    handles = [v["handle"] for v in ballots_on(rt, "shadow-skill")]
+
+    boundary(rt, 2)
+    assert rt.charter.edition == 2  # The widened card now answers for every role.
+    assert all(v["activation_window"] == 2 for v in ballots_on(rt, "skill-for-all"))
+    assert all(v["activation_window"] is None for v in ballots_on(rt, "shadow-skill"))
+
+    boundary(rt, 3)
+    assert rt.charter.edition == 2  # The conflicting patch produced no edition.
+    assert [(item["amendment_id"], "already named" in item["reason"])
+            for item in refusals(rt)] == [("shadow-skill", True)]
+    assert not ballots_on(rt, "shadow-skill")
+    for handle in handles:
+        result = rt.queue.history(handle)[-1]
+        assert result.status is SettleStatus.CENSORED
+        assert result.score == 0
+    # The refused card is released, so the window close cannot retain its samples.
+    rt.n += 10
+    rt._close_price_window()
+    assert shadow.id not in rt.card_samples.values
+
+
+def test_a15_second_amendment_making_no_further_change_is_refused_at_activation(monkeypatch):
+    """Two passed amendments with the same patch: the second leaves the edition unchanged."""
+    rt = runtime()
+    rt._manage_reserve_window()
+    rt.n = 10
+    rt.window = MeasureWindow(1, rt.wallet.balance, costs=[100], invocations=1, ok=1)
+    rt._close_price_window()
+    all_yes_committee(rt, monkeypatch)
+    cheaper = asdict(replace(rt.charter.cards[0], acceptable_region="below 400"))
+    for amendment_id in ("cheaper-returns", "cheaper-returns-twin"):
+        rt._propose_amendment("external-author", {
+            "id": amendment_id, "replace": [cheaper],
+            "predicted_effect": {"card_id": cheaper["id"], "direction": "decrease", "window": 1}})
+
+    boundary(rt, 2)
+    assert rt.charter.edition == 2
+    assert rt.charter.cards[0].acceptable_region == "below 400"
+    handles = [v["handle"] for v in ballots_on(rt, "cheaper-returns-twin")]
+
+    boundary(rt, 3)
+    # Identical to the current edition: no third edition, and no ballots left to grade.
+    assert rt.charter.edition == 2
+    assert len(rt.charter_book.editions()) == 2
+    assert [(item["amendment_id"], item["reason"]) for item in refusals(rt)] == [
+        ("cheaper-returns-twin", "amendment leaves the charter unchanged")
+    ]
+    assert not ballots_on(rt, "cheaper-returns-twin")
+    assert all(rt.queue.history(h)[-1].status is SettleStatus.CENSORED for h in handles)

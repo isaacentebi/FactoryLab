@@ -1,13 +1,26 @@
 """Charter changes require sealed evidence, a committee majority and a boundary."""
 
 import random
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 
 from factorylab.charter.amendment import Amendment
 from factorylab.charter.charter import Charter
 from factorylab.charter.committee import Ballot, Committee, draw
 from factorylab.charter.measurement import preflight_card
 from factorylab.kernel.ledger import Ledger
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """A passed amendment that cannot take effect at its boundary, and why.
+
+    The refusal is an outcome of ``activate_due``, not a silent skip: the
+    caller owes every ballot on the named amendment a closed, ungraded
+    settlement, because the predicted effect will never be observable.
+    """
+
+    amendment_id: str
+    reason: str
 
 
 class CharterBook:
@@ -126,14 +139,21 @@ class CharterBook:
             return "failed"
         return None
 
-    def activate_due(self, now_ns: int) -> Charter | None:
+    def activate_due(self, now_ns: int) -> Charter | Refusal | None:
         """Activate the earliest passed candidate at the caller-supplied boundary.
 
-        One call activates at most one proposal. Frozen patches apply to the
-        latest edition, even if approved against an older base: remove, replace,
-        then add, with later proposals winning conflicts. Existing cards retain
-        their positions; absent replacement/addition ids append in patch order.
-        Earlier removals make a repeated removal a no-op. Norms never change.
+        One call activates at most one proposal, or returns the ``Refusal`` of
+        the earliest passed candidate whose frozen patch cannot take effect
+        against the current edition. Frozen patches apply to the latest edition,
+        even if approved against an older base: remove, replace, then add, with
+        later proposals winning conflicts. Existing cards retain their positions;
+        absent replacement/addition ids append in patch order. Earlier removals
+        make a repeated removal a no-op. Norms never change.
+
+        A candidate is refused when an earlier activation has since made its
+        patch conflict, or has already made the very same change, so that the
+        patched candidate leaves the current edition unchanged. Either way the
+        refusal is evidence, and the candidate is spent.
         """
         if type(now_ns) is not int or now_ns < 0:
             raise ValueError("now_ns must be nonnegative integer nanoseconds")
@@ -151,14 +171,24 @@ class CharterBook:
                 cards.pop(card_id, None)
             for card in (*amendment.replace, *amendment.add):
                 cards[card.id] = card
-            try:
-                validate_observation_bindings(tuple(cards.values()))
-            except ValueError as exc:
+            patched = tuple(cards.values())
+            reason = None
+            if (patched == current.cards and not amendment.proposed_prices
+                    and amendment.tick_interval is None):
+                # An earlier activation already made this exact change; proposal
+                # time checked a base edition that no longer states the effect.
+                reason = "amendment leaves the charter unchanged"
+            else:
+                try:
+                    validate_observation_bindings(patched)
+                except ValueError as exc:
+                    reason = str(exc)
+            if reason is not None:
                 self.__ledger.append({"kind": "charter.refused", "amendment_id": amendment_id,
-                                      "reason": str(exc), "ts": now_ns})
+                                      "reason": reason, "ts": now_ns})
                 self.__activated.add(amendment_id)
-                continue
-            edition = Charter(current.edition + 1, current.norms, tuple(cards.values()))
+                return Refusal(amendment_id, reason)
+            edition = Charter(current.edition + 1, current.norms, patched)
             self.__ledger.append(
                 {
                     "kind": "charter.activate",
