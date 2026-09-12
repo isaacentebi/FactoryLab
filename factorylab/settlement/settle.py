@@ -47,6 +47,8 @@ class Settler:
         self.__standing = standing
         self.__baseline = baseline
         self.__observer = observer
+        # about_handle -> baseline q before that return's outcome entered the base rate
+        self.__snapshots: dict[str, float] = {}
 
     def settle_due(
         self, n: int, facts_for: Callable[[Forecast], WindowFacts | None]
@@ -93,7 +95,13 @@ class Settler:
     def settle_consequences(
         self, payoff_for: Callable[[str], Payoff | None]
     ) -> list[Settled]:
-        """Score kernel commitments as soon as their immutable return outcome is available."""
+        """Score kernel commitments as soon as their immutable return outcome is available.
+
+        Every forecast about one payoff outcome is scored against the same
+        pre-outcome prevalence baseline, whether it is scored in this call or a
+        later one: a judge sealed on the handle of an antagonist's self-forecast
+        is never compared against a base rate that already holds the outcome.
+        """
         results = []
         for forecast in self.__book.pending(predicate_id=RETURN_PAID_OFF.id):
             payoff = payoff_for(forecast.about_handle)
@@ -102,7 +110,7 @@ class Settler:
             if payoff.handle != forecast.about_handle:
                 raise ValueError("consequence belongs to a different return")
             score = brier(forecast.q, payoff.y)
-            baseline = self.__baseline.baseline_brier(forecast.predicate_id, payoff.y)
+            baseline = brier(self.__baseline_before(payoff.handle), payoff.y)
             self.__book.record_consequence(
                 forecast.handle,
                 {**asdict(payoff), "handle": forecast.handle, "about_handle": payoff.handle,
@@ -130,3 +138,11 @@ class Settler:
                         SettleStatus.SETTLED, payoff.marked)
             )
         return results
+
+    def __baseline_before(self, about_handle: str) -> float:
+        """The payoff base rate as it stood before this return's outcome was first scored,
+        fixed on first use so later forecasts about the same outcome share it."""
+        q = self.__snapshots.get(about_handle)
+        if q is None:
+            q = self.__snapshots[about_handle] = self.__baseline.baseline_q(RETURN_PAID_OFF.id)
+        return q

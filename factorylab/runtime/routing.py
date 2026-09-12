@@ -201,18 +201,25 @@ class RoutingMixin:
         A population assembly's trial ends when ``novelty.trials`` settled
         consequences have been delivered to it (continuations and children do not
         count) or ``novelty.max_lifetime_windows`` have passed since its
-        registration; a learning-death window grants one more trial (essay II.IV.b:
-        the compensation period must be shorter than the lifetime).
+        registration; the window after a learning-death flag grants one more trial
+        (essay II.IV.b: the compensation period must be shorter than the lifetime).
         """
         if not self.queue.has_history(action_id):
             return True
         if self.registry.get(action_id).provenance == "seed":
             return False
-        trials = self.m.novelty.trials + int(bool(self.stats.pathologies.get("learning_death")))
         delivered = self.stats.consequences_by_assembly.get(action_id, 0)
         born = self.stats.registered_window.get(action_id, self.stats.reserve_windows)
-        return (delivered < trials
+        return ((delivered < self.m.novelty.trials or self._novelty_grant_open(action_id))
                 and self.stats.reserve_windows - born < self.m.novelty.max_lifetime_windows)
+
+    def _novelty_grant_open(self, assembly_id: str) -> bool:
+        """A learning-death grant is one extra trial per assembly, live only in the window
+        it was issued for and spent by that assembly's first delivered trial beyond the
+        base allowance (spec A13); an unspent grant expires at the next boundary."""
+        grant = self.novelty_grant
+        return (grant["window"] == self.stats.reserve_windows
+                and assembly_id not in grant["consumed"])
 
     def _register_with_trial(self, contract: Contract, handle: str, amount: int):
         """A refused registration returns its trial to the window; only a registered

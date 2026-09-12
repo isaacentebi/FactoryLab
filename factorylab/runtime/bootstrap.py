@@ -308,6 +308,8 @@ class BootstrapMixin:
         self.verdict_outcomes: dict[str, tuple[int, int, str]] = {}
         self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator (A14)
         self.sampling_history: list[dict[str, Any]] = []
+        # learning-death grant: the window it is live for and the assemblies that spent it (A13)
+        self.novelty_grant: dict[str, Any] = {"window": None, "consumed": []}
         self.delivered_seen: dict[str, int] = {
             st.learner.id: 0 for st in self._all_router_states()
         }

@@ -365,9 +365,9 @@ class Runtime(
         adversarial = self.queue.get(handle).channel == CH_EXPOSURE
         if adversarial:
             description += (
-                " You may include payoff: your probability that this return pays off "
-                "(its realised result exceeds its own cost); it is sealed as your forecast "
-                "about your own return."
+                " You may include payoff: your probability that return_paid_off, the "
+                "kernel's consequence predicate, resolves true for this return; it is "
+                "sealed as your forecast about your own return."
             )
         inputs = {
             "kind": str(ev.kind),
@@ -490,9 +490,8 @@ class Runtime(
         req = self._request(
             handle,
             "Evaluate a producer return. Give two numbers: verdict = its quality against "
-            "the charter (0 to 1); payoff = your probability that the return pays off "
-            "(the realised result credited to it, as opener or closer, exceeds its own "
-            "cost; a return that opens and closes nothing does not pay off). Then give "
+            "the charter (0 to 1); payoff = your probability that return_paid_off, the "
+            "kernel's consequence predicate, resolves true for the return. Then give "
             f"{self.ev.max_forecasts_per_verdict} forecasts: for each, a predicate from the "
             "list and q = your probability it happens within its horizon.",
             inputs,

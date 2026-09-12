@@ -296,12 +296,16 @@ class FeedbackMixin:
             self.window.exposures_won += 1
 
     def _count_consequence(self, assembly_id: str | None) -> None:
-        """One settled consequence delivered to an assembly ends one of its novelty trials."""
+        """One settled consequence delivered to an assembly ends one of its novelty trials;
+        a trial beyond the base allowance spends the window's learning-death grant."""
         if assembly_id is None:
             return
-        self.stats.consequences_by_assembly[assembly_id] = (
-            self.stats.consequences_by_assembly.get(assembly_id, 0) + 1
-        )
+        delivered = self.stats.consequences_by_assembly.get(assembly_id, 0)
+        if delivered >= self.m.novelty.trials and self._novelty_grant_open(assembly_id):
+            self.novelty_grant["consumed"].append(assembly_id)
+            self.ledger.append({"kind": "novelty.grant_consumed", "assembly": assembly_id,
+                                "window": self.stats.reserve_windows, "ts": self.clock.now_ns})
+        self.stats.consequences_by_assembly[assembly_id] = delivered + 1
 
     def _settle_meta_consequence(
         self, meta_handle: str, conformity: float, y: int, forecast_handle: str

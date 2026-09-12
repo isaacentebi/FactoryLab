@@ -112,8 +112,37 @@ def test_scoring_block_and_return_contract_document_both_numbers():
     assert "payoff" in world["reserved_return_fields"]
     scoring = world["scoring"]
     assert "verdict_and_payoff" in scoring and "payoff_standing" in scoring
-    assert "closer" in scoring["return_paid_off"]
+    assert "return_paid_off" in scoring and "return_paid_off" in scoring["verdict_and_payoff"]
     assert "consequence_standing" not in scoring  # the old single-number formula is gone
+
+
+RULE_WORDS = ("cost", "closer", "opener", "P&L", "fee", "funding", "marked", "exceeds",
+              "opens and closes nothing", "pays off", "paid off")
+
+
+def test_the_payoff_predicate_is_named_to_the_population_but_never_computed_for_it():
+    """AGENTS.md: kernel physics is enforced in code, never stated to the population. The
+    predicate id is launch-declared vocabulary; its rule is not."""
+    texts = []
+
+    class Capture(ScriptedProvider):
+        def complete(self, req):
+            texts.append(req.messages[-1]["content"].split("\n\nINPUTS\n")[0])
+            return ModelResponse(req.model_id, json.dumps(
+                {"action": "hold", "verdict": 0.5, "payoff": 0.5, "rationale": "t",
+                 "forecasts": []}), 1, 1, "s")
+
+    runtime = _consequence_runtime(provider=Capture())
+    _consequence_produce(runtime, "antagonist-a", "exposure")  # the self-forecast offer
+    _, event = _consequence_produce(runtime, "seed-decider")
+    _consequence_judge(runtime, event, "eval-a")
+    world = runtime._world_block()
+    antagonist, producer, judge = texts
+    named = (antagonist, judge, world["scoring"]["verdict_and_payoff"])
+    assert all("return_paid_off" in text for text in named)
+    for text in (*named, producer, world["scoring"]["return_paid_off"],
+                 world["a_return_may_include"]["payoff"]):
+        assert not any(word in text for word in RULE_WORDS), text
 
 
 def test_standing_uses_payoff_brier_only():

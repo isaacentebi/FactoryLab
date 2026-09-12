@@ -7,6 +7,7 @@ import pytest
 from factorylab.cortex.registration import AssemblyProposal
 from factorylab.cortex.request import Return
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.worlds import load_manifest
 from tests.runtime.test_fidelity import decision, runtime
 
@@ -38,6 +39,15 @@ def _deliver(rt, assembly="new-explorer", *, parent=None):
     rt.consequences.finish(handle, 0)
     rt._settle_due_forecasts()
     return handle
+
+
+def _boundary(rt, *, registrations=0):
+    """Cross one reserve-window boundary; the window that closes shows the given activity."""
+    rt.n += 10
+    rt.window = MeasureWindow(rt.stats.reserve_windows, rt.wallet.balance, invocations=10,
+                              ok=10, registrations=registrations)
+    rt.clock.now_ns += rt.m.novelty.window_ns
+    rt._manage_reserve_window()
 
 
 def test_seat_2_scenario_stays_unhistoried_while_its_consequence_is_pending():
@@ -82,13 +92,70 @@ def test_lifetime_windows_end_the_trial_and_learning_death_extends_it():
     for _ in range(rt.m.novelty.trials):
         _deliver(rt)
     assert not rt._unhistoried("new-explorer")
-    rt.stats.pathologies["learning_death"] = True  # the flag now has a responder
+    for _ in range(rt.m.immune.k):  # k quiet windows: learning death, and a responder
+        _boundary(rt)
+    assert rt.stats.pathologies["learning_death"]
     assert rt._unhistoried("new-explorer")
     _deliver(rt)
     assert not rt._unhistoried("new-explorer")
     # Seed assemblies with history are never protected, whatever the flag says.
     decision(rt, "seed-decider", settled=True)
     assert not rt._unhistoried("seed-decider")
+
+
+def test_learning_death_grant_is_spent_once_per_window_and_reissued_only_by_the_flag():
+    rt = _registered_runtime()
+    for _ in range(rt.m.novelty.trials):
+        _deliver(rt)
+    assert not rt._unhistoried("new-explorer")
+    for _ in range(rt.m.immune.k - 1):
+        _boundary(rt)
+        assert not rt.stats.pathologies["learning_death"]
+        assert rt.novelty_grant == {"window": None, "consumed": []}
+    _boundary(rt)  # the k-th quiet window flags learning death at this boundary
+    assert rt.stats.pathologies["learning_death"]
+    granted = rt.stats.reserve_windows
+    assert rt.novelty_grant == {"window": granted, "consumed": []}
+    assert rt._unhistoried("new-explorer")
+    _deliver(rt)  # the one extra trial
+    assert rt.novelty_grant == {"window": granted, "consumed": ["new-explorer"]}
+    assert not rt._unhistoried("new-explorer")
+    _deliver(rt)  # nothing further to spend in this window
+    assert not rt._unhistoried("new-explorer")
+    items = rt.ledger._recovery_items()
+    assert [i["window"] for i in items if i["kind"] == "novelty.grant"] == [granted]
+    consumed = [i for i in items if i["kind"] == "novelty.grant_consumed"]
+    assert [(i["assembly"], i["window"]) for i in consumed] == [("new-explorer", granted)]
+    # Still flagged at the next boundary: the grant is issued again, unspent.
+    _boundary(rt)
+    assert rt.stats.pathologies["learning_death"]
+    assert rt.novelty_grant == {"window": granted + 1, "consumed": []}
+    assert rt._unhistoried("new-explorer")
+    assert rt.stats.consequences_by_assembly["new-explorer"] == rt.m.novelty.trials + 2
+
+
+def test_an_unused_learning_death_grant_expires_at_the_next_boundary():
+    rt = _registered_runtime()
+    for _ in range(rt.m.novelty.trials):
+        _deliver(rt)
+    for _ in range(rt.m.immune.k):
+        _boundary(rt)
+    granted = rt.stats.reserve_windows
+    assert rt.novelty_grant["window"] == granted and rt._unhistoried("new-explorer")
+    # A window with a registration clears the flag; the unspent grant lapses with it.
+    _boundary(rt, registrations=1)
+    assert not rt.stats.pathologies["learning_death"]
+    assert rt.novelty_grant == {"window": None, "consumed": []}
+    assert not rt._unhistoried("new-explorer")
+    assert rt.stats.consequences_by_assembly["new-explorer"] == rt.m.novelty.trials
+    assert not [i for i in rt.ledger._recovery_items() if i["kind"] == "novelty.grant_consumed"]
+    # The grant is not a permanent base + 1: it is not carried over the boundary.
+    _deliver(rt)
+    assert not rt._unhistoried("new-explorer")
+    # Persisted through the resume codec.
+    from factorylab.runtime.resume import _RUNTIME_FIELDS
+
+    assert "novelty_grant" in _RUNTIME_FIELDS
 
 
 def test_a_refused_duplicate_proposal_returns_its_trial_to_the_window():

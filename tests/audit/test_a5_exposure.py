@@ -83,6 +83,28 @@ def test_exposure_needs_the_judge_to_fail_and_the_antagonist_to_beat_the_baselin
     assert runtime.queue.history(about)[-1].score == 0.0
 
 
+def test_an_accurate_judge_on_the_first_return_is_not_exposed_by_the_antagonists_outcome():
+    """Codex finding: the antagonist's self-forecast is sealed and scored first, and its
+    outcome used to enter the prevalence baseline before the judge's forecast about the
+    same return was scored. On the first return (y = 0) the baseline moved from 0.5 to 0,
+    so a judge saying q = 0.1 (Brier 0.99) lost to a baseline Brier of 1.0 and was marked
+    judge_failed. Every forecast about one outcome is scored against the same pre-outcome
+    baseline."""
+    runtime, about = _three_events(Provider(self_payoff=0.0, judge_payoff=0.1, optional=False))
+    items = runtime.ledger._recovery_items()
+    outcomes = [i for i in items if i["kind"] == "forecast.consequence"
+                and i["about_handle"] == about]
+    assert [i["y"] for i in outcomes] == [0, 0]
+    assert [i["baseline_brier"] for i in outcomes] == [0.75, 0.75]  # one pre-outcome snapshot
+    assert [i["brier"] for i in outcomes] == [1.0, 0.99]  # antagonist, then the judge
+    settled = next(i for i in items if i["kind"] == "exposure.settled")
+    assert settled == {**settled, "judge_failed": False, "self_beat": True, "score": 0.0}
+    assert runtime.queue.history(about)[-1].score == 0.0
+    assert runtime.stats.exposures_won == 0
+    # The outcome still enters the base rate for later returns.
+    assert runtime.baseline.baseline_q("return_paid_off") == 0.0
+
+
 def test_exposure_settles_through_the_antagonist_cards():
     runtime = _consequence_runtime(
         provider=Provider(self_payoff=0.0, judge_payoff=1.0, optional=False)

@@ -84,11 +84,10 @@ class SchematicsMixin:
             "0 to 1; it settles the producer's verdict channel and is graded by meta conformity"
         ),
         "payoff": (
-            "evaluator returns (required): your probability that the judged return pays off "
-            "(the realised result credited to it, as opener or closer, exceeds its own cost); "
-            "antagonist returns (optional): the same probability about your own return. Either "
-            "is sealed as the kernel's payoff forecast and graded by Brier against whether the "
-            "return paid off (see scoring)"
+            "evaluator returns (required): your probability that the kernel's consequence "
+            "predicate resolves true for the judged return; antagonist returns (optional): the "
+            "same probability about your own return. Either is sealed as the kernel's payoff "
+            "forecast and graded by Brier against the realised predicate (see scoring)"
         ),
         "register": "a list of up to three proposals, including amendments, shaped like "
         "proposal_shapes; router add=false replaces, add=true adds a router. Learners: exp3 or "
@@ -311,15 +310,14 @@ class SchematicsMixin:
             "verdict_and_payoff": (
                 "an evaluator gives two numbers: verdict (charter quality) settles the judged "
                 "return and is graded by meta conformity; payoff is sealed as a forecast with "
-                "q = payoff that the judged return pays off and is graded by Brier against "
-                "return_paid_off; the two never substitute for each other"
+                "q = payoff that return_paid_off resolves true for the judged return and is "
+                "graded by Brier against the realised predicate; the two never substitute for "
+                "each other"
             ),
             "return_paid_off": (
-                "1 when the realised P&L credited to the return exceeds its own compute and "
-                "tool cost: a close credits the closed quantity's P&L to the closer (net of its "
-                "closing fee) and to the opener (net of its opening fee and funding); a return "
-                "that opens and closes nothing settles 0; lots still open after "
-                f"{ev.consequence_backstop_events} events are marked to mid"
+                "the kernel's consequence predicate about a return, resolved 1 or 0 by the "
+                "runtime once the return's consequence is fixed; the payoff field is the only "
+                "forecast sealed about it and it cannot be proposed"
             ),
             "payoff_standing": (
                 "mean Brier of the evaluator's payoff forecasts minus the prevalence "
