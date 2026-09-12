@@ -31,7 +31,7 @@ def ledger(clock):
 
 
 def controller(ledger, **changes):
-    parameters = dict(eta=0.5, decay=0.25, lambda_max=2.0, min_window_events=3)
+    parameters = dict(eta=0.5, decay=0.25, lambda_max=2.0, min_window_events=3, kappa=0)
     parameters.update(changes)
     return PriceController(ledger, **parameters)
 
@@ -207,7 +207,9 @@ def test_penalty_sums_known_cards_without_clipping_or_mutating(ledger):
 def test_snapshot_shape_defaults_and_detachment(ledger):
     prices = controller(ledger)
     assert prices.snapshot() == {
-        "parameters": {"eta": 0.5, "decay": 0.25, "lambda_max": 2.0, "min_window_events": 3},
+        "parameters": {
+            "eta": 0.5, "decay": 0.25, "lambda_max": 2.0, "min_window_events": 3, "kappa": 0.0,
+        },
         "cards": {},
     }
     prices.register(region())
@@ -307,6 +309,7 @@ def test_update_is_appended_before_price_counters_or_timing_change(ledger, monke
     }} == {
         "kind": "price.update", "card_id": "cost", "value": 12.0,
         "violation": 1.0, "lambda_before": 0.0, "lambda_after": 0.5,
+        "previous_violation": 0.0, "damping": 0.0,
         "saturated": False, "window_end_event": 7, "ts": 100,
     }
 
@@ -356,3 +359,68 @@ def test_update_region_keeps_price_counts_and_timing_but_moves_the_bounds(ledger
     with pytest.raises(ValueError):
         prices.update_region("cost")
     assert len(evidence(ledger)) == 1  # a region change is not a price revision
+
+
+@pytest.mark.parametrize("value", [-1, True, None, "0.5", float("nan"), float("inf")])
+def test_kappa_requires_finite_nonnegative_number(ledger, value):
+    with pytest.raises(ValueError, match="kappa"):
+        controller(ledger, kappa=value)
+
+
+def test_shrinking_violation_damps_step_and_does_not_overshoot_constant_peer(ledger):
+    prices = controller(ledger, kappa=0.5, lambda_max=100, min_window_events=1)
+    for card_id in ("shrinking", "constant"):
+        prices.register(region(card_id=card_id))
+    prices.observe("shrinking", 18, 0)  # violation 4
+    prices.observe("constant", 14, 0)  # violation 2
+    # Compare from the same price: only the previous violation differs.
+    prices.set_price("constant", prices.price("shrinking"), amendment_id="equal-start")
+    for event, value in enumerate((14, 12, 11), 1):
+        before = prices.price("shrinking")
+        prices.observe("shrinking", value, event)
+        # Constant violations of this size have no damping, so this bounds the step.
+        assert prices.price("shrinking") <= before + 0.5 * prices.violation("shrinking", value)
+        if event == 1:
+            prices.observe("constant", value, event)
+            assert prices.price("shrinking") - before < prices.price("constant") - before
+    updates = [i for i in evidence(ledger) if i["kind"] == "price.update"]
+    shrunk = [i for i in updates if i["card_id"] == "shrinking"]
+    assert [i["previous_violation"] for i in shrunk] == [0, 4, 2, 1]
+    assert [i["damping"] for i in shrunk] == [0, 1, 0.5, 0.25]
+
+
+def test_damping_clips_at_zero_and_satisfaction_resets_history(ledger):
+    prices = controller(ledger, kappa=10, min_window_events=1)
+    prices.register(region())
+    for event, value in enumerate((18, 12, 10, 12)):
+        prices.observe("cost", value, event)
+    updates = evidence(ledger)
+    assert [i["lambda_after"] for i in updates] == [2, 0, 0, 0.5]
+    assert [i["damping"] for i in updates] == [0, 30, 0, 0]
+    assert updates[-1]["previous_violation"] == 0
+
+
+def test_kappa_zero_matches_old_formula_exactly_even_when_violations_shrink(ledger):
+    prices = controller(ledger, kappa=0, min_window_events=1)
+    prices.register(region())
+    expected = 0.0
+    for event, value in enumerate((16, 14, 12, 10, 9, 11, 100, 12)):
+        violation = prices.violation("cost", value)
+        expected = min(2.0, max(0.0, expected + 0.5 * violation if violation else expected - 0.25))
+        prices.observe("cost", value, event)
+        assert prices.price("cost") == expected
+    assert all(i["damping"] == 0 for i in evidence(ledger))
+
+
+def test_skipped_observations_and_failed_updates_do_not_replace_damping_history(ledger, clock):
+    prices = controller(ledger, kappa=0.5, lambda_max=100)
+    prices.register(region())
+    prices.observe("cost", 18, 0)
+    prices.observe("cost", 100, 1)  # skipped
+    clock.fail = True
+    with pytest.raises(RuntimeError):
+        prices.observe("cost", 16, 3)
+    clock.fail = False
+    prices.observe("cost", 14, 3)
+    assert prices.price("cost") == 2.0  # +1 proportional, -1 damping from violation 4
+    assert evidence(ledger)[-1]["previous_violation"] == 4

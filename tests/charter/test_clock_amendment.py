@@ -44,6 +44,18 @@ def test_activation_ledgers_before_clock_mutation(monkeypatch):
     assert rt.tick_clock.interval_ns == 10**9
     committee = rt.charter_book.seat(am.id, {"one": "producer"}, random.Random(1))
     rt.charter_book.vote(committee, "seat-1", True, "yes")
+    assert rt.charter_book.tally(committee) == "passed"
+    rt.cadence.approve(am.id)
+    # No settlements exist yet, so approval waits for the full backstop cadence.
+    threshold = (rt.m.timing.min_ratio * rt.m.evaluation.consequence_backstop_events
+                 * rt.tick_clock.interval_ns)
+    rt.clock.now_ns = threshold - 1
+    rt._activate_charter_if_due()
+    assert rt.charter.edition == 1
+    assert rt.charter_book.pending() == [am]
+    assert rt.tick_clock.interval_ns == 10**9
+    assert rt.stats.clock_changes == 0
+    rt.clock.now_ns = threshold
     append = rt.ledger.append
     changes = []
 
@@ -71,6 +83,18 @@ def test_clock_unchanged_when_ledger_write_fails(monkeypatch):
     rt.charter_book.propose(am)
     committee = rt.charter_book.seat(am.id, {"one": "producer"}, random.Random(1))
     rt.charter_book.vote(committee, "seat-1", True, "yes")
+    assert rt.charter_book.tally(committee) == "passed"
+    rt.cadence.approve(am.id)
+    # No settlements exist yet, so approval waits for the full backstop cadence.
+    threshold = (rt.m.timing.min_ratio * rt.m.evaluation.consequence_backstop_events
+                 * rt.tick_clock.interval_ns)
+    rt.clock.now_ns = threshold - 1
+    rt._activate_charter_if_due()
+    assert rt.charter.edition == 1
+    assert rt.charter_book.pending() == [am]
+    assert rt.tick_clock.interval_ns == 10**9
+    assert rt.stats.clock_changes == 0
+    rt.clock.now_ns = threshold
     append = rt.ledger.append
 
     def fail(entry):

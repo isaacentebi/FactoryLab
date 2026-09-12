@@ -62,6 +62,7 @@ from factorylab.kernel.wallet import DripSchedule, Infeasible, Wallet
 from factorylab.learners.base import BanditFeedback
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
+from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_threshold
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
@@ -540,6 +541,10 @@ class Runtime:
             ledger=self.ledger,
             clock_ns=self.clock,
         )
+        self.cadence = GovernanceCadence(
+            self.ledger, sample=manifest.timing.cadence_sample,
+            min_ratio=manifest.timing.min_ratio, backstop=self.ev.consequence_backstop_events,
+        )
         self.timing = TimingRegistry()
         self.timing.register_loop("leaf", [])
         self.timing.register_loop("governance", ["leaf"])
@@ -721,6 +726,7 @@ class Runtime:
         self.controller = PriceController(
             self.ledger,
             eta=pr.eta,
+            kappa=pr.kappa,
             decay=pr.decay,
             lambda_max=pr.lambda_max,
             min_window_events=pr.min_window_events,
@@ -967,6 +973,7 @@ class Runtime:
                 "min_tick": _duration_str(self.m.clock.min_tick_ns),
                 "max_tick": _duration_str(self.m.max_tick_ns),
             },
+            "governance": self.cadence.world_block(self.tick_clock.interval_ns),
             "registration_feedback": list(self.registration_feedback),
             "prices": {"lambda_max": self.m.prices.lambda_max},
             "amendment_feedback": getattr(self, "amendment_feedback", None),
@@ -1317,6 +1324,8 @@ class Runtime:
         self.insolvency_count = count
 
     def _manage_reserve_window(self) -> None:
+        if self.reserve_window_start is None:
+            self.cadence.launch(self.clock.now_ns if self.live else 0)
         if (
             self.reserve_window_start is None
             or self.clock.now_ns >= self.reserve_window_start + self.m.novelty.window_ns
@@ -2610,10 +2619,28 @@ class Runtime:
                 self.charter_book.abstain(committee, alias)
         outcome = self.charter_book.tally(committee)
         if outcome == "passed":
+            self.cadence.approve(am.id)
+            self.cadence.ready(
+                now_ns=self.clock.now_ns, tick_interval_ns=self.tick_clock.interval_ns,
+                window=self.stats.reserve_windows,
+            )
             self.stats.amendments_passed += 1
 
-    def _activate_charter_if_due(self) -> None:
+    def _next_charter_activation(self) -> Charter | None:
+        """Activate only at a boundary that meets the measured governance separation."""
+        if not self.cadence.ready(
+            now_ns=self.clock.now_ns, tick_interval_ns=self.tick_clock.interval_ns,
+            window=self.stats.reserve_windows,
+        ):
+            return None
         new = self.charter_book.activate_due(self.clock.now_ns)
+        if new is not None:
+            am = self.charter_book.activated_amendment(new.edition)
+            self.cadence.activated(am.id, self.clock.now_ns, self.tick_clock.interval_ns)
+        return new
+
+    def _activate_charter_if_due(self) -> None:
+        new = self._next_charter_activation()
         while new is not None:
             self.charter = new
             am = self.charter_book.activated_amendment(new.edition)
@@ -2645,7 +2672,7 @@ class Runtime:
                     self.tick_clock.set_interval(interval)
                     self.stats.clock_changes += 1
             self.stats.amendments_activated += 1
-            new = self.charter_book.activate_due(self.clock.now_ns)
+            new = self._next_charter_activation()
 
     def _open_epoch(self, kind: str) -> None:
         universe = self._universe_for(kind)
@@ -2731,10 +2758,18 @@ class Runtime:
 
     def _settle_due_forecasts(self) -> None:
         self.consequences.resolve(self.n)
+        pending = {f.handle: f for f in self.book.pending()}
         settled = self.settler.settle_due(self.n, self._facts_for)
         settled.extend(self.settler.settle_consequences(self.consequences.payoff))
         self._settle_exposures(settled)
         for s in settled:
+            forecast = pending[s.handle]
+            self.cadence.record(
+                handle=s.handle, predicate_id=s.predicate_id,
+                opened_event=forecast.made_at_event, settled_event=self.n,
+                opened_ns=self.queue.get(s.handle).opened_ns, settled_ns=self.clock.now_ns,
+                status=str(s.status),
+            )
             self.stats.forecasts_settled += 1
             self._emit(
                 EventKind.FORECAST_SETTLED,

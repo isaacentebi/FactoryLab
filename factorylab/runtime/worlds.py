@@ -14,6 +14,7 @@ import json
 import tomllib
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +107,7 @@ class PricesSpec:
     decay: float = 0.1
     lambda_max: float = 1.0
     min_window_events: int = 1
+    kappa: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -134,6 +136,7 @@ class ClockSpec:
 class TimingSpec:
     min_ratio: int = 3
     jitter_fraction: float = 0.2
+    cadence_sample: int = 200
 
 
 @dataclass(frozen=True)
@@ -234,6 +237,8 @@ class WorldManifest:
                 raise ValueError(f"assembly {a.id} has unknown role {a.role}")
         if self.novelty.window_ns <= 0:
             raise ValueError("novelty window must be positive")
+        if type(self.timing.cadence_sample) is not int or self.timing.cadence_sample < 1:
+            raise ValueError("timing.cadence_sample must be a positive integer")
         if self.timing.min_ratio < 1:
             raise ValueError("timing min_ratio must be at least 1")
         if type(self.clock.min_tick_ns) is not int or self.clock.min_tick_ns <= 0:
@@ -253,6 +258,8 @@ class WorldManifest:
         if self.drip is not None and (self.drip.period_ns <= 0 or self.drip.amount_micro < 0):
             raise ValueError("drip period must be positive and amount non-negative")
         p = self.prices
+        if type(p.kappa) not in (int, float) or not isfinite(p.kappa) or p.kappa < 0:
+            raise ValueError("prices.kappa must be finite and nonnegative")
         if min(p.eta, p.decay, p.lambda_max) <= 0 or p.min_window_events < 1:
             raise ValueError("prices: eta, decay, lambda_max > 0 and min_window_events >= 1")
 
@@ -329,6 +336,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     pr = d.get("prices") or {}
     prices = PricesSpec(
         eta=float(pr.get("eta", 0.5)),
+        kappa=pr.get("kappa", 0.5),
         decay=float(pr.get("decay", 0.1)),
         lambda_max=float(pr.get("lambda_max", 1.0)),
         min_window_events=int(pr.get("min_window_events", 1)),
@@ -347,7 +355,10 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         models=models,
         assemblies=assemblies,
         novelty=NoveltySpec(float(nov.get("share", 0.1)), _ns(nov.get("window", "1d"))),
-        timing=TimingSpec(int(tim.get("min_ratio", 3)), float(tim.get("jitter_fraction", 0.2))),
+        timing=TimingSpec(
+            int(tim.get("min_ratio", 3)), float(tim.get("jitter_fraction", 0.2)),
+            tim.get("cadence_sample", 200),
+        ),
         termination=TerminationSpec(
             usd_to_micro(term.get("balance_floor_usd", 0)),
             term.get("max_events"),

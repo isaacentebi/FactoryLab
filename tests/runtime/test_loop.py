@@ -1071,3 +1071,116 @@ def test_scripted_clock_amendment_changes_next_tick_deterministically(monkeypatc
     second, replay = run()
     assert first == second
     assert entries == replay
+
+
+def test_scripted_governance_waits_for_measured_periods_and_ledgers_both_forecast_types():
+    from math import ceil
+
+    base = load_manifest("scripted")
+    manifest = replace(
+        base, timing=replace(base.timing, cadence_sample=20),
+        novelty=replace(base.novelty, window_ns=3_000_000_000),
+    )
+    manifest.validate()
+
+    def run():
+        rt = Runtime(manifest, events=26, seed=1, initial_balance_micro=None,
+                     ledger_path=None, drip=False, router_gamma=0.1, kill_at_end=True)
+        about = None
+
+        def route(event):
+            nonlocal about
+            if event.kind != EventKind.TICK:
+                return
+            if event.payload["index"] == 0:
+                about = _consequence_decision(rt, "seed-decider", "verdict")
+                rt.consequences.start(about, rt.n)
+                parent = _consequence_decision(rt, "eval-a", "conformity")
+                rt.consequences.seal_verdict(
+                    rt.book, rt.queue, evaluator_handle=parent, evaluator_id="eval-a",
+                    about=about, verdict=0.5, event=rt.n, now_ns=rt.clock.now_ns,
+                    tick_ns=rt.tick_clock.interval_ns,
+                )
+                rt._open_forecasts(parent, "eval-a", about, [{
+                    "predicate": "wallet_up", "q": 0.5, "params": {"horizon_events": 4},
+                }])
+                for amendment_id in ("cadence-one", "cadence-two"):
+                    rt._propose_amendment(about, {
+                        "id": amendment_id, "predicted_effect": "Measure a charter revision.",
+                    })
+            elif event.payload["index"] == 4:
+                rt.consequences.finish(about, 0)
+
+        rt._route = route
+        rt._settle_exchange_effects = lambda events: None
+        snapshots = []
+        original = rt._activate_charter_if_due
+
+        def activate():
+            original()
+            snapshots.append(rt._world_block()["governance"])
+
+        rt._activate_charter_if_due = activate
+        summary = rt.run()
+        # kill_at_end releases the key; the known ledger length is not needed.
+        items = []
+        while True:
+            item = rt.ledger.decrypt_item(len(items))
+            items.append(item)
+            if item["kind"] == "event" and item["event"]["kind"] == "Terminated":
+                break
+        return summary, items, snapshots
+
+    summary, items, snapshots = run()
+    assert summary["ledger_verify"] and summary["wallet_conservation"]
+    latencies = []
+    approvals = set()
+    last_activation = 0
+    deferred = []
+    activations = []
+    opens = {i["handle"]: i for i in items if i["kind"] == "forecast.seal"}
+    settled_handles = {
+        i["return"]["handle"] for i in items
+        if i["kind"] == "decision.settle" and i["return"]["channel"] == "consequence"
+    }
+    samples = [i for i in items if i["kind"] == "cadence.settlement"]
+    assert {i["handle"] for i in samples} == settled_handles
+    assert len(samples) == len(settled_handles)
+    assert "return_paid_off" in {i["predicate_id"] for i in samples}
+    assert any(i["predicate_id"] != "return_paid_off" for i in samples)
+    for item in items:
+        if item["kind"] == "cadence.settlement":
+            assert item["opened_event"] == opens[item["handle"]]["made_at_event"]
+            assert item["latency_ns"] == item["settled_ns"] - item["opened_ns"]
+            assert item["latency_events"] == item["settled_event"] - item["opened_event"]
+            latencies = (latencies + [item["latency_ns"]])[-20:]
+        elif item["kind"] == "charter.approved":
+            approvals.add(item["amendment_id"])
+        elif item["kind"] == "charter.deferred":
+            assert item["amendment_id"] in approvals
+            assert item["ts"] < item["earliest_ns"]
+            deferred.append((item["amendment_id"], item["window"]))
+        elif item["kind"] == "charter.cadence":
+            measured = sorted(latencies)[ceil(0.9 * len(latencies)) - 1]
+            period = min(measured, manifest.evaluation.consequence_backstop_events * 10**9)
+            assert item["slowest_period_ns"] == period
+            assert item["activation_ns"] - last_activation >= manifest.timing.min_ratio * period
+            assert item["previous_activation_ns"] == last_activation
+            last_activation = item["activation_ns"]
+            activations.append(item)
+    assert deferred and len(deferred) == len(set(deferred))
+    assert len(activations) == 2 and any(s["waiting"] for s in snapshots)
+    assert [i["activation_ns"] for i in activations] == [13_000_000_000, 25_000_000_000]
+    assert not snapshots[-1]["waiting"]
+    assert (summary, items, snapshots) == run()
+
+
+def test_governance_live_time_anchor_does_not_treat_epoch_time_as_elapsed():
+    rt = _consequence_runtime()
+    rt.live = True
+    rt.clock.now_ns = 1_800_000_000_000_000_000
+    rt._manage_reserve_window()
+    assert rt.cadence.earliest_ns(rt.tick_clock.interval_ns) == (
+        rt.clock.now_ns
+        + rt.m.timing.min_ratio * rt.ev.consequence_backstop_events * rt.tick_clock.interval_ns
+    )
