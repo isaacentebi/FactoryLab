@@ -475,3 +475,16 @@ def test_generic_authorize_ceiling_and_reserve_precede_signature(quote, monkeypa
     with pytest.raises(X402Error, match="Reserve"):
         client.authorize(selected, ceiling_micro=123)
     assert len(fake.calls) == 1
+
+
+def test_payment_header_survives_decimal_extensions(quote):
+    """A seller's extension blob decoded with Decimal floats (FarOuter's price info) must not
+    break the envelope: the proof of 12 September failed here before any payment was sent."""
+    from decimal import Decimal
+
+    account = Account.from_key(TEST_KEY)
+    body = dict(quote)
+    body["extensions"] = {"bazaar": {"faroutQuote": {"info": {"usd": Decimal("0.001")}}}}
+    selected = parse_quote(HTTPResponse(402, body))
+    payment = decoded(payment_header(account, selected))
+    assert payment["extensions"]["bazaar"]["faroutQuote"]["info"]["usd"] == "0.001"

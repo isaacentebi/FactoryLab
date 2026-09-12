@@ -158,8 +158,18 @@ def siwe_header(account: Any, resource_url: str) -> str:
     )
 
 
+def _json_default(value: Any) -> str:
+    """Quotes are decoded with Decimal floats; sellers' extension blobs may carry them, and
+    they go back to the seller as the decimal strings they arrived as."""
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def _encode(value: dict) -> str:
-    return base64.b64encode(json.dumps(value, separators=(",", ":")).encode()).decode("ascii")
+    return base64.b64encode(
+        json.dumps(value, separators=(",", ":"), default=_json_default).encode()
+    ).decode("ascii")
 
 
 def _decode(value: str) -> dict:
