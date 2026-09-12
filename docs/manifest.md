@@ -147,8 +147,8 @@ proposals and ballots, preflights each candidate through the pricing measurement
 includes `answers_for` and typed windows in the exported TOML, and records the
 surveyed roster hash. `worlds/edition1-example.toml` is only a schema migration of
 the historical example. The experimenter must re-draft edition 1 with the actual
-launch roster after the fix passes merge; this workstream does not ratify a new
-edition or run the paid survey.
+launch roster before launch; the drafting script does not ratify a new edition
+or run the paid survey.
 
 ## Timing, pricing and immune settings
 
@@ -244,7 +244,7 @@ boundary, where the flag must be raised again to re-issue it. That single grant
 is part of the novelty lifetime policy (A13): ledger evidence `novelty.grant` and
 `novelty.grant_consumed`.
 
-## Round-three W5: propensity and measurement (A10, A11)
+## Round-two W5: propensity and measurement (A10, A11)
 
 Neither section adds a manifest key: the spec supplies no number for either, and
 nothing here tells the population what to optimise. What they add are kernel

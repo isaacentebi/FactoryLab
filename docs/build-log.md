@@ -1,6 +1,6 @@
 # Build log
 
-Each entry records what was built, who built it, how many attempts it took, and a fidelity check against `docs/build-spec-v0.4.md` and the source essay. The fidelity check is the point; the rest is bookkeeping.
+Each entry records what was built, who built it, how many attempts it took, and a fidelity check against the spec it followed and the source essay. The fidelity check is the point; the rest is bookkeeping.
 
 ## Phase 1 — deterministic substrate (11 September 2026)
 
@@ -153,7 +153,7 @@ Built by Codex (`charter/controller.py`, PR #17, one attempt, 23 tests) and a Cl
 
 ### Fidelity check
 
-- Soft casts as priced penalties (essay II.II): present, proportional with decay, bounded, ledgered. No integral or derivative term; the audit (`docs/design-audit-v2.md` §3) records this as acceptable at $100 and to be revisited if versioning shows oscillation.
+- Soft casts as priced penalties (essay II.II): present, proportional with decay, bounded, ledgered. No integral or derivative term; the audit (`docs/history/design-audit-v2.md` §3) records this as acceptable at $100 and to be revisited if versioning shows oscillation.
 - Adversarial minority (II.III.b): present and real: antagonists trade the same account within the same limits and are paid only for fooling a judge.
 - Prices public (v0.4 §1.6): the first build omitted card prices from the world block; caught in review and fixed before merge.
 - What the scripted world showed: the scripted amendment's `turnover` card ("below 5") saturates at λ = 1 and zeroes every producer verdict for the rest of the run. That is the physics doing what a badly priced card asks; in a live world the committee that passes such a card pays for it. Kept, with the test asserting it.
@@ -171,14 +171,14 @@ Built by Codex (`charter/controller.py`, PR #17, one attempt, 23 tests) and a Cl
 Merged PRs #19–#25, all Codex on `gpt-6-astra` in separate worktrees, one attempt each except recursive meta-evaluation (two passes: the cascade gate was a review finding) and resume (in flight: a semantic rebase against the clock change). Gate on main after #25: 1189 passed.
 
 - Versioning (`factorylab/versioning/`): windows, cells, transition operator with the Dobrushin bound as the spectral-gap bound, versions, the four pathologies, early-warning signals, settling time. Read-only over a diary.
-- Verdict as consequence forecast (spec v0.7 §2, approved by the experimenter after the fidelity argument in this log's run 4 entry): kernel predicate `return_paid_off`, FIFO lots, realized on close, backstop marking; reward-hacking review in `factorylab/settlement/REWARD_HACKING.md`.
+- Verdict as consequence forecast (spec v0.7 §2, approved by the experimenter after the fidelity argument in this log's run 4 entry): kernel predicate `return_paid_off`, FIFO lots, realized on close, backstop marking; reward-hacking review in `docs/reward-hacking.md`.
 - Population-proposed λ; recursive meta-evaluation with a per-tier cascade gate (3:1 with jitter; the meta's score settles its whole window, a reviewer change from the free 1.0 the first pass gave siblings); the clock amendable by the committee within physics bounds.
 - Compute bought on the open market: x402 client (built for Venice, generalised), `market.discover`, `x402:` and `venice:` namespaces, metering at the paid quote, compute insolvency. Research in `docs/research/venice.md`; the card and OpenRouter routes verified dead.
 - Judges see only the event a producer answered; the Hyperliquid adapter retries and falls back to last-good values.
 
 ### Fidelity check
 
-Every principle in `docs/design-audit-v2.md` marked missing is now built, with two remaining partials: the price controller has no integral or derivative term, and governance cadence is enforced by window rather than measured settling time (the versioning module now reports it). The one deliberate new deviation is the launch tick of five minutes, the architect's cast for edition 1, healed by the committee's power to amend it.
+Every principle in `docs/history/design-audit-v2.md` marked missing is now built, with two remaining partials: the price controller has no integral or derivative term, and governance cadence is enforced by window rather than measured settling time (the versioning module now reports it). The one deliberate new deviation is the launch tick of five minutes, the architect's cast for edition 1, healed by the committee's power to amend it.
 
 ### Live run 5 (testnet, seed 5, venue key, unfunded testnet account)
 
@@ -393,3 +393,123 @@ of this compute proof.
 ### Cold audits (12 September)
 
 Five seats: fidelity by Codex, Fable and Opus; defects by Fable and Opus (Codex was blocked twice by its provider's classifier on this code). Reports in `docs/audits/`. Convergent findings: population cards priced but never applied; the tool sandbox is not isolation; the consequence fill cursor starts at zero; no OS lock on a ledger; vendor overruns swallowed; a torn final append bricks resume; the JSON extractor censors returns with a `}` in a rationale; the novelty reserve's sign reversed; the immune system post-mortem only; lost order acknowledgements recorded as rejections; Blum–Mansour routers crash under the standing mix; the seed prompt advertises child requests nothing handles. Two fidelity arguments recorded as dissent rather than fixed: that the public scoring block over-discloses (the essay lists reward structures among public schematics) and that `return_paid_off` is an architect's objective (the essay makes money the numéraire; run 8 is the first evidence either way). Fix workstreams FA, FB, FC.
+
+## Round two: audits and fixes
+
+Seven seats audited main at `0ec4df4` against the essay with no contact between
+them: composition, pathologies, the first move, defects, live wiring, the
+environment, and the repository as a product. The reports and the triage table
+are in `docs/audits/v2/`: seventeen "not Class 3" findings (A1–A17) and twenty
+"will break" findings (B1–B20), each recorded once with the seats that reached
+it independently. Seat 4 landed thirteen of them as fifteen failing tests under
+`tests/audit/` first. `docs/build-spec-v0.8-round2.md` specifies the passes,
+with the experimenter's decisions on the findings that change the design.
+
+### Pass 1 — defects (B1–B20)
+
+Closed against seat 4's tests plus new ones for B1, B11–B15 and B19.
+`treasury.transfer` was unreachable from any return: a union type in its schema
+crashed the validator, discarding the reply. A journaled venue read failure
+replayed on every resume, bricking a funded world under `Restart=always`. A lone
+UTF-16 surrogate in a reply wedged canonicalisation and every resume after it;
+so did an amendment whose region parsed to infinity. Replay of an interrupted
+live event charged the full ceiling for calls the journal refuses to dispatch;
+an x402 payment with an unknown outcome leaked a wallet hold nothing closed;
+resume materialised the whole diary and did not pin the venue account; the
+mainnet guard tested the manifest's declared name, not its file. No code had
+ever run in the jail on macOS: the `sandbox-exec` profile aborted the
+interpreter and the four jail tests skipped, so the gate was green over an
+unproven sandbox. The Venice rail was selected, paid, and returned nothing on
+world-sized prompts.
+
+### Pass 2 — fidelity mechanics
+
+**Time, prices, the immune organ (#40).** Cadence measured latency between
+internal events sharing a timestamp, so the p90 was zero and amendments could
+activate every window; it now measures in delivered events, counts outstanding
+forecasts, and requires both elapsed time and fresh events since the previous
+activation. The immune organ classified against quantiles of its own sample, so
+stable failure and learning death were unreachable and a frozen factory read as
+thrash; cells now form against fixed anchors, and one `violation()` and one
+`diagnose()` serve both the live organ and `factorylab versions`, which reads
+its thresholds from genesis. Unnormalised, unclipped Σ λ·violation shared across
+a role had settled every producer at exactly 0 after two violating windows;
+violation is now normalised by the catalogue's `unit_range`, capped at
+`prices.penalty_cap`, and multiplied by the decision's attributed share. Review:
+a deferred fill left its decision's notional at zero while the window already
+counted the fill; `timing.min_support` above `timing.cadence_sample` is refused
+at load; and the second implementation of the learning-death grant was removed.
+
+**Judges, consequences, the reserve (#38).** Evaluators return two numbers: a
+`verdict` on charter quality graded by conformity, and a `payoff` probability on
+`return_paid_off` graded by Brier. Closers are credited as well as openers.
+Exposure had paid a near-constant 98.4% and driven the antagonist to 93% of
+routing; it now settles 1 only when the judge's mandatory forecast
+underperformed baseline and the antagonist's beat it, and antagonist share is
+capped. Venue and treasury writes require an open consequence account, the lot
+table refuses fills without one, and nothing is routed to its own or its child's
+output. Novelty protection counts settled consequences, not invocations, and
+ends at `novelty.max_lifetime_windows`. Review: the payoff rule was described in
+prompt text and was removed; forecasts about one outcome were scored against
+baselines already holding it and recorded it twice; an assembly that never
+settled anything could draw protected compute for ever; a router proposal at the
+cap consumed its novelty receipt before being refused; and a lone recursive meta
+waited on a channel no one could answer.
+
+**Disclosure, governance, the treasury (#39).** Every request carries the full
+charter render and a mechanics block; producers and antagonists could previously
+amend a charter they could not read. The world block publishes counts per event
+kind instead of the full topology. Ballots settle late against the amendment's
+predicted effect through the voter's durable identity, eligibility ignores
+self-requested decisions, a proposer never sits on its own committee, and an
+amendment leaving the charter unchanged is refused. `MetricCard.window` is typed
+and measured as declared. The population tops up Venice itself in the fixed $5
+tranche through `treasury.transfer to_venice`. The wake drops positions and
+entry prices. Review, both in `activate_due`: a conflicting patch was marked
+activated and skipped silently, stranding its ballots for ever; and two passed
+amendments sharing a base edition could mint an edition identical to the current
+charter.
+
+### Pass 3 — architecture
+
+**Propensity and measurement (#41).** Every decision carries the router's
+propensity and the deciding agent's own declared distribution over its actions,
+which travels forward on returns and on the judging request. A `learner`
+registration gives an assembly an EXP3 or Blum–Mansour learner over those
+actions, trained off-policy. An `ObservationBook` holds the 22 seed observations
+plus population-registered ones, whose `observe(facts)` runs in the jail after a
+preflight on the last closed window; a card naming an unregistered observation
+is refused before the vote. Review, over two rounds: overflow-safe propensities
+and bounds, declared ranges enforced at every measurement path, and facts
+stripped of identities.
+
+**Spot trading (#42).** Spot sits beside perps on the same venue, wallet and
+physics, a second class of capital inside the venue pot and never additional
+capital. Spot lots are long-only, close FIFO against spot lots alone, and cannot
+be liquidated; perp margin measures perp equity alone. `treasury.transfer`
+accepts `spot_to_perps` and `perps_to_spot` through the same journal, live as a
+signed `usdClassTransfer` confirmed against a matching ledger row, and venue
+writes are refused while one is in flight. `venue.spot_pairs` is fixed at
+launch.
+
+**The wake as an observatory (#43).** The wake publishes hourly what the
+population can already see: roster, registered tools and observations, charter
+and amendment history, compute per rail, pots and transfers, pathology flags,
+portfolio. Learner state, propensities, memories, raw text, scores and assembly
+ids stay sealed until death. One `wake.public` ledger item per window close,
+built from restored state with no new I/O; `tests/audit/test_a17_wake.py` scans
+recursively for sealed keys. Review moved that item after the boundary's charter
+activation, so it is never written against the edition it replaced.
+
+### Decisions recorded, and what is not on main
+
+Manifest keys, seed values and reasoning are in `docs/manifest.md`. Where the
+spec left a choice open: equal means across supported scopes; strict directional
+vote outcomes; submitted Venice tranches consume the window budget; standing
+uses payoff Brier alone; spot has no leverage, funding or liquidation, and live
+pairs must exist verbatim in the venue's metadata or launch fails. Full
+composition (A1: registrable `accepts`/`emits` contracts in place of fixed role
+dispatch, retirement by vote, recursive children with tools) is open as PR #44,
+not merged; connectors are specified and not built; the polish pass has not
+started. Two fidelity arguments from round one stand as dissent, not fixes: the
+public scoring block, and `return_paid_off` as the consequence predicate.

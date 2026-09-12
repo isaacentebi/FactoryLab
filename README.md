@@ -62,7 +62,7 @@ factorylab/
 worlds/        manifests: scripted, scripted-crash, testnet, an example charter edition
 tests/         one directory per package; tests/audit holds the reproductions from the cold audits
 deploy/        cloud-init, systemd units, backups, alerting, the jail probe, the single-host runbook
-docs/          specs, build log, audit reports, manifest reference, research notes
+docs/          the current spec, build log, audit reports, manifest reference, research notes; docs/history holds superseded plans
 scripts/       one-shot scripts (compute proof, charter drafting)
 ```
 
