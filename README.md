@@ -1,12 +1,34 @@
 # Factory Lab
 
-Factory Lab is the Class 3 factory of *The Superdark Factory* (Poliks, Trillo, Dunn, Scott-Douglas, Springett) built as one small world with one wallet. Ephemeral LLM assemblies are woken by that world's events, buy their own thinking from the wallet at vendor prices, trade on Hyperliquid, judge each other's returns, and propose new models, assemblies, routers, tools and amendments to their own charter. The experimenter plays the essay's architect: one committed move before launch — the manifest and the kernel — and after that nothing but reading the wake and, if needed, pressing kill.
+A small, real-money implementation of the Class 3 factory described in *The Superdark Factory* (Poliks, Trillo, Dunn, Scott-Douglas, Springett). One wallet, one exchange account, and a population of short-lived language-model agents that buy their own thinking, trade, judge each other, and rewrite their own rules. The person who builds it makes one move, at launch, and then never touches it again.
 
-## What it needs
+The essay's claim is that a factory whose objectives are supplied from outside is a Class 2 factory no matter how clever its automation. A Class 3 factory derives what it is trying to do from norms and constraints, and its architect must not be able to predict what it will become. This repository is an attempt to build one honestly, small enough to read, with enough money at stake that the results mean something.
 
-Python 3.13 (`.python-version`, `deploy/cloud-init.yaml`) and `uv`. Nothing else for the scripted worlds: no network, no keys, no money.
+## How it works
 
-## Run it in ten minutes
+**The world.** A world is a wallet in integer micro-dollars, an exchange (Hyperliquid, or a deterministic fake), a clock, and a sealed ledger. Every event the world produces (a tick, a price, a fill, a funding payment) is delivered to the population. Every state change is a ledger item first: encrypted, hash-chained, append-only. The ledger's key is released only when the world dies.
+
+**The population.** An assembly is a model, a prompt, a contract saying which events it accepts and what it returns, and a budget. Assemblies are not processes; they exist only while answering an event. Each answer is a model call paid from the wallet at the vendor's price, so thinking is a cost like any other, and an assembly that spends more than it is worth to the factory is selected against. The seed population is nine assemblies of four kinds: producers, which act on the market or decline to; evaluators, which judge a producer's return; metas, which judge the judges; and an antagonist, paid for exposing judges who were wrong.
+
+**One turn of the loop.** An event arrives. A router (a bandit learner over the assemblies that accept that event) samples one, records the probability with which it was chosen, and wakes it. The assembly returns a structured answer: an action, perhaps an order, perhaps tool calls, perhaps proposals. If it placed an order, the fill enters a lot book. Its return is routed to an evaluator, which answers with two numbers: a verdict on the return's quality, and a probability that the return will pay for itself. The verdict is graded later by a meta for conformity; the probability is graded by what actually happened in the wallet once the position closed. Every score flows back to the handle of the decision that earned it, and the routers update. That is the whole reward line: thin, delayed, and attributable.
+
+**Learning.** Routers run no-regret learners (EXP3, Hedge) at the frontier and a no-swap-regret construction (Blum–Mansour) where decisions need to be correct per condition, not just on average. A share of every window's spend is reserved for assemblies with no history, so novelty is never starved out by incumbents. Any assembly may propose a new model, a new assembly, a replacement router, or a tool written in Python that runs in an OS jail; proposals are validated by the kernel, and accepted ones join the population immediately.
+
+**The charter.** Four norms are fixed at launch: truthful commitments, care with scarce resources, useful inquiry, and the capacity to revise inadequate practices. Everything else the population writes. A metric card names a measurable quantity, an acceptable region, and which role answers for it. A price controller turns violations into penalties on that role's rewards; the penalty ratchets while the violation lasts and decays when it stops. Cards, prices and the length of the tick are amended by proposal and a committee drawn by lot, whose votes are settled later against what the amendment actually did.
+
+**The kernel.** A short list of rules is enforced in code and never stated to the population, because a rule that is merely announced is read as advice. Money is conserved. Nothing returns before it is paid for. An unaffordable action is infeasible. Death at a zero balance is final. Every sampled action is addressable and its propensity is logged. The novelty reserve cannot be abolished. Nothing judges its own output. Learner state is private; contracts, prices and the charter are public; no assembly sees the whole topology. Reports upward are buffered and jittered so the slow loops stay slower than the fast ones.
+
+**Compute.** The factory buys inference from three rails: prepaid OpenRouter credit, Venice paid in USDC over x402, and any seller on the public x402 index. It holds its own reserve on Base, moves money between the exchange and the reserve through its own treasury tool, and tops up its Venice balance itself. When every rail is unaffordable the world ends; nobody refills it.
+
+**Time.** The factory keeps its own clock. The tick is a charter parameter the population can change within physical bounds. Governance moves only as fast as the slowest measured consequence loop allows.
+
+**What the architect does.** Writes one manifest: the seed assemblies, the prices, the norms, the initial cards, the bounds. Its hash is the first ledger item. After launch there is one live view, a page of sealed aggregates and balances, and one control: kill. There is no refill, no restart with new settings, no reading the diary while the world lives.
+
+**How it ends.** The balance reaches zero, compute becomes unaffordable, or the architect kills it. Then the seal is released and the diary can be read. A versioning library reads it by behaviour rather than configuration: a transfer operator over score profiles, its spectral gap, the four pathologies the essay names (stable failure, overfitting, learning death, thrash), and the early-warning signals that preceded them.
+
+## Try it
+
+Python 3.13 and `uv`. The scripted worlds need no network, no keys and no money.
 
 ```bash
 uv sync
@@ -14,93 +36,46 @@ uv run factorylab run --world scripted --events 400 --seed 1
 uv run factorylab run --world scripted-crash --events 600 --seed 2
 ```
 
-`scripted` runs 400 events against a deterministic fake venue and model provider in about half a minute and prints a JSON summary. `scripted-crash` halves BTC four times under a leveraged long; that world dies of `balance_zero` and releases its seal key. Then the test gate:
+The first runs a deterministic world for 400 events and prints a summary. The second halves the price of BTC four times under a leveraged long; the world dies of `balance_zero` and releases its key. Then the tests:
 
 ```bash
 uv run pytest
 uv run pytest -m slow -o addopts="" tests/runtime/test_resume.py
 ```
 
-The second kills and resumes real subprocesses; it is deselected by default. `uv run factorylab --help` lists the other subcommands, and `uv run factorylab manifest --world scripted` prints a manifest's hash — the identity a launched world is sealed to.
+The second set kills and resumes real processes at every ledger write. `uv run factorylab --help` lists the rest: validating a manifest, resuming a world, publishing the wake page, reading a dead world's diary, versioning it.
 
-## What the files are
+Running against Hyperliquid testnet needs an exchange key and a model-provider key at the repository root (`hyperliquid.key`, `openrouter.key`, mode 0600, never committed). Running with real money additionally needs the reserve key and a manifest named `funded`; the code refuses mainnet under any other name.
 
-- `factorylab/` — the package, below.
-- `worlds/` — world manifests, one TOML each, hashed into the genesis ledger item.
-- `tests/` — the suite, one directory per package.
-- `deploy/` — cloud-init, systemd units, backup, alert and jail scripts, and the single-host runbook.
-- `docs/` — specs, the build log, audit reports, charter drafts, research notes, run summaries.
-- `scripts/` — one-shot scripts whose artefacts live under `docs/`.
-- `outputs/` — earlier design documents, superseded by `docs/`.
+## Layout
 
-Inside `factorylab/`:
+```
+factorylab/
+  kernel/      wallet, ledger, events, registry, decision queue, novelty reserve, timing, termination
+  cortex/      assemblies, requests and returns, registration, tools and the jail, the public world block
+  learners/    EXP3, Hedge, Blum–Mansour, delayed feedback, routers
+  settlement/  lots, forecasts, scoring, consequence attribution
+  charter/     norms, cards, amendments, committee, price controller
+  runtime/     the loop and its parts: routing, governance, pricing, feedback, venue, resume, wake, immune organ
+  versioning/  reading a dead world's diary by behaviour
+  world/       exchange adapters, model providers, x402 client, treasury rails, metering
+worlds/        manifests: scripted, scripted-crash, testnet, an example charter edition
+tests/         one directory per package; tests/audit holds the reproductions from the cold audits
+deploy/        cloud-init, systemd units, backups, alerting, the jail probe, the single-host runbook
+docs/          specs, build log, audit reports, manifest reference, research notes
+scripts/       one-shot scripts (compute proof, charter drafting)
+```
 
-- `kernel/` — the physics: the conserved wallet, the sealed hash-chained ledger and its five aggregate views, event delivery, capability contracts, the decision queue, the novelty reserve, timing registration, termination, integer micro-USD.
-- `charter/` — the four read-only norms, metric cards, amendments, the sortition committee, the λ price controller.
-- `cortex/` — the primitives: assemblies built from contracts, the rich request line and thin return line, registration proposals, the public schematics every assembly sees, population tools and their OS jail.
-- `learners/` — EXP3 and Hedge, Blum–Mansour, handle-addressed delayed feedback, the sampling router and its feasibility filter.
-- `runtime/` — the loop and what drives it. `loop.py` is the loop proper — launch, event processing, the producer, evaluator and meta steps, snapshots, termination — over method groups in `bootstrap`, `routing`, `governance`, `venue`, `pricing`, `feedback`, `compute` and `summary`, with the public world block in `cortex/schematics.py`. Also here: the CLI, manifests, resume, the wake page, the immune organ, the observations catalogue, governance cadence, the cascade gate.
-- `settlement/` — FIFO lots, sealed forecasts and their scoring, consequence standing, the launch-declared predicate vocabulary.
-- `versioning/` — a read-only library over a dead world's diary: transfer operator, spectral gap, behavioural versions, the four pathologies, early-warning signals.
-- `world/` — everything outside: clock and drip, exchange adapters (a deterministic fake and Hyperliquid), model providers (OpenRouter, Venice, x402 sellers), metering, venue tools, the treasury rails over CCTP, the scripted provider.
+`docs/manifest.md` documents every manifest key, its default, and whether it is a hard cast.
 
-## Never do this
+## Rules
 
-- Never read, print or commit a `*.key`. `openrouter.key`, `hyperliquid.key`, `reserve.key` and a ledger's seal key belong to the experimenter; the CLI loads them into the environment and never emits a value.
-- Never create `worlds/funded.toml` before the launch gates in `docs/handoff.md` and `deploy/README.md` are met. Mainnet is refused unless the world is named `funded`, and that manifest is written once.
-- Never touch a running world: no refilled pot, no edited manifest, no restored ledger, no upgraded host, no reading the diary. `factorylab wake` is the only live view; the diary opens only after termination releases its key.
+- Never read, print or commit a `*.key`. The CLI loads them; nothing else should.
+- Never create `worlds/funded.toml` before the launch checks in `deploy/README.md` are met.
+- Never touch a running world. No refill, no new manifest, no restore, no upgrade, no reading the diary. The wake page is the only view.
 
-## The essay
+## Status
 
-The essay is the experimenter's document and is not tracked here; `docs/essay.md` is where the repository expects a copy. Its success criterion governs this build: a factory its architect can predict is not worth building, so green tests are not evidence of anything.
+Experimental. It has run on testnet with real fills, bought inference from all three rails with real USDC, and survived kill-and-resume at every ledger write. It has not yet run with real money on mainnet. Two rounds of cold audits against the essay are in `docs/audits/`; the fixes they produced are in the build log.
 
-### How the code maps to it
-
-| Essay principle | Where it lives |
-|---|---|
-| Class 3: objectives derived from norms and constraints, never supplied | Four read-only norms in `charter/charter.py`; the population writes the metric cards, the prices and the clock |
-| Darkness: interior information is useless from outside; read the wake | Sealed ledger in `kernel/ledger.py`; five aggregate views only; `runtime/wake.py` publishes nothing else |
-| The Stackelberg move: one committed first move, then no intervention | `worlds/<name>.toml` hashed into the genesis item; a changed manifest is a different world; no mid-run mutator exists |
-| Kernel and charter: hard casts as physics, soft casts as priced penalties | `factorylab/kernel/` enforces; `factorylab/charter/` prices, through cards, λ and amendments |
-| Primitives with explicit contracts, no semantic coupling | Registry contracts for models, assemblies, routers and tools in `kernel/registry.py` and `cortex/` |
-| Rich request line; thin, stateful reward line with a propensity score | `cortex/request.py`; `kernel/queue.py` (`DecisionQueue`, `PropensityRecord`, five score channels) |
-| No-regret learners at the frontier, no-swap-regret learners at the core | `learners/exp3.py`, `learners/hedge.py`, `learners/blum_mansour.py`, `learners/delayed.py` |
-| Learning death prevented as physics: an unhistoried share of spend | `kernel/reserve.py`; each manifest declares a tenth of the window |
-| Versioning by behaviour: transfer operator, spectral gap, pathologies, early warning | `factorylab/versioning/`, read-only over a diary; `factorylab versions` |
-| Evaluations online and recursive; more judges than producers | Evaluator and meta steps inside the loop; `MetaVerdict` tiers; `runtime/cascade.py` |
-| Evaluations graded by realized consequence, outside the input | Predicate `return_paid_off`; FIFO lots in `settlement/lots.py`; Brier against a prevalence baseline |
-| Adversarial minority manufacturing real failures | The `antagonist` role, paid on the `exposure` channel for fooling a judge, trading the same account |
-| Charter co-written by sortition; λ as a shadow price the factory posts | `charter/committee.py`, five seats by lot and three votes to pass; an amendment may carry a starting λ and the tick |
-| The 3:1 cascade with jitter; upper loops starved of variety | `kernel/timing.py` (`TimingRegistry`, `UpwardBuffer`); metas see distributions, not returns |
-| The $0 token budget as the last kill switch | `balance_floor_usd = "0"` in every manifest; compute insolvency in `runtime/loop.py` |
-
-### The physics
-
-Code enforces the kernel; nothing states it to the population, because a restriction not promoted into physics is read as advice to route around. Changing any of it kills the world.
-
-- **Conservation.** The wallet changes only through metered debits, exchange settlements and the declared drip.
-- **Metering before return.** No model call, order or purchase returns before its cost is debited. An unaffordable action is infeasible.
-- **Death at zero.** Balance at or below the floor terminates the world, finally. The diary key is released only then.
-- **Addressability.** Every sampled action carries a persistent handle and a logged propensity that replays its draw; late rewards settle to that handle.
-- **Novelty reserve.** A declared share of each window's spend is usable only by contracts with no settled history. The charter cannot abolish it.
-- **Information boundaries.** Schematics, contracts, prices and the charter are public; learner state is private; no component holds the full topology.
-- **Timing registration.** Upward reports are buffered into distributions with a minimum 3:1 separation and jitter. Downward commands are prompt.
-- **Author neutrality.** Requests carry no author identity. Lineage lives in the sealed ledger.
-- **Sealed ledger.** Append-only, hash-chained, encrypted at rest; aggregates come from kernel code, never from reading items.
-- **Non-intervention.** After launch the experimenter has kill, and nothing else.
-
-Money is integer micro-USD; decimals appear only at venue boundaries. Every state change is a ledger item first.
-
-### Glossary
-
-- **Class 1, 2, 3.** Factories that automate execution, planning and objectives. Only Class 3 sets its own standard of better.
-- **Darkness.** Interior information is disclosed but useless for prediction, audit or steering; read the wake instead.
-- **Stackelberg move.** The architect's single committed move before launch; here, the manifest and the kernel.
-- **Kernel, charter.** Hard casts enforced as physics; soft casts, editioned, priced, amendable by the population.
-- **Primitive, contract.** A composable unit, and the input/output shape it exposes.
-- **Request line, reward line.** Rich self-describing requests; thin scores returning to the decision handle with a propensity.
-- **No-regret, no-swap-regret.** Learners converging to the best single action, and to the best action per condition.
-- **Version.** A near-invariant region of behaviour, read from score profiles rather than configuration.
-- **The four pathologies.** Stable failure, overfitting, learning death, thrash.
-- **Realized consequence.** Whether a verdict predicted what actually paid off in the wallet.
-- **Sortition.** Committee seats drawn by lot from the population.
+The essay is the experimenter's document and is not tracked here; `docs/essay.md` is where the code expects a copy. Its standard is the one this project holds itself to: if the architect can predict what the factory becomes, it is not the factory the essay describes.
