@@ -256,6 +256,24 @@ def _tool(
 # model, router and tool kinds above.
 
 
+def _finite_bound(value: Any) -> float:
+    """Return a declared range bound as a float, or say it is not a finite number.
+
+    Guarantees the conversion raises nothing but ``ValueError``: an integer too
+    large for a float is not representable, and a proposal carrying one is
+    rejected with a reason rather than ending the return that carried it.
+    """
+    if type(value) not in (int, float) or isinstance(value, bool):
+        raise ValueError("range bounds must be finite numbers")
+    try:
+        bound = float(value)
+    except (OverflowError, ValueError):
+        raise ValueError("range bounds must be finite numbers") from None
+    if not math.isfinite(bound):
+        raise ValueError("range bounds must be finite numbers")
+    return bound
+
+
 def _observation(
     item: dict[str, Any], seed_observations: frozenset[str], *, jail: bool | None = None,
 ) -> ObservationProposal:
@@ -287,11 +305,8 @@ def _observation(
     unit_range = item.get("range")
     if not isinstance(unit_range, list | tuple) or len(unit_range) != 2:
         raise ValueError("range must be [lo, hi]")
-    lo, hi = unit_range
-    if any(type(v) not in (int, float) or isinstance(v, bool) or not math.isfinite(v)
-           for v in (lo, hi)):
-        raise ValueError("range bounds must be finite numbers")
-    if not float(lo) < float(hi):
+    lo, hi = (_finite_bound(v) for v in unit_range)
+    if not lo < hi:
         raise ValueError("range must have lo below hi")
     code = item.get("code")
     if not isinstance(code, str):
@@ -302,7 +317,7 @@ def _observation(
         raise ValueError("code must define observe(facts)")
     if not (jail_available() if jail is None else jail):
         raise ValueError("no jail on this host")
-    return ObservationProposal(oid, description, unit.strip(), (float(lo), float(hi)), code)
+    return ObservationProposal(oid, description, unit.strip(), (lo, hi), code)
 
 
 def _learner(item: dict[str, Any], known_assemblies: frozenset[str]) -> LearnerProposal:

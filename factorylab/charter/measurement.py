@@ -26,7 +26,7 @@ def measurement_catalogue(observations=None) -> list[dict]:
     A11: a population-registered observation appears here beside the seeds, with
     its declared units and range, so a card can name it the same way.
     """
-    from factorylab.runtime.observations import SEED_BOOK
+    from factorylab.runtime.observations import seed_book
 
     descriptions = {
         "cost_per_return": "Mean successful response cost in the selected rows; global closed "
@@ -48,7 +48,7 @@ def measurement_catalogue(observations=None) -> list[dict]:
         "censored_share": "Censored outcomes over resolved outcomes; forecast selectors use "
         "forecast records, global closed windows also include judgements and exposures.",
     }
-    result = (observations or SEED_BOOK).catalogue()
+    result = (observations or seed_book()).catalogue()
     for row in result:
         observation = row["id"]
         row["description"] = descriptions.get(observation, row["description"])
@@ -120,9 +120,9 @@ class CardSamples:
 def preflight_card(card: MetricCard, observations=None) -> None:
     """Unmeasurable observations, scopes and regions are rejected before a vote."""
     from factorylab.runtime.cards import parses, region_for
-    from factorylab.runtime.observations import SEED_BOOK
+    from factorylab.runtime.observations import seed_book
 
-    book = observations or SEED_BOOK
+    book = observations or seed_book()
     observation = book.get(card.observation)
     if observation is None:
         raise ValueError(f"card {card.id} observation: unregistered observation")
@@ -204,9 +204,9 @@ def _measure_rows(observation: str, rows: list[dict]) -> float | None:
 
 def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> dict[str, float]:
     """Return each fully supported scope's measurement without pooling its sample selector."""
-    from factorylab.runtime.observations import SEED_BOOK
+    from factorylab.runtime.observations import seed_book
 
-    book = observations or SEED_BOOK
+    book = observations or seed_book()
     preflight_card(card, book)
     observation = book.get(card.observation)
     window = card.window

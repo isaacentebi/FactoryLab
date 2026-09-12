@@ -28,6 +28,24 @@ MAX_ACTION_ID_CHARS = 64
 PROPENSITY_TOLERANCE = 1e-6
 
 
+def _as_probability(prob: Any) -> float:
+    """Return a probability as a float, or say it is not a finite number.
+
+    Guarantees no numeric input escapes as an exception other than ``ValueError``:
+    an integer too large for a float is not representable, and a declaration that
+    carries one is malformed rather than fatal.
+    """
+    if type(prob) not in (int, float) or isinstance(prob, bool):
+        raise ValueError("propensity probabilities must be finite numbers")
+    try:
+        value = float(prob)
+    except (OverflowError, ValueError):
+        raise ValueError("propensity probabilities must be finite numbers") from None
+    if not math.isfinite(value):
+        raise ValueError("propensity probabilities must be finite numbers")
+    return value
+
+
 def validate_propensity(propensity: Any) -> dict[str, float]:
     """Return a declared distribution over an agent's own actions, or say why it is not one.
 
@@ -45,13 +63,12 @@ def validate_propensity(propensity: Any) -> dict[str, float]:
             raise ValueError("propensity action ids must be non-empty strings")
         if len(action) > MAX_ACTION_ID_CHARS:
             raise ValueError(f"propensity action ids exceed {MAX_ACTION_ID_CHARS} chars")
-        if type(prob) not in (int, float) or isinstance(prob, bool) or not math.isfinite(prob):
-            raise ValueError("propensity probabilities must be finite numbers")
-        if not 0 <= float(prob) <= 1:
+        value = _as_probability(prob)
+        if not 0 <= value <= 1:
             raise ValueError("propensity probabilities must lie in [0, 1]")
         if action.strip() in result:
             raise ValueError("propensity action ids must be unique")
-        result[action.strip()] = float(prob)
+        result[action.strip()] = value
     if abs(math.fsum(result.values()) - 1.0) > PROPENSITY_TOLERANCE:
         raise ValueError("propensity probabilities must sum to one")
     return result

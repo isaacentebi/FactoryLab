@@ -12,9 +12,10 @@ vocabulary.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from statistics import fmean, pstdev
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -242,6 +243,9 @@ CATALOGUE: tuple[Observation, ...] = (
 
 
 SEED_IDS = frozenset(o.id for o in CATALOGUE)
+# The only observation state at module scope is this immutable seed vocabulary; a
+# book that can be registered into belongs to one runtime and is built per runtime.
+SEEDS: Mapping[str, Observation] = MappingProxyType({o.id: o for o in CATALOGUE})
 MAX_OBSERVATION_CODE_CHARS = 8000
 MAX_OBSERVATION_DESCRIPTION_CHARS = 500
 # A registered observation runs under the tool jail's own ceilings (cortex/sandbox.py):
@@ -301,6 +305,10 @@ class ObservationBook:
     registered observation's code against a window's facts in the tool jail and
     returns ``(value, error)``. Without a runner a registered observation is
     simply unmeasured, exactly like a quantity without support.
+
+    Guarantees one book owns exactly one registration dict: a book built without
+    one starts empty and stays private to its owner, so registrations never cross
+    from one runtime to another.
     """
 
     def __init__(
@@ -308,14 +316,16 @@ class ObservationBook:
         registered: dict[str, dict] | None = None,
         *,
         run: Callable[[str, dict], tuple[float | None, str | None]] | None = None,
+        reject: Callable[[Observation, float], None] | None = None,
     ) -> None:
         self.registered = registered if registered is not None else {}
         self._run = run
+        self._reject = reject
 
     def get(self, name: str) -> Observation | None:
         """Return the seed or registered observation a card's prose names."""
         key = normalise(name)
-        seed = next((o for o in CATALOGUE if o.id == key), None)
+        seed = SEEDS.get(key)
         if seed is not None:
             return seed
         entry = self.registered.get(key)
@@ -328,12 +338,24 @@ class ObservationBook:
         ]
 
     def value(self, observation: Observation, window: Any) -> float | None:
-        """Measure one window. A registered observation runs its code in the jail."""
+        """Measure one window. A registered observation runs its code in the jail.
+
+        Guarantees a returned value lies inside the observation's declared unit
+        range: a registered measurement outside it is unsupported for that window,
+        reported to the owner of the book, and never clamped into range.
+        """
         if not observation.registered:
             return observation.measure(window)
         if self._run is None:
             return None
         value, _error = self._run(observation.code, window_facts(window))
+        if value is None:
+            return None
+        lo, hi = observation.unit_range
+        if not lo <= value <= hi:
+            if self._reject is not None:
+                self._reject(observation, value)
+            return None
         return value
 
     def catalogue(self) -> list[dict]:
@@ -355,14 +377,21 @@ def _from_entry(key: str, entry: dict) -> Observation:
     )
 
 
-SEED_BOOK = ObservationBook()
+def seed_book() -> ObservationBook:
+    """Return a fresh book of the seed vocabulary alone, registrable by nobody else.
+
+    Guarantees every caller that did not supply a book gets its own: there is no
+    shared book to register into, so one runtime's measurements cannot appear in
+    another's vocabulary.
+    """
+    return ObservationBook()
 
 
 def observation_for(name: str) -> Observation | None:
     """Only a complete seed id matches, ignoring surrounding whitespace and case."""
-    return SEED_BOOK.get(name) if normalise(name) in SEED_IDS else None
+    return SEEDS.get(normalise(name))
 
 
 def catalogue() -> list[dict]:
     """Return independent public metadata without exposing implementation callables."""
-    return SEED_BOOK.catalogue()
+    return seed_book().catalogue()

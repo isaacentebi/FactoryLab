@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.controller import CardRegion
-from factorylab.runtime.observations import SEED_BOOK, ObservationBook
+from factorylab.runtime.observations import ObservationBook, seed_book
 
 _NUMBER = r"([-+]?\d+(?:\.\d+)?(?:e[-+]?\d+)?|zero|one)"
 _WORDS = {"zero": 0.0, "one": 1.0}
@@ -81,7 +81,7 @@ def region_for(
     (A11). Without a book only the seed vocabulary is readable.
     """
     bounds = _parse(card.acceptable_region)
-    observation = (observations or SEED_BOOK).get(card.observation)
+    observation = (observations or seed_book()).get(card.observation)
     if bounds is None or observation is None:
         return None
     lo, hi = bounds.lo, bounds.hi

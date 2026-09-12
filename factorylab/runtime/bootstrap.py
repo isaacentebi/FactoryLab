@@ -25,7 +25,7 @@ from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cascade import CascadeGate
 from factorylab.runtime.immune import ImmunePriceController
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
-from factorylab.runtime.observations import SEED_BOOK
+from factorylab.runtime.observations import seed_book
 from factorylab.runtime.resume import JournalProxy, RecoveryJournal
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement import (
@@ -481,7 +481,7 @@ class BootstrapMixin:
         # A11: the seed catalogue is registered the same way the population's own
         # measurements are, so the vocabulary has one registry and one versioning
         # rule. What a seed does not carry is code: the kernel measures it natively.
-        for observation in SEED_BOOK.all():
+        for observation in seed_book().all():
             self.registry.register(
                 Contract(
                     id=f"observation:{observation.id}",

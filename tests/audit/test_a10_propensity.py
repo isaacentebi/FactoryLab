@@ -161,6 +161,21 @@ def test_validate_propensity_bounds_the_action_set_without_naming_its_contents()
         validate_propensity({"x" * 65: 1.0})
 
 
+def test_a_probability_no_float_can_hold_is_malformed_not_fatal():
+    huge = 10 ** 400  # a JSON integer a model may write; no float holds it
+    with pytest.raises(ValueError, match="finite numbers"):
+        validate_propensity({"hold": huge})
+    record, reason = declared_record("hold", {"hold": huge}, learner_id="assembly:x",
+                                     state_hash="h")
+    assert record.action_ids == ("hold",) and record.probs == (1.0,)
+    assert "finite numbers" in reason
+    # and the billed reply that carried it is an ordinary degenerate record, not a crash
+    runtime = _consequence_runtime(provider=Decider(propensity={"hold": huge}))
+    handle, _event = _consequence_produce(runtime)
+    assert _declared(runtime, handle).action_ids == ("hold",)
+    assert any("finite numbers" in f["reason"] for f in runtime.registration_feedback)
+
+
 # --- Blum--Mansour at the assembly level --------------------------------------
 
 
@@ -237,13 +252,35 @@ def test_declared_record_renormalises_and_reports_its_refusals():
     assert record.action_ids == ("hold",) and "positive mass" in reason
 
 
-def test_the_world_block_states_the_propensity_contract_and_its_action_labels():
+def test_the_world_block_states_the_propensity_field_shape_and_its_action_labels():
     runtime = _consequence_runtime(provider=Decider())
     block = runtime._world_block()
-    assert "propensity" in block["a_return_may_include"]
-    assert "second propensity" in block["a_return_may_include"]["propensity"]
+    text = block["a_return_may_include"]["propensity"]
+    # the shape of the field, and where the data goes: a distribution over the
+    # actions declared, including the one taken, read by this return's judges
+    assert "{action_id: probability}" in text and "summing to one" in text
+    assert "including the action you took" in text and "travels forward" in text
+    # never what the kernel does with it: physics is enforced by code, not announced
+    for announced in ("second propensity", "learner", "records", "1.0"):
+        assert announced not in text
     assert block["action_labels"]["producer"].startswith("hold")
     assert "two propensities" in block["scoring"]["propensity"]
+
+
+def test_a_published_policy_copied_verbatim_is_an_acceptable_propensity():
+    provider = Decider()
+    runtime = _consequence_runtime(provider=provider)
+    runtime._manage_reserve_window()
+    seed, _event = _consequence_produce(runtime)
+    _register_learner(runtime, seed, ("hold", "buy:BTC", "sell:BTC"), learner="exp3")
+    policy = runtime._action_policy("seed-decider")["over"]
+    assert len(policy) == 3  # three equal thirds, rounded independently, sum to 0.999999
+    assert validate_propensity(policy) == pytest.approx(policy)
+    provider.propensity = policy  # the model returns the policy it was shown
+    handle, _event = _consequence_produce(runtime)
+    declared = _declared(runtime, handle)
+    assert set(declared.action_ids) == {"hold", "buy:BTC", "sell:BTC"}
+    assert not [f for f in runtime.registration_feedback if "propensity" in f.get("reason", "")]
 
 
 def test_routing_still_records_the_routers_own_distribution_unchanged():

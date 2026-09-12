@@ -7,6 +7,7 @@ the very same name. Measurement stopped at the architect's twenty-two.
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,12 +15,14 @@ from factorylab.charter.charter import MetricCard
 from factorylab.charter.measurement import measurement_catalogue, preflight_card
 from factorylab.charter.windows import MetricWindow
 from factorylab.cortex.registration import ObservationProposal, Rejected, parse_proposals
+from factorylab.cortex.request import Return
 from factorylab.cortex.tools import ObservationRunner
 from factorylab.runtime.observations import (
     CATALOGUE,
     SEED_IDS,
     ObservationBook,
     observation_for,
+    seed_book,
     window_facts,
 )
 from factorylab.runtime.pricing import MeasureWindow
@@ -68,12 +71,27 @@ def test_a_well_formed_observation_proposal_is_accepted():
     (_proposal(range=[1.0, 0.0]), "range must have lo below hi"),
     (_proposal(range=[0.0]), "range must be [lo, hi]"),
     (_proposal(range=[0.0, float("inf")]), "range bounds must be finite numbers"),
+    # an integer no float can hold is a rejection, not an OverflowError out of math.isfinite
+    (_proposal(range=[0, 10 ** 400]), "range bounds must be finite numbers"),
     (_proposal(code="def other(facts): return 1"), "code must define observe(facts)"),
     (_proposal(code=1), "code must be a string"),
 ])
 def test_malformed_observation_proposals_carry_their_reason(item, reason):
     accepted, rejected = _parse(item)
     assert not accepted and rejected == [Rejected(0, reason)]
+
+
+def test_a_bound_no_float_can_hold_is_rejected_and_the_runtime_survives():
+    runtime = _consequence_runtime()
+    handle, _event = _consequence_produce(runtime)
+    runtime._apply_registrations(
+        handle, Return(handle, {"register": [_proposal(range=[0, 10 ** 400])]}, 0, "ok"),
+    )
+    assert not runtime.registered_observations
+    assert any("range bounds must be finite numbers" in f["reason"]
+               for f in runtime.registration_feedback)
+    # the world goes on: the next decision still lands
+    assert _consequence_produce(runtime)[0] != handle
 
 
 def test_no_jail_means_no_registrable_measurement():
@@ -199,6 +217,54 @@ def test_a_measurement_that_fails_its_preflight_is_refused_with_the_reason():
             "bad-one", "Never measures.", "u", (0.0, 1.0),
             "def observe(facts):\n    raise KeyError('nope')\n"))
     assert "bad-one" not in runtime.registered_observations
+
+
+def test_a_measurement_outside_its_declared_range_is_refused_at_registration():
+    runtime, handle = _registered_runtime()
+    with pytest.raises(ValueError, match="outside its declared range"):
+        runtime._register(handle, ObservationProposal(
+            "out-of-range", "Always five.", "u", (0.0, 1.0),
+            "def observe(facts):\n    return 5.0\n"))
+    assert "out-of-range" not in runtime.registered_observations
+
+
+def test_a_value_that_leaves_its_declared_range_is_unsupported_never_clamped():
+    runtime = _consequence_runtime()
+    # a registration whose code drifts out of the range it declared, after admission
+    runtime.observation_runner = SimpleNamespace(run=lambda code, facts: (5.0, None))
+    runtime.registered_observations["downside-variance"] = {
+        "description": "Semivariance.", "units": "u", "unit_range": [0.0, 1.0],
+        "code": DOWNSIDE, "version": 1, "provenance": "population", "history": [1],
+    }
+    book = runtime.observations
+    assert book.value(book.get("downside-variance"), MeasureWindow(1, 1000, costs=[1])) is None
+    runtime._close_price_window()
+    assert "downside-variance" not in runtime.stats.last_window_values  # not 1.0, not 5.0
+    marker = runtime.ledger.append({"kind": "test.marker"})
+    runtime.termination.kill("test")
+    items = [runtime.ledger.decrypt_item(i) for i in range(marker)]
+    rejected = [i for i in items if i["kind"] == "observation.out_of_range"]
+    assert rejected and rejected[0]["observation"] == "downside-variance"
+    assert rejected[0]["value"] == 5.0 and rejected[0]["range"] == [0.0, 1.0]
+
+
+def test_one_runtimes_registrations_are_invisible_to_another():
+    first, second = _consequence_runtime(), _consequence_runtime()
+    first.registered_observations["downside-variance"] = {
+        "description": "Semivariance.", "units": "u", "unit_range": [0.0, 1.0],
+        "code": DOWNSIDE, "version": 1, "provenance": "population",
+    }
+    assert first.observations.get("downside-variance") is not None
+    assert second.observations.get("downside-variance") is None
+    assert len(second.observations.all()) == len(CATALOGUE)
+    assert observation_for("downside-variance") is None
+    assert "downside-variance" not in {row["id"] for row in measurement_catalogue()}
+    # and no default path hands out a book anyone else can register into
+    borrowed = seed_book()
+    borrowed.registered["downside-variance"] = dict(first.registered_observations[
+        "downside-variance"])
+    assert not seed_book().registered
+    assert len(measurement_catalogue()) == len(CATALOGUE)
 
 
 def test_nothing_is_registrable_before_a_window_has_closed():

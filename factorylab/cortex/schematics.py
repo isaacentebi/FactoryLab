@@ -109,12 +109,10 @@ class SchematicsMixin:
         ),
         "propensity": (
             "optional on any return: your own distribution over the actions you were "
-            "choosing among, as {action_id: probability} summing to one, including the "
-            "action you took (see action_labels for how the kernel names it). It is "
-            "logged as a second propensity on this decision, travels forward on the "
-            "request your return becomes, and trains your assembly learner if you "
-            "registered one. Declare nothing and the kernel records the action you took "
-            "at 1.0"
+            "choosing among, as {action_id: probability} summing to one and including "
+            "the action you took (see action_labels for the shape of an action id). It "
+            "travels forward on the request about this return, so the judges of this "
+            "return read it"
         ),
         "register": "a list of up to three proposals, including amendments, shaped like "
         "proposal_shapes; router add=false replaces, add=true adds a router. Learners: exp3 or "
@@ -398,11 +396,9 @@ class SchematicsMixin:
             "propensity": (
                 "every decision carries two propensities: the router's distribution over "
                 "which assembly to wake, and the woken assembly's own distribution over its "
-                "own actions. The second is whatever that return declared in propensity, "
-                "renormalised, or the action it took at 1.0 when it declared nothing or "
-                "declared something malformed. It is logged on the decision's handle, it "
-                "travels forward on the request about that return, and where the assembly "
-                "registered a learner it is the behaviour policy that learner is trained "
+                "own actions, as the return declared it. It is logged on the decision's "
+                "handle, it travels forward on the request about that return, and where the "
+                "assembly registered a learner it is the behaviour policy that learner is trained "
                 "against: reward r on action a updates it with weight r / propensity(a)"
             ),
             "observations": (

@@ -92,7 +92,8 @@ class GovernanceMixin:
                 self.window.registrations += 1
                 if item.get("kind") != "amendment":
                     self.card_samples.revised(handle)
-            except (Infeasible, PermissionError, ValueError, KeyError, TypeError, X402Error) as exc:
+            except (Infeasible, PermissionError, ValueError, OverflowError, KeyError,
+                    TypeError, X402Error) as exc:
                 self._reject_registration(handle, f"{type(exc).__name__}: {exc}"[:300], index)
 
     def _reject_registration(self, handle: str, reason: str, index: int | None) -> None:
@@ -130,6 +131,13 @@ class GovernanceMixin:
                             "value": value, "error": error, "ts": self.clock.now_ns})
         if value is None:
             raise ValueError(f"observation preflight failed: {error}")
+        lo, hi = prop.unit_range
+        if not lo <= value <= hi:
+            # A declared range is the scale a card's violation is divided by, so a
+            # measurement outside it is not a measurement of what was declared.
+            raise ValueError(
+                f"observation preflight value {value} is outside its declared range [{lo}, {hi}]"
+            )
         version = len(self.registered_observations.get(prop.id, {}).get("history", ())) + 1
         contract = Contract(
             id=f"observation:{prop.id}",

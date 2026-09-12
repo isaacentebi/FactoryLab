@@ -63,9 +63,27 @@ class PricingMixin:
 
         A11. Every consumer of a card's observation reads through this book, so a
         registered measurement is priced, published and diagnosed exactly like a
-        seed one; only the way it is computed differs.
+        seed one; only the way it is computed differs. The book holds this
+        runtime's own registrations and no other's.
         """
-        return ObservationBook(self.registered_observations, run=self.observation_runner.run)
+        return ObservationBook(self.registered_observations, run=self.observation_runner.run,
+                               reject=self._observation_out_of_range)
+
+    def _observation_out_of_range(self, observation, value: float) -> None:
+        """Ledger a measurement that left its declared range; the window observes nothing.
+
+        The range a registration declared is the scale a card's violation is
+        divided by, so a value outside it cannot be scored as if it were inside
+        and is not quietly moved to the edge either. The diary names it so the
+        population can see which measurement stopped supporting its card.
+        """
+        lo, hi = observation.unit_range
+        self.ledger.append({
+            "kind": "observation.out_of_range", "observation": observation.id,
+            "value": value, "range": [lo, hi], "version": observation.version,
+            "window": getattr(getattr(self, "window", None), "index", None),
+            "ts": self.clock.now_ns,
+        })
 
     def _init_fidelity(self) -> None:
         """Manifest settings and attributed observations are initialized before any decision."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections import deque
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -20,6 +21,25 @@ from factorylab.settlement import SEED_VOCABULARY
 from factorylab.world.market import X402MeteredModel
 from factorylab.world.metering import BillingUncertain, Metered, MeteredModel
 from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
+
+
+def _publishable(policy: dict[str, float]) -> dict[str, float]:
+    """Return a readable copy of a distribution that is still a distribution.
+
+    Guarantees the result sums to one within ``PROPENSITY_TOLERANCE``, so an
+    agent that copies a published policy verbatim into its return declares
+    something the same validator accepts. Rounding alone does not: three equal
+    thirds rounded independently sum to 0.999999.
+    """
+    rounded = {action: round(p, 6) for action, p in policy.items()}
+    if not rounded:
+        return rounded
+    top = max(rounded, key=lambda action: (rounded[action], action))
+    adjusted = round(rounded[top] + (1.0 - math.fsum(rounded.values())), 6)
+    if not 0.0 <= adjusted <= 1.0:
+        return dict(policy)  # full precision rather than a rounding that left the simplex
+    rounded[top] = adjusted
+    return rounded
 
 
 @dataclass
@@ -499,7 +519,7 @@ class ComputeMixin:
             policy = detached.distribution(tuple(detached.actions))
         except (ValueError, RuntimeError, TypeError, ArithmeticError):
             return None
-        return {"over": {a: round(p, 6) for a, p in policy.items()},
+        return {"over": _publishable(policy),
                 "note": "your own learner's current policy over the action set you registered; "
                         "declare a propensity on your return to train it"}
 
