@@ -44,7 +44,7 @@ The session model plans, specs, reviews diffs and merges. Codex on `gpt-6-astra`
 
 ## Next
 
-Remaining before the `funded` manifest: merge resume and the clock; one real x402 purchase from the reserve for cents (experimenter funds `reserve.key`'s address with about $5 USDC on Base; `factorylab reserve init` prints the address) and one real $5 Venice tranche; venue↔reserve real moves with CCTP and funding payments (spec §5.3, §5.5); testnet faucet then run 6 with real fills; cold audits; hosting; build log, wake page.
+Remaining before the `funded` manifest: merge resume and the clock; one real x402 purchase from the reserve for cents (experimenter funds `reserve.key`'s address with about $5 USDC on Base; `factorylab reserve init` prints the address) and one real $5 Venice tranche; venue↔reserve real moves with CCTP and funding payments (spec §5.3, §5.5); testnet faucet then run 6 with real fills; cold audits per `docs/audit-brief.md` (Codex, a Fable subagent and an Opus subagent, each given the essay); hosting; build log, wake page.
 
 The ordered list, with the gaps against the essay, is `docs/design-audit-v2.md` §7. In short: merge the controller wiring and `p3b-runtime`; run 5 with the Hyperliquid testnet key; make the treasury real (Hyperliquid withdrawals to a factory-owned reserve address, mechanical float top-ups from the reserve only); `resume` after a process crash; a versioning module (transfer operator, spectral gap, pathology flags, early-warning signals); population-proposed λ; recursive meta-evaluation; cold audits; hosting; then the `funded` manifest and no changes, ever.
 
