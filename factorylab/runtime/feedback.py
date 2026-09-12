@@ -464,7 +464,65 @@ class FeedbackMixin:
                 self.window.censored += 1
             del self.pending[p.handle]
 
+    def _close_assembly_rounds(self) -> None:
+        """Close every assembly round whose decision now has an outcome (A10).
+
+        The evidence is the same thin score the router receives: the first
+        settlement or timeout on the handle. A round is closed once, whatever
+        opened the decision — a router, a parent's child request, a continuation —
+        so nothing is left open for a decision that will never be scored again.
+        """
+        for handle in list(self.assembly_rounds):
+            decision = self.queue.get(handle)
+            if decision.status is SettleStatus.PENDING:
+                continue
+            scored = next((lr for lr in self.queue.history(handle)
+                           if lr.status in (SettleStatus.SETTLED, SettleStatus.TIMED_OUT)), None)
+            if scored is None:
+                self._close_assembly_round(handle, None)  # censored: no evidence
+                continue
+            reward = (min(1.0, max(0.0, float(scored.score)))
+                      if scored.status is SettleStatus.SETTLED else 0.0)
+            self._close_assembly_round(handle, reward)
+
+    def _close_assembly_round(self, handle: str, reward: float | None) -> None:
+        """Train an assembly's own learner from the reward that settled its decision (A10).
+
+        The reward is the same thin score the router receives; what differs is the
+        distribution it is attributed to. The router's record prices the choice of
+        who acted; this one prices what the actor chose to do, over the action set
+        the actor declared. A censored decision closes its round without evidence.
+        """
+        assembly_id = self.assembly_rounds.pop(handle, None)
+        if assembly_id is None:
+            return
+        learner = self.assembly_learners.get(assembly_id)
+        if learner is None:
+            return
+        declared = self.queue.declared_propensity(handle)
+        if reward is None or declared is None:
+            try:
+                learner.discard_for(handle)
+            except KeyError:
+                pass
+            return
+        index = declared.action_ids.index(declared.chosen)
+        try:
+            learner.update_for(
+                handle, BanditFeedback(declared.chosen, reward, declared.probs[index])
+            )
+        except (KeyError, ValueError, RuntimeError, TypeError, AssertionError) as exc:
+            self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
+                                "assembly_id": assembly_id, "reason": str(exc)[:200],
+                                "ts": self.clock.now_ns})
+            return
+        self.ledger.append({"kind": "propensity.learned", "handle": handle,
+                            "assembly_id": assembly_id, "action": declared.chosen,
+                            "propensity": declared.probs[index], "reward": reward,
+                            "ts": self.clock.now_ns})
+
     def _deliver_returns(self) -> None:
+        self._close_assembly_rounds()
         for state in self._all_router_states() + list(self.retired_routers.values()):
             lid = state.learner.id
             returns = self.queue.returns_for(lid)

@@ -181,3 +181,21 @@ Mechanism: a registration `{"kind": "observation", "id", "description", "unit", 
 ## After pass 3
 
 Edition 1 re-draft with the launch roster (A6). Pass 4: seat 7's polish list. Round three: the same seven seats on the result.
+
+## Pass 3, workstream W8: registrable connectors (information sources are the population's)
+
+Essay II.I: composability means the factory can discover primitives, assess their contracts and assemble them. I.I: what a factory can know must not be decided for it.
+
+Defect: population code runs in a jail with no network, and the only things that reach the world are rails the architect chose. The set of information sources is fixed at the first move.
+
+Decision: the jail is unchanged. A **connector** is the simplest possible read-only rail: an https origin the population registers by vote, which the kernel fetches from on the population's behalf.
+
+Mechanism, deliberately minimal:
+- Registration kind `connector`: `{id, description, origin}`. `origin` is `https://<host>` only. Nothing else is configurable.
+- Admission: the same sortition vote as an amendment, after a kernel preflight `GET origin/` that must answer within the bounds. Public reason on refusal. Versioned in the registry as `connector:<id>`.
+- Use: a tool call `connector.fetch {id, path}` from any return. The runtime fetches `origin + path` with GET, no headers beyond `Accept` and `User-Agent`, no credentials, https only, response cut at `connectors.max_bytes`, timeout `connectors.timeout_s`, hosts in `connectors.origin_denylist` (the venue's and providers' hosts, private ranges) refused. Metered at the flat `connectors.call_price_usd` per call from the caller's reservation; at most `connectors.max_calls_per_window` per assembly. The body reaches the caller as text in `seen_tool_results` on its continuation; a population tool may parse it in the jail via the ordinary tool path.
+- Ledger: `connector.registered`, `connector.call` (id, path, status, bytes, cost; never the body), `connector.refused`. The observatory lists connectors and calls per day.
+- Manifest keys (seed values): `connectors.max_bytes = 262144`, `connectors.timeout_s = 10`, `connectors.call_price_usd = "0.001"`, `connectors.max_calls_per_window = 60`, `connectors.origin_denylist`.
+- No cache, no byte pricing, no params schema, no path prefix. Seed: none; the architect registers no connector.
+
+Accept: the scripted world (fake transport) registers a connector by vote, calls it from a producer, parses the body in a jailed tool, and the ledger shows the chain; a non-https origin, a denylisted host, or a body over the cap is refused with a reason; the jail test proving population code has no network still passes.

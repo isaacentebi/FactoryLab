@@ -74,6 +74,73 @@ class ToolRunner:
             return {"error": "tool execution failed"}
 
 
+_OBSERVATION_HARNESS = """
+
+import json as _json, math as _math, sys as _sys
+_facts = _json.loads(_sys.stdin.read())
+_value = observe(_facts)
+if _value is None:
+    print(_json.dumps({"value": None}))
+else:
+    _value = float(_value)
+    if not _math.isfinite(_value):
+        raise ValueError("observation must be finite")
+    print(_json.dumps({"value": _value}))
+"""
+
+
+class ObservationRunner:
+    """One registered observation, measured under the tool jail's own limits.
+
+    The population supplies a module defining ``observe(facts)``; the facts are
+    the public per-window facts as JSON on stdin. The result is ``(value, error)``:
+    a finite float, or ``None`` with the reason it could not be measured. Nothing
+    here raises, and no host detail reaches the reason.
+    """
+
+    def __init__(self, *, timeout_s: int | None = None, cpu_s: int | None = None) -> None:
+        from factorylab.runtime.observations import OBSERVATION_CPU_S, OBSERVATION_TIMEOUT_S
+
+        self.timeout_s = OBSERVATION_TIMEOUT_S if timeout_s is None else timeout_s
+        self.cpu_s = OBSERVATION_CPU_S if cpu_s is None else cpu_s
+        self.available = jail_available()
+
+    def run(self, code: str, facts: dict) -> tuple[float | None, str | None]:
+        """Return the observed value, or None and the reason there is none."""
+        try:
+            if not self.available:
+                return None, "no jail on this host"
+            try:
+                stdin = json.dumps(facts, allow_nan=False)
+            except (TypeError, ValueError, RecursionError):
+                return None, "window facts are not JSON serializable"
+            result = run_python(
+                code + _OBSERVATION_HARNESS,
+                stdin=stdin,
+                timeout_s=self.timeout_s,
+                cpu_s=self.cpu_s,
+                max_output_bytes=2000,
+            )
+            if result.timed_out:
+                return None, "timeout"
+            if result.returncode != 0:
+                return None, f"exit {result.returncode}: {result.stderr.strip()[-200:]}"
+            try:
+                output = json.loads(result.stdout, parse_constant=_reject_constant)
+            except (ValueError, RecursionError):
+                return None, "observation printed something other than its value"
+            if not isinstance(output, dict) or "value" not in output:
+                return None, "observation printed something other than its value"
+            value = output["value"]
+            if value is None:
+                return None, "unsupported: observe returned None"
+            return float(value), None
+        except NoJail:
+            return None, "no jail on this host"
+        except Exception:
+            return None, "observation execution failed"
+
+
 def _reject_constant(value: str) -> None:
     raise ValueError("non-JSON numeric constant")
 

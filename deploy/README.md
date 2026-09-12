@@ -234,18 +234,53 @@ service logging after launch.
 ### Wake schema and decisions
 
 Exactly these fields are published: `wallet_series`, `spend_by_capability`,
-`invocations_by_assembly`, `action_frequencies`, `settlement_latency`, `world`,
-`manifest_hash`, `uptime_ns`, `last_event_time_ns`, plus `venue` when a venue key is
-present and `reserve` when a reserve key is present. The five views originate
+`invocations_by_assembly`, `action_frequencies`, `settlement_latency`, `roster`,
+`tools`, `observations`, `charter`, `compute`, `pots`, `immune`, `portfolio`,
+`world`, `manifest_hash`, `uptime_ns`, `last_event_time_ns`, plus `venue` when a
+venue key is present and `reserve` when a reserve key is present. The five views originate
 from `Ledger.aggregate`, each verifying the same frozen chain. The three identity-bearing
 views (`spend_by_capability`, `invocations_by_assembly`, `action_frequencies`) are projected
 to role totals (`producer`, `evaluator`, `meta`, `antagonist`, `noop`, `other`).
 Registered assemblies join their declared role; unknown identities join `other`.
-No assembly ids, model bindings, positions or entry prices are published. Incomplete input or
+In these five views no assembly ids, model bindings, positions or entry prices are
+published. Incomplete input or
 verification failure retries once after 100 ms; a second failure replaces all
 ledger-derived fields with `"unavailable"` and exits 1. Optional account failures
 mark only their unavailable fields. There is no exception text in the artifacts.
 Each output file is atomically replaced; the pair is not a transactional bundle.
+
+#### The observatory sections (A17, widened)
+
+The rule is one sentence: whatever the population can see is public to the
+experimenter; whatever the essay keeps private stays sealed until death. An
+assembly reads the world block on every request, so the world block's standing
+facts are public by construction. The runtime projects them into one
+`wake.public` ledger item at each price-window close (`runtime/pricing.py`,
+`_close_price_window`, built by `wake.public_window_item`); the wake republishes
+the most recent one. Nothing in that item comes from an external call, so it adds
+no journaled I/O and no resumable state. The histories come from public items
+that already existed; the wake reads them in the same single authenticated pass
+that builds the five views. Every list is capped at the most recent 200 rows so
+the page cannot grow with the diary.
+
+| section | reads |
+| --- | --- |
+| `roster` | `current` and `over_time` from `wake.public.roster` (one row per assembly kind × model id, with counts); `registered` from `Registered` events; `retired` from `actor.retire`. Registration and retirement rows carry a timestamp and what kind of thing joined or left, never an id. |
+| `tools` | `wake.public.tools`: the world block's tool specs, with the registry contract version (seed tools are version 1). Id, description and version only — never a tool's source. |
+| `observations` | `wake.public.observations`: the measurement catalogue's id, description and units. |
+| `charter` | `wake.public.charter`: edition, norms, and every card's observation, region, `lambda` and `answers_for`. `amendments` is assembled from `charter.propose` (with `predicted_effect` and the cards added, replaced or removed), `charter.approved`, `charter.activate`, and the refusals `charter.refused`, `policy.refused` and `amendment.rejected` with their public reason. |
+| `compute` | `wallet.commit` items whose reason names a model, bucketed by UTC day and ISO week of the item timestamp; the rail follows the model id namespace exactly as registration routes it (`venice:` → Venice, `x402:` → an x402 seller, otherwise OpenRouter). `invocations_by_kind_per_day` counts `invocation` items by role. |
+| `pots` | `wake.public.pots` (venue, reserve, Venice credit, OpenRouter seed, completeness) and every `treasury.submitted`, `treasury.confirmed` and `treasury.refused` with its direction, amount and public refusal reason. |
+| `immune` | `immune.window` flags per window, plus the organ's responses: `immune.gain` (direction and pathology only — the exploration rate itself is learner state), `immune.price_relief`, `immune.decay` and `novelty.grant`. |
+| `portfolio` | `wake.public.portfolio`: `equity_micro` (the venue pot as last observed, the same number the population reads in `world.pots`), `realized_to_date_micro`, and open positions as coin and side only — no size, no entry price, no lot, no handle. |
+
+Sealed and never published anywhere in either artifact: learner state and router
+weights, propensities, private memories, raw request and return text, per-decision
+scores, prompts, tool source, assembly ids and wallet or chain addresses. The page
+stays static: no script, no external resource, no address, no key material. These
+sections are absent (`"unavailable"`) only when the chain fails to verify; before
+the first window closes the standing sections fall back to the genesis manifest's
+roster and empty histories.
 
 The snapshot adapter is isolated in `runtime/wake.py` and couples to Ledger's
 private read state because its public reopen API is a writer-only recovery API.

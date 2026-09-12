@@ -51,6 +51,8 @@ class RunStats:
     tool_calls: int = 0
     tool_call_failures: int = 0
     population_tools_registered: int = 0
+    observations_registered: int = 0  # A11
+    assembly_learners_registered: int = 0  # A10
     amendments_proposed: int = 0
     amendments_passed: int = 0
     amendments_activated: int = 0

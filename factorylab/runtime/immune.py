@@ -4,7 +4,6 @@ from dataclasses import asdict
 from math import isfinite
 
 from factorylab.charter.controller import PriceController
-from factorylab.runtime.observations import observation_for
 from factorylab.versioning.series import CHANNELS
 from factorylab.versioning.versions import diagnose
 
@@ -75,7 +74,7 @@ def close_window(rt, values: dict[str, float]) -> None:
         "exposure": values.get("exposure_win_rate"),
     })
     profile.update({f"card:{c.id}": values.get(o.id)
-                    if (o := observation_for(c.observation)) is not None else None
+                    if (o := rt.observations.get(c.observation)) is not None else None
                     for c in rt.charter.cards})
     # Activity is a separate observation even when the charter has no registration card.
     profile["registrations"] = values.get("registrations", 0.0)
