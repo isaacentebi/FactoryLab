@@ -50,7 +50,11 @@ class Wallet:
         drip_schedule: DripSchedule | None = None,
         *,
         clock_ns: Callable[[], int] = time_ns,
+        reported_cost_multiple: int = 10,
     ) -> None:
+        if type(reported_cost_multiple) is not int or reported_cost_multiple < 1:
+            raise ValueError("reported cost multiple must be a positive integer")
+        self.__reported_cost_multiple = reported_cost_multiple
         require_money(initial, nonnegative=True)
         if drip_schedule is not None and not isinstance(drip_schedule, DripSchedule):
             raise TypeError("drip_schedule must be immutable DripSchedule")
@@ -188,8 +192,8 @@ class Wallet:
             raise Infeasible("actual exceeds reservation")
         self._commit(reservation, actual)
 
-    def commit_reported(self, reservation: Reservation, actual: Money) -> None:
-        """Debit a completed vendor bill in full, including debt beyond its held ceiling.
+    def commit_reported(self, reservation: Reservation, actual: Money) -> Money:
+        """Return the booked bill, disputing claims beyond the immutable ceiling multiple.
 
         Only a genuine, still-open reservation can carry a reported overrun.
         Ordinary commit remains ceiling-bounded. Both evidence items precede
@@ -198,6 +202,15 @@ class Wallet:
         require_money(actual, nonnegative=True)
         self._live()
         self._held(reservation)
+        if actual > reservation.amount * self.__reported_cost_multiple:
+            self.__ledger.append({
+                "kind": "metering.disputed", "handle": reservation.handle,
+                "reason": reservation.reason, "reservation_id": reservation.id,
+                "reserved": reservation.amount, "reported": actual,
+                "multiple": self.__reported_cost_multiple, "booked": reservation.amount,
+                "ts": self.__clock(),
+            })
+            actual = reservation.amount
         if actual > reservation.amount:
             self.__ledger.append({
                 "kind": "metering.overrun", "handle": reservation.handle,
@@ -206,6 +219,7 @@ class Wallet:
                 "overrun": actual - reservation.amount, "ts": self.__clock(),
             })
         self._commit(reservation, actual)
+        return actual
 
     def _commit(self, reservation: Reservation, actual: Money) -> None:
         balance = self.balance - actual
@@ -311,7 +325,7 @@ class Wallet:
         """Return accounting and outstanding holds, excluding ledger, clock and issuer objects."""
         return {
             "initial": self.__initial, "balance": self.__balance, "schedule": self.__schedule,
-            "exhausted": self.__exhausted,
+            "exhausted": self.__exhausted, "reported_cost_multiple": self.__reported_cost_multiple,
             "reservations": [replace(r, _issuer=None) for r in self.__reservations.values()],
             "next_reservation": self.__next_reservation, "drip_count": self.__drip_count,
             "drips": self.__drips, "settlements": self.__settlements, "commits": self.__commits,
@@ -325,6 +339,8 @@ class Wallet:
             raise Infeasible("cannot restore a dead wallet")
         if state["initial"] != self.__initial or state["schedule"] != self.__schedule:
             raise ValueError("wallet launch configuration differs")
+        if state.get("reported_cost_multiple", 10) != self.__reported_cost_multiple:
+            raise ValueError("wallet reported-cost policy differs")
         for name in ("balance", "drips", "settlements", "commits"):
             require_money(state[name])
         if state["balance"] != (

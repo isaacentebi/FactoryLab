@@ -54,7 +54,7 @@ class LiveClock:
                 target = self.last_ns + self.interval_ns
                 wait = target - self.now_ns()
                 if wait > 0:
-                    self.sleep(wait / NS_PER_SECOND)
+                    self.sleep(min(wait, self.interval_ns) / NS_PER_SECOND)
             ts = max(self.now_ns(), self.last_ns + 1)
             self.last_ns = ts
             i = self.index
@@ -99,7 +99,7 @@ class LiveVenue:
             return []  # read-only legacy/test adapter
         try:
             payments = method(self.last_funding_ns)
-        except RuntimeError:
+        except (RuntimeError, OSError, ValueError, ArithmeticError):
             return []  # no key or transient venue outage: preserve cursor
         payments = sorted((p for p in payments if p.ts_ns >= self.last_funding_ns
                            and p.id not in self.seen_funding), key=lambda p: (p.ts_ns, p.id))
@@ -119,7 +119,11 @@ class LiveVenue:
 
     def on_tick(self, now_ns: int) -> list[WorldEvent]:
         out: list[WorldEvent] = []
-        for coin, mid in self.exchange.mids().items():
+        try:
+            mids = self.exchange.mids()
+        except (RuntimeError, OSError, ValueError, ArithmeticError):
+            mids = {}
+        for coin, mid in mids.items():
             out.append(
                 WorldEvent(
                     WorldEventKind.MARKET_MID,
@@ -128,7 +132,11 @@ class LiveVenue:
                     {"coin": coin, "mid": str(mid)},
                 )
             )
-        for f in self.exchange.funding():
+        try:
+            funding = self.exchange.funding()
+        except (RuntimeError, OSError, ValueError, ArithmeticError):
+            funding = []
+        for f in funding:
             out.append(
                 WorldEvent(
                     WorldEventKind.FUNDING,
@@ -144,7 +152,7 @@ class LiveVenue:
             )
         try:
             fills = self.exchange.fills(self.last_fill_ns)
-        except RuntimeError:  # no account: read-only venue
+        except (RuntimeError, OSError, ValueError, ArithmeticError):  # no account: read-only venue
             fills = []
         for fl in fills:
             if fl.ts_ns < self.last_fill_ns or fl.order_id in self.seen_fills:

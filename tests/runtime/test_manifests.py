@@ -238,10 +238,10 @@ def test_example_manifest_and_cli_resolve_population_charter(capsys):
 
     example = load_manifest("edition1-example")
     base = load_manifest("testnet")
-    assert replace(example, charter=base.charter) == base
+    assert replace(example, name=base.name, charter=base.charter, treasury=base.treasury) == base
     assert {c.id: c.observation for c in example.charter.cards} == {
         "model_cost_efficiency": "cost_per_return", "revision_rate": "revision_rate",
-        "cost_per_return": "cost_per_return", "well_formed_rate": "well_formed_rate",
+        "well_formed_rate": "well_formed_rate",
         "verdict_mean_score": "verdict_mean",
     }
     assert main(["manifest", "--world", "edition1-example"]) == 0

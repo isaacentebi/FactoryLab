@@ -191,3 +191,10 @@ gap_threshold = 0.8
 gain_step = 0.05
 gamma_max = 0.5
 decay_step = 0.1
+
+# Rehearsal placeholder: tests inject the matching reserve and offline rail.
+[treasury]
+reserve_address = "0x1111111111111111111111111111111111111111"
+hyperevm_gas_budget_wei = 100000000000000000
+base_gas_budget_wei = 1000000000000000
+max_transfer_fee_usd = "2"

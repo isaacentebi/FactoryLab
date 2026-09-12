@@ -1,6 +1,6 @@
 # The testnet world: live Hyperliquid testnet, real models through OpenRouter at
 # real prices, a fake-USD wallet. Rehearsal only. No real money moves.
-name = "testnet"
+name = "edition1-example"
 seed = 4
 initial_balance_usd = "100"
 tick_interval = "60s"
@@ -209,16 +209,6 @@ units = "fraction"
 window = "rolling 100 well-formed returns"
 acceptable_region = "above 0.05"
 observation = "revision_rate"
-answers_for = "producer"
-
-[[charter.cards]]
-id = "cost_per_return"
-norm = "care with scarce resources"
-description = "Wallet cost of producing one well-formed return."
-units = "micro-USD per return"
-window = "rolling 100 returns"
-acceptable_region = "below the median of the previous window"
-observation = "cost_per_return"
 answers_for = "producer"
 
 [[charter.cards]]

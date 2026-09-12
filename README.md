@@ -122,9 +122,11 @@ Testnet needs three keys at the repo root, mode 0600, gitignored: `openrouter.ke
 ```bash
 uv run factorylab reserve init
 uv run factorylab probe --world testnet
-uv run factorylab run --world testnet --events 200 --seed 8 --tick-interval 10s --ledger runs/r8.jsonl --kill-at-end
+uv run factorylab run --world testnet --events 200 --seed 8 --ledger runs/r8.jsonl --kill-at-end
 uv run factorylab report runs/r8.summary.json
 ```
+
+Killing the `uv run` wrapper does not kill the world: the child process can keep running. Use the world's explicit kill mechanism to end it; for a crash rehearsal, target the actual world process.
 
 `--kill-at-end` ends a budgeted rehearsal by explicit kill so the seal key is released. Only then can the diary be read:
 

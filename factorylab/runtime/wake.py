@@ -14,7 +14,7 @@ from pathlib import Path
 
 from cryptography.fernet import InvalidToken
 
-from factorylab.kernel.ledger import KeyStore, Ledger, LedgerIntegrityError, _canonical
+from factorylab.kernel.ledger import Ledger, LedgerIntegrityError, _canonical
 from factorylab.runtime.worlds import WORLDS_DIR, load_manifest
 
 VIEWS = (
@@ -27,27 +27,17 @@ UNAVAILABLE = "unavailable"
 class _Snapshot(Ledger):
     """A frozen, sealed ledger supports kernel aggregates even after termination.
 
-    Ledger.reopen is a writer recovery API: it rejects final worlds and concurrent
-    appends. This compatibility adapter hydrates its read state only. It never
-    releases the public key or calls the recovery/item-export API. Keep the private
-    field coupling here until the kernel offers a read-only snapshot constructor.
+    Recovery and wake share the kernel's streaming verification and aggregate
+    indexes. The read-only boundary remains stable when the writer appends.
     """
 
     def __init__(self, path: Path, manifest) -> None:
-        super().__init__(manifest=json.loads(manifest.canonical_json()))
         key_path = Path(str(path) + ".key")
         mode = key_path.lstat().st_mode
         if not stat.S_ISREG(mode) or stat.S_IMODE(mode) != 0o600:
             raise LedgerIntegrityError("ledger key unavailable")
-        self._Ledger__keys = KeyStore(key_path.read_bytes().strip())
-        self._Ledger__path = path
-        tokens = self._tokens()  # One read; an incomplete final line is rejected.
-        self._Ledger__path = None  # Every view verifies the same immutable bytes.
-        self._Ledger__tokens = tokens
-        if tokens:
-            self._Ledger__head = json.loads(self._Ledger__keys._decrypt(tokens[-1]))["hash"]
-        if not self.verify():
-            raise LedgerIntegrityError("ledger verification failed")
+        frozen = Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()), read_only=True)
+        self.__dict__.update(frozen.__dict__)
 
     def append(self, entry: dict) -> int:
         """A wake reader cannot append evidence."""
@@ -55,20 +45,10 @@ class _Snapshot(Ledger):
 
     def timing(self, *, live: bool, now_ns: int) -> dict:
         """Only event timestamps escape; payloads, identities and kinds remain private."""
-        if not self.verify():
-            raise LedgerIntegrityError("ledger verification failed")
-        first_tick, last, final = None, None, False
-        for token in self._tokens():
-            item = json.loads(self._Ledger__keys._decrypt(token))
-            if item.get("kind") != "event":
-                continue
-            event = item["event"]
-            last = event["ts_ns"]
-            if event["kind"] == "Tick" and first_tick is None:
-                first_tick = last
-            final |= event["kind"] == "Terminated"
-        start = first_tick if live else 0
-        end = now_ns if live and not final else last
+        times = self._event_times()
+        start = times["first_tick"] if live else 0
+        last = times["last_event"]
+        end = now_ns if live and not times["terminated"] else last
         uptime = max(0, end - start) if start is not None and end is not None else 0
         return {"uptime_ns": uptime, "last_event_time_ns": last}
 

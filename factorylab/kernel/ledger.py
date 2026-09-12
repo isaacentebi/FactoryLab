@@ -4,8 +4,10 @@ import fcntl
 import hashlib
 import json
 import os
+import tempfile
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from copy import deepcopy
 from dataclasses import fields, is_dataclass
 from pathlib import Path
 from time import time_ns
@@ -142,7 +144,15 @@ class Ledger:
         self.__last_line = b""
         self.__keys = KeyStore(self._persist_key(key_path))
         self.__clock = clock_ns
-        self.__tokens: list[bytes] = []
+        self.__tokens: list[bytes] = []  # memory-only ledgers; disk diaries stream
+        self.__count = 0
+        self.__decision_count = 0
+        self.__read_only = False
+        self.__read_cursor = (0, None)
+        self.__checkpoint: dict | None = None
+        self.__raw_hash = hashlib.sha256()
+        self.__index = self._empty_index()
+        self.__persist_head = key_path is not None
         self.__decision_ids: dict[int, str] = {}
         self.__genesis = hashlib.sha256(_canonical({"manifest": manifest or {}})).hexdigest()
         self.__header = {"format": 1, "genesis_hash": self.__genesis}
@@ -162,6 +172,7 @@ class Ledger:
                 os.fsync(stream.fileno())
             self.__size = len(line)
             self.__last_line = line
+            self.__raw_hash.update(line)
 
     @staticmethod
     def _persist_key(key_path: str | Path | None) -> bytes | None:
@@ -185,63 +196,263 @@ class Ledger:
     @classmethod
     def reopen(
         cls, path: str | Path, *, manifest: dict, clock_ns: Callable[[], int] = time_ns,
-        full_verify_every: int = 1024,
+        full_verify_every: int = 1024, read_only: bool = False,
     ) -> "Ledger":
-        """Authenticate an existing non-final world with its adjacent key, keeping it sealed.
+        """Verify a bounded stream before recovery, retaining only indexes and the current head.
 
-        A newline acknowledges a record. Only an unterminated final line may
-        be discarded, after authenticating the complete prefix. A repair item
-        precedes subsequent work. Runtime writers must hold the sidecar lock.
+        An encrypted head caches authentication of an exact byte prefix. Its digest
+        is checked against the whole persisted prefix; only the tail is decrypted.
+        A missing/stale head falls back to a streaming chain walk. Only an
+        unterminated last line may be repaired, after prefix authentication.
+        Read-only consumers freeze one byte boundary, allow final worlds and never repair.
         """
         ledger = cls(manifest=manifest, clock_ns=clock_ns, full_verify_every=full_verify_every)
         ledger_path = Path(path)
         try:
             ledger.__keys = KeyStore(Path(str(path) + ".key").read_bytes().strip())
-            data = ledger_path.read_bytes()
-            boundary = data.rfind(b"\n") + 1
-            prefix = data[:boundary]
-            tokens = ledger._tokens(data=prefix)
-            ledger.__tokens = tokens
-            if tokens:
-                ledger.__head = json.loads(ledger.__keys._decrypt(tokens[-1]))["hash"]
-            if not ledger.verify():
-                raise LedgerIntegrityError("ledger chain or manifest hash differs")
-            items = ledger._recovery_items()
-            ledger.__decision_ids = {
-                item["seq"]: f"decision-{index}" for index, item in enumerate(
-                    item for item in items if item.get("kind") == "decision.handle"
-                )
-            }
-            if any(item.get("kind") == "event" and item["event"]["kind"] == "Terminated"
-                   for item in items):
+            size = ledger_path.stat().st_size
+            with ledger_path.open("rb") as stream:
+                boundary = cls._acknowledged_boundary(stream, size)
+            if read_only and boundary != size:
+                raise LedgerIntegrityError("incomplete ledger")
+            ledger.__path = ledger_path
+            ledger.__size = boundary
+            ledger.__read_only = read_only
+            ledger.__persist_head = not read_only
+            ledger.__checkpoint = ledger._load_head(boundary)
+            checked, hasher = ledger._scan_disk(boundary)
+            ledger.__count, ledger.__head = checked["count"], checked["head"]
+            ledger.__decision_count = checked["decisions"]
+            ledger.__index = checked["index"]
+            ledger.__checkpoint, ledger.__raw_hash = checked, hasher
+            if ledger.__index["terminated"] and not read_only:
                 raise LedgerIntegrityError("cannot resume a terminated world")
-            # Authentication above uses the in-memory prefix; failure never
-            # edits even a single acknowledged byte on disk.
-            discarded = len(data) - boundary
+            ledger.__last_line = next(ledger._reverse_lines(), b"")
+            discarded = size - boundary
             if discarded:
                 with ledger_path.open("r+b") as stream:
                     stream.truncate(boundary)
                     stream.flush()
                     os.fsync(stream.fileno())
-            ledger.__path = ledger_path
-            ledger.__size = len(prefix)
-            ledger.__last_line = prefix.splitlines(keepends=True)[-1]
-            if discarded:
                 ledger.append({"kind": "ledger.repaired", "discarded_bytes": discarded,
                                "acknowledged_bytes": boundary})
         except (OSError, ValueError, KeyError, TypeError, InvalidToken) as exc:
             raise LedgerIntegrityError("ledger/key unavailable or manifest hash differs") from exc
         return ledger
 
-    def _recovery_items(self) -> list[dict]:
-        """Kernel recovery receives authenticated items without releasing the public key."""
+    @staticmethod
+    def _acknowledged_boundary(stream, size: int) -> int:
+        position = size
+        while position:
+            start = max(0, position - 65536)
+            stream.seek(start)
+            chunk = stream.read(position - start)
+            last = chunk.rfind(b"\n")
+            if last >= 0:
+                return start + last + 1
+            position = start
+        return 0
+
+    @staticmethod
+    def _empty_index() -> dict:
+        return {"choices": {}, "wallet_series": [], "spend": {}, "invocations": {},
+                "actions": {}, "latency_count": 0, "latency_total": 0,
+                "latency_min": None, "latency_max": None,
+                "first_tick": None, "last_event": None, "launch": False, "terminated": False}
+
+    @staticmethod
+    def _index_item(index: dict, item: dict) -> None:
+        kind = item.get("kind")
+        if kind in ("wallet.initial", "wallet.commit", "wallet.drip", "wallet.settle"):
+            index["wallet_series"].append({"ts": item["ts"], "balance": item["balance_after"]})
+        if kind == "decision.open":
+            choice = item["propensity"]["chosen"]
+            index["choices"][item["handle"]] = choice
+            index["actions"][choice] = index["actions"].get(choice, 0) + 1
+        if kind == "wallet.commit":
+            choice = index["choices"].get(item["handle"], item["reason"])
+            index["spend"][choice] = index["spend"].get(choice, 0) + item["amount"]
+        if kind == "invocation":
+            name = item["assembly_id"]
+            index["invocations"][name] = index["invocations"].get(name, 0) + 1
+        if kind == "decision.settle":
+            latency = item["latency_ns"]
+            index["latency_count"] += 1
+            index["latency_total"] += latency
+            index["latency_min"] = min(latency, index["latency_min"] if
+                                        index["latency_min"] is not None else latency)
+            index["latency_max"] = max(latency, index["latency_max"] if
+                                        index["latency_max"] is not None else latency)
+        if kind == "event":
+            event = item["event"]
+            index["last_event"] = event["ts_ns"]
+            if event["kind"] == "Tick" and index["first_tick"] is None:
+                index["first_tick"] = event["ts_ns"]
+            index["launch"] |= event["kind"] == "Launch"
+            index["terminated"] |= event["kind"] == "Terminated"
+
+    def _load_head(self, size: int) -> dict | None:
+        try:
+            data = json.loads(self.__keys._decrypt(
+                Path(str(self.__path) + ".head").read_bytes()))
+            if (data["genesis"] == self.__genesis and data["format"] == 1
+                    and type(data["offset"]) is int and 0 < data["offset"] <= size
+                    and type(data["count"]) is int and data["count"] >= 0
+                    and type(data["decisions"]) is int and data["decisions"] >= 0):
+                return data
+        except (OSError, InvalidToken, ValueError, KeyError, TypeError):
+            pass  # Optional acceleration never supplies unauthenticated evidence.
+        return None
+
+    def _head_state(self) -> dict:
+        return {"format": 1, "genesis": self.__genesis, "offset": self.__size,
+                "digest": self.__raw_hash.hexdigest(), "head": self.__head,
+                "count": self.__count, "decisions": self.__decision_count,
+                "index": deepcopy(self.__index)}
+
+    def checkpoint(self) -> None:
+        """Persist an authenticated prefix digest and kernel indexes without changing the diary."""
+        if self.__path is None or not self.__persist_head or self.__read_only:
+            return
+        data = self._head_state()
+        temporary = None
+        try:
+            fd, temporary = tempfile.mkstemp(prefix=".ledger-head-", dir=self.__path.parent)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(self.__keys._encrypt(_canonical(data)))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, str(self.__path) + ".head")
+            self.__checkpoint = data
+        except OSError:
+            pass  # Losing this cache only makes the next recovery verify the prefix again.
+        finally:
+            if temporary is not None:
+                Path(temporary).unlink(missing_ok=True)
+
+    @staticmethod
+    def _token(line: bytes) -> bytes:
+        if not line.endswith(b"\n"):
+            raise LedgerIntegrityError("incomplete ledger")
+        record = json.loads(line)
+        if set(record) != {"item"}:
+            raise LedgerIntegrityError("invalid encrypted record")
+        return record["item"].encode("ascii")
+
+    def _scan_disk(self, size: int) -> tuple[dict, object]:
+        """Authenticate every byte while decrypting only records beyond the trusted head."""
+        digest = hashlib.sha256()
+        with self.__path.open("rb") as stream:
+            header = stream.readline()
+            if not header.endswith(b"\n") or json.loads(header) != self.__header:
+                raise LedgerIntegrityError("genesis header changed")
+            digest.update(header)
+            checkpoint = self.__checkpoint
+            if checkpoint is not None and len(header) <= checkpoint["offset"] <= size:
+                remaining = checkpoint["offset"] - len(header)
+                while remaining:
+                    chunk = stream.read(min(65536, remaining))
+                    if not chunk:
+                        raise LedgerIntegrityError("incomplete ledger")
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                if digest.hexdigest() != checkpoint["digest"]:
+                    raise LedgerIntegrityError("verified ledger prefix changed")
+                previous, count = checkpoint["head"], checkpoint["count"]
+                decisions, index = checkpoint["decisions"], deepcopy(checkpoint["index"])
+            else:
+                previous, count, decisions, index = self.__genesis, 0, 0, self._empty_index()
+            while stream.tell() < size:
+                line = stream.readline()
+                if not line or stream.tell() > size:
+                    raise LedgerIntegrityError("incomplete ledger")
+                token = self._token(line)
+                item = json.loads(self.__keys._decrypt(token))
+                claimed = item.pop("hash")
+                if (item["seq"] != count or item["prev_hash"] != previous
+                        or hashlib.sha256(_canonical(item)).hexdigest() != claimed):
+                    raise LedgerIntegrityError("ledger chain differs")
+                self._index_item(index, item)
+                decisions += item.get("kind") == "decision.handle"
+                count += 1
+                previous = claimed
+                digest.update(line)
+            if stream.tell() != size:
+                raise LedgerIntegrityError("incomplete ledger")
+        return {"format": 1, "genesis": self.__genesis, "offset": size,
+                "digest": digest.hexdigest(), "head": previous, "count": count,
+                "decisions": decisions, "index": index}, digest
+
+    def _reverse_lines(self) -> Iterator[bytes]:
+        """Yield complete lines newest first with memory bounded by the largest record."""
+        with self.__path.open("rb") as stream:
+            position, pending = max(0, self.__size - 1), b""
+            while position:
+                start = max(0, position - 65536)
+                stream.seek(start)
+                parts = (stream.read(position - start) + pending).split(b"\n")
+                pending = parts[0]
+                for line in reversed(parts[1:]):
+                    yield line + b"\n"
+                position = start
+            if pending:
+                yield pending + b"\n"
+
+    def _iter_items(self, *, start_offset: int | None = None,
+                    end_offset: int | None = None) -> Iterator[dict]:
+        if self.__path is None:
+            for token in self.__tokens:
+                yield json.loads(self.__keys._decrypt(token))
+            return
+        with self.__path.open("rb") as stream:
+            if start_offset is None:
+                stream.readline()
+            else:
+                stream.seek(start_offset)
+            end = self.__size if end_offset is None else end_offset
+            while stream.tell() < end:
+                yield json.loads(self.__keys._decrypt(self._token(stream.readline())))
+
+    def _recovery_tail(self) -> tuple[dict | None, Iterator[dict]]:
+        """Find the latest checkpoint backwards and stream its continuation one item at a time."""
         if not self.verify():
             raise LedgerIntegrityError("ledger verification failed")
-        return [json.loads(self.__keys._decrypt(token)) for token in self.__tokens]
+        ordinal, offset = self.__decision_count, self.__size
+        if self.__path is None:
+            lines = ((None, token) for token in reversed(self.__tokens))
+        else:
+            lines = ((line, self._token(line)) for line in self._reverse_lines()
+                     if json.loads(line).keys() == {"item"})
+        for line, token in lines:
+            if line is not None:
+                offset -= len(line)
+            item = json.loads(self.__keys._decrypt(token))
+            if item.get("kind") == "snapshot":
+                if line is None:
+                    return item, (entry for entry in self._iter_items()
+                                  if entry["seq"] > item["seq"])
+                return item, self._iter_items(start_offset=offset + len(line),
+                                              end_offset=self.__size)
+            if item.get("kind") == "decision.handle":
+                ordinal -= 1
+                self.__decision_ids[item["seq"]] = f"decision-{ordinal}"
+        return None, iter(())
+
+    def _recovery_items(self) -> list[dict]:
+        """Explicit internal exports authenticate items without releasing the public key."""
+        if not self.verify():
+            raise LedgerIntegrityError("ledger verification failed")
+        return list(self._iter_items())
 
     def decision_id(self, seq: int) -> str:
-        """Return the ledger-wide handle ordinal, unaffected by administrative resume items."""
+        """Return the handle ordinal for a new append or an authenticated replay-tail item."""
         return self.__decision_ids[seq]
+
+    def _event_times(self) -> dict:
+        """Only verified event boundaries and launch/finality flags leave the kernel index."""
+        if not self.verify():
+            raise LedgerIntegrityError("ledger verification failed")
+        return {k: self.__index[k] for k in ("first_tick", "last_event", "launch", "terminated")}
 
     @property
     def key_store(self) -> KeyStore:
@@ -265,7 +476,7 @@ class Ledger:
         ``verify()``, and by ``aggregate()``; size changes, truncation, reordering
         of the tail and a forged header are caught immediately.
         """
-        if len(self.__tokens) % self.__full_every == 0:
+        if self.__count % self.__full_every == 0:
             return self.verify()
         if self.__path is None:
             return True
@@ -283,6 +494,8 @@ class Ledger:
 
         Corruption detection here is ``healthy()``; call ``verify()`` for a full walk.
         """
+        if self.__read_only:
+            raise PermissionError("read-only ledger")
         if self.__final:
             raise RuntimeError("world is final")
         if not self.healthy():
@@ -298,7 +511,7 @@ class Ledger:
         item.setdefault("ts", self.__clock())
         if type(item["ts"]) is not int or item["ts"] < 0:
             raise ValueError("ts must be nonnegative integer nanoseconds")
-        item.update(seq=len(self.__tokens), prev_hash=self.__head)
+        item.update(seq=self.__count, prev_hash=self.__head)
         item["hash"] = hashlib.sha256(_canonical(item)).hexdigest()
         token = self.__keys._encrypt(_canonical(item))
         if self.__path is not None:
@@ -309,29 +522,18 @@ class Ledger:
                 os.fsync(stream.fileno())
             self.__size += len(line)
             self.__last_line = line
-        self.__tokens.append(token)
+            self.__raw_hash.update(line)
+        else:
+            self.__tokens.append(token)
         self.__head = item["hash"]
+        self.__count += 1
+        self._index_item(self.__index, item)
         if item.get("kind") == "decision.handle":
-            self.__decision_ids[item["seq"]] = f"decision-{len(self.__decision_ids)}"
+            self.__decision_ids[item["seq"]] = f"decision-{self.__decision_count}"
+            self.__decision_count += 1
+        if item.get("kind") == "snapshot":
+            self.checkpoint()
         return item["seq"]
-
-    def _tokens(self, *, data: bytes | None = None) -> list[bytes]:
-        if data is None and self.__path is None:
-            return list(self.__tokens)
-        if data is None:
-            data = self.__path.read_bytes()
-        lines = data.splitlines(keepends=True)
-        if not lines or any(not line.endswith(b"\n") for line in lines):
-            raise LedgerIntegrityError("incomplete ledger")
-        if json.loads(lines[0]) != self.__header:
-            raise LedgerIntegrityError("genesis header changed")
-        tokens = []
-        for line in lines[1:]:
-            record = json.loads(line)
-            if set(record) != {"item"}:
-                raise LedgerIntegrityError("invalid encrypted record")
-            tokens.append(record["item"].encode("ascii"))
-        return tokens
 
     def verify(self) -> bool:
         """Detect changed bytes and headers, authenticating each unchanged ciphertext once.
@@ -339,11 +541,22 @@ class Ledger:
         The verified prefix contains immutable bytes. Every pass compares its
         entire stored prefix byte-for-byte; only an identical prefix may reuse
         its authenticated head. New ciphertexts still undergo Fernet, sequence,
-        previous-hash and canonical digest checks. Reopen begins with no cache.
+        previous-hash and canonical digest checks. Disk recovery can reuse its
+        encrypted head only after checking the persisted prefix digest.
         """
         try:
-            tokens = self._tokens()
-            if len(tokens) != len(self.__tokens):
+            if self.__path is not None:
+                size = self.__path.stat().st_size
+                if size < self.__size or not self.__read_only and size != self.__size:
+                    return False
+                checked, hasher = self._scan_disk(self.__size)
+                if checked["count"] != self.__count or checked["head"] != self.__head:
+                    return False
+                self.__checkpoint, self.__raw_hash = checked, hasher
+                self.__index = deepcopy(checked["index"])
+                return True
+            tokens = self.__tokens
+            if len(tokens) != self.__count:
                 return False
             prefix = self.__verified_tokens
             if len(tokens) < len(prefix) or any(
@@ -381,7 +594,29 @@ class Ledger:
         _ = self.__keys.key
         if type(seq) is not int or seq < 0:
             raise ValueError("seq must be a nonnegative integer")
-        return json.loads(self.__keys._decrypt(self._tokens()[seq]))
+        if seq >= self.__count:
+            raise IndexError(seq)
+        if self.__path is None:
+            return json.loads(self.__keys._decrypt(self.__tokens[seq]))
+        # Post-mortem readers commonly walk consecutive items. Retain one byte
+        # cursor, never all ciphertexts or a diary-sized seek index.
+        current, offset = self.__read_cursor
+        with self.__path.open("rb") as stream:
+            if offset is None or seq < current:
+                stream.readline()
+                current = 0
+            else:
+                stream.seek(offset)
+            while current < seq:
+                if not stream.readline():
+                    raise LedgerIntegrityError("incomplete ledger")
+                current += 1
+            line = stream.readline()
+            self.__read_cursor = (seq + 1, stream.tell())
+        item = json.loads(self.__keys._decrypt(self._token(line)))
+        if item["seq"] != seq:
+            raise LedgerIntegrityError("ledger sequence differs")
+        return item
 
     def aggregate(self, view: str, **params) -> dict:
         """Return a fixed aggregate with optional half-open timestamp bounds, never items."""
@@ -402,10 +637,18 @@ class Ledger:
             raise ValueError("inverted aggregate interval")
         if not self.verify():
             raise LedgerIntegrityError("ledger verification failed")
-        items = [json.loads(self.__keys._decrypt(token)) for token in self._tokens()]
-        selected = [
-            item for item in items if item["ts"] >= since and (until is None or item["ts"] < until)
-        ]
+        if not params:
+            index = self.__index
+            if view == "wallet_series":
+                return {"series": deepcopy(index["wallet_series"])}
+            if view in ("spend_by_capability", "invocations_by_assembly", "action_frequencies"):
+                key = {"spend_by_capability": "spend", "invocations_by_assembly": "invocations",
+                       "action_frequencies": "actions"}[view]
+                return {"spend" if key == "spend" else "counts": dict(sorted(index[key].items()))}
+            return {"count": index["latency_count"], "total_ns": index["latency_total"],
+                    "min_ns": index["latency_min"], "max_ns": index["latency_max"]}
+        selected = (item for item in self._iter_items()
+                    if item["ts"] >= since and (until is None or item["ts"] < until))
         if view == "wallet_series":
             return {
                 "series": [
@@ -418,7 +661,7 @@ class Ledger:
         if view == "spend_by_capability":
             choices = {
                 item["handle"]: item["propensity"]["chosen"]
-                for item in items
+                for item in self._iter_items()
                 if item.get("kind") == "decision.open"
             }
             amounts: Counter = Counter()

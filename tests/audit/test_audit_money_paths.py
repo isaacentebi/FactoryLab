@@ -1,0 +1,162 @@
+"""Cold audit, seat 4: money paths that lose or misbook micro-dollars.
+
+Each test reproduces one finding in docs/audits/v2/defects-fable.md and fails on the
+audited commit. Nothing here touches a network; keys are throwaway.
+"""
+
+import json
+from dataclasses import replace
+from decimal import Decimal
+
+from eth_account import Account
+
+from factorylab.cortex.assembly import Assembly, AssemblySpec
+from factorylab.cortex.registration import ModelProposal
+from factorylab.cortex.request import Request
+from factorylab.kernel.ledger import Ledger
+from factorylab.kernel.wallet import Wallet
+from factorylab.runtime.loop import Runtime, ScriptedProvider, run_world
+from factorylab.runtime.resume import resume_runtime
+from factorylab.runtime.worlds import load_manifest
+from factorylab.world.clock import ClockSource
+from factorylab.world.exchange import FakeExchange
+from factorylab.world.market import X402MeteredModel, X402Provider
+from factorylab.world.metering import Meter, MeteredModel
+from factorylab.world.models import ModelRequest, ModelResponse, PriceTable, TokenPrice
+from factorylab.world.x402 import HTTPResponse
+
+
+class RecordedProvider:
+    name = "recorded-provider"
+
+    def __init__(self):
+        self.inner = ScriptedProvider()
+        self.calls = 0
+
+    def complete(self, request):
+        self.calls += 1
+        return self.inner.complete(request)
+
+
+class Venue(FakeExchange):
+    def __init__(self):
+        super().__init__(seed=1, coins=("BTC",), start_cash_usd=Decimal("100"))
+
+
+def _items(path, manifest):
+    return Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()))._recovery_items()
+
+
+def test_replay_of_an_interrupted_event_does_not_charge_undispatched_model_calls(tmp_path):
+    """Finding 4: a process death after decision.open but before io.call means the provider was
+    never contacted; the journal knows this ("never dispatched") yet metering books the full
+    ceiling as an uncertain bill. Real money is not owed to anyone."""
+    base = load_manifest("scripted")
+    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)),
+                drip=None)
+    path = str(tmp_path / "w.jsonl")
+    clock = ClockSource(1_000_000_000, 1_000_000_000, 8)
+    run_world(m, events=8, seed=1, ledger_path=path, provider=RecordedProvider(),
+              exchange=Venue(), clock_source=clock.events())
+    diary = _items(path, m)
+    snap = next(s["seq"] for s in diary if s["kind"] == "snapshot")
+    call = next(i for i in diary if i["kind"] == "io.call" and i["name"] == "provider.complete"
+                and i["seq"] > snap)
+    balance_at_cut = next(i["balance_after"] for i in reversed(diary)
+                          if i["seq"] < call["seq"] and i["kind"].startswith("wallet."))
+    lines = (tmp_path / "w.jsonl").read_bytes().splitlines(keepends=True)
+    (tmp_path / "w.jsonl").write_bytes(b"".join(lines[: call["seq"] + 1]))
+    provider = RecordedProvider()
+    rt = resume_runtime(m, path, provider=provider, exchange=Venue(),
+                        clock_source=ClockSource(1_000_000_000, 1_000_000_000, 8).events(),
+                        now_ns=10**15)
+    try:
+        evidence = rt.ledger._recovery_items()
+        booked = [i for i in evidence if i["kind"] == "metering.uncertain"
+                  and i["seq"] >= call["seq"]]
+        assert provider.calls == 0  # the journal refused to dispatch it, correctly
+        assert booked == [], "an undispatched call was booked as an uncertain vendor bill"
+        assert rt.wallet.balance == balance_at_cut
+    finally:
+        rt._ledger_lock.close()
+
+
+SELLER = "https://seller.example"
+MODEL = f"x402:{SELLER}#glm"
+QUOTE = {"scheme": "exact", "network": "eip155:8453",
+         "asset": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "amount": "100000",
+         "payTo": "0x8e3c3e9c91cc0161b5e1cf138180ef3641d2371e", "maxTimeoutSeconds": 60}
+
+
+def _seller_that_drops_the_paid_request(method, url, payload, headers):
+    if "base.org" in url:  # the reserve's USDC balance read
+        return HTTPResponse(200, {"jsonrpc": "2.0", "id": 1, "result": hex(50_000_000)})
+    if "PAYMENT-SIGNATURE" in headers:
+        raise ConnectionError("socket closed after the signed authorization was sent")
+    return HTTPResponse(402, {"x402Version": 2, "accepts": [QUOTE]})
+
+
+def test_unknown_x402_payment_outcome_does_not_leak_a_wallet_hold():
+    """Finding 5: PaymentOutcomeUnknown leaves the quote held forever; nothing in the runtime
+    resolves x402.unresolved. Every such call shrinks `available` until compute insolvency."""
+    key = Account.create().key.hex()
+    provider = X402Provider(private_key=key, transport=_seller_that_drops_the_paid_request)
+    provider.register(MODEL, 100_000)
+    ledger = Ledger()
+    wallet = Wallet(1_000_000, ledger)
+    prices = PriceTable()
+    prices.register(MODEL, TokenPrice(0, 0, 100_000))
+    model = X402MeteredModel(provider, prices, Meter(wallet), record=ledger.append,
+                             on_unaffordable=lambda h: None)
+    asm = Assembly(AssemblySpec("seller-user", 1, MODEL), model)
+    for n in range(3):
+        req = Request(f"decision-{n}", "hi", {}, {}, {"type": "object"}, 10**12,
+                      max(0, wallet.available), None, "json", "verdict", f"decision-{n}")
+        ret = asm.invoke(req)
+        assert ret.status == "failed"
+    holds = wallet.state()["reservations"]
+    assert holds == [], f"{len(holds)} holds of {sum(h.amount for h in holds)} micro never close"
+
+
+class BigBill:
+    """A vendor whose usage.cost field is a mistake or a lie."""
+
+    name = "bigbill"
+
+    def complete(self, req):
+        return ModelResponse(req.model_id, '{"action": "hold"}', 10, 10, "stop",
+                             cost_micro=10**12)
+
+
+def test_a_single_reported_vendor_cost_cannot_kill_the_wallet():
+    """Finding 6: commit_reported debits any reported overrun without bound; one bad number
+    from a provider (not the world) exhausts a $100 wallet and releases the seal."""
+    wallet = Wallet(100_000_000, Ledger())
+    prices = PriceTable()
+    prices.register("m", TokenPrice(1, 1))
+    model = MeteredModel(BigBill(), prices, Meter(wallet))
+    req = ModelRequest("m", "s", ({"role": "user", "content": "x"},), 100)
+    ceiling = model.ceiling(req)
+    model.complete(req, handle="d")
+    assert not wallet.dead, "a vendor's reported cost, not the world, killed the wallet"
+    assert wallet.balance >= 100_000_000 - 10 * ceiling
+
+
+def test_a_refused_duplicate_model_proposal_does_not_consume_the_novelty_share():
+    """Finding 7 (minor): reserve_for runs before registry.register; a re-proposal of a model
+    that already exists is refused after the window's novelty share was debited."""
+    m = load_manifest("scripted")
+    rt = Runtime(m, events=2, seed=1, initial_balance_micro=None, ledger_path=None, drip=False,
+                 router_gamma=0.1)
+    try:
+        rt.run()
+        before = rt.reserve.remaining()
+        assert before > 0
+        handle = next(iter(rt.handle_to_assembly))
+        try:
+            rt._register(handle, ModelProposal("fake-haiku"))  # a seed model, already registered
+        except ValueError as exc:
+            assert "version" in str(exc)
+        assert rt.reserve.remaining() == before
+    finally:
+        rt._ledger_lock.close()

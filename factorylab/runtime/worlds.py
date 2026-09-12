@@ -108,6 +108,7 @@ class TreasurySpec:
     cctp_max_fee_micro: int = 100_000
     fake_fee_micro: int = 10_000
     max_request_micro: int = 500_000
+    reported_cost_multiple: int = 10
 
 
 @dataclass(frozen=True)
@@ -246,6 +247,9 @@ class WorldManifest:
             raise ValueError("initial balance must be non-negative")
         if type(self.treasury.insolvency_events) is not int or self.treasury.insolvency_events < 1:
             raise ValueError("treasury.insolvency_events must be a positive integer")
+        if (type(self.treasury.reported_cost_multiple) is not int
+                or self.treasury.reported_cost_multiple < 1):
+            raise ValueError("treasury.reported_cost_multiple must be a positive integer")
         if self.treasury.reserve_address is not None:
             import re
 
@@ -302,8 +306,8 @@ class WorldManifest:
             raise ValueError("novelty window must be positive")
         if type(self.timing.cadence_sample) is not int or self.timing.cadence_sample < 1:
             raise ValueError("timing.cadence_sample must be a positive integer")
-        if self.timing.min_ratio < 1:
-            raise ValueError("timing min_ratio must be at least 1")
+        if type(self.timing.min_ratio) is not int or self.timing.min_ratio < 3:
+            raise ValueError("timing min_ratio must be an integer at least 3")
         if type(self.clock.min_tick_ns) is not int or self.clock.min_tick_ns <= 0:
             raise ValueError("clock.min_tick must be positive integer nanoseconds")
         if (type(self.tick_interval_ns) is not int
@@ -494,6 +498,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
                 (d.get("treasury") or {}).get("cctp_max_fee_usd", "0.10")),
             fake_fee_micro=usd_to_micro((d.get("treasury") or {}).get("fake_fee_usd", "0.01")),
             max_request_micro=(d.get("treasury") or {}).get("max_request_micro", 500_000),
+            reported_cost_multiple=(d.get("treasury") or {}).get("reported_cost_multiple", 10),
         ),
         clock=ClockSpec(_ns(clock.get("min_tick", default_min_tick))),
         tick_interval_ns=_ns(d.get("tick_interval", "10s")),
@@ -509,4 +514,7 @@ def load_manifest(name_or_path: str) -> WorldManifest:
     if not p.exists():
         p = WORLDS_DIR / f"{name_or_path}.toml"
     with open(p, "rb") as f:
-        return manifest_from_dict(tomllib.load(f))
+        manifest = manifest_from_dict(tomllib.load(f))
+    if manifest.name != p.stem:
+        raise ValueError("manifest name must match its file stem")
+    return manifest
