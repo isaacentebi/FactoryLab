@@ -98,6 +98,7 @@ def _record_types() -> dict[str, type]:
         Order,
         OrderResult,
         Position,
+        SpotBalance,
     )
     from factorylab.world.market import SellerModel
     from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
@@ -110,7 +111,8 @@ def _record_types() -> dict[str, type]:
         SettleStatus, Contract, PriceSpec, ResourceBounds, DistributionSummary, DripSchedule,
         Reservation, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast, Lot,
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
-        AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position, SellerModel,
+        AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position,
+        SpotBalance, SellerModel,
         CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote,
     )
     return {cls.__name__: cls for cls in classes}
@@ -406,7 +408,8 @@ class JournalProxy:
 _RUNTIME_FIELDS = (
     "rng", "cascade", "cascade_windows", "stats", "charter", "pending_exposure",
     "delivered_seen", "snapshot_keys", "recent_mids", "realized_to_date", "fees_to_date",
-    "funding_to_date", "memory", "handle_to_assembly", "tool_specs", "population_tools",
+    "funding_to_date", "spot_inventory", "memory", "handle_to_assembly", "tool_specs",
+    "population_tools",
     "tool_owner", "pending_votes", "regions", "priced", "rolling", "unparsed_logged", "window",
     "pending", "balance_at", "events_log", "last_closure_ns", "reserve_window_start", "internal",
     "n", "emitted", "insolvency_count", "_compute_routed", "_compute_unaffordable",

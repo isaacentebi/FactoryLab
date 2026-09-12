@@ -191,8 +191,8 @@ balance_floor_usd = "0"
 # Omitted accountabilty_score: verifiability of commitments is not measured.
 # Omitted revision_adoption: no link from adopted amendments to prior breaches.
 # Omitted practice_revision_rate: no fraction of revision-active windows over ten windows.
-# revision_rate measures revision-bearing producer returns in the runtime window;
-# the draft's window labels are prose, not separately enforced rolling schedules.
+# Each card's window is typed ({kind, n, per}) and is the sample actually measured:
+# a returns window is the last n returns, a forecasts window the last n settled forecasts.
 # No lambda was proposed in the draft; controller defaults apply.
 [charter]
 norms = ["truthful commitments", "care with scarce resources", "useful inquiry", "the capacity to revise inadequate practices"]
@@ -248,3 +248,6 @@ gap_threshold = 0.8
 gain_step = 0.05
 gamma_max = 0.5
 decay_step = 0.1
+
+[venue]
+spot_pairs = ["BTC/USDC", "ETH/USDC"]

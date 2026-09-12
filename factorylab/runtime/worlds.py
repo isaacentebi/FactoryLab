@@ -60,6 +60,7 @@ class ExchangeSpec:
     kind: str  # "fake" | "hyperliquid"
     mainnet: bool = False
     coins: tuple[str, ...] = ("BTC", "ETH")
+    spot_pairs: tuple[str, ...] = ()
     seed: int = 0
     start_cash_usd: str = "100"
     shocks: tuple[Shock, ...] = ()
@@ -450,10 +451,17 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             end_ns=_ns(dd["end"]),
         )
     ex = d.get("exchange", {})
+    spot_pairs = d.get("venue", {}).get("spot_pairs", [])
+    if (not isinstance(spot_pairs, list) or any(
+            not isinstance(p, str) or p.count("/") != 1 or not p.endswith("/USDC")
+            or not p.split("/")[0] for p in spot_pairs)
+            or len(set(spot_pairs)) != len(spot_pairs)):
+        raise ValueError("venue.spot_pairs must be a unique list of BASE/USDC pairs")
     exchange = ExchangeSpec(
         kind=ex.get("kind", "fake"),
         mainnet=bool(ex.get("mainnet", False)),
         coins=tuple(ex.get("coins", ["BTC", "ETH"])),
+        spot_pairs=tuple(spot_pairs),
         seed=int(ex.get("seed", d.get("seed", 0))),
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
         shocks=tuple(

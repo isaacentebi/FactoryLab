@@ -54,8 +54,11 @@ class Order:
     limit_px: Decimal | None = None
     client_id: str | None = None
     reduce_only: bool = False
+    market: str = "perp"
 
     def __post_init__(self) -> None:
+        if self.market not in ("perp", "spot"):
+            raise ValueError("market must be perp or spot")
         if not self.size.is_finite() or self.size <= 0:
             raise ValueError("order size must be finite and positive")
         if self.limit_px is not None and (not self.limit_px.is_finite() or self.limit_px <= 0):
@@ -84,6 +87,8 @@ class Fill:
     ts_ns: int
     realized: Decimal = Decimal(0)  # closed P&L in USD, signed
     liquidation: bool = False
+    market: str = "perp"
+    inventory_size: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -113,11 +118,19 @@ class Position:
 
 
 @dataclass(frozen=True)
+class SpotBalance:
+    coin: str
+    total: Decimal
+    available: Decimal
+
+
+@dataclass(frozen=True)
 class AccountState:
     equity_usd: Decimal
     cash_usd: Decimal
     positions: tuple[Position, ...]
     margin_used_usd: Decimal
+    spot_balances: tuple[SpotBalance, ...] = ()
 
 
 class Exchange(Protocol):
@@ -141,8 +154,9 @@ class Exchange(Protocol):
     def funding_history(self, coin: str, n: int) -> list[FundingEvent]: ...
     def open_orders(self) -> list[dict]: ...
     def close(self, coin: str, size: Decimal | None = None, *,
-              client_id: str | None = None) -> OrderResult: ...
-    def set_leverage(self, coin: str, leverage: int) -> dict: ...
+              client_id: str | None = None, market: str = "perp") -> OrderResult: ...
+    def instruments(self) -> dict: ...
+    def set_leverage(self, coin: str, leverage: int, *, market: str = "perp") -> dict: ...
 
 
 # --------------------------------------------------------------------------- fake
@@ -164,6 +178,7 @@ class FakeExchange:
     seed: int = 0
     start_cash_usd: Decimal = Decimal("100")
     coins: tuple[str, ...] = ("BTC", "ETH")
+    spot_pairs: tuple[str, ...] = ()
     price_path: dict[str, list[Decimal]] | None = None
     start_prices: dict[str, Decimal] = field(
         default_factory=lambda: {"BTC": Decimal("60000"), "ETH": Decimal("2500")}
@@ -184,6 +199,11 @@ class FakeExchange:
         self._mids: dict[str, Decimal] = dict(self.start_prices)
         for c in self.coins:
             self._mids.setdefault(c, Decimal("100"))
+        self._spot_cash = Decimal(0)
+        self._spot_positions: dict[str, Position] = {}
+        for pair in self.spot_pairs:
+            self._mids.setdefault(pair.split("/")[0], Decimal("100"))
+            self._mids[pair] = self._mids[pair.split("/")[0]]
         self._cash = Decimal(self.start_cash_usd)
         self._positions: dict[str, Position] = {}
         self._fills: list[Fill] = []
@@ -214,7 +234,7 @@ class FakeExchange:
         self._now_ns = ts_ns
         self._step += 1
         events: list[WorldEvent] = []
-        for coin in self.coins:
+        for coin in dict.fromkeys((*self.coins, *(p.split("/")[0] for p in self.spot_pairs))):
             self._mids[coin] = self._next_price(coin)
             self._mid_history[coin].append((ts_ns, self._mids[coin]))
             events.append(
@@ -225,6 +245,11 @@ class FakeExchange:
                     {"coin": coin, "mid": str(self._mids[coin])},
                 )
             )
+        for pair in self.spot_pairs:
+            self._mids[pair] = self._mids[pair.split("/")[0]]
+            self._mid_history[pair].append((ts_ns, self._mids[pair]))
+            events.append(WorldEvent(WorldEventKind.MARKET_MID, ts_ns, self.name,
+                                     {"coin": pair, "mid": str(self._mids[pair])}))
         events.extend(self._cross_resting())
         events.extend(self._liquidate_if_needed())
         if ts_ns - self._last_funding_ns >= self.funding_interval_ns:
@@ -250,7 +275,8 @@ class FakeExchange:
         so margin checks see the wallet's truth, including compute spend the
         venue never observes.
         """
-        self._cash = Decimal(cash_usd)
+        self._cash = Decimal(cash_usd) - self._spot_cash - sum(
+            (p.size * p.entry_px for p in self._spot_positions.values()), Decimal(0))
 
     # ---- protocol
 
@@ -272,10 +298,14 @@ class FakeExchange:
             unrealized += (mid - p.entry_px) * p.size
             margin += abs(p.size) * mid / self._leverage.get(p.coin, self.max_leverage)
         return AccountState(
-            equity_usd=self._cash + unrealized,
+            equity_usd=self._cash + unrealized + self._spot_cash + sum(
+                (p.size * self._mids[p.coin] for p in self._spot_positions.values()), Decimal(0)),
             cash_usd=self._cash,
             positions=tuple(self._positions.values()),
             margin_used_usd=margin,
+            spot_balances=(SpotBalance("USDC", self._spot_cash, self._spot_available("USDC")), *(
+                SpotBalance(p.coin.split("/")[0], p.size, self._spot_available(p.coin))
+                for p in self._spot_positions.values())),
         )
 
     def place(self, order: Order) -> OrderResult:
@@ -288,19 +318,26 @@ class FakeExchange:
         return result
 
     def _place(self, order: Order) -> OrderResult:
-        if order.coin not in self._mids:
+        if order.coin not in (self.spot_pairs if order.market == "spot" else self.coins):
             return OrderResult(None, "rejected", Decimal(0), None, "unknown coin")
+        if order.market == "spot" and (order.size % Decimal("0.000001")
+                or order.limit_px is not None and order.limit_px % Decimal("0.01")):
+            return OrderResult(None, "rejected", Decimal(0), None, "invalid spot tick or lot size")
         oid = str(self._next_oid)
         self._next_oid += 1
         if order.kind is OrderKind.LIMIT:
             assert order.limit_px is not None
             if self._crosses(order, self._mids[order.coin]):
                 return self._fill(oid, order, order.limit_px)
+            if order.market == "spot" and not self._spot_affordable(order, order.limit_px):
+                return OrderResult(oid, "rejected", Decimal(0), None, "insufficient spot balance")
             self._resting[oid] = order
             return OrderResult(oid, "resting", Decimal(0), None)
         mid = self._mids[order.coin]
         half = mid * self.spread_bps / Decimal(20_000)
         px = mid + half if order.is_buy else mid - half
+        if order.market == "spot":
+            px = px.quantize(Decimal("0.01"))
         return self._fill(oid, order, px)
 
     def cancel(self, order_id: str, *, coin: str | None = None,
@@ -411,21 +448,27 @@ class FakeExchange:
 
     def close(
         self, coin: str, size: Decimal | None = None, *, client_id: str | None = None,
+        market: str = "perp",
     ) -> OrderResult:
         """Close at most the current position; flat or invalid requests are rejected."""
         if client_id is not None and client_id in self._client_results:
             return self._client_results[client_id]
-        pos = self._positions.get(coin)
+        if market not in ("perp", "spot"):
+            return OrderResult(None, "rejected", Decimal(0), None, "unknown market")
+        pos = (self._spot_positions if market == "spot" else self._positions).get(coin)
         if pos is None:
             return OrderResult(None, "rejected", Decimal(0), None, "no open position")
         if size is not None and (not size.is_finite() or size <= 0):
             return OrderResult(None, "rejected", Decimal(0), None, "size must be positive")
         amount = abs(pos.size) if size is None else min(size, abs(pos.size))
-        return self.place(Order(coin, pos.size < 0, amount, client_id=client_id, reduce_only=True))
+        return self.place(Order(coin, pos.size < 0, amount, client_id=client_id,
+                                reduce_only=True, market=market))
 
-    def set_leverage(self, coin: str, leverage: int) -> dict:
+    def set_leverage(self, coin: str, leverage: int, *, market: str = "perp") -> dict:
         """Accept integer leverage within the venue cap without changing other coins."""
-        if coin not in self._mids:
+        if market == "spot" or coin in self.spot_pairs:
+            return {"status": "rejected", "error": "spot does not support leverage"}
+        if coin not in self.coins:
             return {"status": "rejected", "error": "unknown coin"}
         if type(leverage) is not int or not 1 <= leverage <= self.max_leverage:
             return {"status": "rejected", "error": f"leverage must be 1..{self.max_leverage}"}
@@ -451,6 +494,8 @@ class FakeExchange:
     def _fill(
         self, oid: str, order: Order, px: Decimal, *, liquidation: bool = False
     ) -> OrderResult:
+        if order.market == "spot":
+            return self._fill_spot(oid, order, px)
         if order.reduce_only:
             pos = self._positions.get(order.coin)
             if pos is None or (pos.size > 0) == order.is_buy:
@@ -501,7 +546,8 @@ class FakeExchange:
         else:
             # partial reduce keeps the entry price
             self._positions[order.coin] = Position(order.coin, new_size, pos.entry_px)
-        fill = Fill(oid, order.coin, order.is_buy, order.size, px, fee, self._now_ns)
+        fill = Fill(oid, order.coin, order.is_buy, order.size, px, fee, self._now_ns,
+                    realized, liquidation)
         self._fills.append(fill)
         self._pending_events.append(
             WorldEvent(
@@ -529,7 +575,7 @@ class FakeExchange:
                 margin += (
                     abs(p.size) * self._mids[p.coin] / self._leverage.get(p.coin, self.max_leverage)
                 )
-        return margin <= self.account().equity_usd
+        return margin <= self._perp_equity()
 
     def _liquidate_if_needed(self) -> list[WorldEvent]:
         """Force-close every position at mid when equity falls below maintenance margin.
@@ -542,7 +588,7 @@ class FakeExchange:
             return []
         acct = self.account()
         maintenance = acct.margin_used_usd * self.maintenance_fraction
-        if acct.equity_usd >= maintenance:
+        if self._perp_equity() >= maintenance:
             return []
         events: list[WorldEvent] = []
         for pos in list(self._positions.values()):
@@ -552,6 +598,71 @@ class FakeExchange:
             self._fill(oid, close, self._mids[pos.coin], liquidation=True)
             events.extend(self.drain_events())
         return events
+
+    def _perp_equity(self) -> Decimal:
+        return self._cash + sum(((self._mids[p.coin] - p.entry_px) * p.size
+                                 for p in self._positions.values()), Decimal(0))
+
+    def _perp_withdrawable(self) -> Decimal:
+        resting = sum((o.size * o.limit_px / self._leverage.get(o.coin, self.max_leverage)
+                       for o in self._resting.values() if o.market == "perp"
+                       and not o.reduce_only), Decimal(0))
+        return max(Decimal(0), min(self._cash,
+                   self._perp_equity() - self.account().margin_used_usd - resting))
+
+    def _spot_available(self, coin: str) -> Decimal:
+        if coin == "USDC":
+            held = self._spot_cash
+            committed = sum((o.size * o.limit_px * (1 + self.fee_bps / 10_000)
+                             for o in self._resting.values() if o.market == "spot" and o.is_buy),
+                            Decimal(0))
+        else:
+            held = self._spot_positions[coin].size if coin in self._spot_positions else Decimal(0)
+            committed = sum((o.size for o in self._resting.values()
+                             if o.market == "spot" and o.coin == coin and not o.is_buy), Decimal(0))
+        return max(Decimal(0), held - committed)
+
+    def _spot_affordable(self, order: Order, px: Decimal) -> bool:
+        fee = (order.size * px * self.fee_bps / 10_000).quantize(Decimal("0.000001"))
+        return ((not order.reduce_only and order.size * px + fee <= self._spot_available("USDC"))
+                if order.is_buy else order.size <= self._spot_available(order.coin))
+
+    def class_transfer(self, amount: Decimal, to_perp: bool) -> None:
+        """Move quote cash between classes without changing total capital."""
+        available = self._spot_available("USDC") if to_perp else self._perp_withdrawable()
+        if not amount.is_finite() or amount <= 0 or amount > available:
+            raise ValueError("insufficient available class cash")
+        self._spot_cash += -amount if to_perp else amount
+        self._cash += amount if to_perp else -amount
+
+    def instruments(self) -> dict:
+        """Publish deterministic lot and price increments for configured markets."""
+        return {market: [{"coin": c, "lot_size": "0.000001", "tick_size": "0.01"}
+                         for c in coins]
+                for market, coins in (("perp", self.coins), ("spot", self.spot_pairs))}
+
+    def _fill_spot(self, oid: str, order: Order, px: Decimal) -> OrderResult:
+        pos = self._spot_positions.get(order.coin)
+        held = pos.size if pos else Decimal(0)
+        fee = (order.size * px * self.fee_bps / 10_000).quantize(Decimal("0.000001"))
+        if not self._spot_affordable(order, px):
+            return OrderResult(oid, "rejected", Decimal(0), None, "insufficient spot balance")
+        realized = Decimal(0) if order.is_buy else (px - pos.entry_px) * order.size
+        self._spot_cash += (-order.size * px if order.is_buy else order.size * px) - fee
+        size = held + (order.size if order.is_buy else -order.size)
+        if size:
+            entry = ((held * (pos.entry_px if pos else 0) + order.size * px) / size
+                     if order.is_buy else pos.entry_px)
+            self._spot_positions[order.coin] = Position(order.coin, size, entry)
+        else:
+            self._spot_positions.pop(order.coin, None)
+        self._fills.append(Fill(oid, order.coin, order.is_buy, order.size, px, fee,
+                                self._now_ns, realized, market="spot"))
+        self._pending_events.append(WorldEvent(WorldEventKind.FILL, self._now_ns, self.name, {
+            "order_id": oid, "coin": order.coin, "is_buy": order.is_buy,
+            "size": str(order.size), "px": str(px), "fee_usd": str(fee),
+            "realized_usd": str(realized), "liquidation": False, "market": "spot"}))
+        return OrderResult(oid, "filled", order.size, px)
 
     def _apply_funding(self) -> list[WorldEvent]:
         events: list[WorldEvent] = []
@@ -581,7 +692,7 @@ class FakeExchange:
 
 
 class HyperliquidExchange:
-    """Hyperliquid perpetuals via the official SDK.
+    """Hyperliquid perpetuals and configured USDC spot pairs via the official SDK.
 
     Testnet by default. Mainnet is selected only when ``mainnet=True`` is passed
     explicitly by a world manifest. Read calls need only an address; writes
@@ -598,6 +709,7 @@ class HyperliquidExchange:
         key_env: str = "HL_PRIVATE_KEY",
         coins: tuple[str, ...] = ("BTC", "ETH"),
         timeout: float = 20.0,
+        spot_pairs: tuple[str, ...] = (),
     ) -> None:
         from hyperliquid.info import Info
         from hyperliquid.utils import constants
@@ -605,6 +717,7 @@ class HyperliquidExchange:
         self.name = "hyperliquid-mainnet" if mainnet else "hyperliquid-testnet"
         self.base_url = constants.MAINNET_API_URL if mainnet else constants.TESTNET_API_URL
         self.coins = coins
+        self.spot_pairs = spot_pairs
         self._info = Info(self.base_url, skip_ws=True, timeout=timeout)
         self._address = address
         self._exchange: Any | None = None
@@ -618,9 +731,47 @@ class HyperliquidExchange:
             self._exchange = HLExchange(wallet, self.base_url, account_address=self._address)
         meta = self._info.meta()
         self._sz_decimals = {a["name"]: int(a["szDecimals"]) for a in meta["universe"]}
+        self._spot_names = {}
+        self._spot_tokens = {}
+        if spot_pairs:
+            self._configure_spot(self._info.spot_meta())
         self.transient_failures = 0
+        self.account_fallbacks = 0
         self._last_mids: dict[str, Decimal] | None = None
         self._last_account: AccountState | None = None
+
+    def _configure_spot(self, meta: dict) -> None:
+        tokens = {t["index"]: t for t in meta["tokens"]}
+        self._spot_marks = {}
+        for row in meta["universe"]:
+            base, quote = (tokens[i] for i in row["tokens"])
+            pair = f'{base["name"]}/{quote["name"]}'
+            if quote["name"] == "USDC":
+                self._spot_marks[base["name"]] = row["name"]
+            if pair in self.spot_pairs:
+                self._spot_names[pair] = row["name"]
+                self._spot_tokens[pair] = base["name"]
+                self._sz_decimals[pair] = int(base["szDecimals"])
+        missing = set(self.spot_pairs) - self._spot_names.keys()
+        if missing:
+            raise ValueError(f"spot pairs unavailable in venue metadata: {sorted(missing)}")
+
+    def _wire_coin(self, coin: str) -> str:
+        return getattr(self, "_spot_names", {}).get(coin, coin)
+
+    def _public_coin(self, coin: str) -> str:
+        return next((p for p, name in getattr(self, "_spot_names", {}).items()
+                     if name == coin), coin)
+
+    def instruments(self) -> dict:
+        """Expose lot precision and the venue's price precision rule without guessing a tick."""
+        return {market: [{"coin": c, "lot_size": str(Decimal(1).scaleb(-self._sz_decimals[c])),
+                          "tick_size": str(Decimal(1).scaleb(
+                              -(8 if market == "spot" else 6) + self._sz_decimals[c])),
+                          "price_significant_figures": 5, "integer_prices_allowed": True}
+                         for c in coins]
+                for market, coins in (("perp", self.coins),
+                                      ("spot", getattr(self, "spot_pairs", ())))}
 
     def _guarded(self, what: str, call: Any, attempts: int = 3) -> Any:
         """Call the API with retries on transient failures; raise VenueUnavailable after.
@@ -655,7 +806,9 @@ class HyperliquidExchange:
             if self._last_mids is None:
                 raise
             return dict(self._last_mids)
-        self._last_mids = {c: Decimal(str(raw[c])) for c in self.coins if c in raw}
+        self._last_mids = {c: Decimal(str(raw[self._wire_coin(c)]))
+                           for c in (*self.coins, *getattr(self, "spot_pairs", ()))
+                           if self._wire_coin(c) in raw}
         return dict(self._last_mids)
 
     def funding(self) -> list[FundingEvent]:
@@ -690,11 +843,19 @@ class HyperliquidExchange:
     def account(self) -> AccountState:
         if not self._address:
             raise RuntimeError("account() needs an address or a private key")
+        spot = mids = None
         try:
             st = self._guarded("user_state", lambda: self._info.user_state(self._address))
+            if getattr(self, "spot_pairs", ()):
+                spot = self._guarded("spot_user_state", lambda:
+                                     self._info.spot_user_state(self._address))
+                mids = self._guarded("spot_mids", self._info.all_mids)
         except VenueUnavailable:
+            # Half an account is not an account: perps and spot fall back together,
+            # so a spot endpoint outage returns the last complete snapshot.
             if self._last_account is None:
                 raise
+            self.account_fallbacks = getattr(self, "account_fallbacks", 0) + 1
             return self._last_account
         summary = st["marginSummary"]
         positions: list[Position] = []
@@ -705,11 +866,29 @@ class HyperliquidExchange:
                 continue
             entry = Decimal(str(p["entryPx"])) if p.get("entryPx") else Decimal(0)
             positions.append(Position(p["coin"], size, entry))
+        balances = []
+        spot_value = Decimal(0)
+        if spot is not None:
+            for row in spot.get("balances", []):
+                total = Decimal(str(row["total"]))
+                balances.append(SpotBalance(row["coin"], total,
+                                            total - Decimal(str(row.get("hold", "0")))))
+                if row["coin"] == "USDC":
+                    spot_value += total
+                elif total:
+                    symbol = self._spot_marks.get(row["coin"])
+                    if symbol is None or symbol not in mids:
+                        raise VenueUnavailable("spot balance has no USD mid")
+                    mark = Decimal(str(mids[symbol]))
+                    if not mark.is_finite() or mark <= 0:
+                        raise VenueUnavailable("invalid spot USD mid")
+                    spot_value += total * mark
         self._last_account = AccountState(
-            equity_usd=Decimal(str(summary["accountValue"])),
+            equity_usd=Decimal(str(summary["accountValue"])) + spot_value,
             cash_usd=Decimal(str(st.get("withdrawable", summary["accountValue"]))),
             positions=tuple(positions),
             margin_used_usd=Decimal(str(summary["totalMarginUsed"])),
+            spot_balances=tuple(balances),
         )
         return self._last_account
 
@@ -783,6 +962,14 @@ class HyperliquidExchange:
                 values = [Decimal(str(f.get(key, "0")))
                           for key in ("sz", "px", "fee", "closedPnl")]
                 size, px, fee, realized = values
+                pair = self._public_coin(f["coin"])
+                if pair in getattr(self, "spot_pairs", ()):
+                    token = f.get("feeToken", "USDC")
+                    if token == pair.split("/")[0]:
+                        size -= fee if f["side"] == "B" else -fee
+                        fee *= px
+                    elif token != "USDC":
+                        raise ValueError("spot fee token has no USD mark")
                 stamp = int(f["time"]) * NS_PER_MS
                 if (any(not value.is_finite() for value in values)
                         or size <= 0 or px <= 0 or stamp < 0
@@ -790,9 +977,13 @@ class HyperliquidExchange:
                         or not isinstance(f["coin"], str) or not f["coin"]):
                     continue
                 out.append(Fill(
-                    order_id=str(f["oid"]), coin=f["coin"], is_buy=f["side"] == "B",
-                    size=size, px=px, fee=fee, ts_ns=stamp, realized=realized,
+                    order_id=str(f["oid"]), coin=self._public_coin(f["coin"]),
+                    is_buy=f["side"] == "B",
+                    size=Decimal(str(f["sz"])), px=px, fee=fee, ts_ns=stamp, realized=realized,
                     liquidation=bool(f.get("liquidation")),
+                    market="spot" if self._public_coin(f["coin"]) in
+                    getattr(self, "spot_pairs", ()) else "perp",
+                    inventory_size=size,
                 ))
             except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):
                 continue
@@ -806,7 +997,7 @@ class HyperliquidExchange:
         width_ms = _interval_ns(interval) // NS_PER_MS
         end_ms = time.time_ns() // NS_PER_MS
         start_ms = end_ms - end_ms % width_ms - (n - 1) * width_ms
-        raw = self._info.candles_snapshot(coin, interval, start_ms, end_ms)
+        raw = self._info.candles_snapshot(self._wire_coin(coin), interval, start_ms, end_ms)
         return [
             {
                 "ts_ns": int(c["t"]) * NS_PER_MS,
@@ -822,7 +1013,7 @@ class HyperliquidExchange:
     def order_book(self, coin: str, depth: int) -> dict:
         """Return at most depth levels per side, bids descending and asks ascending."""
         _check_count(depth, 20)
-        raw = self._info.l2_snapshot(coin)
+        raw = self._info.l2_snapshot(self._wire_coin(coin))
         sides = [
             sorted(
                 [
@@ -865,7 +1056,7 @@ class HyperliquidExchange:
         return [
             {
                 "order_id": str(o["oid"]),
-                "coin": o["coin"],
+                "coin": self._public_coin(o["coin"]),
                 "side": "buy" if o["side"] == "B" else "sell",
                 "size": Decimal(str(o["sz"])),
                 "price": Decimal(str(o["limitPx"])),
@@ -933,7 +1124,14 @@ class HyperliquidExchange:
         if self._exchange is None:
             return OrderResult(None, "rejected", Decimal(0), None, "no signing key")
         client_id = order.client_id or str(uuid4())
-        if order.reduce_only and order.kind is OrderKind.MARKET:
+        if order.market == "spot":
+            if order.coin not in getattr(self, "spot_pairs", ()):
+                return OrderResult(None, "rejected", Decimal(0), None, "unknown spot pair")
+            if order.reduce_only and order.is_buy:
+                return OrderResult(None, "rejected", Decimal(0), None, "spot buy cannot reduce")
+        elif order.coin in getattr(self, "spot_pairs", ()):
+            return OrderResult(None, "rejected", Decimal(0), None, "pair requires market spot")
+        if order.market == "perp" and order.reduce_only and order.kind is OrderKind.MARKET:
             try:
                 pos = next((p for p in self.account().positions if p.coin == order.coin), None)
             except Exception:
@@ -948,10 +1146,11 @@ class HyperliquidExchange:
         sz = float(rounded)  # SDK wire format only; accounting remains exact Decimal.
         if order.kind is OrderKind.MARKET:
             return self._submit(client_id, lambda: self._exchange.market_open(
-                order.coin, order.is_buy, sz, cloid=cloid))
+                self._wire_coin(order.coin), order.is_buy, sz, cloid=cloid))
         return self._submit(client_id, lambda: self._exchange.order(
-            order.coin, order.is_buy, sz, float(order.limit_px), {"limit": {"tif": "Gtc"}},
-            reduce_only=order.reduce_only, cloid=cloid))
+            self._wire_coin(order.coin), order.is_buy, sz, float(order.limit_px),
+            {"limit": {"tif": "Gtc"}},
+            reduce_only=order.reduce_only and order.market == "perp", cloid=cloid))
 
     def cancel(self, order_id: str, *, coin: str | None = None,
                client_id: str | None = None) -> dict:
@@ -970,7 +1169,7 @@ class HyperliquidExchange:
             results[client_id] = {"status": "uncertain", "order_id": order_id}
             for name in (coin,) if coin is not None else self.coins:
                 try:
-                    response = self._exchange.cancel(name, int(order_id))
+                    response = self._exchange.cancel(self._wire_coin(name), int(order_id))
                     if response.get("status") == "err":
                         results[client_id] = {"status": "rejected", "error": "venue rejection"}
                         return dict(results[client_id])
@@ -994,10 +1193,22 @@ class HyperliquidExchange:
         return dict(results[client_id])
 
     def close(self, coin: str, size: Decimal | None = None, *,
-              client_id: str | None = None) -> OrderResult:
+              client_id: str | None = None, market: str = "perp") -> OrderResult:
         """A reduce-only close is submitted once with its originating decision's cloid."""
         if self._exchange is None:
             return OrderResult(None, "rejected", Decimal(0), None, "no signing key")
+        if client_id is not None and client_id in getattr(self, "_client_results", {}):
+            result = self._client_results[client_id]
+            return self.lookup(client_id) if result.status == "uncertain" else result
+        if market == "spot":
+            if coin not in getattr(self, "spot_pairs", ()):
+                return OrderResult(None, "rejected", Decimal(0), None, "unknown spot pair")
+            balance = next((b.available for b in self.account().spot_balances
+                            if b.coin == self._spot_tokens[coin]), Decimal(0))
+            amount = balance if size is None else min(size, balance)
+            if amount <= 0:
+                return OrderResult(None, "rejected", Decimal(0), None, "no spot balance")
+            return self.place(Order(coin, False, amount, client_id=client_id, market="spot"))
         rounded = None if size is None else self._round_size(coin, size)
         if rounded is not None and (not rounded.is_finite() or rounded <= 0):
             return OrderResult(None, "rejected", Decimal(0), None, "size below venue precision")
@@ -1005,8 +1216,10 @@ class HyperliquidExchange:
         return self._submit(client_id, lambda: self._exchange.market_close(
             coin, sz=None if rounded is None else float(rounded), cloid=self.client_id(client_id)))
 
-    def set_leverage(self, coin: str, leverage: int) -> dict:
+    def set_leverage(self, coin: str, leverage: int, *, market: str = "perp") -> dict:
         """Return venue acknowledgement or a rejected result without propagating failures."""
+        if market == "spot" or coin in getattr(self, "spot_pairs", ()):
+            return {"status": "rejected", "error": "spot does not support leverage"}
         if self._exchange is None:
             return {"status": "rejected", "error": "no signing key"}
         if type(leverage) is not int or leverage < 1:
@@ -1065,6 +1278,18 @@ class HyperliquidExchange:
         ):
             return OrderResult(None, "uncertain", Decimal(0), None, "unparseable acknowledgement")
         return OrderResult(None, "uncertain", Decimal(0), None, "unknown response shape")
+
+
+def live_exchange(spec: Any, venue_class: Any = None) -> HyperliquidExchange:
+    """The single place a manifest becomes a live venue, so no caller reads a partial world.
+
+    The runtime and the wake both construct through here; a field added to
+    ``ExchangeSpec`` reaches every call site at once. ``venue_class`` lets a
+    caller bind the class from its own module namespace.
+    """
+    return (venue_class or HyperliquidExchange)(
+        mainnet=spec.mainnet, coins=spec.coins, spot_pairs=spec.spot_pairs,
+    )
 
 
 def stream_market(exchange: Exchange, clock: Iterator[WorldEvent]) -> Iterator[WorldEvent]:

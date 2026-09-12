@@ -54,6 +54,23 @@ class VenueMixin:
     def _settle_exchange_effects(self, evs: list[WorldEvent]) -> None:
         settlements = []
         for we in evs:
+            if we.kind is WorldEventKind.FILL and we.payload.get("market") == "spot":
+                coin = we.payload["coin"]
+                quantity = Decimal(str(we.payload.get("inventory_size", we.payload["size"])))
+                px = Decimal(str(we.payload["px"]))
+                held, entry = self.spot_inventory.get(coin, (Decimal(0), Decimal(0)))
+                buy = we.payload["is_buy"]
+                if not buy and quantity > held:
+                    raise ValueError("spot fill exceeds accounted inventory")
+                realized = Decimal(0) if buy else (px - entry) * quantity
+                remaining = held + (quantity if buy else -quantity)
+                cost = (held * entry + quantity * px) / remaining if buy else entry
+                self.ledger.append({"kind": "spot.inventory", "coin": coin,
+                                    "size": str(remaining), "entry_px": str(cost),
+                                    "order_id": we.payload["order_id"]})
+                self.spot_inventory[coin] = (remaining, cost)
+                we.payload["realized_usd"] = str(realized)
+        for we in evs:
             if we.kind is WorldEventKind.FILL:
                 delta = _usd_to_micro(we.payload["realized_usd"]) - _usd_to_micro(
                     we.payload["fee_usd"]
@@ -103,13 +120,15 @@ class VenueMixin:
                 str(out.get("side", "buy")).lower() == "buy",
                 Decimal(str(out["size"])),
                 client_id=ret.handle,
+                market=out.get("market", "perp"),
             )
         except (KeyError, ValueError, ArithmeticError):
             return
         reason = self._order_exclusion(ret.handle, order.coin, order.size, order.is_buy)
         result = ({"status": "rejected", "error": reason} if reason else self._venue_write(
             ret.handle, "venue.place_market", {"coin": order.coin,
-                "side": "buy" if order.is_buy else "sell", "size": str(order.size)}, slot="output"
+                "side": "buy" if order.is_buy else "sell", "size": str(order.size),
+                "market": order.market}, slot="output"
         ))
         self.stats.orders_placed += 1
         if result["status"] == "rejected":
@@ -119,6 +138,11 @@ class VenueMixin:
 
     def _venue_write(self, handle: str, operation: str, args: dict, *, slot: str) -> dict:
         """Every venue write has a durable intent and a stable identity before submission."""
+        pending = getattr(self.treasury, "state", None)
+        if (pending and pending["status"] == "submitted"
+                and pending["direction"] in ("spot_to_perps", "perps_to_spot")
+                and operation != "venue.cancel"):
+            return {"status": "rejected", "error": "class transfer awaiting receipt"}
         client_id = handle if slot == "output" else f"{handle}:{slot}"
         previous = self.order_intents.get(client_id)
         if previous is not None:
@@ -145,7 +169,9 @@ class VenueMixin:
                                               client_id=client_id)
             elif operation == "venue.close":
                 size = None if args.get("size") is None else Decimal(str(args["size"]))
-                result = self.exchange.close(args["coin"], size, client_id=client_id)
+                result = self.exchange.close(args["coin"], size, client_id=client_id,
+                                             **({"market": "spot"} if args.get("market") == "spot"
+                                                else {}))
             else:
                 limit = operation == "venue.place_limit"
                 result = self.exchange.place(Order(
@@ -153,6 +179,7 @@ class VenueMixin:
                     OrderKind.LIMIT if limit else OrderKind.MARKET,
                     Decimal(str(args["price"])) if limit else None, client_id,
                     reduce_only=args.get("reduce_only", False),
+                    market=args.get("market", "perp"),
                 ))
             result = _to_plain(vars(result)) if isinstance(result, OrderResult) else result
         except Exception:
@@ -217,6 +244,8 @@ class VenueMixin:
         Existing margin and resting orders count before new exposure. Reductions
         remain available to unwind risk; world-priced losses still settle in full.
         """
+        if "/" in coin and not is_buy:
+            return None
         if reduce_only or not self.reserve.remaining():
             return None
         try:
@@ -244,6 +273,8 @@ class VenueMixin:
 
     def _order_leverage(self, coin: str) -> Decimal:
         """Use acknowledged leverage; unknown live leverage receives no collateral discount."""
+        if "/" in coin:
+            return Decimal(1)
         if self.venue_tools is not None:
             for tool, args, ok in reversed(self.venue_tools.log):
                 if tool == "venue.set_leverage" and ok and args["coin"] == coin:

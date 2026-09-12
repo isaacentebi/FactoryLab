@@ -113,3 +113,20 @@ def test_a6_draft_toml_round_trips_typed_null_scope():
     raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
     raw.update(tomllib.loads(draft.render_toml([(card(), None)], seed_charter().norms)))
     assert manifest_from_dict(raw).charter.cards == (card(),)
+
+
+def test_a6_cost_card_window_is_the_rolling_last_100_returns_not_the_reserve_window():
+    """class3-codex finding 6: 100 zero-cost returns, then one 1,000-micro return in the next
+    window. The declared window is the last 100 returns, so the observation is 10, not 1,000."""
+    cost_card = next(c for c in seed_charter().cards if c.observation == "cost_per_return")
+    assert cost_card.window == MetricWindow("returns", 100, "role")
+    samples = CardSamples()
+    for i in range(100):
+        samples.returned(handle=f"a{i}", assembly="p1", role="producer", window=1,
+                         ret=Return(f"a{i}", {}, 0, "ok"))
+    measure_cards((cost_card,), samples, MeasureWindow(1, 100, invocations=100, ok=100))
+    assert samples.scopes[cost_card.id] == {"producer": 0}
+    samples.returned(handle="b", assembly="p1", role="producer", window=2,
+                     ret=Return("b", {}, 1000, "ok"))
+    measure_cards((cost_card,), samples, MeasureWindow(2, 100, invocations=1, ok=1))
+    assert samples.scopes[cost_card.id] == {"producer": 10}
