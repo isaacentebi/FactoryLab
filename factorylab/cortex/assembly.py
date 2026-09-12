@@ -15,11 +15,12 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 
 from factorylab.cortex.request import ChildRequest, Request, Return
+from factorylab.kernel.ledger import utf8_text
 from factorylab.world.metering import BillingUncertain, Infeasible, MeteredModel
 from factorylab.world.models import ModelRequest
 
@@ -105,10 +106,15 @@ class Assembly:
         if (not isinstance(resp.text, str) or not isinstance(resp.model_id, str)
                 or not isinstance(resp.stop_reason, str) or type(resp.refused) is not bool):
             return Return(req.handle, {"reason": "invalid response metadata"}, cost, "malformed")
+        provider = _provider_report(resp, mreq.max_tokens)
         if resp.refused:
             return Return(
-                req.handle, {"reason": "refused"}, cost, "refused", served_by=resp.model_id
+                req.handle, {"reason": "refused"}, cost, "refused", served_by=resp.model_id,
+                provider=provider,
             )
+        # Reply bytes outside UTF-8 (an emoji cut by max_tokens) are seen exactly as the
+        # journal can store them, so a live call and its replay parse the same text.
+        resp = replace(resp, text=utf8_text(resp.text))
         parsed = _parse_json_object(resp.text)
         if parsed is not None:
             try:
@@ -125,6 +131,7 @@ class Assembly:
                 "malformed",
                 served_by=resp.model_id,
                 stop_reason=resp.stop_reason,
+                provider=provider,
             )
         if self.spec.memory_policy == "handle-scoped":
             scope = req.parent_handle or req.handle
@@ -153,6 +160,7 @@ class Assembly:
             served_by=resp.model_id,
             stop_reason=resp.stop_reason,
             tool_calls=tool_calls,
+            provider=provider,
         )
 
     def _children(self, req: Request, parsed: dict[str, Any]) -> tuple[ChildRequest | Request, ...]:
@@ -163,6 +171,19 @@ class Assembly:
             return tuple(self.child_factory(req, item, i) for i, item in enumerate(raw))
         return tuple(ChildRequest(item["target"], item["description"], item["inputs"],
                                   item["outcome_schema"]) for item in raw)
+
+
+def _provider_report(resp: Any, max_tokens: int) -> dict[str, Any]:
+    """Return the provider's own account of the completion; unreported fields are None."""
+    raw = resp.raw if isinstance(raw := getattr(resp, "raw", None), dict) else {}
+    reasoning = raw.get("reasoning_tokens")
+    return {
+        "finish_reason": resp.stop_reason,
+        "input_tokens": resp.input_tokens if type(resp.input_tokens) is int else None,
+        "output_tokens": resp.output_tokens if type(resp.output_tokens) is int else None,
+        "reasoning_tokens": reasoning if type(reasoning) is int else None,
+        "max_tokens": max_tokens,
+    }
 
 
 def _parse_json_object(text: str) -> dict[str, Any] | None:
@@ -180,10 +201,24 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
         if isinstance(obj, dict):
             try:
                 _finite_json(obj)
+                _utf8_json(obj)
             except (ValueError, RecursionError):
                 return None
             return obj
     return None
+
+
+def _utf8_json(value: Any) -> None:
+    """Reject strings the JSON escape syntax admits but UTF-8 cannot carry (lone surrogates)."""
+    if isinstance(value, str):
+        value.encode("utf-8")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _utf8_json(key)
+            _utf8_json(item)
+    elif isinstance(value, list):
+        for item in value:
+            _utf8_json(item)
 
 
 def _finite_json(value: Any) -> None:

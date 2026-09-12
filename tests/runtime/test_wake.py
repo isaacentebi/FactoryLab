@@ -244,6 +244,10 @@ def test_supervisor_first_launch_and_restart_agree_on_exit_code(tmp_path, exists
     cli.write_text('#!/bin/bash\nprintf "%s\\n" "$1" >> "$CALLS"\n'
                    'if [[ $1 == run ]]; then touch "$LEDGER"; exit 0; fi\nexit 3\n')
     cli.chmod(0o700)
+    # start.sh proves the jail before the first run; here the probe is a stand-in.
+    python = root / "repo/.venv/bin/python"
+    python.write_text('#!/bin/bash\nprintf "%s\n" "jail-check $*" >> "$CALLS"\nexit 0\n')
+    python.chmod(0o700)
     ledger = root / "runs/funded.jsonl"
     if exists:
         ledger.touch()
@@ -253,7 +257,9 @@ def test_supervisor_first_launch_and_restart_agree_on_exit_code(tmp_path, exists
     proc = subprocess.run(["bash", "-c", script], env={**os.environ, "CALLS": str(calls),
                                                       "LEDGER": str(ledger)}, capture_output=True)
     assert proc.returncode == TERMINATED_EXIT
-    assert calls.read_text().splitlines() == (["resume"] if exists else ["run", "resume"])
+    assert calls.read_text().splitlines() == (
+        ["resume"] if exists else ["jail-check -m factorylab.cortex.sandbox", "run", "resume"]
+    )
     assert (runtime / "mode").read_text().strip() == "resume"
 
 

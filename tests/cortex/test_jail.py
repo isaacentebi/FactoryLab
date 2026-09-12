@@ -11,6 +11,15 @@ from factorylab.cortex.registration import Rejected, parse_proposals
 from factorylab.cortex.tools import PopulationTool, ToolRunner
 
 
+def require_jail():
+    """Skip only where no jail is installed; a jail that is installed and cannot start fails."""
+    if not sandbox.jail_installed():
+        pytest.skip("no jail executable on this host; refusal is tested separately")
+    reason = sandbox.jail_probe()
+    if reason is not None:
+        pytest.fail(f"this host claims a jail that cannot start: {reason}")
+
+
 def proposal():
     return {"kind": "tool", "id": "test-tool", "description": "Synthetic probe",
             "args_schema": {"type": "object", "properties": {}}, "code": 'print("{}")',
@@ -25,7 +34,7 @@ def parse(item):
 @pytest.mark.parametrize("failure", ["missing", "unusable"])
 def test_no_jail_refuses_registration_and_execution(monkeypatch, failure):
     if failure == "missing":
-        monkeypatch.setattr(shutil, "which", lambda _: None)
+        monkeypatch.setattr(shutil, "which", lambda *args, **kwargs: None)
     else:
         def fail(*args, **kwargs):
             raise OSError("jail unavailable")
@@ -39,7 +48,7 @@ def test_no_jail_refuses_registration_and_execution(monkeypatch, failure):
 def test_no_jail_is_visible_in_the_world_block(monkeypatch):
     from tests.runtime.test_fa_defects import make_runtime
 
-    monkeypatch.setattr(shutil, "which", lambda _: None)
+    monkeypatch.setattr(shutil, "which", lambda *args, **kwargs: None)
     rt = make_runtime()
     assert rt._world_block()["population_tools"] == {
         "available": False, "reason": "no jail on this host",
@@ -48,13 +57,14 @@ def test_no_jail_is_visible_in_the_world_block(monkeypatch):
 
 @pytest.mark.parametrize("attack", ["file", "socket", "process"])
 def test_tool_cannot_read_host_file_open_socket_or_spawn_process(tmp_path, attack):
-    if not sandbox.jail_available():
-        pytest.skip("host cannot launch an OS jail; refusal is tested separately")
+    require_jail()
     outside = tmp_path / "outside-synthetic.txt"
     outside.write_text("synthetic fixture")
     code = {
         "file": f"open({str(outside)!r}).read()",
-        "socket": "__import__('so'+'cket').socket()",
+        # Linux seccomp refuses socket(); macOS seatbelt refuses connect(). Either is
+        # confinement; both raise PermissionError before any byte leaves the jail.
+        "socket": "__import__('so'+'cket').create_connection(('127.0.0.1', 9), timeout=1)",
         "process": "__import__('sub'+'process').run(['/usr/bin/true'], check=True)",
     }[attack]
     # A healthy computation proves that failure is caused by confinement.
@@ -65,8 +75,7 @@ def test_tool_cannot_read_host_file_open_socket_or_spawn_process(tmp_path, attac
 
 
 def test_tool_resource_limits_are_hard_and_finite():
-    if not sandbox.jail_available():
-        pytest.skip("host cannot launch an OS jail; refusal is tested separately")
+    require_jail()
     result = sandbox.run_python(
         "import json, resource; "
         "print(json.dumps({name: resource.getrlimit(getattr(resource, name)) "
@@ -75,6 +84,9 @@ def test_tool_resource_limits_are_hard_and_finite():
     )
     assert result.returncode == 0
     limits = json.loads(result.stdout)
+    if sys.platform == "darwin":
+        # Darwin refuses every RLIMIT_AS value; the development jail documents that.
+        assert limits.pop("RLIMIT_AS") == [2**63 - 1] * 2
     assert all(0 <= soft == hard < 2**40 for soft, hard in limits.values())
     assert limits["RLIMIT_NPROC"] == [0, 0]
 

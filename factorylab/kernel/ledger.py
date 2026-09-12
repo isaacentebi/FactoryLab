@@ -62,13 +62,28 @@ class LedgerLock:
         self.close()
 
 
+def utf8_text(text: str) -> str:
+    """Return ``text`` unchanged when it is UTF-8 encodable; otherwise the same text with
+    each lone UTF-16 surrogate replaced by U+FFFD, so the result always encodes.
+
+    Idempotent, so an item written through it compares equal to itself on replay.
+    """
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+    return text
+
+
 def _plain(value):
+    if isinstance(value, str):
+        return utf8_text(value)
     if is_dataclass(value) and not isinstance(value, type):
         return {field.name: _plain(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, Mapping):
         if any(not isinstance(key, str) for key in value):
             raise TypeError("JSON object keys must be strings")
-        return {key: _plain(item) for key, item in value.items()}
+        return {utf8_text(key): _plain(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
         return [_plain(item) for item in value]
     if isinstance(value, (frozenset, set)):

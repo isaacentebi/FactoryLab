@@ -35,6 +35,9 @@ write_files:
       uv run --no-sync ruff check .
       uv run --no-sync pytest
       chmod -R a+rX /opt/factorylab-python
+      # The gate above ran as root; the world runs as factory under the unit's
+      # restrictions. Population tools exist only if the jail starts there.
+      bash deploy/jail-check.sh
       install -m 0644 deploy/*.service deploy/*.timer /etc/systemd/system/
       systemctl daemon-reload
       # No enable/start: launch requires keys, paid hosting and the approved funded manifest.

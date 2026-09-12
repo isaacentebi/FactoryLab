@@ -3,8 +3,10 @@
 Linux uses bubblewrap namespaces and seccomp: no host tree outside the Python
 runtime/system libraries and the tool directory, no sockets or child processes.
 macOS sandbox-exec is development-only: a deny-default profile grants access
-only to the Python prefix and the tool directory. Hosts unable to launch the
-jail cannot execute population code. No source-text filtering is a boundary.
+only to the Python prefix and the tool directory, and the kernel refuses every
+RLIMIT_AS/RLIMIT_DATA value (EINVAL, confined or not), so on macOS the memory
+bound is only the wall and CPU timeouts. Hosts unable to launch the jail cannot
+execute population code. No source-text filtering is a boundary.
 """
 
 from __future__ import annotations
@@ -36,9 +38,14 @@ class SandboxResult:
     cpu_limited: bool
 
 
+# The jail binary is resolved on the system path only: the caller's PATH can
+# neither hide it nor substitute an impostor from a user-writable directory.
+_SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+
+
 def _jail_executable() -> str:
     name = {"linux": "bwrap", "darwin": "sandbox-exec"}.get(sys.platform)
-    executable = shutil.which(name) if name else None
+    executable = shutil.which(name, path=_SYSTEM_PATH) if name else None
     if executable is None:
         raise NoJail("no jail on this host")
     return executable
@@ -90,9 +97,15 @@ def _command(jail: str, work: Path, prefix: Path, python: Path, seccomp_fd: int)
     # grant is limited to this interpreter; dylibs must come from its prefix
     # or the OS shared cache. If the installed runtime needs more, the probe
     # fails closed instead of broadening the filesystem grant.
+    #
+    # dyld's shared-cache lookup (dyld4::CacheFinder) opens the root directory
+    # itself before any image loads; without that one read the interpreter is
+    # aborted (SIGABRT from ignition_halt) before its first instruction. The
+    # grant is the literal "/" only: no subpath, so no file under it opens.
     profile = (
         '(version 1)(deny default)'
         f'(allow process-exec (literal {json.dumps(str(python))}))'
+        '(allow file-read-data (literal "/"))'
         f'(allow file-read* (subpath {json.dumps(str(prefix))})'
         f' (subpath {json.dumps(str(work))}))'
         f'(allow file-write* (subpath {json.dumps(str(work))}))'
@@ -101,13 +114,41 @@ def _command(jail: str, work: Path, prefix: Path, python: Path, seccomp_fd: int)
     return [jail, "-p", profile, str(python), "-I", "-S", "-B", str(work / "runner.py")]
 
 
-def jail_available() -> bool:
-    """Report usable isolation, including hosts where an installed jail cannot start."""
+def jail_installed() -> bool:
+    """Report whether this host claims a jail: the platform's jail executable exists."""
+    try:
+        _jail_executable()
+    except NoJail:
+        return False
+    return True
+
+
+def jail_probe() -> str | None:
+    """Return None when population code can run confined here, else why it cannot.
+
+    The reason names the failing stage (no executable, an interpreter outside its
+    prefix, a launch error, or the confined interpreter's exit status and streams)
+    so an operator can act on it; it never contains population code.
+    """
     try:
         result = run_python('print("factorylab-jail-ready")', timeout_s=2)
-    except (NoJail, OSError, subprocess.SubprocessError):
-        return False
-    return result.returncode == 0 and result.stdout.strip() == "factorylab-jail-ready"
+    except NoJail as exc:
+        return str(exc)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"jail launch failed: {type(exc).__name__}: {exc}"
+    if result.returncode == 0 and result.stdout.strip() == "factorylab-jail-ready":
+        return None
+    if result.timed_out:
+        return "jailed interpreter did not answer within 2 s"
+    return (
+        f"jailed interpreter exited {result.returncode}"
+        f" (stdout {result.stdout.strip()[:200]!r}, stderr {result.stderr.strip()[:500]!r})"
+    )
+
+
+def jail_available() -> bool:
+    """Report usable isolation, including hosts where an installed jail cannot start."""
+    return jail_probe() is None
 
 
 def run_python(
@@ -142,10 +183,17 @@ def run_python(
         # Set NPROC after the jail has created its init/interpreter processes.
         # These hard limits cannot be raised by population code. Linux seccomp
         # enforces the process ban even where RLIMIT_NPROC exempts uid 0.
+        # Darwin returns EINVAL for any RLIMIT_AS value (the shared cache alone
+        # exceeds what a tool may map), so the development jail sets no memory
+        # rlimit; Linux, the deployed jail, bounds the address space.
+        address_space = (
+            "" if sys.platform == "darwin"
+            else "resource.setrlimit(resource.RLIMIT_AS, (536870912, 536870912))\n"
+        )
         (work / "runner.py").write_text(
             "import resource, runpy\n"
             f"resource.setrlimit(resource.RLIMIT_CPU, ({cpu_s}, {cpu_s}))\n"
-            "resource.setrlimit(resource.RLIMIT_AS, (536870912, 536870912))\n"
+            f"{address_space}"
             "resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))\n"
             "resource.setrlimit(resource.RLIMIT_FSIZE, (1048576, 1048576))\n"
             "resource.setrlimit(resource.RLIMIT_NOFILE, (32, 32))\n"
@@ -182,3 +230,22 @@ def run_python(
             timed_out,
             not timed_out and proc.returncode in (-9, -24, 137, 152),
         )
+
+
+def main() -> int:
+    """Exit 0 only when a confined interpreter runs here; print the reason otherwise.
+
+    ``python -m factorylab.cortex.sandbox`` is the provisioning probe: run it as
+    the service user under the unit's own restrictions, and fail provisioning
+    on a non-zero exit instead of launching a world whose tools cannot exist.
+    """
+    reason = jail_probe()
+    if reason is None:
+        print(f"factorylab jail-check: ok ({_jail_executable()} confines {sys._base_executable})")
+        return 0
+    print(f"factorylab jail-check: FAILED: {reason}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

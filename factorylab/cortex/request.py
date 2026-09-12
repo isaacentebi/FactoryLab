@@ -82,3 +82,6 @@ class Return:
     served_by: str | None = None
     stop_reason: str | None = None
     tool_calls: tuple[dict[str, Any], ...] = ()
+    # What the provider reported about the completion: finish_reason, input_tokens,
+    # output_tokens, reasoning_tokens (None when unreported) and the max_tokens sent.
+    provider: dict[str, Any] = field(default_factory=dict)

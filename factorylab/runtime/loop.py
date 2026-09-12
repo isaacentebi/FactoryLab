@@ -50,6 +50,7 @@ from factorylab.cortex.registration import (
     parse_proposals,
 )
 from factorylab.cortex.request import ChildRequest, Request, Return
+from factorylab.cortex.sandbox import NoJail, jail_probe
 from factorylab.kernel.events import Bus, Event, EventKind
 from factorylab.kernel.ledger import Ledger, LedgerLock
 from factorylab.kernel.money import money_to_usd, usd_to_money
@@ -2463,6 +2464,7 @@ class Runtime:
                 second.status,
                 served_by=second.served_by,
                 stop_reason=second.stop_reason,
+                provider=second.provider,
             )
         self.stats.invocations += 1
         self.stats.invocation_status[ret.status] = (
@@ -2481,10 +2483,26 @@ class Runtime:
                 "status": ret.status,
                 "stop_reason": sr,
                 "served_by": ret.served_by,
+                "finish_reason": ret.provider.get("finish_reason"),
+                "usage": {
+                    key: ret.provider.get(key)
+                    for key in ("input_tokens", "output_tokens", "reasoning_tokens", "max_tokens")
+                },
                 "outputs": json.dumps(ret.outputs, default=str)[:4000],
                 "ts": self.clock.now_ns,
             }
         )
+        fault = _provider_fault(ret)
+        if fault is not None:
+            # The vendor charged for tokens nobody can read. The bill stands (the
+            # wallet mirrors what the provider took) and the diary names the fault
+            # so a reader sees weather, not a mute assembly.
+            self.ledger.append({
+                "kind": "provider.fault", "assembly_id": action_id, "handle": req.handle,
+                "served_by": ret.served_by, "reason": fault, "cost": ret.cost,
+                "reasoning_tokens": ret.provider.get("reasoning_tokens"),
+                "max_tokens": ret.provider.get("max_tokens"), "ts": self.clock.now_ns,
+            })
         self.window.invocations += 1
         if ret.status == "ok":
             self.window.ok += 1
@@ -3854,6 +3872,20 @@ def _assembly_contract(aid: str, role: str, accepts: tuple[str, ...], max_tokens
     )
 
 
+def _provider_fault(ret: Return) -> str | None:
+    """Name a completion the provider billed but could not deliver: hidden reasoning
+    consumed the whole budget and the visible reply is empty."""
+    reasoning, budget = ret.provider.get("reasoning_tokens"), ret.provider.get("max_tokens")
+    if (
+        ret.status == "malformed"
+        and ret.outputs.get("raw") == ""
+        and type(reasoning) is int and type(budget) is int
+        and budget > 0 and reasoning >= budget
+    ):
+        return "hidden reasoning consumed the whole completion budget; no visible reply"
+    return None
+
+
 def run_world(
     manifest: WorldManifest,
     *,
@@ -3877,7 +3909,15 @@ def run_world(
     producer decision is judged or censored; forecasts are sealed before any
     outcome is known and settle to their own handle; the world terminates by
     death if the wallet reaches zero and the summary reports the seal state.
+
+    A world whose manifest prices population tools does not launch on a host
+    where the jail cannot start: the world block would promise tools that no
+    proposal could ever obtain. Nothing is written before the refusal.
     """
+    if manifest.tools.population_tool_micro_per_call > 0:
+        reason = jail_probe()
+        if reason is not None:
+            raise NoJail(f"this world offers population tools and the host has no jail: {reason}")
     return Runtime(
         manifest,
         events=events,

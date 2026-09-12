@@ -169,8 +169,8 @@ def test_invalid_reported_cost_fails_without_catalogue_fallback(completion, req,
     "config,expected",
     [
         ({"effort": "high"}, {"reasoning_effort": "high", "disable_thinking": False}),
-        ({"effort": "none"}, {"reasoning_effort": "none", "disable_thinking": True}),
-        ({"enabled": False}, {"reasoning_effort": "none", "disable_thinking": True}),
+        ({"effort": "none"}, {"reasoning": {"enabled": False}, "disable_thinking": True}),
+        ({"enabled": False}, {"reasoning": {"enabled": False}, "disable_thinking": True}),
         ({"enabled": True}, {"disable_thinking": False}),
         ({"max_tokens": 200}, {"reasoning_effort": "low", "disable_thinking": False}),
     ],
@@ -184,7 +184,7 @@ def test_reasoning_tier_mapping_and_budget_substitution(completion, req, config,
     payload = fake.calls[0][2]
     assert payload.get("reasoning_effort") == expected.get("reasoning_effort")
     assert payload["venice_parameters"]["disable_thinking"] == expected["disable_thinking"]
-    assert "reasoning" not in payload
+    assert payload.get("reasoning") == expected.get("reasoning")
     if "max_tokens" in saved:
         assert response.raw["reasoning_substitution"] == {
             "requested_max_tokens": 200,
