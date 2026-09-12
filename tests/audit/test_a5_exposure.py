@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from factorylab.charter.charter import Charter, MetricCard
+from factorylab.charter.windows import MetricWindow
 from factorylab.kernel.events import Event, EventKind
 from factorylab.learners.base import BanditFeedback
 from factorylab.runtime.loop import run_world
@@ -110,12 +111,13 @@ def test_exposure_settles_through_the_antagonist_cards():
         provider=Provider(self_payoff=0.0, judge_payoff=1.0, optional=False)
     )
     charter = runtime.charter
-    card = MetricCard("quiet", charter.norms[0], "noop share", "fraction", "window",
+    card = MetricCard("quiet", charter.norms[0], "noop share", "fraction",
+                      MetricWindow("returns", 1, "role"),
                       "below 0.1", "noop_share", "antagonist")
     runtime.charter = Charter(charter.edition, charter.norms, (*charter.cards, card))
     runtime._derive_regions()
     runtime.controller.set_price("quiet", 0.5, amendment_id="test")
-    runtime.stats.last_window_values = {"noop_share": 1.0}
+    runtime.card_samples.values["quiet"] = 1.0  # A6: the card's own typed-window measurement
     about, event = _consequence_produce(runtime, "antagonist-a", "exposure")
     _consequence_judge(runtime, event, "eval-a")
     penalty = next(i for i in runtime.ledger._recovery_items()

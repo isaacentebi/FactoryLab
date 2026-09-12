@@ -423,7 +423,7 @@ _COMPONENT_FIELDS = (
     ("baseline", "_PrevalenceBaseline__", ("counts",)),
     ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
-    ("settler", "_Settler__", ("snapshots",)),
+    ("settler", "_Settler__", ("snapshots", "recorded")),
     ("charter_book", "_CharterBook__", (
         "editions", "proposals", "committees", "ballots", "activated", "activations",
     )),

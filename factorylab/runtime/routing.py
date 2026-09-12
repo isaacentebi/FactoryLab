@@ -124,6 +124,21 @@ class RoutingMixin:
             authors.add(self.handle_to_assembly.get(parent))
         return {a for a in authors if a is not None}
 
+    def _higher_tier_universe(self, chosen: str) -> list[str]:
+        """The assemblies that could judge the meta verdict ``chosen`` is about to emit.
+
+        Nothing judges its own output (A9), so the tier above this decision always
+        excludes the meta making it: a recursive meta that is the only assembly
+        accepting ``MetaVerdict`` is terminal on the tier it judges, and its
+        conformity is graded against the consequence (A14) rather than waiting for
+        a verdict that no one can give.
+        """
+        return sorted(
+            a.spec.id
+            for a in self.assemblies.values()
+            if "MetaVerdict" in a.spec.accepts and a.spec.id != chosen
+        )
+
     def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
         excluded = self._subject_authors(kind, ev)
         ids = sorted(
@@ -201,17 +216,26 @@ class RoutingMixin:
         A population assembly's trial ends when ``novelty.trials`` settled
         consequences have been delivered to it (continuations and children do not
         count) or ``novelty.max_lifetime_windows`` have passed since its
-        registration; the window after a learning-death flag grants one more trial
+        registration, whichever comes first: the lifetime ends the trial even when
+        no consequence ever arrived, so silence is not an unbounded entitlement
         (essay II.IV.b: the compensation period must be shorter than the lifetime).
+        The window after a learning-death flag grants one more trial. A seed
+        assembly has no registration window; it is protected until its first
+        settled record.
         """
+        try:
+            population = self.registry.get(action_id).provenance != "seed"
+        except KeyError:  # no contract: nothing the population registered, so no lifetime
+            population = False
+        if not population:
+            return not self.queue.has_history(action_id)
+        born = self.stats.registered_window.get(action_id, self.stats.reserve_windows)
+        if self.stats.reserve_windows - born >= self.m.novelty.max_lifetime_windows:
+            return False
         if not self.queue.has_history(action_id):
             return True
-        if self.registry.get(action_id).provenance == "seed":
-            return False
         delivered = self.stats.consequences_by_assembly.get(action_id, 0)
-        born = self.stats.registered_window.get(action_id, self.stats.reserve_windows)
-        return ((delivered < self.m.novelty.trials or self._novelty_grant_open(action_id))
-                and self.stats.reserve_windows - born < self.m.novelty.max_lifetime_windows)
+        return delivered < self.m.novelty.trials or self._novelty_grant_open(action_id)
 
     def _novelty_grant_open(self, assembly_id: str) -> bool:
         """A learning-death grant is one extra trial per assembly, live only in the window
@@ -362,9 +386,7 @@ class RoutingMixin:
                                     "reason": reason, "ts": self.clock.now_ns})
         role = self._role_for_kind(kind)
         channel = {"producer": CH_VERDICT, "evaluator": CH_CONFORMITY, "meta": CH_FAST}[role]
-        if role == "meta" and any(
-            "MetaVerdict" in a.spec.accepts for a in self.assemblies.values()
-        ):
+        if role == "meta" and self._higher_tier_universe(sample.chosen):
             channel = CH_CONFORMITY
         chosen_role = self.assemblies[sample.chosen].spec.role if sample.chosen != NOOP else None
         if chosen_role == "antagonist":

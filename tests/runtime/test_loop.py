@@ -273,7 +273,16 @@ def test_population_registers_recursive_meta_and_settles_higher_tiers():
         if events.get(o["event_id"], {}).get("kind") in ("Verdict", "MetaVerdict")
     ]
     assert any(o["seq"] < registration and o["channel"] == "fast" for o in meta_opens)
-    assert all(o["channel"] == "conformity" for o in meta_opens if o["seq"] > registration)
+    # Once the recursive tier exists, a meta it can judge opens on conformity; the
+    # recursive judge itself is terminal (nothing judges its own output) and opens on
+    # the consequence-graded channel instead of waiting for a verdict no one can give.
+    later = [o for o in meta_opens if o["seq"] > registration]
+    assert later and any(o["propensity"]["chosen"] == "recursive-meta" for o in later)
+    assert all(
+        o["channel"] == ("fast" if o["propensity"]["chosen"] == "recursive-meta"
+                         else "conformity")
+        for o in later
+    )
     judged_metas = []
     for event in meta_events:
         p = event["payload"]
@@ -301,11 +310,15 @@ def test_population_registers_recursive_meta_and_settles_higher_tiers():
         if event["kind"] == "MetaVerdict":
             judged = opens[event["payload"]["by"]]["propensity"]["chosen"]
             assert judged not in opened["propensity"]["action_ids"]
-    assert any(
-        r["status"] == "censored"
-        and r["channel"] == "conformity"
-        and opens[r["handle"]]["propensity"]["chosen"] == "recursive-meta"
-        for r in returns
+    # The sole recursive meta is graded by its conformity Brier against the judged
+    # verdict's consequence (A14): it is never left to time out on a tier above it.
+    graded = [
+        r for r in returns
+        if opens[r["handle"]]["propensity"]["chosen"] == "recursive-meta"
+    ]
+    assert graded and all(
+        r["status"] == "settled" and r["definition_version"] == "meta-consequence-v1"
+        for r in graded
     )
     # The sole recursive judge cannot sample itself when its tier-3 return is delivered.
     self_routes = [

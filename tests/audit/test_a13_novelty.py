@@ -176,7 +176,11 @@ def test_a_refused_duplicate_proposal_returns_its_trial_to_the_window():
                 "role": "producer", "accepts": ["Tick"], "system_prompt": "Observe."}
     rt._apply_registrations("author", Return("author", {"register": [proposal]}, 0, "ok"))
     assert rt.reserve.remaining() == before
-    assert rt.registration_feedback[-1]["handle"] == "author"
+    # A8: the public feedback carries the reason, never the proposing handle.
+    assert "handle" not in rt.registration_feedback[-1]
+    assert rt.registration_feedback[-1]["reason"]
+    rejected = [i for i in rt.ledger._recovery_items() if i["kind"] == "registration.rejected"]
+    assert rejected[-1]["handle"] == "author"
     assert rt.stats.registrations_rejected == 1
     assert rt.wallet.check_conservation()
 
@@ -213,3 +217,24 @@ def test_a_judges_settled_payoff_forecast_counts_as_its_consequence():
     _consequence_judge(rt, event, "new-judge")
     assert rt.queue.get(about).status is SettleStatus.SETTLED
     assert rt.stats.consequences_by_assembly.get("new-judge") == 1
+
+
+def test_an_assembly_that_never_settles_anything_still_ends_at_its_lifetime():
+    """Codex finding: the no-history early return came before the lifetime check, so a
+    registered assembly that never settled anything drew protected compute for ever.
+    Absence of history is the start of a trial, not an exemption from its end."""
+    rt = runtime()
+    rt._manage_reserve_window()
+    rt._register("author", EXPLORER)
+    born = rt.stats.registered_window["new-explorer"]
+    assert not rt.queue.has_history("new-explorer") and rt._unhistoried("new-explorer")
+    rt.stats.reserve_windows = born + rt.m.novelty.max_lifetime_windows + 1
+    assert not rt.queue.has_history("new-explorer")
+    assert not rt._unhistoried("new-explorer")
+    pending = decision(rt, "new-explorer")
+    assert not rt._novelty_compute(pending, "model:fake-haiku")
+    assert rt.wallet.available_for(pending, "model:fake-haiku") == rt.wallet.available
+    # A seed assembly has no registration window: it is protected until its first record.
+    assert rt._unhistoried("seed-decider")
+    decision(rt, "seed-decider", settled=True)
+    assert not rt._unhistoried("seed-decider")

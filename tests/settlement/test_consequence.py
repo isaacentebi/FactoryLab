@@ -299,3 +299,40 @@ def test_fill_cursor_filters_history_keeps_launch_peers_and_failed_poll_boundary
     assert cursor.poll(exchange) == []
     rows.append(fill(11, "late-peer"))
     assert [p["order_id"] for _, p in cursor.poll(exchange)] == ["late-peer"]
+
+
+def test_one_return_is_one_observation_however_many_forecasts_share_it(
+    book,
+    settler,
+    baseline,
+    seal_forecast,
+):
+    """Codex finding: the snapshot scored every forecast about one return against the same
+    pre-outcome base rate, but each forecast still recorded the outcome. A return carrying
+    an antagonist's self-forecast and a judge's forecast entered the prevalence rate twice,
+    so one paid-off return and one that did not read 2/3 instead of 1/2."""
+    from factorylab.settlement.lots import Payoff
+
+    payoffs = {"producer-1": Payoff("producer-1", 1, 10, 1, 0),
+               "producer-2": Payoff("producer-2", 0, 0, 1, 0)}
+    for about, evaluator, q in (("producer-1", "antagonist-a", 0.9),
+                                ("producer-1", "judge-a", 0.8),
+                                ("producer-2", "judge-a", 0.2)):
+        seal_forecast(predicate_id=RETURN_PAID_OFF.id, about_handle=about,
+                      evaluator_id=evaluator, q=q)
+    results = settler.settle_consequences(payoffs.get)
+    assert [r.y for r in results] == [1, 1, 0]
+    assert [r.baseline_brier for r in results] == [0.75, 0.75, 0.75]
+    assert baseline.baseline_q(RETURN_PAID_OFF.id) == 0.5
+    # A judge sealed on the same return later settles against the same snapshot and does
+    # not count that outcome a second time.
+    seal_forecast(predicate_id=RETURN_PAID_OFF.id, about_handle="producer-1",
+                  evaluator_id="judge-b", q=0.7)
+    (late,) = settler.settle_consequences(payoffs.get)
+    assert late.y == 1 and late.baseline_brier == 0.75
+    assert baseline.baseline_q(RETURN_PAID_OFF.id) == 0.5
+    assert book.outstanding() == 0
+    # Which outcomes are already counted survives a checkpoint with the snapshots.
+    from factorylab.runtime.resume import _COMPONENT_FIELDS
+
+    assert ("settler", "_Settler__", ("snapshots", "recorded")) in _COMPONENT_FIELDS

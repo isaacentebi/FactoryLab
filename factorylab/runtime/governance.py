@@ -198,6 +198,18 @@ class GovernanceMixin:
                 },
             )
         else:
+            # Everything that can refuse this router is checked before the receipt is
+            # spent: a registry entry cannot be withdrawn, so a later failure would leave
+            # an orphan contract and a burnt novelty trial.
+            if prop.learner == "blum_mansour":
+                try:
+                    import factorylab.learners.delayed  # noqa: F401
+                except ImportError as exc:
+                    raise ValueError("blum_mansour router unavailable in this build") from exc
+            if prop.add and (
+                len(self.routers.get(prop.event_kind, [])) >= self.m.tools.max_routers_per_kind
+            ):
+                raise ValueError("router cap reached for this event kind")
             contract = Contract(
                 id=f"router:{prop.event_kind}:{prop.learner}:{self.n}",
                 version=1,
@@ -210,11 +222,6 @@ class GovernanceMixin:
                 resource_bounds=ResourceBounds(),
             )
             self._register_with_trial(contract, handle, amount)
-            if prop.learner == "blum_mansour":
-                try:
-                    import factorylab.learners.delayed  # noqa: F401
-                except ImportError as exc:
-                    raise ValueError("blum_mansour router unavailable in this build") from exc
             self._build_router(prop.event_kind, prop.learner, prop.gamma, replace=not prop.add)
             self.stats.routers_replaced += 1
             self._emit(

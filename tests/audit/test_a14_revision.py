@@ -59,7 +59,7 @@ def test_an_accepted_registration_and_an_activated_amendment_are_revisions():
     activations = iter([edition, None])
     rt._next_charter_activation = lambda: next(activations)
     rt.charter_book.activated_amendment = lambda _e: SimpleNamespace(
-        id="am", proposed_prices=(), tick_interval=None,
+        id="am", proposed_prices=(), tick_interval=None, proposer_handle="seed-decider",
     )
     rt._activate_charter_if_due()
     assert rt.charter.edition == charter.edition + 1
@@ -218,3 +218,45 @@ def test_scripted_windows_with_divergence_produce_a_sampling_raise_item(monkeypa
                     and i["boundary"] == "reserve_window" and i["seq"] > raises[0]["seq"])
     runtime_fields = dict(snapshot["state"]["runtime"]["$map"])
     assert runtime_fields["consequence_mix"] == {"$float": repr(raises[0]["mix_after"])}
+
+
+def test_the_only_recursive_meta_is_terminal_on_the_tier_it_judges():
+    """Codex finding: one assembly accepting MetaVerdict made every meta decision
+    non-terminal, that assembly's own included — but nothing judges its own output (A9),
+    so its decision waited on the conformity channel for a verdict no one could give and
+    timed out. A terminal meta is graded by its conformity Brier against the judged
+    verdict's consequence (A14)."""
+    from factorylab.runtime.shared import CH_CONFORMITY
+
+    rt = _consequence_runtime(provider=Judge(0.9))
+    spec = next(a.spec for a in rt.assemblies.values() if a.spec.role == "meta")
+    rt._instantiate(replace(spec, id="recursive-meta", accepts=frozenset({"MetaVerdict"})))
+    rt._open_epoch("MetaVerdict")
+    _, produced = _consequence_produce(rt, "NOOP")
+    _consequence_judge(rt, produced, "eval-a")
+    verdict = next(e for e in rt.internal if e.kind is EventKind.VERDICT)
+    rt.n += 1
+    rt._route_with(rt.routers["Verdict"][0], verdict)
+    decisions = rt.queue.state()["decisions"]
+    lower = next(d for d in decisions.values() if d.event_id == verdict.id)
+    assert lower.propensity.chosen != "recursive-meta"
+    assert lower.channel == CH_CONFORMITY  # the recursive tier can judge this one
+    meta_event = next(e for e in rt.internal if e.kind is EventKind.META_VERDICT)
+    for _ in range(20):  # the router may draw NOOP; the terminal decision is the one judged
+        rt.n += 1
+        opened = set(rt.queue.state()["decisions"])
+        rt._route_with(rt.routers["MetaVerdict"][0], meta_event)
+        top = next(d for h, d in rt.queue.state()["decisions"].items() if h not in opened)
+        if top.propensity.chosen == "recursive-meta":
+            break
+    assert top.propensity.chosen == "recursive-meta"
+    assert top.channel == CH_FAST
+    # The tier above it is empty: its own meta verdict can only be routed to NOOP.
+    emitted = next(e for e in rt.internal if e.kind is EventKind.META_VERDICT
+                   and e.payload["by"] == top.handle)
+    assert rt._universe_for("MetaVerdict", emitted) == ["NOOP"]
+    assert rt._higher_tier_universe("recursive-meta") == []
+    outcome = rt.queue.history(top.handle)[0]
+    assert outcome.status is SettleStatus.SETTLED
+    assert outcome.definition_version == "meta-consequence-v1"
+    assert outcome.score == pytest.approx(0.36)  # conformity 0.8 against y = 0
