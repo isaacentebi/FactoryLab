@@ -1,4 +1,3 @@
-import json
 import math
 from dataclasses import FrozenInstanceError
 from random import Random
@@ -50,7 +49,8 @@ def test_immediate_ordered_delivery_matches_synchronous(kind):
         )
         synchronous.update(feedback)
         delayed.update_for(str(index), feedback)
-        assert delayed.state() == synchronous.state()
+        assert delayed.state()["inner"] == synchronous.state()
+        assert not delayed.state()["snapshots"]
 
 
 def test_investment_trap_at_5000_seed_zero_separates_delivery_from_adaptation():
@@ -102,11 +102,11 @@ def test_investment_trap_at_5000_seed_zero_separates_delivery_from_adaptation():
                 f"synchronous/immediate={reference:.12f}; ordered/shuffled batch={batch:.12f}"
             )
     # Identical histories alone cannot establish that the updates were applied.
-    ordered_bases = json.loads(ordered.state())["bases"]
-    shuffled_bases = json.loads(shuffled.state())["bases"]
+    ordered_bases = ordered.state()["inner"]["bases"]
+    shuffled_bases = shuffled.state()["inner"]["bases"]
     for left, right in zip(ordered_bases, shuffled_bases, strict=True):
-        left_logs = json.loads(bytes.fromhex(left))["log_weights"]
-        right_logs = json.loads(bytes.fromhex(right))["log_weights"]
+        left_logs = left["log_weights"]
+        right_logs = right["log_weights"]
         assert right_logs == pytest.approx(left_logs, rel=0, abs=1e-9)
         assert min(right_logs.values()) < -1
 
@@ -119,19 +119,21 @@ def test_handle_lifecycle_plain_update_and_state(reduction):
     )
     learner = SnapshotLearner(inner, id="delayed")
     assert learner.id == "delayed"
-    assert learner.state() == inner.state()
+    assert learner.state()["inner"] == inner.state()
+    assert not learner.state()["snapshots"]
     feedback = FullInfoFeedback({"a": 0, "b": 1})
     with pytest.raises(KeyError):
         learner.update_for("missing", feedback)
     with pytest.raises(TypeError, match="update_for"):
         learner.update(feedback)
-    assert learner.state() == inner.state()
+    assert learner.state()["inner"] == inner.state()
+    assert not learner.state()["snapshots"]
 
     returned = learner.distribution_for("round", actions)
     before = learner.state()
-    assert before != inner.state()
-    saved = json.loads(before)
-    assert saved["inner"] == inner.state().hex()
+    assert before["snapshots"]
+    saved = before
+    assert saved["inner"] == inner.state()
     assert set(saved["snapshots"]) == {"round"}
     if reduction:
         assert saved["snapshots"]["round"]["support"] == list(actions)
@@ -145,24 +147,27 @@ def test_handle_lifecycle_plain_update_and_state(reduction):
     assert learner.state() == before
     learner.distribution_for("second", ("b",))
     learner.update_for("round", feedback)
-    assert set(json.loads(learner.state())["snapshots"]) == {"second"}
+    assert set(learner.state()["snapshots"]) == {"second"}
     with pytest.raises(KeyError):
         learner.update_for("round", feedback)
     with pytest.raises(KeyError):
         learner.distribution_for("round", actions)
     learner.update_for("second", feedback)
-    assert learner.state() == inner.state()
+    assert learner.state()["inner"] == inner.state()
+    assert not learner.state()["snapshots"]
 
 
 def test_plain_distribution_delegates_without_snapshot():
     inner = BlumMansour(lambda a: Hedge(a, 0.2), ("a", "b"))
     learner = SnapshotLearner(inner)
     assert learner.distribution(inner.actions) == inner.distribution(inner.actions)
-    assert learner.state() == inner.state()
+    assert learner.state()["inner"] == inner.state()
+    assert not learner.state()["snapshots"]
     with pytest.raises(RuntimeError, match="pending"):
         learner.distribution(("a",))
     inner.update(FullInfoFeedback({"a": 0, "b": 1}))
-    assert learner.state() == inner.state()
+    assert learner.state()["inner"] == inner.state()
+    assert not learner.state()["snapshots"]
 
 
 def test_invalid_feedback_keeps_snapshot_for_retry():
@@ -176,7 +181,8 @@ def test_invalid_feedback_keeps_snapshot_for_retry():
         learner.update_for("old", BanditFeedback("a", 1, 0.5))
     assert learner.state() == before
     learner.update_for("old", FullInfoFeedback({"a": 0, "b": 1}))
-    assert learner.state() == inner.state()
+    assert learner.state()["inner"] == inner.state()
+    assert not learner.state()["snapshots"]
 
 
 def test_explicit_snapshot_is_immutable_owned_and_preserves_plain_pending_round():
@@ -256,7 +262,7 @@ def test_shuffled_bandit_feedback_uses_frozen_master_policy_and_all_base_rows():
     learner = SnapshotLearner(inner)
     rng = Random(0)
     rounds = []
-    expected_logs = [json.loads(base.state())["log_weights"] for base in bases]
+    expected_logs = [base.state()["log_weights"] for base in bases]
     for index in range(30):
         support = (inner.actions, ("c", "a"), ("b", "c"))[index % 3]
         rows = [base.distribution(support) for base in bases]
@@ -284,10 +290,11 @@ def test_shuffled_bandit_feedback_uses_frozen_master_policy_and_all_base_rows():
             logs[k] += base.gamma / len(inner.actions) * gain / denominator
     for base, logs in zip(bases, expected_logs, strict=True):
         offset = max(logs.values())
-        assert json.loads(base.state())["log_weights"] == pytest.approx(
+        assert base.state()["log_weights"] == pytest.approx(
             {a: value - offset for a, value in logs.items()}, rel=0, abs=1e-12,
         )
-    assert learner.state() == inner.state()
+    assert learner.state()["inner"] == inner.state()
+    assert not learner.state()["snapshots"]
 
 
 def test_simulator_opens_every_round_before_any_feedback():

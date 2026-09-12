@@ -15,14 +15,13 @@ a full loss vector, and EXP3 uses the feedback's logged propensity. Custom
 learners must likewise accept feedback without a pending-round dependency.
 Handles cannot be reopened, even after settlement. Failed updates retain their
 snapshot for retry; successful updates discard it. A spent-handle tombstone is
-kept for this instance's lifetime, but excluded from state() so an adapter with
-no outstanding snapshots returns exactly inner.state(). State is for hashing,
-not serialization of the adapter's handle lifecycle.
+kept in state(), including after the last outstanding snapshot is consumed, so
+process recovery cannot reopen a spent handle.
 """
 
 from collections.abc import Sequence
 
-from .base import Feedback, Learner, _state
+from .base import Feedback, Learner, _probabilities, _state, _support, restore_learner
 from .blum_mansour import BlumMansour, BlumMansourSnapshot
 
 
@@ -67,10 +66,8 @@ class SnapshotLearner:
         """Reject unaddressed feedback, which cannot identify a delayed decision."""
         raise TypeError("SnapshotLearner requires update_for(handle, feedback)")
 
-    def state(self) -> bytes:
-        """Include inner state and frozen rounds; return inner bytes when none remain."""
-        if not self._snapshots:
-            return self.inner.state()
+    def state(self) -> dict:
+        """Include exact inner state, frozen rounds, identity and all spent-handle tombstones."""
         snapshots = {
             handle: {"support": saved.support, "p": saved.p, "rows": saved.rows}
             if isinstance(saved, BlumMansourSnapshot)
@@ -80,6 +77,38 @@ class SnapshotLearner:
         return _state(
             algorithm="SnapshotLearner",
             id=self.id,
-            inner=self.inner.state().hex(),
+            inner=self.inner.state(),
             snapshots=snapshots,
+            used_handles=sorted(self._used_handles),
         )
+
+    @classmethod
+    def restore(cls, state: dict) -> "SnapshotLearner":
+        """Rebind every delayed round to its restored owner and preserve one-use handles."""
+        if state.get("algorithm") != "SnapshotLearner":
+            raise ValueError("learner algorithm mismatch")
+        inner = restore_learner(state["inner"])
+        learner = cls(inner, id=state["id"])
+        used = state["used_handles"]
+        if any(not isinstance(h, str) for h in used) or len(set(used)) != len(used):
+            raise ValueError("invalid saved handles")
+        if not set(state["snapshots"]) <= set(used):
+            raise ValueError("snapshot without a handle tombstone")
+        learner._used_handles = set(used)
+        for handle, saved in state["snapshots"].items():
+            if isinstance(inner, BlumMansour):
+                support = _support(saved["support"], inner.actions)
+                _probabilities(dict(saved["p"]), support)
+                if len(saved["rows"]) != len(inner.actions):
+                    raise ValueError("invalid saved proposal rows")
+                for row in saved["rows"]:
+                    _probabilities(dict(row), support)
+                saved = BlumMansourSnapshot(
+                    support, tuple(tuple(pair) for pair in saved["p"]),
+                    tuple(tuple(tuple(pair) for pair in row) for row in saved["rows"]), inner,
+                )
+            else:
+                _probabilities(saved, tuple(saved))
+                saved = dict(saved)
+            learner._snapshots[handle] = saved
+        return learner

@@ -103,6 +103,7 @@ class Ledger:
         self.__keys = KeyStore(self._persist_key(key_path))
         self.__clock = clock_ns
         self.__tokens: list[bytes] = []
+        self.__decision_ids: dict[int, str] = {}
         self.__genesis = hashlib.sha256(_canonical({"manifest": manifest or {}})).hexdigest()
         self.__header = {"format": 1, "genesis_hash": self.__genesis}
         self.__head = self.__genesis
@@ -125,9 +126,9 @@ class Ledger:
         """Create a 0600 key file (or return None for a memory-only key).
 
         The file must not already exist: a world never reuses another world's
-        key. The file's only purpose is post-mortem decryption after a crash;
-        it does not resume a world. Reading it before termination is a breach
-        of the non-intervention covenant, not something the kernel can prevent.
+        key. The file permits process recovery and post-mortem decryption.
+        Automatic recovery may read it without releasing the public seal
+        (v0.7 section 6).
         """
         if key_path is None:
             return None
@@ -138,6 +139,52 @@ class Ledger:
             stream.flush()
             os.fsync(stream.fileno())
         return key
+
+    @classmethod
+    def reopen(
+        cls, path: str | Path, *, manifest: dict, clock_ns: Callable[[], int] = time_ns,
+        full_verify_every: int = 1024,
+    ) -> "Ledger":
+        """Authenticate an existing non-final world with its adjacent key, keeping it sealed.
+
+        No file is created, truncated or changed on failure. Incomplete records
+        fail verification just like any other chain corruption.
+        """
+        ledger = cls(manifest=manifest, clock_ns=clock_ns, full_verify_every=full_verify_every)
+        ledger.__path = Path(path)
+        try:
+            ledger.__keys = KeyStore(Path(str(path) + ".key").read_bytes().strip())
+            tokens = ledger._tokens()
+            ledger.__tokens = tokens
+            if tokens:
+                ledger.__head = json.loads(ledger.__keys._decrypt(tokens[-1]))["hash"]
+            if not ledger.verify():
+                raise LedgerIntegrityError("ledger chain or manifest hash differs")
+            items = ledger._recovery_items()
+            ledger.__decision_ids = {
+                item["seq"]: f"decision-{index}" for index, item in enumerate(
+                    item for item in items if item.get("kind") == "decision.handle"
+                )
+            }
+            if any(item.get("kind") == "event" and item["event"]["kind"] == "Terminated"
+                   for item in items):
+                raise LedgerIntegrityError("cannot resume a terminated world")
+            data = ledger.__path.read_bytes()
+            ledger.__size = len(data)
+            ledger.__last_line = data.splitlines(keepends=True)[-1]
+        except (OSError, ValueError, KeyError, TypeError, InvalidToken) as exc:
+            raise LedgerIntegrityError("ledger/key unavailable or manifest hash differs") from exc
+        return ledger
+
+    def _recovery_items(self) -> list[dict]:
+        """Kernel recovery receives authenticated items without releasing the public key."""
+        if not self.verify():
+            raise LedgerIntegrityError("ledger verification failed")
+        return [json.loads(self.__keys._decrypt(token)) for token in self.__tokens]
+
+    def decision_id(self, seq: int) -> str:
+        """Return the ledger-wide handle ordinal, unaffected by administrative resume items."""
+        return self.__decision_ids[seq]
 
     @property
     def key_store(self) -> KeyStore:
@@ -207,6 +254,8 @@ class Ledger:
             self.__last_line = line
         self.__tokens.append(token)
         self.__head = item["hash"]
+        if item.get("kind") == "decision.handle":
+            self.__decision_ids[item["seq"]] = f"decision-{len(self.__decision_ids)}"
         return item["seq"]
 
     def _tokens(self) -> list[bytes]:

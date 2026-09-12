@@ -47,6 +47,16 @@ class TimingRegistry:
             return None
         return (closures[-1] - closures[0]) // (len(closures) - 1)
 
+    def state(self) -> dict:
+        """Retain registered dependencies and every closure without sharing mutable lists."""
+        return {"governs": dict(self.__governs),
+                "closures": {k: list(v) for k, v in self.__closures.items()}}
+
+    def _restore_state(self, state: dict) -> None:
+        """Authenticated closure history preserves each loop's cumulative clock."""
+        self.__governs = dict(state["governs"])
+        self.__closures = {k: list(v) for k, v in state["closures"].items()}
+
 
 @dataclass(frozen=True)
 class DistributionSummary:
@@ -123,3 +133,17 @@ class UpwardBuffer:
         self.__items.clear()
         self._reset_window()
         return result
+
+    def state(self) -> dict:
+        """Retain pending reports, drawn thresholds, baselines and the exact jitter RNG."""
+        return {
+            "governed": self.__governed, "min_ratio": self.__min_ratio, "jitter": self.__jitter,
+            "rng": self.__rng.getstate(), "items": list(self.__items),
+            "baseline": dict(self.__baseline), "thresholds": dict(self.__thresholds),
+        }
+
+    def _restore_state(self, state: dict) -> None:
+        """Authenticated buffer data resumes existing jitter draws without drawing again."""
+        for name in ("governed", "min_ratio", "jitter", "items", "baseline", "thresholds"):
+            setattr(self, f"_UpwardBuffer__{name}", state[name])
+        self.__rng.setstate(state["rng"])

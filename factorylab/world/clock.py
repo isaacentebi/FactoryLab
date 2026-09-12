@@ -53,6 +53,9 @@ class ClockSource:
     interval_ns: int
     count: int
     source: str = "clock"
+    index: int = 0
+    last_ns: int | None = None
+    last_event_ns: int | None = None
 
     def __post_init__(self) -> None:
         self.set_interval(self.interval_ns)
@@ -76,19 +79,31 @@ class ClockSource:
         at the last drip fires there, never retroactively. Ticks win timestamp ties.
         """
         drip = next(drips, None) if drips is not None else None
-        last_tick = None
-        last_event = self.start_ns
-        for i in range(self.count):
+        while self.index < self.count:
             while True:
-                ts = self.start_ns if last_tick is None else last_tick + self.interval_ns
-                ts = max(ts, last_event)
+                ts = self.start_ns if self.last_ns is None else self.last_ns + self.interval_ns
+                if self.last_event_ns is not None:
+                    ts = max(ts, self.last_event_ns)
                 if drip is None or drip.ts_ns >= ts:
                     break
-                last_event = drip.ts_ns
+                self.last_event_ns = drip.ts_ns
                 yield drip
                 drip = next(drips, None)
-            last_tick = last_event = ts
+            self.last_ns = self.last_event_ns = ts
+            i = self.index
+            self.index += 1
             yield WorldEvent(WorldEventKind.TICK, ts, self.source, {"index": i})
+
+    def state(self) -> dict:
+        """Retain the amended interval, budget and exact tick/drip continuation point."""
+        return {"start_ns": self.start_ns, "interval_ns": self.interval_ns,
+                "count": self.count, "source": self.source, "index": self.index,
+                "last_ns": self.last_ns, "last_event_ns": self.last_event_ns}
+
+    @classmethod
+    def restore(cls, state: dict) -> ClockSource:
+        """Continue the saved clock without replaying already delivered ticks."""
+        return cls(**state)
 
 
 @dataclass(frozen=True)

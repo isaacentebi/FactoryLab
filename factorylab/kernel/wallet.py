@@ -1,7 +1,7 @@
 """A single conserved wallet with irrevocable death and prepaid reservations."""
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from time import time_ns
 
 from factorylab.kernel.ledger import Ledger
@@ -206,3 +206,31 @@ class Wallet:
     def check_conservation(self) -> bool:
         """Confirm booked balance equals initial plus drips and settlements minus commits."""
         return self.balance == self.__initial + self.__drips + self.__settlements - self.__commits
+
+    def state(self) -> dict:
+        """Return accounting and outstanding holds, excluding ledger, clock and issuer objects."""
+        return {
+            "initial": self.__initial, "balance": self.__balance, "schedule": self.__schedule,
+            "reservations": [replace(r, _issuer=None) for r in self.__reservations.values()],
+            "next_reservation": self.__next_reservation, "drip_count": self.__drip_count,
+            "drips": self.__drips, "settlements": self.__settlements, "commits": self.__commits,
+        }
+
+    def _restore_state(self, state: dict) -> None:
+        """Restore authenticated kernel checkpoint data without creating a new money entry."""
+        if self.__ledger.final or self.dead:
+            raise Infeasible("cannot restore a dead wallet")
+        if state["initial"] != self.__initial or state["schedule"] != self.__schedule:
+            raise ValueError("wallet launch configuration differs")
+        for name in ("balance", "drips", "settlements", "commits"):
+            require_money(state[name])
+        if state["balance"] != (
+            state["initial"] + state["drips"] + state["settlements"] - state["commits"]
+        ):
+            raise ValueError("checkpoint violates conservation")
+        holds = {r.id: replace(r, _issuer=self) for r in state["reservations"]}
+        for name in (
+            "balance", "next_reservation", "drip_count", "drips", "settlements", "commits",
+        ):
+            setattr(self, f"_Wallet__{name}", state[name])
+        self.__reservations = holds

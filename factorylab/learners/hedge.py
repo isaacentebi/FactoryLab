@@ -9,7 +9,16 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from .base import Feedback, FullInfoFeedback, _actions, _center, _state, _support, _weights
+from .base import (
+    Feedback,
+    FullInfoFeedback,
+    _actions,
+    _center,
+    _restore_weights,
+    _state,
+    _support,
+    _weights,
+)
 
 
 @dataclass(frozen=True)
@@ -55,7 +64,7 @@ class Hedge:
             {a: self._log_weights[a] - self.eta * losses[a] for a in self.actions}
         )
 
-    def state(self) -> bytes:
+    def state(self) -> dict:
         """Return deterministic weights, parameters, identity, and last support."""
         return _state(
             algorithm="Hedge",
@@ -66,3 +75,16 @@ class Hedge:
             feasible=self._last_support.feasible,
             unavailable=self._last_support.unavailable,
         )
+
+    @classmethod
+    def restore(cls, state: dict) -> "Hedge":
+        """Preserve exact weights and the last feasible menu without issuing a new query."""
+        weights = _restore_weights(state, "Hedge")
+        learner = cls(state["actions"], state["eta"], id=state["id"])
+        feasible = _support(state["feasible"], learner.actions)
+        unavailable = tuple(a for a in learner.actions if a not in feasible)
+        if unavailable != tuple(state["unavailable"]):
+            raise ValueError("invalid saved support")
+        learner._log_weights = weights
+        learner._last_support = Support(feasible, unavailable)
+        return learner

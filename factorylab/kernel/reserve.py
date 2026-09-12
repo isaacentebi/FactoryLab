@@ -1,6 +1,7 @@
 """Protected, expiring novelty entitlements independent of wallet creation."""
 
 from collections.abc import Callable
+from dataclasses import replace
 from decimal import Decimal
 from time import time_ns
 
@@ -138,3 +139,22 @@ class NoveltyReserve:
 
     def _consume_registration(self, receipt: Reservation) -> None:
         del self.__receipts[receipt.id]
+
+    def state(self) -> dict:
+        """Retain the live window and all unused registration receipts without issuer pointers."""
+        return {
+            "start": self.__start, "remaining": self.__remaining, "serial": self.__serial,
+            "receipts": {k: (replace(r, _issuer=None), c)
+                         for k, (r, c) in self.__receipts.items()},
+        }
+
+    def _restore_state(self, state: dict) -> None:
+        """Authenticated receipts regain this reserve as issuer; spent receipts stay spent."""
+        if self.__ledger.final:
+            raise RuntimeError("world is final")
+        self.__start, self.__remaining, self.__serial = (
+            state["start"], state["remaining"], state["serial"],
+        )
+        self.__receipts = {
+            k: (replace(r, _issuer=self), c) for k, (r, c) in state["receipts"].items()
+        }

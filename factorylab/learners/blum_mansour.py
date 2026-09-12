@@ -51,6 +51,7 @@ from .base import (
     _probabilities,
     _state,
     _support,
+    restore_learner,
 )
 from .exp3 import EXP3
 
@@ -227,12 +228,37 @@ class BlumMansour:
         finally:
             self._pending = pending
 
-    def state(self) -> bytes:
+    def state(self) -> dict:
         """Return parameters, every base state, and the pending decision snapshot."""
         return _state(
             algorithm="BlumMansour",
             id=self.id,
             actions=self.actions,
-            bases=[base.state().hex() for base in self._bases],
+            bases=[base.state() for base in self._bases],
             pending=self._pending,
         )
+
+    @classmethod
+    def restore(cls, state: dict) -> "BlumMansour":
+        """Restore independent bases and the pending round without solving or rounding again."""
+        if state.get("algorithm") != "BlumMansour":
+            raise ValueError("learner algorithm mismatch")
+        bases = [restore_learner(s) for s in state["bases"]]
+        actions = _actions(state["actions"])
+        if len(bases) != len(actions) or any(b.actions != actions for b in bases):
+            raise ValueError("invalid saved base universe")
+        source = iter(bases)
+        learner = cls(lambda _: next(source), actions, id=state["id"])
+        if state["pending"] is not None:
+            support, p, rows = state["pending"]
+            support = _support(support, actions)
+            _probabilities(p, support)
+            if len(rows) != len(actions):
+                raise ValueError("invalid saved proposal rows")
+            for row in rows:
+                _probabilities(row, support)
+            learner._pending = (
+                support, {a: p[a] for a in support},
+                tuple({a: row[a] for a in support} for row in rows),
+            )
+        return learner
