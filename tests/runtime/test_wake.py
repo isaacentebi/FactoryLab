@@ -12,6 +12,7 @@ from factorylab.kernel.ledger import Ledger, LedgerIntegrityError
 from factorylab.runtime.cli import TERMINATED_EXIT, main
 from factorylab.runtime.loop import run_world
 from factorylab.runtime.wake import (
+    SECTIONS,
     UNAVAILABLE,
     VIEWS,
     _open_snapshot,
@@ -64,7 +65,8 @@ def test_cli_exact_public_content_and_self_contained_page(world, tmp_path, capsy
     assert main(["wake", "--ledger", str(world), "--out", str(out)]) == 0
     assert capsys.readouterr() == ("", "")
     data = json.loads((out / "wake.json").read_text())
-    assert set(data) == {*VIEWS, "world", "manifest_hash", "uptime_ns", "last_event_time_ns"}
+    assert set(data) == {*VIEWS, *SECTIONS, "world", "manifest_hash", "uptime_ns",
+                         "last_event_time_ns"}
     assert data["world"] == "scripted" and data["manifest_hash"] == manifest.manifest_hash()
     assert data["last_event_time_ns"] > 0 and data["uptime_ns"] == data["last_event_time_ns"]
     for view in VIEWS:
