@@ -736,6 +736,7 @@ class HyperliquidExchange:
         if spot_pairs:
             self._configure_spot(self._info.spot_meta())
         self.transient_failures = 0
+        self.account_fallbacks = 0
         self._last_mids: dict[str, Decimal] | None = None
         self._last_account: AccountState | None = None
 
@@ -842,11 +843,19 @@ class HyperliquidExchange:
     def account(self) -> AccountState:
         if not self._address:
             raise RuntimeError("account() needs an address or a private key")
+        spot = mids = None
         try:
             st = self._guarded("user_state", lambda: self._info.user_state(self._address))
+            if getattr(self, "spot_pairs", ()):
+                spot = self._guarded("spot_user_state", lambda:
+                                     self._info.spot_user_state(self._address))
+                mids = self._guarded("spot_mids", self._info.all_mids)
         except VenueUnavailable:
+            # Half an account is not an account: perps and spot fall back together,
+            # so a spot endpoint outage returns the last complete snapshot.
             if self._last_account is None:
                 raise
+            self.account_fallbacks = getattr(self, "account_fallbacks", 0) + 1
             return self._last_account
         summary = st["marginSummary"]
         positions: list[Position] = []
@@ -859,10 +868,7 @@ class HyperliquidExchange:
             positions.append(Position(p["coin"], size, entry))
         balances = []
         spot_value = Decimal(0)
-        if getattr(self, "spot_pairs", ()):
-            spot = self._guarded("spot_user_state", lambda:
-                                 self._info.spot_user_state(self._address))
-            mids = self._guarded("spot_mids", self._info.all_mids)
+        if spot is not None:
             for row in spot.get("balances", []):
                 total = Decimal(str(row["total"]))
                 balances.append(SpotBalance(row["coin"], total,
@@ -1272,6 +1278,18 @@ class HyperliquidExchange:
         ):
             return OrderResult(None, "uncertain", Decimal(0), None, "unparseable acknowledgement")
         return OrderResult(None, "uncertain", Decimal(0), None, "unknown response shape")
+
+
+def live_exchange(spec: Any, venue_class: Any = None) -> HyperliquidExchange:
+    """The single place a manifest becomes a live venue, so no caller reads a partial world.
+
+    The runtime and the wake both construct through here; a field added to
+    ``ExchangeSpec`` reaches every call site at once. ``venue_class`` lets a
+    caller bind the class from its own module namespace.
+    """
+    return (venue_class or HyperliquidExchange)(
+        mainnet=spec.mainnet, coins=spec.coins, spot_pairs=spec.spot_pairs,
+    )
 
 
 def stream_market(exchange: Exchange, clock: Iterator[WorldEvent]) -> Iterator[WorldEvent]:

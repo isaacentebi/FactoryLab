@@ -5,7 +5,13 @@ import pytest
 
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.wallet import Wallet
-from factorylab.world.exchange import FakeExchange, HyperliquidExchange, Order, OrderKind
+from factorylab.world.exchange import (
+    FakeExchange,
+    HyperliquidExchange,
+    Order,
+    OrderKind,
+    VenueUnavailable,
+)
 from factorylab.world.treasury import FakeTreasury, UnconfiguredRail
 from factorylab.world.venue_tools import VenueTools
 
@@ -196,3 +202,15 @@ def test_reserve_withdrawal_cannot_spend_spot_class_cash():
     treasury.transfer('perps_to_spot', '990', handle='a', now_ns=1)
     treasury.tick(2)
     assert treasury.transfer('to_reserve', '20', handle='b', now_ns=3)['status'] == 'refused'
+
+
+def test_spot_outage_returns_the_last_complete_account():
+    ex, _ = live()
+    first = ex.account()
+
+    def outage(_):
+        raise VenueUnavailable('spot_user_state: ConnectionError')
+
+    ex._info.spot_user_state = outage
+    assert ex.account() == first and ex.account_fallbacks == 1
+    assert ex.account().spot_balances == first.spot_balances

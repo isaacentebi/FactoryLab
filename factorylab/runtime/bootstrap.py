@@ -36,7 +36,7 @@ from factorylab.settlement import (
 )
 from factorylab.settlement.consequence import FillCursor, ReturnConsequences
 from factorylab.world.clock import ClockIterator, ClockSource
-from factorylab.world.exchange import FakeExchange, HyperliquidExchange
+from factorylab.world.exchange import FakeExchange, HyperliquidExchange, live_exchange
 from factorylab.world.market import MultiProvider, X402Provider
 from factorylab.world.metering import Meter
 from factorylab.world.models import FakeModel, TokenPrice
@@ -125,10 +125,7 @@ class BootstrapMixin:
         if exchange is not None:
             self.exchange = exchange
         elif self.live:
-            self.exchange = HyperliquidExchange(
-                mainnet=manifest.exchange.mainnet, coins=manifest.exchange.coins,
-                spot_pairs=manifest.exchange.spot_pairs
-            )
+            self.exchange = live_exchange(manifest.exchange, HyperliquidExchange)
         else:
             shocks: dict[int, dict[str, Decimal]] = {}
             for sh in manifest.exchange.shocks:
