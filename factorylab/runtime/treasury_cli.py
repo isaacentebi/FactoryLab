@@ -1,0 +1,174 @@
+"""Testnet-only treasury acceptance with the same encrypted journal and replay rules as worlds."""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+from pathlib import Path
+from time import time_ns
+
+from factorylab.kernel.ledger import Ledger
+from factorylab.kernel.wallet import Wallet
+from factorylab.runtime.loop import SimClock
+from factorylab.runtime.resume import (
+    JournalProxy,
+    RecoveryJournal,
+    ResumeError,
+    _ReplayFault,
+    decode,
+    encode,
+)
+from factorylab.world.evm import RailError
+from factorylab.world.treasury import Treasury
+
+
+class AcceptanceSession:
+    """Persist every input and response; recover bookkeeping without inventing another transfer."""
+
+    def __init__(self, path: Path, rail, config: dict):
+        self.path, self.clock, self.config = path, SimClock(), config
+        existing = path.exists()
+        if existing:
+            ledger = Ledger.reopen(path, manifest=config, clock_ns=self.clock)
+            items = ledger._recovery_items()
+            saved = next((i for i in reversed(items)
+                          if i.get("kind") == "treasury.acceptance.snapshot"), None)
+            if saved is None:
+                raise ResumeError("acceptance journal has no checkpoint; refusing a new transfer")
+            initial = decode(saved["wallet"])["initial"]
+        else:
+            balances = rail.balances()
+            initial = balances["venue"] + balances["reserve"]
+            ledger = Ledger(path, manifest=config, clock_ns=self.clock,
+                            key_path=str(path) + ".key")
+            saved, items = None, []
+        self.journal = RecoveryJournal(ledger, self.clock)
+        self.journal.bootstrap = existing
+        self.wallet = Wallet(initial, self.journal, clock_ns=self.clock)
+        self.treasury = Treasury(
+            self.journal, self.wallet, JournalProxy(rail, self.journal, "treasury.rail"),
+            fee_ceiling_micro=config["max_transfer_fee_micro"],
+        )
+        self.wallet.bind_pots(self.treasury.pots)
+        if saved:
+            self.wallet._restore_state(decode(saved["wallet"]))
+            self.treasury.restore(decode(saved["treasury"]))
+            self.clock.now_ns = saved["now_ns"]
+        self.journal.bootstrap = False
+        self.journal.active = True
+        if saved:
+            self.journal.tail = items[saved["seq"] + 1:]
+            self.journal.recovering = True
+            try:
+                while (item := self.journal.peek()) is not None:
+                    if item.get("kind") != "treasury.acceptance.input":
+                        raise ResumeError("unexpected acceptance journal tail")
+                    self.execute(item["operation"], item["now_ns"])
+            except _ReplayFault as exc:
+                raise ResumeError(str(exc)) from None
+            self.journal.recovering = False
+            self.journal.tail = []
+            self.journal.position = 0
+        else:
+            self.treasury.refresh_pots()
+            self.checkpoint()
+
+    def checkpoint(self):
+        """Checkpoint public references and authenticated wallet holds, never signing clients."""
+        self.journal.append({"kind": "treasury.acceptance.snapshot", "now_ns": self.clock.now_ns,
+                             "wallet": encode(self.wallet.state()),
+                             "treasury": encode(self.treasury.snapshot())})
+
+    def execute(self, operation: dict, now_ns: int) -> dict:
+        """One transfer or one reconciliation tick is a replayable unit of work."""
+        self.clock.now_ns = max(now_ns, self.clock.now_ns)
+        self.journal.append({"kind": "treasury.acceptance.input", "operation": operation,
+                             "now_ns": self.clock.now_ns})
+        if operation["kind"] == "transfer":
+            result = self.treasury.transfer(operation["direction"], operation["usd"],
+                                            handle="testnet-acceptance", now_ns=self.clock.now_ns)
+        elif operation["kind"] == "advance":
+            result = {"completed": self.treasury.tick(self.clock.now_ns)}
+        else:
+            raise ValueError("unknown acceptance operation")
+        self.checkpoint()
+        return {"result": result, **self.status()}
+
+    def status(self) -> dict:
+        """Only confirmed receipt references are reported as completed transactions."""
+        state = self.treasury.state
+        return {
+            "status": state["status"] if state else "idle",
+            "step": state["steps"][state["index"]] if state else None,
+            "transfer_id": state["id"] if state else None,
+            "amount_micro": state["amount_micro"] if state else None,
+            "received_micro": state["received_micro"] if state else None,
+            "fees_micro": state["fees_micro"] if state else 0,
+            "tx_refs": state["receipts"] if state else [],
+            "pending_reference": state["reference"] if state and state["status"] == "submitted"
+            else None,
+            "wallet_micro": self.wallet.balance,
+            "pots": self.wallet.pots(),
+        }
+
+
+def command(args) -> int:
+    """The acceptance CLI can only select Hyperliquid testnet, HyperEVM testnet and Base Sepolia."""
+    from eth_account import Account
+
+    from factorylab.runtime.worlds import TreasurySpec
+    from factorylab.world.exchange import HyperliquidExchange
+    from factorylab.world.treasury_rails import LiveRail
+
+    reserve = Account.from_key(os.environ["RESERVE_PRIVATE_KEY"]).address
+    spec = TreasurySpec(reserve_address=reserve, hyperevm_gas_budget_wei=5 * 10**16,
+                        base_gas_budget_wei=10**15)
+    exchange = HyperliquidExchange(mainnet=False, coins=("ETH",))
+    rail = LiveRail(exchange, spec)
+    assert rail.testnet and rail.hyper.chain.id == 998 and rail.base.chain.id == 84532
+    config = {"name": "treasury-testnet-acceptance", "format": 1, "venue": rail.venue_address,
+              "reserve": reserve, "networks": [998, 84532],
+              "max_transfer_fee_micro": spec.max_transfer_fee_micro,
+              "withdrawal_fee_micro": spec.withdrawal_fee_micro,
+              "cctp_max_fee_micro": spec.cctp_max_fee_micro,
+              "hyperevm_gas_budget_wei": spec.hyperevm_gas_budget_wei,
+              "base_gas_budget_wei": spec.base_gas_budget_wei}
+    path = Path(args.ledger)
+    if args.treasury_command == "status" and path.exists():
+        # Status must not replay an interrupted write. Advance is the explicit recovery command.
+        items = Ledger.reopen(path, manifest=config)._recovery_items()
+        saved = next(i for i in reversed(items)
+                     if i.get("kind") == "treasury.acceptance.snapshot")
+        state = decode(saved["treasury"])["state"]
+        tail = len(items) - saved["seq"] - 1
+        print(json.dumps({"status": "recovery_required" if tail else
+                          state["status"] if state else "idle", "pending_tail_items": tail,
+                          "state": state, "reserve_address": reserve, "networks": [998, 84532]}))
+        return 0
+    if args.treasury_command == "status" and not path.exists():
+        balances = rail.balances()
+        print(json.dumps({"reserve_address": reserve, "networks": [998, 84532],
+                          **balances, "hype_wei": rail.hyper.balance(),
+                          "base_sepolia_eth_wei": rail.base.balance()}))
+        return 0
+    if args.treasury_command != "transfer" and not path.exists():
+        raise RailError("no acceptance journal exists; submit a transfer first")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        session = AcceptanceSession(path, rail, config)
+        if args.treasury_command == "status":
+            output = session.status()
+        else:
+            operation = {"kind": args.treasury_command}
+            if args.treasury_command == "transfer":
+                if not args.direction or args.usd is None:
+                    raise RailError("transfer requires --direction and --usd")
+                operation.update(direction=args.direction, usd=args.usd)
+            output = session.execute(operation, time_ns())
+        print(json.dumps(output, default=str))
+        return 2 if output["status"] in ("failed", "stranded") else 0
+    finally:
+        os.close(fd)

@@ -62,6 +62,7 @@ class Wallet:
         self.__next_reservation = 0
         self.__drip_count = 0
         self.__drips = self.__settlements = self.__commits = 0
+        self.__pots_view: Callable[[], dict] | None = None
         ledger._claim_wallet(self)
         self._log("initial", initial, initial, "", "initial")
 
@@ -79,6 +80,21 @@ class Wallet:
     def available(self) -> Money:
         """Return booked balance minus all outstanding holds."""
         return self.__balance - sum(item.amount for item in self.__reservations.values())
+
+    def bind_pots(self, view: Callable[[], dict]) -> None:
+        """Bind one observational view; it cannot mutate the conserved wallet balance."""
+        if self.__pots_view is not None or not callable(view):
+            raise ValueError("pots view must be callable and can only be bound once")
+        self.__pots_view = view
+
+    def pots(self) -> dict:
+        """Return detached pot observations, with unavailable data explicitly marked unknown."""
+        from copy import deepcopy
+
+        if self.__pots_view is None:
+            return {"venue": None, "reserve": None, "seed": None, "sellers": {},
+                    "complete": False, "pending": False, "total_micro": None}
+        return deepcopy(self.__pots_view())
 
     @property
     def drip_schedule(self) -> DripSchedule | None:
@@ -234,3 +250,7 @@ class Wallet:
         ):
             setattr(self, f"_Wallet__{name}", state[name])
         self.__reservations = holds
+
+    def _reservation_for_resume(self, reservation_id: str) -> Reservation:
+        """Rebind an authenticated owner's saved hold to this wallet's actual reservation."""
+        return self.__reservations[reservation_id]

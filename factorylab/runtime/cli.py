@@ -31,12 +31,12 @@ def _load_dotenv() -> None:
     ):
         keyfile = Path.cwd() / filename
         if keyfile.exists() and var not in os.environ:
-            if filename == "reserve.key":
+            if filename in {"reserve.key", "hyperliquid.key"}:
                 import stat
 
                 info = keyfile.lstat()
                 if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
-                    raise ValueError("reserve.key must be a regular file with mode 0600")
+                    raise ValueError(f"{filename} must be a regular file with mode 0600")
             value = keyfile.read_text().strip()
             if value:
                 os.environ[var] = value
@@ -343,6 +343,12 @@ def _cmd_postmortem(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_treasury_testnet(args: argparse.Namespace) -> int:
+    from factorylab.runtime.treasury_cli import command
+
+    return command(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="factorylab")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -401,6 +407,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.set_defaults(func=_cmd_run)
 
+    treasury = sub.add_parser("treasury-testnet", help="journaled native CCTP testnet acceptance")
+    treasury_sub = treasury.add_subparsers(dest="treasury_command", required=True)
+    for name in ("status", "transfer", "advance"):
+        command = treasury_sub.add_parser(name)
+        command.add_argument("--ledger", default="runs/treasury-testnet.jsonl")
+        if name == "transfer":
+            command.add_argument("--direction", required=True, choices=("to_reserve", "to_venue"))
+            command.add_argument("--usd", required=True)
+        command.set_defaults(func=_cmd_treasury_testnet)
+
     resume = sub.add_parser("resume", help="continue a process-interrupted world")
     resume.add_argument("--world", required=True)
     resume.add_argument("--ledger", required=True, help="ledger with an adjacent .key file")
@@ -422,6 +438,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.cmd == "treasury-testnet":
+        from factorylab.world.evm import RailError
+
+        try:
+            _load_dotenv()
+            return int(args.func(args))
+        except RailError as exc:
+            print(str(exc), file=sys.stderr)
+        except Exception:
+            print("Testnet treasury unavailable; preserve the journal and reconcile its references."
+                  " No new transfer should be submitted to replace an uncertain one.",
+                  file=sys.stderr)
+        return 1
     is_reserve = args.cmd == "reserve"
     is_venice_probe = args.cmd == "probe" and args.provider == "venice"
     is_x402 = args.cmd == "market" or (args.cmd == "probe" and args.provider == "x402")

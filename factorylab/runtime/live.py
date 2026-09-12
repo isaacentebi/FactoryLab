@@ -77,15 +77,45 @@ class LiveVenue:
     """Adapts a real ``Exchange`` to per-tick world events.
 
     Each tick reads mids and funding; when the exchange has an account, new
-    fills since the last poll are emitted with their realised P&L so the
-    runtime can settle them. Funding payments are reported as rates only:
-    the venue account's own funding cash flows are reconciled, not settled,
-    in this phase.
+    fills since the last poll are emitted with their realised P&L. Rates remain
+    observations; separate venue-identified funding payments carry actual cash.
     """
 
     exchange: Any
     last_fill_ns: int = 0
     seen_fills: set[str] = field(default_factory=set)
+    ledger: Any = None
+    last_funding_ns: int | None = None
+    seen_funding: set[str] = field(default_factory=set)
+
+    def funding_payments(self, now_ns: int) -> list[WorldEvent]:
+        """Emit post-launch funding once, with an inclusive cursor that keeps timestamp peers."""
+        if self.last_funding_ns is None:
+            if self.ledger is not None:
+                self.ledger.append({"kind": "funding.cursor", "since_ns": now_ns, "seen": []})
+            self.last_funding_ns = now_ns
+        method = getattr(self.exchange, "funding_payments", None)
+        if method is None:
+            return []  # read-only legacy/test adapter
+        try:
+            payments = method(self.last_funding_ns)
+        except RuntimeError:
+            return []  # no key or transient venue outage: preserve cursor
+        payments = sorted((p for p in payments if p.ts_ns >= self.last_funding_ns
+                           and p.id not in self.seen_funding), key=lambda p: (p.ts_ns, p.id))
+        if not payments:
+            return []
+        latest = max(p.ts_ns for p in payments)
+        seen = {p.id for p in payments if p.ts_ns == latest}
+        if latest == self.last_funding_ns:
+            seen |= self.seen_funding
+        if self.ledger is not None:
+            self.ledger.append({"kind": "funding.cursor", "since_ns": latest,
+                                "seen": sorted(seen)})
+        self.last_funding_ns, self.seen_funding = latest, seen
+        return [WorldEvent(WorldEventKind.FUNDING, p.ts_ns, self.exchange.name,
+                           {"coin": p.coin, "rate": str(p.rate), "paid_usd": str(p.paid_usd),
+                            "payment_id": p.id, "observed_at_ns": now_ns}) for p in payments]
 
     def on_tick(self, now_ns: int) -> list[WorldEvent]:
         out: list[WorldEvent] = []
@@ -138,6 +168,7 @@ class LiveVenue:
                     },
                 )
             )
+        out.extend(self.funding_payments(now_ns))
         return out
 
 
@@ -153,36 +184,46 @@ class Reconciler:
         return self._ticks % self.every == 0
 
     @staticmethod
-    def snapshot(wallet_balance_micro: int, provider: Any, exchange: Any) -> dict[str, Any]:
-        remaining = None
-        if hasattr(provider, "balance_micro"):
-            try:
-                remaining = provider.balance_micro()
-            except Exception:
-                remaining = None
-        equity = None
-        positions = None
+    def snapshot(wallet_balance_micro: int, provider: Any, exchange: Any, *,
+                 pots_view: dict | None = None, ledger: Any = None) -> dict[str, Any]:
+        from factorylab.world.treasury import provider_pots
+
+        account, positions = None, None
         try:
             account = exchange.account()
-            equity = str(account.equity_usd)
             positions = [{"coin": p.coin, "size": str(p.size), "entry_px": str(p.entry_px)}
                          for p in account.positions]
         except Exception:
-            equity = None
-        pots = 0
-        if remaining is not None:
-            pots += remaining
-        if equity is not None:
-            pots += int(Decimal(equity) * 1_000_000)
+            pass
+        if pots_view is None:
+            seed, sellers = provider_pots(provider)
+            try:
+                equity = str(account.equity_usd)
+                venue = int(Decimal(equity) * 1_000_000)
+            except Exception:
+                venue = None
+            pots_view = {"venue": venue, "reserve": 0, "seed": seed, "sellers": sellers,
+                         "pending": False}
+        else:
+            pots_view = dict(pots_view)
+        values = [pots_view.get(k) for k in ("venue", "reserve", "seed")]
+        values.extend(pots_view["sellers"].values())
+        complete = not pots_view.get("pending", False) and all(type(v) is int for v in values)
+        pots = sum(values) if complete else None
+        discrepancy = wallet_balance_micro - pots if pots is not None else None
+        within = abs(discrepancy) <= 500_000 if discrepancy is not None else None
+        if ledger is not None and within is False:
+            ledger.append({"kind": "reconcile.drift", "wallet_micro": wallet_balance_micro,
+                           "pots_micro": pots, "discrepancy_micro": discrepancy,
+                           "tolerance_micro": 500_000, "pots": pots_view})
         return {
             "wallet_micro": wallet_balance_micro,
-            "openrouter_remaining_micro": remaining,
-            "venue_equity_usd": equity,
             "positions": positions,
-            "pots_micro": pots if (remaining is not None or equity is not None) else None,
-            "discrepancy_micro": (wallet_balance_micro - pots)
-            if (remaining is not None or equity is not None)
-            else None,
+            "openrouter_remaining_micro": pots_view["seed"],
+            "venue_equity_usd": str(Decimal(pots_view["venue"]) / 1_000_000)
+            if pots_view["venue"] is not None else None,
+            "pots": pots_view, "pots_micro": pots, "discrepancy_micro": discrepancy,
+            "within_tolerance": within, "tolerance_micro": 500_000,
         }
 
 

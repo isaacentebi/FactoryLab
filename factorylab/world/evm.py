@@ -1,0 +1,448 @@
+"""Pinned USDC rails with chain-checked RPC, bounded gas and replayable transaction references.
+
+No web3 dependency: ABI and signing come from the Hyperliquid SDK's existing
+eth_abi/eth_account dependencies. Private keys never enter a transaction reference.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+from urllib.parse import urlsplit
+
+from eth_abi import decode, encode
+from eth_utils import keccak, to_checksum_address
+
+from factorylab.world.x402 import Transport, http_request
+
+
+class RailError(RuntimeError):
+    """A bounded diagnostic never incorporates an RPC response body or signing material."""
+
+
+class Pending(RailError):
+    """Keep the existing reference live; a new nonce or refund would be unsafe."""
+
+
+@dataclass(frozen=True)
+class Chain:
+    id: int
+    domain: int
+    rpc: str
+    usdc: str
+    messenger: str
+    transmitter: str
+    gas_symbol: str
+
+
+# Native CCTP V2, verified against Circle's contract-address pages on 2026-09-11.
+# https://developers.circle.com/cctp/references/contract-addresses
+# https://developers.circle.com/stablecoins/usdc-contract-addresses
+HYPEREVM_TESTNET = Chain(
+    998,
+    19,
+    "https://rpc.hyperliquid-testnet.xyz/evm",
+    "0x2B3370eE501B4a559b57D449569354196457D8Ab",
+    "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
+    "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
+    "HYPE",
+)
+BASE_SEPOLIA = Chain(
+    84532,
+    6,
+    "https://sepolia.base.org",
+    "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
+    "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
+    "ETH",
+)
+HYPEREVM = Chain(
+    999,
+    19,
+    "https://rpc.hyperliquid.xyz/evm",
+    "0xb88339CB7199b77E23DB6E890353E22632Ba630f",
+    "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d",
+    "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64",
+    "HYPE",
+)
+BASE = Chain(
+    8453,
+    6,
+    "https://mainnet.base.org",
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0x28b5a0e9C621a5BadaA536219b3a228C8168cf5d",
+    "0x81D40F21F12A8F0E3252Bccb954D722d4c464B64",
+    "ETH",
+)
+CORE_TEST_WALLET = "0x0B80659a4076E9E93C7DbE0f10675A16a3e5C206"
+CORE_WALLET = "0x6B9E773128f453f5c2C60935Ee2DE2CBc5390A24"
+CORE_USDC_SYSTEM = "0x2000000000000000000000000000000000000000"
+
+
+def address(value: str) -> str:
+    """Only a nonzero EVM address, with no path or whitespace, can enter a transaction."""
+    if not isinstance(value, str) or len(value) != 42 or not value.startswith("0x"):
+        raise RailError("invalid EVM address")
+    try:
+        result = to_checksum_address(value)
+    except (ValueError, TypeError):
+        raise RailError("invalid EVM address") from None
+    if int(result, 16) == 0:
+        raise RailError("zero EVM address")
+    return result
+
+
+def word_address(value: str) -> bytes:
+    return bytes.fromhex(address(value)[2:]).rjust(32, b"\0")
+
+
+def calldata(signature: str, types: list[str], values: list) -> str:
+    return "0x" + (keccak(text=signature)[:4] + encode(types, values)).hex()
+
+
+def event_topic(signature: str) -> str:
+    return "0x" + keccak(text=signature).hex()
+
+
+class EVM:
+    """Each signed call pins chain, sender, nonce, destination, calldata and maximum gas cost."""
+
+    def __init__(
+        self,
+        chain: Chain,
+        account: Any,
+        *,
+        transport: Transport = http_request,
+        rpc: str | None = None,
+        gas_budget_wei: int = 0,
+    ):
+        self.chain, self.account, self.transport = chain, account, transport
+        self.rpc = rpc or chain.rpc
+        parsed = urlsplit(self.rpc)
+        if (
+            parsed.scheme not in {"https", "http"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise RailError("RPC URL must have no credentials, query or fragment")
+        if type(gas_budget_wei) is not int or gas_budget_wei < 0:
+            raise RailError("gas budget must be nonnegative integer wei")
+        self.gas_budget_wei = gas_budget_wei
+
+    def call(self, method: str, params: list) -> Any:
+        try:
+            result = self.transport(
+                "POST",
+                self.rpc,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": method,
+                    "params": params,
+                },
+                {"User-Agent": "FactoryLab/0.4"},
+            )
+        except Exception:
+            raise Pending("RPC transport failed; reference remains pending") from None
+        if result.status != 200 or "error" in result.body or "result" not in result.body:
+            raise Pending("RPC call rejected or unavailable")
+        return result.body["result"]
+
+    def check_chain(self) -> None:
+        if int(self.call("eth_chainId", []), 16) != self.chain.id:
+            raise RailError("RPC chain ID does not match the pinned rail")
+
+    def block(self) -> int:
+        self.check_chain()
+        return int(self.call("eth_blockNumber", []), 16)
+
+    def balance(self, token: str | None = None, owner: str | None = None) -> int:
+        self.check_chain()
+        owner = address(owner or self.account.address)
+        if token is None:
+            return int(self.call("eth_getBalance", [owner, "latest"]), 16)
+        data = calldata("balanceOf(address)", ["address"], [owner])
+        return int(self.call("eth_call", [{"to": address(token), "data": data}, "latest"]), 16)
+
+    def read(self, contract: str, data: str) -> bytes:
+        self.check_chain()
+        result = self.call("eth_call", [{"to": address(contract), "data": data}, "latest"])
+        return bytes.fromhex(result.removeprefix("0x"))
+
+    def prepare(self, to: str, data: str, *, gas_remaining_wei: int) -> dict:
+        """A reference is computed before broadcast; signing it again yields the same tx hash."""
+        self.check_chain()
+        if type(gas_remaining_wei) is not int or gas_remaining_wei <= 0:
+            raise RailError("gas budget exhausted")
+        if gas_remaining_wei > self.gas_budget_wei:
+            raise RailError("gas remaining exceeds declared budget")
+        sender, to = address(self.account.address), address(to)
+        tx = {"from": sender, "to": to, "value": "0x0", "data": data}
+        estimate = int(self.call("eth_estimateGas", [tx]), 16)
+        gas = (estimate * 12 + 9) // 10
+        price = int(self.call("eth_gasPrice", []), 16)
+        ceiling = gas * price
+        if ceiling <= 0 or ceiling > gas_remaining_wei:
+            raise RailError("transaction exceeds remaining gas budget")
+        nonce = int(self.call("eth_getTransactionCount", [sender, "pending"]), 16)
+        unsigned = {
+            "chainId": self.chain.id,
+            "nonce": nonce,
+            "to": to,
+            "value": 0,
+            "gas": gas,
+            "gasPrice": price,
+            "data": data,
+        }
+        try:
+            signed = self.account.sign_transaction(unsigned)
+        except Exception:
+            raise RailError("transaction signing failed") from None
+        l1_ceiling = 0
+        if self.chain.id in (8453, 84532):
+            # This adapter supports Base's zero operator-fee configuration only.
+            # Check before broadcasting, rather than discovering an unsupported fee after spending.
+            # https://specs.optimism.io/protocol/isthmus/exec-engine.html (2026-09-11)
+            for signature in ("operatorFeeScalar()", "operatorFeeConstant()"):
+                value = self.read(
+                    "0x4200000000000000000000000000000000000015", calldata(signature, [], [])
+                )
+                if len(value) != 32 or int.from_bytes(value):
+                    raise RailError("Base operator fee configuration is unsupported")
+            # Include OP Stack data fees, separately reported as receipt.l1Fee.
+            # https://specs.optimism.io/protocol/fjord/predeploys.html (2026-09-11)
+            size = len(signed.raw_transaction)
+            data = calldata("getL1FeeUpperBound(uint256)", ["uint256"], [size])
+            l1_ceiling = (
+                int.from_bytes(self.read("0x420000000000000000000000000000000000000F", data)) * 2
+            )
+            ceiling += l1_ceiling
+        if ceiling > gas_remaining_wei or self.balance() < ceiling:
+            raise RailError("insufficient native gas balance or remaining budget")
+        return {
+            "network": f"eip155:{self.chain.id}",
+            "sender": sender,
+            "tx_hash": "0x" + bytes(signed.hash).hex(),
+            "tx": unsigned,
+            "gas_ceiling_wei": ceiling,
+            "l1_fee_ceiling_wei": l1_ceiling,
+        }
+
+    def broadcast(self, reference: dict) -> None:
+        """Broadcast only an already-journaled immutable transaction; no new nonce on retry."""
+        self.check_chain()
+        tx = reference["tx"]
+        if (
+            tx["chainId"] != self.chain.id
+            or reference["sender"] != self.account.address
+            or tx.get("value") != 0
+        ):
+            raise RailError("transaction reference belongs to another chain or signer")
+        try:
+            signed = self.account.sign_transaction(tx)
+        except Exception:
+            raise RailError("transaction signing failed") from None
+        expected = "0x" + bytes(signed.hash).hex()
+        if expected != reference["tx_hash"]:
+            raise RailError("transaction reference was modified")
+        result = self.call("eth_sendRawTransaction", ["0x" + bytes(signed.raw_transaction).hex()])
+        if not isinstance(result, str) or result.lower() != expected.lower():
+            raise Pending("RPC did not acknowledge the prepared transaction hash")
+
+    def receipt(self, reference: dict, *, finalized: bool = True) -> dict | None:
+        """Verify canonical identity and fees; provisional receipts never establish settlement."""
+        receipt = self.proof(reference["tx_hash"], finalized=finalized)
+        if receipt is None:
+            return None
+        if (
+            receipt["transactionHash"].lower() != reference["tx_hash"].lower()
+            or receipt["from"].lower() != reference["sender"].lower()
+            or receipt["to"].lower() != reference["tx"]["to"].lower()
+        ):
+            raise RailError("receipt identity does not match submitted transaction")
+        fee = int(receipt["gasUsed"], 16) * int(receipt["effectiveGasPrice"], 16)
+        if self.chain.id in (8453, 84532):
+            if "l1Fee" not in receipt:
+                raise Pending("Base receipt does not report the L1 data fee")
+            fee += int(receipt["l1Fee"], 16)
+            # Fail closed if a future Base operator-fee schedule is nonzero.
+            # Its current receipts must never be treated as zero-cost by omission.
+            scalar = int(receipt.get("operatorFeeScalar", "0x0"), 16)
+            constant = int(receipt.get("operatorFeeConstant", "0x0"), 16)
+            if scalar or constant:
+                raise RailError("Base operator fees require a supported accounting schedule")
+        if fee > reference["gas_ceiling_wei"]:
+            raise RailError("receipt gas cost exceeds reserved ceiling")
+        return {**receipt, "gas_fee_wei": fee, "success": int(receipt["status"], 16) == 1}
+
+    def proof(self, tx_hash: str, *, finalized: bool = True) -> dict | None:
+        """Require a canonical receipt and, by default, finalized inclusion."""
+        self.check_chain()
+        receipt = self.call("eth_getTransactionReceipt", [tx_hash])
+        if receipt is None:
+            return None
+        if receipt["transactionHash"].lower() != tx_hash.lower():
+            raise RailError("receipt transaction hash mismatch")
+        if finalized:
+            final = self.call("eth_getBlockByNumber", ["finalized", False])
+            if not final or int(final["number"], 16) < int(receipt["blockNumber"], 16):
+                return None
+        canonical = self.call("eth_getBlockByNumber", [receipt["blockNumber"], False])
+        if not canonical or canonical["hash"].lower() != receipt["blockHash"].lower():
+            return None
+        return receipt
+
+    def logs(self, contract: str, topics: list, start: int) -> list:
+        """Read finalized logs only; callers verify event fields as well as the contract."""
+        self.check_chain()
+        final = self.call("eth_getBlockByNumber", ["finalized", False])
+        if not final or int(final["number"], 16) < start:
+            return []
+        end = int(final["number"], 16)
+        logs = []
+        # Bound each RPC page without silently losing events on a provider range limit.
+        # Hyperliquid's official RPC documents a 50-block range limit.
+        for first in range(start, end + 1, 50):
+            logs.extend(
+                self.call(
+                    "eth_getLogs",
+                    [
+                        {
+                            "address": address(contract),
+                            "topics": topics,
+                            "fromBlock": hex(first),
+                            "toBlock": hex(min(first + 49, end)),
+                        }
+                    ],
+                )
+            )
+        verified = []
+        for log in logs:
+            if log.get("removed", False) or log.get("address", "").lower() != contract.lower():
+                continue
+            actual = log.get("topics", [])
+            if len(actual) < len(topics) or any(
+                expected is not None and str(expected).lower() != str(got).lower()
+                for expected, got in zip(topics, actual, strict=False)
+            ):
+                continue
+            height = int(log["blockNumber"], 16)
+            if not start <= height <= end:
+                continue
+            canonical = self.call("eth_getBlockByNumber", [log["blockNumber"], False])
+            if canonical and canonical["hash"].lower() == log["blockHash"].lower():
+                verified.append(log)
+        return verified
+
+    def system_transfer(
+        self, contract: str, data: str, start: int, core_time_ms: int
+    ) -> dict | None:
+        """Match a finalized HyperCore system call without mistaking inclusion for execution.
+
+        The official RPC hides system receipts/logs. Locate the call using the
+        separately observed HyperCore ledger time, then verify the canonical block
+        and exact calldata. The caller must still prove execution with Circle's
+        signed attestation; a system transaction alone proves no successful burn.
+        https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/json-rpc
+        """
+        if self.chain.id not in (998, 999):
+            raise RailError("system transfer lookup requires HyperEVM")
+        self.check_chain()
+        final = self.call("eth_getBlockByNumber", ["finalized", False])
+        if not final or int(final["number"], 16) < start:
+            return None
+        low, high = start, int(final["number"], 16)
+        first_second, last_second = core_time_ms // 1000 - 2, core_time_ms // 1000 + 10
+        while low < high:
+            middle = (low + high) // 2
+            block = self.call("eth_getBlockByNumber", [hex(middle), False])
+            if int(block["timestamp"], 16) < first_second:
+                low = middle + 1
+            else:
+                high = middle
+        found = []
+        for height in range(low, min(low + 64, int(final["number"], 16) + 1)):
+            block = self.call("eth_getBlockByNumber", [hex(height), False])
+            if int(block["timestamp"], 16) > last_second:
+                break
+            for tx in self.call("eth_getSystemTxsByBlockHash", [block["hash"]]):
+                if (tx.get("to", "").lower() == contract.lower()
+                        and tx.get("input", "").lower() == data.lower()
+                        and tx.get("from", "").lower() ==
+                        "0x2000000000000000000000000000000000000000"
+                        and int(tx.get("chainId", "0x0"), 16) == self.chain.id
+                        and int(tx.get("value", "0x1"), 16) == 0
+                        and int(tx.get("gasPrice", "0x1"), 16) == 0
+                        and tx.get("blockHash", "").lower() == block["hash"].lower()
+                        and int(tx.get("blockNumber", "0x0"), 16) == height):
+                    found.append(tx)
+        if len(found) > 1:
+            raise RailError("ambiguous HyperCore system call")
+        return found[0] if found else None
+
+    @staticmethod
+    def archive_hash(tx: dict) -> str:
+        """Reproduce nanoreth's documented system-tx identifier; this signs no payment.
+
+        Source checked 2026-09-11: hl-archive-node/nanoreth
+        src/node/types/reth_compat.rs, system_tx_to_reth_transaction.
+        This synthetic identifier only locates Circle evidence; it is not itself
+        a signature or an execution proof.
+        """
+        from eth_account._utils.legacy_transactions import (
+            encode_transaction,
+            serializable_unsigned_transaction_from_dict,
+        )
+
+        if int(tx["type"], 16) != 0 or int(tx["gasPrice"], 16) != 0:
+            raise RailError("expected a legacy system transaction")
+        unsigned = {k: int(tx[k], 16) for k in ("chainId", "nonce", "gasPrice", "gas", "value")}
+        unsigned.update(to=address(tx["to"]), data=tx["input"])
+        sender = int(tx["from"], 16)
+        encoded = encode_transaction(
+            serializable_unsigned_transaction_from_dict(unsigned),
+            vrs=(2 * unsigned["chainId"] + 36, 1, sender),
+        )
+        return "0x" + keccak(encoded).hex()
+
+    def approve(self, token: str, spender: str, amount: int, remaining: int) -> dict:
+        """Approve exactly the transfer amount, never an unlimited allowance."""
+        return self.prepare(
+            token,
+            calldata(
+                "approve(address,uint256)", ["address", "uint256"], [address(spender), amount]
+            ),
+            gas_remaining_wei=remaining,
+        )
+
+    def transfer(self, token: str, to: str, amount: int, remaining: int) -> dict:
+        return self.prepare(
+            token,
+            calldata("transfer(address,uint256)", ["address", "uint256"], [address(to), amount]),
+            gas_remaining_wei=remaining,
+        )
+
+    def transferred(self, receipt: dict, token: str, source: str, dest: str, amount: int) -> bool:
+        topics = [
+            event_topic("Transfer(address,address,uint256)"),
+            "0x" + word_address(source).hex(),
+            "0x" + word_address(dest).hex(),
+        ]
+        return any(
+            log["address"].lower() == token.lower()
+            and [t.lower() for t in log["topics"]] == [t.lower() for t in topics]
+            and int(log["data"], 16) == amount
+            and not log.get("removed", False)
+            for log in receipt.get("logs", [])
+        )
+
+
+def decode_log(log: dict, types: list[str]) -> tuple:
+    """Decode only ABI event data, with a bounded error that cannot echo RPC material."""
+    try:
+        return decode(types, bytes.fromhex(log["data"].removeprefix("0x")))
+    except Exception:
+        raise RailError("invalid event encoding") from None

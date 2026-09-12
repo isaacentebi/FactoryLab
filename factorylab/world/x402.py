@@ -61,7 +61,7 @@ def http_request(method: str, url: str, payload: dict | None, headers: dict) -> 
     req = request.Request(
         url,
         data=json.dumps(payload).encode() if payload is not None else None,
-        headers={"Content-Type": "application/json", **headers},
+        headers={"Content-Type": "application/json", "User-Agent": "FactoryLab/0.4", **headers},
         method=method,
     )
     try:

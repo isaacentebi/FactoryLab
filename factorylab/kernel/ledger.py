@@ -107,6 +107,8 @@ class Ledger:
         self.__genesis = hashlib.sha256(_canonical({"manifest": manifest or {}})).hexdigest()
         self.__header = {"format": 1, "genesis_hash": self.__genesis}
         self.__head = self.__genesis
+        self.__verified_tokens: tuple[bytes, ...] = ()
+        self.__verified_head = self.__genesis
         self.__path = Path(path) if path is not None else None
         self.__final = False
         self.__authority = None
@@ -276,13 +278,25 @@ class Ledger:
         return tokens
 
     def verify(self) -> bool:
-        """Detect changed, reordered, truncated or unauthenticated items and headers."""
+        """Detect changed bytes and headers, authenticating each unchanged ciphertext once.
+
+        The verified prefix contains immutable bytes. Every pass compares its
+        entire stored prefix byte-for-byte; only an identical prefix may reuse
+        its authenticated head. New ciphertexts still undergo Fernet, sequence,
+        previous-hash and canonical digest checks. Reopen begins with no cache.
+        """
         try:
             tokens = self._tokens()
             if len(tokens) != len(self.__tokens):
                 return False
-            previous = self.__genesis
-            for seq, token in enumerate(tokens):
+            prefix = self.__verified_tokens
+            if len(tokens) < len(prefix) or any(
+                token != tokens[seq] for seq, token in enumerate(prefix)
+            ):
+                return False
+            previous = self.__verified_head
+            for seq in range(len(prefix), len(tokens)):
+                token = tokens[seq]
                 item = json.loads(self.__keys._decrypt(token))
                 digest = item.pop("hash")
                 if item["seq"] != seq or item["prev_hash"] != previous:
@@ -290,7 +304,11 @@ class Ledger:
                 if hashlib.sha256(_canonical(item)).hexdigest() != digest:
                     return False
                 previous = digest
-            return previous == self.__head
+            if previous != self.__head:
+                return False
+            self.__verified_tokens = tuple(tokens)
+            self.__verified_head = previous
+            return True
         except (
             OSError,
             ValueError,

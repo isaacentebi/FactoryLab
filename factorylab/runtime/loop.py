@@ -579,12 +579,30 @@ class Runtime:
             "exchange",
             deterministic=isinstance(self.exchange, FakeExchange) and not self.live,
         )
-        self.venue = LiveVenue(self.exchange) if self.live else None
+        self.venue = LiveVenue(self.exchange, ledger=self.ledger) if self.live else None
         self.prices = manifest.price_table()
         self.meter = Meter(self.wallet)
         if provider is None:
             provider = build_provider(manifest)
         self.provider = provider if provider is not None else ScriptedProvider()
+        from factorylab.world.treasury import FakeTreasury, Treasury, UnconfiguredRail
+
+        if not self.live:
+            self.treasury = FakeTreasury(self.ledger, self.wallet,
+                                         fee_micro=manifest.treasury.fake_fee_micro)
+        else:
+            if manifest.treasury.reserve_address is not None:
+                from factorylab.world.treasury_rails import LiveRail
+
+                rail = LiveRail(self.exchange, manifest.treasury)
+            else:
+                rail = UnconfiguredRail(self.exchange.target)
+            self.treasury = Treasury(self.ledger, self.wallet, rail, provider=self.provider,
+                                     fee_ceiling_micro=manifest.treasury.max_transfer_fee_micro)
+        self.wallet.bind_pots(self.treasury.pots)
+        self.treasury.rail = JournalProxy(
+            self.treasury.rail, self.ledger, "treasury.rail", deterministic=not self.live
+        )
         self.market = (
             market
             if market is not None
@@ -664,14 +682,13 @@ class Runtime:
                 }
         self.tool_specs["treasury.transfer"] = {
             "id": "treasury.transfer",
-            "description": "Record an intent to move money between the compute pot and the venue "
-            "account. Nothing moves until the fixed weekly execution; the wallet is one number "
-            "either way.",
+            "description": "Submit a transfer between venue and reserve. Principal stays held "
+            "until receipt-confirmed arrival. The result carries references or a refusal reason.",
             "args_schema": {
                 "type": "object",
                 "properties": {
-                    "direction": {"enum": ["to_compute", "to_venue"]},
-                    "usd": {"type": "number", "minimum": 0},
+                    "direction": {"enum": ["to_reserve", "to_venue"]},
+                    "usd": {"type": ["string", "integer"], "description": "Exact positive USD"},
                     "reason": {"type": "string"},
                 },
                 "required": ["direction", "usd"],
@@ -916,6 +933,7 @@ class Runtime:
         account["funding_usd_to_date"] = str(money_to_usd(self.funding_to_date))
         return {
             "wallet_balance_usd": str(money_to_usd(self.wallet.balance)),
+            "pots": self.wallet.pots(),
             "charter_edition": self.charter.edition,
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
@@ -1110,6 +1128,7 @@ class Runtime:
         self.wallet.drip(self.clock.now_ns)
         self._manage_reserve_window()
         if ev.kind is EventKind.TICK:
+            self.treasury.tick(self.clock.now_ns)
             if self.venue is not None:
                 observed = [
                     we
@@ -1124,7 +1143,10 @@ class Runtime:
                 )
                 self._settle_exchange_effects(observed)
                 if self.reconciler.due():
-                    snap = Reconciler.snapshot(self.wallet.balance, self.provider, self.exchange)
+                    snap = Reconciler.snapshot(
+                        self.wallet.balance, self.provider, self.exchange,
+                        pots_view=self.treasury.refresh_pots(), ledger=self.ledger,
+                    )
                     self.stats.reconciliations += 1
                     self._emit(EventKind.RECONCILED, snap, source="kernel")
             else:
@@ -1165,8 +1187,14 @@ class Runtime:
                 WorldEvent(WorldEventKind.FILL, max(now_ns, ts), self.exchange.name, payload)
                 for ts, payload in self.consequence_fills.poll(self.exchange)
             ]
+            observed.extend(self.venue.funding_payments(now_ns))
             self._settle_exchange_effects(observed)
-        snapshot = Reconciler.snapshot(self.wallet.balance, self.provider, self.exchange)
+            self.treasury.tick(now_ns)
+        snapshot = Reconciler.snapshot(
+            self.wallet.balance, self.provider, self.exchange,
+            pots_view=self.treasury.refresh_pots() if self.live else self.treasury.pots(),
+            ledger=self.ledger,
+        )
         self.ledger.append({"kind": "resume.reconcile", **snapshot})
         if self.live:
             self.stats.reconciliations += 1
@@ -1452,7 +1480,8 @@ class Runtime:
                     self.wallet.settle(-paid, f"funding:{we.payload['coin']}:{we.ts_ns}", "funding")
             self.internal.append(self._kernel_event(we))
         if hasattr(self.exchange, "sync_cash"):
-            self.exchange.sync_cash(money_to_usd(self.wallet.balance))
+            self.exchange.sync_cash(getattr(self.treasury, "venue_balance_usd",
+                                            money_to_usd(self.wallet.balance)))
 
     def _execute_outputs(self, ret: Return) -> None:
         out = ret.outputs
@@ -1657,13 +1686,9 @@ class Runtime:
             if spec["kind"] == "treasury":
                 direction = args.get("direction")
                 usd = args.get("usd")
-                if direction not in ("to_compute", "to_venue") or not isinstance(usd, int | float):
-                    return {"error": "direction must be to_compute|to_venue and usd a number"}
-                if isinstance(usd, bool) or usd < 0:
-                    return {"error": "usd must be non-negative"}
                 intent = {
                     "direction": direction,
-                    "usd": str(Decimal(str(usd)).quantize(Decimal("0.01"))),
+                    "usd": str(usd),
                     "reason": str(args.get("reason", ""))[:500],
                     "by": action_id,
                     "handle": handle,
@@ -1671,7 +1696,8 @@ class Runtime:
                 self.ledger.append({"kind": "treasury.intent", **intent, "ts": self.clock.now_ns})
                 self._emit(EventKind.TRANSFER_INTENT, intent, source="kernel")
                 self.stats.transfer_intents += 1
-                return {"recorded": True, **intent}
+                return self.treasury.transfer(direction, usd, handle=handle,
+                                              now_ns=self.clock.now_ns)
             tool = self.population_tools.get(tool_id)
             if tool is None:
                 return {"error": "tool unavailable"}

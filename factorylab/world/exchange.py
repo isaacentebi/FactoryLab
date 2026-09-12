@@ -91,6 +91,17 @@ class FundingEvent:
 
 
 @dataclass(frozen=True)
+class FundingPayment:
+    """A venue-identified payment uses positive USD for money paid, negative for received."""
+
+    id: str
+    coin: str
+    paid_usd: Decimal
+    rate: Decimal
+    ts_ns: int
+
+
+@dataclass(frozen=True)
 class Position:
     coin: str
     size: Decimal  # signed; negative is short
@@ -114,6 +125,7 @@ class Exchange(Protocol):
 
     def mids(self) -> dict[str, Decimal]: ...
     def funding(self) -> list[FundingEvent]: ...
+    def funding_payments(self, since_ns: int) -> list[FundingPayment]: ...
     def account(self) -> AccountState: ...
     def place(self, order: Order) -> OrderResult: ...
     def cancel(self, order_id: str, *, coin: str | None = None) -> dict | None: ...
@@ -174,6 +186,7 @@ class FakeExchange:
         self._pending_events: list[WorldEvent] = []
         self._mid_history: dict[str, list[tuple[int, Decimal]]] = {coin: [] for coin in self._mids}
         self._funding_history: list[FundingEvent] = []
+        self._funding_payments: list[FundingPayment] = []
         self._leverage: dict[str, Decimal] = {}
 
     # ---- time and prices
@@ -236,6 +249,10 @@ class FakeExchange:
 
     def funding(self) -> list[FundingEvent]:
         return [FundingEvent(c, self.funding_rate, None, self._now_ns) for c in self.coins]
+
+    def funding_payments(self, since_ns: int) -> list[FundingPayment]:
+        """Return actual simulated cash flows at or after an inclusive nanosecond cursor."""
+        return [p for p in self._funding_payments if p.ts_ns >= since_ns]
 
     def account(self) -> AccountState:
         unrealized = Decimal(0)
@@ -504,6 +521,9 @@ class FakeExchange:
                 # longs pay when rate is positive
                 paid = pos.size * self._mids[coin] * self.funding_rate
                 self._cash -= paid
+            self._funding_payments.append(FundingPayment(
+                f"{self._now_ns}:{coin}", coin, paid, self.funding_rate, self._now_ns,
+            ))
             events.append(
                 WorldEvent(
                     WorldEventKind.FUNDING,
@@ -643,6 +663,45 @@ class HyperliquidExchange:
             margin_used_usd=Decimal(str(summary["totalMarginUsed"])),
         )
         return self._last_account
+
+    def funding_payments(self, since_ns: int) -> list[FundingPayment]:
+        """Read inclusive, paginated user cash flows; never infer payments from funding rates.
+
+        Hyperliquid's delta.usdc is a credit to the user, so paid_usd negates it.
+        The boundary millisecond is reread and deduplicated by hash plus coin.
+        A stalled full page fails closed instead of silently skipping its tail.
+        """
+        if type(since_ns) is not int or since_ns < 0:
+            raise ValueError("since_ns must be nonnegative integer nanoseconds")
+        if not self._address:
+            raise RuntimeError("funding_payments() needs an address or a private key")
+        start = since_ns // NS_PER_MS
+        payments: dict[str, FundingPayment] = {}
+        while True:
+            page = self._guarded("user_funding", lambda start=start:
+                                 self._info.user_funding_history(self._address, start))
+            if not isinstance(page, list):
+                raise ValueError("invalid user funding response")
+            for row in page:
+                delta = row["delta"]
+                if delta.get("type") != "funding":
+                    continue
+                ts_ns = int(row["time"]) * NS_PER_MS
+                if ts_ns < since_ns:
+                    continue
+                coin = str(delta["coin"])
+                ident = f"{row['hash']}:{coin}"
+                paid, rate = -Decimal(str(delta["usdc"])), Decimal(str(delta["fundingRate"]))
+                if not paid.is_finite() or not rate.is_finite():
+                    raise ValueError("nonfinite funding payment")
+                payments[ident] = FundingPayment(ident, coin, paid, rate, ts_ns)
+            if len(page) < 500:
+                break
+            latest = max(int(row["time"]) for row in page)
+            if latest <= start:
+                raise ValueError("funding pagination stalled at a full timestamp")
+            start = latest
+        return sorted(payments.values(), key=lambda p: (p.ts_ns, p.id))
 
     def fills(self, since_ns: int) -> list[Fill]:
         """Fills since ``since_ns``; an unavailable venue yields none, and the caller's
