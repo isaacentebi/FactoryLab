@@ -197,7 +197,9 @@ class VenueMixin:
                 if result["status"] == "cancelled" and Decimal(str(result["filled_size"])) > 0:
                     attributed = {**result, "status": "filled"}
                 self.consequences.order_result(intent["handle"], attributed, intent["args"], self.n)
-            self.consequences.order_acknowledged(client_id)
+            for kind, payload, _event in self.consequences.order_acknowledged(client_id):
+                if kind == "Fill":
+                    self._record_fill_notional(payload)
         return dict(result)
 
     def _reconcile_orders(self) -> None:

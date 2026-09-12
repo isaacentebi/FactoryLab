@@ -96,17 +96,25 @@ class PricingMixin:
 
     def _record_pricing_fills(self, events) -> None:
         """Filled notional belongs to the order's original decision in the fill's window."""
-        owners = {order.order_id: order.handle for order in self.consequences.table.orders}
+        if self.consequences.pending_orders:
+            # An unresolved order write defers these fills; acknowledgement replays them.
+            return
         for ev in events:
-            if ev.kind != "Fill" or (handle := owners.get(str(ev.payload["order_id"]))) is None:
-                continue
-            notional = _usd_to_micro(Decimal(str(ev.payload["size"]))
-                                     * Decimal(str(ev.payload["px"])))
-            sample = self._contribution(handle, "producer")
-            self.ledger.append({"kind": "price.contribution", "handle": handle,
-                                "window": self.window.index, "notional_micro": notional})
-            sample["notional_micro"] += notional
-            self.price_origins[handle]["turnover"] = self.window.index
+            if str(ev.kind) == "Fill":
+                self._record_fill_notional(dict(ev.payload))
+
+    def _record_fill_notional(self, payload: dict) -> None:
+        """One observed fill, priced on the same path whether it was deferred or not."""
+        owners = {order.order_id: order.handle for order in self.consequences.table.orders}
+        handle = owners.get(str(payload["order_id"]))
+        if handle is None:
+            return
+        notional = _usd_to_micro(Decimal(str(payload["size"])) * Decimal(str(payload["px"])))
+        sample = self._contribution(handle, "producer")
+        self.ledger.append({"kind": "price.contribution", "handle": handle,
+                            "window": self.window.index, "notional_micro": notional})
+        sample["notional_micro"] += notional
+        self.price_origins[handle]["turnover"] = self.window.index
 
     def _manage_reserve_window(self) -> None:
         self.cadence.advance(self.n)

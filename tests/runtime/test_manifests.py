@@ -150,7 +150,7 @@ def test_damping_and_cadence_are_explicit_manifest_parameters(world):
 def test_damping_and_cadence_defaults_overrides_and_hashes():
     default = manifest_from_dict(_base())
     assert default.prices.kappa == 0.5 and default.timing.cadence_sample == 200
-    for section, key, value in (("prices", "kappa", 0), ("timing", "cadence_sample", 10)):
+    for section, key, value in (("prices", "kappa", 0), ("timing", "cadence_sample", 100)):
         raw = _base()
         raw[section] = {key: value}
         changed = manifest_from_dict(raw)

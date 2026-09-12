@@ -1,10 +1,14 @@
 """A2: slow unfinished feedback still constrains the governance clock."""
 
+from dataclasses import replace
+
+import pytest
+
 from factorylab.charter.amendment import Amendment
 from factorylab.kernel.ledger import Ledger
 from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.worlds import load_manifest
+from factorylab.runtime.worlds import TimingSpec, load_manifest
 
 
 def test_a2_zero_timestamp_reproduction_retains_backstop():
@@ -63,3 +67,15 @@ def test_a2_two_approved_amendments_cannot_activate_at_one_boundary():
     assert rt.cadence.world_block(rt.tick_clock.interval_ns)["waiting"] == ["second"]
     assert not rt.cadence.ready(now_ns=rt.clock.now_ns,
                                 tick_interval_ns=rt.tick_clock.interval_ns, window=1)
+
+
+def test_a2_min_support_beyond_the_retained_sample_is_refused_at_load():
+    """A support larger than the retained deque could never be reached, so the gate would
+    hold the no-data cap forever without ever saying why."""
+    base = load_manifest("scripted")
+    manifest = replace(base, timing=TimingSpec(3, 0.2, cadence_sample=200, min_support=201))
+    with pytest.raises(ValueError) as excinfo:
+        manifest.validate()
+    reason = str(excinfo.value)
+    assert "timing.min_support" in reason and "timing.cadence_sample" in reason
+    replace(base, timing=TimingSpec(3, 0.2, 200, 200)).validate()

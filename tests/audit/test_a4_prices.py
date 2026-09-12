@@ -192,3 +192,45 @@ def test_a4_filled_notional_keeps_order_owner_and_venue_rounding():
     rt._settle_exchange_effects([fill])
     assert rt.window.notional_micro == rt.window.decisions[owner]["notional_micro"] == 2
     assert rt.price_origins[owner] == {"origin": 1, "turnover": 2}
+
+
+def test_a4_fill_before_the_order_write_resolves_is_priced_on_acknowledgement(monkeypatch):
+    """A deferred fill is still the decision's own notional once its order has an owner."""
+    from types import SimpleNamespace
+
+    from factorylab.world.events import WorldEvent, WorldEventKind
+
+    rt = runtime()
+    owner = decision(rt, 100)
+    rt.consequences.start(owner, rt.n)
+    acknowledged = []
+
+    def unresolved(order):
+        raise TimeoutError("the venue did not acknowledge the write")
+
+    def lookup(client_id, **kwargs):
+        # The first query is still unresolved; the venue only answers at reconciliation.
+        if not acknowledged:
+            acknowledged.append(client_id)
+            raise TimeoutError("the venue did not acknowledge the write")
+        return SimpleNamespace(status="filled", order_id="order", filled_size="1")
+
+    monkeypatch.setattr(rt.exchange, "place", unresolved, raising=False)
+    monkeypatch.setattr(rt.exchange, "lookup", lookup, raising=False)
+    write = rt._venue_write(owner, "venue.place_market",
+                            {"coin": "BTC", "side": "buy", "size": "1"}, slot="output")
+    assert write["status"] == "uncertain"
+
+    fill = WorldEvent(WorldEventKind.FILL, 0, "fake", {
+        "order_id": "order", "size": "1", "px": "0.0000016", "coin": "BTC",
+        "is_buy": True, "realized_usd": "0", "fee_usd": "0",
+    })
+    rt._settle_exchange_effects([fill])
+    # The window already counts the fill while the order has no known owner.
+    assert rt.window.notional_micro == 2
+    assert rt.window.decisions[owner]["notional_micro"] == 0
+
+    rt._reconcile_orders()
+    assert rt.window.decisions[owner]["notional_micro"] == rt.window.notional_micro == 2
+    assert rt.price_origins[owner]["turnover"] == rt.window.index
+    assert not rt.consequences.deferred_events

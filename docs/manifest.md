@@ -158,7 +158,7 @@ parameters; the observer never substitutes a second set of thresholds.
 
 | Key | Type | Seed default | Hard cast? |
 | --- | --- | --- | --- |
-| `timing.min_support` | positive integer | `30` | Yes: settled samples required before estimating p90. |
+| `timing.min_support` | positive integer, at most `timing.cadence_sample` | `30` | Yes: settled samples required before estimating p90; a larger support than the retained sample could never be reached, so it is refused at load. |
 | `timing.cadence_sample` | positive integer | `200` | Yes: retained event-latency sample length. |
 | `timing.min_ratio` | integer, at least 3 | `3` | Yes: cascade and governance separation. |
 | `evaluation.consequence_backstop_events` | positive integer | `200` | Yes: consequence horizon and conservative governance period floor. |

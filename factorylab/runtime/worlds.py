@@ -337,6 +337,9 @@ class WorldManifest:
             raise ValueError("timing.cadence_sample must be a positive integer")
         if type(self.timing.min_support) is not int or self.timing.min_support < 1:
             raise ValueError("timing.min_support must be a positive integer")
+        if self.timing.min_support > self.timing.cadence_sample:
+            # The latency deque is capped at cadence_sample, so a larger support never arrives.
+            raise ValueError("timing.min_support must be at most timing.cadence_sample")
         if type(self.timing.min_ratio) is not int or self.timing.min_ratio < 3:
             raise ValueError("timing min_ratio must be an integer at least 3")
         if type(self.clock.min_tick_ns) is not int or self.clock.min_tick_ns <= 0:
