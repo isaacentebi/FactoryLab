@@ -12,13 +12,15 @@ Written 11 September 2026 so that any session (or a compacted one) can resume fr
 
 ## State on main
 
-Phases 1–3b and most of phase 4 are merged (PRs #1–#24). Gate: 1170 tests. Merged on 11 September in phase 4: versioning (behaviour-based versions, pathologies, early warnings), population-proposed λ, recursive meta-evaluation behind a per-tier cascade gate, verdict-as-consequence-forecast with FIFO lots and a reward-hacking review, the x402 client and Venice provider, and compute bought on the open market (`market.discover`, `x402:` sellers, insolvency). Judges see only the event a producer answered. The Hyperliquid adapter survives transient API failures.
+12 September 2026, end of the fix cycle. Everything is merged (PRs #1–#37); no branch, worktree or background task is open. Everyday gate: `uv run pytest` (parallel by default) 1685 passed in about three minutes; the kill-and-resume tests are marked `slow` and run with `uv run pytest -m slow -p no:xdist tests/runtime/test_resume.py` before any merge to main (30 passed).
 
-In flight: resume after a process death (spec v0.7 §6) and the committee-amendable clock (§8), both with Codex in worktrees `../FactoryLab-p4H` and `../FactoryLab-p4K`.
+Phase 4 delivered: versioning, verdict-as-consequence-forecast, population λ, recursive evaluation with the cascade gate, the amendable clock, measured governance cadence, damping, the observations catalogue, the charter in the manifest, the x402 client, Venice and market compute, resume, hosting, the live wake. The reward line reaches every primitive; scoring physics is public in every request.
 
-Live runs: 1–5 logged (run 5 summary in `runs/`, to be copied to `docs/runs/`). Run 5 had two unscripted registrations and an antagonist that fooled judges 44 times in 50, but zero fills: the venue key's testnet account has no testnet USDC (faucet claim owed by the experimenter).
+Cold audits (docs/audits/, five reports: fidelity by Codex, Fable, Opus; defects by Fable, Opus) found 30-odd issues; three fix passes closed every reproduced finding (docs/build-log.md "Cold audits"). Two fidelity arguments are recorded as dissent, not fixed: the public scoring block, and `return_paid_off` as the consequence predicate.
 
-Decisions taken 11 September: compute is bought by the factory itself on the x402 market with Venice as the credible renewable seller and OpenRouter credits as a depleting seed nobody refills (no human anywhere after launch; card and OpenRouter API routes verified dead, see `docs/research/`); the funded world ticks every five minutes at launch and the committee may amend the tick within physics bounds; verdicts are forecasts settled on realized consequence.
+Proven with real money (docs/runs/compute-proof.md): the factory bought its own thinking on three rails from its reserve on Base ($5 Venice top-up, three paid completions; reserve now 4.989 USDC and 4.999768 Venice credit). Proven on testnet: Hyperliquid ↔ HyperEVM ↔ Base round trip through the factory's own treasury tool (PR #29).
+
+Live runs 1–8 logged; run 8 was the first with population trades (docs/build-log.md).
 
 ## Secrets and money
 
@@ -44,7 +46,13 @@ The session model plans, specs, reviews diffs and merges. Codex on `gpt-6-astra`
 
 ## Next
 
-Remaining before the `funded` manifest: merge resume and the clock; one real x402 purchase from the reserve for cents (experimenter funds `reserve.key`'s address with about $5 USDC on Base; `factorylab reserve init` prints the address) and one real $5 Venice tranche; venue↔reserve real moves with CCTP and funding payments (spec §5.3, §5.5); testnet faucet then run 6 with real fills; cold audits per `docs/audit-brief.md` (Codex, a Fable subagent and an Opus subagent, each given the essay); hosting (droplet, supervisor into resume, nightly encrypted backups, alert on death, and a `factorylab wake` command that publishes the five sealed aggregates plus venue and reserve balances hourly: the only live view, per the essay's control tower); build log, wake page.
+1. A cold re-audit of this main, launched together with the experimenter (docs/audit-brief.md; Codex cannot take a defect seat).
+2. The first-move review: seed prompts, the lineup, edition 1 of the charter (`worlds/edition1-example.toml`), the tick, the pots.
+3. Operational checks on the launch machine: the Hyperliquid mainnet wallet (a dedicated experiment wallet holding only the experiment's money; withdrawals need its main key), Venice buying from the reserve, the wake page reachable.
+4. Fund OpenRouter with the seed ($100), no auto top-up.
+5. The `funded` manifest, hash recorded, launched. Then nothing changes, ever.
+
+Previously listed before the `funded` manifest: merge resume and the clock; one real x402 purchase from the reserve for cents (experimenter funds `reserve.key`'s address with about $5 USDC on Base; `factorylab reserve init` prints the address) and one real $5 Venice tranche; venue↔reserve real moves with CCTP and funding payments (spec §5.3, §5.5); testnet faucet then run 6 with real fills; cold audits per `docs/audit-brief.md` (Codex, a Fable subagent and an Opus subagent, each given the essay); hosting (droplet, supervisor into resume, nightly encrypted backups, alert on death, and a `factorylab wake` command that publishes the five sealed aggregates plus venue and reserve balances hourly: the only live view, per the essay's control tower); build log, wake page.
 
 The ordered list, with the gaps against the essay, is `docs/design-audit-v2.md` §7. In short: merge the controller wiring and `p3b-runtime`; run 5 with the Hyperliquid testnet key; make the treasury real (Hyperliquid withdrawals to a factory-owned reserve address, mechanical float top-ups from the reserve only); `resume` after a process crash; a versioning module (transfer operator, spectral gap, pathology flags, early-warning signals); population-proposed λ; recursive meta-evaluation; cold audits; hosting; then the `funded` manifest and no changes, ever.
 
