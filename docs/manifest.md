@@ -801,7 +801,10 @@ discarded, so the mark does not slide when the series rolls and evidence that
 arrived after the claim is still found. When the retained prefix no longer
 reaches back to the mark, the required interval has been discarded: the window
 supplies no facts at all and the forecast is closed unscored rather than resolved
-false, with `forecast.evidence_discarded` in the diary.
+false, with `forecast.evidence_discarded` in the diary. A claim that comes due
+after a window boundary is read against a window that opened after the mark, so
+every sample in it counts and any sample it has already discarded censors the
+claim the same way.
 
 ## Operator controls and recovery
 

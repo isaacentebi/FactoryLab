@@ -17,6 +17,7 @@ from factorylab.runtime.observations import (
     MAX_WORLD_SAMPLES,
     record_venue_facts,
     window_cursor,
+    window_facts,
     window_facts_since,
 )
 from factorylab.runtime.resume import restore_runtime, runtime_state
@@ -264,3 +265,61 @@ def test_a_batched_read_that_fits_discards_nothing_of_a_marked_coin():
                        {"mids": {coin: "100" for coin in ["ETH", "BTC", "SOL"]}}, 1)
     since = window_facts_since(rt.window, cursor)
     assert len(since["mids"]["ETH"]) == 1 and rt.window.series_discarded == {}
+
+
+def roll_window(rt):
+    """Cross a real reserve boundary: the open window closes and the next one opens."""
+    rt._manage_reserve_window()  # a runtime that has not opened a reserve window yet
+    rt.clock.now_ns += rt.m.novelty.window_ns
+    rt._manage_reserve_window()
+
+
+def test_a_claim_sealed_before_the_boundary_reads_the_later_window_s_discards():
+    """A window that opened after the mark is entirely after it — evictions included.
+
+    Nothing in the new window predates the claim, so every sample it has already
+    dropped was dropped out of the interval the claim is owed. Returning the
+    retained suffix hands the resolver a window it can only misread.
+    """
+    rt = make_runtime()
+    feed_mids(rt, 1, coin="ETH")
+    cursor = window_cursor(rt.window)
+    roll_window(rt)
+    assert rt.window.index != cursor["index"]
+    record_venue_facts(rt.window, "venue.mids", {},
+                       {"mids": {coin: "100" for coin in batch_coins("ETH")}}, 1)
+    assert "ETH" not in {row["coin"] for row in rt.window.mids}  # dropped by the batch's bound
+    assert window_facts_since(rt.window, cursor) is None
+
+
+def test_a_claim_sealed_before_the_boundary_reads_an_intact_later_window_whole():
+    rt = make_runtime()
+    feed_mids(rt, 1, coin="ETH")
+    cursor = window_cursor(rt.window)
+    roll_window(rt)
+    feed_mids(rt, 3, coin="ETH")
+    since = window_facts_since(rt.window, cursor)
+    assert since is not None
+    assert len(since["mids"]["ETH"]) == 3
+    assert since == window_facts(rt.window)
+
+
+def test_a_claim_due_in_a_later_window_is_closed_unscored_when_that_window_evicted(monkeypatch):
+    rt = sealed_claim(monkeypatch, coin="ETH")
+    forecast = seal(rt, "eth-mid")
+    roll_window(rt)
+    record_venue_facts(rt.window, "venue.mids", {},
+                       {"mids": {coin: "100" for coin in batch_coins("ETH")}}, 1)
+    status, _score = settle(rt, forecast)
+    assert status is SettleStatus.CENSORED
+    assert [i["predicate"] for i in ledger_items(rt, "forecast.evidence_discarded")] == ["eth-mid"]
+
+
+def test_a_claim_due_in_a_later_window_is_scored_on_that_window_when_nothing_was_lost(monkeypatch):
+    rt = sealed_claim(monkeypatch, coin="ETH")
+    forecast = seal(rt, "eth-mid")
+    roll_window(rt)
+    feed_mids(rt, 1, coin="ETH")
+    status, score = settle(rt, forecast)
+    assert status is SettleStatus.SETTLED
+    assert score == pytest.approx(0.99)  # 1 - (0.9 - 1) ** 2

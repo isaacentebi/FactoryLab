@@ -381,8 +381,9 @@ def window_facts_since(window: Any, cursor: Mapping | None) -> dict | None:
     sealed cannot resolve anything sealed against it. ``index`` and
     ``equity_start_micro`` describe the window itself and are fixed when it
     opens, so they pass through unchanged. A cursor from an earlier window (or
-    no cursor at all) yields the whole current window, which opened after the
-    mark and is therefore already entirely after it.
+    no cursor at all) marks nothing in this one: the window opened after the
+    mark, so every sample it holds is already after it — and so is every sample
+    it has since discarded, which is read exactly like a path that stood at zero.
 
     Returns ``None`` when a bounded series has discarded a sample the cursor
     still needs: the interval the claim was sealed over is no longer evidence,
@@ -390,7 +391,7 @@ def window_facts_since(window: Any, cursor: Mapping | None) -> dict | None:
     """
     facts = window_facts(window)
     if not isinstance(cursor, Mapping) or cursor.get("index") != facts.get("index"):
-        return facts
+        cursor = {}  # A window opened after the mark stands wholly after it.
     offsets = series_offsets(window)
     result = {}
     for key, value in facts.items():
