@@ -234,6 +234,7 @@ def test_example_manifest_and_cli_resolve_population_charter(capsys):
     # re-drafted with the actual roster and takes a cadence then. Everything else
     # about the two files is still the same file.
     assert replace(example, name=base.name, charter=base.charter, treasury=base.treasury,
+                   charter_explicit=base.charter_explicit,
                    tick_interval_ns=base.tick_interval_ns, evaluation=base.evaluation) == base
     assert example.tick_interval_ns == 60_000_000_000
     assert example.evaluation.consequence_backstop_events == 200
