@@ -1,5 +1,6 @@
 """T21: population kinds retain their own accountability and reward contracts."""
 
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -137,7 +138,12 @@ def test_world_disclosure_has_exactly_four_shapes_and_registered_predicates():
     block = work_disclosure({"WeatherForecast": "forecast"}, predicates)
     assert set(block["reward_shapes"]) == {"judged", "forecast", "conformity", "exposure"}
     assert block["default_reward_shape"] == "judged"
-    assert "reward stays outside the loop of the thing rewarded" in block["reward_contract"]
+    # The catalogue and the default are the registration contract; why the kernel
+    # allows no fifth shape is enforced in code and never announced (AGENTS.md).
+    disclosed = json.dumps(block)
+    assert "reward_contract" not in block
+    for described in ("outside the loop", "exactly four", "no fifth", "kernel"):
+        assert described not in disclosed
     assert block["kind_rewards"] == {"WeatherForecast": "forecast"}
     assert block["predicates"] == predicates
     block["predicates"][0]["params"]["horizon_events"] = 99

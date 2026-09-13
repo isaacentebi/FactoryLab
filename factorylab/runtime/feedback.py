@@ -148,9 +148,17 @@ class FeedbackMixin:
                 )
                 definition = known[pid]
                 forecast_type = PredicateForecast if definition.code is not None else Forecast
+                population = {}
+                if definition.code is not None:
+                    from factorylab.runtime.observations import window_cursor
+
+                    # Seal how much of the open window had already happened, so the
+                    # claim is resolved over what follows it and not over its past.
+                    population = {"predicate": definition,
+                                  "window_cursor": window_cursor(self.window)}
                 self.book.seal(forecast_type(
                     fh, evaluator_id, about, pid, params, q, self.n, self.n + horizon, "",
-                    **({"predicate": definition} if definition.code is not None else {})))
+                    **population))
             except (ValueError, KeyError):
                 continue
             self.stats.forecasts_sealed += 1
@@ -248,11 +256,13 @@ class FeedbackMixin:
         window_balances = self.balance_at[start : self.n + 1]
         public = {}
         if isinstance(f, PredicateForecast):
-            from factorylab.runtime.observations import window_facts
+            from factorylab.runtime.observations import window_facts_since
 
-            # The public window at the due event is the same evidence surface used
-            # by observations; no private handles or attribution enter the resolver.
-            public = {"public_window": window_facts(self.window)}
+            # The same evidence surface observations read, restricted to what the
+            # window accumulated after the claim was sealed: a fill that had already
+            # happened resolves nothing. No private handles or attribution enter the
+            # resolver.
+            public = {"public_window": window_facts_since(self.window, f.window_cursor)}
         return WindowFacts(
             balance_at_forecast=self.balance_at[start],
             balance_at_settlement=self.wallet.balance,

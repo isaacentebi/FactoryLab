@@ -401,7 +401,11 @@ class WorldManifest:
         from factorylab.charter.book import validate_observation_bindings
 
         validate_observation_bindings(self.charter.cards)
+        # A launch card can only hold to account work this world can actually emit:
+        # a seed role, every role at once, or a kind one of the seed assemblies emits.
+        seed_kinds = frozenset(kind for a in self.assemblies for kind in a.emits)
         for card in self.charter.cards:
+            card.validate_answers_for(seed_kinds)
             if observation_for(card.observation) is None:
                 raise ValueError(f"card {card.id} observation: unknown catalogue id")
             if not parses(card):

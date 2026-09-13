@@ -59,7 +59,9 @@ def test_runtime_world_block_discloses_the_four_shapes():
     work = rt._world_block()["work"]
     assert set(work["reward_shapes"]) == {"judged", "forecast", "conformity", "exposure"}
     assert work["default_reward_shape"] == "judged"
-    assert "reward stays outside the loop of the thing rewarded" in work["reward_contract"]
+    # The kernel's restriction is enforced in code, never announced (AGENTS.md).
+    assert "reward_contract" not in work
+    assert "outside the loop" not in json.dumps(work)
 
 
 def test_runtime_registers_and_discloses_a_preflighted_predicate(monkeypatch):
@@ -391,3 +393,60 @@ def test_pruned_polymorphic_forecast_keeps_its_emitted_measurement_scope(monkeyp
     rt.balance_at[:] = [rt.wallet.balance] * (rt.n + 1)
     rt._settle_due_forecasts()
     assert rt.card_samples.forecasts[-1]["role"] == "WeatherForecast"
+
+
+def _sealed_fill_claim(monkeypatch):
+    """A world whose one desk seals `fills > 0` over the open window on every tick."""
+    rt = make_runtime()
+    register_work(rt)
+    rt._close_price_window()
+    rt.tool_jail_available = True
+    monkeypatch.setattr(PredicateRunner, "run",
+                        lambda self, code, facts: (facts["fills"] > 0, None))
+    rt._apply_registrations("decision-0", Return("decision-0", {"register": [{
+        "kind": "predicate", "id": "has-fill", "description": "A fill occurred.",
+        "code": "def resolve(facts): return facts['fills'] > 0",
+    }]}, 0, "ok"))
+    assert rt.predicates.get("has-fill") is not None, rt.registration_feedback
+    monkeypatch.setattr(type(rt.provider.target), "complete", lambda self, req: ModelResponse(
+        req.model_id, json.dumps({"forecasts": [{"predicate": "has-fill",
+            "params": {"horizon_events": 1}, "q": 0.9}]}), 1, 1, "end_turn"))
+    return rt
+
+
+def _resolved_score(rt):
+    forecast = next(f for f in rt.book.pending() if f.predicate_id == "has-fill")
+    rt.n += 1
+    rt.balance_at[:] = [rt.wallet.balance] * (rt.n + 1)
+    rt._settle_due_forecasts()
+    assert rt.queue.get(forecast.handle).status is SettleStatus.SETTLED
+    return rt.queue.history(forecast.handle)[-1].score
+
+
+def test_population_predicate_is_resolved_only_over_what_followed_the_claim(monkeypatch):
+    from tests.audit.test_a1_composition import routed
+
+    # The window already holds a fill when the claim is sealed: hindsight, not skill.
+    before = _sealed_fill_claim(monkeypatch)
+    before.window.fills += 1
+    routed(before, "weather-desk", Event("weather", EventKind.TICK, 0, {}, "world"))
+    assert _resolved_score(before) == pytest.approx(0.19)  # 1 - (0.9 - 0) ** 2
+
+    # The same fill, arriving after the claim, resolves it.
+    after = _sealed_fill_claim(monkeypatch)
+    routed(after, "weather-desk", Event("weather", EventKind.TICK, 0, {}, "world"))
+    after.window.fills += 1
+    assert _resolved_score(after) == pytest.approx(0.99)  # 1 - (0.9 - 1) ** 2
+
+
+def test_sealed_window_cursor_survives_resume(monkeypatch):
+    from tests.audit.test_a1_composition import routed
+
+    rt = _sealed_fill_claim(monkeypatch)
+    rt.window.fills += 1
+    routed(rt, "weather-desk", Event("weather", EventKind.TICK, 0, {}, "world"))
+    restored = make_runtime()
+    restore_runtime(restored, json.loads(json.dumps(runtime_state(rt))))
+    monkeypatch.setattr(PredicateRunner, "run",
+                        lambda self, code, facts: (facts["fills"] > 0, None))
+    assert _resolved_score(restored) == pytest.approx(0.19)

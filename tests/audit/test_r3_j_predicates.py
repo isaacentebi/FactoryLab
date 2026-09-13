@@ -201,3 +201,26 @@ def test_predicate_runner_jail_returns_true_and_false():
     assert runner.run(FIRST, {"fills": 0}) == (False, None)
     value, error = runner.run("def resolve(facts): return 1", {})
     assert value is None and error
+
+
+def test_public_facts_for_a_claim_begin_where_the_claim_was_sealed():
+    """What a predicate reads is the window after the forecast, never the window before it."""
+    from factorylab.runtime.observations import window_cursor, window_facts, window_facts_since
+    from factorylab.runtime.pricing import MeasureWindow
+
+    window = MeasureWindow(index=3, equity_start_micro=500)
+    window.fills = 2
+    window.costs.append(10)
+    window.mids.append({"coin": "BTC", "ts_ns": 1, "value": 10})
+    cursor = window_cursor(window)
+    assert window_facts_since(window, cursor)["fills"] == 0
+    window.fills += 1
+    window.costs.append(20)
+    window.mids.append({"coin": "BTC", "ts_ns": 2, "value": 20})
+    since = window_facts_since(window, cursor)
+    assert (since["fills"], since["costs"], since["mids"]) == (1, [20], {"BTC": [[2, 20]]})
+    # The window's identity is fixed when it opens, so it is carried, not differenced.
+    assert (since["index"], since["equity_start_micro"]) == (3, 500)
+    # A later window opened after the claim, so all of it is already after the claim.
+    assert window_facts_since(window, {**cursor, "index": 2}) == window_facts(window)
+    assert window_facts_since(window, None) == window_facts(window)

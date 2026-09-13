@@ -92,7 +92,13 @@ def return_channel(kind: str, shape: str, *, higher: bool = False) -> str:
 
 
 def work_disclosure(kinds: dict[str, str], predicates: list[dict]) -> dict:
-    """Publish the four reward shapes and predicate metadata without learner identities."""
+    """Publish the declarable reward shapes and predicate metadata without learner identities.
+
+    The block is a registration form, not an account of the kernel: it names the
+    shapes a declaration may carry and the shape it gets without one. Why the
+    catalogue is closed, and that reward may not re-enter what it rewards, is
+    enforced by ``reward_contracts`` and never announced (AGENTS.md).
+    """
     shapes = reward_contracts(tuple(kinds), kinds)
     return {
         "reward_shapes": {
@@ -104,11 +110,6 @@ def work_disclosure(kinds: dict[str, str], predicates: list[dict]) -> dict:
             "exposure": "Exposure of a judge's failed payoff prediction against consequence.",
         },
         "default_reward_shape": "judged",
-        "reward_contract": (
-            "A new kind declares one of exactly four reward shapes. A kind without a "
-            "declaration defaults to judged. There is no fifth shape: reward stays outside "
-            "the loop of the thing rewarded."
-        ),
         "kind_rewards": shapes,
         "predicates": _to_plain(predicates),
         "predicate_registration": {
