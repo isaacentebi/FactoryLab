@@ -15,7 +15,8 @@ RETURN_OBSERVATIONS = frozenset({
 })
 # The runtime keeps per-decision attribution on the same window object;
 # measurement never observes it.
-ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions")
+ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_cards",
+                      "closed_prices")
 FORECAST_OBSERVATIONS = frozenset({
     "forecast_skill", "verdict_mean", "verdict_std", "consequence_paid_off_rate", "censored_share",
 })

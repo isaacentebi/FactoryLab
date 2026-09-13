@@ -139,6 +139,56 @@ def test_a_verdict_on_an_unblamed_return_settles_at_one():
     assert runtime.standing.snapshot()["eval-a"]["verdict_skill"] == pytest.approx(0.25)
 
 
+def _remove_card_at_the_boundary(runtime, card_id="no-inaction"):
+    """Activate an amendment that drops the violated card at the next reserve-window
+    boundary, exactly where governance activates one: after the window has closed, and
+    before the verdicts that window owes have settled."""
+    activate = runtime._activate_charter_if_due
+
+    def at_the_boundary():
+        activate()
+        charter = runtime.charter
+        runtime.charter = Charter(charter.edition + 1, charter.norms,
+                                  tuple(c for c in charter.cards if c.id != card_id))
+        runtime.controller.remove(card_id, amendment_id="test-amendment")
+        runtime.priced.remove(card_id)
+        runtime.regions.pop(card_id, None)
+        runtime._derive_regions()
+
+    runtime._activate_charter_if_due = at_the_boundary
+
+
+def test_an_amendment_at_the_boundary_cannot_unblame_a_closed_windows_verdict():
+    """A verdict is settled against the edition that priced the window the judged return
+    worked in. An amendment removing the violated card activates after that window closed
+    and before the verdict settles; the window's attribution is already fixed."""
+    runtime = _blaming_runtime(Colluders())
+    about, event = _consequence_produce(runtime, "seed-decider")
+    judge = _consequence_judge(runtime, event, "eval-a")
+    _remove_card_at_the_boundary(runtime)
+    _close_window(runtime)
+    # The new edition is in force and the card's price is gone with it.
+    assert "no-inaction" not in {c.id for c in runtime.charter.cards}
+    assert runtime.controller.price("no-inaction") == 0.0
+    item = _items(runtime, "verdict.consequence")[0]
+    assert item["handle"] == judge and item["about_handle"] == about
+    assert item["window"] == 1 and item["window_closed"] is True
+    assert item["share"] == 1.0 and item["outcome"] == 0.0  # the closed window blamed it alone
+    assert [t["card_id"] for t in item["terms"]] == ["no-inaction"]
+    assert item["brier"] == 0.0 and item["baseline_brier"] == 0.75
+    assert runtime.standing.snapshot()["eval-a"]["verdict_skill"] == pytest.approx(-0.75)
+    assert runtime.ledger.verify()
+    # The untouched path settles identically: the amendment changed nothing about it.
+    control = _blaming_runtime(Colluders())
+    _, control_event = _consequence_produce(control, "seed-decider")
+    _consequence_judge(control, control_event, "eval-a")
+    _close_window(control)
+    unchanged = _items(control, "verdict.consequence")[0]
+    keys = ("share", "outcome", "brier", "baseline_brier", "beat_baseline", "window",
+            "window_closed", "terms")
+    assert {k: item[k] for k in keys} == {k: unchanged[k] for k in keys}
+
+
 def test_a_verdict_whose_window_never_closes_settles_at_one_at_the_backstop():
     manifest = load_manifest("scripted")
     manifest = replace(manifest, evaluation=replace(manifest.evaluation,
