@@ -21,6 +21,7 @@ from typing import Any
 from factorylab.charter.charter import Charter, MetricCard, seed_charter
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.cards import parses
+from factorylab.runtime.notes import NotesSpec
 from factorylab.runtime.observations import observation_for
 from factorylab.world.connector import DEFAULT_DENYLIST, validate_denylist
 from factorylab.world.market import DISCOVERY_URL
@@ -229,6 +230,7 @@ class WorldManifest:
     evaluation: EvaluationSpec = EvaluationSpec()
     tools: ToolsSpec = ToolsSpec()
     connectors: ConnectorsSpec = ConnectorsSpec()
+    notes: NotesSpec = NotesSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
     clock: ClockSpec = ClockSpec()
@@ -285,6 +287,38 @@ class WorldManifest:
 
     # ---- validation
 
+    def validate_venue_metadata(self) -> dict:
+        """Name missing markets before launch; unreachable metadata is explicitly unverified.
+
+        This read-only preflight is separate from deterministic manifest loading.
+        It never constructs a trading adapter or reads account credentials.
+        """
+        if self.exchange.kind != "hyperliquid":
+            return {"status": "not_applicable"}
+        from urllib.request import Request, urlopen
+
+        host = "api.hyperliquid.xyz" if self.exchange.mainnet else "api.hyperliquid-testnet.xyz"
+
+        def metadata(kind):
+            request = Request(f"https://{host}/info", data=json.dumps({"type": kind}).encode(),
+                              headers={"Content-Type": "application/json"})
+            with urlopen(request, timeout=5) as response:
+                return json.load(response)
+
+        try:
+            perps, spot = metadata("meta"), metadata("spotMeta")
+            coins = {row["name"] for row in perps["universe"]}
+            tokens = {row["index"]: row["name"] for row in spot["tokens"]}
+            pairs = {f"{tokens[row['tokens'][0]]}/{tokens[row['tokens'][1]]}"
+                     for row in spot["universe"]}
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            return {"status": "unavailable", "coins": list(self.exchange.coins),
+                    "spot_pairs": list(self.exchange.spot_pairs)}
+        missing_coins = sorted(set(self.exchange.coins) - coins)
+        missing_pairs = sorted(set(self.exchange.spot_pairs) - pairs)
+        return {"status": "invalid" if missing_coins or missing_pairs else "valid",
+                "missing_coins": missing_coins, "missing_spot_pairs": missing_pairs}
+
     def validate(self) -> None:
         if (self.exchange.kind == "hyperliquid" and self.exchange.mainnet
                 and self.charter_explicit is not True):
@@ -293,6 +327,9 @@ class WorldManifest:
             raise ValueError("live_exchange_requires_explicit_charter: mainnet needs [charter]")
         if self.initial_balance_micro < 0:
             raise ValueError("initial balance must be non-negative")
+        if (type(self.termination.balance_floor_micro) is not int
+                or self.termination.balance_floor_micro < 0):
+            raise ValueError("termination balance floor must be non-negative integer micro-USD")
         if type(self.treasury.insolvency_events) is not int or self.treasury.insolvency_events < 1:
             raise ValueError("treasury.insolvency_events must be a positive integer")
         if (type(self.treasury.reported_cost_multiple) is not int
@@ -389,7 +426,7 @@ class WorldManifest:
             raise ValueError("tick_interval must lie within clock.min_tick and derived max_tick")
         if self.exchange.kind not in ("fake", "hyperliquid"):
             raise ValueError("unknown exchange kind")
-        if self.exchange.kind == "hyperliquid" and self.exchange.mainnet and self.name != "funded":
+        if self.exchange.mainnet and self.name != "funded":
             raise ValueError("mainnet is only allowed in the world named 'funded'")
         if self.exchange.shocks and self.exchange.kind != "fake":
             raise ValueError("price shocks exist only on the fake venue")
@@ -401,7 +438,11 @@ class WorldManifest:
         from factorylab.charter.book import validate_observation_bindings
 
         validate_observation_bindings(self.charter.cards)
+        # A launch card can only hold to account work this world can actually emit:
+        # a seed role, every role at once, or a kind one of the seed assemblies emits.
+        seed_kinds = frozenset(kind for a in self.assemblies for kind in a.emits)
         for card in self.charter.cards:
+            card.validate_answers_for(seed_kinds)
             if observation_for(card.observation) is None:
                 raise ValueError(f"card {card.id} observation: unknown catalogue id")
             if not parses(card):
@@ -474,6 +515,10 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
 
 
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
+    note = d.get("notes", {})
+    if not isinstance(note, dict) or set(note) - {"max_keys", "max_bytes", "byte_window_micro"}:
+        raise ValueError("unknown notes manifest key")
+    notes = NotesSpec(**note)
     conn = d.get("connectors", {})
     if not isinstance(conn, dict) or set(conn) - {
         "max_bytes", "timeout_s", "call_price_usd", "max_calls_per_window", "origin_denylist"
@@ -607,6 +652,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         charter_explicit="charter" in d,
         evaluation=evaluation,
         connectors=connectors,
+        notes=notes,
         tools=ToolsSpec(
             int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
             int((d.get("tools") or {}).get("max_leverage", 3)),

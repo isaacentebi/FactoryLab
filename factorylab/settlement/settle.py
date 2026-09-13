@@ -1,17 +1,50 @@
 """Due commitments receive one original-handle outcome, with missing facts left unscored."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 
 from factorylab.kernel.queue import DecisionQueue, SettleStatus
+from factorylab.kernel.registry import _freeze
 from factorylab.settlement.forecast import Forecast, ForecastBook
 from factorylab.settlement.lots import Payoff
 from factorylab.settlement.scoring import PrevalenceBaseline, _require_probability, brier
 from factorylab.settlement.standing import ConsequenceStanding
-from factorylab.settlement.vocabulary import RETURN_PAID_OFF, Observer, WindowFacts
+from factorylab.settlement.vocabulary import (
+    RETURN_PAID_OFF,
+    Observer,
+    Predicate,
+    WindowFacts,
+    _validate_params,
+)
 
 # The verdict's own outside anchor: the base rate of returns the charter did not blame.
 VERDICT_NOT_BLAMED = "verdict_not_blamed"
+
+
+@dataclass(frozen=True)
+class PredicateForecast(Forecast):
+    """A population forecast seals its exact predicate definition alongside its parameters.
+
+    ``window_cursor`` seals how much of the open measurement window had already
+    happened when the claim was made, so resolution reads only what the window
+    accumulated after it.
+    """
+
+    predicate: Predicate | None = None
+    window_cursor: dict | None = None
+
+    def __post_init__(self) -> None:
+        if self.predicate is None or self.predicate.code is None:
+            raise ValueError("population forecast requires a registered predicate")
+        _validate_params(self.predicate_id, self.params, predicate=self.predicate)
+        # Reuse the seed record's identity, probability, event and immutable-parameter checks.
+        checked = Forecast(self.handle, self.evaluator_id, self.about_handle, "wallet_up",
+                           self.params, self.q, self.made_at_event, self.due_at_event, self.seal)
+        object.__setattr__(self, "params", checked.params)
+        if self.window_cursor is not None:
+            if not isinstance(self.window_cursor, Mapping):
+                raise ValueError("window_cursor must mark a position in the public window")
+            object.__setattr__(self, "window_cursor", _freeze(self.window_cursor))
 
 
 @dataclass(frozen=True)
@@ -40,6 +73,19 @@ class SettledVerdict:
     outcome: float
     brier: float
     baseline_brier: float
+
+
+def baseline_key(forecast: Forecast) -> str:
+    """Name the base rate a forecast is scored against, separating population versions.
+
+    A seed predicate has one fixed meaning, so its id is its base rate. A
+    population definition can be replaced, and the replacement is a different
+    claim: it starts its own prevalence history rather than inheriting the rate
+    its predecessor accumulated.
+    """
+    if isinstance(forecast, PredicateForecast):
+        return f"{forecast.predicate_id}@{forecast.predicate.version}"
+    return forecast.predicate_id
 
 
 def normative_brier(q: float, outcome: float) -> float:
@@ -87,8 +133,13 @@ class Settler:
             y = score = baseline_score = None
             status = SettleStatus.CENSORED
             if facts is not None:
-                y = self.__observer.observe(forecast.predicate_id, forecast.params, facts)
-                baseline_score = self.__baseline.baseline_brier(forecast.predicate_id, y)
+                if isinstance(forecast, PredicateForecast):
+                    y = self.__observer.observe(forecast.predicate_id, forecast.params, facts,
+                                                version=forecast.predicate.version)
+                else:
+                    y = self.__observer.observe(forecast.predicate_id, forecast.params, facts)
+            if y is not None:
+                baseline_score = self.__baseline.baseline_brier(baseline_key(forecast), y)
                 score = brier(forecast.q, y)
                 status = SettleStatus.SETTLED
             # A rejected queue/ledger write must not contaminate history on a later retry.
@@ -101,7 +152,7 @@ class Settler:
                 sampling_ref=None,
             )
             if y is not None:
-                self.__baseline.record(forecast.predicate_id, y)
+                self.__baseline.record(baseline_key(forecast), y)
             self.__book.mark_settled(forecast.handle)
             results.append(
                 Settled(

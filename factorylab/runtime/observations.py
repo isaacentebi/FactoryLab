@@ -30,6 +30,9 @@ MAX_WORLD_SAMPLES = 1024
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
 # not, so these are rebuilt by hand rather than copied through.
 ANONYMISED_WINDOW_FIELDS = ("verdicts", "revision_handles")
+# Facts fixed when the window opens rather than accumulated inside it: a
+# since-a-forecast view of the window carries them unchanged.
+WINDOW_IDENTITY_FACTS = ("index", "equity_start_micro")
 
 
 @dataclass(frozen=True)
@@ -291,8 +294,14 @@ def window_facts(window: Any) -> dict:
     """
     raw = dict(vars(window)) if not isinstance(window, dict) else dict(window)
     facts: dict[str, Any] = {}
+    facts["books"] = {}
     for key, value in raw.items():
         if key in PRIVATE_WINDOW_FIELDS or key in ANONYMISED_WINDOW_FIELDS:
+            continue
+        if key == "books":
+            for row in value[-MAX_WORLD_SAMPLES:]:
+                facts["books"].setdefault(row["coin"], []).append({
+                    "ts_ns": row["ts_ns"], "bids": row["bids"], "asks": row["asks"]})
             continue
         if key in ("mids", "funding"):
             series = {}
@@ -313,6 +322,63 @@ def window_facts(window: Any) -> dict:
     return facts
 
 
+def window_cursor(window: Any) -> dict:
+    """Mark one position in the public window: each counter's value, each series' length.
+
+    Sealed when a forecast is made, so the claim it opened can later be resolved
+    over what the window accumulated *after* it and never over what was already
+    there. Carries no window content, only how much of it had happened.
+    """
+    return _cursor(window_facts(window))
+
+
+def window_facts_since(window: Any, cursor: Mapping | None) -> dict:
+    """Return the public facts the window accumulated strictly after a sealed cursor.
+
+    Counters arrive as their increase since the mark and series as the samples
+    appended after it, so a fact that was already true when the cursor was
+    sealed cannot resolve anything sealed against it. ``index`` and
+    ``equity_start_micro`` describe the window itself and are fixed when it
+    opens, so they pass through unchanged. A cursor from an earlier window (or
+    no cursor at all) yields the whole current window, which opened after the
+    mark and is therefore already entirely after it.
+    """
+    facts = window_facts(window)
+    if not isinstance(cursor, Mapping) or cursor.get("index") != facts.get("index"):
+        return facts
+    return {
+        key: value if key in WINDOW_IDENTITY_FACTS else _since(value, cursor.get(key))
+        for key, value in facts.items()
+    }
+
+
+def _cursor(value: Any) -> Any:
+    """A counter marks its value, a series its length, and anything else nothing."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int | float):
+        return value
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, dict):
+        return {key: _cursor(item) for key, item in value.items()}
+    return None
+
+
+def _since(value: Any, mark: Any) -> Any:
+    """Subtract a counter's mark, drop a series' prefix, and pass anything else through."""
+    if isinstance(value, list):
+        return value[mark:] if type(mark) is int else value
+    if isinstance(value, dict):
+        marks = mark if isinstance(mark, Mapping) else {}
+        return {key: _since(item, marks.get(key)) for key, item in value.items()}
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int | float) and type(mark) in (int, float):
+        return value - mark
+    return value
+
+
 def window_fact_names() -> list[str]:
     """The names a registered observation may read, taken from the facts themselves.
 
@@ -322,6 +388,46 @@ def window_fact_names() -> list[str]:
     from factorylab.runtime.pricing import MeasureWindow
 
     return sorted(window_facts(MeasureWindow(index=0, equity_start_micro=0)))
+
+
+def record_venue_facts(window, tool: str, args: dict, result: dict, now_ns: int) -> None:
+    """Paid public reads add bounded numeric facts without account or author identities."""
+    from decimal import Decimal
+
+    from factorylab.kernel.money import usd_to_micro
+
+    if result.get("error"):
+        return
+    try:
+        if tool == "venue.order_book":
+            row = {"coin": args["coin"], "ts_ns": int(result["ts_ns"])}
+            for side in ("bids", "asks"):
+                row[side] = [[usd_to_micro(Decimal(str(level["price"])), rounding="nearest"),
+                              float(Decimal(str(level["size"])))]
+                             for level in result[side][:20]]
+                if any(price <= 0 or not math.isfinite(size) or size < 0
+                       for price, size in row[side]):
+                    return
+            window.books.append(row)
+            del window.books[:-MAX_WORLD_SAMPLES]
+        elif tool in ("venue.funding", "venue.funding_history"):
+            key = "funding" if tool == "venue.funding" else "funding_history"
+            rows = []
+            for item in result[key][-MAX_WORLD_SAMPLES:]:
+                rate = float(item["rate"])
+                if math.isfinite(rate):
+                    rows.append({"coin": item["coin"], "ts_ns": int(item["ts_ns"]),
+                                 "value": rate})
+            window.funding.extend(rows)
+            del window.funding[:-MAX_WORLD_SAMPLES]
+        elif tool == "venue.mids":
+            rows = [{"coin": coin, "ts_ns": now_ns,
+                     "value": usd_to_micro(Decimal(str(value)), rounding="nearest")}
+                    for coin, value in result["mids"].items()]
+            window.mids.extend(rows[-MAX_WORLD_SAMPLES:])
+            del window.mids[:-MAX_WORLD_SAMPLES]
+    except (KeyError, TypeError, ValueError, ArithmeticError, OverflowError):
+        return  # Malformed or unavailable venue data supplies no measurement.
 
 
 def _anonymous_verdicts(verdicts: Any) -> list[list[list[float]]]:

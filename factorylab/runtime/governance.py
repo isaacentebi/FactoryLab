@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from statistics import fmean
 from typing import Any
 
@@ -18,11 +18,14 @@ from factorylab.cortex.registration import (
     AssemblyProposal,
     ConnectorProposal,
     LearnerProposal,
+    MarketProposal,
     ModelProposal,
     ObservationProposal,
+    PredicateProposal,
     RetireProposal,
     ToolProposal,
     parse_proposals,
+    reward_contracts,
 )
 from factorylab.cortex.request import Return
 from factorylab.cortex.tools import PopulationTool, as_spec
@@ -37,9 +40,20 @@ from factorylab.runtime.observations import (
     ObservationBook,
     window_facts,
 )
-from factorylab.runtime.shared import _to_plain
+from factorylab.runtime.shared import PredicateRunner, _to_plain, assembly_rewards
 from factorylab.runtime.summary import _assembly_contract, _model_contract
 from factorylab.world.x402 import X402Error
+
+
+@dataclass(frozen=True)
+class WorkAssemblySpec(AssemblySpec):
+    """Population work retains its admitted reward shapes across checkpoints."""
+
+    reward_shapes: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        object.__setattr__(self, "reward_shapes", reward_contracts(self.emits, self.reward_shapes))
 
 
 @dataclass(frozen=True)
@@ -59,6 +73,13 @@ class GovernanceMixin:
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.charter_book.bind_observations(lambda: self.observations)
+        from factorylab.runtime.resume import JournalProxy
+
+        self.registered_predicates = {}
+        self.kind_reward_shapes = {}
+        self.forecast_returns = {}
+        self.predicate_runner = JournalProxy(PredicateRunner(), self.ledger, "predicate")
+        self.observer.predicates = self.predicates
         self.PROPOSAL_SHAPES = deepcopy(self.PROPOSAL_SHAPES)
         for kind in ("connector", "retire"):
             self.PROPOSAL_SHAPES[kind]["predicted_effect"] = {
@@ -102,6 +123,7 @@ class GovernanceMixin:
                         tool_jail=self.tool_jail_available,
                         retired_assemblies=frozenset(self.retired_assemblies),
                         seed_observations=SEED_IDS,
+                        known_reward_shapes=self._kind_rewards(),
                     )
                     if rejected:
                         if item.get("kind") == "connector":
@@ -138,6 +160,61 @@ class GovernanceMixin:
         self.window.registration_rejections += 1
         self.registration_feedback.append({k: v for k, v in item.items()
                                            if k not in ("kind", "handle")})
+
+    def _kind_rewards(self) -> dict[str, str]:
+        """Kind meanings outlive the assemblies that first declared them."""
+        return {**{k: v for a in self.assemblies.values()
+                   for k, v in assembly_rewards(a.spec).items()}, **self.kind_reward_shapes}
+
+    def _validate_output_contract(self, parsed, req) -> None:
+        """Registered predicates extend forecast validation without relaxing any return schema."""
+        try:
+            super()._validate_output_contract(parsed, req)
+        except ValueError as exc:
+            if str(exc) != "unknown forecast predicate":
+                raise
+            # The inherited validator has already checked the complete return,
+            # binding, custom schema and tool arguments before its seed lookup.
+            from factorylab.settlement.vocabulary import _validate_params
+
+            for forecast in parsed.get("forecasts", []):
+                predicate = self.predicates.get(forecast["predicate"])
+                _validate_params(forecast["predicate"], forecast["params"], predicate=predicate)
+
+    @property
+    def predicates(self):
+        """Predicate resolution always reads this world's current persisted history."""
+        from factorylab.settlement.vocabulary import PredicateBook
+
+        return PredicateBook(self.registered_predicates,
+                             run=lambda code, facts: self.predicate_runner.run(code, facts))
+
+    def _register_predicate(self, handle: str, prop: PredicateProposal) -> None:
+        """Only jailed boolean preflights and durable admission publish a predicate version."""
+        if not self.tool_jail_available:
+            raise Infeasible("no jail on this host")
+        closed = self.card_samples.windows[-1] if self.card_samples.windows else None
+
+        def persist(predicate):
+            contract = Contract(
+                id=f"predicate:{prop.id}", version=predicate.version, kind="observation",
+                description=prop.description, input_schema={"type": "object"},
+                output_schema={"type": "boolean"}, price=PriceSpec({}),
+                permissions=frozenset({"sandbox.run"}),
+                resource_bounds=ResourceBounds(
+                    max_duration_ns=OBSERVATION_TIMEOUT_S * 1_000_000_000))
+            self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+
+        predicate = self.predicates.register(
+            prop.id, prop.description, prop.code,
+            facts=window_facts(closed) if closed is not None else None,
+            persist=persist, provenance=handle,
+            preflight=lambda p, value, error: self.ledger.append({
+                "kind": "predicate.preflight", "handle": handle, "predicate": p.id,
+                "version": p.version, "window": closed["index"],
+                "value": value, "error": error, "ts": self.clock.now_ns}))
+        self._emit(EventKind.REGISTERED, {"kind": "predicate", "id": predicate.id,
+                                          "version": predicate.version})
 
     def _register_observation(self, handle: str, prop: Any) -> None:
         """Admit a population measurement only after it measures the last closed window.
@@ -241,12 +318,16 @@ class GovernanceMixin:
         card = next((c for c in self.charter.cards if c.id == prediction.card_id), None)
         if card is None:
             raise ValueError("predicted_effect.card_id must name a current card")
-        preflight_measurement(card, self.observations)
+        preflight_measurement(card, self.observations,
+                              registered_kinds=frozenset(self._kind_rewards()))
         return prediction
 
     def _register(self, handle: str, prop: Any, *,
                   predicted_effect: PredictedEffect | None = None) -> None:
         amount = self.ev.trial_amount_micro
+        if isinstance(prop, MarketProposal):
+            self._register_market(handle, prop)
+            return
         if isinstance(prop, RetireProposal):
             self._propose_retirement(handle, prop, predicted_effect=predicted_effect)
             return
@@ -255,6 +336,9 @@ class GovernanceMixin:
             return
         if isinstance(prop, ObservationProposal):
             self._register_observation(handle, prop)
+            return
+        if isinstance(prop, PredicateProposal):
+            self._register_predicate(handle, prop)
             return
         if isinstance(prop, LearnerProposal):
             self._register_learner(handle, prop)
@@ -334,11 +418,17 @@ class GovernanceMixin:
             version = (self.assemblies[prop.id].spec.version + 1
                        if prop.id in self.assemblies else 1)
             emits = prop.emits or None
-            spec = AssemblySpec(
+            declared_emits = prop.emits or tuple(prop.reward_shapes)
+            shapes = reward_contracts(declared_emits, prop.reward_shapes,
+                                      registered=self._kind_rewards())
+            custom = any(k not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
+                         for k in declared_emits)
+            spec = (WorkAssemblySpec if custom else AssemblySpec)(
                 id=prop.id, version=version, model_id=prop.model_id,
                 system_prompt=prop.system_prompt, max_tokens=prop.max_tokens,
                 effort=prop.effort, accepts=frozenset(prop.accepts), role=prop.role,
-                emits=emits, schemas=prop.schemas)
+                emits=emits, schemas=prop.schemas,
+                **({"reward_shapes": shapes} if custom else {}))
             self._check_event_schemas(spec)
             contract = _assembly_contract(prop.id, prop.role, prop.accepts, prop.max_tokens,
                                          emits=spec.emits, schemas=spec.schemas, version=version)
@@ -347,6 +437,8 @@ class GovernanceMixin:
                 refuse=("id already registered: a live assembly is retired by vote before "
                         "its id takes a next version") if live else "")
             self._instantiate(spec)
+            if custom:
+                self.kind_reward_shapes.update(shapes)
             self.retired_assemblies.discard(prop.id)
             for kind in prop.accepts:
                 self._open_epoch(kind)
@@ -360,6 +452,7 @@ class GovernanceMixin:
                     "emits": list(spec.emits),
                     "schemas": spec.schemas,
                     "version": version,
+                    **({"reward_shapes": shapes} if custom else {}),
                 },
             )
         else:
@@ -403,14 +496,16 @@ class GovernanceMixin:
         from factorylab.charter.committee import Committee, draw
 
         predicted_effect = self._policy_prediction(predicted_effect)
+        if prop.pay == "x402" and prop.max_call_micro > self.m.treasury.max_request_micro:
+            raise ValueError("connector cap exceeds treasury.max_request_micro")
         owner = self.handle_to_assembly.get(handle)
         if owner is None:
             try:
                 owner = self.queue.get(handle).propensity.chosen
             except KeyError:
                 raise ValueError("connector proposal needs a caller decision") from None
-        result, _ = self._fetch_connector(owner, handle, {"id": prop.id, "path": "/"},
-                                          origin=prop.origin)
+        result, _ = self._fetch_connector(
+            owner, handle, {"id": prop.id, "path": prop.preflight_path}, origin=prop.origin)
         # Preflight establishes bounds, not information for the proposer.
         if "error" in result:
             raise ValueError(f"connector preflight: {result['error']}")
@@ -431,7 +526,9 @@ class GovernanceMixin:
             raise ValueError("connector sortition vote did not reach a majority")
         contract = Contract(
             id=f"connector:{prop.id}", version=version, kind="connector",
-            description=prop.description, input_schema={"origin": prop.origin},
+            description=prop.description, input_schema={
+                "origin": prop.origin, "preflight_path": prop.preflight_path,
+                "pay": prop.pay, "max_call_micro": prop.max_call_micro},
             output_schema={"type": "string"},
             price=PriceSpec({"call": self.m.connectors.call_price_micro}),
             permissions=frozenset({"connector.fetch"}),
@@ -447,11 +544,47 @@ class GovernanceMixin:
         self.ledger.append({"kind": "connector.registered", "id": prop.id,
                             "version": version, "description": prop.description,
                             "origin": prop.origin, "handle": handle, "vote_id": vote_id,
+                            "preflight_path": prop.preflight_path, "pay": prop.pay,
+                            "max_call_micro": prop.max_call_micro,
                             "predicted_effect": asdict(predicted_effect),
                             "ts": self.clock.now_ns})
         self._activate_policy_ballots(vote_id)
         self._emit(EventKind.REGISTERED, {"kind": "connector", "id": prop.id,
                                           "version": version, "origin": prop.origin})
+
+    def _register_market(self, handle: str, prop: MarketProposal) -> None:
+        """One novelty trial admits a listed market, with durable identity before effects."""
+        listed = self.exchange.instruments()
+        if prop.coin not in {row["coin"] for row in listed.get(prop.market, [])}:
+            raise ValueError("market is not listed by the venue")
+        allowed = self.venue_tools.spot_pairs if prop.market == "spot" else self.venue_tools.coins
+        if prop.coin in allowed:
+            raise ValueError("market is already registered for trading")
+        contract = Contract(
+            id=f"market:{prop.market}:{prop.coin}", version=1, kind="exchange",
+            description=f"Trade {prop.market} {prop.coin}",
+            input_schema={"coin": prop.coin, "market": prop.market},
+            output_schema={}, price=PriceSpec({}), permissions=frozenset(),
+            resource_bounds=ResourceBounds())
+        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        self.ledger.append({"kind": "market.registered", "coin": prop.coin,
+                            "market": prop.market, "handle": handle, "ts": self.clock.now_ns})
+        self._admit_market(prop.coin, prop.market)
+        self._emit(EventKind.REGISTERED, {"kind": "market", "coin": prop.coin,
+                                         "market": prop.market, "version": 1})
+
+    def _admit_market(self, coin: str, market: str) -> None:
+        """Rebuilding trading permission requires no new external write or payment."""
+        self.venue_tools.admit_market(coin, market)
+        attr = "spot_pairs" if market == "spot" else "coins"
+        setattr(self.exchange, attr, tuple(dict.fromkeys((*getattr(self.exchange, attr), coin))))
+        self._refresh_venue_schemas()
+
+    def _refresh_venue_schemas(self) -> None:
+        """Current market permissions preserve existing tool examples and prices."""
+        for spec in self.venue_tools.contracts():
+            if spec.id in self.tool_specs:
+                self.tool_specs[spec.id]["args_schema"].update(_to_plain(spec.args_schema))
 
     def _propose_amendment(self, handle: str, item: dict[str, Any]) -> None:
         from factorylab.charter.amendment import (
@@ -501,18 +634,22 @@ class GovernanceMixin:
                         c.get("window"),
                         str(c.get("acceptable_region", "")),
                         str(c.get("observation", "")),
-                        proposed_answers_for(c.get("answers_for"), str(c.get("id", ""))),
+                        (c.get("answers_for") if isinstance(c.get("answers_for"), str)
+                         and c.get("answers_for") in self._kind_rewards()
+                         else proposed_answers_for(c.get("answers_for"), str(c.get("id", "")))),
                     )
                 )
             from factorylab.runtime.cards import parses
 
             for card in out:
+                card.validate_answers_for(frozenset(self._kind_rewards()))
                 if not parses(card):
                     raise ValueError("card acceptable_region has no finite usable bounds")
                 # A card may name a registered observation; an unregistered one
                 # is refused here, before a vote, with the reason.
                 region_for(card, rolling={}, observations=self.observations)
-                preflight_measurement(card, self.observations)
+                preflight_measurement(card, self.observations,
+                                      registered_kinds=frozenset(self._kind_rewards()))
             return tuple(out)
 
         remove = item.get("remove") or []
@@ -631,7 +768,7 @@ class GovernanceMixin:
         active = {am.id for am in self.charter_book.pending()}
         active.update(pid for pid, row in self.retirement_proposals.items()
                       if row["status"] == "passed")
-        waiting = self.cadence.world_block(self.tick_clock.interval_ns)["waiting"]
+        waiting = self.cadence.world_block(self.tick_clock)["waiting"]
         for proposal_id in waiting:
             if proposal_id not in active:
                 self.cadence.refused(proposal_id, "proposal is no longer pending")
@@ -646,7 +783,7 @@ class GovernanceMixin:
             if waiting and waiting[0] != row["proposal"].id:
                 continue
             if not self.cadence.ready(now_ns=self.clock.now_ns,
-                                      tick_interval_ns=self.tick_clock.interval_ns,
+                                      tick_interval_ns=self.tick_clock,
                                       window=self.stats.reserve_windows):
                 return
             motion = row["proposal"]
@@ -661,7 +798,7 @@ class GovernanceMixin:
             self._retire_assembly(motion.assembly_id, motion.id)
             row["status"] = "activated"
             self._activate_policy_ballots(motion.id)
-            self.cadence.activated(motion.id, self.clock.now_ns, self.tick_clock.interval_ns)
+            self.cadence.activated(motion.id, self.clock.now_ns, self.tick_clock)
             self.card_samples.revised(motion.proposer_handle)
             self.window.revision_returns += 1
             return
@@ -835,7 +972,7 @@ class GovernanceMixin:
             self.cadence.approve(am.id)
             self.cadence.ready(
                 now_ns=self.clock.now_ns,
-                tick_interval_ns=self.tick_clock.interval_ns,
+                tick_interval_ns=self.tick_clock,
                 window=self.stats.reserve_windows,
             )
             if not retiring:
@@ -850,7 +987,7 @@ class GovernanceMixin:
             return None
         if not self.cadence.ready(
             now_ns=self.clock.now_ns,
-            tick_interval_ns=self.tick_clock.interval_ns,
+            tick_interval_ns=self.tick_clock,
             window=self.stats.reserve_windows,
         ):
             return None
@@ -864,7 +1001,7 @@ class GovernanceMixin:
         if new is not None:
             am = self.charter_book.activated_amendment(new.edition)
             self._activate_policy_ballots(am.id)
-            self.cadence.activated(am.id, self.clock.now_ns, self.tick_clock.interval_ns)
+            self.cadence.activated(am.id, self.clock.now_ns, self.tick_clock)
         return new
 
     def _close_refused_ballots(self, refusal: Any) -> None:

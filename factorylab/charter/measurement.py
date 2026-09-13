@@ -155,7 +155,8 @@ def record_card_forecasts(runtime, pending, baseline) -> None:
         source = returns.get(parent, {})
         assembly = forecast.evaluator_id
         role = source.get("role") or (
-            measured_role(runtime.assemblies[assembly].spec.emits)
+            measured_role(runtime.return_kinds.get(parent)
+                          or runtime.assemblies[assembly].spec.emits)
             if assembly in runtime.assemblies else "evaluator"
         )
         subject = returns.get(forecast.about_handle)
@@ -194,7 +195,8 @@ def preflight_card(card: MetricCard, observations=None) -> None:
         raise ValueError(f"card {card.id} window: {observation.id} has no role/assembly samples")
 
 
-def preflight_measurement(card: MetricCard, observations=None) -> None:
+def preflight_measurement(card: MetricCard, observations=None, *,
+                          registered_kinds: frozenset[str] = frozenset()) -> None:
     """Execute the pricing measurement with one synthetic unit of the proposed selector."""
     from dataclasses import replace
 
@@ -203,10 +205,14 @@ def preflight_measurement(card: MetricCard, observations=None) -> None:
     from factorylab.runtime.pricing import MeasureWindow
     from factorylab.settlement.forecast import Forecast
 
+    card.validate_answers_for(registered_kinds)
     preflight_card(card, observations)
     unit = replace(card, window=replace(card.window, n=1))
     samples = CardSamples()
-    for kind in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
+    kinds = ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
+    if card.answers_for not in ("producer", "evaluator", "meta", "antagonist", "all"):
+        kinds += (card.answers_for,)
+    for kind in kinds:
         role = measured_role(kind)
         samples.returned(handle=kind, assembly=kind, role=role, window=1,
                          ret=Return(kind, {"verdict": 0.0} if kind == "Verdict" else {}, 1, "ok"))

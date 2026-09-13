@@ -7,10 +7,11 @@ from typing import Any
 from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, reserved_return_fields
 from factorylab.kernel.money import money_to_usd
+from factorylab.runtime.cadence import tick_intervals
 from factorylab.runtime.observations import window_fact_names
 from factorylab.runtime.propensity import MIN_DECLARED_MASS, action_vocabulary
+from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
-from factorylab.settlement import SEED_VOCABULARY
 
 
 class SchematicsMixin:
@@ -32,6 +33,7 @@ class SchematicsMixin:
             "accepts": ["Tick"],
             "emits": ["ProducerReturn"],
             "schemas": {},
+            "reward_shapes": {"ProducerReturn": "judged"},
             "max_tokens": 512,
             "effort": "low",
         },
@@ -44,7 +46,10 @@ class SchematicsMixin:
         },
         "retire": {"kind": "retire", "assembly_id": "an id from world.catalogue"},
         "connector": {"kind": "connector", "id": "public-source",
-                      "description": "Public information", "origin": "https://example.org"},
+                      "description": "Public information", "origin": "https://example.org",
+                      "preflight_path": "/data", "pay": "x402", "max_call_usd": "0.003"},
+        "market": {"kind": "market", "coin": "listed perp coin; omit when using pair",
+                   "pair": "listed BASE/USDC pair; omit when using coin"},
         "tool": {
             "kind": "tool",
             "id": "slug",
@@ -142,14 +147,16 @@ class SchematicsMixin:
         "it with a new version. A learner gives one assembly (assembly_id, normally your own "
         "inputs.you) a learner over the action set "
         "it declares, trained by that assembly's declared propensities and the rewards its "
-        "decisions settle at. Cards answer for producer, evaluator, meta, "
-        "antagonist or all; window is "
+        "decisions settle at. Cards answer for any registered emitted kind, "
+        "the seed aliases producer, evaluator, meta, antagonist, or all; window is "
         "{kind: returns|forecasts|windows, n: positive integer, per: role|assembly|null}. "
         "Insufficient samples are unmeasured. Lambda is optional and bounded by prices.lambda_max; "
         "tick_interval is an optional duration within world.clock bounds. A prediction names a "
         "card_id, direction (increase or decrease), and a positive window count after activation. "
         "Unmeasurable windows, duplicate role/observation bindings and unchanged amendments "
-        "are refused before a vote.",
+        "are refused before a vote. A connector may omit preflight_path (default /), pay, "
+        "and max_call_usd; pay=x402 requires an exact max_call_usd cap. A market proposal "
+        "names exactly one coin or pair from venue.instruments.",
         "tool_calls": (
             'a list of {"tool": id, "args": {...}} bounded by mechanics.tools.max_tool_calls; '
             'results come back in one continuation per request'
@@ -159,7 +166,9 @@ class SchematicsMixin:
             "ProducerReturn uses verdict feedback, Verdict uses conformity and payoff, "
             "MetaVerdict uses conformity or terminal consequence, Exposure uses exposure. "
             "A custom kind is declared in registration.schemas[kind] as a JSON object schema "
-            "and receives verdict feedback. Event kind names keep their schema; a changed "
+            "and declares registration.reward_shapes[kind] as judged, forecast, conformity "
+            "or exposure (default judged). See world.work for the reward contracts. "
+            "Event kind names keep their schema; a changed "
             "schema uses a new name. Built-in world and kernel events cannot be emitted."
         ),
         "requests": (
@@ -180,6 +189,7 @@ class SchematicsMixin:
     def _world_block(self) -> dict[str, Any]:
         """Facts about the world any assembly may see. No rules, no goals, no private state."""
         self._ensure_connector_tool()
+        from factorylab.runtime.notes import counts
         try:
             acct = self.exchange.account()
             account = {
@@ -208,6 +218,13 @@ class SchematicsMixin:
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
             "venue": self.exchange.instruments(),
+            "trading_markets": {"perp": list(self.venue_tools.coins),
+                                "spot": list(self.venue_tools.spot_pairs)},
+            "notes": {**counts(self.notes), "max_keys": self.m.notes.max_keys,
+                      "max_bytes": self.m.notes.max_bytes,
+                      "byte_window_micro": self.m.notes.byte_window_micro,
+                      "pricing": "UTF-8 key and text bytes; storage per window, reads per byte. "
+                      "Unpaid storage rent is due before a read or overwrite; text is retained."},
             "tools": list(self.tool_specs.values()),
             "connectors": {"registered": self._connector_catalogue(),
                            "max_bytes": self.m.connectors.max_bytes,
@@ -217,8 +234,11 @@ class SchematicsMixin:
                            "window_ns": self.m.novelty.window_ns,
                            "origin_denylist": list(self.m.connectors.origin_denylist),
                            "method": "GET",
+                           "optional_fields": ["pay", "max_call_usd"],
+                           "payment": "pay=x402 uses max_call_usd as the seller charge cap; "
+                           "the flat call price is additional. Omit pay for free sources.",
                            "result": "UTF-8 text in seen_tool_results[].result.body",
-                           "tool_rounds": 2, "continuation_tool_kinds": ["population"],
+                           "tool_rounds": 2, "continuation_tool_kinds": ["population", "note"],
                            "encoding": "UTF-8 with replacement", "redirects": "refused",
                            "oversize": "refused", "credentials": False},
             "population_tools": {
@@ -226,6 +246,7 @@ class SchematicsMixin:
                 "reason": None if self.tool_jail_available else "no jail on this host",
             },
             "observations": measurement_catalogue(self.observations),
+            "work": work_disclosure(self._kind_rewards(), self.predicates.catalogue()),
             "observation_facts": window_fact_names(),
             "action_labels": action_vocabulary(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
@@ -284,7 +305,8 @@ class SchematicsMixin:
                 "min_tick": _duration_str(self.m.clock.min_tick_ns),
                 "max_tick": _duration_str(self.m.max_tick_ns),
             },
-            "governance": self.cadence.world_block(self.tick_clock.interval_ns),
+            "governance": self.cadence.world_block(self.tick_clock),
+            "tick_intervals": tick_intervals(self.tick_clock),
             "registration_feedback": list(self.registration_feedback),
             "reserved_return_fields": reserved_return_fields(
                 max_children=self.m.tools.max_children,
@@ -374,8 +396,9 @@ class SchematicsMixin:
             "items": {
                 "type": "object",
                 "properties": {"kind": {"enum": ["model", "assembly", "router", "tool",
-                                                   "observation", "learner", "amendment",
-                                                   "retire", "connector"]}},
+                                                   "observation", "predicate", "learner",
+                                                   "amendment", "retire", "connector",
+                                                   "market"]}},
                 "required": ["kind"],
             },
         }
@@ -388,7 +411,7 @@ class SchematicsMixin:
             "items": {
                 "type": "object",
                 "properties": {
-                    "predicate": {"enum": [p.id for p in SEED_VOCABULARY]},
+                    "predicate": {"enum": [p.id for p in self.predicates.all()]},
                     "params": {
                         "type": "object",
                         "properties": {"horizon_events": {"type": "integer", "minimum": 1}},
@@ -494,6 +517,12 @@ class SchematicsMixin:
                 "number for the last closed window, and its declared range is the scale a "
                 "card's violation is divided by. A card naming an unregistered observation "
                 "is refused before the vote"
+                ". Window facts include mids (micro-USD), funding (dimensionless), "
+                "wallet_balance_micro and tick_timestamps_ns. Coin series carry nanosecond "
+                "timestamps. Paid venue reads also contribute books (price in micro-USD, "
+                "size in base units) and funding history for listed markets; each series "
+                "retains at most 1024 samples. venue.instruments lists public markets; "
+                "a market proposal adds trading permission for a listed coin or pair"
             ),
             "revision": (
                 "a producer return counts as a revision only when a registration it carried "

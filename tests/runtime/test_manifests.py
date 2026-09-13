@@ -314,3 +314,17 @@ def _testnet_with_charter():
     raw = tomllib.loads((WORLDS_DIR / "testnet.toml").read_text())
     raw["charter"] = _with_charter()["charter"]
     return manifest_from_dict(raw)
+
+
+def test_manifest_card_scope_must_name_a_kind_a_seed_assembly_emits():
+    """A launch card cannot hold to account work no seed assembly ever produces."""
+    raw = _with_charter()
+    raw["charter"]["cards"][0]["answers_for"] = "WeatherForcast"  # a typo for the kind below
+    with pytest.raises(ValueError, match="cost_per_return answers_for: unregistered emitted kind"):
+        manifest_from_dict(raw)
+    raw["assemblies"] = [{"id": "a", "model_id": "m", "emits": ["WeatherForecast"],
+                          "schemas": {"WeatherForecast": {"type": "object"}}}]
+    with pytest.raises(ValueError, match="unregistered emitted kind"):
+        manifest_from_dict(raw)
+    raw["charter"]["cards"][0]["answers_for"] = "WeatherForecast"
+    assert manifest_from_dict(raw).charter.cards[0].answers_for == "WeatherForecast"

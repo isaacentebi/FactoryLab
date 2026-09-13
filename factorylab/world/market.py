@@ -37,6 +37,34 @@ class PaymentOutcomeUnknown(X402Error):
     """A submitted authorization may have settled; its provisional debit requires reconciliation."""
 
 
+def metered_data(meter, handle: str, ceiling: int, execute, record) -> tuple[dict, int]:
+    """Data costs debit before return; unknown payments remain provisional and reconcilable."""
+    reserve_before = None
+
+    def evidence(item):
+        nonlocal reserve_before
+        if item["kind"] == "x402.reserve_before":
+            reserve_before = item["reserve_micro"]
+        record({**item, "handle": handle})
+
+    reservation = meter.wallet.reserve(ceiling, handle, "tool:connector.x402")
+    try:
+        result = execute(evidence)
+    except PaymentOutcomeUnknown:
+        meter.wallet.commit_uncertain(reservation)
+        evidence({"kind": "x402.unresolved", "reserved_micro": ceiling,
+                  "reservation_id": reservation.id, "reserve_before_micro": reserve_before})
+        return {"error": "data payment outcome is unknown", "status": "uncertain",
+                "bytes": 0, "cost_micro": ceiling}, ceiling
+    except Exception:
+        meter.wallet.release(reservation)
+        return {"error": "data read refused before payment", "status": "refused",
+                "bytes": 0, "cost_micro": 0}, 0
+    cost = result["cost_micro"]
+    meter.wallet.commit(reservation, cost)
+    return result, cost
+
+
 def seller_root(seller_url: str) -> str:
     """A seller URL has no embedded credentials, query, fragment or ambiguous API suffix."""
     if not isinstance(seller_url, str) or any(c.isspace() for c in seller_url):
@@ -267,6 +295,50 @@ class X402Provider:
     def reserve_balance(self) -> int:
         """Return an observed Base USDC balance without authorizing a payment."""
         return self._client().usdc_balance()
+
+    def fetch_data(self, origin: str, path: str, ceiling_micro: int, *, transport,
+                   record=None) -> dict:
+        """A bounded data GET signs once at most and uses the inference reserve wallet.
+
+        The caller supplies the connector's pinned transport, never a population URL
+        transport. Any failure after submission retains an uncertain debit.
+        """
+        if type(ceiling_micro) is not int or not 0 <= ceiling_micro <= self.max_request_micro:
+            raise X402Error("Data cap exceeds treasury.max_request_micro")
+        response = transport(origin, path)
+        cost = 0
+        if response.status == 402:
+            body = json.loads(response.body, parse_float=Decimal) if response.body else {}
+            quote = parse_quote(HTTPResponse(402, body, response.headers))
+            if quote.amount_micro > ceiling_micro:
+                return {"error": "Quote exceeds connector per-call cap", "status": 402,
+                        "bytes": 0, "cost_micro": 0}
+            if record:
+                record({"kind": "x402.quote", "quote": self._clean(asdict(quote))})
+            client = self._client(record=record)
+            signature = client.authorize(quote, ceiling_micro=ceiling_micro)
+            if record:
+                record({"kind": "x402.submitted", "amount_micro": quote.amount_micro})
+            try:
+                response = transport(origin, path, signature)
+                header = _header(response.headers, "payment-response", "x-payment-response")
+                if header is not None:
+                    receipt = _decode(header)
+                    if (receipt.get("success") is not True
+                            or receipt.get("network", BASE_NETWORK) != BASE_NETWORK
+                            or str(receipt.get("payer", client.address)).lower()
+                            != client.address.lower()):
+                        raise ValueError("invalid payment receipt")
+                elif not 200 <= response.status < 300:
+                    raise ValueError("payment outcome unavailable")
+            except Exception:
+                raise PaymentOutcomeUnknown("Data payment outcome is unknown") from None
+            cost = quote.amount_micro
+        result = {"body": response.body.decode("utf-8", errors="replace"),
+                  "status": response.status, "bytes": len(response.body), "cost_micro": cost}
+        if record:
+            record({"kind": "x402.result", "cost_micro": cost, "http_status": response.status})
+        return result
 
     def seller_models(self, seller_url: str) -> list[SellerModel]:
         """Seller catalogue reads use the same injected transport as inference."""

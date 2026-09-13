@@ -339,7 +339,9 @@ class ComputeMixin:
     def _connector_catalogue(self) -> list[dict]:
         """Public connector contracts expose latest versions, descriptions and origins."""
         return [{"id": c.id.removeprefix("connector:"), "version": c.version,
-                 "description": c.description, "origin": c.input_schema["origin"]}
+                 "description": c.description, "origin": c.input_schema["origin"],
+                 "pay": c.input_schema.get("pay"),
+                 "max_call_micro": c.input_schema.get("max_call_micro", 0)}
                 for c in self.registry.available("connector")]
 
     def _connector_refused(self, handle: str, reason: str, **fields) -> tuple[dict, int]:
@@ -358,6 +360,7 @@ class ComputeMixin:
         if error:
             return self._connector_refused(handle, error)
         preflight = origin is not None
+        paid_cap = None
         cid, path = args["id"], args["path"]
         fields = {"id": cid, "path": path, "assembly_id": action_id}
         try:
@@ -366,6 +369,8 @@ class ComputeMixin:
                 if contract.kind != "connector":
                     raise KeyError(cid)
                 origin = contract.input_schema["origin"]
+                if contract.input_schema.get("pay") == "x402":
+                    paid_cap = contract.input_schema["max_call_micro"]
             self.connector_proxy.validate(origin, path)
         except (KeyError, ConnectorRefused, ValueError) as exc:
             reason = "unknown connector" if isinstance(exc, KeyError) else str(exc)
@@ -376,17 +381,24 @@ class ComputeMixin:
         if count >= self.m.connectors.max_calls_per_window:
             return self._connector_refused(handle, "connector window call cap reached", **fields)
         price = self.m.connectors.call_price_micro
+        if price + (paid_cap or 0) > self.wallet.available_for(handle, "tool:connector.fetch"):
+            return self._connector_refused(handle, "connector call unaffordable", **fields)
+        data_cost = 0
 
         def execute():
+            nonlocal data_cost
             self.connector_calls[action_id] = (self.window.index, count + 1)
             day = self.clock.now_ns // 86_400_000_000_000
             self.connector_calls_day[day] = self.connector_calls_day.get(day, 0) + 1
             # Recovery evidence, exactly as for a paid model call or an x402 purchase:
             # the io.call/io.result pair reproduces the read without fetching it again
             # and without repeating the debit, so replay stays deterministic.
-            result = self.ledger.call("connector.fetch", self.connector_proxy.fetch,
-                                      (origin, path), {},
-                                      deterministic=self.connector_deterministic)
+            if paid_cap is not None:
+                result, data_cost = self._fetch_paid_data(handle, origin, path, paid_cap)
+            else:
+                result = self.ledger.call("connector.fetch", self.connector_proxy.fetch,
+                                          (origin, path), {},
+                                          deterministic=self.connector_deterministic)
             if preflight:
                 result = {key: value for key, value in result.items() if key != "body"}
             if len(result.get("body") or "") >= MIN_PROTECTED_BODY_CHARS:
@@ -406,12 +418,43 @@ class ComputeMixin:
             return self._connector_refused(handle, "connector call unaffordable", **fields)
         else:
             result, cost = paid.result, paid.cost
+        cost += data_cost
         self.ledger.append({"kind": "connector.call", "handle": handle, **fields,
                             "status": result["status"], "bytes": result["bytes"], "cost": cost,
                             "ts": self.clock.now_ns})
         if "error" in result:
             self._connector_refused(handle, result["error"], **fields)
         return result, cost
+
+    def _fetch_paid_data(self, handle: str, origin: str, path: str, cap: int):
+        """The existing x402 wallet buys data through one bounded, non-repeating journal call."""
+        from factorylab.world.market import metered_data
+
+        def fetch(origin, path, cap, *, record):
+            return self.market.target.fetch_data(
+                origin, path, cap, transport=self.connector_proxy.payment_transport, record=record)
+
+        def execute(record):
+            return self.ledger.call("connector.paid_fetch", fetch, (origin, path, cap),
+                                    {"record": record})
+
+        return metered_data(self.meter, handle, cap, execute, self._record_market)
+
+    def _tool_price_bound(self, call: dict) -> int:
+        """Variable tool prices fit the remaining request ceiling before dispatch."""
+        tool = call["tool"]
+        price = self.tool_specs.get(tool, {}).get("price_micro_per_call", 0)
+        try:
+            if tool == "connector.fetch":
+                contract = self.registry.get(f"connector:{call['args']['id']}")
+                price += contract.input_schema.get("max_call_micro", 0)
+            if tool in ("note.put", "note.get"):
+                from factorylab.runtime.notes import prepare
+
+                _, price = prepare(self.notes, self.m.notes, tool, call["args"], self.window.index)
+        except (KeyError, ValueError):
+            pass  # The normal dispatcher supplies the shape or identity refusal.
+        return price
 
     CONSEQUENCE_WRITES = frozenset({
         "venue.place_market", "venue.place_limit", "venue.close", "venue.cancel",
@@ -447,7 +490,9 @@ class ComputeMixin:
                 return False
             if self.return_kinds.get(ancestor) in ("Verdict", "MetaVerdict"):
                 return False
-        return self.consequences.account_open(handle)
+            if not self.consequences.account_open(ancestor):
+                return False
+        return True
 
     def _allowed_tools(self, action_id: str) -> set[str]:
         """Every registered tool is a public primitive; schematics are public."""
@@ -463,6 +508,10 @@ class ComputeMixin:
             return {"error": "unknown or disallowed tool"}, 0
         if tool_id == "connector.fetch":
             return self._fetch_connector(action_id, handle, args)
+        if tool_id in ("note.put", "note.get"):
+            from factorylab.runtime.notes import run
+
+            return run(self, action_id, handle, tool_id, args)
         if tool_id in self.CONSEQUENCE_WRITES and not self._may_write(handle):
             # No judge trades what it judges (essay II.III): the refusal is public.
             self.ledger.append({"kind": "tool.refused", "handle": handle,
@@ -538,6 +587,10 @@ class ComputeMixin:
         except Exception as exc:  # reservation refused or execution known unbilled
             return {"error": f"{type(exc).__name__}: {exc}"[:200]}, 0
         if spec["kind"] == "venue":
+            if tool_id in self.venue_tools.PUBLIC_READS:
+                from factorylab.runtime.observations import record_venue_facts
+
+                record_venue_facts(self.window, tool_id, args, metered.result, self.clock.now_ns)
             if hasattr(self.exchange, "drain_events"):
                 self._settle_exchange_effects(self.exchange.drain_events())
         return metered.result, metered.cost
@@ -596,7 +649,7 @@ class ComputeMixin:
             for index, call in enumerate(ret.tool_calls):
                 if self.wallet.dead:
                     break
-                price = self.tool_specs.get(call["tool"], {}).get("price_micro_per_call", 0)
+                price = self._tool_price_bound(call)
                 slot = f"tool:{index}" if tool_round == 0 else f"connector-parse:{index}"
                 if price > max(0, req.cost_ceiling - total_cost - tool_cost):
                     result, cost = {"error": "request cost ceiling exhausted"}, 0
@@ -677,7 +730,7 @@ class ComputeMixin:
                 ret = replace(ret, children=())
             # The extra round composes the retrieved text through ordinary jailed tools.
             if tool_round < round_limit and ret.tool_calls:
-                if any(self.tool_specs.get(c["tool"], {}).get("kind") != "population"
+                if any(self.tool_specs.get(c["tool"], {}).get("kind") not in ("population", "note")
                        for c in ret.tool_calls):
                     round_limit = tool_round
             if ret.tool_calls and tool_round >= round_limit:
