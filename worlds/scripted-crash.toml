@@ -96,6 +96,7 @@ accepts = ["Verdict"]
 max_tokens = 128
 
 [evaluation]
+consequence_backstop_events = 20
 consequence_share = 0.3
 max_forecasts_per_verdict = 2
 verdict_timeout_events = 20

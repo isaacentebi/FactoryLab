@@ -16,13 +16,18 @@ from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
-from factorylab.runtime.shared import CH_VERDICT, _to_plain
+from factorylab.runtime.routing import _KeyedLearner
+from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, NOOP, _to_plain
 from factorylab.runtime.summary import _price_str
 from factorylab.settlement import SEED_VOCABULARY
 from factorylab.settlement.consequence import ReturnConsequences
 from factorylab.world.market import X402MeteredModel
 from factorylab.world.metering import BillingUncertain, Metered, MeteredModel
 from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
+
+# A fetched body at least this long is text and stays off every durable surface;
+# a shorter one (a price, "OK", a count) is a fact the population may repeat.
+MIN_PROTECTED_BODY_CHARS = 32
 
 
 def _publishable(policy: dict[str, float]) -> dict[str, float]:
@@ -384,7 +389,11 @@ class ComputeMixin:
                                       deterministic=self.connector_deterministic)
             if preflight:
                 result = {key: value for key, value in result.items() if key != "body"}
-            if "body" in result:
+            if len(result.get("body") or "") >= MIN_PROTECTED_BODY_CHARS:
+                # A body long enough to be text is kept off every durable surface. A
+                # number, a status word or a token shorter than this is a fact the
+                # population fetched in order to say; protecting it would refuse
+                # every later return that mentions it.
                 self.ledger.protect_connector_body(result["body"])
             return result
 
@@ -411,10 +420,19 @@ class ComputeMixin:
     WRITE_REFUSAL = ("venue and treasury writes require a producing return kind and an open "
                      "consequence account; judging decisions and their children cannot write")
 
-    def _may_write(self, handle: str) -> bool:
-        """A judging decision cannot acquire venue authority by requesting a producing child."""
-        from factorylab.runtime.shared import CH_CONFORMITY, CH_FAST
+    # The channels a decision settles on when it produced something the world can
+    # price. Every other channel (conformity, fast, policy, an unselected sum type)
+    # names a judgement or a ballot, and nothing under one may write.
+    WRITING_CHANNELS = frozenset({CH_VERDICT, CH_EXPOSURE})
 
+    def _may_write(self, handle: str) -> bool:
+        """Write authority is a property of the decision chain, never of a return's kind.
+
+        Guarantees that a decision, and every decision it descends from, settles on
+        a producing channel with an open consequence account before a venue or
+        treasury write is executed: a policy ballot, a judgement, or a child of
+        either has no such authority whatever output kind its assembly declares.
+        """
         ancestors = []
         cursor = handle
         while cursor is not None:
@@ -424,15 +442,10 @@ class ComputeMixin:
             except KeyError:
                 return False
         for ancestor in ancestors:
-            try:
-                decision = self.queue.get(ancestor)
-            except KeyError:
-                continue
-            if self.return_kinds.get(ancestor) in ("Verdict", "MetaVerdict"):
+            decision = self.queue.get(ancestor)
+            if decision.channel not in self.WRITING_CHANNELS:
                 return False
-            if ancestor not in self.return_kinds and decision.channel in (
-                CH_CONFORMITY, CH_FAST, "policy", "emits"
-            ):
+            if self.return_kinds.get(ancestor) in ("Verdict", "MetaVerdict"):
                 return False
         return self.consequences.account_open(handle)
 
@@ -543,16 +556,26 @@ class ComputeMixin:
         return ret
 
     def _invoke(self, action_id: str, req: Request, role: str, *, child: bool = False) -> Return:
+        from factorylab.runtime.propensity import effect_label
+
         self._ensure_connector_tool()
         body_mark = len(self.ledger.connector_bodies)
         self.handle_to_assembly[req.handle] = action_id
+        # Every request tells its executor who it is: an id is a public schematic,
+        # and retirement, learner registration and requests are all keyed by it.
+        # Nothing else about authorship travels; the judge of this return never
+        # sees the name. A parent cannot forge its child's identity here either.
+        req = replace(req, inputs={**req.inputs, "you": action_id})
+        effects: list[str] = []  # venue and treasury writes, children: the action so far
         ret = self._invoke_compute(action_id, req)
         self._check_compute_return(req.handle, ret)
         if (ret.status == "ok" and ret.outputs.get("status") == "cannot"
                 and isinstance(ret.outputs.get("reason"), str)):
             ret = replace(ret, status="refused", children=(), tool_calls=())
-        if ret.status == "ok":
+        if ret.status == "ok" and req.scoring_channel != "policy":
             # The channel is the emitted kind of the contract this assembly declared.
+            # A ballot is not a contract return: it binds no kind, so the queue's
+            # policy channel alone says what the decision is.
             kinds = self.assemblies[action_id].spec.emits
             emitted = ret.outputs.get("emits", kinds[0] if len(kinds) == 1 else None)
             if emitted not in kinds:
@@ -573,15 +596,23 @@ class ComputeMixin:
                 if self.wallet.dead:
                     break
                 price = self.tool_specs.get(call["tool"], {}).get("price_micro_per_call", 0)
+                slot = f"tool:{index}" if tool_round == 0 else f"connector-parse:{index}"
                 if price > max(0, req.cost_ceiling - total_cost - tool_cost):
                     result, cost = {"error": "request cost ceiling exhausted"}, 0
                     if call["tool"] == "connector.fetch":
                         self._connector_refused(req.handle, result["error"])
                 else:
-                    slot = f"tool:{index}" if tool_round == 0 else f"connector-parse:{index}"
                     result, cost = self._run_tool(action_id, req.handle, call, slot=slot)
                 tool_cost += cost
-                ok = not (isinstance(result, dict) and "error" in result)
+                # A venue write the venue has not yet acknowledged is its own outcome:
+                # the intent is durable and the reconciler finalises it under the
+                # same client id, so it is neither a success nor a failure here.
+                uncertain = (isinstance(result, dict) and result.get("status") == "uncertain"
+                             and call["tool"] in self.CONSEQUENCE_WRITES)
+                # An acknowledged venue result carries ``error: None``; only a stated
+                # error is a failure.
+                ok = uncertain or not (isinstance(result, dict)
+                                       and result.get("error") is not None)
                 if call["tool"] == "connector.fetch" and ok:
                     round_limit = 2
                 self.stats.tool_calls += 1
@@ -594,11 +625,19 @@ class ComputeMixin:
                 self.ledger.append({
                     "kind": "tool.call", "handle": req.handle, "assembly_id": action_id,
                     "tool": call.get("tool"), "args": logged_args,
-                    "ok": ok, "cost": cost, "ts": self.clock.now_ns,
+                    "ok": ok, "outcome": "uncertain" if uncertain else "ok" if ok else "failed",
+                    **({"client_id": f"{req.handle}:{slot}"} if uncertain else {}),
+                    "cost": cost, "ts": self.clock.now_ns,
                 })
                 self.window.tool_calls += 1
                 results.append({"tool": call.get("tool"), "args": call.get("args"),
                                 "result": result})
+                # A write the venue accepted, or has not yet acknowledged, is an
+                # action this return took; a rejected or refused one is not.
+                label = effect_label(str(call.get("tool")), call.get("args"))
+                if label is not None and ok and (
+                        not isinstance(result, dict) or result.get("status") != "rejected"):
+                    effects.append(label)
             for item in ret.children:
                 if self.wallet.dead:
                     break
@@ -607,6 +646,8 @@ class ComputeMixin:
                 )
                 tool_cost += cost
                 results.append(result)
+                if "error" not in result["result"] and result["result"].get("status") != "failed":
+                    effects.append(f"request:{item.target}"[:64])
             seen_results.extend(results)
             # The continuation is the same request, and it is the billed call
             # that produces the final verdict — so everything the first call was
@@ -704,7 +745,7 @@ class ComputeMixin:
             self.window.ok += 1
             if role == "producer":
                 self.window.costs.append(ret.cost)
-        self._record_declared_propensity(action_id, req, ret, role)
+        self._record_declared_propensity(action_id, req, ret, role, effects=tuple(effects))
         del self.ledger.connector_bodies[body_mark:]
         return ret
 
@@ -736,12 +777,17 @@ class ComputeMixin:
                 "note": "your own learner's current policy over the action set you registered; "
                         "declare a propensity on your return to train it"}
 
-    def _record_declared_propensity(self, action_id: str, req: Request, ret: Return, role: str):
+    def _record_declared_propensity(self, action_id: str, req: Request, ret: Return, role: str,
+                                    *, effects: tuple[str, ...] = ()):
         """Log the woken assembly's own distribution as a second propensity on the handle.
 
-        Absent or unusable, it is recorded degenerate: the action taken at 1.0
-        The reason an offered declaration could not be used goes back
-        to the population, because a refusal nobody can read is repeated.
+        The action is named from what the return executed (``effects``: its venue
+        and treasury writes and the children it requested) and then from its final
+        answer, so a trade made through a tool is never learned as ``hold``.
+        Absent or unusable, the declaration is recorded degenerate: the action
+        taken at 1.0. A declaration that starves the action taken of mass is
+        floored, and stays. The reason either way goes back to the population,
+        because a refusal nobody can read is repeated.
         """
         from factorylab.learners.base import state_bytes
         from factorylab.runtime.propensity import action_label, declared_record
@@ -750,7 +796,8 @@ class ComputeMixin:
             self.queue.get(req.handle)
         except KeyError:
             return None
-        label = action_label("producer" if role == "child" else role, ret.outputs, ret.status)
+        label = action_label("producer" if role == "child" else role,
+                             ret.outputs, ret.status, effects)
         learner = self.assembly_learners.get(action_id)
         state_hash = (
             hashlib.sha256(state_bytes(learner.state())).hexdigest()
@@ -765,8 +812,11 @@ class ComputeMixin:
         except (KeyError, ValueError):
             return None
         if reason is not None:
-            self.ledger.append({"kind": "propensity.refused", "handle": req.handle,
-                                "reason": reason, "ts": self.clock.now_ns})
+            # A refused declaration is degenerate (the one action taken); a floored
+            # one keeps the support the return declared.
+            floored = len(record.action_ids) > 1
+            self.ledger.append({"kind": "propensity.floored" if floored else "propensity.refused",
+                                "handle": req.handle, "reason": reason, "ts": self.clock.now_ns})
             self.registration_feedback.append({"reason": f"propensity: {reason}"})
         self._open_assembly_round(action_id, req.handle, record)
         return record
@@ -805,6 +855,76 @@ class ComputeMixin:
             return
         self.assembly_rounds[handle] = action_id
 
+    def _settle_outside_universe(self, handle: str, prop: PropensityRecord, feedback) -> None:
+        """Deliver a settled score whose action the router holding the decision cannot hold.
+
+        A parent may request a target its own router never offers — a Tick
+        producer asking for an evaluator that only accepts ProducerReturn — and
+        the parent's router cannot be trained on an arm outside its universe.
+        Guarantees the score still reaches a learner that can use it: the router
+        whose universe holds the target, found by the kinds the target accepts,
+        else the requesting assembly's own learner over the request action it
+        registered. The ledger names whichever was trained, or why neither was,
+        so no settlement is dropped in silence.
+        """
+        target = prop.chosen
+        spec = self.assemblies[target].spec if target in self.assemblies else None
+        for kind in (sorted(spec.accepts) if spec is not None else sorted(self.routers)):
+            for state in self.routers.get(kind, []):
+                if target in state.universe:
+                    self._settle_on_router(handle, state, kind, target, feedback)
+                    return
+        self._settle_on_requester(handle, target, feedback)
+
+    def _settle_on_router(self, handle: str, state, kind: str, target: str, feedback) -> None:
+        """Train the router that owns the target's kind on the child it did not select."""
+        learner = state.learner
+        try:
+            if isinstance(learner, _KeyedLearner):
+                # A keyed learner scores frozen rounds, so the settlement needs one
+                # opened under this handle before it can be applied.
+                learner.inner.distribution_for(
+                    handle, [a for a in state.universe if a != NOOP])
+                learner.inner.update_for(handle, feedback)
+            else:
+                learner.update(feedback)
+        except (KeyError, ValueError, RuntimeError, TypeError, AssertionError) as exc:
+            self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
+                                "learner_id": learner.id, "reason": str(exc)[:200],
+                                "ts": self.clock.now_ns})
+            return
+        self.ledger.append({"kind": "request.settled", "handle": handle,
+                            "target": target, "learner_id": learner.id,
+                            "learner": "router", "event_kind": kind,
+                            "reward": feedback.reward, "ts": self.clock.now_ns})
+
+    def _settle_on_requester(self, handle: str, target: str, feedback) -> None:
+        """Train the assembly that asked for the child, over the request action it declared."""
+        parent = self.queue.get(handle).parent_handle
+        assembly_id = self.handle_to_assembly.get(parent) if parent is not None else None
+        learner = self.assembly_learners.get(assembly_id)
+        action = f"request:{target}"[:64]
+        reason = None
+        if learner is None:
+            reason = f"no router holds {target} and the requester registered no learner"
+        elif action not in set(getattr(learner.inner, "actions", ())):
+            reason = f"no router holds {target} and {action} is outside the requester's actions"
+        if reason is None:
+            try:
+                learner.distribution_for(handle, list(learner.inner.actions))
+                learner.update_for(handle, replace(feedback, action=action))
+            except (KeyError, ValueError, RuntimeError, TypeError, AssertionError) as exc:
+                reason = str(exc)[:200]
+        if reason is not None:
+            self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
+                                "assembly_id": assembly_id, "reason": reason,
+                                "ts": self.clock.now_ns})
+            return
+        self.ledger.append({"kind": "request.settled", "handle": handle, "target": target,
+                            "learner_id": learner.id, "learner": "assembly",
+                            "assembly_id": assembly_id, "action": action,
+                            "reward": feedback.reward, "ts": self.clock.now_ns})
+
     def _invoke_child(
         self, action_id: str, parent: Request, item: ChildRequest, ceiling: int,
     ) -> tuple[dict, int]:
@@ -821,7 +941,17 @@ class ComputeMixin:
                                 "reason": reason, "depth": depth})
             return {"tool": f"assembly:{target}", "args": item.inputs,
                     "result": {"error": reason}}, 0
-        actor = f"composition:{parent.handle}"
+        # A child spends its parent's money: whatever the parent's remaining request
+        # ceiling says, the ceiling never exceeds what the parent's own decision may
+        # spend now, so a fresh target cannot be bought compute the parent lacks.
+        ceiling = min(ceiling, max(0, self._compute_available(parent.handle)))
+        # The child is opened under the learner that woke its parent, so the score
+        # its return settles at reaches a router that exists: the parent's router
+        # learns what the target it chose was worth on this kind of work. A target
+        # that router never offers is settled on the router that owns the target's
+        # kind instead (_settle_outside_universe). The propensity is still the
+        # parent's choice, recorded as such.
+        actor = self.queue.get(parent.handle).actor
         channels = self._return_channels(target) if target in self.assemblies else {}
         handle = self.queue.open(
             actor=actor, event_id=f"child-{parent.handle}",

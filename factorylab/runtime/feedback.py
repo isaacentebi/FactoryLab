@@ -549,6 +549,8 @@ class FeedbackMixin:
                         learner.inner.update_for(key, fb)
                 elif set(prop.action_ids) <= set(state.universe):
                     learner.update(fb)
+                else:  # an action this router cannot hold: settle it where it can be held
+                    self._settle_outside_universe(lr.handle, prop, fb)
             self.delivered_seen[lid] = len(returns)
             if lid in self.retired_routers and not self.queue.outstanding(lid):
                 self.queue.retire_actor(lid)
