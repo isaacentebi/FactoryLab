@@ -17,7 +17,9 @@ def seed_markets(exchange, spec) -> None:
     The seed only ever adds, and only markets the venue lists: a manifest coin
     or pair the adapter does not list is dropped here for the same reason a
     ``market`` registration is refused, and an adapter never acquires a market
-    class it was not built with.
+    class it was not built with. An adapter that publishes no listing at all
+    keeps none: nothing is seeded onto it, and the manifest seed remains the
+    trading permission the venue tools were built with.
     """
     from factorylab.world.exchange import FakeExchange
 
@@ -38,8 +40,10 @@ def seed_markets(exchange, spec) -> None:
             target._mids.setdefault(pair, target._mids[base])
             target._mid_history.setdefault(base, [])
             target._mid_history.setdefault(pair, [])
-    exchange.coins = tuple(dict.fromkeys((*exchange.coins, *coins)))
-    exchange.spot_pairs = tuple(dict.fromkeys((*exchange.spot_pairs, *pairs)))
+    for name, seeded in (("coins", coins), ("spot_pairs", pairs)):
+        listed = getattr(target, name, None)
+        if isinstance(listed, (list, tuple)):
+            setattr(exchange, name, tuple(dict.fromkeys((*listed, *seeded))))
 
 
 @dataclass(frozen=True)

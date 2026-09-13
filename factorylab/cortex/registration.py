@@ -137,8 +137,19 @@ class AssemblyProposal:
     reward_shapes: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "reward_shapes", reward_contracts(
-            self.emits or seed_emits(self.role), self.reward_shapes))
+        """``reward_shapes`` holds the resolved contract for the kinds this proposal emits.
+
+        The field is resolved, not declared: construction fills an undeclared kind
+        from its seed shape or ``judged``, so a proposal derived from another by
+        ``replace`` arrives carrying the earlier proposal's kinds. Resolution is
+        against this proposal's own emitted kinds; a declaration naming a kind the
+        proposal does not emit is refused where the population declares it.
+        """
+        kinds = self.emits or seed_emits(self.role)
+        declared = self.reward_shapes
+        if isinstance(declared, Mapping):
+            declared = {k: v for k, v in declared.items() if k in kinds}
+        object.__setattr__(self, "reward_shapes", reward_contracts(kinds, declared))
 
 
 @dataclass(frozen=True)
