@@ -24,7 +24,8 @@ round-three fixes to the existing contracts.
 The assembly proposal uses the same accepts/emits/schemas contract. A custom
 schema validates the returned payload, excluding the protocol fields `emits`,
 `about_handle`, `register`, `requests`, `tool_calls`, `status` and `reason`. Custom returns receive
-verdict feedback. A changed schema requires a new kind name; built-in world or
+the feedback of the reward shape they declare, verdict feedback by default.
+A changed schema requires a new kind name; built-in world or
 kernel events cannot be impersonated. A producer may process its own event;
 judgement against its own or an ancestor's output is refused. Public registrations
 include ids and versions without identifying the author of a judged return.
@@ -39,7 +40,9 @@ ids, prompts, learner state, router menus and who judged whom remain sealed.
 Venue and treasury write authority follows the decision chain. Every decision
 in that chain must use a producing channel (`verdict` or `exposure`) and must
 not emit `Verdict` or `MetaVerdict`. The writing decision must have an open
-consequence account. A policy ballot binds no return kind and cannot write.
+consequence account. Every decision in the writing chain, not only the writing
+decision, must still hold an open consequence account.
+A policy ballot binds no return kind and cannot write.
 An author whose contract includes a judging kind is excluded from its own
 subject's router, even if the contract also includes a producing kind.
 
@@ -108,7 +111,7 @@ settings".
 | `charter.cards[].window.kind` | `"returns"`, `"forecasts"`, or `"windows"` | Required for explicit cards | Executable selector type; its value is population amendable |
 | `charter.cards[].window.n` | Positive integer, never a boolean or float | Required; seed cost and well-formedness cards use `100`, forecast skill uses `50` | Population amendable sample horizon |
 | `charter.cards[].window.per` | `"role"`, `"assembly"`, or null | Required in JSON; omitted in TOML means null. Seed cost and well-formedness use `"role"`; forecast skill uses `"assembly"` | Population amendable scope |
-| `charter.cards[].answers_for` | `producer`, `evaluator`, `meta`, `antagonist`, or `all` | Required | Population amendable pricing responsibility |
+| `charter.cards[].answers_for` | `producer`, `evaluator`, `meta`, `antagonist`, `all`, or any registered emitted kind | Required | Population amendable pricing responsibility |
 | Proposal `predicted_effect.card_id` | Current or proposed card id for amendments; current card id for connectors and retirements | Required; no default | Liability binds to a measurable card |
 | Proposal `predicted_effect.direction` | `increase` or `decrease` | Required; no default | Recorded prediction; grading uses frozen-region compliance |
 | Proposal `predicted_effect.window` | Positive integer count of closed reserve windows after activation | Required; no default | Population-authored liability horizon |
@@ -328,8 +331,13 @@ therefore cannot chain.
 `LiveClock` retains the latest 64 delivered tick gaps and exposes their integer
 mean through `measured_interval_ns()`. Before two ticks it returns the declared
 interval. `intervals()` returns `declared_ns`, `measured_ns` and `samples`.
-Governance conversion and `world.clock` still use the declared tick interval;
-the measured interval is not yet wired into those consumers. Resume preserves
+Governance conversion uses the delivered gap mean from `measured_interval_ns()`
+once two ticks have been sampled, so an overrunning loop lengthens the published
+period and the activation gate instead of understating them; the declared
+interval prices a simulated clock, an unsampled one, and any period whose
+declared interval has since changed. `world.tick_intervals` publishes that pair
+and its sample count; `world.clock.tick_interval` remains the declared interval.
+Resume preserves
 the event budget but starts a fresh gap sample and drops the wall-clock deadline.
 
 The spec's p90-only estimate and its zero-timestamp reproduction pull in different
@@ -553,10 +561,12 @@ spot inventory. Sells cannot exceed the smaller of runtime inventory and
 accounted lots. Deferred fills update inventory only after order acknowledgement.
 
 Gap liquidation realises the full observed loss and may overshoot zero;
-`scripted-crash` demonstrates this. `termination.balance_floor_usd` defaults
-to zero and is parsed into `balance_floor_micro`, but the current termination
-path uses `Wallet.dead` at zero rather than that configured floor. A configured
-floor is not a guaranteed liquidation price or a supported nonzero death threshold.
+`scripted-crash` demonstrates this. `termination.balance_floor_usd` is parsed
+into `balance_floor_micro` and is the death condition: a balance at or below it
+is death, irreversibly and at launch as well as in flight, and a gap liquidation
+may still overshoot it. It defaults to `"0"`, where the termination reason is
+`balance_zero`; a configured positive floor terminates with `balance_floor`.
+The floor is not a guaranteed liquidation price.
 
 ## Registrable connectors (W8)
 
@@ -570,10 +580,11 @@ floor is not a guaranteed liquidation price or a supported nonzero death thresho
 | `max_calls_per_window` | `60` | Positive integer attempted calls per assembly per novelty reserve window. |
 | `origin_denylist` | The world's own rail hosts: the venue API and RPC on both networks, the model providers and the discovery index | Hostnames (matched exactly or as a parent domain) or CIDRs; every registered seller's host is added to them. Bare addresses, private names and nonpublic resolved addresses are always refused. |
 
-Population proposals have `{kind: "connector", id, description, origin, predicted_effect}`, with an
+Population proposals have `{kind: "connector", id, description, origin, predicted_effect}`
+and may add `preflight_path`, `pay` and `max_call_usd`, with an
 origin of `https://<host>` and no credentials, port, path, query or fragment.
-A priced `GET /` preflight precedes the same experienced, proposer-excluding
-sortition ballot path as amendments. A strict majority admits the next
+A priced `GET` of `preflight_path`, which defaults to `/`, precedes the same
+experienced, proposer-excluding sortition ballot path as amendments. A strict majority admits the next
 `connector:<id>` registry version. `predicted_effect` names a current measurable
 card and carries `direction` and `window`. Admission starts the same delayed
 ballot liability as an amendment.
@@ -592,8 +603,8 @@ Paths may include a query but cannot change origin. HTTP status is returned
 as evidence rather than treated as a fetch error.
 Responses decode as UTF-8 with replacement and arrive in `seen_tool_results`
 (and the existing `tool_results`) on the caller's continuation. A successful
-fetch permits one additional tool round consisting of ordinary population tools,
-then a final model answer. The jail is unchanged.
+fetch permits one additional tool round consisting of ordinary population tools
+and the note tools, then a final model answer. The jail is unchanged.
 
 `MIN_PROTECTED_BODY_CHARS` is `32`, fixed in `runtime/compute.py`.
 Bodies at least that long and copies in parser arguments/model journal
@@ -611,6 +622,150 @@ repeat the debit.
 The observatory's `connectors` section publishes latest registered versions and
 attempt counts per UTC date at each public window close, including preflights.
 Scripted manifests use an offline fake transport; live manifests use bounded HTTPS.
+
+## New kinds of work: reward shapes and predicates
+
+A registration declares which one of the four reward shapes — `judged`,
+`forecast`, `conformity`, `exposure` — pays its emitted kind; the declaration
+defaults to `judged`, is fixed for the life of that kind, cannot redefine a seed
+kind's shape, and a conflicting redeclaration reaches `registration_feedback`.
+The declaration is `reward_shapes`, an object on the assembly proposal mapping
+each of its own `emits` kinds to a shape. A declaration naming a kind the
+proposal does not emit is refused. The seed shapes are `ProducerReturn`
+→ `judged`, `Verdict` → `forecast`, `MetaVerdict` → `conformity` and
+`Exposure` → `exposure`. A refusal is ledgered as `registration.rejected` with
+its reason. `world.work` publishes `reward_shapes`, `default_reward_shape`,
+`kind_rewards`, `predicates`, `predicate_registration` and `predicate_contract`.
+That block names the four shapes and the default; it states no reason for the
+catalogue being closed.
+
+A shape selects an existing reward channel. `judged` settles on the verdict
+channel. `forecast` settles on the consequence channel, except that the seed
+`Verdict` keeps its conformity channel because its predictions already have
+their own consequence decisions. `conformity` settles on the conformity channel
+when a higher tier exists to judge it, and on the fast channel otherwise.
+`exposure` settles on the
+exposure channel. A forecast-shaped return earns the mean of its own resolved
+predictions once, as `forecast-mean-v1`; a return with any unresolved prediction
+is censored rather than scored. Admitted shapes survive resume in
+`kind_reward_shapes`, so a kind keeps its meaning after the assembly that
+declared it is retired.
+
+A card's `answers_for` may name any registered emitted kind, and that kind is
+measured in its own scope rather than as a producer. A launch manifest's cards
+are narrower: `answers_for` there must be a seed role, `all`, or a kind one of
+the manifest's own assemblies emits. An amendment naming an unregistered kind is
+refused before the vote.
+
+A forecast predicate registers like an observation: a jailed
+`resolve(facts) -> bool` preflighted against the last closed window, versioned
+per id so a sealed claim keeps the meaning it was sealed with, and resolved only
+over facts that followed the claim; a resolution that fails is unscored, never
+false. The proposal is `{"kind": "predicate", "id", "description", "code"}` with
+exactly those fields. `id` is a slug of 2–48 chars; seed and kernel predicate
+ids, including `return_paid_off`, cannot be redefined. `code` is bounded by
+`MAX_PREDICATE_CODE_CHARS` (`8000`) and must define `resolve`; `description` is
+bounded by `MAX_PREDICATE_DESCRIPTION_CHARS` (`500`). The resolver runs in the
+tool jail under the observation ceilings, `OBSERVATION_TIMEOUT_S` and
+`OBSERVATION_CPU_S`, and only a JSON boolean is an outcome. Nothing is
+registrable before a window has closed, and nothing is registrable on a host
+without a jail.
+
+The preflight and its value or reason are ledgered as `predicate.preflight`.
+Admission registers `predicate:<id>` with one novelty trial and emits a
+`REGISTERED` payload `{"kind": "predicate", "id", "version"}`. Re-registering an
+id appends the next version; an outstanding forecast binds the version it sealed,
+and the base rate it is scored against is keyed `<id>@<version>`, so a
+replacement definition starts its own prevalence history. A sealed claim also
+carries `window_cursor`, the position of every public window counter and series
+at the moment it was made, and resolution reads `window_facts_since` that mark:
+a fact already true when the claim was sealed resolves nothing. Unavailable
+facts, a timeout, a nonboolean result or a failed run leave the forecast
+censored. `world.work.predicates` publishes each predicate's id, description,
+parameter names, `horizon_param`, `version` and `provenance`, and `predicate`
+is one of the kinds the `register` field accepts.
+
+## Seeing the world: markets, paid sources and notes
+
+A connector proposal may carry a `preflight_path` within its own origin, and
+admission judges whether the origin answered within the manifest's bounds rather
+than whether its root returned 2xx. The path defaults to `/`, starts with one
+`/`, carries no fragment or whitespace, and cannot change origin. Any HTTP
+status, 404 and 403 included, is an answer; only an unanswered, oversize or
+out-of-time read refuses admission. The preflight's body is stripped before the
+proposer sees the result. `connector.registered` records `preflight_path`, `pay`
+and `max_call_micro` beside the origin and version.
+
+`exchange.coins` and `venue.spot_pairs` are the launch seed of trading
+permission, not the limit of what may be read: public venue data is readable for
+any coin the venue lists, and a `market` registration adds a pair the venue
+lists, under a novelty trial, surviving resume. `venue.instruments`,
+`venue.mids` and `venue.funding` cover every listed market;
+`venue.candles`, `venue.order_book` and `venue.funding_history` accept any coin
+or pair the venue lists, and `venue.funding_history` refuses a spot pair.
+`venue.place_market`, `venue.place_limit`, `venue.close`, `venue.cancel` and
+`venue.set_leverage` still refuse a market that is not registered for trading.
+These six public reads are priced at `connectors.call_price_usd` per call. The
+launch seed only ever adds to the adapter's own listing; on the deterministic
+venue a seeded market the adapter does not list is dropped, and on a live one an
+unlisted spot pair fails launch. An adapter that publishes no listing keeps the
+manifest seed it was built with.
+
+The proposal is `{"kind": "market", "coin"}` for a perpetual or
+`{"kind": "market", "pair"}` for a `BASE/USDC` spot pair, with exactly one of
+them. A coin the venue does not list, or one already registered for trading, is
+refused. Admission costs one novelty trial, registers the contract
+`market:<market>:<coin>`, ledgers `market.registered` and emits a `REGISTERED`
+payload `{"kind": "market", "coin", "market", "version"}`. `world.trading_markets`
+publishes the `perp` and `spot` lists the population may trade. Resume rebuilds
+the venue tools from the launch seed and replays every `market:` contract, so
+registered markets, inventory and lots survive a restart.
+
+A connector may pay for data through x402 with an exact per-call cap from the
+world's own wallet, journaled as one `io.call`/`io.result` pair and never
+resubmitted on replay; above the cap only the flat read is billed. The proposal
+carries `pay: "x402"` and `max_call_usd` as exact USD text or an integer, parsed
+into `max_call_micro`; a cap above `treasury.max_request_micro` is refused. The
+paid read is the journal call `connector.paid_fetch`, and the ledger retains
+`x402.quote`, `x402.submitted`, `x402.result` and, when the outcome is unknown,
+`x402.unresolved` and its later `x402.reconciled`. A quote above the cap returns
+HTTP 402 with no data cost. `world.connectors` publishes `optional_fields`,
+the `payment` note, and each registered connector's `pay` and `max_call_micro`.
+
+`note.put` and `note.get` are a public key-value notebook bounded in UTF-8 bytes
+and charged rent per byte-window; unaffordable rent retains the text, an
+overwrite cannot escape the debt, reads are journaled and priced, and the wake
+publishes counts only. `[notes]` is a hard cast with exactly these keys.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `max_keys` | `128` | Positive integer count of retained keys. |
+| `max_bytes` | `262144` | Positive integer total of key and text bytes. |
+| `byte_window_micro` | `1` | Positive integer micro-USD charged per byte per window. |
+
+A key is 1–128 printable UTF-8 bytes. An entry's size is its key bytes plus its
+text bytes, and its price is that size plus any unpaid retained bytes, times
+`byte_window_micro`. A call above the caller's available compute or its request
+ceiling is refused before any debit or overwrite. `note.get` on an unknown key is
+an error. Each window boundary charges every retained note for the windows it has
+not paid for: `note.rent` when the writer's compute affords it, `note.rent_due`
+when it does not, in which case the text stays and the debt is still owed on the
+next read or overwrite. The ledger items `note.put` and `note.get` carry the key,
+handle, assembly id, cost, window, version and byte count, and `note.put` also
+carries the text. The `note.read` journal call is replayable read-only work.
+`world.notes` publishes the key and byte counts, the three bounds and the pricing
+rule; the wake's `notes` section publishes counts only; the notebook survives
+resume.
+
+Window facts carry the market, funding, wallet and tick series of the closed
+window, retained to `MAX_WORLD_SAMPLES`, so a registered observation can measure
+the world and not only the factory. `window_facts.books` maps each coin to
+`ts_ns`, `bids` and `asks` levels, with prices in micro-USD and sizes in base
+units. Paid reads through `venue.mids`, `venue.funding`, `venue.funding_history`
+and `venue.order_book` are what fill `mids`, `funding` and `books`;
+`wallet_balance_micro` and `tick_timestamps_ns` are sampled at delivered ticks.
+Malformed or unavailable venue data contributes no sample. No series carries an
+account, an author or a handle.
 
 ## Operator controls and recovery
 
