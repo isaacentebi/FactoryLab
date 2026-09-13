@@ -12,8 +12,6 @@ from factorylab.cortex.request import Return
 from tests.conftest import make_runtime
 from tests.runtime.test_fidelity import decision
 
-pytestmark = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
-
 
 def _experienced(rt, assemblies=None):
     rt._manage_reserve_window()
@@ -51,7 +49,9 @@ def test_finding_3_a_refused_amendment_blocks_every_later_retirement():
     refused = [i for i in rt.ledger._recovery_items() if i["kind"] == "charter.refused"]
     assert [i["amendment_id"] for i in refused] == ["same-two"]
     rt._apply_registrations(proposer, Return(proposer, {"register": [
-        {"kind": "retire", "assembly_id": "eval-a"}]}, 0, "ok"))
+        {"kind": "retire", "assembly_id": "eval-a",
+         "predicted_effect": {"card_id": "cost_per_return",
+                              "direction": "decrease", "window": 1}}]}, 0, "ok"))
     row = next(iter(rt.retirement_proposals.values()))
     assert row["status"] == "passed"
     for _ in range(3):
@@ -66,13 +66,16 @@ def test_finding_10_an_assembly_votes_on_its_own_retirement():
     _experienced(rt, ["eval-a", "eval-b", "meta-a", "seed-observer", "seed-decider"])
     proposer = decision(rt, "seed-decider")
     rt._apply_registrations(proposer, Return(proposer, {"register": [
-        {"kind": "retire", "assembly_id": "eval-a"}]}, 0, "ok"))
+        {"kind": "retire", "assembly_id": "eval-a",
+         "predicted_effect": {"card_id": "cost_per_return",
+                              "direction": "decrease", "window": 1}}]}, 0, "ok"))
     row = next(iter(rt.retirement_proposals.values()))
     seated = [seat.assembly_id for seat in row["committee"].seats]
     assert "seed-decider" not in seated
     assert "eval-a" not in seated, seated
 
 
+@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_finding_6_the_operator_has_a_kill_control():
     """README: after launch there is one live view and one control: kill. Termination has
     an ``explicit_kill`` condition, but no command reaches it on a running world; the

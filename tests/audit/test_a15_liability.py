@@ -53,7 +53,7 @@ def test_a15_bad_votes_lose_after_declared_window_and_survive_resume(monkeypatch
     handles = [(v["handle"], v["assembly"], v["vote"]) for v in rt.pending_votes]
     for current in (rt, restored):
         current.n += 10
-        current.window = MeasureWindow(3, current.wallet.balance, costs=[300], invocations=1, ok=1)
+        current.window = MeasureWindow(3, current.wallet.balance, costs=[500], invocations=1, ok=1)
         current._close_price_window()
         assert not current.pending_votes
         for handle, assembly, vote in handles:
