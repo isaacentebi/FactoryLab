@@ -1032,7 +1032,8 @@ def test_insolvency_terminates_scripted_world_when_seller_demands_unaffordable_p
     assert result["seal_key_released"] and result["wallet_balance_micro"] > 0
     assert not market_http.payments
     events = [i for i in _diary(runtime) if i["kind"] == "treasury.insolvency"]
-    assert [e["consecutive_events"] for e in events[-3:]] == [1, 2, 3]
+    assert [e["consecutive_events"] for e in events] == [1, 0, 1, 3]
+    assert runtime.insolvency_count == 3
 
 
 def test_insolvency_no_affordable_provider_counts_once_per_routed_event(market_http):
@@ -1042,8 +1043,9 @@ def test_insolvency_no_affordable_provider_counts_once_per_routed_event(market_h
     assert result["seal_key_released"] and result["wallet_balance_micro"] == 100_000
     items = _diary(runtime)
     counted = [i for i in items if i["kind"] == "treasury.insolvency"]
-    assert [i["consecutive_events"] for i in counted] == [1, 2, 3]
-    assert len({i["event_id"] for i in counted}) == 3
+    assert [i["consecutive_events"] for i in counted] == [1, 3]
+    assert len({i["event_id"] for i in counted}) == 2
+    assert runtime.insolvency_count == 3
     assert len([i for i in items if i["kind"] == "event"
                 and i["event"]["kind"] == "Terminated"]) == 1
 

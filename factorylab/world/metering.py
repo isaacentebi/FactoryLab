@@ -13,6 +13,8 @@ from dataclasses import dataclass, replace
 from typing import Any, Protocol, TypeVar
 
 from factorylab.world.models import ModelProvider, ModelRequest, ModelResponse, PriceTable
+from factorylab.world.openrouter import OpenRouterError as ProviderOpenRouterError
+from factorylab.world.venice import VeniceError as ProviderVeniceError
 
 T = TypeVar("T")
 
@@ -33,6 +35,35 @@ class Infeasible(Exception):
 
 class UnbilledFailure(RuntimeError):
     """A trusted adapter establishes that no bill or paid execution occurred."""
+
+
+class OpenRouterError(ProviderOpenRouterError, UnbilledFailure):
+    """An unbilled OpenRouter failure retains its provider class name in invocations."""
+
+
+class VeniceError(ProviderVeniceError, UnbilledFailure):
+    """An unbilled Venice failure retains its provider class name in invocations."""
+
+
+def classify_provider_failure(exc: Exception) -> Exception:
+    """Only bounded pre-generation evidence turns a provider error into an unbilled one."""
+    if isinstance(exc, UnbilledFailure):
+        return exc
+    if not isinstance(exc, (ProviderOpenRouterError, ProviderVeniceError)):
+        return exc
+    # These are adapter-generated messages, not guesses based on vendor response bodies.
+    provider = "OpenRouter" if isinstance(exc, ProviderOpenRouterError) else "Venice"
+    connection = str(exc) == f"{provider} error (None): Connection failed"
+    missing_key = (isinstance(exc, ProviderOpenRouterError) and exc.status is None
+                   and exc.body == "API key environment variable is not set")
+    if isinstance(exc, ProviderVeniceError) and isinstance(exc.__context__, ProviderVeniceError):
+        missing_key = str(exc.__context__) == (
+            "Venice error (None): Set VENICE_API_KEY or RESERVE_PRIVATE_KEY"
+        )
+    if not (connection or missing_key or type(exc.status) is int and 400 <= exc.status < 500):
+        return exc
+    cls = OpenRouterError if isinstance(exc, ProviderOpenRouterError) else VeniceError
+    return cls(exc.status, "Request failed before generation")
 
 
 class BillingUncertain(RuntimeError):
@@ -88,6 +119,7 @@ class Meter:
             if type(actual) is not int or actual < 0:
                 raise ValueError("cost must be non-negative integer micro-USD")
         except Exception as exc:
+            exc = classify_provider_failure(exc)
             if isinstance(exc, UnbilledFailure):
                 self.wallet.release(reservation)
             else:
@@ -95,7 +127,7 @@ class Meter:
             if on_failure is not None:
                 on_failure(exc)
             if isinstance(exc, UnbilledFailure):
-                raise
+                raise exc from None
             raise BillingUncertain(ceiling, exc) from None
         if actual > ceiling:
             booked = self.wallet.commit_reported(reservation, actual)
