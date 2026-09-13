@@ -59,9 +59,6 @@ def runtime_samples(*, recorder=None, prune_subject=False):
     return rt
 
 
-@pytest.mark.xfail(
-    strict=True, reason="T14: needs governance._record_card_forecasts wiring, group C",
-)
 def test_runtime_verdict_rows_select_subject_and_skill_selects_forecaster():
     rt = runtime_samples()
     try:
@@ -74,9 +71,6 @@ def test_runtime_verdict_rows_select_subject_and_skill_selects_forecaster():
 
 
 @pytest.mark.parametrize("observation,value", [("verdict_mean", 0.4), ("verdict_std", 0.2)])
-@pytest.mark.xfail(
-    strict=True, reason="T14: needs governance._record_card_forecasts wiring, group C",
-)
 def test_subject_scope_survives_pruning_and_snapshot(observation, value):
     rt = runtime_samples()
     try:
