@@ -5,13 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
+from factorylab.cortex.registration import reward_contracts
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.registry import Contract
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
 from factorylab.runtime.immune import gamma
-from factorylab.runtime.shared import CH_CONFORMITY, CH_EXPOSURE, CH_FAST, CH_VERDICT, NOOP
+from factorylab.runtime.shared import (
+    CH_CONSEQUENCE,
+    CH_FAST,
+    CH_VERDICT,
+    NOOP,
+    assembly_rewards,
+    return_channel,
+)
 from factorylab.world.models import ModelRequest
 
 
@@ -250,12 +258,15 @@ class RoutingMixin:
         conformity is graded against the consequence rather than waiting for
         a verdict that no one can give.
         """
+        kinds = (self.assemblies[chosen].spec.emits if chosen in self.assemblies
+                 else ("MetaVerdict",))
         return sorted(
             a.spec.id
             for a in self.assemblies.values()
-            if "MetaVerdict" in a.spec.accepts and a.spec.id != chosen
+            if set(kinds) & set(a.spec.accepts)
+            and a.spec.id != chosen
             and a.spec.id not in self.retired_assemblies
-            and set(a.spec.emits) & {"Verdict", "MetaVerdict"}
+            and set(assembly_rewards(a.spec).values()) & {"forecast", "conformity"}
         )
 
     def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
@@ -265,7 +276,7 @@ class RoutingMixin:
             for a in self.assemblies.values()
             if kind in a.spec.accepts
             and (a.spec.id not in excluded
-                 or not set(a.spec.emits) <= {"Verdict", "MetaVerdict"})
+                 or not set(assembly_rewards(a.spec).values()) <= {"forecast", "conformity"})
             and a.spec.id not in self.retired_assemblies
         )
         return ids + [NOOP]
@@ -448,7 +459,7 @@ class RoutingMixin:
         """
         share = self.ev.adversarial_share
         adversaries = [a for a in dist if a in self.assemblies
-                       and "Exposure" in self.assemblies[a].spec.emits]
+                       and "exposure" in assembly_rewards(self.assemblies[a].spec).values()]
         rest = [a for a in dist if a not in adversaries]
         mass = sum(dist[a] for a in adversaries)
         rest_mass = sum(dist[a] for a in rest)
@@ -460,7 +471,7 @@ class RoutingMixin:
     def _mix_with_standing(self, dist: dict[str, float]) -> dict[str, float]:
         s = self.consequence_mix
         evaluators = [a for a in dist if a in self.assemblies
-                      and "Verdict" in self.assemblies[a].spec.emits]
+                      and "forecast" in assembly_rewards(self.assemblies[a].spec).values()]
         if s <= 0 or not evaluators:
             return dist
         weights = {a: self.standing.weight(a) for a in evaluators}
@@ -473,7 +484,8 @@ class RoutingMixin:
 
     def _route(self, ev: Event) -> None:
         kind = str(ev.kind)
-        if ev.kind is EventKind.META_VERDICT:
+        if (ev.kind is EventKind.META_VERDICT
+                or self._kind_rewards().get(kind) == "conformity"):
             self._deliver_meta_verdict(ev)
         if ev.kind in (EventKind.VERDICT, EventKind.META_VERDICT):
             ev = self._cascade_arrival(ev)
@@ -526,12 +538,16 @@ class RoutingMixin:
         deadline = (
             self.clock.now_ns + (self.ev.verdict_timeout_events + 2) * self.tick_clock.interval_ns
         )
-        if CH_FAST in channels.values():
+        if set(channels.values()) & {CH_FAST, CH_CONSEQUENCE}:
             # A top meta is graded against the judged verdict's eventual consequence, so
             # its decision lives as long as the return's backstop, like a forecast.
             deadline = self.clock.now_ns + (
                 (self.ev.consequence_backstop_events + 2) * self.tick_clock.interval_ns * 4
             )
+        if CH_CONSEQUENCE in channels.values():
+            # A population forecast may select any of the admitted 1..200 event
+            # horizons; its invocation must not expire before its predictions.
+            deadline = max(deadline, self.clock.now_ns + 202 * self.tick_clock.interval_ns * 4)
         handle = self.queue.open(
             actor=sample.learner_id,
             event_id=ev.id,
@@ -580,10 +596,20 @@ class RoutingMixin:
             kinds = kinds if len(kinds) == 1 else {"ProducerReturn"}
         else:
             kinds = self.assemblies[action_id].spec.emits
-        return {kind: (CH_CONFORMITY if kind == "Verdict" else
-                       CH_CONFORMITY if kind == "MetaVerdict" and higher else
-                       CH_FAST if kind == "MetaVerdict" else
-                       CH_EXPOSURE if kind == "Exposure" else CH_VERDICT)
+        shapes = {}
+        actions = (self._universe_for(str(ev.kind), ev) if action_id == NOOP
+                   else (action_id,))
+        for action in actions:
+            if action == NOOP:
+                continue
+            spec = self.assemblies[action].spec
+            declared = assembly_rewards(spec)
+            for kind, shape in declared.items():
+                if kind in shapes and shapes[kind] != shape:
+                    raise ValueError(f"reward shape already declared differently: {kind}")
+                shapes[kind] = shape
+        defaults = reward_contracts(tuple(kinds))
+        return {kind: return_channel(kind, shapes.get(kind, defaults[kind]), higher=bool(higher))
                 for kind in kinds}
 
     def _open_epoch(self, kind: str) -> None:

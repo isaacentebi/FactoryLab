@@ -5,11 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from factorylab.charter.windows import MetricWindow
+from factorylab.cortex.registration import CONTRACT_ROLES, ROLES, event_name
 
 
 @dataclass(frozen=True)
 class MetricCard:
-    """One norm interpretation binds a typed window and an accountable scoring role."""
+    """One norm interpretation binds a typed window and an accountable emitted kind."""
 
     id: str
     norm: str
@@ -25,13 +26,21 @@ class MetricCard:
             if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
                 raise ValueError(f"metric card needs {name}")
         object.__setattr__(self, "window", MetricWindow.parse(self.window))
-        if not isinstance(self.answers_for, str) or self.answers_for.strip().lower() not in (
-            "producer", "evaluator", "meta", "antagonist", "all",
-        ):
-            raise ValueError(
-                f"card {self.id} answers_for: expected producer, evaluator, meta, antagonist or all"
-            )
-        object.__setattr__(self, "answers_for", self.answers_for.strip().lower())
+        try:
+            scope = event_name(self.answers_for.strip() if isinstance(self.answers_for, str)
+                               else self.answers_for)
+        except ValueError as exc:
+            raise ValueError(f"card {self.id} answers_for: {exc}") from None
+        if scope.lower() in (*ROLES, "all"):
+            scope = scope.lower()
+        else:
+            scope = CONTRACT_ROLES.get(scope, scope)
+        object.__setattr__(self, "answers_for", scope)
+
+    def validate_answers_for(self, registered_kinds: frozenset[str]) -> None:
+        """Admission refuses an accountability scope absent from the public kind catalogue."""
+        if self.answers_for not in (*ROLES, "all") and self.answers_for not in registered_kinds:
+            raise ValueError(f"card {self.id} answers_for: unregistered emitted kind")
 
 
 @dataclass(frozen=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
+from statistics import fmean
 from typing import Any
 
 from factorylab.kernel.events import Event, EventKind
@@ -24,12 +25,12 @@ from factorylab.runtime.shared import (
 )
 from factorylab.runtime.summary import _as_unit
 from factorylab.settlement import (
-    SEED_VOCABULARY,
     Forecast,
     WindowFacts,
     brier,
     open_forecast_decision,
 )
+from factorylab.settlement.settle import PredicateForecast
 from factorylab.settlement.vocabulary import RETURN_PAID_OFF
 
 # A verdict is a prediction that the judged return will not be blamed by the charter. Its
@@ -114,10 +115,11 @@ class FeedbackMixin:
 
     def _open_forecasts(
         self, evaluator_handle: str, evaluator_id: str, about: str, raw: Any
-    ) -> None:
+    ) -> list[str]:
         if not isinstance(raw, list):
-            return
-        known = {p.id: p for p in SEED_VOCABULARY}
+            return []
+        opened = []
+        known = {p.id: p for p in self.predicates.all()}
         for item in raw[: self.ev.max_forecasts_per_verdict]:
             if not isinstance(item, dict):
                 continue
@@ -133,7 +135,7 @@ class FeedbackMixin:
             try:
                 from factorylab.settlement.vocabulary import _validate_params
 
-                _validate_params(pid, params)
+                _validate_params(pid, params, predicate=known[pid])
                 fh = open_forecast_decision(
                     self.queue,
                     evaluator_id=evaluator_id,
@@ -144,12 +146,52 @@ class FeedbackMixin:
                     now_event=self.n,
                     horizon=horizon,
                 )
-                self.book.seal(
-                    Forecast(fh, evaluator_id, about, pid, params, q, self.n, self.n + horizon, "")
-                )
+                definition = known[pid]
+                forecast_type = PredicateForecast if definition.code is not None else Forecast
+                population = {}
+                if definition.code is not None:
+                    from factorylab.runtime.observations import window_cursor
+
+                    # Seal how much of the open window had already happened, so the
+                    # claim is resolved over what follows it and not over its past.
+                    population = {"predicate": definition,
+                                  "window_cursor": window_cursor(self.window)}
+                self.book.seal(forecast_type(
+                    fh, evaluator_id, about, pid, params, q, self.n, self.n + horizon, "",
+                    **population))
             except (ValueError, KeyError):
                 continue
             self.stats.forecasts_sealed += 1
+            opened.append(fh)
+        return opened
+
+    def _settle_forecast_returns(self) -> None:
+        """A forecast-shaped invocation earns the mean of all its resolved predictions once."""
+        from factorylab.cortex.registration import measured_role
+
+        for handle, entry in list(self.forecast_returns.items()):
+            forecasts = entry["handles"]
+            if any(self.queue.get(f).status is SettleStatus.PENDING for f in forecasts):
+                continue
+            if self.queue.get(handle).status is SettleStatus.PENDING:
+                results = [self.queue.history(f)[-1] for f in forecasts]
+                if not results or any(r.status is not SettleStatus.SETTLED for r in results):
+                    self.queue.settle(handle, channel=CH_CONSEQUENCE, score=0.0,
+                                      status=SettleStatus.CENSORED,
+                                      definition_version="forecast-mean-v1", sampling_ref=None)
+                else:
+                    self._settle_priced(
+                        handle, channel=CH_CONSEQUENCE, score=fmean(r.score for r in results),
+                        definition_version="forecast-mean-v1", sampling_ref=None,
+                        cards=measured_role(self.return_kinds[handle]))
+                    evidence = entry["results"]
+                    if all(f in evidence for f in forecasts):
+                        y = int(fmean(evidence[f][0] for f in forecasts)
+                                >= fmean(evidence[f][1] for f in forecasts))
+                        for meta_handle, conformity in self.pending_meta.pop(handle, []):
+                            self._settle_meta_consequence(meta_handle, conformity, y, forecasts[0])
+                        self.verdict_outcomes[handle] = (y, self.n, forecasts[0])
+            del self.forecast_returns[handle]
 
     def _deliver_meta_verdict(self, ev: Event) -> None:
         """Only the first timely higher-tier judgement settles its original handle."""
@@ -212,11 +254,21 @@ class FeedbackMixin:
             return None
         start = f.made_at_event
         window_balances = self.balance_at[start : self.n + 1]
+        public = {}
+        if isinstance(f, PredicateForecast):
+            from factorylab.runtime.observations import window_facts_since
+
+            # The same evidence surface observations read, restricted to what the
+            # window accumulated after the claim was sealed: a fill that had already
+            # happened resolves nothing. No private handles or attribution enter the
+            # resolver.
+            public = {"public_window": window_facts_since(self.window, f.window_cursor)}
         return WindowFacts(
             balance_at_forecast=self.balance_at[start],
             balance_at_settlement=self.wallet.balance,
             min_balance_in_window=min(window_balances) if window_balances else self.wallet.balance,
             events=tuple(self.events_log[start + 1 : self.n + 1]),
+            **public,
         )
 
     def _standing_for(self, evaluator_id: str) -> dict[str, Any] | None:
@@ -377,6 +429,12 @@ class FeedbackMixin:
         pending = {f.handle: f for f in self.book.pending()}
         settled = self.settler.settle_due(self.n, self._facts_for)
         settled.extend(self.settler.settle_consequences(self.consequences.payoff))
+        for result in settled:
+            parent = self.queue.get(result.handle).parent_handle
+            if parent in self.forecast_returns and result.brier is not None:
+                self.forecast_returns[parent]["results"][result.handle] = (
+                    result.brier, result.baseline_brier)
+        self._settle_forecast_returns()
         self._settle_due_verdicts()
         self._settle_exposures(settled)
         backstop = self.ev.consequence_backstop_events
@@ -481,6 +539,9 @@ class FeedbackMixin:
             except KeyError:
                 opened = self.n
             cards = _CARDS_FOR_CHANNEL.get(self.queue.get(about).channel, "producer")
+            emitted = self.return_kinds.get(about)
+            if emitted and emitted not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
+                cards = emitted
             # A return that never contributed to a window (a router noop) still waits
             # for the window it was made in, so no verdict settles before its window.
             window = self.price_origins.get(about, {}).get("origin", self.window.index)

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 from factorylab.cortex.sandbox import jail_available
@@ -33,19 +35,27 @@ def seed_emits(role: str) -> tuple[str, ...]:
                 role, ("ProducerReturn",))
 
 
-CONTRACT_ROLES = {"Verdict": "evaluator", "MetaVerdict": "meta", "Exposure": "antagonist"}
+CONTRACT_ROLES = MappingProxyType({
+    "ProducerReturn": "producer", "Verdict": "evaluator",
+    "MetaVerdict": "meta", "Exposure": "antagonist",
+})
+REWARD_SHAPES = ("judged", "forecast", "conformity", "exposure")
+SEED_REWARD_SHAPES = MappingProxyType({
+    "ProducerReturn": "judged", "Verdict": "forecast",
+    "MetaVerdict": "conformity", "Exposure": "exposure",
+})
 
 
 def measured_role(emits: str | tuple[str, ...] | None) -> str:
     """Name the measurement scope of an emitted contract, never of a free-form label.
 
     A registration's ``role`` is a display name; what a return is measured
-    against follows the kind it emits, by the same mapping that chooses its
-    settlement channel. A contract with several declared kinds is measured, like
-    it is settled, under the first one until the return selects its kind.
+    against follows the kind it emits. Seed role names remain aliases for their
+    seed kinds; population kinds retain their exact, case-sensitive names. A
+    contract with several declared kinds uses the first until the return selects.
     """
     kinds = (emits,) if isinstance(emits, str) else tuple(emits or ())
-    return CONTRACT_ROLES.get(kinds[0], "producer") if kinds else "producer"
+    return CONTRACT_ROLES.get(kinds[0], kinds[0]) if kinds else "producer"
 
 
 BUILTIN_RETURNS = frozenset({"ProducerReturn", "Verdict", "MetaVerdict", "Exposure"})
@@ -57,6 +67,29 @@ def event_name(value: Any) -> str:
             or any(c.isspace() or not c.isprintable() for c in value)):
         raise ValueError("event kind must be a nonempty name without whitespace")
     return value
+
+
+def reward_contracts(
+    emits: tuple[str, ...], declared: Any = None, *,
+    registered: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Each emitted kind has one of four reward shapes; seed meanings remain fixed."""
+    if declared is None:
+        declared = {}
+    if not isinstance(declared, Mapping) or any(k not in emits for k in declared):
+        raise ValueError("reward_shapes must map declared emits kinds to reward shapes")
+    result = {}
+    for kind in emits:
+        existing = SEED_REWARD_SHAPES.get(kind, (registered or {}).get(kind))
+        shape = declared.get(kind, existing or "judged")
+        if not isinstance(shape, str) or shape not in REWARD_SHAPES:
+            raise ValueError("reward shape must be judged, forecast, conformity or exposure")
+        if kind in SEED_REWARD_SHAPES and shape != SEED_REWARD_SHAPES[kind]:
+            raise ValueError("built-in reward shapes cannot be replaced")
+        if existing is not None and shape != existing:
+            raise ValueError(f"reward shape already declared differently: {kind}")
+        result[kind] = shape
+    return result
 
 
 def output_contracts(emits: Any, schemas: Any) -> tuple[tuple[str, ...], dict[str, dict]]:
@@ -101,6 +134,11 @@ class AssemblyProposal:
     effort: str
     emits: tuple[str, ...] = ()
     schemas: dict[str, dict] = field(default_factory=dict)
+    reward_shapes: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "reward_shapes", reward_contracts(
+            self.emits or seed_emits(self.role), self.reward_shapes))
 
 
 @dataclass(frozen=True)
@@ -133,6 +171,15 @@ class ObservationProposal:
     description: str
     unit: str
     unit_range: tuple[float, float]
+    code: str
+
+
+@dataclass(frozen=True)
+class PredicateProposal:
+    """A population predicate defines a boolean resolution over public facts."""
+
+    id: str
+    description: str
     code: str
 
 
@@ -173,7 +220,7 @@ def _connector(item: dict[str, Any]) -> ConnectorProposal:
 
 Proposal = (
     ModelProposal | AssemblyProposal | RouterProposal | ToolProposal | RetireProposal
-    | ObservationProposal | LearnerProposal | ConnectorProposal
+    | ObservationProposal | PredicateProposal | LearnerProposal | ConnectorProposal
 )
 
 
@@ -193,6 +240,7 @@ def parse_proposals(
     tool_jail: bool | None = None,
     retired_assemblies: frozenset[str] = frozenset(),
     seed_observations: frozenset[str] = frozenset(),
+    known_reward_shapes: Mapping[str, str] | None = None,
 ) -> tuple[list[Proposal], list[Rejected]]:
     """Return well-formed proposals and the reasons the rest were refused.
 
@@ -222,7 +270,8 @@ def parse_proposals(
                 accepted.append(_model(item))
             elif kind == "assembly":
                 accepted.append(_assembly(item, event_kinds, known_models,
-                                          known_assemblies - retired_assemblies))
+                                          known_assemblies - retired_assemblies,
+                                          known_reward_shapes))
             elif kind == "router":
                 accepted.append(_router(item, event_kinds))
             elif kind == "tool":
@@ -238,6 +287,8 @@ def parse_proposals(
                 accepted.append(_connector(item))
             elif kind == "observation":
                 accepted.append(_observation(item, seed_observations, jail=tool_jail))
+            elif kind == "predicate":
+                accepted.append(_predicate(item, jail=tool_jail))
             elif kind == "learner":
                 accepted.append(_learner(item, known_assemblies))
             else:
@@ -261,6 +312,7 @@ def _assembly(
     event_kinds: frozenset[str],
     known_models: frozenset[str],
     known_assemblies: frozenset[str],
+    known_reward_shapes: Mapping[str, str] | None = None,
 ) -> AssemblyProposal:
     aid = item.get("id")
     if not isinstance(aid, str) or not SLUG.match(aid):
@@ -291,8 +343,11 @@ def _assembly(
     effort = item.get("effort", "low")
     if effort not in ("low", "medium", "high"):
         raise ValueError("effort must be low, medium or high")
+    if "reward_shapes" in item and not isinstance(item["reward_shapes"], dict):
+        raise ValueError("reward_shapes must map declared emits kinds to reward shapes")
     return AssemblyProposal(
-        aid, role, model_id, prompt, accepts, max_tokens, effort, emits, schemas
+        aid, role, model_id, prompt, accepts, max_tokens, effort, emits, schemas,
+        reward_contracts(emits, item.get("reward_shapes", {}), registered=known_reward_shapes),
     )
 
 
@@ -414,6 +469,18 @@ def _observation(
     if not (jail_available() if jail is None else jail):
         raise ValueError("no jail on this host")
     return ObservationProposal(oid, description, unit.strip(), (lo, hi), code)
+
+
+def _predicate(item: dict[str, Any], *, jail: bool | None = None) -> PredicateProposal:
+    """Malformed predicate definitions receive feedback before their jailed preflight."""
+    from factorylab.settlement.vocabulary import validate_predicate_definition
+
+    if set(item) != {"kind", "id", "description", "code"}:
+        raise ValueError("predicate fields are kind, id, description, code")
+    validate_predicate_definition(item["id"], item["description"], item["code"])
+    if not (jail_available() if jail is None else jail):
+        raise ValueError("no jail on this host")
+    return PredicateProposal(item["id"], item["description"], item["code"])
 
 
 def _learner(item: dict[str, Any], known_assemblies: frozenset[str]) -> LearnerProposal:

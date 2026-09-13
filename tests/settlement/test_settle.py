@@ -244,3 +244,43 @@ def test_retired_evaluator_keeps_attribution_and_historical_feedback(
     assert queue.history(forecast.handle)[0].status == SettleStatus.HISTORICAL
     assert queue.history(forecast.handle)[0].score == result.brier
     assert standing.snapshot() == {}
+
+
+def test_replaced_population_definition_starts_its_own_prevalence_baseline(
+    queue, book, baseline, standing, clock
+):
+    """A new version is a new claim: it cannot be scored against, or feed, the old base rate."""
+    from factorylab.settlement import PrevalenceBaseline, open_forecast_decision
+    from factorylab.settlement.settle import PredicateForecast, baseline_key
+    from factorylab.settlement.vocabulary import PredicateBook
+
+    predicates = PredicateBook(run=lambda code, facts: (True, None))
+    settler = Settler(book, queue, standing, baseline, Observer(predicates))
+    facts = WindowFacts(1_000_000, 1_100_000, 900_000, (), public_window={"fills": 1})
+
+    def register(description, code):
+        return predicates.register("has-fill", description, code, facts={"fills": 1},
+                                   persist=lambda predicate: None)
+
+    def seal(predicate, due):
+        handle = open_forecast_decision(
+            queue, evaluator_id="judge-a", event_id=f"forecast-{due}", q=0.5,
+            deadline_ns=clock.now + 10_000, parent_handle=None, now_event=0, horizon=due)
+        return book.seal(PredicateForecast(
+            handle, "judge-a", "producer-1", "has-fill", {"horizon_events": due}, 0.5, 0, due,
+            "", predicate=predicate))
+
+    first = register("A fill occurred.", "def resolve(facts): return facts['fills'] > 0")
+    seal(first, 1)
+    (settled,) = settler.settle_due(1, lambda forecast: facts)
+    assert settled.y == 1 and settled.baseline_brier == 0.75  # no history yet: base rate 0.5
+    assert baseline.baseline_q("has-fill@1") == 1.0
+
+    second = register("Any fill at all.", "def resolve(facts): return bool(facts['fills'])")
+    assert (first.version, second.version) == (1, 2)
+    assert baseline_key(seal(second, 2)) == "has-fill@2"
+    (replaced,) = settler.settle_due(2, lambda forecast: facts)
+    # The replacement is scored against an empty history, not its predecessor's certainty.
+    assert replaced.baseline_brier == 0.75
+    assert baseline.baseline_q("has-fill@2") == 1.0
+    assert baseline.baseline_q("has-fill") == PrevalenceBaseline().baseline_q("has-fill") == 0.5

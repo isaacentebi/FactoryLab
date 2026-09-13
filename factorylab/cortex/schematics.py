@@ -10,8 +10,8 @@ from factorylab.kernel.money import money_to_usd
 from factorylab.runtime.cadence import tick_intervals
 from factorylab.runtime.observations import window_fact_names
 from factorylab.runtime.propensity import MIN_DECLARED_MASS, action_vocabulary
+from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
-from factorylab.settlement import SEED_VOCABULARY
 
 
 class SchematicsMixin:
@@ -33,6 +33,7 @@ class SchematicsMixin:
             "accepts": ["Tick"],
             "emits": ["ProducerReturn"],
             "schemas": {},
+            "reward_shapes": {"ProducerReturn": "judged"},
             "max_tokens": 512,
             "effort": "low",
         },
@@ -143,8 +144,8 @@ class SchematicsMixin:
         "it with a new version. A learner gives one assembly (assembly_id, normally your own "
         "inputs.you) a learner over the action set "
         "it declares, trained by that assembly's declared propensities and the rewards its "
-        "decisions settle at. Cards answer for producer, evaluator, meta, "
-        "antagonist or all; window is "
+        "decisions settle at. Cards answer for any registered emitted kind, "
+        "the seed aliases producer, evaluator, meta, antagonist, or all; window is "
         "{kind: returns|forecasts|windows, n: positive integer, per: role|assembly|null}. "
         "Insufficient samples are unmeasured. Lambda is optional and bounded by prices.lambda_max; "
         "tick_interval is an optional duration within world.clock bounds. A prediction names a "
@@ -160,7 +161,9 @@ class SchematicsMixin:
             "ProducerReturn uses verdict feedback, Verdict uses conformity and payoff, "
             "MetaVerdict uses conformity or terminal consequence, Exposure uses exposure. "
             "A custom kind is declared in registration.schemas[kind] as a JSON object schema "
-            "and receives verdict feedback. Event kind names keep their schema; a changed "
+            "and declares registration.reward_shapes[kind] as judged, forecast, conformity "
+            "or exposure (default judged). See world.work for the reward contracts. "
+            "Event kind names keep their schema; a changed "
             "schema uses a new name. Built-in world and kernel events cannot be emitted."
         ),
         "requests": (
@@ -227,6 +230,7 @@ class SchematicsMixin:
                 "reason": None if self.tool_jail_available else "no jail on this host",
             },
             "observations": measurement_catalogue(self.observations),
+            "work": work_disclosure(self._kind_rewards(), self.predicates.catalogue()),
             "observation_facts": window_fact_names(),
             "action_labels": action_vocabulary(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
@@ -376,7 +380,8 @@ class SchematicsMixin:
             "items": {
                 "type": "object",
                 "properties": {"kind": {"enum": ["model", "assembly", "router", "tool",
-                                                   "observation", "learner", "amendment",
+                                                   "observation", "predicate", "learner",
+                                                   "amendment",
                                                    "retire", "connector"]}},
                 "required": ["kind"],
             },
@@ -390,7 +395,7 @@ class SchematicsMixin:
             "items": {
                 "type": "object",
                 "properties": {
-                    "predicate": {"enum": [p.id for p in SEED_VOCABULARY]},
+                    "predicate": {"enum": [p.id for p in self.predicates.all()]},
                     "params": {
                         "type": "object",
                         "properties": {"horizon_events": {"type": "integer", "minimum": 1}},

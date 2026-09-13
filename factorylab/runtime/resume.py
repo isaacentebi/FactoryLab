@@ -73,13 +73,15 @@ def _record_types() -> dict[str, type]:
     from factorylab.kernel.wallet import DripSchedule, Reservation
     from factorylab.runtime.cascade import CascadeGate
     from factorylab.runtime.feedback import PendingJudgement
-    from factorylab.runtime.governance import Retirement
+    from factorylab.runtime.governance import Retirement, WorkAssemblySpec
     from factorylab.runtime.pricing import MeasureWindow
     from factorylab.runtime.routing import PopulationEvent
     from factorylab.runtime.summary import RunStats
     from factorylab.settlement.forecast import Forecast
     from factorylab.settlement.lots import Lot, LotOrder, LotTable, Payoff, ReturnAccount
+    from factorylab.settlement.settle import PredicateForecast
     from factorylab.settlement.standing import _Standing
+    from factorylab.settlement.vocabulary import Predicate
     from factorylab.world.events import WorldEvent, WorldEventKind
     from factorylab.world.exchange import (
         AccountState,
@@ -98,7 +100,8 @@ def _record_types() -> dict[str, type]:
     classes = (
         Amendment, PredictedEffect, Charter, MetricCard, MetricWindow, CardSamples,
         Ballot, Committee, Seat, CardRegion, _CardState,
-        AssemblySpec, PopulationTool, Event, PopulationEvent, EventKind, Decision,
+        AssemblySpec, WorkAssemblySpec, Predicate, PredicateForecast,
+        PopulationTool, Event, PopulationEvent, EventKind, Decision,
         LearningReturn, PropensityRecord,
         SettleStatus, Contract, PriceSpec, ResourceBounds, DistributionSummary, DripSchedule,
         Reservation, Retirement, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast,
@@ -378,7 +381,7 @@ class RecoveryJournal:
 
 
 def _read_only(name: str) -> bool:
-    if name in ("sandbox.run", "observation.run"):
+    if name in ("sandbox.run", "observation.run", "predicate.run"):
         return True
     if name == "treasury.provider_pots" or (
         name.startswith("treasury.rail.")
@@ -474,6 +477,7 @@ _RUNTIME_FIELDS = (
     "return_events",
     # The population's registered measurements and its open assembly-learner rounds.
     "registered_observations", "assembly_rounds",
+    "registered_predicates", "kind_reward_shapes", "forecast_returns",
     "connector_calls", "connector_calls_day",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
@@ -565,6 +569,7 @@ def restore_runtime(rt, state: dict) -> None:
                           code="venue_account_mismatch")
     for name, value in decode(state["runtime"]).items():
         setattr(rt, name, value)
+    rt.observer.predicates = rt.predicates
     if rt.window.index in rt.price_windows:
         rt.price_windows[rt.window.index] = rt.window
     rt.clock.now_ns = state["clock_ns"]
