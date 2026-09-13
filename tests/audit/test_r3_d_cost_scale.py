@@ -17,9 +17,11 @@ def test_edition_one_cost_cap_has_fraction_card_relative_weight():
     fraction = relative_region(region_for(
         replace(card, observation="well_formed_rate", units="fraction",
                 acceptable_region="at most 0.25"), rolling={}))
-    assert region.hi == 500
-    assert violation(region, 1_000) == pytest.approx(violation(fraction, 0.5))
-    assert violation(region, 1_000) == pytest.approx(1.0)
+    # Edition 1's line is a quarter of a cent per answer (docs/launch-decisions.md);
+    # twice the line is one unit of violation, the same weight as a fraction card at 2x.
+    assert region.hi == 2_500
+    assert violation(region, 5_000) == pytest.approx(violation(fraction, 0.5))
+    assert violation(region, 5_000) == pytest.approx(1.0)
 
 
 def test_ten_edition_one_cost_violations_survive_one_compliant_window():
@@ -32,9 +34,9 @@ def test_ten_edition_one_cost_violations_survive_one_compliant_window():
                                  kappa=manifest.prices.kappa)
     controller.register(relative_region(region_for(card, rolling={})))
     for event in range(10):
-        controller.observe(card.id, 1_000, window_end_event=event)
-    assert controller.penalty({card.id: 1_000}) == pytest.approx(1.0)
-    controller.observe(card.id, 500, window_end_event=10)
+        controller.observe(card.id, 5_000, window_end_event=event)
+    assert controller.penalty({card.id: 5_000}) == pytest.approx(1.0)
+    controller.observe(card.id, 2_500, window_end_event=10)
     assert controller.price(card.id) == pytest.approx(0.9)
 
 
