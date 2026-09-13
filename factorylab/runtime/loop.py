@@ -185,6 +185,10 @@ class Runtime(
             if self._snapshot("launch") is False:
                 raise ValueError("launch snapshot unavailable")
             self._launch()
+        # A world funded at or below its floor is already dead: its first event would
+        # drip into a dead wallet and abandon a persistent ledger unsealed instead.
+        if self._check_termination():
+            return self._summary()
         while True:
             ev = self._next_event(stream)
             if ev is None or not self._process_event(ev):
@@ -356,6 +360,9 @@ class Runtime(
         if we.kind is WorldEventKind.TICK:
             self.ticks_consumed += 1
             if isinstance(self.tick_clock, (ClockSource, LiveClock)):
+                if (isinstance(self.tick_clock, LiveClock)
+                        and 0 <= self.tick_clock.last_ns < we.ts_ns):
+                    self.tick_clock.gaps.append(we.ts_ns - self.tick_clock.last_ns)
                 self.tick_clock.index = self.ticks_consumed
                 self.tick_clock.last_ns = we.ts_ns
         elif we.kind is WorldEventKind.DRIP:
