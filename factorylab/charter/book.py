@@ -42,6 +42,7 @@ class CharterBook:
         self.__ballots: dict[str, dict[str, Ballot]] = {}
         self.__activated: set[str] = set()
         self.__activations: dict[int, Amendment] = {}
+        self.__bindings: dict[str, dict[str, dict]] = {}
 
     def bind_observations(self, observations) -> None:
         """Resolve the runtime vocabulary afresh, including after checkpoint restoration."""
@@ -62,7 +63,12 @@ class CharterBook:
         return tuple(self.__editions)
 
     def propose(self, amendment: Amendment, observations=None) -> None:
-        """Freeze a unique candidate valid against the current edition's cards and norms."""
+        """Freeze a unique candidate valid against the current edition's cards and norms.
+
+        The observation version behind every card is frozen with the candidate,
+        in the ledger and in book state, because a committee votes on a measured
+        promise and not on an id: see ``_observation_drift``.
+        """
         self.validate(amendment, observations)
         book = self._observation_book(observations)
         cards = {c.id: c for c in (*self.current().cards, *amendment.replace, *amendment.add)}
@@ -72,6 +78,7 @@ class CharterBook:
         self.__ledger.append({"kind": "charter.propose", **asdict(amendment),
                               "observation_bindings": bindings})
         self.__proposals[amendment.id] = amendment
+        self.__bindings[amendment.id] = bindings
 
     def validate(self, amendment: Amendment, observations=None) -> None:
         """Reject unchanged or unmeasurable candidate editions before any vote or reservation."""
@@ -169,8 +176,9 @@ class CharterBook:
 
         A candidate is refused when an earlier activation has since made its
         patch conflict, or has already made the very same change, so that the
-        patched candidate leaves the current edition unchanged. Either way the
-        refusal is evidence, and the candidate is spent.
+        patched candidate leaves the current edition unchanged, or when an
+        observation behind one of its own cards has been re-registered since the
+        vote. Either way the refusal is evidence, and the candidate is spent.
         """
         if type(now_ns) is not int or now_ns < 0:
             raise ValueError("now_ns must be nonnegative integer nanoseconds")
@@ -200,6 +208,8 @@ class CharterBook:
                     validate_observation_bindings(patched)
                 except ValueError as exc:
                     reason = str(exc)
+                else:
+                    reason = self._observation_drift(amendment)
             if reason is not None:
                 self.__ledger.append({"kind": "charter.refused", "amendment_id": amendment_id,
                                       "reason": reason, "ts": now_ns})
@@ -219,6 +229,30 @@ class CharterBook:
             self.__activated.add(amendment_id)
             self.__activations[edition.edition] = amendment
             return edition
+        return None
+
+    def _observation_drift(self, amendment: Amendment) -> str | None:
+        """Name the first card of a candidate whose observation is no longer the voted one.
+
+        A committee votes on a card's measurement, not on the id it names, and a
+        registered observation can be superseded between the ballot and the
+        boundary. The book keeps only the newest implementation of an id, so the
+        voted version cannot be pinned for the activated edition; the candidate
+        is refused instead, and the proposer may re-propose against the new
+        measurement. Seed observations are single-version and never drift.
+        """
+        bindings = self.__bindings.get(amendment.id) or {}
+        book = self._observation_book()
+        for card in (*amendment.replace, *amendment.add):
+            voted = bindings.get(card.id)
+            if voted is None:
+                continue
+            live = book.get(card.observation)
+            if live is not None and live.id == voted["id"] and live.version == voted["version"]:
+                continue
+            now = "withdrawn" if live is None else f"version {live.version}"
+            return (f"card {card.id} observation: committee voted on {voted['id']} "
+                    f"version {voted['version']}, now {now}")
         return None
 
     def activated_amendment(self, edition: int) -> Amendment:

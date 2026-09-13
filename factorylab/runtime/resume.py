@@ -464,6 +464,7 @@ _COMPONENT_FIELDS = (
     ("settler", "_Settler__", ("snapshots", "recorded")),
     ("charter_book", "_CharterBook__", (
         "editions", "proposals", "committees", "ballots", "activated", "activations",
+        "bindings",
     )),
     ("controller", "_PriceController__", (
         "eta", "kappa", "decay", "lambda_max", "min_window_events", "cards",
@@ -562,6 +563,9 @@ def restore_runtime(rt, state: dict) -> None:
         for field in names:
             if name == "controller" and field == "kappa" and field not in components[name]:
                 # Older checkpoints inherited this immutable parameter from the same manifest.
+                continue
+            if name == "charter_book" and field == "bindings" and field not in components[name]:
+                # Older checkpoints predate the frozen observation version per proposal.
                 continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
     rt.prices.prices = decode(state["prices"])

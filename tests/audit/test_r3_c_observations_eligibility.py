@@ -9,14 +9,15 @@ from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.shared import DEF_CONFORMITY
-from tests.audit.test_a15_liability import boundary
+from tests.audit.test_a15_liability import boundary, refusals
 from tests.audit.test_r3_c_liability import committee
 from tests.audit.test_v3_seat4_boundaries import _decision
 from tests.conftest import make_runtime
 from tests.runtime.test_fidelity import decision
 
 
-def test_registered_observation_reaches_vote_activation_price_and_frozen_liability(monkeypatch):
+def voted_observation_amendment(monkeypatch):
+    """Register a population observation, then pass a card that measures by it."""
     rt = make_runtime()
     rt._manage_reserve_window()
     rt.tool_jail_available = True
@@ -36,7 +37,6 @@ def test_registered_observation_reaches_vote_activation_price_and_frozen_liabili
         "code": "def observe(facts): return 0.5",
     }
     rt._apply_registrations(author, Return(author, {"register": [observation]}, 0, "ok"))
-    assert rt.registry.get("observation:fresh-measure").version == 1
     card = {
         "id": "fresh-card",
         "norm": "useful inquiry",
@@ -55,6 +55,21 @@ def test_registered_observation_reaches_vote_activation_price_and_frozen_liabili
             "predicted_effect": {"card_id": "fresh-card", "direction": "increase", "window": 2},
         },
     )
+    return rt, author, observation
+
+
+def replace_observation(rt, author, observation) -> None:
+    """Supersede the registered implementation behind the same observation id."""
+    rt.clock.now_ns += rt.reserve.window_ns
+    rt.reserve.open_window(rt.clock.now_ns, rt.wallet.balance)
+    observation["code"] = "def observe(facts): return 0.9"
+    rt._apply_registrations(author, Return(author, {"register": [observation]}, 0, "ok"))
+    assert rt.registry.get("observation:fresh-measure").version == 2, rt.registration_feedback
+
+
+def test_registered_observation_reaches_vote_activation_price_and_frozen_liability(monkeypatch):
+    rt, author, observation = voted_observation_amendment(monkeypatch)
+    assert rt.registry.get("observation:fresh-measure").version == 1
     votes = list(rt.pending_votes)
     assert len(votes) == 3
     assert all(
@@ -66,10 +81,7 @@ def test_registered_observation_reaches_vote_activation_price_and_frozen_liabili
     rt._close_price_window()
     assert rt.window.closed_values["fresh-card"] == 0.5
     assert rt.controller.price("fresh-card") > 0
-    rt.reserve.open_window(rt.clock.now_ns, rt.wallet.balance)
-    observation["code"] = "def observe(facts): return 0.9"
-    rt._apply_registrations(author, Return(author, {"register": [observation]}, 0, "ok"))
-    assert rt.registry.get("observation:fresh-measure").version == 2, rt.registration_feedback
+    replace_observation(rt, author, observation)
     saved = runtime_state(rt)
     restored = make_runtime()
     restored.observation_runner = rt.observation_runner
@@ -97,6 +109,48 @@ def test_registered_observation_reaches_vote_activation_price_and_frozen_liabili
         current.charter_book.validate(amendment)
         current.charter_book.propose(amendment)
     assert runtime_state(rt) == runtime_state(restored)
+
+
+def test_replacing_a_voted_observation_before_activation_refuses_the_amendment(monkeypatch):
+    """A committee votes on a measurement, so a superseded implementation is not activated."""
+    rt, author, observation = voted_observation_amendment(monkeypatch)
+    replace_observation(rt, author, observation)
+    # The binding is frozen in the book, not only in the ledger, so a resumed
+    # runtime refuses the same candidate for the same reason.
+    restored = make_runtime()
+    restored.observation_runner = rt.observation_runner
+    restore_runtime(restored, runtime_state(rt))
+    for current in (rt, restored):
+        ballots = [vote["handle"] for vote in current.pending_votes]
+        assert len(ballots) == 3
+        boundary(current, 2)
+        assert current.charter.edition == 1
+        assert all(card.id != "fresh-card" for card in current.charter.cards)
+        assert [(item["amendment_id"], item["reason"]) for item in refusals(current)] == [(
+            "fresh-policy",
+            "card fresh-card observation: committee voted on fresh-measure "
+            "version 1, now version 2",
+        )]
+        # The candidate is spent, its seats are closed and the cadence keeps no head.
+        assert not current.charter_book.pending()
+        assert not current.pending_votes
+        waiting = current.cadence.world_block(current.tick_clock.interval_ns)["waiting"]
+        assert "fresh-policy" not in waiting
+        for handle in ballots:
+            assert current.queue.history(handle)[-1].status is SettleStatus.CENSORED
+        boundary(current, 3)
+        assert current.charter.edition == 1
+        assert len(refusals(current)) == 1
+    assert runtime_state(rt) == runtime_state(restored)
+
+
+def test_an_untouched_observation_activates_the_amendment_it_was_voted_with(monkeypatch):
+    """Without a replacement the ordinary path is unchanged: the voted card goes live."""
+    rt, _author, _observation = voted_observation_amendment(monkeypatch)
+    boundary(rt, 2)
+    assert rt.charter.edition == 2
+    assert any(card.id == "fresh-card" for card in rt.charter.cards)
+    assert not refusals(rt)
 
 
 def test_conformity_and_consequence_evidence_count_each_original_once():
