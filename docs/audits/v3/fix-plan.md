@@ -14,7 +14,22 @@ Goal: close every row of `triage.md` once, each behind a test that was red and i
 
 ## Step 0: test speed, alone, before any fix
 
-Owner: Codex medium. One PR, test code only, no production change. Acceptance: same 2,115 tests pass; `uv run pytest -m fast` under 60 s; the default gate under 6 minutes; `slow` unchanged. The profile that fixes the targets is being measured now and will be pasted here; the known shape is that the scripted-world tests each construct a runtime and run hundreds of events through the real jail, and that they are the whole of the time. Work: session-scoped scripted-world fixtures shared by read-only tests; an in-process fake jail for tests that are not about the jail; markers `fast` (pure units), `world` (scripted runs), `slow` (real kill and resume, unchanged). Nothing else lands until this is merged, so every later targeted run and the final gate are cheap.
+Owner: Codex medium. One PR, test code only, no production change. Measured on main with `--durations` over `tests/runtime tests/audit tests/world` (1,156 tests, 9:19 wall under `-n auto`):
+
+| Test | Seconds | What it does |
+|---|---|---|
+| `test_a3_immune.py` fixture `w1_scripted_diary` | 551 (setup) | its own 500-event scripted run through the real jail |
+| `test_a4_prices.py` fixture `w1_scripted_diary` | 549 (setup) | the same run again |
+| `test_audit_b13_jail.py::...population_tool_in_the_jail` | 295 | the same run again |
+| `test_loop.py::test_scripted_world_phase3_spec_condition_2` | 185 | short-cadence manifest, 500 events |
+| `test_a5_exposure.py::...win_rate_is_below_sixty_percent` | 146 | scripted, 400 events |
+| `test_loop.py::test_scripted_world_phase2_spec_condition_2` | 145 | |
+| `test_loop.py::test_scripted_clock_amendment_...` | 139 | |
+| `test_loop.py::test_scripted_amendment_lambda_...` | 62 | |
+| `test_a17_wake.py` module fixture | 43 + 38 | |
+| `test_connectors.py::...real_sortition...` (2 cases) | 23 + 23 | |
+
+Everything else is under 8 seconds. The same seed gives the same run (a test asserts it), so the same world is recomputed about eight times, and under xdist a 550-second test pins one worker while the rest idle. The work: one session-wide cache of scripted runs keyed by (manifest, events, seed), shared across xdist workers through a lock file, computed once, read by every consumer; tests that mutate a ledger copy it first; `fast` and `world` markers auto-applied; no assertion weakened, no test removed, same collection count. Acceptance: the migrated files pass alone and together under `-n 4`, the heaviest world runs once per session, and the default gate on merged main, which I run once, is under six minutes. The remaining cost inside a run (a 351 MB ledger for 500 events, from an insolvency item written every event and a journal pair per connector call) is production code and belongs to groups E and B, not here.
 
 ## Step 1: fix groups, in parallel, file-disjoint
 
