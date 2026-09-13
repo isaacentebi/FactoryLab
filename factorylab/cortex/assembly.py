@@ -8,13 +8,12 @@ runtime passes in, keyed by handle scope.
 
 The system prompt is world-supplied. It must not describe kernel rules (the
 kernel enforces them); it describes only how to answer a request. The system
-*message* is not only that prompt: the kernel renders the request's stable
-world block ahead of it. That block is the kernel's own disclosure of public
-schematics — placed by the kernel, in every prompt of every assembly, and
-identical across them — so the rule above is untouched by it: what a world may
-not write about the kernel, the kernel may still publish about itself, and the
-population rule it keeps is the other one (physics is enforced, never
-announced).
+*message* is that prompt and nothing else. Everything the kernel discloses about
+the world — the charter text, the tool, observation, work and metric catalogues —
+is population-authored the moment a member registers into it, so it travels in
+the user message, where it is material to read rather than an instruction that
+outranks the assembly's own. An assembly that writes a tool description is
+writing to its peers' inputs, never to their system role.
 """
 
 from __future__ import annotations
@@ -101,28 +100,33 @@ class Assembly:
         child's identity: whatever ``inputs`` carried, the assembly overwrites it
         with its own.
 
-        The prompt's stable prefix (``Request.stable_prefix``) heads the system
-        message, ahead of this assembly's own system prompt, and the moving half
-        of the rendering is the user message. The wire every provider builds is
-        ``[system, *messages]``, so this is the only placement under which two
-        assemblies of one world — which hold different system prompts — begin
-        with the same bytes; put in the user message, the differing system text
-        would precede it and no cross-assembly prefix cache could ever hit. That
-        is all DeepSeek's and OpenAI's automatic prompt caching asks for: they
-        key on an identical leading token sequence and need no ``cache_control``
-        marker, so none is sent. The block is the kernel's disclosure, not the
-        world's, so placing it inside a world-supplied message leaves the rule in
-        this module's docstring intact. Nothing now precedes it: handle-scoped
-        memory, when a world registers it, sits in the messages after it.
+        Guarantees the system message is exactly ``spec.system_prompt``: no
+        population-authored text ever reaches the system role. The registered
+        catalogues carry prose their authors chose — a tool's description, an
+        observation's, a predicate's, a metric card's, the charter's norms — and
+        in the system role, shared by every later call, that prose would be a
+        standing instruction one member wrote for the rest of the population.
+        The prompt's stable prefix (``Request.stable_prefix``) therefore heads
+        this user message, which is where the world block belongs and where it
+        reads as material.
+
+        The cache hit that placement keeps is the per-assembly one, which is
+        where the volume is: this assembly's system text is a constant, so its
+        own consecutive calls open with the identical ``system`` message
+        followed by the identical stable block, which is all DeepSeek's and
+        OpenAI's automatic prompt caching asks for — they key on an identical
+        leading token sequence and need no ``cache_control`` marker, so none is
+        sent. Handle-scoped memory, when a world registers it, is the one thing
+        that precedes the block and costs that assembly the hit.
         """
         req = replace(req, inputs={**req.inputs, "you": self.spec.id})
         messages: list[dict[str, Any]] = []
         if self.spec.memory_policy == "handle-scoped" and req.parent_handle:
             messages.extend(self.memory.get(req.parent_handle, []))
-        messages.append({"role": "user", "content": req.moving_text()})
+        messages.append({"role": "user", "content": req.prompt_text()})
         return ModelRequest(
             model_id=self.spec.model_id,
-            system=req.stable_prefix() + self.spec.system_prompt,
+            system=self.spec.system_prompt,
             messages=tuple(messages),
             max_tokens=self.spec.max_tokens,
             effort=self.spec.effort,
@@ -179,10 +183,7 @@ class Assembly:
             scope = req.parent_handle or req.handle
             self.memory.setdefault(scope, []).extend(
                 [
-                    # The user message as it was sent: the stable block is the system
-                    # message's, and a remembered copy of it would be a stale world
-                    # repeated inside the very prefix it is supposed to leave alone.
-                    {"role": "user", "content": req.moving_text()},
+                    {"role": "user", "content": req.prompt_text()},
                     {"role": "assistant", "content": resp.text},
                 ]
             )

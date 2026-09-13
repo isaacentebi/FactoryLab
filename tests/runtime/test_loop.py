@@ -1073,9 +1073,7 @@ def test_scripted_clock_amendment_changes_next_tick_deterministically(monkeypatc
 
         class ClockProvider(ScriptedProvider):
             def complete(self, req):
-                # The wire is [system, *messages]; the stable world block heads the system.
-                text = "\n".join([req.system,
-                                  *(str(m.get("content", "")) for m in req.messages)])
+                text = "\n".join(str(m.get("content", "")) for m in req.messages)
                 requests.append(_inputs_from_prompt(text))
                 response = super().complete(req)
                 body = json.loads(response.text)

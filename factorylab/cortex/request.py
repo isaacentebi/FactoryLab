@@ -24,11 +24,12 @@ Money = int
 
 # The world facts that hold still between calls: everything fixed within a charter
 # edition and a registration state. They are rendered first, in one contiguous
-# block at the head of the system message, so consecutive calls to any assembly
-# of a world begin with byte-identical text and a provider's automatic prefix
-# cache (DeepSeek and OpenAI cache on an identical prefix, with no cache_control
-# marker) can hit. Everything not named here moves — the account, the mids, the
-# pots, the note counts, the pathologies, the reserve, the controller's prices,
+# block at the head of the first user message — never in the system message, which
+# carries the assembly's own prompt and nothing the population wrote — so
+# consecutive calls to one assembly begin with byte-identical text and a provider's
+# automatic prefix cache (DeepSeek and OpenAI cache on an identical prefix, with no
+# cache_control marker) can hit. Everything not named here moves — the account,
+# the mids, the pots, the note counts, the pathologies, the reserve, the card prices,
 # the scoring values the runtime's own adaptation changes, the governance queue,
 # the measured tick — and is rendered after the block, inside ``INPUTS`` with the
 # request itself. A key absent from this set is treated as moving, which costs
@@ -172,28 +173,29 @@ class Request:
 
         Guarantees it is a pure function of the world facts named in
         ``STABLE_WORLD_KEYS`` — no description, no identity, no event, no
-        account — so two requests to two different assemblies about two
-        different events begin with the same bytes, and a provider's automatic
-        prefix cache scores a hit on the second of them. That is why
-        ``Assembly.build_model_request`` puts it at the head of the system
-        message, ahead of the assembly's own system prompt, which is where the
-        wire actually begins. It is the empty string when the request carries
-        no world block.
+        account — so two requests about two different events render the same
+        bytes here, and a provider's automatic prefix cache scores a hit on the
+        second call an assembly makes. It heads ``prompt_text``, which is the
+        whole of the first user message, and it is never given to the system
+        role: the block publishes catalogues the population writes, and the
+        system role is where an instruction outranks the rest of the prompt. It
+        is the empty string when the request carries no world block.
         """
         stable, _ = self._world_split()
         if not stable:
             return ""
         return f"{WORLD_HEADER}{json.dumps(stable, sort_keys=True, indent=2)}\n\n"
 
-    def moving_text(self) -> str:
-        """Render everything about this request that the stable prefix leaves out.
+    def prompt_text(self) -> str:
+        """Render the request as the executor sees it: world, description, inputs, schema.
 
-        Guarantees the world facts it renders are exactly those the prefix does
-        not — the partition ``_world_split`` makes — and that it carries every
-        other field of the request the executor needs, so
-        ``stable_prefix() + moving_text()`` is the whole rendering with nothing
-        said twice. This is the text the user message carries; the prefix
-        travels ahead of it in the system message.
+        Guarantees the rendering is a pure function of the request's fields and
+        contains no handle, parent, or channel information the executor does not
+        need to do the work; that it opens with ``stable_prefix()`` and that
+        nothing which moves between calls precedes that block; and that the
+        world it publishes is the whole world exactly once — the stable facts in
+        the block, the moving ones inside ``INPUTS``, by the partition
+        ``_world_split`` makes.
         """
         stable, moving = self._world_split()
         inputs = {**self.inputs, "world": moving} if stable else self.inputs
@@ -212,19 +214,7 @@ class Request:
             f"OUTCOME SCHEMA\n{json.dumps(self.outcome_schema, sort_keys=True, indent=2)}",
             f"COMPLETION CRITERION\n{self.completion_criterion}",
         ])
-        return "\n\n".join(blocks)
-
-    def prompt_text(self) -> str:
-        """Render the request as the executor sees it: world, description, inputs, schema.
-
-        Guarantees the rendering is a pure function of the request's fields and
-        contains no handle, parent, or channel information the executor does
-        not need to do the work, and that it is the two rendered halves in the
-        order the wire carries them: the stable world block first, then
-        everything that moves. The wire splits them across the system and the
-        user message; this is the same bytes, joined.
-        """
-        return self.stable_prefix() + self.moving_text()
+        return self.stable_prefix() + "\n\n".join(blocks)
 
 
 @dataclass(frozen=True)

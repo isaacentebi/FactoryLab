@@ -66,13 +66,19 @@ class Charter:
 
     def render(self, prices: dict[str, float] | None = None, *,
                price_label: str | None = None) -> str:
-        """Expose the full charter, including each window, role and current supplied price.
+        """Expose the full charter: the edition, every norm, and every card in order.
 
-        ``price_label`` names where the prices are instead of inlining them. The
-        controller moves every card's lambda at every closed window, so a charter
-        rendered with its prices inside is a different charter on every call; the
-        disclosure that has to hold still between calls names ``world.card_prices``
-        and lets the moving numbers travel there.
+        Guarantees each card renders its id, norm, description, units, window,
+        acceptable region, observation and accountability scope identically in
+        every case, and that the four cases differ in the ``lambda:`` line
+        alone. With ``prices``, it is that card's price, and ``0.0`` for a card
+        the mapping does not name. With ``price_label``, it is that label
+        verbatim, for every card. With both, ``price_label`` wins and ``prices``
+        is not read: a rendering that names where the prices are cannot also
+        inline numbers the controller moves at every closed window, which is the
+        whole reason the label exists — a disclosure that must hold still
+        between calls names ``world.card_prices`` and lets the moving numbers
+        travel there. With neither, it is ``unassigned``.
         """
         lines = [f"CHARTER (edition {self.edition})", "", "NORMS"]
         lines += [f"- {n}" for n in self.norms]

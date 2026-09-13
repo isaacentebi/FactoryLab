@@ -44,10 +44,7 @@ class ScriptedProvider:
     late_amendment_call: int = 1610
 
     def complete(self, req: ModelRequest) -> ModelResponse:
-        # The wire every provider builds is [system, *messages], and the stable world
-        # block heads the system message, so a scripted reply reads the prompt in the
-        # same order a vendor would.
-        text = "\n".join([req.system, *(str(m.get("content", "")) for m in req.messages)])
+        text = "\n".join(str(m.get("content", "")) for m in req.messages)
         inputs = _inputs_from_prompt(text)
         desc = _description_from_prompt(text)
         if desc == "A1 helper":
@@ -279,10 +276,7 @@ class ScriptedProvider:
         verdict = 1.0 if status == "ok" and action in ("order", "hold") else 0.3
         if action in ("noop", "hold"):
             verdict = 0.9 if req.model_id == "fake-haiku" else 0.1
-        # The assembly's own prompt, not the kernel's block ahead of it: a judge's
-        # scripted style is a property of the judge, and every assembly of a world
-        # shares that block.
-        style = int(hashlib.sha256(_assembly_prompt(req.system).encode()).hexdigest(), 16) % 4
+        style = int(hashlib.sha256(req.system.encode()).hexdigest(), 16) % 4
         q = (0.3, 0.45, 0.6, 0.75)[style]
         return {
             "verdict": verdict,
@@ -313,31 +307,15 @@ def _description_from_prompt(text: str) -> str:
 
 
 
-def _assembly_prompt(system: str) -> str:
-    """The assembly's own system prompt, with the kernel's block ahead of it removed.
-
-    Guarantees a system message that carries no stable world block is returned
-    unchanged, so what this yields is the world-supplied prompt and nothing else
-    whether or not the kernel prefixed one.
-    """
-    if not system.startswith("WORLD\n") or (start := system.find("{")) < 0:
-        return system
-    try:
-        _, end = json.JSONDecoder().raw_decode(system[start:])
-    except (ValueError, json.JSONDecodeError):
-        return system
-    return system[start + end:].lstrip("\n")
-
-
 def _world_from_prompt(text: str) -> dict[str, Any]:
-    """Read the stable world block the kernel renders ahead of everything else.
+    """Read the stable world block the request renders ahead of everything else.
 
-    Guarantees the block is read wherever the kernel puts it — it heads the
-    system message, so whatever follows it on the wire is the assembly's own
-    prompt and not a header this reader has to know — and that a prompt carrying
-    no such block, or a damaged one, reads as an empty mapping rather than an
-    error. The facts that move stay in ``INPUTS``; a reader of the prompt wants
-    the whole world, so it reads both and joins them.
+    Guarantees the block is read from where the request puts it — the head of
+    the user message — by its own extent rather than by the section that follows
+    it, and that a prompt carrying no such block, or a damaged one, reads as an
+    empty mapping rather than an error. The facts that move stay in ``INPUTS``;
+    a reader of the prompt wants the whole world, so it reads both and joins
+    them.
     """
     if not text.startswith("WORLD\n") or (start := text.find("{")) < 0:
         return {}

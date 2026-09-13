@@ -127,9 +127,8 @@ def test_the_payoff_predicate_is_named_to_the_population_but_never_computed_for_
 
     class Capture(ScriptedProvider):
         def complete(self, req):
-            # The request description alone: the user message opens with REQUEST now
-            # that the stable world block heads the system message, and what that
-            # block discloses is asserted below from the world block itself.
+            # The request description alone: the stable world block leads the
+            # prompt, and what it discloses is asserted below from the world block.
             texts.append(
                 req.messages[-1]["content"].split("\n\nINPUTS\n")[0].split("REQUEST\n")[-1])
             return ModelResponse(req.model_id, json.dumps(

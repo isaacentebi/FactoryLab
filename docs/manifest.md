@@ -131,25 +131,30 @@ A rendered request puts the world facts that hold still first, in one contiguous
 named in `cortex/request.py:STABLE_WORLD_KEYS` — the charter text, mechanics,
 scoring, tool, connector, work and observation catalogues, the assembly
 catalogue and contracts, the trading markets and their instrument records — and
-is byte-identical across consecutive calls to every assembly of a world, so
-DeepSeek's and OpenAI's automatic prefix caching hits it without any
-`cache_control` marker. It is the head of the **system message**, ahead of the
-assembly's own system prompt, because the wire every provider builds is
-`[system, *messages]`: a block leading the user message would sit behind system
-text that differs per registered assembly, and no cross-assembly hit could
-land. The rule that a world-supplied system prompt may not describe kernel
-rules is untouched — this block is the kernel's own disclosure of public
-schematics, placed by the kernel in every assembly's prompt. It changes when the
-charter edition, the mechanics or one of those catalogues changes, and at
-nothing else; a live adaptation does not change it. Everything that moves
-between calls — `inputs.you`, the event, the account, `recent_mids`, the pots,
+is byte-identical across consecutive calls to an assembly, so DeepSeek's and
+OpenAI's automatic prefix caching hits it without any `cache_control` marker.
+It is the head of the **first user message**, never the system message, and
+that placement is a boundary, not a preference: the block publishes catalogues
+the population writes — registered tool, observation, predicate and work
+descriptions, metric cards, the charter text — and the system role is where one
+member's prose would outrank every other assembly's own prompt. The system
+message is exactly the assembly's world-supplied `system_prompt`; no
+population-authored text ever enters it. The cache hit this keeps is the
+per-assembly one, which is where the volume is: an assembly's system text is a
+constant, so each of its calls opens with the identical `system` message
+followed by the identical stable block, and a provider keys on nothing more
+than that identical leading sequence. Handle-scoped memory, where a world
+registers it, is the one thing that precedes the block and costs that assembly
+the hit. The block changes when the charter edition, the mechanics or one of
+those catalogues changes, and at nothing else; a live adaptation does not
+change it. Everything that moves between calls — `inputs.you`, the event, the account, `recent_mids`, the pots,
 note counts, pathologies, the reserve remaining, `governance`, `tick_intervals`,
 `registration_feedback`, `adaptive_scoring` and `card_prices` — is rendered
-after it, in the user message inside `INPUTS`. The controller re-prices every
-card at every closed window, so the charter disclosure names `world.card_prices`
-instead of inlining each lambda; `card_prices` still publishes every card's
-current price and region. Where the
-provider reports it, `usage.prompt_tokens_details.cached_tokens` is recorded as
+after it, in the same user message inside `INPUTS`. The controller re-prices
+every card at every closed window, so the charter disclosure names
+`world.card_prices` instead of inlining each lambda; `card_prices` still
+publishes every card's current price and region. Where the provider reports
+it, `usage.prompt_tokens_details.cached_tokens` is recorded as
 `usage.cached_tokens` on the `invocation` item, absent where it is not reported.
 Cost metering is unchanged: OpenRouter's reported `usage.cost` already carries
 the cache discount.
