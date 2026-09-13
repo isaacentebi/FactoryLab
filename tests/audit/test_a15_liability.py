@@ -63,7 +63,9 @@ def test_a15_bad_votes_lose_after_declared_window_and_survive_resume(monkeypatch
             assert current.queue.get(handle).actor == f"assembly:{assembly}"
     assert runtime_state(rt) == runtime_state(restored)
     # Another ballot is offered the very same learner's prior policy return.
-    rt.reserve.open_window(rt.clock.now_ns, rt.wallet.balance)
+    # The proposal's trial needs a live novelty window: let the runtime decide whether
+    # this activation boundary is also a reserve boundary, rather than assuming it is.
+    rt._manage_reserve_window()
     rt._propose_amendment("external-author", proposal(rt, id="policy-next"))
     assert any(request.inputs["your_policy_returns"] for request in seen[len(members):])
 

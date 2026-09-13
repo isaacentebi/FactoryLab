@@ -40,9 +40,11 @@ def test_scripted_800_event_diaries_have_equal_summaries(tmp_path):
         # launch + min_ratio * 20 = event 61, and the scripted measurement window is 120
         # events, so the first window carrying the new card closes at event 121. The
         # scripted fill-card amendment proposed later in the run does not activate inside
-        # this budget, so exactly one activation is expected.
+        # this budget on its own; with population observations admitted to the charter
+        # (round three, T3) the scripted fill-card amendment also activates, later.
         activation = [item for item in items if item.get("kind") == "charter.activate"]
-        assert [item["amendment_id"] for item in activation] == ["turnover-card"]
+        assert [item["amendment_id"] for item in activation] == ["turnover-card",
+                                                                  "scripted-fill-card"]
         assert "card:turnover" in report["operator"]["dimensions"]
         assert any(w["profile"]["verdict"] is not None for w in report["windows"])
         assert report["settling"] and report["settling"][0]["edition"] == 2
