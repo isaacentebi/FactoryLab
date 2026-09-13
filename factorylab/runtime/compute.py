@@ -16,7 +16,8 @@ from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
-from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, _to_plain
+from factorylab.runtime.routing import _KeyedLearner
+from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, NOOP, _to_plain
 from factorylab.runtime.summary import _price_str
 from factorylab.settlement import SEED_VOCABULARY
 from factorylab.settlement.consequence import ReturnConsequences
@@ -854,6 +855,76 @@ class ComputeMixin:
             return
         self.assembly_rounds[handle] = action_id
 
+    def _settle_outside_universe(self, handle: str, prop: PropensityRecord, feedback) -> None:
+        """Deliver a settled score whose action the router holding the decision cannot hold.
+
+        A parent may request a target its own router never offers — a Tick
+        producer asking for an evaluator that only accepts ProducerReturn — and
+        the parent's router cannot be trained on an arm outside its universe.
+        Guarantees the score still reaches a learner that can use it: the router
+        whose universe holds the target, found by the kinds the target accepts,
+        else the requesting assembly's own learner over the request action it
+        registered. The ledger names whichever was trained, or why neither was,
+        so no settlement is dropped in silence.
+        """
+        target = prop.chosen
+        spec = self.assemblies[target].spec if target in self.assemblies else None
+        for kind in (sorted(spec.accepts) if spec is not None else sorted(self.routers)):
+            for state in self.routers.get(kind, []):
+                if target in state.universe:
+                    self._settle_on_router(handle, state, kind, target, feedback)
+                    return
+        self._settle_on_requester(handle, target, feedback)
+
+    def _settle_on_router(self, handle: str, state, kind: str, target: str, feedback) -> None:
+        """Train the router that owns the target's kind on the child it did not select."""
+        learner = state.learner
+        try:
+            if isinstance(learner, _KeyedLearner):
+                # A keyed learner scores frozen rounds, so the settlement needs one
+                # opened under this handle before it can be applied.
+                learner.inner.distribution_for(
+                    handle, [a for a in state.universe if a != NOOP])
+                learner.inner.update_for(handle, feedback)
+            else:
+                learner.update(feedback)
+        except (KeyError, ValueError, RuntimeError, TypeError, AssertionError) as exc:
+            self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
+                                "learner_id": learner.id, "reason": str(exc)[:200],
+                                "ts": self.clock.now_ns})
+            return
+        self.ledger.append({"kind": "request.settled", "handle": handle,
+                            "target": target, "learner_id": learner.id,
+                            "learner": "router", "event_kind": kind,
+                            "reward": feedback.reward, "ts": self.clock.now_ns})
+
+    def _settle_on_requester(self, handle: str, target: str, feedback) -> None:
+        """Train the assembly that asked for the child, over the request action it declared."""
+        parent = self.queue.get(handle).parent_handle
+        assembly_id = self.handle_to_assembly.get(parent) if parent is not None else None
+        learner = self.assembly_learners.get(assembly_id)
+        action = f"request:{target}"[:64]
+        reason = None
+        if learner is None:
+            reason = f"no router holds {target} and the requester registered no learner"
+        elif action not in set(getattr(learner.inner, "actions", ())):
+            reason = f"no router holds {target} and {action} is outside the requester's actions"
+        if reason is None:
+            try:
+                learner.distribution_for(handle, list(learner.inner.actions))
+                learner.update_for(handle, replace(feedback, action=action))
+            except (KeyError, ValueError, RuntimeError, TypeError, AssertionError) as exc:
+                reason = str(exc)[:200]
+        if reason is not None:
+            self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
+                                "assembly_id": assembly_id, "reason": reason,
+                                "ts": self.clock.now_ns})
+            return
+        self.ledger.append({"kind": "request.settled", "handle": handle, "target": target,
+                            "learner_id": learner.id, "learner": "assembly",
+                            "assembly_id": assembly_id, "action": action,
+                            "reward": feedback.reward, "ts": self.clock.now_ns})
+
     def _invoke_child(
         self, action_id: str, parent: Request, item: ChildRequest, ceiling: int,
     ) -> tuple[dict, int]:
@@ -876,8 +947,10 @@ class ComputeMixin:
         ceiling = min(ceiling, max(0, self._compute_available(parent.handle)))
         # The child is opened under the learner that woke its parent, so the score
         # its return settles at reaches a router that exists: the parent's router
-        # learns what the target it chose was worth on this kind of work. The
-        # propensity is still the parent's choice, recorded as such.
+        # learns what the target it chose was worth on this kind of work. A target
+        # that router never offers is settled on the router that owns the target's
+        # kind instead (_settle_outside_universe). The propensity is still the
+        # parent's choice, recorded as such.
         actor = self.queue.get(parent.handle).actor
         channels = self._return_channels(target) if target in self.assemblies else {}
         handle = self.queue.open(

@@ -115,11 +115,10 @@ class SchematicsMixin:
         "about_handle": (
             "judging returns (optional): the return handle your verdict or conformity is "
             "about, exactly as it appears in the request (inputs.subject_handle when present, "
-            "otherwise the delivered return); omit it to judge the delivered return. Prose or "
-            "any value that is not a return handle is ignored, the delivered return is judged, "
-            "and the reason appears in registration_feedback; naming your own return, an "
-            "ancestor, a return whose consequence is already fixed, or (from a requested "
-            "child) anything outside the requesting chain is refused"
+            "otherwise the delivered return); omit it to judge the delivered return. A value "
+            "you cannot address here — prose, or a handle this judgement may not be about — "
+            "is not used: the delivered return is judged instead and the reason appears in "
+            "registration_feedback"
         ),
         "propensity": (
             "optional on any return: your own distribution over the actions you were "

@@ -162,3 +162,132 @@ def test_a_childs_verdict_trains_the_router_that_woke_its_parent(monkeypatch):
     )
     rt._deliver_returns()
     assert state.learner.distribution(state.universe)["seed-decider"] > before
+
+
+def test_a_cross_role_childs_score_trains_the_router_that_owns_the_targets_kind(monkeypatch):
+    """A Tick producer requests a ProducerReturn evaluator: the parent's router cannot hold
+    that arm, so the settlement goes to the router whose universe can, and the ledger says so."""
+    rt = make_runtime()
+    tick = rt.routers["Tick"][0]
+    returns = rt.routers["ProducerReturn"][0]
+    assert "eval-a" not in tick.universe and "eval-a" in returns.universe
+    lid = tick.learner.id
+    parent = rt.queue.open(
+        actor=lid,
+        event_id="tick-2",
+        channel="verdict",
+        deadline_ns=10**15,
+        parent_handle=None,
+        cost_ceiling=10_000_000,
+        propensity=PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, lid, "t"),
+    )
+    rt.handle_to_assembly[parent] = "seed-decider"
+    rt.consequences.start(parent, 0)
+    req = rt._request(parent, "parent task", {}, {"type": "object"}, 10**15, "verdict")
+    monkeypatch.setattr(
+        rt.provider.target,
+        "complete",
+        lambda request: ModelResponse(
+            request.model_id,
+            json.dumps({"verdict": 0.5, "payoff": 0.5, "rationale": "r", "forecasts": []}),
+            1,
+            1,
+            "stop",
+        ),
+    )
+    # The judgement this child offers is its own business and settles on its own terms;
+    # what is under test is where the score goes, so the step is held and a score supplied.
+    judged = []
+    monkeypatch.setattr(rt, "_evaluator_step", lambda *a, **k: judged.append(a[1]))
+    before_tick, before_returns = tick.learner.state(), returns.learner.state()
+    rt._invoke_child(
+        "seed-decider",
+        req,
+        ChildRequest("eval-a", "judge it", {}, {"type": "object"}),
+        req.cost_ceiling,
+    )
+    child = _items(rt, "request.child")[-1]["handle"]
+    assert judged == [child]  # the child ran as an evaluator, under the parent's router
+    assert rt.queue.get(child).actor == lid
+    rt.queue.settle(
+        child,
+        channel=rt.queue.get(child).channel,
+        score=1.0,
+        status=SettleStatus.SETTLED,
+        definition_version="test",
+        sampling_ref=None,
+    )
+    rt._deliver_returns()
+    settled = [i for i in _items(rt, "request.settled") if i["handle"] == child]
+    assert settled, "the child's settlement reached no learner and said nothing"
+    assert settled[-1]["learner_id"] == returns.learner.id
+    assert settled[-1]["target"] == "eval-a" and settled[-1]["event_kind"] == "ProducerReturn"
+    assert returns.learner.state() != before_returns  # the router that can hold eval-a learned
+    # Five arms started uniform; the reward moved the one the parent chose.
+    assert returns.learner.distribution(returns.universe)["eval-a"] > 1 / len(returns.universe)
+    assert tick.learner.state() == before_tick  # the one that cannot was left alone
+
+
+def test_a_child_no_router_can_hold_settles_on_the_requesters_own_learner(monkeypatch):
+    """No router holds an unavailable target, so the score goes to the assembly that asked
+    for it, over the request action it registered; with no learner the ledger says that."""
+    from factorylab.cortex.registration import LearnerProposal
+
+    def requested(rt):
+        tick = rt.routers["Tick"][0]
+        lid = tick.learner.id
+        parent = rt.queue.open(
+            actor=lid,
+            event_id="tick-3",
+            channel="verdict",
+            deadline_ns=10**15,
+            parent_handle=None,
+            cost_ceiling=10_000_000,
+            propensity=PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, lid, "t"),
+        )
+        rt.handle_to_assembly[parent] = "seed-decider"
+        rt.consequences.start(parent, 0)
+        return parent, rt._request(parent, "parent task", {}, {"type": "object"}, 10**15,
+                                   "verdict")
+
+    def settle(rt, req):
+        rt._invoke_child(
+            "seed-decider", req, ChildRequest("ghost", "task", {}, {"type": "object"}),
+            req.cost_ceiling,
+        )
+        child = _items(rt, "request.child")[-1]["handle"]
+        rt.queue.settle(
+            child,
+            channel=rt.queue.get(child).channel,
+            score=1.0,
+            status=SettleStatus.SETTLED,
+            definition_version="test",
+            sampling_ref=None,
+        )
+        rt._deliver_returns()
+        return child
+
+    def reply(request):
+        return ModelResponse(request.model_id, json.dumps({"action": "hold"}), 1, 1, "stop")
+
+    rt = make_runtime()
+    rt._manage_reserve_window()
+    parent, req = requested(rt)
+    monkeypatch.setattr(rt.provider.target, "complete", reply)
+    rt._register(parent, LearnerProposal("seed-decider", "exp3", ("hold", "request:ghost"), 0.1))
+    learner = rt.assembly_learners["seed-decider"]
+    before = learner.state()
+    child = settle(rt, req)
+    entry = [i for i in _items(rt, "request.settled") if i["handle"] == child][-1]
+    assert entry["learner_id"] == learner.id and entry["action"] == "request:ghost"
+    assert learner.state() != before
+
+    bare = make_runtime()
+    bare._manage_reserve_window()
+    _parent, bare_req = requested(bare)
+    monkeypatch.setattr(bare.provider.target, "complete", reply)
+    bare_child = settle(bare, bare_req)
+    # Nothing could hold it, and the ledger says so rather than dropping it in silence.
+    assert not _items(bare, "request.settled")
+    unlearned = [i for i in _items(bare, "propensity.unlearned") if i["handle"] == bare_child]
+    assert unlearned and "no router holds ghost" in unlearned[-1]["reason"]

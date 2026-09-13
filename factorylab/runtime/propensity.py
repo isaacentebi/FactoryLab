@@ -25,7 +25,10 @@ Three facts make a declared propensity usable rather than decorative:
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from decimal import Decimal
+from types import MappingProxyType
 from typing import Any
 
 from factorylab.cortex.request import validate_propensity
@@ -39,10 +42,10 @@ HOLD = "hold"
 # on-policy step, whatever the return claimed.
 MIN_DECLARED_MASS = 0.05
 # The venue and treasury tools whose execution is an action in its own right.
-EFFECT_TOOLS = {
+EFFECT_TOOLS: Mapping[str, str] = MappingProxyType({
     "venue.place_market": "order", "venue.place_limit": "order", "venue.close": "close",
     "venue.cancel": "cancel", "venue.set_leverage": "leverage", "treasury.transfer": "transfer",
-}
+})
 # How big the order was, in the base units the return declared, as a closed
 # vocabulary of five bands. Sizing is a decision — half a position and a tenth of
 # one are not the same choice — so the label has to be able to say which was
@@ -165,6 +168,22 @@ def action_vocabulary() -> dict[str, str]:
     }
 
 
+def _floored(probs: tuple[float, ...], chosen: int) -> tuple[float, ...]:
+    """Return the same distribution with the chosen action's mass at the floor or above.
+
+    Guarantees ``probs[chosen] >= MIN_DECLARED_MASS`` in the recorded numbers, so
+    one reward moves a learner by at most 1 / MIN_DECLARED_MASS times the on-policy
+    step. Raising the declared mass before normalising does not guarantee it: the
+    other actions still sum to nearly one, and dividing by the new total puts the
+    action taken back under the floor. The rest are rescaled to make room instead.
+    """
+    if probs[chosen] >= MIN_DECLARED_MASS:
+        return probs
+    rest = math.fsum(p for i, p in enumerate(probs) if i != chosen)
+    scale = (1.0 - MIN_DECLARED_MASS) / rest if rest > 0 else 0.0
+    return tuple(MIN_DECLARED_MASS if i == chosen else p * scale for i, p in enumerate(probs))
+
+
 def declared_record(
     label: str,
     declared: Any,
@@ -178,9 +197,11 @@ def declared_record(
     as offered, the reason — the population is told, because an agent that cannot
     see why its disclosure was refused simply repeats it. A declaration that gives
     the action taken less than ``MIN_DECLARED_MASS`` is used with that mass
-    raised to the floor (a refused declaration is recorded degenerate, over the
-    one action taken; a floored one keeps its support): the probability is the
-    agent's unverifiable report, and the importance weight it becomes is bounded.
+    raised to the floor and the rest rescaled around it, so the recorded mass on
+    the action taken is at least the floor (a refused declaration is recorded
+    degenerate, over the one action taken; a floored one keeps its support): the
+    probability is the agent's unverifiable report, and the importance weight it
+    becomes is bounded.
     """
     reason: str | None = None
     distribution: dict[str, float] | None = None
@@ -193,15 +214,15 @@ def declared_record(
                 raise ValueError(f"the action taken ({label}) needs positive mass")
             if distribution[label] < MIN_DECLARED_MASS:
                 reason = (f"the action taken ({label}) declared {distribution[label]:.3g} "
-                          f"mass; floored to {MIN_DECLARED_MASS} before it weights a reward")
-                distribution[label] = MIN_DECLARED_MASS
+                          f"mass; floored to {MIN_DECLARED_MASS} before it weights a reward, "
+                          "and the other actions rescaled so the floor survives normalising")
         except ValueError as exc:
             distribution, reason = None, str(exc)
     if distribution is None:
         distribution = {label: 1.0}
     actions = tuple(distribution)
-    total = sum(distribution.values())
-    probs = tuple(distribution[a] / total for a in actions)
+    total = math.fsum(distribution.values())
+    probs = _floored(tuple(distribution[a] / total for a in actions), actions.index(label))
     record = PropensityRecord(
         actions, probs, label, 0, learner_id, state_hash, source="declared",
     )

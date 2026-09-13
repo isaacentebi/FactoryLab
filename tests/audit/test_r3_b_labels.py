@@ -146,9 +146,23 @@ def test_the_mass_declared_on_the_action_taken_is_floored_before_it_weights_a_re
         "hold", {"hold": tiny, "buy:BTC": 1 - tiny}, learner_id="assembly:x", state_hash="h")
     assert set(record.action_ids) == {"hold", "buy:BTC"} and record.chosen == "hold"
     mass = dict(zip(record.action_ids, record.probs, strict=True))
-    assert mass["hold"] == pytest.approx(MIN_DECLARED_MASS / (1 + MIN_DECLARED_MASS - tiny))
+    # Raising the declared mass to the floor is not enough on its own: normalising
+    # {hold: 0.000001, buy:BTC: 0.999999} against an unchanged remainder records
+    # about 0.04762, an importance weight of 21. The rest are rescaled around the
+    # floor instead, so the recorded mass is the floor and the weight is 20.
+    assert mass["hold"] == MIN_DECLARED_MASS
+    assert mass["buy:BTC"] == pytest.approx(1 - MIN_DECLARED_MASS)
+    assert 1 / mass["hold"] == pytest.approx(20)
     assert sum(record.probs) == pytest.approx(1.0)
     assert "floored" in reason and f"{MIN_DECLARED_MASS}" in reason
+    # However lopsided the declaration, the action taken is recorded at or above the floor.
+    for declared in ({"hold": 1e-9, "a": 0.5, "b": 0.5 - 1e-9},
+                     {"hold": 0.04, "a": 0.96},
+                     {"hold": 0.01, "a": 0.33, "b": 0.33, "c": 0.33}):
+        lopsided, _ = declared_record("hold", declared, learner_id="assembly:x", state_hash="h")
+        recorded = dict(zip(lopsided.action_ids, lopsided.probs, strict=True))
+        assert recorded["hold"] >= MIN_DECLARED_MASS
+        assert sum(lopsided.probs) == pytest.approx(1.0)
     # An honest declaration at or above the floor is untouched.
     record, reason = declared_record(
         "hold", {"hold": MIN_DECLARED_MASS, "buy:BTC": 1 - MIN_DECLARED_MASS},
