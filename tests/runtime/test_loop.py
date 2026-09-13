@@ -22,9 +22,9 @@ def _short_cadence_manifest():
     return replace(base, evaluation=replace(base.evaluation, consequence_backstop_events=20))
 
 
-def test_scripted_world_phase2_spec_condition_2() -> None:
+def test_scripted_world_phase2_spec_condition_2(scripted_run) -> None:
     m = load_manifest("scripted")
-    s = run_world(m, events=400, seed=1)
+    s = scripted_run(m, 400, 1).summary
     st = s["stats"]
     assert s["terminated"] is False
     assert s["wallet_conservation"] is True and s["ledger_verify"] is True
@@ -52,9 +52,9 @@ def test_scripted_world_phase2_spec_condition_2() -> None:
     assert s["standing"]["eval-c"]["weight"] > s["standing"]["eval-a"]["weight"]
 
 
-def test_every_producer_decision_is_judged_or_censored() -> None:
+def test_every_producer_decision_is_judged_or_censored(scripted_run) -> None:
     m = load_manifest("scripted")
-    s = run_world(m, events=120, seed=4)
+    s = scripted_run(m, 120, 4).summary
     st = s["stats"]
     judged = st["verdicts"] + st["censored"] + st["exposures_settled"]
     assert judged + s["outstanding_decisions"] >= st["producer_returns"]
@@ -87,9 +87,9 @@ def test_determinism_same_seed_same_summary() -> None:
     assert a == b
 
 
-def test_scripted_world_phase3_spec_condition_2() -> None:
+def test_scripted_world_phase3_spec_condition_2(scripted_run) -> None:
     m = _short_cadence_manifest()
-    s = run_world(m, events=500, seed=1)
+    s = scripted_run(m, 500, 1).summary
     st = s["stats"]
     assert s["terminated"] is False
     assert s["wallet_conservation"] is True and s["ledger_verify"] is True
@@ -129,38 +129,11 @@ def test_scripted_world_phase3_spec_condition_2() -> None:
     assert cards["cost_per_return"]["updates"] == closed - 1  # no median before the first window
 
 
-def test_scripted_amendment_lambda_is_voted_adopted_and_visible(monkeypatch):
-    from factorylab.runtime.loop import Runtime
-    from factorylab.world.scripted import ScriptedProvider, _inputs_from_prompt
-
-    requests = []
-
-    class RecordingProvider(ScriptedProvider):
-        def complete(self, req):
-            text = "\n".join(str(m.get("content", "")) for m in req.messages)
-            requests.append(_inputs_from_prompt(text))
-            return super().complete(req)
-
-    rt = Runtime(
-        _short_cadence_manifest(),
-        events=260,
-        seed=1,
-        initial_balance_micro=None,
-        ledger_path=None,
-        drip=True,
-        router_gamma=0.1,
-        provider=RecordingProvider(),
-    )
-    entries = []
-    append = rt.ledger.append
-
-    def capture(entry):
-        result = append(entry)
-        entries.append(dict(entry))
-        return result
-
-    monkeypatch.setattr(rt.ledger, "append", capture)
-    result = rt.run()
+def test_scripted_amendment_lambda_is_voted_adopted_and_visible(scripted_runtime_run):
+    manifest = _short_cadence_manifest()
+    record = scripted_runtime_run(manifest, 260, 1, record_requests=True)
+    rt = record.runtime(manifest)
+    requests, entries, result = record.requests, record.entries, record.summary
     assert result["ledger_verify"] and result["wallet_conservation"]
     votes = [req["amendment"] for req in requests if "amendment" in req]
     assert votes and all(am["add"][0]["lambda"] == 0.6 for am in votes)

@@ -382,12 +382,10 @@ def test_owner_read_only_key_does_not_trap_loading(keyfile, monkeypatch):
     assert os.environ["RESERVE_PRIVATE_KEY"] == TEST_KEY
 
 
-def test_resume_reports_insecure_key_metadata_without_reading_it(tmp_path, monkeypatch, capsys):
-    from factorylab.runtime.loop import run_world
-    from factorylab.runtime.worlds import load_manifest
-
-    path = tmp_path / "synthetic.jsonl"
-    run_world(load_manifest("scripted"), events=0, ledger_path=str(path))
+def test_resume_reports_insecure_key_metadata_without_reading_it(
+    tmp_path, monkeypatch, capsys, scripted_run,
+):
+    path = scripted_run("scripted", 0, None).copy_to(tmp_path / "synthetic")
     (tmp_path / "hyperliquid.key").touch(mode=0o644)
     monkeypatch.delenv("HL_PRIVATE_KEY", raising=False)
     monkeypatch.setattr(Path, "read_text", lambda *_a, **_kw: pytest.fail("must not read key"))
