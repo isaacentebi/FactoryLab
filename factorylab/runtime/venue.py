@@ -8,6 +8,7 @@ from decimal import ROUND_CEILING, Decimal
 from factorylab.cortex.request import Return
 from factorylab.kernel.money import money_to_usd, usd_to_micro
 from factorylab.runtime.shared import _to_plain
+from factorylab.settlement.lots import LotTable
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import Order, OrderKind, OrderResult
 
@@ -53,23 +54,22 @@ class VenueMixin:
 
     def _settle_exchange_effects(self, evs: list[WorldEvent]) -> None:
         settlements = []
+        spot_table = self.consequences.table
+        refused = set()
         for we in evs:
             if we.kind is WorldEventKind.FILL and we.payload.get("market") == "spot":
-                coin = we.payload["coin"]
-                quantity = Decimal(str(we.payload.get("inventory_size", we.payload["size"])))
-                px = Decimal(str(we.payload["px"]))
-                held, entry = self.spot_inventory.get(coin, (Decimal(0), Decimal(0)))
-                buy = we.payload["is_buy"]
-                if not buy and quantity > held:
-                    raise ValueError("spot fill exceeds accounted inventory")
-                realized = Decimal(0) if buy else (px - entry) * quantity
-                remaining = held + (quantity if buy else -quantity)
-                cost = (held * entry + quantity * px) / remaining if buy else entry
-                self.ledger.append({"kind": "spot.inventory", "coin": coin,
-                                    "size": str(remaining), "entry_px": str(cost),
-                                    "order_id": we.payload["order_id"]})
-                self.spot_inventory[coin] = (remaining, cost)
-                we.payload["realized_usd"] = str(realized)
+                if self.consequences.pending_orders:
+                    # The consequence book defers these until ownership is known.
+                    continue
+                try:
+                    spot_table = self._spot_fill_table(spot_table, we.payload)
+                except ValueError as exc:
+                    self.ledger.append({"kind": "consequence.refused", "event": self.n,
+                                        "order_id": str(we.payload["order_id"]),
+                                        "reason": str(exc)})
+                    refused.add(id(we))
+                    continue
+                we.payload["realized_usd"] = str(self._account_spot_fill(we.payload))
         for we in evs:
             if we.kind is WorldEventKind.FILL:
                 delta = usd_to_micro(we.payload["realized_usd"], rounding="nearest") - usd_to_micro(
@@ -85,7 +85,8 @@ class VenueMixin:
         if settlements:
             self.wallet.settle_batch(settlements)
         for we in evs:
-            self.consequences.observe(str(we.kind), dict(we.payload), self.n)
+            if id(we) not in refused:
+                self.consequences.observe(str(we.kind), dict(we.payload), self.n)
         for we in evs:
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
@@ -153,6 +154,20 @@ class VenueMixin:
             if previous["result"]["status"] == "uncertain":
                 return self._recover_order(client_id)
             return dict(previous["result"])
+        if args.get("market") == "spot" and (
+            operation == "venue.close" or (
+                operation in ("venue.place_market", "venue.place_limit")
+                and args.get("side") == "sell"
+            )
+        ):
+            held = self.spot_inventory.get(args["coin"], (Decimal(0), Decimal(0)))[0]
+            quantity = held if args.get("size") is None else Decimal(str(args["size"]))
+            lots = sum((lot.size for lot in self.consequences.table.lots
+                        if lot.coin == args["coin"] and lot.market == "spot"), 0)
+            if quantity <= 0 or quantity > min(held, lots):
+                reason = "spot sell exceeds accounted inventory"
+                self.ledger.append({"kind": "order.refused", "handle": handle, "reason": reason})
+                return {"status": "rejected", "error": reason}
         if any(i["result"]["status"] == "uncertain" and i["args"]["coin"] == args["coin"]
                for i in self.order_intents.values()):
             self.ledger.append({"kind": "order.refused", "handle": handle,
@@ -169,6 +184,8 @@ class VenueMixin:
                                               client_id=client_id)
             elif operation == "venue.close":
                 size = None if args.get("size") is None else Decimal(str(args["size"]))
+                if size is None and args.get("market") == "spot":
+                    size = self.spot_inventory[args["coin"]][0]
                 result = self.exchange.close(args["coin"], size, client_id=client_id,
                                              **({"market": "spot"} if args.get("market") == "spot"
                                                 else {}))
@@ -187,6 +204,35 @@ class VenueMixin:
         if not isinstance(result, dict) or result.get("status") == "uncertain":
             return self._recover_order(client_id)
         return self._record_order_result(client_id, result)
+
+    @staticmethod
+    def _spot_fill_table(table: LotTable, payload: dict) -> LotTable:
+        """Inventory changes require the same exact acceptance as the consequence book."""
+        return table.fill(
+            order_id=str(payload["order_id"]), coin=payload["coin"],
+            is_buy=payload["is_buy"], size=str(payload.get("inventory_size", payload["size"])),
+            px=str(payload["px"]), fee_usd=str(payload["fee_usd"]),
+            liquidation=payload.get("liquidation", False), market="spot",
+            order_size=str(payload["size"]),
+        )
+
+    def _account_spot_fill(self, payload: dict) -> Decimal:
+        """An accepted spot fill changes inventory only after its evidence is durable."""
+        coin = payload["coin"]
+        quantity = Decimal(str(payload.get("inventory_size", payload["size"])))
+        px = Decimal(str(payload["px"]))
+        held, entry = self.spot_inventory.get(coin, (Decimal(0), Decimal(0)))
+        buy = payload["is_buy"]
+        if not buy and quantity > held:
+            raise ValueError("spot fill exceeds accounted inventory")
+        realized = Decimal(0) if buy else (px - entry) * quantity
+        remaining = held + (quantity if buy else -quantity)
+        cost = (held * entry + quantity * px) / remaining if buy else entry
+        self.ledger.append({"kind": "spot.inventory", "coin": coin,
+                            "size": str(remaining), "entry_px": str(cost),
+                            "order_id": payload["order_id"]})
+        self.spot_inventory[coin] = (remaining, cost)
+        return realized
 
     def _recover_order(self, client_id: str) -> dict:
         """Query an ambiguous intent; never resubmit it or replace its originating handle."""
@@ -224,9 +270,28 @@ class VenueMixin:
                 if result["status"] == "cancelled" and Decimal(str(result["filled_size"])) > 0:
                     attributed = {**result, "status": "filled"}
                 self.consequences.order_result(intent["handle"], attributed, intent["args"], self.n)
+            spot_table = self.consequences.table
+            corrections = []
             for kind, payload, _event in self.consequences.order_acknowledged(client_id):
                 if kind == "Fill":
+                    if payload.get("market") == "spot":
+                        try:
+                            spot_table = self._spot_fill_table(spot_table, payload)
+                        except ValueError:
+                            continue  # The replay already recorded its refusal.
+                        realized = usd_to_micro(
+                            self._account_spot_fill(payload), rounding="nearest",
+                        )
+                        delta = realized - usd_to_micro(payload["realized_usd"], rounding="nearest")
+                        if delta:
+                            corrections.append((delta, f"fill:{payload['order_id']}",
+                                                "exchange_pnl"))
                     self._record_fill_notional(payload)
+            if corrections:
+                self.wallet.settle_batch(corrections)
+                delta = sum(change for change, _handle, _reason in corrections)
+                self.realized_to_date += delta
+                self.window.realized_pnl_micro += delta
         return dict(result)
 
     def _reconcile_orders(self) -> None:
