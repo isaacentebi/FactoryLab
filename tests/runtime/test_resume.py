@@ -89,7 +89,10 @@ raise AssertionError('kill point was not reached')
     else:
         assert len(snapshots) >= 3  # launch, first reserve window, next reserve window
         assert last["n"] < before[-1]["n"]
-        assert decode(last["state"]["runtime"])["stats"].amendments_activated == 0
+        # With the scripted consequence backstop at 20 events the first activation lands
+        # before this crash point, so the resume must carry the activated edition forward
+        # (the snapshot was taken after the activation, between reserve windows).
+        assert decode(last["state"]["runtime"])["stats"].amendments_activated == 1
     resumed = resume_world(m, str(path))
     assert resumed["stats"]["resumes"] == 1
     resumed["stats"]["resumes"] = 0
