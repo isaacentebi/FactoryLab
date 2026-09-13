@@ -54,8 +54,11 @@ def test_every_request_tells_its_executor_its_own_id(monkeypatch):
     def complete(request):
         text = request.messages[-1]["content"]
         seen.append(_inputs_from_prompt(text))
-        body = ({"verdict": 0.5, "payoff": 0.5, "rationale": "r", "forecasts": []}
-                if "Evaluate" in text else {"action": "hold"})
+        body = (
+            {"verdict": 0.5, "payoff": 0.5, "rationale": "r", "forecasts": []}
+            if "Evaluate" in text
+            else {"action": "hold"}
+        )
         return ModelResponse(request.model_id, json.dumps(body), 1, 1, "stop")
 
     monkeypatch.setattr(rt.provider.target, "complete", complete)
@@ -69,21 +72,47 @@ def test_every_request_tells_its_executor_its_own_id(monkeypatch):
     assert "seed-observer" not in json.dumps(seen[-1]["producer"])
     req = parent_request(rt)
     rt.handle_to_assembly[req.handle] = "seed-decider"
-    rt._invoke_child("seed-decider", req, ChildRequest(
-        "seed-observer", "task", {"you": "forged"}, {"type": "object"}), req.cost_ceiling)
+    rt._invoke_child(
+        "seed-decider",
+        req,
+        ChildRequest("seed-observer", "task", {"you": "forged"}, {"type": "object"}),
+        req.cost_ceiling,
+    )
     assert seen[-1]["you"] == "seed-observer"  # a parent cannot forge its child's identity
 
 
 def test_a_scripted_assembly_can_retire_a_seed_it_did_not_register(monkeypatch):
     rt = make_runtime()
     rt._manage_reserve_window()
-    monkeypatch.setattr(rt, "_committee_eligible", lambda: {
-        "seed-observer": "producer", "eval-b": "evaluator", "meta-a": "meta"})
+    monkeypatch.setattr(
+        rt,
+        "_committee_eligible",
+        lambda: {"seed-observer": "producer", "eval-b": "evaluator", "meta-a": "meta"},
+    )
     req = parent_request(rt)  # a decision of seed-decider, which registered nothing
     rt.handle_to_assembly[req.handle] = "seed-decider"
     target = next(row["id"] for row in rt._world_block()["catalogue"] if row["id"] == "eval-a")
-    rt._apply_registrations(req.handle, Return(req.handle, {"register": [
-        {"kind": "retire", "assembly_id": target}]}, 0, "ok"))
+    rt._apply_registrations(
+        req.handle,
+        Return(
+            req.handle,
+            {
+                "register": [
+                    {
+                        "kind": "retire",
+                        "assembly_id": target,
+                        "predicted_effect": {
+                            "card_id": "forecast_skill",
+                            "direction": "increase",
+                            "window": 1,
+                        },
+                    }
+                ]
+            },
+            0,
+            "ok",
+        ),
+    )
     proposed = _items(rt, "retirement.proposed")
     assert proposed and proposed[-1]["assembly_id"] == "eval-a"
     assert not rt.registration_feedback
@@ -98,21 +127,38 @@ def test_a_childs_verdict_trains_the_router_that_woke_its_parent(monkeypatch):
     lid = state.learner.id
     assert "seed-decider" in state.universe
     parent = rt.queue.open(
-        actor=lid, event_id="tick-1", channel="verdict", deadline_ns=10**15,
-        parent_handle=None, cost_ceiling=10_000_000,
-        propensity=PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, lid, "t"))
+        actor=lid,
+        event_id="tick-1",
+        channel="verdict",
+        deadline_ns=10**15,
+        parent_handle=None,
+        cost_ceiling=10_000_000,
+        propensity=PropensityRecord(("seed-decider",), (1.0,), "seed-decider", 0, lid, "t"),
+    )
     rt.handle_to_assembly[parent] = "seed-decider"
     rt.consequences.start(parent, 0)
     req = rt._request(parent, "parent task", {}, {"type": "object"}, 10**15, "verdict")
-    monkeypatch.setattr(rt.provider.target, "complete", lambda request: ModelResponse(
-        request.model_id, json.dumps({"action": "hold"}), 1, 1, "stop"))
+    monkeypatch.setattr(
+        rt.provider.target,
+        "complete",
+        lambda request: ModelResponse(
+            request.model_id, json.dumps({"action": "hold"}), 1, 1, "stop"
+        ),
+    )
     before = state.learner.distribution(state.universe)["seed-decider"]
-    rt._invoke_child("seed-decider", req, ChildRequest(
-        "self", "task", {}, {"type": "object"}), req.cost_ceiling)
+    rt._invoke_child(
+        "seed-decider", req, ChildRequest("self", "task", {}, {"type": "object"}), req.cost_ceiling
+    )
     child = _items(rt, "request.child")[-1]["handle"]
     assert rt.queue.get(child).actor == lid
     assert rt.queue.get(child).propensity.chosen == "seed-decider"
-    rt.queue.settle(child, channel="verdict", score=1.0, status=SettleStatus.SETTLED,
-                    definition_version="test", sampling_ref=None)
+    rt.queue.settle(
+        child,
+        channel="verdict",
+        score=1.0,
+        status=SettleStatus.SETTLED,
+        definition_version="test",
+        sampling_ref=None,
+    )
     rt._deliver_returns()
     assert state.learner.distribution(state.universe)["seed-decider"] > before
