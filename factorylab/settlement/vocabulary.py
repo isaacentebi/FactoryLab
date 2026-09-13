@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields, replace
@@ -110,8 +109,6 @@ def _validate_params(
 
 MAX_PREDICATE_CODE_CHARS = 8000
 MAX_PREDICATE_DESCRIPTION_CHARS = 500
-PREDICATE_TIMEOUT_S = 5
-PREDICATE_CPU_S = 2
 
 
 def validate_predicate_definition(predicate_id: str, description: str, code: str) -> None:
@@ -137,55 +134,6 @@ def validate_predicate_definition(predicate_id: str, description: str, code: str
     if not any(isinstance(node, ast.FunctionDef) and node.name == "resolve"
                for node in module.body):
         raise ValueError("predicate code must define resolve(facts)")
-
-
-_PREDICATE_HARNESS = '''
-import json as _predicate_json, sys as _predicate_sys
-_predicate_result = resolve(_predicate_json.load(_predicate_sys.stdin))
-if type(_predicate_result) is not bool:
-    raise TypeError("resolve must return a boolean")
-print(_predicate_json.dumps({"value": _predicate_result}, allow_nan=False))
-'''
-
-
-class PredicateRunner:
-    """Population resolvers run only in the tool jail, with the observation resource bounds."""
-
-    def __init__(self) -> None:
-        from factorylab.cortex.sandbox import jail_available
-
-        self.available = jail_available()
-
-    def run(self, code: str, facts: dict) -> tuple[bool | None, str | None]:
-        """Only a JSON boolean is truth evidence; execution failures remain unsupported."""
-        from factorylab.cortex.sandbox import NoJail, run_python
-
-        if not self.available:
-            return None, "no jail on this host"
-        try:
-            stdin = json.dumps(facts, allow_nan=False)
-        except (TypeError, ValueError, RecursionError):
-            return None, "predicate facts are not JSON serializable"
-        try:
-            result = run_python(
-                code + _PREDICATE_HARNESS, stdin=stdin,
-                timeout_s=PREDICATE_TIMEOUT_S, cpu_s=PREDICATE_CPU_S,
-                max_output_bytes=2000,
-            )
-            if result.timed_out:
-                return None, "timeout"
-            if result.returncode != 0:
-                return None, f"exit {result.returncode}: {result.stderr.strip()[-200:]}"
-            output = json.loads(result.stdout)
-            if not isinstance(output, dict) or set(output) != {"value"}:
-                return None, "predicate must return a boolean"
-            if type(output["value"]) is not bool:
-                return None, "predicate must return a boolean"
-            return output["value"], None
-        except NoJail:
-            return None, "no jail on this host"
-        except Exception:
-            return None, "predicate execution failed"
 
 
 class PredicateBook:

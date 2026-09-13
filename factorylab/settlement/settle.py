@@ -8,10 +8,32 @@ from factorylab.settlement.forecast import Forecast, ForecastBook
 from factorylab.settlement.lots import Payoff
 from factorylab.settlement.scoring import PrevalenceBaseline, _require_probability, brier
 from factorylab.settlement.standing import ConsequenceStanding
-from factorylab.settlement.vocabulary import RETURN_PAID_OFF, Observer, WindowFacts
+from factorylab.settlement.vocabulary import (
+    RETURN_PAID_OFF,
+    Observer,
+    Predicate,
+    WindowFacts,
+    _validate_params,
+)
 
 # The verdict's own outside anchor: the base rate of returns the charter did not blame.
 VERDICT_NOT_BLAMED = "verdict_not_blamed"
+
+
+@dataclass(frozen=True)
+class PredicateForecast(Forecast):
+    """A population forecast seals its exact predicate definition alongside its parameters."""
+
+    predicate: Predicate | None = None
+
+    def __post_init__(self) -> None:
+        if self.predicate is None or self.predicate.code is None:
+            raise ValueError("population forecast requires a registered predicate")
+        _validate_params(self.predicate_id, self.params, predicate=self.predicate)
+        # Reuse the seed record's identity, probability, event and immutable-parameter checks.
+        checked = Forecast(self.handle, self.evaluator_id, self.about_handle, "wallet_up",
+                           self.params, self.q, self.made_at_event, self.due_at_event, self.seal)
+        object.__setattr__(self, "params", checked.params)
 
 
 @dataclass(frozen=True)
@@ -87,7 +109,12 @@ class Settler:
             y = score = baseline_score = None
             status = SettleStatus.CENSORED
             if facts is not None:
-                y = self.__observer.observe(forecast.predicate_id, forecast.params, facts)
+                if isinstance(forecast, PredicateForecast):
+                    y = self.__observer.observe(forecast.predicate_id, forecast.params, facts,
+                                                version=forecast.predicate.version)
+                else:
+                    y = self.__observer.observe(forecast.predicate_id, forecast.params, facts)
+            if y is not None:
                 baseline_score = self.__baseline.baseline_brier(forecast.predicate_id, y)
                 score = brier(forecast.q, y)
                 status = SettleStatus.SETTLED

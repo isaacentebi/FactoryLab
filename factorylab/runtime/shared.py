@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from factorylab.cortex.registration import REWARD_SHAPES, reward_contracts
@@ -20,6 +21,56 @@ DEF_FAST, DEF_VERDICT, DEF_CONFORMITY = "fast-v1", "verdict-v1", "conformity-v1"
 
 # A top meta's conformity graded by Brier against the judged verdict's consequence.
 DEF_META_CONSEQUENCE = "meta-consequence-v1"
+
+
+_PREDICATE_HARNESS = '''
+import json as _predicate_json, sys as _predicate_sys
+_predicate_result = resolve(_predicate_json.load(_predicate_sys.stdin))
+if type(_predicate_result) is not bool:
+    raise TypeError("resolve must return a boolean")
+print(_predicate_json.dumps({"value": _predicate_result}, allow_nan=False))
+'''
+
+
+class PredicateRunner:
+    """Population resolvers run only in the tool jail, with the observation resource bounds."""
+
+    def __init__(self) -> None:
+        from factorylab.cortex.sandbox import jail_available
+
+        self.available = jail_available()
+
+    def run(self, code: str, facts: dict) -> tuple[bool | None, str | None]:
+        """Only a JSON boolean is truth evidence; execution failures remain unsupported."""
+        from factorylab.cortex.sandbox import NoJail, run_python
+        from factorylab.runtime.observations import OBSERVATION_CPU_S, OBSERVATION_TIMEOUT_S
+
+        if not self.available:
+            return None, "no jail on this host"
+        try:
+            stdin = json.dumps(facts, allow_nan=False)
+        except (TypeError, ValueError, RecursionError):
+            return None, "predicate facts are not JSON serializable"
+        try:
+            result = run_python(
+                code + _PREDICATE_HARNESS, stdin=stdin,
+                timeout_s=OBSERVATION_TIMEOUT_S, cpu_s=OBSERVATION_CPU_S,
+                max_output_bytes=2000,
+            )
+            if result.timed_out:
+                return None, "timeout"
+            if result.returncode != 0:
+                return None, f"exit {result.returncode}: {result.stderr.strip()[-200:]}"
+            output = json.loads(result.stdout)
+            if not isinstance(output, dict) or set(output) != {"value"}:
+                return None, "predicate must return a boolean"
+            if type(output["value"]) is not bool:
+                return None, "predicate must return a boolean"
+            return output["value"], None
+        except NoJail:
+            return None, "no jail on this host"
+        except Exception:
+            return None, "predicate execution failed"
 
 
 def assembly_rewards(spec: Any) -> dict[str, str]:
@@ -46,8 +97,10 @@ def work_disclosure(kinds: dict[str, str], predicates: list[dict]) -> dict:
     return {
         "reward_shapes": {
             "judged": "A judge's verdict now, with consequence recorded later.",
-            "forecast": "Brier on predictions when their facts are available.",
-            "conformity": "Conformity judged above, or Brier against consequence at the top.",
+            "forecast": "Return forecasts: [{predicate, params, q}]. Reward is mean Brier "
+            "when every prediction resolves; missing outcomes are unscored.",
+            "conformity": "Return conformity: a probability that the judged work beats its "
+            "baseline. Judged above, or graded by Brier against consequence at the top.",
             "exposure": "Exposure of a judge's failed payoff prediction against consequence.",
         },
         "default_reward_shape": "judged",

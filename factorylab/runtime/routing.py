@@ -258,10 +258,13 @@ class RoutingMixin:
         conformity is graded against the consequence rather than waiting for
         a verdict that no one can give.
         """
+        kinds = (self.assemblies[chosen].spec.emits if chosen in self.assemblies
+                 else ("MetaVerdict",))
         return sorted(
             a.spec.id
             for a in self.assemblies.values()
-            if "MetaVerdict" in a.spec.accepts and a.spec.id != chosen
+            if set(kinds) & set(a.spec.accepts)
+            and a.spec.id != chosen
             and a.spec.id not in self.retired_assemblies
             and set(assembly_rewards(a.spec).values()) & {"forecast", "conformity"}
         )
@@ -481,7 +484,8 @@ class RoutingMixin:
 
     def _route(self, ev: Event) -> None:
         kind = str(ev.kind)
-        if ev.kind is EventKind.META_VERDICT:
+        if (ev.kind is EventKind.META_VERDICT
+                or self._kind_rewards().get(kind) == "conformity"):
             self._deliver_meta_verdict(ev)
         if ev.kind in (EventKind.VERDICT, EventKind.META_VERDICT):
             ev = self._cascade_arrival(ev)
@@ -540,6 +544,10 @@ class RoutingMixin:
             deadline = self.clock.now_ns + (
                 (self.ev.consequence_backstop_events + 2) * self.tick_clock.interval_ns * 4
             )
+        if CH_CONSEQUENCE in channels.values():
+            # A population forecast may select any of the admitted 1..200 event
+            # horizons; its invocation must not expire before its predictions.
+            deadline = max(deadline, self.clock.now_ns + 202 * self.tick_clock.interval_ns * 4)
         handle = self.queue.open(
             actor=sample.learner_id,
             event_id=ev.id,

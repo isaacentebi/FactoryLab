@@ -5,6 +5,7 @@ import json
 import pytest
 
 from factorylab.cortex import sandbox
+from factorylab.runtime.shared import PredicateRunner
 from factorylab.settlement import vocabulary
 from tests.audit.test_r3_j_work import parse
 from tests.cortex.test_jail import require_jail
@@ -165,7 +166,7 @@ def test_predicate_runner_uses_observation_jail_limits(monkeypatch):
         return sandbox.SandboxResult('{"value": false}', "", 0, False)
 
     monkeypatch.setattr(sandbox, "run_python", run)
-    runner = vocabulary.PredicateRunner()
+    runner = PredicateRunner()
     assert runner.run(FIRST, {"fills": 0}) == (False, None)
     assert calls[0][0].startswith(FIRST)
     assert calls[0][1] == {
@@ -179,7 +180,7 @@ def test_jail_output_must_be_a_boolean(monkeypatch, value):
     monkeypatch.setattr(sandbox, "jail_available", lambda: True)
     monkeypatch.setattr(sandbox, "run_python", lambda *a, **k: sandbox.SandboxResult(
         json.dumps({"value": value}), "", 0, False))
-    assert vocabulary.PredicateRunner().run(FIRST, {"fills": 0}) == (
+    assert PredicateRunner().run(FIRST, {"fills": 0}) == (
         None, "predicate must return a boolean")
 
 
@@ -190,12 +191,12 @@ def test_predicate_runner_never_executes_without_jail(monkeypatch):
         pytest.fail("resolver dispatched without a jail")
 
     monkeypatch.setattr(sandbox, "run_python", forbidden)
-    assert vocabulary.PredicateRunner().run(FIRST, {}) == (None, "no jail on this host")
+    assert PredicateRunner().run(FIRST, {}) == (None, "no jail on this host")
 
 
 def test_predicate_runner_jail_returns_true_and_false():
     require_jail()
-    runner = vocabulary.PredicateRunner()
+    runner = PredicateRunner()
     assert runner.run(FIRST, {"fills": 1}) == (True, None)
     assert runner.run(FIRST, {"fills": 0}) == (False, None)
     value, error = runner.run("def resolve(facts): return 1", {})
