@@ -185,6 +185,10 @@ class Runtime(
             if self._snapshot("launch") is False:
                 raise ValueError("launch snapshot unavailable")
             self._launch()
+        # A world funded at or below its floor is already dead: its first event would
+        # drip into a dead wallet and abandon a persistent ledger unsealed instead.
+        if self._check_termination():
+            return self._summary()
         while True:
             ev = self._next_event(stream)
             if ev is None or not self._process_event(ev):

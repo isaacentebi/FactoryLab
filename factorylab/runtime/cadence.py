@@ -105,11 +105,18 @@ class GovernanceCadence:
         return max(estimate, oldest)
 
     def slowest_period_ns(self, tick_interval_ns: int | TickClock) -> int:
-        """Convert with delivered live gaps, or the declared interval without measurements."""
+        """Convert at the slower of the delivered gap and the interval now declared.
+
+        A gap sample is evidence that the loop ran slowly, never evidence that
+        it may run faster than the charter currently says. An amendment that
+        lengthens the tick therefore takes effect immediately, and measurement
+        may only push the priced period further out.
+        """
         interval = tick_interval_ns
         if not isinstance(interval, int):
+            declared = interval.interval_ns
             measured = getattr(interval, "measured_interval_ns", None)
-            interval = measured() if measured is not None else interval.interval_ns
+            interval = max(measured(), declared) if measured is not None else declared
         return self.slowest_period_events() * interval
 
     def earliest_event(self) -> int:

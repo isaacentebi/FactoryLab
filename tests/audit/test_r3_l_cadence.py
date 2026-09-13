@@ -79,3 +79,59 @@ def test_live_runtime_does_not_count_a_delivered_gap_twice():
             fake.now += fake.work[index]
     assert clock.intervals() == {
         "declared_ns": 60 * SECOND, "measured_ns": 109_400_000_000, "samples": 5}
+
+
+def test_a_slower_declared_interval_holds_the_gate_for_its_own_period():
+    """An amendment that lengthens the tick may not be priced at the old tick.
+
+    The retained gaps were delivered at 60 s. Keeping them after the charter
+    moved the world to a 600 s tick let a proposal clear the nanosecond gate
+    ten times too early.
+    """
+    fake = FakeWork(0, [])
+    clock = LiveClock(60 * SECOND, 6, now_ns=fake.now_ns, sleep=fake.sleep)
+    rt = make_runtime(clock_source=clock)
+    fake.run(clock)
+    assert clock.intervals() == {"declared_ns": 60 * SECOND, "measured_ns": 60 * SECOND,
+                                 "samples": 5}
+    events = rt.cadence.slowest_period_events()
+    stale = rt.cadence.earliest_ns(clock)
+
+    clock.set_interval(600 * SECOND)  # a charter amendment slows the world down
+
+    assert clock.intervals() == {"declared_ns": 600 * SECOND, "measured_ns": 600 * SECOND,
+                                 "samples": 0}
+    assert rt.cadence.slowest_period_ns(clock) == events * 600 * SECOND
+    earliest = rt.cadence.earliest_ns(clock)
+    assert earliest == stale * 10
+    rt.cadence.advance(rt.cadence.earliest_event())
+    assert not rt.cadence.ready(now_ns=stale, tick_interval_ns=clock, window=1)
+    assert not rt.cadence.ready(now_ns=earliest - 1, tick_interval_ns=clock, window=1)
+    assert rt.cadence.ready(now_ns=earliest, tick_interval_ns=clock, window=1)
+
+
+def test_a_retained_fast_sample_never_prices_a_slower_declared_interval():
+    """Measurement may only push the priced period out, never pull it in.
+
+    A resumed clock carries gaps measured before the amendment. The conversion
+    still takes the declared interval as its floor.
+    """
+    fake = FakeWork(0, [])
+    clock = LiveClock(60 * SECOND, 6, now_ns=fake.now_ns, sleep=fake.sleep)
+    fake.run(clock)
+    restored = LiveClock.restore(clock.state() | {"interval_ns": 600 * SECOND},
+                                 now_ns=fake.now_ns, sleep=fake.sleep)
+    assert restored.measured_interval_ns() == 60 * SECOND
+    rt = make_runtime(clock_source=restored)
+    assert rt.cadence.slowest_period_ns(restored) == (
+        rt.cadence.slowest_period_events() * 600 * SECOND)
+
+
+def test_an_unchanged_interval_keeps_its_delivered_gap_sample():
+    """Only a real change discards evidence; re-declaring the same tick is not one."""
+    fake = FakeWork(0, [n * SECOND for n in (60, 145, 120, 104, 118)])
+    clock = LiveClock(60 * SECOND, 6, now_ns=fake.now_ns, sleep=fake.sleep)
+    fake.run(clock)
+    clock.set_interval(60 * SECOND)
+    assert clock.intervals() == {"declared_ns": 60 * SECOND, "measured_ns": 109_400_000_000,
+                                 "samples": 5}

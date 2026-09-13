@@ -42,7 +42,10 @@ class LiveClock:
     clock also retains the gaps it actually delivered and reports their mean as
     ``measured_interval_ns``. Anything converting events into real time — the
     governance cadence above all — must use the measured interval, or it prices
-    the world's slowest loop at a speed the world never ran at.
+    the world's slowest loop at a speed the world never ran at. The sample
+    belongs to one declared interval: an amendment that changes the tick
+    discards it, and the declared interval remains the floor of any conversion
+    until the new cadence has been measured.
 
     ``deadline_ns``, when set, ends the stream at the first tick at or after it,
     so a wall-clock length stays a wall-clock length however long a tick takes.
@@ -59,9 +62,17 @@ class LiveClock:
     gaps: deque[int] = field(default_factory=lambda: deque(maxlen=MEASURED_SAMPLE))
 
     def set_interval(self, interval_ns: int) -> None:
-        """Adopt positive integer nanoseconds for the next tick after the current yield."""
+        """Adopt positive integer nanoseconds and discard gaps delivered at the old interval.
+
+        The retained sample describes one declared cadence. Gaps measured at a
+        60 s tick say nothing about a world the charter has just moved to a
+        10 minute tick, and keeping them would price the new world at the old
+        world's speed.
+        """
         if type(interval_ns) is not int or interval_ns <= 0:
             raise ValueError("interval_ns must be positive integer nanoseconds")
+        if interval_ns != self.interval_ns:
+            self.gaps.clear()
         self.interval_ns = interval_ns
 
     def measured_interval_ns(self) -> int:
