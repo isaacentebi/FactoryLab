@@ -182,6 +182,7 @@ def test_no_identity_the_runtime_knows_survives_into_an_observations_facts():
     runtime.registered_observations["downside-variance"] = {
         "description": "Semivariance.", "units": "u", "unit_range": [0.0, 1.0],
         "code": DOWNSIDE, "version": 1, "provenance": "population", "history": [1],
+        "trial_window": runtime.window.index,
     }
     handle, event = _consequence_produce(runtime)
     _consequence_judge(runtime, event, "eval-a")

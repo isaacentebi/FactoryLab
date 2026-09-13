@@ -6,8 +6,6 @@ audited commit. Nothing here touches a network.
 
 import json
 
-import pytest
-
 from factorylab.cortex.registration import AssemblyProposal
 from factorylab.cortex.request import ChildRequest
 from factorylab.kernel.queue import SettleStatus
@@ -16,8 +14,6 @@ from tests.conftest import make_runtime
 from tests.runtime.test_child_requests import parent_request
 from tests.runtime.test_fidelity import decision
 from tests.runtime.test_loop import _consequence_produce
-
-pytestmark = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 
 
 def _judge_reply(monkeypatch, rt, verdict, payoff):

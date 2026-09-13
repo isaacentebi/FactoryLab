@@ -9,7 +9,6 @@ from factorylab.charter.charter import Charter, MetricCard
 from factorylab.charter.windows import MetricWindow
 from factorylab.kernel.events import Event, EventKind
 from factorylab.learners.base import BanditFeedback
-from factorylab.runtime.loop import run_world
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.scripted import ScriptedProvider
 from tests.runtime.test_loop import (
@@ -52,7 +51,10 @@ def _three_events(provider):
     runtime.n += 1
     runtime.balance_at.append(runtime.wallet.balance)
     runtime._settle_due_forecasts()
-    runtime.n = runtime.ev.verdict_timeout_events + 5
+    # Past the judgement timeout and the consequence backstop: the judge's verdict on the
+    # return settles too (at 1; its window never closed), so nothing about it is pending.
+    runtime.n = max(runtime.ev.verdict_timeout_events,
+                    runtime.ev.consequence_backstop_events) + 5
     runtime._settle_due_forecasts()
     return runtime, about
 
@@ -150,8 +152,8 @@ def test_three_hundred_fake_wins_cannot_move_the_antagonist_past_the_cap():
     assert record.probs[record.action_ids.index("antagonist-a")] <= runtime.ev.adversarial_share
 
 
-def test_scripted_run_exposure_win_rate_is_below_sixty_percent():
-    summary = run_world(load_manifest("scripted"), events=400, seed=1)
+def test_scripted_run_exposure_win_rate_is_below_sixty_percent(scripted_run):
+    summary = scripted_run("scripted", 400, 1).summary
     stats = summary["stats"]
     assert stats["exposures_settled"] >= 10
     assert stats["exposures_won"] / stats["exposures_settled"] < 0.6

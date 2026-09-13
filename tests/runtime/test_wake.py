@@ -17,6 +17,8 @@ from factorylab.runtime.wake import (
     VIEWS,
     _open_snapshot,
     _realized,
+    _reserve,
+    _venue,
     collect_wake,
     render_wake,
 )
@@ -39,13 +41,9 @@ def isolated(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path, scripted_run):
     """A finished scripted world in its own directory, not the one the test chdir'd into."""
-    directory = tmp_path / "world"
-    directory.mkdir()
-    path = directory / "scripted.jsonl"
-    run_world(load_manifest("scripted"), events=5, seed=1, ledger_path=str(path))
-    return path
+    return scripted_run("scripted", 5, 1).copy_to(tmp_path / "world")
 
 
 class Page(HTMLParser):
@@ -181,9 +179,15 @@ def test_optional_accounts_are_projected_and_independent(world, monkeypatch):
     monkeypatch.setattr("factorylab.world.x402.X402Client", lambda: SimpleNamespace(
         usdc_balance=lambda: 12, venice_balance=fail,
     ))
+    assert _venue(load_manifest("testnet")) == {"equity_micro": 1123456,
+                                               "realized_to_date_micro": 3}
+    assert _reserve() == {"usdc_micro": 12, "venice_micro": UNAVAILABLE}
+    # The keys are in the environment, but this world owns neither account: a
+    # fake world's page must not carry the architect's real equity beside its own.
     result = collect_wake(world)
-    assert result["venue"] == {"equity_micro": 1123456, "realized_to_date_micro": 3}
-    assert result["reserve"] == {"usdc_micro": 12, "venice_micro": UNAVAILABLE}
+    assert result["venue"] == {"equity_micro": UNAVAILABLE,
+                               "realized_to_date_micro": UNAVAILABLE}
+    assert result["reserve"] == {"usdc_micro": UNAVAILABLE, "venice_micro": UNAVAILABLE}
     assert "NEVER SHOW" not in json.dumps(result)
 
 
@@ -211,10 +215,15 @@ def test_wake_venue_is_built_with_spot_pairs_and_counts_spot_equity(world, monke
         return venue
 
     monkeypatch.setattr("factorylab.world.exchange.HyperliquidExchange", construct)
-    result = collect_wake(world)
+    venue = _venue(load_manifest("scripted"))
     assert built["spot_pairs"] == load_manifest("scripted").exchange.spot_pairs == ("BTC/USDC",)
     # 1 USDC of perps account value, 2 of spot cash and 3 BTC marked at 100.
-    assert result["venue"] == {"equity_micro": 303_000_000, "realized_to_date_micro": 0}
+    assert venue == {"equity_micro": 303_000_000, "realized_to_date_micro": 0}
+    # ...and the venue of a world whose exchange is fake is never constructed at all.
+    built.clear()
+    assert collect_wake(world)["venue"] == {"equity_micro": UNAVAILABLE,
+                                            "realized_to_date_micro": UNAVAILABLE}
+    assert built == {}
 
 
 def test_realized_pagination_preserves_boundary_and_refuses_retention_limit():
@@ -310,14 +319,9 @@ def test_live_uptime_uses_first_tick_and_stops_at_termination(tmp_path):
 
 
 @pytest.mark.parametrize("damage", ["ciphertext", "reorder", "header", "missing_key"])
-def test_untrusted_snapshot_never_emits_aggregates(tmp_path, damage):
-    # Not the shared world fixture: pytest names a temporary directory after the
-    # first thirty characters of the test, which is the same string for all four
-    # parameters, so each damage builds its own world where only it can write.
-    directory = tmp_path / f"damaged-{damage}"
-    directory.mkdir()
-    world = directory / "scripted.jsonl"
-    run_world(load_manifest("scripted"), events=5, seed=1, ledger_path=str(world))
+def test_untrusted_snapshot_never_emits_aggregates(tmp_path, damage, scripted_run):
+    # Each damage gets every ledger sidecar in a private directory.
+    world = scripted_run("scripted", 5, 1).copy_to(tmp_path / f"damaged-{damage}")
     lines = world.read_bytes().splitlines(keepends=True)
     if damage == "ciphertext":
         # One byte of the last token, always changed: a Fernet token is base64url,

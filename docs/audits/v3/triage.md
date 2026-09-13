@@ -55,5 +55,7 @@ Decision: fix | design (needs Isaac) | known | doc.
 | T48 | A spot fill on a pair not in spot_pairs is booked as a perp and settled against the wallet | 6 | M | broken | live | fix (classify by venue metadata) |
 | T49 | Venue minimum order value never published to the population | 6 | M | unclean | live | fix |
 | T50 | --duration converts to an event count; 40m ran 67 min | 6 | M | unclean | live | fix or doc |
+| T51 | termination.balance_floor_micro is parsed and read nowhere; Wallet.dead hardcodes zero, so a positive floor is never enforced | F2 | M | broken | code read | fix (kernel/wallet.py, runtime/worlds.py) |
+| T52 | FakeExchange.place caches the auto client id before incrementing; an early rejection poisons the next order's id | F2 | M | unclean | code read | fix |
 
 Perimeter (seat 1 ruling b), for Isaac: venue view fixed to manifest coins; only free GET text; nothing retained beyond one request; measurement closed to own activity. Proposed: reachability preflight (T10), GET on venue public info host, window facts series (T22), a bounded metered note primitive.

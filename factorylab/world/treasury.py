@@ -312,6 +312,15 @@ class Treasury:
         if not outcome["confirmed"]:
             return [self._fail(outcome.get("reason", "confirmed chain failure"))]
         if updated["index"] + 1 == len(updated["steps"]):
+            if hasattr(self.rail, "confirm"):
+                try:
+                    self.rail.confirm(updated)
+                except (RailError, ValueError, ArithmeticError) as exc:
+                    # A scripted class move is applied at settlement and the venue
+                    # re-checks availability: a source that lost value since submission
+                    # settles nothing, so no principal left and the transfer fails.
+                    self.state = {**updated, "principal_moved": False}
+                    return [self._fail(f"venue refused the settlement: {exc}")]
             finished = {**updated, "status": "confirmed"}
             self._write("confirmed", state=finished, tx_refs=finished["receipts"], ts=now_ns)
             self.state = finished
@@ -319,8 +328,6 @@ class Treasury:
             if self.fee_hold is not None:
                 self.wallet.release(self.fee_hold)
             self.principal_hold = self.fee_hold = None
-            if hasattr(self.rail, "confirm"):
-                self.rail.confirm(finished)
             self.refresh_pots()
             return [
                 {
@@ -566,6 +573,12 @@ class FakeTreasury(Treasury):
         return money_to_usd(self.wallet.balance - self.rail.reserve - self.rail.venice)
 
 
+# The venue stamps an accountClassTransfer row with its own execution time, which is
+# always later than the millisecond nonce signed at prepare. One retry interval bounds
+# the gap the venue was measured to take; a row outside it belongs to another action.
+CLASS_EXECUTION_TOLERANCE_MS = 60_000
+
+
 class ClassTransferRail:
     """USDC class transfers retain the signed nonce until matching ledger evidence arrives."""
 
@@ -603,13 +616,22 @@ class ClassTransferRail:
             raise RailError("venue rejected withdrawal")
 
     def class_poll(self, state: dict) -> dict | None:
+        """Confirm one hashed row of the signed direction and amount executed in window.
+
+        The nonce is this client's prepare time and ``time`` is the venue's execution
+        time, so they are never equal; the evidence is the unique row whose execution
+        falls in ``[nonce, nonce + CLASS_EXECUTION_TOLERANCE_MS]``, pinned by its hash.
+        Two candidate rows are ambiguous and confirm nothing.
+        """
         ref = state["reference"]
+        start, end = ref["nonce"], ref["nonce"] + CLASS_EXECUTION_TOLERANCE_MS
         rows = self.exchange._info.user_non_funding_ledger_updates(
-            self.exchange._address, ref["nonce"])
+            self.exchange._address, start)
         matches = []
         for row in rows:
             delta = row.get("delta", {})
-            if (row.get("time") == ref["nonce"] and row.get("hash")
+            executed = row.get("time")
+            if (type(executed) is int and start <= executed <= end and row.get("hash")
                     and delta.get("type") == "accountClassTransfer"
                     and delta.get("toPerp") is ref["action"]["toPerp"]
                     and Decimal(str(delta.get("usdc", "0"))) * 1_000_000

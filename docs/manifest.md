@@ -7,9 +7,8 @@ moved by the population through the charter. Keys are listed as their fix pass
 introduces them; the polish pass will complete the table for the older keys.
 
 The TOML manifest fixes the initial conditions. Money is stored as integer
-micro-USD after exact decimal parsing. The entries below document the round-two
-additions and the changed charter contract; other sections retain their existing
-keys.
+micro-USD after exact decimal parsing. The entries below include the merged
+round-three fixes to the existing contracts.
 
 ## Round-two W4: composition contracts (A1)
 
@@ -30,6 +29,36 @@ kernel events cannot be impersonated. A producer may process its own event;
 judgement against its own or an ancestor's output is refused. Public registrations
 include ids and versions without identifying the author of a judged return.
 
+`world.catalogue` lists each live assembly's `id`, `version`, `accepts` and
+`emits`. `world.addressing` explains their use in `requests[].target`, retirement
+and learner proposals. Every invocation receives its own assembly id in
+`inputs.you`, including children. Ids and contracts are public; the earlier A8
+statement that assembly ids are never disclosed is superseded. Models behind
+ids, prompts, learner state, router menus and who judged whom remain sealed.
+
+Venue and treasury write authority follows the decision chain. Every decision
+in that chain must use a producing channel (`verdict` or `exposure`) and must
+not emit `Verdict` or `MetaVerdict`. The writing decision must have an open
+consequence account. A policy ballot binds no return kind and cannot write.
+An author whose contract includes a judging kind is excluded from its own
+subject's router, even if the contract also includes a producing kind.
+
+Judging returns may include `about_handle`; omission selects the delivered
+subject. A value absent from the decision queue falls back to an addressable
+delivered subject with `about_handle.ignored` and `registration_feedback`.
+An existing but forbidden handle is refused, not replaced. A requested judge
+may address only its requesting decision or that decision's ancestors. The
+ancestor self-judgement check still refuses those subjects, so this restriction
+does not grant permission to judge the requesting chain. A payoff judgement on
+a subject not chosen by the router also passes the hindsight check, including
+a parent-selected subject. A fixed consequence, expired backstop or judgement
+deadline beyond that backstop is refused. Judgement `return.refused` items
+deliver their reasons in `registration_feedback`.
+
+`tool.call.outcome` is `ok`, `failed` or `uncertain`. An unacknowledged venue
+write is `uncertain` and retains its client id for reconciliation. An
+acknowledged result with `error: null` is not a tool failure.
+
 A multi-kind return must select `emits` on its first response, before any tools
 or children run, and cannot change it on continuation. The kernel queue keeps
 its original channel (`emits` for a sum of channels); `decision.contract` and
@@ -39,31 +68,36 @@ their original channels. Exposure also publishes the producer-shaped event used
 by the shipped evaluator registrations. Judge cost accounts do not add novelty
 trials to the forecast and meta-feedback trials they already receive.
 
-`register: [{"kind":"retire","assembly_id":"eval-a"}]` proposes retirement
+`register: [{"kind":"retire","assembly_id":"eval-a","predicted_effect":{"card_id":"forecast_skill","direction":"increase","window":1}}]` proposes retirement
 of the current version. It uses amendment eligibility, sortition, majority and
-activation cadence, with the proposer excluded. Retirement ballots carry no
-predicted-effect field, so they are censored without inventing a new reward.
+activation cadence, with the proposer and retirement target excluded.
+`predicted_effect` is required and names a current measurable card.
+Retirement ballots carry the delayed liability described under "Committee liability".
 Retirement removes future routing and child admission, retains old handles,
 accounts and feedback identity, and allows the id's next version to register.
 
 Each depth has one continuation. It returns the final answer after its tool and
 child results; additional requests at that continuation are refused. Descendant
-costs accumulate against the original parent's remaining ceiling. These are
-protocol semantics from A1, not additional population objectives.
+costs accumulate against the original parent's remaining ceiling. A child's
+ceiling is also capped by the parent's available compute. Children never spend
+protected novelty compute. These are protocol semantics, not additional
+population objectives.
+
+`assemblies[].max_tokens` seeds `3000` for `eval-b` and `eval-c`, and `2500`
+for `antagonist-a`, in testnet and the edition-one example. These are output
+budgets, not guarantees of nonempty or well-formed model replies.
 
 The deterministic scripted fixture reuses its existing call schedule: the third
 registration slot installs a helper and a producer accepting `ProducerReturn`;
 the fourth tool slot requests helper → grandchild with a catalogue tool; the
 router-add slot also replaces the custom `Finding` router and proposes retiring
-`eval-a`. The earlier scripted replies and seed probabilities are preserved.
+`eval-a`. The scripted provider also registers `scripted-fill-count`, later
+names it in a card amendment, and registers a Blum–Mansour assembly learner.
+Tick orders size from `world.wallet_balance_usd`, not venue equity.
 
 ## Round-two W3: disclosure, governance, the treasury
-# Manifest parameters: round two
 
-The TOML manifest fixes the initial conditions. Money is stored as integer
-micro-USD after exact decimal parsing. These entries document the
-round-two additions and the changed charter contract; other sections retain
-their existing keys. The W3 governance and charter keys are below; the W1
+The W3 governance and charter keys are below; the W1
 timing, pricing and immune keys follow under "Timing, pricing and immune
 settings".
 
@@ -75,16 +109,13 @@ settings".
 | `charter.cards[].window.n` | Positive integer, never a boolean or float | Required; seed cost and well-formedness cards use `100`, forecast skill uses `50` | Population amendable sample horizon |
 | `charter.cards[].window.per` | `"role"`, `"assembly"`, or null | Required in JSON; omitted in TOML means null. Seed cost and well-formedness use `"role"`; forecast skill uses `"assembly"` | Population amendable scope |
 | `charter.cards[].answers_for` | `producer`, `evaluator`, `meta`, `antagonist`, or `all` | Required | Population amendable pricing responsibility |
-| Amendment `predicted_effect.card_id` | Current or proposed card id | Required; no default | Forecast must bind to a measurable observation |
-| Amendment `predicted_effect.direction` | `increase` or `decrease` | Required; no default | Forecast outcome type |
-| Amendment `predicted_effect.window` | Positive integer count of closed reserve windows after activation | Required; no default | Population-authored liability horizon |
+| Proposal `predicted_effect.card_id` | Current or proposed card id for amendments; current card id for connectors and retirements | Required; no default | Liability binds to a measurable card |
+| Proposal `predicted_effect.direction` | `increase` or `decrease` | Required; no default | Recorded prediction; grading uses frozen-region compliance |
+| Proposal `predicted_effect.window` | Positive integer count of closed reserve windows after activation | Required; no default | Population-authored liability horizon |
 
 The existing `committee.min_settled`, `novelty.window`, `novelty.share`,
 `novelty.trials`, prices, timing and clock parameters are disclosed in
 every request's `world.mechanics`. Their runtime values, including temporary
-controller decay, are used in that disclosure. W1 owns the penalty-cap change;
-until that parameter exists, the mechanics block reports it as null and the
-scoring block retains the actual uncapped formula.
 controller decay, are used in that disclosure. The scoring block states the
 capped, attributed formula recorded under "Observation units and attribution".
 
@@ -114,6 +145,10 @@ capped, attributed formula recorded under "Observation units and attribution".
 `sampling.lower` (A14); `novelty.release`, `novelty.grant`,
 `novelty.grant_consumed` (A13).
 
+A handle that opens and closes its own lot receives realised profit once,
+net of its opening fees, funding, other charges and closing fees. Distinct
+opener and closer handles retain their separate net attribution.
+
 ## Exact measurement
 
 `returns` selects the latest `n` completed invocation responses in each selected
@@ -128,6 +163,9 @@ denominator. The other supported return observations are `noop_share`,
 each outcome, not lifetime standing. The other supported forecast observations
 are `verdict_mean`, `verdict_std`, `consequence_paid_off_rate` and `censored_share`.
 Censored records count toward the selector but not a scored outcome mean.
+`verdict_mean` and `verdict_std` select by the judged subject's assembly or
+role. `forecast_skill` selects by the forecaster. Preflight uses the same
+subject-aware forecast row construction as runtime measurement.
 
 `windows` selects exactly the latest `n` closed reserve windows. Global rates
 are recomputed from their combined sufficient statistics, rather than averaging
@@ -147,22 +185,36 @@ The buffers and their active measurements survive resume.
 
 ## Committee liability
 
-Eligibility counts distinct decision handles with settled consequences, not
-fast or verdict settlements. A decision requested by its own assembly anywhere
-in its ancestry cannot qualify that assembly. Proposers cannot vote on their
-own amendments. Identical patches, including unchanged prices and clock
-intervals, are refused before spending the proposal reservation or seating a
+Eligibility counts distinct router-chosen decision handles with settled
+consequences, including terminal meta consequences and conformity settlements.
+Fast or verdict scores alone do not qualify. Child requests and policy ballots
+cannot manufacture eligibility. Proposers cannot vote on their own proposals.
+Retirement targets cannot vote on their own retirement. Identical patches,
+including unchanged prices and clock intervals, are refused before spending
+the proposal reservation or seating a
 committee. A proposed observation cannot overlap another live card's pricing
 role, including an `all` binding.
 
+Charter validation uses the runtime observation book, including population
+registrations. `charter.propose.observation_bindings` freezes observation ids
+and versions and survives resume. If an added or replaced card's observation
+is superseded or withdrawn before activation, `charter.refused` names the card
+and voted and current versions. Its ballots are censored. Refused amendments
+and stale retirements leave the cadence queue with `charter.cadence_refused`
+without consuming an activation boundary.
+
 A valid vote opens a policy decision under `assembly:<id>`, retaining that
-identity across amendments. The prediction freezes the named card's selector
-and observation. Its baseline is measured immediately before activation. If
-activation opens window `i`, horizon `k` settles at the close of `i+k-1`.
-The directional outcome is strict: an unchanged value does not satisfy an
-increase or decrease prediction. Yes votes predict that outcome; no votes
-predict its negation. The score is `1 - (vote - outcome)^2`. Abstentions, failed
-amendments and missing measurement evidence are censored, with no fast reward.
+identity across proposals. `policy.promised` freezes the named card's selector,
+observation version and implementation, and acceptable region. An unavailable
+region is resolved at activation. Its baseline is measured at activation as
+evidence. If activation opens window `i`, horizon `k` settles at the close
+of `i+k-1`.
+The outcome is whether the measured value satisfies the frozen acceptable
+region. `direction` does not determine the outcome. Yes votes predict compliance;
+no votes predict its negation. The score is `1 - (vote - outcome)^2`, recorded
+as `policy-region-brier-v1`. Amendments, connectors and retirements use this
+same liability. Abstentions, failed proposals and missing measurement or region
+evidence are censored, with no fast reward.
 Subsequent ballots receive that assembly's private policy-return history.
 
 ## Venice transfer and first move
@@ -196,6 +248,25 @@ the historical example. The experimenter must re-draft edition 1 with the actual
 launch roster before launch; the drafting script does not ratify a new edition
 or run the paid survey.
 
+A mainnet Hyperliquid manifest requires an explicit `[charter]`; testnet may
+use the seed charter. `charter_explicit` records admission provenance and is
+excluded from the canonical manifest hash.
+
+Testnet `treasury.reserve_address` is the public checksummed address
+`0x1228e5620944a79D268Afc7522E00891526EdEBb`, not a placeholder.
+
+`treasury.insolvency` records entry into or exit from an unaffordable-compute
+streak and the count reaching `treasury.insolvency_events`. Intermediate
+unaffordable events advance the count without another item.
+
+OpenRouter and Venice failures retain their provider class in invocation and
+replay records. A provider failure is unbilled only when `sent` is false or
+the provider returns a 4xx rejection. Missing credentials, failed name
+resolution, refused connections and certificate verification failures establish
+non-dispatch. A timeout or dropped connection after possible dispatch remains
+billing-uncertain and commits the reserved ceiling. `io.result` retains
+`status` and `unbilled` so replay preserves the same accounting.
+
 ## Timing, pricing and immune settings
 
 The canonical manifest is recorded with its hash in the ledger's `Launch` event.
@@ -208,7 +279,7 @@ parameters; the observer never substitutes a second set of thresholds.
 | `timing.min_support` | positive integer, at most `timing.cadence_sample` | `30` | Yes: settled samples required before estimating p90; a larger support than the retained sample could never be reached, so it is refused at load. |
 | `timing.cadence_sample` | positive integer | `200` | Yes: retained event-latency sample length. |
 | `timing.min_ratio` | integer, at least 3 | `3` | Yes: cascade and governance separation. |
-| `evaluation.consequence_backstop_events` | positive integer | `200` | Yes: consequence horizon and conservative governance period floor. |
+| `evaluation.consequence_backstop_events` | positive integer | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
 | `immune.k` | integer, at least 2 | `3` | Yes: consecutive windows or changes required for diagnosis. |
 | `immune.bins` | integer, exactly 3 | `3` | Yes: inside, up to one scale unit outside, more than one unit outside. |
@@ -229,6 +300,13 @@ pressure continues to ratchet.
 
 ## Timing interpretation
 
+The shipped testnet manifest sets `tick_interval = "120s"` and
+`evaluation.consequence_backstop_events = 60`. With `timing.min_ratio = 3`,
+the conservative activation floor is 180 events, or six hours at the declared
+tick interval. Both scripted manifests use a 20-event backstop so the
+500-event demonstration can activate a card amendment and evaluator retirement
+on separate boundaries.
+
 All measured latencies are `settled_event - opened_event`. The ledger also retains
 nanoseconds as provenance, but nanoseconds never determine the measured period.
 The period is `max(backstop, supported_p90, oldest_outstanding_age)` in events;
@@ -236,6 +314,13 @@ unsupported p90 contributes nothing. Multiply by the current tick interval for
 the corresponding duration. Both that duration and `min_ratio * period` fresh
 events must pass after the previous activation. Activations at one boundary
 therefore cannot chain.
+
+`LiveClock` retains the latest 64 delivered tick gaps and exposes their integer
+mean through `measured_interval_ns()`. Before two ticks it returns the declared
+interval. `intervals()` returns `declared_ns`, `measured_ns` and `samples`.
+Governance conversion and `world.clock` still use the declared tick interval;
+the measured interval is not yet wired into those consumers. Resume preserves
+the event budget but starts a fresh gap sample and drops the wall-clock deadline.
 
 The spec's p90-only estimate and its zero-timestamp reproduction pull in different
 directions: many same-tick settlements can have small positive event latencies.
@@ -252,32 +337,51 @@ change either. Bounded fractions and scores use [0, 1], score differences use
 and ratios use one count or one base quantity as their unit interval [0, 1];
 cost per return uses one dollar [0, 1,000,000] in micro-USD; signed dollar P&L
 uses [-1, 1] USD. These are unit definitions, not acceptable regions or clipping
-bounds: larger and negative observations remain measurable. The spec supplies
-no further calibration for unbounded observations, so none is fitted from live
-samples or inferred from the charter's requested bound.
+bounds for seed observations: larger and negative observations remain measurable.
+Registered observations must return within their declared range.
 
-For card j, `v_j = distance_outside_region / observation.scale`, and
+Pricing normalises a card by its own bound magnitude for a one-sided region,
+or by its width for a band. A zero one-sided bound falls back to the
+observation's declared unit width. The resulting scale is frozen with the
+card's region. Doubling a positive 500-micro-USD cap therefore has violation 1.
+
+For card j, `v_j = distance_outside_region / card_region.scale`, and
 `S = sum(lambda_j * v_j)`. A settlement receives
 `min(S, prices.penalty_cap) * share`. When cards measure different quantities,
 `share = sum(lambda_j * v_j * share_j) / S`, or zero when S is zero.
 
-Cost, tool attempts and turnover use the decision's contribution divided by the
-window total. A lower-bound well-formedness violation is allocated by malformed
+Cost shares use the card's selected scopes and successful returns. Each return
+contributes its cost divided by the successful return count in that scope;
+the contributions are normalised across supported scopes. Evaluator and meta
+cost cards therefore charge those roles. Global window cost retains the
+producer-cost sufficient statistics. Tool attempts and turnover use the
+decision's contribution divided by the window total.
+A lower-bound well-formedness violation is allocated by malformed
 invocations, so a correct return does not pay for someone else's malformed one;
 an upper-bound violation uses well-formed invocations. A zero attributable total
 contributes zero. Other observations use `1/n` decisions for the card's role
 (or all roles for `answers_for = "all"`). The final score is
 `clip(raw_score - penalty, 0, 1)`.
 
-Closed windows retain their observations, regions and contributions for delayed
-settlements. Before a window closes, the most recent closed observations supply
+Closed windows retain their observations, regions, contributions, and the cards
+and prices of the edition in force at the close, for delayed settlements. A
+closed window is therefore priced by the edition that measured it: an amendment
+activated at a window boundary, which takes effect after the close, cannot
+remove or restate a card out of what that window already attributed, so a
+verdict or a late settlement from it keeps the blame the window assigned.
+Before a window closes, the most recent closed observations supply
 pressure and the current window's observed contribution totals supply shares.
+A cost settlement inside its own window reads the selected returns as they
+stand, falling back to observed contributions when no shares are available.
+Only delayed settlements use that window's frozen `closed_shares`.
 A settlement cannot depend on future returns. Each penalty item records the
 terms, window identifiers and shares actually used. Historical windows are
 released when no unresolved decision needs them.
 
 Fixed pathology cells include the priced card dimensions and the two activity
-dimensions. Raw reward channels remain available for retrospective analysis.
+dimensions. The immune organ uses pricing's typed card measurements, including
+unavailable support, and frozen `closed_regions`, not raw observation-id values
+or later live regions. Raw reward channels remain available for retrospective analysis.
 Adding a card starts its support history; removing one drops that dimension
 without clearing surviving evidence. Thrash requires k consecutive changes with
 no compliant window. Stable failure requires k same-cell windows with a common
@@ -303,6 +407,8 @@ one place. All are fixed in code for the world's life.
 | `MAX_DECLARED_ACTIONS` | `cortex/request.py`, `cortex/registration.py` | `32` | Actions in one declared propensity, and in one registered assembly action set |
 | `MAX_ACTION_ID_CHARS` | same | `64` | Length of one action id; the ids themselves are the population's |
 | `PROPENSITY_TOLERANCE` | `cortex/request.py` | `1e-6` | How far a declared distribution may sum from one before it is refused |
+| `MIN_DECLARED_MASS` | `runtime/propensity.py` | `0.05` | Minimum recorded mass on the chosen action after normalisation |
+| `MAX_WORLD_SAMPLES` | `runtime/observations.py` | `1024` | Retained samples per public world series |
 | `MAX_OBSERVATION_CODE_CHARS` | `runtime/observations.py` | `8000` | Source length of a registered observation (the tool source bound) |
 | `MAX_OBSERVATION_DESCRIPTION_CHARS` | `runtime/observations.py` | `500` | Description length (the tool description bound) |
 | `OBSERVATION_TIMEOUT_S` / `OBSERVATION_CPU_S` | `runtime/observations.py` | `5` / `2` | Wall and CPU seconds for one observation run: the tool jail's own ceilings |
@@ -327,6 +433,17 @@ declares something that is not a distribution or omits the action it took, is
 recorded degenerate — that action at 1.0 — and the reason reaches the population
 in `registration_feedback`.
 
+Producing action labels include accepted or uncertain venue and treasury tool
+effects and successful child requests, followed by the final answer's action.
+Rejected writes add no effect label. Orders use the same banded label through
+tools or final answers. Other effects use `close:<COIN>`, `cancel:<COIN>`,
+`leverage:<COIN>`, `transfer:<direction>` and `request:<assembly id>`.
+Multiple parts join with `+` in execution order, truncated to 64 characters.
+A trade through a tool followed by `hold` therefore retains its trade label.
+Positive declared mass below `MIN_DECLARED_MASS` is raised to `0.05` after
+normalisation, with other probabilities rescaled and `propensity.floored`
+recorded. Zero mass remains a refused declaration.
+
 The declared propensity travels forward on the request about that decision: the
 `ProducerReturn`, `Verdict` and `MetaVerdict` events carry it, and the judge's
 `Request` carries it as a first-class field rendered in its own `PROPENSITY`
@@ -342,21 +459,40 @@ off-policy through the declared propensity, via the same snapshot machinery the
 routers use. Ledger evidence: `propensity.refused`, `propensity.unlearned`,
 `propensity.learned`.
 
+A learner's action set is fixed at registration: include `hold` and every
+`<side>:<COIN>:<size band>` label the assembly may take, because a decision
+outside that set produces `propensity.unlearned`.
+
+Children open under the parent's router actor and their settled scores train
+that router when it holds the target. A target outside its universe routes
+feedback to a router whose universe holds the target, found through the
+target's accepted kinds. If none exists, feedback goes to the requesting
+assembly's learner on `request:<target>`. `request.settled` identifies the
+fallback learner trained; `propensity.unlearned` records unavailable or failed
+learning instead of silently dropping the score.
+
 ### A11: registrable observations
 
 A `{"kind": "observation", "id", "description", "unit", "range": [lo, hi],
 "code"}` registration adds a measurement. `code` defines `observe(facts)` over
 the public per-window facts as JSON — the same facts the seed observations
 compute from, with the per-decision attribution (`decisions`, `closed_values`,
-`closed_regions`) removed and sets rendered as sorted lists. It runs in the tool
-jail under the tool limits above, and is admitted only after a preflight run on
+`closed_regions`, `closed_shares`) removed and sets rendered as sorted lists.
+It runs in the tool jail under the tool limits above, and is admitted only after a preflight run on
 the last closed window returns a finite number; the preflight and its reason are
 ledgered as `observation.preflight`. Nothing is registrable before a window has
 closed, and nothing is registrable on a host without a jail.
 
-The declared `range` is the observation's unit interval, so `scale` — the
-divisor in `v_j` above — is the population's to declare for its own
-measurements, exactly as the seed table fixes it for the twenty-two.
+The declared `range` bounds supported outputs and supplies the fallback unit
+width for zero-bound cards. Pricing otherwise uses the card's own bound or
+band width as its scale.
+
+`window_facts.mids` and `window_facts.funding` map coin symbols to
+`[timestamp_ns, value]` pairs. Mids are integer micro-USD; funding rates are
+dimensionless. `wallet_balance_micro` holds `[timestamp_ns, balance]` pairs
+sampled at delivered ticks. `tick_timestamps_ns` holds those tick timestamps.
+Each series retains at most `MAX_WORLD_SAMPLES` (`1024`) samples, across coins,
+including combined multi-window measurements. These samples survive checkpoints.
 
 Registration is versioned in the registry as `observation:<id>`: re-registering
 an id supersedes it with the next version and cards then measure with the new
@@ -367,18 +503,50 @@ so a proposal cannot name one. A registered observation is measured over closed
 windows only; the `returns` and `forecasts` selectors remain the seed row
 vocabulary, and `preflight_card` refuses any other binding. A card naming an
 unregistered observation is refused before the vote, with the reason.
+
+At window close, registered observations run only when named by a live card
+or covered by an open registration trial. Seed observations remain available.
+Delivery of the registration starts `observation.trial`. An undelivered
+registration records `observation.inactive`. An unused observation retires
+after `novelty.max_lifetime_windows` from its trial or inactive window, records
+`observation.retired`, and leaves the observation book.
+
 ## Spot venue
 
 `venue.spot_pairs` is a list of unique `BASE/USDC` pairs, default `[]`, fixed at
-launch. Testnet seeds `["BTC/USDC", "ETH/USDC"]`; scripted seeds `["BTC/USDC"]`.
+launch. Testnet seeds `["PURR/USDC"]`; scripted seeds `["BTC/USDC"]`.
+The mainnet re-draft uses `UBTC/USDC` and `UETH/USDC` for those base assets.
 Live pairs must exist verbatim in SDK spot metadata; unavailable pairs fail launch.
 Orders and closes accept `market: "perp" | "spot"` (default `perp`); spot uses pair
 names and long-only inventory. Spot has no leverage, funding or liquidation.
-The world venue block publishes lot sizes and price decimal increments; live prices
-also obey the venue's five-significant-figure rule (integer prices are allowed).
+The world venue block publishes lot sizes, price decimal increments and
+`min_order_value_usd` (`"10"` on Hyperliquid; `"0"` by default on the fake).
+Live prices also obey the venue's five-significant-figure rule (integer prices
+are allowed).
 `treasury.transfer` accepts `perps_to_spot` and `spot_to_perps`, moving available
 USDC through the same intent, submission and receipt journal. Venue pots show
 `perps` and `spot` as components of `venue`, never additional capital.
+
+Class transfer confirmation requires a unique hashed `accountClassTransfer`
+row matching the signed direction and exact amount, executed within the
+inclusive interval from the nonce to nonce plus `CLASS_EXECUTION_TOLERANCE_MS`
+(`60000` ms). Execution time need not equal the nonce. Two matching rows
+confirm nothing. A fake settlement refused by the venue becomes
+`treasury.failed` with a reason and releases the unmoved principal instead of
+raising out of the treasury tick.
+
+Live fills are classified against the venue's full spot metadata, not the
+manifest's traded subset. Non-USDC launch holdings seed unowned lots at the
+launch mark with `consequence.spot_seed` and `spot.inventory` evidence. A
+holding without a launch price refuses launch. Refused fills never credit
+spot inventory. Sells cannot exceed the smaller of runtime inventory and
+accounted lots. Deferred fills update inventory only after order acknowledgement.
+
+Gap liquidation realises the full observed loss and may overshoot zero;
+`scripted-crash` demonstrates this. `termination.balance_floor_usd` defaults
+to zero and is parsed into `balance_floor_micro`, but the current termination
+path uses `Wallet.dead` at zero rather than that configured floor. A configured
+floor is not a guaranteed liquidation price or a supported nonzero death threshold.
 
 ## Registrable connectors (W8)
 
@@ -392,27 +560,39 @@ USDC through the same intent, submission and receipt journal. Venue pots show
 | `max_calls_per_window` | `60` | Positive integer attempted calls per assembly per novelty reserve window. |
 | `origin_denylist` | The world's own rail hosts: the venue API and RPC on both networks, the model providers and the discovery index | Hostnames (matched exactly or as a parent domain) or CIDRs; every registered seller's host is added to them. Bare addresses, private names and nonpublic resolved addresses are always refused. |
 
-Population proposals have `{kind: "connector", id, description, origin}`, with an
+Population proposals have `{kind: "connector", id, description, origin, predicted_effect}`, with an
 origin of `https://<host>` and no credentials, port, path, query or fragment.
 A priced `GET /` preflight precedes the same experienced, proposer-excluding
 sortition ballot path as amendments. A strict majority admits the next
-`connector:<id>` registry version. There is no predicted-effect field, so
-connector policy ballots are censored rather than assigned a manufactured score.
+`connector:<id>` registry version. `predicted_effect` names a current measurable
+card and carries `direction` and `window`. Admission starts the same delayed
+ballot liability as an amendment.
 The usual novelty registration trial is charged on admission.
 
-`connector.fetch {id, path}` costs the flat price even for transport, status or
+Preflight tests reachability within the byte and time bounds. Any HTTP status,
+including 3xx, 403 or 404, is admissible. Redirects are never followed.
+The response body remains bounded by `max_bytes`; headers and body together
+are bounded by `max_bytes + HEADER_ALLOWANCE_BYTES`, with a fixed `65536`-byte
+allowance in `world/connector.py`.
+
+`connector.fetch {id, path}` costs the flat price even for transport or
 size failures once dispatched; malformed, denylisted, over-quota and unaffordable
 requests never dispatch. Preflights share the proposer's price and window cap.
-Paths may include a query but cannot change origin. Redirects are refused.
+Paths may include a query but cannot change origin. HTTP status is returned
+as evidence rather than treated as a fetch error.
 Responses decode as UTF-8 with replacement and arrive in `seen_tool_results`
 (and the existing `tool_results`) on the caller's continuation. A successful
 fetch permits one additional tool round consisting of ordinary population tools,
 then a final model answer. The jail is unchanged.
 
-Bodies and copies in parser arguments/model journal responses are transient and
-redacted from the public ledger surfaces. Final outputs containing the raw body
+`MIN_PROTECTED_BODY_CHARS` is `32`, fixed in `runtime/compute.py`.
+Bodies at least that long and copies in parser arguments/model journal
+responses are transient and redacted from the public ledger surfaces.
+Final outputs containing the protected raw body
 are refused instead of rewriting their action fields. Counters and registry
-versions survive checkpoints. A dispatched fetch is journalled as one
+versions survive checkpoints. Shorter bodies are repeatable facts and are
+neither protected nor grounds for refusing a final return.
+A dispatched fetch is journalled as one
 `io.call`/`io.result` pair, like a paid model call or an x402 purchase, so
 recovery replays a call made after the last checkpoint from its recorded
 outcome: it does not re-fetch potentially changed information and does not
@@ -421,3 +601,29 @@ repeat the debit.
 The observatory's `connectors` section publishes latest registered versions and
 attempt counts per UTC date at each public window close, including preflights.
 Scripted manifests use an offline fake transport; live manifests use bounded HTTPS.
+
+## Operator controls and recovery
+
+`factorylab kill --world W --ledger L` takes the ledger writer lock, reopens
+the original world, records `explicit_kill:operator`, releases the seal and
+exits `3`. Stop the running process first so the lock is available. Stopping
+the process alone does not terminate the world. Kill loads no credentials
+and makes no network call. Failures from `run` and `kill` retain the reason
+code on the first stderr line and may add the exception class and originating
+`factorylab` module on a second line, without provider exception text.
+
+`probe --max-tokens` defaults to `256` for model probes. A paid x402 completion
+with empty text is a failed probe. Live `run --duration` sets a wall-clock
+deadline as well as the event ceiling derived from the declared interval.
+The clock stops before delivering a tick at or after the deadline; it does
+not interrupt an in-progress tick. Fake worlds convert duration to event count.
+
+The wake reads the venue only for a world's live Hyperliquid exchange and
+the reserve only when the manifest configures a reserve address, with the
+respective credentials present. Host credentials alone do not attach live
+accounts to a fake world. Public portfolio and window items expose no open positions.
+
+Interrupted `sandbox.run` and `observation.run` journal calls are replayable
+read-only work and may re-execute after a crash. An authenticated ledger head
+whose offset exceeds the file length raises `LedgerIntegrityError`; reopen
+does not silently roll back to the shorter file.

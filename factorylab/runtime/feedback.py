@@ -16,6 +16,7 @@ from factorylab.runtime.shared import (
     CH_CONSEQUENCE,
     CH_EXPOSURE,
     CH_FAST,
+    CH_VERDICT,
     DEF_CONFORMITY,
     DEF_EXPOSURE,
     DEF_META_CONSEQUENCE,
@@ -31,6 +32,18 @@ from factorylab.settlement import (
 )
 from factorylab.settlement.vocabulary import RETURN_PAID_OFF
 
+# A verdict is a prediction that the judged return will not be blamed by the charter. Its
+# commitment waits in ``pending`` under the judge's payoff-forecast handle until the
+# return's window closes; a subject marker under the judged return's handle keeps that
+# window's attribution evidence alive until every verdict on the return has settled.
+NORM_COMMITMENT = "verdict.norm"
+NORM_SUBJECT = "verdict.subject"
+# A verdict at or above this endorses the return; on a return the window blamed, it
+# exposes the judge to the antagonist that made the return.
+VERDICT_ENDORSEMENT = 0.8
+_CARDS_FOR_CHANNEL = {CH_VERDICT: "producer", CH_CONFORMITY: "evaluator",
+                      CH_EXPOSURE: "antagonist"}
+
 
 @dataclass
 class PendingJudgement:
@@ -38,6 +51,16 @@ class PendingJudgement:
     channel: str
     opened_at_event: int
     tier: int = 1
+    # NORM_COMMITMENT only: one verdict awaiting the charter's blame on the return it judged.
+    about: str | None = None  # the judged return
+    judge: str | None = None  # the evaluator's own decision, whose verdict this is
+    evaluator_id: str | None = None
+    q: float | None = None  # the verdict
+    cards: str | None = None  # the judged return's card label
+    window: int | None = None  # the price window the judged return worked in
+    payoff_beat: int | None = None  # its payoff forecast beat the baseline, once settled
+    verdict_beat: int | None = None  # the verdict beat the baseline, once settled
+    graded: bool = False  # the metas that conformed to it have their outcome
 
 
 class FeedbackMixin:
@@ -200,11 +223,14 @@ class FeedbackMixin:
         """A judge's own consequence standing: skill against the prevalence baseline, sample
         size, selection weight. Its own running score, private to it."""
         st = self.standing.snapshot().get(evaluator_id)
-        if not st or not st.get("n"):
+        if not st or not (st.get("n") or st.get("verdict_n")):
             return None
         return {
             "skill_vs_baseline": round(float(st["skill"]), 4),
+            "payoff_skill": round(float(st["payoff_skill"]), 4),
+            "verdict_skill": round(float(st["verdict_skill"]), 4),
             "settled_forecasts": st["n"],
+            "settled_verdicts": st["verdict_n"],
             "selection_weight": round(float(st["weight"]), 4),
         }
 
@@ -238,30 +264,37 @@ class FeedbackMixin:
                     round(float(s.baseline_brier), 4) if s.baseline_brier is not None else None
                 )
 
+    def _exposure_evidence(self, handle: str) -> dict[str, bool]:
+        """The three facts that can expose a judge on this return, each False until it lands."""
+        evidence = self.exposure_evidence.setdefault(handle, {})
+        for fact in ("judge_failed", "self_beat", "verdict_exposed"):
+            evidence.setdefault(fact, False)
+        return evidence
+
     def _settle_exposures(self, settled: list[Any]) -> None:
         """An antagonist wins only for a real, attributable failure of the judge.
 
         Exposure settles 1 when the evaluated verdict's mandatory payoff forecast
         on the antagonist's return scored worse than the prevalence baseline and
         the antagonist's own payoff forecast on that return beat it (essay
-        II.III.b: the failures have to be real). Optional forecasts never count.
-        Without both facts by the time nothing about the return is pending, it
-        settles 0.
+        II.III.b: the failures have to be real), or when the judge's verdict
+        endorsed the return (at or above ``VERDICT_ENDORSEMENT``) and the
+        return's window blamed it. Optional forecasts never count. Without
+        either by the time nothing about the return is pending, neither a payoff
+        forecast nor a verdict, it settles 0.
         """
         for s in settled:
             if (s.predicate_id != RETURN_PAID_OFF.id or s.about_handle not in self.pending_exposure
                     or s.brier is None or s.baseline_brier is None):
                 continue
-            evidence = self.exposure_evidence.setdefault(
-                s.about_handle, {"judge_failed": False, "self_beat": False}
-            )
+            evidence = self._exposure_evidence(s.about_handle)
             if s.evaluator_id == self.handle_to_assembly.get(s.about_handle):
                 evidence["self_beat"] |= s.brier > s.baseline_brier
             else:
                 evidence["judge_failed"] |= s.brier < s.baseline_brier
-            if evidence["judge_failed"] and evidence["self_beat"]:
+            if (evidence["judge_failed"] and evidence["self_beat"]) or evidence["verdict_exposed"]:
                 self._settle_exposure(s.about_handle, 1.0)
-        waiting = {f.about_handle for f in self.book.pending()}
+        waiting = {f.about_handle for f in self.book.pending()} | self._verdicts_waiting()
         stale = [
             h
             for h, o in self.pending_exposure.items()
@@ -271,9 +304,8 @@ class FeedbackMixin:
             self._settle_exposure(h, 0.0)
 
     def _settle_exposure(self, handle: str, score: float) -> None:
-        evidence = self.exposure_evidence.pop(
-            handle, {"judge_failed": False, "self_beat": False}
-        )
+        evidence = {"judge_failed": False, "self_beat": False, "verdict_exposed": False,
+                    **self.exposure_evidence.pop(handle, {})}
         if self.queue.get(handle).status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
             self.pending_exposure.pop(handle, None)
             return
@@ -311,7 +343,9 @@ class FeedbackMixin:
         self, meta_handle: str, conformity: float, y: int, forecast_handle: str
     ) -> None:
         """A top meta's conformity is a probability that the verdict was right; it is graded
-        by Brier against whether the verdict's payoff forecast beat the baseline."""
+        by Brier against whether the verdict was right on both counts: its payoff forecast
+        beat the prevalence baseline and the verdict itself beat the baseline of charter
+        blame on the judged return."""
         if self.queue.get(meta_handle).status not in (
             SettleStatus.PENDING, SettleStatus.TIMED_OUT,
         ):
@@ -339,9 +373,11 @@ class FeedbackMixin:
                 top_level = True
             if top_level:  # continuations and children are not trials
                 self._count_consequence(self.handle_to_assembly.get(payoff.handle))
+        self._commit_verdicts()
         pending = {f.handle: f for f in self.book.pending()}
         settled = self.settler.settle_due(self.n, self._facts_for)
         settled.extend(self.settler.settle_consequences(self.consequences.payoff))
+        self._settle_due_verdicts()
         self._settle_exposures(settled)
         backstop = self.ev.consequence_backstop_events
         for judge_handle in [h for h, (_y, at, _f) in self.verdict_outcomes.items()
@@ -355,9 +391,20 @@ class FeedbackMixin:
                     self._count_consequence(s.evaluator_id)
                     judge_handle = event_id[len("verdict-"):]
                     y = int(s.brier >= s.baseline_brier)
-                    for meta_handle, conformity in self.pending_meta.pop(judge_handle, []):
-                        self._settle_meta_consequence(meta_handle, conformity, y, s.handle)
-                    self.verdict_outcomes[judge_handle] = (y, self.n, s.handle)
+                    commitment = self.pending.get(s.handle)
+                    if commitment is not None and commitment.channel == NORM_COMMITMENT:
+                        commitment.payoff_beat = y
+                        # A verdict right on both counts needs both; wrong on one is decided.
+                        if y == 0 or commitment.verdict_beat is not None:
+                            self._finalize_verdict(commitment)
+                        if commitment.verdict_beat is not None:
+                            del self.pending[commitment.handle]
+                    else:
+                        # No verdict was announced for this forecast: the payoff fact alone
+                        # grades the metas, as before the verdict had its own anchor.
+                        for meta_handle, conformity in self.pending_meta.pop(judge_handle, []):
+                            self._settle_meta_consequence(meta_handle, conformity, y, s.handle)
+                        self.verdict_outcomes[judge_handle] = (y, self.n, s.handle)
             self.cadence.record(
                 handle=s.handle,
                 predicate_id=s.predicate_id,
@@ -403,6 +450,127 @@ class FeedbackMixin:
                     {"kind": "upward.release", "summary": released, "ts": self.clock.now_ns}
                 )
 
+    def _commit_verdicts(self) -> None:
+        """Every announced verdict is committed once, before any payoff about its return
+        can settle, and never twice.
+
+        A verdict is a prediction that the judged return will not be blamed by the
+        charter. The commitment is keyed by the judge's payoff-forecast handle, so
+        the book's pending kernel forecasts enumerate the verdicts still owed a
+        commitment; the verdict itself is read from the public Verdict event the
+        judge's decision announced. A subject marker under the judged return keeps
+        its attribution window from being released before the verdict settles.
+        """
+        for forecast in self.book.pending(predicate_id=RETURN_PAID_OFF.id):
+            if forecast.handle in self.pending:
+                continue
+            decision = self.queue.get(forecast.handle)
+            if not decision.event_id.startswith("verdict-"):
+                continue
+            judge = decision.event_id[len("verdict-"):]
+            announced = self.return_events.get(judge)
+            if (announced is None or announced.kind is not EventKind.VERDICT
+                    or announced.payload.get("payoff_handle") != forecast.handle):
+                continue
+            q = _as_unit(announced.payload.get("verdict"))
+            if q is None:
+                continue
+            about = forecast.about_handle
+            try:
+                opened = self.consequences.table.account(about).opened_at_event
+            except KeyError:
+                opened = self.n
+            cards = _CARDS_FOR_CHANNEL.get(self.queue.get(about).channel, "producer")
+            # A return that never contributed to a window (a router noop) still waits
+            # for the window it was made in, so no verdict settles before its window.
+            window = self.price_origins.get(about, {}).get("origin", self.window.index)
+            self.pending[forecast.handle] = PendingJudgement(
+                forecast.handle, NORM_COMMITMENT, opened, about=about, judge=judge,
+                evaluator_id=forecast.evaluator_id, q=q, cards=cards, window=window,
+            )
+            self.pending.setdefault(about, PendingJudgement(about, NORM_SUBJECT, self.n))
+
+    def _verdicts_waiting(self) -> set[str]:
+        """The judged returns with a verdict whose window has not yet judged it."""
+        return {p.about for p in self.pending.values()
+                if p.channel == NORM_COMMITMENT and p.verdict_beat is None}
+
+    def _verdict_window(self, commitment: PendingJudgement) -> str:
+        """Whether the judged return's window has closed: open, closed, or released."""
+        window = self.price_windows.get(commitment.window)
+        if window is None:
+            return "released"
+        return "closed" if window.closed_values is not None else "open"
+
+    def _settle_due_verdicts(self) -> None:
+        """A verdict settles once, when the judged return's window has closed, against the
+        share of that window's charter blame the pricing pass attributed to the return.
+
+        The realised normative outcome is 1 minus that share (1 when nothing was
+        attributed). Nothing is skipped under the cadence: a verdict whose window
+        has not closed by the consequence backstop, or whose evidence was released
+        before it could be read, settles at 1. The Brier enters the judge's
+        standing beside payoff skill; a high verdict on a blamed return exposes
+        the judge to the antagonist that made it; the judge is told, privately.
+        """
+        backstop = self.ev.consequence_backstop_events
+        due = [p for p in self.pending.values()
+               if p.channel == NORM_COMMITMENT and p.verdict_beat is None]
+        for c in due:
+            state = self._verdict_window(c)
+            if state == "open" and self.n < c.opened_at_event + backstop:
+                continue
+            closed = state == "closed" and c.about in self.price_origins
+            terms = self._penalty_terms(c.cards, c.about) if closed else []
+            total = sum(t["weight"] for t in terms)
+            share = sum(t["weight"] * t["share"] for t in terms) / total if total > 0 else 0.0
+            share = min(1.0, max(0.0, share))
+            result = self.settler.settle_verdict(
+                evaluator_id=c.evaluator_id, about_handle=c.about, q=c.q, share=share,
+            )
+            c.verdict_beat = int(result.brier >= result.baseline_brier)
+            self.ledger.append({
+                "kind": "verdict.consequence", "handle": c.judge,
+                "forecast_handle": c.handle, "about_handle": c.about,
+                "evaluator_id": c.evaluator_id, "cards": c.cards, "q": c.q,
+                "window": c.window, "window_closed": closed, "share": share,
+                "outcome": result.outcome, "brier": result.brier,
+                "baseline_brier": result.baseline_brier, "beat_baseline": c.verdict_beat,
+                "terms": terms, "ts": self.clock.now_ns,
+            })
+            for entry in self.memory.get(c.evaluator_id, ()):
+                if entry["handle"] == c.judge:
+                    entry["judged_return_blamed"] = round(float(share), 4)
+                    entry["your_verdict_brier"] = round(float(result.brier), 4)
+                    entry["verdict_baseline_brier"] = round(float(result.baseline_brier), 4)
+            if c.about in self.pending_exposure:
+                evidence = self._exposure_evidence(c.about)
+                evidence["verdict_exposed"] |= c.q >= VERDICT_ENDORSEMENT and share > 0
+                if evidence["verdict_exposed"]:
+                    self._settle_exposure(c.about, 1.0)
+            # A verdict right on both counts needs both facts; wrong on one is decided now.
+            if c.verdict_beat == 0 or c.payoff_beat is not None:
+                self._finalize_verdict(c)
+            if c.payoff_beat is not None:
+                del self.pending[c.handle]
+        # A judged return's attribution evidence is released once every verdict on it settled.
+        waiting = self._verdicts_waiting()
+        for handle in [h for h, p in self.pending.items()
+                       if p.channel == NORM_SUBJECT and h not in waiting]:
+            del self.pending[handle]
+
+    def _finalize_verdict(self, commitment: PendingJudgement) -> None:
+        """Whether the verdict was right is decided once: the top metas that conformed to it
+        are graded on it, and a meta arriving later finds the same outcome. The commitment
+        stays until both facts are in, so nothing commits or grades it twice."""
+        if commitment.graded:
+            return
+        commitment.graded = True
+        y = int(bool(commitment.payoff_beat) and bool(commitment.verdict_beat))
+        self.verdict_outcomes[commitment.judge] = (y, self.n, commitment.handle)
+        for meta_handle, conformity in self.pending_meta.pop(commitment.judge, []):
+            self._settle_meta_consequence(meta_handle, conformity, y, commitment.handle)
+
     def _sampling_actuator(self) -> None:
         """The live sampling-rate actuator (essay II.IV.b: increase the sampling rate).
 
@@ -447,7 +615,8 @@ class FeedbackMixin:
         stale = [
             p
             for p in self.pending.values()
-            if self.n - p.opened_at_event > self.ev.verdict_timeout_events
+            if p.channel not in (NORM_COMMITMENT, NORM_SUBJECT)  # settled by the window
+            and self.n - p.opened_at_event > self.ev.verdict_timeout_events
         ]
         for p in stale:
             if self.queue.get(p.handle).status is SettleStatus.PENDING:
@@ -549,6 +718,8 @@ class FeedbackMixin:
                         learner.inner.update_for(key, fb)
                 elif set(prop.action_ids) <= set(state.universe):
                     learner.update(fb)
+                else:  # an action this router cannot hold: settle it where it can be held
+                    self._settle_outside_universe(lr.handle, prop, fb)
             self.delivered_seen[lid] = len(returns)
             if lid in self.retired_routers and not self.queue.outstanding(lid):
                 self.queue.retire_actor(lid)

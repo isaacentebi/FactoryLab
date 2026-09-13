@@ -324,6 +324,9 @@ class Ledger:
         try:
             data = json.loads(self.__keys._decrypt(
                 Path(str(self.__path) + ".head").read_bytes()))
+            if (data["genesis"] == self.__genesis and type(data["offset"]) is int
+                    and data["offset"] > size):
+                raise LedgerIntegrityError("ledger shorter than authenticated head")
             if (data["genesis"] == self.__genesis and data["format"] == 1
                     and type(data["offset"]) is int and 0 < data["offset"] <= size
                     and type(data["count"]) is int and data["count"] >= 0

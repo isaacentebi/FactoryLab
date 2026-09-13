@@ -62,7 +62,13 @@ def test_a_world_that_cannot_start_says_so_without_its_interior(tmp_path, monkey
     monkeypatch.setattr("factorylab.runtime.loop.run_world", refuse)
     assert main(["run", "--world", "scripted", "--events", "1"]) == status
     captured = capsys.readouterr()
-    assert captured.err == f"factorylab run: {code.value}\n"
+    lines = captured.err.splitlines()
+    assert lines[0] == f"factorylab run: {code.value}"
+    # A launch refusal also names the subsystem that refused: a class and a module
+    # this repository wrote, never a provider's words. Nothing else follows.
+    assert all(re.fullmatch(r"factorylab run: raised [A-Za-z]+ in factorylab(\.[a-z_]+)+", line)
+               for line in lines[1:])
+    assert len(lines) <= 2
     assert SECRET not in captured.out + captured.err
 
 

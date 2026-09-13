@@ -15,7 +15,7 @@ from factorylab.world.models import ModelRequest, ModelResponse
 class ScriptedProvider:
     """Deterministic stand-in for seed contracts and the A1 composition exercise.
 
-    Producers cycle buy / hold / sell / hold on ticks (sized to equity) and
+    Producers cycle buy / hold / sell / hold on ticks (sized to the world wallet) and
     occasionally propose registrations; every produce reply carries a low
     ``payoff`` self-forecast, which the runtime seals only for antagonists.
     Evaluators return a verdict, a payoff probability and two forecasts whose
@@ -67,7 +67,7 @@ class ScriptedProvider:
         if "event Tick" in desc:
             try:
                 payload = inputs["payload"]
-                equity = Decimal(str(payload["account"]["equity_usd"]))
+                equity = Decimal(str(inputs["world"]["wallet_balance_usd"]))
                 mid = Decimal(str(payload["mids"]["BTC"]))
                 phase = int(payload["index"]) % 4
             except (KeyError, ValueError, ArithmeticError, TypeError):
@@ -88,6 +88,37 @@ class ScriptedProvider:
                     reply["connector_value"] = row.get("result", {}).get("value")
             reply["seen_tool_results"] = len(inputs["tool_results"])
             return reply
+        if n == 35:
+            reply["register"] = [{
+                "kind": "learner", "assembly_id": "seed-decider",
+                "learner": "blum_mansour", "gamma": 0.2,
+                "actions": ["hold", *[
+                    f"{side}:BTC:{band}" for side in ("buy", "sell")
+                    for band in ("xs", "s", "m", "l", "xl")
+                ]],
+            }]
+        # Late calls leave the scripted world's first window available for preflight.
+        if n == 1000:
+            reply["register"] = [{
+                "kind": "observation", "id": "scripted-fill-count",
+                "description": "Number of fills in the closed window.",
+                "unit": "count", "range": [0, 10000],
+                "code": "def observe(facts):\n    return facts['fills']\n",
+            }]
+        if n == 1010:
+            reply["register"] = [{
+                "kind": "amendment", "id": "scripted-fill-card",
+                "add": [{
+                    "id": "scripted-fills", "norm": "care with scarce resources",
+                    "description": "Fills per closed window.", "units": "count",
+                    "window": {"kind": "windows", "n": 1, "per": None},
+                    "acceptable_region": "below 1000",
+                    "observation": "scripted-fill-count", "answers_for": "producer",
+                }],
+                "replace": [], "remove": [],
+                "predicted_effect": {"card_id": "scripted-fills", "direction": "decrease",
+                                     "window": 1},
+            }]
         if n in self.tool_at_calls:
             # first the venue, then the population tool once it exists, then both
             calls = [{"tool": "venue.candles", "args": {"coin": "BTC", "interval": "1m", "n": 5}}]
@@ -112,7 +143,9 @@ class ScriptedProvider:
         if n == 160:
             reply["register"] = [
                 {"kind": "connector", "id": "scripted-source", "description": "Scripted data",
-                 "origin": "https://example.org"},
+                 "origin": "https://example.org",
+                 "predicted_effect": {"card_id": "forecast_skill", "direction": "increase",
+                                      "window": 1}},
                 {"kind": "tool", "id": "connector-parser", "description": "Parse a data value",
                  "args_schema": {"type": "object", "properties": {"body": {"type": "string"}},
                                  "required": ["body"]},
@@ -135,7 +168,9 @@ class ScriptedProvider:
             ]
             reply["register"].extend([
                 {"kind": "router", "event_kind": "Finding", "learner": "exp3", "gamma": 0.3},
-                {"kind": "retire", "assembly_id": "eval-a"},
+                {"kind": "retire", "assembly_id": "eval-a",
+                 "predicted_effect": {"card_id": "forecast_skill", "direction": "increase",
+                                      "window": 1}},
             ])
         if n == self.tool_at_calls[3]:
             reply["requests"] = [{

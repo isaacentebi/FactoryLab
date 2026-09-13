@@ -73,16 +73,16 @@ def close_window(rt, values: dict[str, float]) -> None:
         "consequence": values.get("forecast_skill"),
         "exposure": values.get("exposure_win_rate"),
     })
-    profile.update({f"card:{c.id}": values.get(o.id)
-                    if (o := rt.observations.get(c.observation)) is not None else None
-                    for c in rt.charter.cards})
+    measured = rt.window.closed_values or {}
+    regions = rt.window.closed_regions
+    profile.update({f"card:{c.id}": measured.get(c.id) for c in rt.charter.cards})
     # Activity is a separate observation even when the charter has no registration card.
     profile["registrations"] = values.get("registrations", 0.0)
     profile["revision"] = values.get("revision_rate", 0.0)
     current = {
         "index": rt.window.index, "charter_edition": rt.charter.edition,
         "profile": profile,
-        "regions": {f"card:{cid}": asdict(region) for cid, region in rt.regions.items()
+        "regions": {f"card:{cid}": asdict(region) for cid, region in regions.items()
                     },
     }
     windows = [*previous, current][-(spec.k + 1):]

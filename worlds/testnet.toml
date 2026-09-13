@@ -3,7 +3,7 @@
 name = "testnet"
 seed = 4
 initial_balance_usd = "100"
-tick_interval = "60s"
+tick_interval = "120s"
 
 [exchange]
 kind = "hyperliquid"
@@ -104,7 +104,9 @@ id = "eval-b"
 role = "evaluator"
 model_id = "qwen/qwen3.8-flash"
 accepts = ["ProducerReturn"]
-max_tokens = 1500
+# A reasoning seed spends its budget on reasoning before any content: 1500 returned
+# empty content on `length` for a third of this seat's answers in the launch rehearsal.
+max_tokens = 3000
 effort = "low"
 
 [[assemblies]]
@@ -112,7 +114,7 @@ id = "eval-c"
 role = "evaluator"
 model_id = "tencent/hy3"
 accepts = ["ProducerReturn"]
-max_tokens = 1500
+max_tokens = 3000
 effort = "low"
 
 [[assemblies]]
@@ -129,7 +131,7 @@ id = "antagonist-a"
 role = "antagonist"
 model_id = "qwen/qwen3.8-flash"
 accepts = ["Tick", "MarketMid"]
-max_tokens = 1000
+max_tokens = 2500
 effort = "low"
 
 [[assemblies]]
@@ -160,6 +162,9 @@ min_ratio = 3
 jitter_fraction = 0.2
 
 [evaluation]
+# Two hours of world time (60 events at a 120s tick) for a trade to be judged, so
+# governance's conservative floor is min_ratio * 2h = six hours between activations.
+consequence_backstop_events = 60
 consequence_share = 0.3
 max_forecasts_per_verdict = 2
 verdict_timeout_events = 20
@@ -197,12 +202,16 @@ gain_step = 0.05
 gamma_max = 0.5
 decay_step = 0.1
 
-# Rehearsal placeholder: tests inject the matching reserve and offline rail.
+# The reserve this repository's reserve.key derives; LiveRail refuses any other.
 [treasury]
-reserve_address = "0x1111111111111111111111111111111111111111"
+reserve_address = "0x1228e5620944a79D268Afc7522E00891526EdEBb"
 hyperevm_gas_budget_wei = 100000000000000000
 base_gas_budget_wei = 1000000000000000
 max_transfer_fee_usd = "2"
 
 [venue]
-spot_pairs = ["BTC/USDC", "ETH/USDC"]
+# Testnet spot: PURR/USDC is the only pair on testnet with a canonical name and a
+# rehearsable lot (szDecimals 0, mid ~$4.6). BTC/USDC exists there but szDecimals 0
+# at a ~$6,100 mid puts one lot far beyond the spot balance a rehearsal holds, and
+# ETH/USDC does not exist on testnet at all.
+spot_pairs = ["PURR/USDC"]

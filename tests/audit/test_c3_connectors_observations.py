@@ -16,8 +16,6 @@ from tests.runtime.test_connectors import decision, register
 from tests.runtime.test_loop import _consequence_produce, _consequence_runtime
 from tests.world.test_connector import Transport
 
-pytestmark = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
-
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):

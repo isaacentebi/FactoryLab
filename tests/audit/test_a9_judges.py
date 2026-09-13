@@ -11,8 +11,8 @@ from factorylab.world.exchange import FakeExchange
 from tests.runtime.test_loop import _consequence_decision, _consequence_runtime
 
 
-def _judge_handle(runtime, judge="eval-a"):
-    return _consequence_decision(runtime, judge, CH_CONFORMITY)
+def _judge_handle(runtime, judge="eval-a", *, deadline_ns=None):
+    return _consequence_decision(runtime, judge, CH_CONFORMITY, deadline_ns=deadline_ns)
 
 
 def test_a_judge_cannot_close_against_a_producers_lot():
@@ -187,7 +187,10 @@ def test_a_chosen_target_with_an_open_consequence_is_judged_and_sealed():
     assert runtime.consequences.payoff(open_handle) is None
 
     runtime.n += 1
-    handle = _judge_handle(runtime)
+    # The judgement must also settle inside the chosen target's consequence backstop, so its
+    # deadline is a handful of ticks rather than the helper's default hundred seconds.
+    handle = _judge_handle(
+        runtime, deadline_ns=runtime.clock.now_ns + 5 * runtime.tick_clock.interval_ns)
     chosen = Return(handle, {"verdict": 0.8, "payoff": 0.4, "rationale": "on time",
                              "forecasts": [], "about_handle": open_handle}, 0, "ok")
     runtime._evaluator_step(event, handle, SimpleNamespace(chosen="eval-a"),

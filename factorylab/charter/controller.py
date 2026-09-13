@@ -55,6 +55,20 @@ class CardRegion:
             raise ValueError("band requires lo < hi")
 
 
+def relative_region(region: CardRegion) -> CardRegion:
+    """Normalize a card by its bound magnitude, band width, or units at a zero bound.
+
+    A twofold breach of a positive cap has distance one regardless of currency
+    units. Bands use their width; zero one-sided bounds retain declared units.
+    The returned scale is ledgered with the bounds for identical offline use.
+    """
+    if region.kind == "band":
+        scale = region.hi - region.lo
+    else:
+        scale = abs(region.hi if region.kind == "max" else region.lo)
+    return replace(region, scale=scale if scale and isfinite(scale) else region.scale)
+
+
 def violation(region: CardRegion, value: float) -> float:
     """Return finite, nonnegative distance outside inclusive bounds in observation units."""
     value = _number(value, "value")
