@@ -145,7 +145,9 @@ def test_a1_retire_seed_retains_pending_feedback_and_accepts_a_new_version():
     rt.consequences.finish(handle, 2)
     proposer = decision(rt, 'seed-decider')
     rt._apply_registrations(proposer, Return(proposer, {
-        'register': [{'kind': 'retire', 'assembly_id': target}]}, 0, 'ok'))
+        'register': [{'kind': 'retire', 'assembly_id': target,
+                      'predicted_effect': {'card_id': 'cost_per_return',
+                                           'direction': 'decrease', 'window': 1}}]}, 0, 'ok'))
     row = next(iter(rt.retirement_proposals.values()))
     assert row['status'] == 'passed'
     assert all(seat.assembly_id != 'seed-decider' for seat in row['committee'].seats)

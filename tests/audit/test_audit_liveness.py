@@ -43,13 +43,12 @@ def test_discover_terminates_on_a_repeating_index():
     assert result == []
 
 
-def test_resume_memory_does_not_scale_with_the_whole_diary(tmp_path):
+def test_resume_memory_does_not_scale_with_the_whole_diary(tmp_path, scripted_run):
     """Finding 11 (round-one Opus #13, recorded as fixed by 'diary streaming', still on main):
     Ledger.reopen reads the whole file and _recovery_items decrypts every item into a list
     before the last snapshot is even located. Resume RSS is ~9x the diary; a droplet that
     must run for a year cannot resume after weeks. Net RSS must stay within a few diary sizes."""
-    path = str(tmp_path / "w.jsonl")
-    run_world(load_manifest("scripted"), events=60, seed=1, ledger_path=path)
+    path = str(scripted_run("scripted", 60, 1).copy_to(tmp_path / "world"))
     size = os.path.getsize(path)
     code = """
 import resource, sys

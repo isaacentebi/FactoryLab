@@ -13,11 +13,11 @@ def test_scripted_manifest_loads_and_hashes_stably() -> None:
     assert m.novelty.window_ns == 2 * 60 * 1_000_000_000
     assert m.price_table().cost("fake-opus", 1000, 100) == 1000 * 5 + 100 * 25
     assert m.manifest_hash() == load_manifest("scripted").manifest_hash()
-    assert m.manifest_hash() != load_manifest("testnet").manifest_hash()
+    assert m.manifest_hash() != _testnet_with_charter().manifest_hash()
 
 
 def test_testnet_manifest_is_not_mainnet() -> None:
-    m = load_manifest("testnet")
+    m = _testnet_with_charter()
     assert m.exchange.kind == "hyperliquid" and m.exchange.mainnet is False
     ids = {t.id for t in m.models}
     assert {"z-ai/glm-5.3-flash", "qwen/qwen3.8-flash", "tencent/hy3", "openai/gpt-5.6-luna"} <= ids
@@ -45,6 +45,7 @@ def test_validation_rejects_unpriced_assembly_and_mainnet_outside_funded() -> No
     with pytest.raises(ValueError):
         manifest_from_dict(d)
     d["name"] = "funded"
+    d["charter"] = _with_charter()["charter"]
     assert manifest_from_dict(d).exchange.mainnet is True
 
 
@@ -134,7 +135,7 @@ def test_damping_and_cadence_are_explicit_manifest_parameters(world):
         raw = tomllib.load(source)
     assert raw["prices"]["kappa"] == 0.5
     assert raw["timing"]["cadence_sample"] == 200
-    m = load_manifest(world)
+    m = _testnet_with_charter() if world == "testnet" else load_manifest(world)
     assert m.prices.kappa == 0.5 and m.timing.cadence_sample == 200
 
 
@@ -288,6 +289,8 @@ def test_fidelity_casts_are_explicit_in_all_worlds_and_hashed():
 
     for path in WORLDS_DIR.glob("*.toml"):
         raw = tomllib.loads(path.read_text())
+        if raw.get("exchange", {}).get("kind") == "hyperliquid" and "charter" not in raw:
+            raw["charter"] = _with_charter()["charter"]
         manifest = manifest_from_dict(raw)
         assert raw["novelty"]["trials"] == manifest.novelty.trials == 3
         assert raw["novelty"]["max_lifetime_windows"] == manifest.novelty.max_lifetime_windows
@@ -299,3 +302,14 @@ def test_fidelity_casts_are_explicit_in_all_worlds_and_hashed():
             assert raw["immune"][key] == getattr(manifest.immune, key)
         raw["immune"]["k"] += 1
         assert manifest.manifest_hash() != manifest_from_dict(raw).manifest_hash()
+
+
+def _testnet_with_charter():
+    """Inspect live settings with an explicit test-only charter, without changing any manifest."""
+    import tomllib
+
+    from factorylab.runtime.worlds import WORLDS_DIR
+
+    raw = tomllib.loads((WORLDS_DIR / "testnet.toml").read_text())
+    raw["charter"] = _with_charter()["charter"]
+    return manifest_from_dict(raw)

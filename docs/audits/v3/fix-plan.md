@@ -90,7 +90,7 @@ Group E's T27 append site is in `runtime/loop.py`, which B owns: E hands B a one
 
 ## Models, by budget
 
-Fable is the scarce one: groups B and G only, the two where who-judges-whom and who-may-write are decided. Codex high takes C, J, K and the closure review at the end, a reviewer that wrote none of the code. Codex medium takes Step 0, A, D, E and H. Opus takes F (long, live, needs keys) and every review-comment fix.
+Fable was used for groups B and G only, and no further Fable seats are dispatched (usage). Codex high takes C, J, K and the closure review at the end, a reviewer that wrote none of the code, plus any follow-up B or G need. Codex medium takes Step 0, A, D, E and H. Opus takes F1, F2 (long, live, need keys) and every review-comment fix.
 
 ## Timeline, wall clock
 

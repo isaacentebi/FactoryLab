@@ -4,8 +4,9 @@ Prices and sizes enter as decimal strings, never binary floats. Fractional micro
 fees, funding and P&L remain exact until each return's final total is floored once.
 A backstop fixes the outcome, not the inventory: subsequent closes still consume
 the marked opener's lots. A close credits the realised P&L of the closed quantity
-to both sides: the opener, net of its opening fee and funding, and the closer, net
-of its closing fee. Only a decision with an open account can own an order or a lot.
+to distinct sides: the opener, net of its opening fee and funding, and the closer,
+net of its closing fee. A handle closing its own lot receives the profit once.
+Only a decision with an open account can own an order or a lot.
 """
 
 from collections.abc import Mapping
@@ -83,6 +84,18 @@ class LotTable:
     returns: tuple[ReturnAccount, ...] = ()
     orders: tuple[LotOrder, ...] = ()
 
+    def seed_spot(self, coin: str, size: str, px: str) -> "LotTable":
+        """Launch inventory has an exact basis and no decision receives opening credit."""
+        _require_id(coin)
+        quantity, price = exact(size), exact(px)
+        if quantity <= 0 or price <= 0 or not coin.endswith("/USDC"):
+            raise ValueError("invalid launch spot inventory")
+        if self.returns or self.orders or any(lot.coin == coin for lot in self.lots):
+            raise ValueError("spot inventory may only be seeded once before decisions")
+        return replace(self, lots=(*self.lots, Lot(
+            None, coin, True, quantity, price, Fraction(0), "spot",
+        )))
+
     def start(self, handle: str, event: int) -> "LotTable":
         """Admit a unique return before its orders can produce fills."""
         _require_id(handle)
@@ -142,7 +155,7 @@ class LotTable:
         market: str = "perp",
         order_size: str | None = None,
     ) -> "LotTable":
-        """Close opposite lots FIFO, crediting the realised P&L to opener and closer alike.
+        """Close opposite lots FIFO, crediting realised P&L once per distinct handle.
 
         The opener's credit is net of its opening fee and accrued funding; the
         closer's is net of its closing fee. A reversal opens only its residual
@@ -188,7 +201,7 @@ class LotTable:
             closing_fee = fee * closed / quantity
             # A liquidation has no closer: its fee is the liquidated opener's own cost.
             net = pnl - lot.charges_micro * share - (closing_fee if liquidation else 0)
-            closer_net += pnl - closing_fee
+            closer_net += (pnl if owner != lot.handle else 0) - closing_fee
             closes += 1
             if lot.handle in accounts:
                 account = accounts[lot.handle]
