@@ -121,8 +121,10 @@ def test_top_meta_is_graded_by_brier_against_the_verdicts_consequence():
     item = next(i for i in rt.ledger._recovery_items() if i["kind"] == "meta.consequence")
     assert item["y"] == 0 and item["conformity"] == 0.8 and item["handle"] == meta
     assert rt.stats.fast_settlements == 1
-    # Pending outcome: the meta waits for the judge's payoff forecast, then settles on it.
+    # Pending outcome: the meta waits for the judge's payoff forecast, then settles on it
+    # once the hold's window has also judged the verdict (T16: right on both counts).
     rt = _consequence_runtime(provider=Judge(0.0))
+    rt._manage_reserve_window()  # window 1 opens; the hold below is made in it
     _, event = _consequence_produce(rt, "seed-decider")  # a hold
     about = event.payload["about_handle"]
     # Reopen the hold's account so its payoff is still pending when the meta judges.
@@ -135,6 +137,10 @@ def test_top_meta_is_graded_by_brier_against_the_verdicts_consequence():
     assert rt.queue.get(meta).status is SettleStatus.PENDING
     assert any(i["kind"] == "meta.awaiting_consequence" for i in rt.ledger._recovery_items())
     rt.consequences.finish(about, 0)
+    rt._settle_due_forecasts()
+    assert rt.queue.get(meta).status is SettleStatus.PENDING  # the payoff fact alone: right
+    rt.clock.now_ns += rt.m.novelty.window_ns
+    rt._manage_reserve_window()  # the hold's window closes and does not blame it
     rt._settle_due_forecasts()
     outcome = rt.queue.history(meta)[0]
     assert outcome.status is SettleStatus.SETTLED
