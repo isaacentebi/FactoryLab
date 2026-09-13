@@ -67,10 +67,10 @@ Proof names the node id run to close the row; every file is under `tests/audit/`
 | T55 | After SIGKILL the jailed child survives on macOS and holds the ledger writer lock: resume reports ledger_busy | rehearsal | S | broken | live | fix (lock fds close-on-exec; jail children die with the parent) | closed | tests/audit/test_r3_rh_jail_lock.py |
 | T56 | stats.fills and the window's fills count 2 while no event:Fill item exists in the diary | rehearsal | S | broken | live | verify and fix (fills must be ledgered as events) | closed | tests/audit/test_r3_rh_fill_items.py |
 
-| T57 | Custom conformity kinds route upward individually, bypassing the cascade's release ratio, jitter and representative attribution | review 58-64 | S | not C3 | code read | fix (cascade admission by reward shape) | open | |
-| T58 | Note rent is debited from the wallet but never enters the writer's consequence cost or the charter's cost measurement | review 58-64 | S | broken | code read | fix (rent as an attributable, resumable liability) | open | |
-| T59 | A predicate's window cursor stores list lengths; a bounded series that rolls past 1,024 samples loses post-forecast evidence and scores a false outcome | review 58-64 | M | broken | code read | fix (monotonic positions; unavailable evidence is unscored) | open | |
-| T60 | A custom kind named Producer or ALL is lowercased by MetricCard into a role alias, so its card measures another population | review 58-64 | M | broken | code read | fix (reserve alias spellings case-insensitively) | open | |
+| T57 | Custom conformity kinds route upward individually, bypassing the cascade's release ratio, jitter and representative attribution | review 58-64 | S | not C3 | code read | fix (cascade admission by reward shape) | closed (#65) | tests/audit/test_r3_rv_cascade.py |
+| T58 | Note rent is debited from the wallet but never enters the writer's consequence cost or the charter's cost measurement | review 58-64 | S | broken | code read | fix (rent as an attributable, resumable liability) | closed (#65) | tests/audit/test_r3_rv_rent.py |
+| T59 | A predicate's window cursor stores list lengths; a bounded series that rolls past 1,024 samples loses post-forecast evidence and scores a false outcome | review 58-64 | M | broken | code read | fix (monotonic positions; unavailable evidence is unscored) | closed (#65) | tests/audit/test_r3_rv_cursor.py |
+| T60 | A custom kind named Producer or ALL is lowercased by MetricCard into a role alias, so its card measures another population | review 58-64 | M | broken | code read | fix (reserve alias spellings case-insensitively) | closed (#65) | tests/audit/test_r3_rv_scopes.py |
 
 ## Open
 
