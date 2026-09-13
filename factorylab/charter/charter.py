@@ -66,8 +66,22 @@ class Charter:
             if c.norm not in self.norms:
                 raise ValueError(f"card {c.id} references an unknown norm")
 
-    def render(self, prices: dict[str, float] | None = None) -> str:
-        """Expose the full charter, including each window, role and current supplied price."""
+    def render(self, prices: dict[str, float] | None = None, *,
+               price_label: str | None = None) -> str:
+        """Expose the full charter: the edition, every norm, and every card in order.
+
+        Guarantees each card renders its id, norm, description, units, window,
+        acceptable region, observation and accountability scope identically in
+        every case, and that the four cases differ in the ``lambda:`` line
+        alone. With ``prices``, it is that card's price, and ``0.0`` for a card
+        the mapping does not name. With ``price_label``, it is that label
+        verbatim, for every card. With both, ``price_label`` wins and ``prices``
+        is not read: a rendering that names where the prices are cannot also
+        inline numbers the controller moves at every closed window, which is the
+        whole reason the label exists — a disclosure that must hold still
+        between calls names ``world.card_prices`` and lets the moving numbers
+        travel there. With neither, it is ``unassigned``.
+        """
         lines = [f"CHARTER (edition {self.edition})", "", "NORMS"]
         lines += [f"- {n}" for n in self.norms]
         lines += ["", "METRIC CARDS"]
@@ -77,7 +91,8 @@ class Charter:
                 f"  {c.description}",
                 f"  units: {c.units}; window: {c.window}; acceptable: {c.acceptable_region}",
                 f"  observation: {c.observation}; answers_for: {c.answers_for}",
-                f"  lambda: {prices.get(c.id, 0.0) if prices is not None else 'unassigned'}",
+                "  lambda: " + (price_label if price_label is not None else str(
+                    prices.get(c.id, 0.0) if prices is not None else "unassigned")),
             ]
         return "\n".join(lines)
 

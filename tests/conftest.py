@@ -94,7 +94,8 @@ def _cached_scripted_run(directory, manifest, events, seed, *, mode, drip=True):
 
                 class RecordingProvider(ScriptedProvider):
                     def complete(self, request):
-                        text = "\n".join(str(m.get("content", "")) for m in request.messages)
+                        text = "\n".join(str(m.get("content", ""))
+                                         for m in request.messages)
                         requests.append(_inputs_from_prompt(text))
                         return super().complete(request)
 

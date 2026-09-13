@@ -180,7 +180,11 @@ def test_divergence_raises_the_consequence_mix_and_steps_back_without_it():
     assert raised["verdict_slope"] > 0 > raised["outcome_slope"]
     assert (raised["mix_before"], raised["mix_after"]) == (0.3, 0.4)
     assert rt._world_block()["scoring"]["payoff_standing"].startswith("mean Brier")
-    assert "now 0.4" in rt._world_block()["scoring"]["payoff_standing"]
+    # The weight in force is still disclosed, but out of the prompt's stable prefix,
+    # which a live adaptation must not invalidate: scoring names where it is published.
+    block = rt._world_block()
+    assert "world.adaptive_scoring.consequence_mix" in block["scoring"]["payoff_standing"]
+    assert block["adaptive_scoring"]["consequence_mix"] == 0.4
     for i in range(6):  # the divergence persists: the mix ratchets to the cap
         _close(rt, 0.8 + 0.01 * (i + 1), -0.2 - 0.01 * (i + 1))
     assert rt.consequence_mix == rt.ev.sampling_cap == 0.7

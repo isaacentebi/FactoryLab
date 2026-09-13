@@ -220,7 +220,14 @@ class SchematicsMixin:
             "composition": SEED_SYSTEM_PROMPT,
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
-            "venue": self.exchange.instruments(),
+            "venue": self._traded_instruments(),
+            "venue_listing": (
+                "venue is the instrument record of each market in trading_markets. The "
+                "venue lists far more than those: call the venue.instruments public read "
+                "for the whole listing, and register a market proposal to trade one of them. "
+                "venue.mids, venue.funding, venue.candles, venue.order_book and "
+                "venue.funding_history read any listed coin or pair without registering it."
+            ),
             "trading_markets": {"perp": list(self.venue_tools.coins),
                                 "spot": list(self.venue_tools.spot_pairs)},
             "notes": {**counts(self.notes), "max_keys": self.m.notes.max_keys,
@@ -228,7 +235,7 @@ class SchematicsMixin:
                       "byte_window_micro": self.m.notes.byte_window_micro,
                       "pricing": "UTF-8 key and text bytes; storage per window, reads per byte. "
                       "Unpaid storage rent is due before a read or overwrite; text is retained."},
-            "tools": list(self.tool_specs.values()),
+            "tools": self._published_tool_specs(),
             "connectors": {"registered": self._connector_catalogue(),
                            "max_bytes": self.m.connectors.max_bytes,
                            "timeout_s": self.m.connectors.timeout_s,
@@ -315,6 +322,9 @@ class SchematicsMixin:
                 max_children=self.m.tools.max_children,
                 max_tool_calls=self.m.tools.max_tool_calls),
             "scoring": self._scoring_block(),
+            # Moving by construction: the sampling actuator and the immune controller
+            # change these, so they are published here and never inside the prefix.
+            "adaptive_scoring": self._adaptive_scoring_block(),
             "prices": {"lambda_max": self.m.prices.lambda_max,
                        "penalty_cap": self.m.prices.penalty_cap},
             "amendment_feedback": getattr(self, "amendment_feedback", None),
@@ -340,11 +350,70 @@ class SchematicsMixin:
         }
 
     def _charter_text(self) -> str:
-        """Every duplicate charter disclosure uses the same current controller prices."""
-        return self.charter.render({c.id: self.controller.price(c.id) for c in self.charter.cards})
+        """Every duplicate charter disclosure is the same text, and it holds still.
+
+        The controller re-prices every card at every closed window, so a charter
+        with its lambdas written into it would be a different charter on every
+        call and no prefix cache could ever hold it. The prices are published
+        unabridged in ``world.card_prices``, beside each card's region, where
+        they move without rewriting the disclosure that carries them.
+        """
+        return self.charter.render(price_label="in world.card_prices")
+
+    def _traded_instruments(self) -> dict[str, list[dict[str, Any]]]:
+        """The instrument record of each market this world may trade, and no other.
+
+        Guarantees the returned records are exactly the venue's own for the coins
+        and pairs in ``world.trading_markets``, unabridged and unrewritten, and
+        that the block's size follows that permission rather than the venue's
+        listing: a venue that lists a thousand more instruments adds nothing here.
+
+        The venue's own listing runs to thousands of instruments; carrying it in
+        every prompt cost about 100k input tokens a call and told an assembly
+        nothing it could not read on demand. What a trading decision needs is the
+        lot size, tick size and order floor of the markets it may actually send an
+        order to, which is ``trading_markets``. The listing itself stays one
+        ``venue.instruments`` call away, and ``world.venue_listing`` says so.
+        """
+        traded = {"perp": set(self.venue_tools.coins), "spot": set(self.venue_tools.spot_pairs)}
+        return {market: [row for row in rows if row.get("coin") in traded.get(market, ())]
+                for market, rows in self.exchange.instruments().items()}
+
+    def _published_tool_specs(self) -> list[dict[str, Any]]:
+        """Every registered tool's contract, with the venue's listing named rather than spelled.
+
+        Guarantees each registered spec is published exactly once and changed in
+        one way only: a public venue read whose ``coin`` argument enumerates the
+        whole listing is disclosed as naming it instead. Nothing dispatch reads is
+        touched — the registry keeps its own enum and still refuses an unlisted
+        coin with a reason — so this narrows what the prompt says, never what a
+        call may do.
+        """
+        specs: list[dict[str, Any]] = []
+        for tool_id, spec in self.tool_specs.items():
+            schema = spec.get("args_schema", {})
+            coin = schema.get("properties", {}).get("coin", {})
+            if (tool_id in self.venue_tools.PUBLIC_READS and isinstance(coin, dict)
+                    and "enum" in coin):
+                coin = {**{k: v for k, v in coin.items() if k != "enum"},
+                        "description": "any coin or pair the venue lists; "
+                                       "venue.instruments lists them"}
+                schema = {**schema, "properties": {**schema["properties"], "coin": coin}}
+                spec = {**spec, "args_schema": schema}
+            specs.append(spec)
+        return specs
 
     def _mechanics_block(self) -> dict[str, Any]:
-        """Expose the committed parameters and operative formulas without learner state."""
+        """Expose the committed parameters and operative formulas without learner state.
+
+        Guarantees every number here is one the manifest committed or an amendment
+        activated, and none is one the runtime's own adaptation moves between
+        calls: the sampling actuator's consequence mix and the immune
+        controller's decay are named here and published in
+        ``world.adaptive_scoring``, which moves with them. That is what lets this
+        block sit in the prompt's stable prefix, which an adaptation must not
+        invalidate.
+        """
         pr, nov = self.m.prices, self.m.novelty
         return {
             "tools": {"max_depth": self.m.tools.max_depth,
@@ -369,8 +438,7 @@ class SchematicsMixin:
                         "trials": nov.trials,
                         "max_lifetime_windows": nov.max_lifetime_windows},
             "controller": {
-                "eta": pr.eta, "kappa": pr.kappa, "decay": self.controller.snapshot()[
-                    "parameters"]["decay"],
+                "eta": pr.eta, "kappa": pr.kappa, "decay": pr.decay,
                 "lambda_max": pr.lambda_max, "min_window_events": pr.min_window_events,
                 "penalty_cap": getattr(pr, "penalty_cap", None),
                 "recurrence": "v = distance outside the inclusive region / scale; "
@@ -379,7 +447,11 @@ class SchematicsMixin:
             },
             "cascade": {"min_ratio": self.m.timing.min_ratio,
                         "jitter_fraction": self.m.timing.jitter_fraction},
-            "consequence_mix": getattr(self, "consequence_mix", self.ev.consequence_share),
+            "consequence_mix": self.ev.consequence_share,
+            "adaptive": "the committed values are here; the two the runtime moves between "
+            "calls — the consequence mix the sampling actuator raises and steps back, and "
+            "the decay the immune controller borrows — are in world.adaptive_scoring, and "
+            "controller.decay and consequence_mix above are what they were committed at",
             "treasury": {"max_venice_per_window_micro": self.m.treasury.max_venice_per_window,
                          "venice_tranche_usd": "5"},
             "tick_bounds_ns": {"min": self.m.clock.min_tick_ns, "max": self.m.max_tick_ns},
@@ -391,6 +463,22 @@ class SchematicsMixin:
             "their denominators.",
         }
 
+    def _adaptive_scoring_block(self) -> dict[str, Any]:
+        """The scoring values in force this window: the ones the runtime's adaptation moves.
+
+        Guarantees every value an actuator or a controller can change between two
+        calls of one charter edition is published here and inlined nowhere in the
+        stable world block, so a live adaptation is visible to the population in
+        the same call it takes effect and still leaves the prompt's cached prefix
+        byte-identical. What each value was committed at stays in
+        ``world.mechanics``.
+        """
+        return {
+            "consequence_mix": getattr(self, "consequence_mix", self.ev.consequence_share),
+            "controller_decay": self.controller.snapshot()["parameters"]["decay"],
+            "committed": "world.mechanics carries the committed value of each of these; a "
+            "difference is this runtime's own adaptation, not an amendment",
+        }
 
     @staticmethod
     def _register_schema() -> dict[str, Any]:
@@ -430,7 +518,13 @@ class SchematicsMixin:
         """How decisions settle, stated as facts about the world (schematics are
         public; no goals). Run 7 showed judges grading conformity alone because nothing told
         them a verdict is also a forecast, and producers reinforced by verdicts that never
-        answered to money. Every formula here is the one the runtime applies."""
+        answered to money. Every formula here is the one the runtime applies.
+
+        Guarantees the formulas name the weights the runtime's adaptation moves
+        rather than quoting them, so this block holds still between calls of one
+        charter edition and can sit in the prompt's stable prefix; the weight in
+        force is in ``world.adaptive_scoring``.
+        """
         ev = self.ev
         return {
             "producer_or_antagonist_return": (
@@ -467,8 +561,9 @@ class SchematicsMixin:
                 "mean Brier of the evaluator's payoff forecasts minus the prevalence "
                 "baseline's, capped below minimum coverage; it enters selection among contracts "
                 "declaring Verdict on any accepted event kind with "
-                f"weight consequence_mix (now {self.consequence_mix}, manifest "
-                f"{ev.consequence_share}) beside the learned selection; when the verdict mean "
+                f"weight consequence_mix (committed {ev.consequence_share}; the weight in "
+                "force this window is world.adaptive_scoring.consequence_mix) beside the "
+                "learned selection; when the verdict mean "
                 f"rises while payoff skill falls over {self.m.immune.k} windows the mix rises by "
                 f"{ev.sampling_step} for the next window, capped at {ev.sampling_cap}, and "
                 "steps back otherwise"

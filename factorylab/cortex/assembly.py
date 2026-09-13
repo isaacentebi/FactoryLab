@@ -7,7 +7,13 @@ a memory policy is set, the memory lives in the registry-controlled store the
 runtime passes in, keyed by handle scope.
 
 The system prompt is world-supplied. It must not describe kernel rules (the
-kernel enforces them); it describes only how to answer a request.
+kernel enforces them); it describes only how to answer a request. The system
+*message* is that prompt and nothing else. Everything the kernel discloses about
+the world — the charter text, the tool, observation, work and metric catalogues —
+is population-authored the moment a member registers into it, so it travels in
+the user message, where it is material to read rather than an instruction that
+outranks the assembly's own. An assembly that writes a tool description is
+writing to its peers' inputs, never to their system role.
 """
 
 from __future__ import annotations
@@ -93,6 +99,25 @@ class Assembly:
         actually sent. Stamping it here also means a parent cannot forge its
         child's identity: whatever ``inputs`` carried, the assembly overwrites it
         with its own.
+
+        Guarantees the system message is exactly ``spec.system_prompt``: no
+        population-authored text ever reaches the system role. The registered
+        catalogues carry prose their authors chose — a tool's description, an
+        observation's, a predicate's, a metric card's, the charter's norms — and
+        in the system role, shared by every later call, that prose would be a
+        standing instruction one member wrote for the rest of the population.
+        The prompt's stable prefix (``Request.stable_prefix``) therefore heads
+        this user message, which is where the world block belongs and where it
+        reads as material.
+
+        The cache hit that placement keeps is the per-assembly one, which is
+        where the volume is: this assembly's system text is a constant, so its
+        own consecutive calls open with the identical ``system`` message
+        followed by the identical stable block, which is all DeepSeek's and
+        OpenAI's automatic prompt caching asks for — they key on an identical
+        leading token sequence and need no ``cache_control`` marker, so none is
+        sent. Handle-scoped memory, when a world registers it, is the one thing
+        that precedes the block and costs that assembly the hit.
         """
         req = replace(req, inputs={**req.inputs, "you": self.spec.id})
         messages: list[dict[str, Any]] = []
@@ -196,11 +221,15 @@ def _provider_report(resp: Any, max_tokens: int) -> dict[str, Any]:
     """Return the provider's own account of the completion; unreported fields are None."""
     raw = resp.raw if isinstance(raw := getattr(resp, "raw", None), dict) else {}
     reasoning = raw.get("reasoning_tokens")
+    # Input the provider served from its own prompt cache. Absent where the
+    # provider does not report it, which is not a miss and must not read as one.
+    cached = raw.get("cached_tokens")
     return {
         "finish_reason": resp.stop_reason,
         "input_tokens": resp.input_tokens if type(resp.input_tokens) is int else None,
         "output_tokens": resp.output_tokens if type(resp.output_tokens) is int else None,
         "reasoning_tokens": reasoning if type(reasoning) is int else None,
+        "cached_tokens": cached if type(cached) is int else None,
         "max_tokens": max_tokens,
     }
 

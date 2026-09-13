@@ -307,6 +307,25 @@ def _description_from_prompt(text: str) -> str:
 
 
 
+def _world_from_prompt(text: str) -> dict[str, Any]:
+    """Read the stable world block the request renders ahead of everything else.
+
+    Guarantees the block is read from where the request puts it — the head of
+    the user message — by its own extent rather than by the section that follows
+    it, and that a prompt carrying no such block, or a damaged one, reads as an
+    empty mapping rather than an error. The facts that move stay in ``INPUTS``;
+    a reader of the prompt wants the whole world, so it reads both and joins
+    them.
+    """
+    if not text.startswith("WORLD\n") or (start := text.find("{")) < 0:
+        return {}
+    try:
+        world, _ = json.JSONDecoder().raw_decode(text[start:])
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    return world if isinstance(world, dict) else {}
+
+
 def _inputs_from_prompt(text: str) -> dict[str, Any]:
     try:
         start = text.index("INPUTS\n") + len("INPUTS\n")
@@ -320,6 +339,11 @@ def _inputs_from_prompt(text: str) -> dict[str, Any]:
         )
         if end < 0:
             return {}
-        return json.loads(text[start:end])
+        inputs = json.loads(text[start:end])
     except (ValueError, json.JSONDecodeError):
         return {}
+    stable = _world_from_prompt(text)
+    if stable:
+        moving = inputs.get("world")
+        inputs["world"] = {**stable, **moving} if isinstance(moving, dict) else stable
+    return inputs

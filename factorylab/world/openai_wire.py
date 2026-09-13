@@ -41,6 +41,10 @@ class WireCompletion:
     reasoning_tokens: int | None
     message: dict
     usage: dict
+    # Input tokens the provider served from its own prompt cache, when it says so
+    # (``usage.prompt_tokens_details.cached_tokens``). None means unreported, which
+    # is not the same as a miss: a provider that never reports it never says zero.
+    cached_tokens: int | None = None
 
 
 def parse_completion(response: Any, *, error: type[Exception]) -> WireCompletion:
@@ -62,6 +66,8 @@ def parse_completion(response: Any, *, error: type[Exception]) -> WireCompletion
         if any(type(n) is not int or n < 0 for n in (input_tokens, output_tokens)):
             raise ValueError("token counts must be nonnegative integers")
         details = usage.get("completion_tokens_details") or {}
+        prompt_details = usage.get("prompt_tokens_details") or {}
+        cached = prompt_details.get("cached_tokens")
         return WireCompletion(
             model=response.get("model"),
             text=content or "",
@@ -73,6 +79,7 @@ def parse_completion(response: Any, *, error: type[Exception]) -> WireCompletion
             if "reasoning_tokens" in details else None,
             message=message,
             usage=usage,
+            cached_tokens=cached if type(cached) is int and cached >= 0 else None,
         )
     except error:
         raise

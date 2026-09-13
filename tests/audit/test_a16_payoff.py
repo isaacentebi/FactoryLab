@@ -127,7 +127,10 @@ def test_the_payoff_predicate_is_named_to_the_population_but_never_computed_for_
 
     class Capture(ScriptedProvider):
         def complete(self, req):
-            texts.append(req.messages[-1]["content"].split("\n\nINPUTS\n")[0])
+            # The request description alone: the stable world block leads the
+            # prompt, and what it discloses is asserted below from the world block.
+            texts.append(
+                req.messages[-1]["content"].split("\n\nINPUTS\n")[0].split("REQUEST\n")[-1])
             return ModelResponse(req.model_id, json.dumps(
                 {"action": "hold", "verdict": 0.5, "payoff": 0.5, "rationale": "t",
                  "forecasts": []}), 1, 1, "s")

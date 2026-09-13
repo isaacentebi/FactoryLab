@@ -267,6 +267,8 @@ class VeniceProvider:
                 raw["request_id"] = wire.request_id
             if wire.reasoning_tokens is not None:
                 raw["reasoning_tokens"] = wire.reasoning_tokens
+            if wire.cached_tokens is not None:
+                raw["cached_tokens"] = wire.cached_tokens
             for key in ("tool_calls", "reasoning_content", "reasoning_details"):
                 if key in wire.message:
                     raw[key] = wire.message[key]
