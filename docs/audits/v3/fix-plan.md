@@ -90,6 +90,9 @@ Group E's T27 append site is in `runtime/loop.py`, which B owns: E hands B a one
 
 ## Models, by budget
 
+Standing rule from here: every remaining task runs on Opus, or on Codex at medium effort once its usage resets; no Fable seats.
+
+
 Fable was used for groups B and G only, and no further Fable seats are dispatched (usage). Codex high took C, J and K; Codex reached its usage limit during wave two, so the closure review at the end and every remaining fix go to Opus (a reviewer that wrote none of the code it reviews). Codex medium takes Step 0, A, D, E and H. Opus takes F1, F2 (long, live, need keys) and every review-comment fix.
 
 ## Timeline, wall clock
