@@ -1,15 +1,31 @@
 """One reader for OpenAI-shaped chat completions, shared by every rail that speaks it.
 
 Providers differ in how they price a call and in the error they raise; they do
-not differ in how a completion is laid out. Everything that is common lives
-here, so a change to the wire shape is made once, and a fault in one provider's
+not differ in how a completion is laid out, nor in what a transport fault says
+about whether the request was dispatched. Everything that is common lives here,
+so a change to the wire shape is made once, and a fault in one provider's
 pricing can never surface as another provider's exception.
 """
 
 from __future__ import annotations
 
+import socket
+import ssl
 from dataclasses import dataclass
 from typing import Any
+
+# Faults that prove the request body never reached the provider: the host never
+# resolved, the connection was refused, or the TLS handshake was rejected. Every
+# other transport fault (read timeout, reset, truncated body) can follow a POST
+# the provider already accepted, generated and billed.
+PREDISPATCH = (socket.gaierror, socket.herror, ConnectionRefusedError,
+               ssl.SSLCertVerificationError)
+
+
+def dispatched(exc: BaseException) -> bool:
+    """True unless the failure is definitive evidence the request was never sent."""
+    # ``URLError`` carries the underlying socket failure as its ``reason``.
+    return not any(isinstance(cause, PREDISPATCH) for cause in (exc, getattr(exc, "reason", None)))
 
 
 @dataclass(frozen=True)

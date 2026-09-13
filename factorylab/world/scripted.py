@@ -112,7 +112,9 @@ class ScriptedProvider:
         if n == 160:
             reply["register"] = [
                 {"kind": "connector", "id": "scripted-source", "description": "Scripted data",
-                 "origin": "https://example.org"},
+                 "origin": "https://example.org",
+                 "predicted_effect": {"card_id": "forecast_skill", "direction": "increase",
+                                      "window": 1}},
                 {"kind": "tool", "id": "connector-parser", "description": "Parse a data value",
                  "args_schema": {"type": "object", "properties": {"body": {"type": "string"}},
                                  "required": ["body"]},
@@ -135,7 +137,9 @@ class ScriptedProvider:
             ]
             reply["register"].extend([
                 {"kind": "router", "event_kind": "Finding", "learner": "exp3", "gamma": 0.3},
-                {"kind": "retire", "assembly_id": "eval-a"},
+                {"kind": "retire", "assembly_id": "eval-a",
+                 "predicted_effect": {"card_id": "forecast_skill", "direction": "increase",
+                                      "window": 1}},
             ])
         if n == self.tool_at_calls[3]:
             reply["requests"] = [{

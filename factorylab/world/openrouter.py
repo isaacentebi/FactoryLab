@@ -10,15 +10,20 @@ from urllib import error, request
 
 from factorylab.kernel.money import nonnegative_usd_micro, usd_to_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
-from factorylab.world.openai_wire import parse_completion
+from factorylab.world.openai_wire import dispatched, parse_completion
 
 
 class OpenRouterError(Exception):
-    """Provider failures carry an HTTP status, if available, and a sanitized body."""
+    """Provider failures carry an HTTP status, a sanitized body, and whether it was sent.
 
-    def __init__(self, status: int | None, body: str) -> None:
+    ``sent`` is False only with definitive evidence the request body never left this
+    process; it stays True whenever the provider may already have billed the call.
+    """
+
+    def __init__(self, status: int | None, body: str, *, sent: bool = True) -> None:
         self.status = status
         self.body = body
+        self.sent = sent
         super().__init__(f"OpenRouter error ({status}): {body}")
 
 
@@ -59,7 +64,7 @@ class OpenRouterProvider:
     def _default_transport(self, method: str, path: str, payload: dict | None) -> dict:
         key = os.environ.get(self._key_env)
         if not key:
-            raise OpenRouterError(None, "API key environment variable is not set")
+            raise OpenRouterError(None, "API key environment variable is not set", sent=False)
         req = request.Request(
             self._base_url + path,
             data=json.dumps(payload).encode("utf-8") if payload is not None else None,
@@ -91,13 +96,17 @@ class OpenRouterProvider:
                     exc.close()
                 raise OpenRouterError(exc.code, self._redact(body)) from None
             except OpenRouterError as exc:
-                raise OpenRouterError(exc.status, self._redact(exc.body)) from None
-            except (error.URLError, ConnectionError, TimeoutError):
+                raise OpenRouterError(exc.status, self._redact(exc.body), sent=exc.sent) from None
+            except (error.URLError, ConnectionError, TimeoutError) as exc:
                 if attempt + 1 == attempts:
-                    raise OpenRouterError(None, "Connection failed") from None
-            except Exception:
+                    raise OpenRouterError(
+                        None, "Connection failed", sent=dispatched(exc)
+                    ) from None
+            except Exception as exc:
                 # Arbitrary transport/decoder exceptions may contain request headers.
-                raise OpenRouterError(None, "Transport or response decoding failed") from None
+                raise OpenRouterError(
+                    None, "Transport or response decoding failed", sent=dispatched(exc)
+                ) from None
         raise AssertionError("unreachable")
 
     def complete(self, req: ModelRequest) -> ModelResponse:

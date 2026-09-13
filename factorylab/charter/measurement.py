@@ -41,9 +41,9 @@ def measurement_catalogue(observations=None) -> list[dict]:
         "revision_rate": "Share of selected responses with accepted registrations or activated "
         "amendments; global closed windows use their revision counters.",
         "verdict_mean": "Mean evaluator verdict; forecast selectors use the verdicts attached "
-        "to their selected resolved forecasts.",
+        "to resolved forecasts, grouped by the judged return's assembly or role.",
         "verdict_std": "Population standard deviation of evaluator verdicts; forecast "
-        "selectors use verdicts attached to their selected resolved forecasts.",
+        "selectors group verdicts by the judged return's assembly or role.",
         "consequence_paid_off_rate": "Positive return_paid_off outcomes over selected settled "
         "consequences; forecast selectors restrict this to selected forecast records.",
         "censored_share": "Censored outcomes over resolved outcomes; forecast selectors use "
@@ -90,6 +90,19 @@ class CardSamples:
                 sample["revision"] = True
                 return
 
+    def resolved_forecast(
+        self, *, forecast, role: str, window: int, skill: float | None,
+        y: int | None, status: str, source: dict, subject: dict,
+    ) -> None:
+        """Resolved rows retain separate forecaster and judged-return identities."""
+        self.forecasts.append({
+            "handle": forecast.handle, "assembly": forecast.evaluator_id, "role": role,
+            "subject_handle": forecast.about_handle,
+            "subject_assembly": subject.get("assembly"), "subject_role": subject.get("role"),
+            "window": window, "skill": skill, "predicate": forecast.predicate_id,
+            "y": y, "status": status, "verdict": source.get("verdict"),
+        })
+
     def closed(self, window) -> None:
         """A closed window enters the record once, detached from the runtime's counters."""
         if not self.windows or self.windows[-1]["index"] != window.index:
@@ -119,6 +132,45 @@ class CardSamples:
             )]
 
 
+def record_card_forecasts(runtime, pending, baseline) -> None:
+    """Settled forecast events retain the actual forecaster and judged contract scopes."""
+    from factorylab.cortex.registration import measured_role
+    from factorylab.kernel.events import EventKind
+
+    samples = runtime.card_samples
+    returns = {row["handle"]: row for row in samples.returns}
+    for event in runtime.internal:
+        if event.kind is not EventKind.FORECAST_SETTLED:
+            continue
+        row = event.payload
+        forecast = pending.get(row["handle"])
+        if forecast is None:
+            continue
+        skill = None
+        if row["brier"] is not None:
+            skill = row["brier"] - baseline.baseline_brier(row["predicate"], row["y"])
+            baseline.record(row["predicate"], row["y"])
+        parent = runtime.queue.get(forecast.handle).parent_handle
+        source = returns.get(parent, {})
+        assembly = forecast.evaluator_id
+        role = source.get("role") or (
+            measured_role(runtime.assemblies[assembly].spec.emits)
+            if assembly in runtime.assemblies else "evaluator"
+        )
+        subject = returns.get(forecast.about_handle)
+        if subject is None:
+            # A subject can leave the rolling return horizon before its forecast
+            # resolves. Its selected contract and assembly remain runtime facts.
+            subject_assembly = runtime.handle_to_assembly.get(forecast.about_handle)
+            kind = runtime.return_kinds.get(forecast.about_handle)
+            subject = {"assembly": subject_assembly,
+                       "role": measured_role(kind) if kind is not None else None}
+        samples.resolved_forecast(
+            forecast=forecast, role=role, window=runtime.window.index, skill=skill,
+            y=row["y"], status=row["status"], source=source, subject=subject,
+        )
+
+
 def preflight_card(card: MetricCard, observations=None) -> None:
     """Unmeasurable observations, scopes and regions are rejected before a vote."""
     from factorylab.runtime.cards import parses, region_for
@@ -145,18 +197,30 @@ def preflight_measurement(card: MetricCard, observations=None) -> None:
     """Execute the pricing measurement with one synthetic unit of the proposed selector."""
     from dataclasses import replace
 
+    from factorylab.cortex.registration import measured_role
+    from factorylab.cortex.request import Return
     from factorylab.runtime.pricing import MeasureWindow
+    from factorylab.settlement.forecast import Forecast
 
     preflight_card(card, observations)
     unit = replace(card, window=replace(card.window, n=1))
-    samples = CardSamples(
-        returns=[{"handle": "sample", "assembly": "sample", "role": card.answers_for,
-                  "window": 1, "cost": 1, "ok": True, "noop": False, "revision": False,
-                  "tool_calls": 0}],
-        forecasts=[{"handle": "forecast", "assembly": "sample", "role": card.answers_for,
-                    "window": 1, "skill": 0.0, "predicate": "return_paid_off", "y": 0,
-                    "status": "settled", "verdict": 0.0}],
-    )
+    samples = CardSamples()
+    for kind in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
+        role = measured_role(kind)
+        samples.returned(handle=kind, assembly=kind, role=role, window=1,
+                         ret=Return(kind, {"verdict": 0.0} if kind == "Verdict" else {}, 1, "ok"))
+    # Use the real row constructor, with judge and subject separated. The card
+    # cannot manufacture either identity by assigning its answers_for to a row.
+    for source in samples.returns:
+        for subject in samples.returns:
+            forecast = Forecast(
+                f"forecast-{source['handle']}-{subject['handle']}", source["assembly"],
+                subject["handle"], "return_paid_off", {"horizon_events": 1}, 0.5, 0, 1,
+            )
+            samples.resolved_forecast(
+                forecast=forecast, role=source["role"], window=1, skill=0.0,
+                y=0, status="settled", source=source, subject=subject,
+            )
     window = MeasureWindow(1, 1, costs=[1], invocations=1, ok=1, producer_returns=1,
                            consequences_settled=1, exposures_settled=1, outcomes=1,
                            meta_verdicts=[0.0], max_position_notional_micro=0,
@@ -167,12 +231,18 @@ def preflight_measurement(card: MetricCard, observations=None) -> None:
 
 def _groups(card: MetricCard, rows: list[dict]) -> dict[str, list[dict]]:
     groups = defaultdict(list)
+    subject = card.observation.strip().lower() in ("verdict_mean", "verdict_std")
     for row in rows:
+        if subject and row.get("verdict") is None:
+            continue
+        prefix = "subject_" if subject else ""
         if card.window.per is not None and card.answers_for != "all" and (
-            row["role"] != card.answers_for
+            row.get(prefix + "role") != card.answers_for
         ):
             continue
-        key = row[card.window.per] if card.window.per is not None else "all"
+        key = row.get(prefix + card.window.per) if card.window.per is not None else "all"
+        if key is None:
+            continue
         groups[key].append(row)
     return dict(groups)
 

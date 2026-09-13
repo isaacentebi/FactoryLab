@@ -128,11 +128,18 @@ class ConnectorResponse:
     body: bytes
 
 
-class _DeadlineReader(io.RawIOBase):
-    """Every socket read observes the same deadline, including HTTP header parsing."""
+# http.client buffers every response header before the body read begins, and its
+# own limits (100 lines of 64 KiB) are megabytes. The origin's whole answer,
+# headers included, is bounded by max_bytes plus this one-line allowance.
+HEADER_ALLOWANCE_BYTES = 65536
 
-    def __init__(self, sock, deadline):
-        self.sock, self.deadline = sock, deadline
+
+class _DeadlineReader(io.RawIOBase):
+    """Every socket read observes the same deadline and the same total byte budget."""
+
+    def __init__(self, sock, deadline, budget):
+        self.sock, self.deadline, self.budget = sock, deadline, budget
+        self.consumed = 0
         self.raw = sock.makefile("rb", buffering=0)
 
     def close(self):
@@ -146,21 +153,27 @@ class _DeadlineReader(io.RawIOBase):
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError
+        allowed = self.budget - self.consumed
+        if allowed <= 0:
+            raise ConnectorRefused("response exceeds max_bytes with headers")
         self.sock.settimeout(remaining)
-        return self.raw.readinto(buffer)
+        read = self.raw.readinto(memoryview(buffer)[:allowed])
+        self.consumed += read or 0
+        return read
 
 
 class _DeadlineSocket:
-    """HTTP buffering cannot reset the total read deadline with each arriving byte."""
+    """HTTP buffering cannot reset the total read deadline or budget with each byte."""
 
-    def __init__(self, sock, deadline):
-        self.sock, self.deadline = sock, deadline
+    def __init__(self, sock, deadline, budget):
+        self.sock, self.deadline, self.budget = sock, deadline, budget
 
     def __getattr__(self, name):
         return getattr(self.sock, name)
 
     def makefile(self, *args, **kwargs):
-        return io.BufferedReader(_DeadlineReader(self.sock, self.deadline), buffer_size=1)
+        return io.BufferedReader(
+            _DeadlineReader(self.sock, self.deadline, self.budget), buffer_size=1)
 
     def sendall(self, data):
         remaining = self.deadline - time.monotonic()
@@ -175,7 +188,7 @@ class HTTPSTransport:
 
     def get(self, host: str, path: str, *, max_bytes: int, timeout_s: int,
             denylist: tuple[str, ...]) -> ConnectorResponse:
-        """DNS, connect, headers and body share a deadline; read at most cap+1 bytes."""
+        """DNS, connect, headers and body share one deadline and one total byte budget."""
         deadline = time.monotonic() + timeout_s
         # libc DNS has no deadline API. Only resolution uses a disposable, bounded
         # helper process; HTTP, TLS and policy remain in this runtime process.
@@ -206,7 +219,8 @@ class HTTPSTransport:
             except BaseException:
                 raw.close()
                 raise
-            connection.sock = _DeadlineSocket(secured, deadline)
+            connection.sock = _DeadlineSocket(
+                secured, deadline, max_bytes + HEADER_ALLOWANCE_BYTES)
             # Host is required HTTP framing. These are the only application headers.
             connection.putrequest("GET", path, skip_accept_encoding=True)
             connection.putheader("Accept", "*/*")
@@ -258,7 +272,12 @@ class ConnectorProxy:
         return host
 
     def fetch(self, origin: str, path: str) -> dict:
-        """Return bounded UTF-8 text or a safe refusal; oversize bodies are never returned."""
+        """An origin that answered within the bounds returns its status and bounded text.
+
+        The status is reported, never judged: a data API whose root is 404, 403 or
+        301 answered as truly as an HTML front page that is 200, and no redirect is
+        ever followed. Only an unanswered, oversize or out-of-time read is an error.
+        """
         started = time.monotonic()
         try:
             host = self.validate(origin, path)
@@ -272,9 +291,6 @@ class ConnectorProxy:
             if size > self.bounds.max_bytes:
                 return {"error": "body exceeds max_bytes", "status": response.status,
                         "bytes": self.bounds.max_bytes + 1}
-            if not 200 <= response.status < 300:
-                return {"error": "HTTP status refused (redirects disabled)",
-                        "status": response.status, "bytes": size}
             return {"body": response.body.decode("utf-8", errors="replace"),
                     "status": response.status, "bytes": size}
         except ConnectorRefused as exc:

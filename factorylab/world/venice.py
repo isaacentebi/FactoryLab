@@ -13,7 +13,7 @@ from urllib import error
 
 from factorylab.kernel.money import nonnegative_usd_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
-from factorylab.world.openai_wire import parse_completion
+from factorylab.world.openai_wire import dispatched, parse_completion
 from factorylab.world.x402 import VENICE_URL, X402Client, http_request, redact
 
 
@@ -84,10 +84,15 @@ def top_up(client: X402Client, reference: dict) -> dict:
 
 
 class VeniceError(Exception):
-    """Provider failures retain HTTP status but never transport bodies or credentials."""
+    """Provider failures retain HTTP status but never transport bodies or credentials.
 
-    def __init__(self, status: int | None, message: str) -> None:
+    ``sent`` is False only with definitive evidence the request body never left this
+    process; it stays True whenever the provider may already have billed the call.
+    """
+
+    def __init__(self, status: int | None, message: str, *, sent: bool = True) -> None:
         self.status = status
+        self.sent = sent
         super().__init__(f"Venice error ({status}): {message}")
 
 
@@ -128,7 +133,7 @@ class VeniceProvider:
         elif method == "GET" and path == "/models":
             headers = {}  # The Venice catalogue is public.
         else:
-            raise VeniceError(None, "Set VENICE_API_KEY or RESERVE_PRIVATE_KEY")
+            raise VeniceError(None, "Set VENICE_API_KEY or RESERVE_PRIVATE_KEY", sent=False)
         response = http_request(method, self._base_url + path, payload, headers)
         if not 200 <= response.status < 300:
             raise VeniceError(response.status, "HTTP request failed")
@@ -151,13 +156,15 @@ class VeniceProvider:
             except VeniceError as exc:
                 # Even injected provider exceptions must not echo request credentials.
                 raise VeniceError(
-                    exc.status, "Request failed; check authentication and status"
+                    exc.status, "Request failed; check authentication and status", sent=exc.sent
                 ) from None
-            except (error.URLError, ConnectionError, TimeoutError):
+            except (error.URLError, ConnectionError, TimeoutError) as exc:
                 if method != "GET" or attempt == 1:
-                    raise VeniceError(None, "Connection failed") from None
-            except Exception:
-                raise VeniceError(None, "Transport or response decoding failed") from None
+                    raise VeniceError(None, "Connection failed", sent=dispatched(exc)) from None
+            except Exception as exc:
+                raise VeniceError(
+                    None, "Transport or response decoding failed", sent=dispatched(exc)
+                ) from None
         raise AssertionError("unreachable")
 
     def _configuration(self, req: ModelRequest) -> tuple[str, dict, dict]:
