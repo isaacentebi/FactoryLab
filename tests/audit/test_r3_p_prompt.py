@@ -99,7 +99,7 @@ def test_the_listing_leaves_the_prompt_and_the_block_size_stops_following_it():
     assert len(listing) > 100_000  # the listing itself is what used to be copied in
     blocks = [rendered(rt._world_block()) for rt in (small, large)]
     assert len(blocks[1]) - len(blocks[0]) < 1_000
-    assert len(blocks[1]) < 60_000
+    assert len(blocks[1]) < len(listing) // 2  # smaller than the listing it left out
     venue = large._world_block()["venue"]
     assert {market: [row["coin"] for row in rows] for market, rows in venue.items()} == TRADING
     assert all(row["lot_size"] and row["min_order_value_usd"] is not None
