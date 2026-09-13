@@ -82,3 +82,19 @@ def test_world_series_survive_checkpoint_with_integer_money():
     facts = window_facts(restored.window)
     assert type(facts["mids"]["BTC"][0][1]) is int
     assert type(facts["wallet_balance_micro"][0][1]) is int
+
+
+def test_a_funding_payment_event_is_not_a_funding_rate_sample():
+    """Funding payments carry ``paid_usd``; only the tick's funding rate feeds the series."""
+    from factorylab.kernel.events import Event, EventKind
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    payment = {"coin": "BTC", "paid_usd": ".9"}
+    rt._observe_delivered_event(Event("f-pay", EventKind.FUNDING, 0, payment, "test"))
+    live_payment = {"coin": "BTC", "paid_usd": ".9", "rate": "0.0001", "payment_id": "p1"}
+    rt._observe_delivered_event(Event("f-pay-2", EventKind.FUNDING, 0, live_payment, "test"))
+    assert rt.window.funding == []
+    rate = {"coin": "BTC", "rate": "0.0001"}
+    rt._observe_delivered_event(Event("f-rate", EventKind.FUNDING, 0, rate, "test"))
+    assert [s["value"] for s in rt.window.funding] == [0.0001]

@@ -64,7 +64,7 @@ class Termination:
         if not self.__ledger.healthy():
             return "ledger_failure"
         if wallet.dead:
-            return "balance_zero"
+            return "balance_floor" if wallet.balance_floor_micro else "balance_zero"
         return None
 
     def kill(self, reason: str) -> None:

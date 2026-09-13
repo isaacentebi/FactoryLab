@@ -490,7 +490,9 @@ class ComputeMixin:
                 return False
             if self.return_kinds.get(ancestor) in ("Verdict", "MetaVerdict"):
                 return False
-        return self.consequences.account_open(handle)
+            if not self.consequences.account_open(ancestor):
+                return False
+        return True
 
     def _allowed_tools(self, action_id: str) -> set[str]:
         """Every registered tool is a public primitive; schematics are public."""

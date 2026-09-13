@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import signal
 from copy import deepcopy
 from dataclasses import dataclass
 
@@ -121,7 +122,10 @@ class ObservationRunner:
                 cpu_s=self.cpu_s,
                 max_output_bytes=2000,
             )
-            if result.timed_out:
+            # Jail wrappers may encode a signal as 128 + signal instead of -signal.
+            if result.timed_out or result.returncode in (
+                -signal.SIGKILL, -signal.SIGXCPU, 128 + signal.SIGKILL, 128 + signal.SIGXCPU,
+            ):
                 return None, "timeout"
             if result.returncode != 0:
                 return None, f"exit {result.returncode}: {result.stderr.strip()[-200:]}"

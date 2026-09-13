@@ -2,8 +2,20 @@
 
 from collections import deque
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 from factorylab.kernel.ledger import Ledger
+
+
+class TickClock(Protocol):
+    interval_ns: int
+
+
+def tick_intervals(clock: TickClock) -> dict:
+    """Publish delivered intervals where measured, declared intervals otherwise."""
+    if hasattr(clock, "intervals"):
+        return clock.intervals()
+    return {"declared_ns": clock.interval_ns, "measured_ns": clock.interval_ns, "samples": 0}
 
 
 class GovernanceCadence:
@@ -92,15 +104,26 @@ class GovernanceCadence:
                      default=0)
         return max(estimate, oldest)
 
-    def slowest_period_ns(self, tick_interval_ns: int) -> int:
-        """Convert the event estimate using the current tick, never the ledger latency in ns."""
-        return self.slowest_period_events() * tick_interval_ns
+    def slowest_period_ns(self, tick_interval_ns: int | TickClock) -> int:
+        """Convert at the slower of the delivered gap and the interval now declared.
+
+        A gap sample is evidence that the loop ran slowly, never evidence that
+        it may run faster than the charter currently says. An amendment that
+        lengthens the tick therefore takes effect immediately, and measurement
+        may only push the priced period further out.
+        """
+        interval = tick_interval_ns
+        if not isinstance(interval, int):
+            declared = interval.interval_ns
+            measured = getattr(interval, "measured_interval_ns", None)
+            interval = max(measured(), declared) if measured is not None else declared
+        return self.slowest_period_events() * interval
 
     def earliest_event(self) -> int:
         """Require fresh event evidence since the most recent activation."""
         return self._last_activation_event + self._min_ratio * self.slowest_period_events()
 
-    def earliest_ns(self, tick_interval_ns: int) -> int:
+    def earliest_ns(self, tick_interval_ns: int | TickClock) -> int:
         """Return the inclusive activation threshold, recomputed from current observations."""
         return self._last_activation_ns + self._min_ratio * self.slowest_period_ns(tick_interval_ns)
 
@@ -111,7 +134,7 @@ class GovernanceCadence:
         self._ledger.append({"kind": "charter.approved", "amendment_id": amendment_id})
         self._waiting[amendment_id] = None
 
-    def ready(self, *, now_ns: int, tick_interval_ns: int, window: int) -> bool:
+    def ready(self, *, now_ns: int, tick_interval_ns: int | TickClock, window: int) -> bool:
         """Block early activation and emit at most one deferral per waiting candidate per window."""
         earliest = self.earliest_ns(tick_interval_ns)
         if now_ns >= earliest and self._current_event >= self.earliest_event():
@@ -135,7 +158,7 @@ class GovernanceCadence:
         self._waiting.pop(amendment_id)
         self._deferred.pop(amendment_id, None)
 
-    def activated(self, amendment_id: str, now_ns: int, tick_interval_ns: int) -> None:
+    def activated(self, amendment_id: str, now_ns: int, tick_interval_ns: int | TickClock) -> None:
         """Record the measured period before advancing the activation anchor and waiting list."""
         self._ledger.append({
             "kind": "charter.cadence", "amendment_id": amendment_id,
@@ -152,7 +175,7 @@ class GovernanceCadence:
         self._waiting.pop(amendment_id, None)
         self._deferred.pop(amendment_id, None)
 
-    def world_block(self, tick_interval_ns: int) -> dict:
+    def world_block(self, tick_interval_ns: int | TickClock) -> dict:
         """Expose measured duration, UTC activation timestamp and approved waiting ids only."""
         seconds, nanos = divmod(self.earliest_ns(tick_interval_ns), 1_000_000_000)
         timestamp = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(seconds=seconds)

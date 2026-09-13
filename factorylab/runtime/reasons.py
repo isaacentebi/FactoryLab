@@ -43,6 +43,7 @@ class Reason(StrEnum):
     VENUE_ACCOUNT_MISMATCH = "venue_account_mismatch"
     ADAPTER_MISMATCH = "adapter_mismatch"
     ADAPTER_UNAVAILABLE = "adapter_unavailable"
+    EMPTY_COMPLETION = "empty_completion"
     RESERVE_UNAVAILABLE = "reserve_unavailable"
     MARKET_UNAVAILABLE = "market_unavailable"
     TREASURY_UNAVAILABLE = "treasury_unavailable"
