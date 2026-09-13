@@ -80,7 +80,8 @@ def test_population_authored_price_changes_a_settled_reward():
     rt._settle_priced(handle, channel="verdict", score=0.8,
                       definition_version="test", sampling_ref=None, cards="producer")
     earned = rt.queue.returns_for("test-router")[-1].score
-    assert earned == pytest.approx(0.6)
+    # Runtime regions normalize the deficit by the card's own 0.9 bound.
+    assert earned == pytest.approx(0.8 - 0.5 * (0.9 - 0.5) / 0.9)
 
 
 def test_incumbent_cannot_spend_the_frontiers_compute():
@@ -177,7 +178,7 @@ def test_role_prices_are_not_card_id_conventions():
     for card in rt.charter.cards:
         rt.controller.set_price(card.id, 0.25, amendment_id="test")
     for role in ("producer", "evaluator", "meta"):
-        assert rt._penalty_for(role) == pytest.approx(0.2)
+        assert rt._penalty_for(role) == pytest.approx(2 * 0.25 * (0.9 - 0.5) / 0.9)
 
 
 def test_new_assembly_keeps_protected_compute_until_its_consequences_settle():

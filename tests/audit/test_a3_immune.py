@@ -32,6 +32,8 @@ def runtime():
 
 def freeze(rt, index, cost=920, skill=-0.3, turnover=230, registrations=0, revision=0):
     rt.window.index = index
+    rt.window.closed_values = {"cost": cost, "skill": skill, "turnover": turnover}
+    rt.window.closed_regions = dict(rt.regions)
     for cid in rt.regions:
         rt.controller.set_price(cid, 1, amendment_id="fixture")
     close_window(rt, dict(cost_per_return=cost, forecast_skill=skill, turnover=turnover,
@@ -67,6 +69,8 @@ def test_a3_one_recovery_followed_by_stability_flags_nothing():
     rt = runtime()
     for i, verdict in enumerate([0, 0, 0, 1, 1, 1, 1, 1], 1):
         rt.window.index = i
+        rt.window.closed_values = {"cost": 400, "skill": .2, "turnover": 0}
+        rt.window.closed_regions = dict(rt.regions)
         close_window(rt, dict(cost_per_return=400, forecast_skill=.2, turnover=0,
                               verdict_mean=verdict, registrations=1, revision_rate=0))
         assert not any(rt.stats.pathologies.values())

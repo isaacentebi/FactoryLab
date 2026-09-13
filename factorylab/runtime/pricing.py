@@ -4,16 +4,17 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 from decimal import Decimal
+from fractions import Fraction
 
-from factorylab.charter.controller import CardRegion, violation
-from factorylab.charter.measurement import measure_cards
+from factorylab.charter.controller import CardRegion, relative_region, violation
+from factorylab.charter.measurement import _groups, measure_cards
 from factorylab.cortex.registration import measured_role
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.money import usd_to_micro
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.immune import close_window
-from factorylab.runtime.observations import ObservationBook
+from factorylab.runtime.observations import MAX_WORLD_SAMPLES, ObservationBook, normalise
 
 
 @dataclass
@@ -53,6 +54,11 @@ class MeasureWindow:
     decisions: dict[str, dict] = field(default_factory=dict)
     closed_values: dict[str, float] | None = None
     closed_regions: dict[str, CardRegion] = field(default_factory=dict)
+    closed_shares: list[dict] = field(default_factory=list)
+    mids: list[dict] = field(default_factory=list)
+    funding: list[dict] = field(default_factory=list)
+    wallet_balance_micro: list[list[int]] = field(default_factory=list)
+    tick_timestamps_ns: list[int] = field(default_factory=list)
 
 
 class PricingMixin:
@@ -73,8 +79,8 @@ class PricingMixin:
     def _observation_out_of_range(self, observation, value: float) -> None:
         """Ledger a measurement that left its declared range; the window observes nothing.
 
-        The range a registration declared is the scale a card's violation is
-        divided by, so a value outside it cannot be scored as if it were inside
+        The range a registration declared bounds its supported outputs,
+        so a value outside it cannot be scored as if it were inside
         and is not quietly moved to the edge either. The diary names it so the
         population can see which measurement stopped supporting its card.
         """
@@ -107,11 +113,16 @@ class PricingMixin:
         before_children = sum(d["tool_calls"] for d in self.window.decisions.values())
         ret = super()._invoke(action_id, req, role, child=child)
         child_calls = sum(d["tool_calls"] for d in self.window.decisions.values()) - before_children
-        sample = self._contribution(req.handle, role)
+        emitted = self.return_kinds.get(req.handle)
+        if emitted is None and action_id in self.assemblies:
+            emitted = self.assemblies[action_id].spec.emits
+        observed_role = measured_role(emitted) if emitted else role
+        sample = self._contribution(req.handle, observed_role)
         evidence = {"cost": ret.cost, "ok": int(ret.status == "ok"), "invocations": 1,
                     "tool_calls": self.window.tool_calls - before_calls - child_calls}
         self.ledger.append({"kind": "price.contribution", "handle": req.handle,
-                            "window": self.window.index, "role": role, **evidence})
+                            "window": self.window.index, "role": observed_role, **evidence})
+        sample["role"] = observed_role
         for name, value in evidence.items():
             sample[name] += value
         return ret
@@ -190,7 +201,27 @@ class PricingMixin:
                               if index == self.window.index or index in retained}
 
     def _observe_delivered_event(self, ev: Event) -> None:
-        """Only ledgered event deliveries contribute raw verdict samples to this window."""
+        """Only ledgered deliveries contribute window samples or start observation trials."""
+        if ev.kind in (EventKind.MARKET_MID, EventKind.FUNDING):
+            key = "mids" if ev.kind is EventKind.MARKET_MID else "funding"
+            value = (usd_to_micro(Decimal(str(ev.payload["mid"])), rounding="nearest")
+                     if key == "mids" else float(ev.payload["rate"]))
+            series = getattr(self.window, key)
+            series.append({"coin": str(ev.payload["coin"]), "ts_ns": ev.ts_ns, "value": value})
+            del series[:-MAX_WORLD_SAMPLES]
+        elif ev.kind is EventKind.TICK:
+            self.window.tick_timestamps_ns.append(ev.ts_ns)
+            del self.window.tick_timestamps_ns[:-MAX_WORLD_SAMPLES]
+            self.window.wallet_balance_micro.append([ev.ts_ns, self.wallet.balance])
+            del self.window.wallet_balance_micro[:-MAX_WORLD_SAMPLES]
+        elif ev.kind is EventKind.REGISTERED and ev.payload.get("kind") == "observation":
+            entry = self.registered_observations.get(ev.payload["id"])
+            if (entry is not None and entry["version"] == ev.payload["version"]
+                    and "trial_window" not in entry):
+                self.ledger.append({"kind": "observation.trial", "observation": ev.payload["id"],
+                                    "version": entry["version"], "window": self.window.index,
+                                    "ts": self.clock.now_ns})
+                entry["trial_window"] = self.window.index
         if ev.kind is EventKind.VERDICT:
             judges = self.window.verdicts.setdefault(ev.payload["about_handle"], {})
             judge = self.handle_to_assembly.get(
@@ -237,6 +268,7 @@ class PricingMixin:
                     )
                     self.unparsed_logged.add(key)
                 continue
+            region = relative_region(region)
             regions[card.id] = region
             if region == self.regions.get(card.id):
                 continue
@@ -278,13 +310,42 @@ class PricingMixin:
         ]
         w = replace(self.window, forecast_skills=skills)
         book = self.observations
-        values = {o.id: value for o in book.all() if (value := book.value(o, w)) is not None}
+        named = {normalise(c.observation) for c in self.charter.cards}
+        for oid, entry in self.registered_observations.items():
+            born = entry.get("trial_window")
+            if born is None and "inactive_window" not in entry:
+                self.ledger.append({"kind": "observation.inactive", "observation": oid,
+                                    "version": entry["version"], "window": w.index,
+                                    "ts": self.clock.now_ns})
+                entry["inactive_window"] = w.index
+            lifetime_start = born if born is not None else entry["inactive_window"]
+            expired = w.index - lifetime_start >= self.m.novelty.max_lifetime_windows
+            if oid not in named and expired and not entry.get("retired"):
+                self.ledger.append({"kind": "observation.retired", "observation": oid,
+                                    "version": entry["version"], "window": w.index,
+                                    "reason": "unused_trial_expired", "ts": self.clock.now_ns})
+                entry["retired"] = True
+        values = {}
+        for observation in book.all():
+            entry = self.registered_observations.get(observation.id, {})
+            born = entry.get("trial_window")
+            trial = born is not None and w.index - born < self.m.novelty.max_lifetime_windows
+            if observation.registered and observation.id not in named and not trial:
+                continue
+            value = book.value(observation, w)
+            if value is not None:
+                values[observation.id] = value
         # Typed windows. A card may name a registered observation.
         card_values = measure_cards(self.charter.cards, self.card_samples, w, observations=book)
         card_values = {cid: value for cid, value in card_values.items() if cid in self.regions}
         # A decision settling late is priced on the window it worked in.
         self.window.closed_values = dict(card_values)
         self.window.closed_regions = dict(self.regions)
+        self.window.closed_shares = [
+            {"card_id": card.id, "shares": self._cost_shares(card)}
+            for card in self.charter.cards
+            if card.id in card_values and normalise(card.observation) == "cost_per_return"
+        ]
         self.ledger.append(
             {
                 "kind": "price.window",
@@ -326,6 +387,11 @@ class PricingMixin:
                 continue
             window = self.price_windows.get(origins.get(observation.id, origins.get("origin")),
                                             self.window)
+            if observation.id == "cost_per_return" and window.closed_values is None:
+                window = max(
+                    (w for w in self.price_windows.values() if w.closed_values is not None),
+                    key=lambda w: w.index, default=window,
+                )
             # The card's own typed measurement, from its decision's window when that closed.
             values = (self.card_samples.values if window.closed_values is None
                       else window.closed_values)
@@ -338,11 +404,46 @@ class PricingMixin:
             share = 1.0 if handle is None else self._decision_share(
                 window, handle, observation.id, card.answers_for, region, values[card.id]
             )
+            if handle is not None and observation.id == "cost_per_return":
+                for support in window.closed_shares:
+                    if support["card_id"] == card.id:
+                        share = support["shares"].get(handle, 0.0)
+                        break
             terms.append({"card_id": card.id, "observation": observation.id,
                           "window": window.index, "violation": amount,
                           "lambda": self.controller.price(card.id), "weight": weight,
                           "share": share})
         return terms
+
+    def _cost_shares(self, card) -> dict[str, float]:
+        """Cost ownership uses exactly the supported scopes and successful selected returns."""
+        samples = self.card_samples
+        rows = samples.returns
+        if card.window.kind == "windows":
+            selected = samples.windows[-card.window.n:]
+            first, last = selected[0]["index"], selected[-1]["index"]
+            rows = [r for r in rows if first <= r["window"] <= last]
+            if card.window.per is None:
+                rows = [r for r in rows if r["role"] == "producer"]
+                if not rows:
+                    # Global window sufficient statistics also support native callers
+                    # that supplied contribution records without invocation samples.
+                    rows = [dict(d, handle=h) for index, w in self.price_windows.items()
+                            if first <= index <= last for h, d in w.decisions.items()
+                            if d["role"] == "producer"]
+        shares: dict[str, Fraction] = {}
+        for scope, group in _groups(card, rows).items():
+            if scope not in samples.scopes.get(card.id, {}):
+                continue
+            if card.window.kind == "returns":
+                group = group[-card.window.n:]
+            successful = [r for r in group if r["ok"]]
+            for row in successful:
+                handle = row["handle"]
+                shares[handle] = shares.get(handle, Fraction()) + Fraction(
+                    row["cost"], len(successful))
+        total = sum(shares.values())
+        return {h: float(amount / total) for h, amount in shares.items()} if total else {}
 
     @staticmethod
     def _decision_share(window, handle, observation, role, region, value) -> float:
@@ -352,7 +453,7 @@ class PricingMixin:
         numerator = denominator = 0
         if observation == "cost_per_return":
             eligible = {h: d["cost"] for h, d in samples.items()
-                        if d["role"] == "producer" and d["ok"]}
+                        if (role == "all" or d["role"] == role) and d["ok"]}
             numerator, denominator = eligible.get(handle, 0), sum(eligible.values())
         elif observation == "well_formed_rate":
             deficit = region.kind in ("min", "band") and value < region.lo

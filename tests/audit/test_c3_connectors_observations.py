@@ -16,8 +16,6 @@ from tests.runtime.test_connectors import decision, register
 from tests.runtime.test_loop import _consequence_produce, _consequence_runtime
 from tests.world.test_connector import Transport
 
-pytestmark = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
-
 
 @pytest.fixture(autouse=True)
 def no_network(monkeypatch):
@@ -28,6 +26,7 @@ def no_network(monkeypatch):
 
 
 @pytest.mark.parametrize("body", [b"65000.5", b"OK", b"1"])
+@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_finding_7_a_short_connector_body_makes_any_return_that_mentions_it_malformed(
     monkeypatch, body,
 ):
