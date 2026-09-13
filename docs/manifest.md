@@ -149,6 +149,16 @@ A handle that opens and closes its own lot receives realised profit once,
 net of its opening fees, funding, other charges and closing fees. Distinct
 opener and closer handles retain their separate net attribution.
 
+A verdict is also a prediction that the judged return will not be blamed by the
+charter. It is scored against the share of its window's blame the pricing pass
+attributed to that return, and the score joins payoff skill in the judge's
+standing (`verdict.consequence`). A window that has not closed by the
+consequence backstop, or whose attribution evidence was released before it could
+be read, judged nothing: there is no fact either way, so the commitment is closed
+out unscored (`verdict.unread`). It moves neither the judge's standing nor the
+base rate of unblamed returns, and the metas that conformed to that verdict are
+graded on the payoff fact alone. A missing fact is never performance.
+
 ## Exact measurement
 
 `returns` selects the latest `n` completed invocation responses in each selected

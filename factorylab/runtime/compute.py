@@ -617,8 +617,9 @@ class ComputeMixin:
         # Every request tells its executor who it is: an id is a public schematic,
         # and retirement, learner registration and requests are all keyed by it.
         # Nothing else about authorship travels; the judge of this return never
-        # sees the name. A parent cannot forge its child's identity here either.
-        req = replace(req, inputs={**req.inputs, "you": action_id})
+        # sees the name. The identity is stamped by the assembly that renders the
+        # prompt (``Assembly.build_model_request``), so it is inside every ceiling
+        # priced from this request and a parent cannot forge its child's.
         effects: list[str] = []  # venue and treasury writes, children: the action so far
         ret = self._invoke_compute(action_id, req)
         self._check_compute_return(req.handle, ret)

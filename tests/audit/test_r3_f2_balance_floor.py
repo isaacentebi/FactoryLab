@@ -1,8 +1,10 @@
 """Round three, group F2, triage T30: a gap liquidation overshoots the balance floor.
 
 Reproduced, then pinned rather than changed. ``scripted-crash`` dies with the wallet at
--$4.144312 and ``termination.balance_floor_usd = "0"``. The cause is the venue's, not an
-ordering mistake in the kernel: a manifest shock halves BTC in one step while a 3x long
+-$4.204470 and ``termination.balance_floor_usd = "0"``. (The exact terminal balance is a
+witness of one deterministic trajectory, not the finding; it was re-pinned when the
+round-three merges changed which producer holds the long into the shock.) The cause is
+the venue's, not an ordering mistake in the kernel: a shock halves BTC in one step while a 3x long
 is open, and the maintenance margin a continuous market would liquidate against (half the
 initial margin, about a sixth of notional) is gapped straight through. The realised loss
 is larger than the equity behind it and lands in the wallet in one debit. That is gap
@@ -37,12 +39,16 @@ def test_t30_a_gap_through_maintenance_margin_realises_more_than_the_equity_behi
 
 
 def test_t30_scripted_crash_dies_below_its_zero_floor_with_money_conserved():
-    """The world-level reproduction, pinned: the terminal wallet is negative, not zero."""
+    """The world-level reproduction: the terminal wallet is negative, not zero.
+
+    The exact overshoot moves whenever the scripted diary moves (a gap liquidation lands
+    whatever the leveraged position was at the shock), so the invariant is asserted, not
+    a magic number: below the floor by more than one whole dollar, money conserved."""
     m = load_manifest("scripted-crash")
     assert m.termination.balance_floor_micro == 0
     rt = Runtime(m, events=600, seed=2, initial_balance_micro=None, ledger_path=None,
                  drip=False, router_gamma=.1)
     summary = rt.run()
     assert summary["termination_reason"] == "balance_zero" and summary["seal_key_released"]
-    assert summary["wallet_balance_micro"] == -4_144_312 < m.termination.balance_floor_micro
+    assert summary["wallet_balance_micro"] < m.termination.balance_floor_micro - 1_000_000
     assert summary["wallet_conservation"] and summary["ledger_verify"]

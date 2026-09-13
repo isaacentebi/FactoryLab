@@ -60,7 +60,10 @@ class PendingJudgement:
     cards: str | None = None  # the judged return's card label
     window: int | None = None  # the price window the judged return worked in
     payoff_beat: int | None = None  # its payoff forecast beat the baseline, once settled
-    verdict_beat: int | None = None  # the verdict beat the baseline, once settled
+    # The verdict is closed out once, informatively or not. ``verdict_beat`` stays None
+    # when the window never judged the return: there is no fact, so there is no score.
+    verdict_closed: bool = False
+    verdict_beat: int | None = None  # the verdict beat the baseline, once scored
     graded: bool = False  # the metas that conformed to it have their outcome
 
 
@@ -453,9 +456,9 @@ class FeedbackMixin:
                     if commitment is not None and commitment.channel == NORM_COMMITMENT:
                         commitment.payoff_beat = y
                         # A verdict right on both counts needs both; wrong on one is decided.
-                        if y == 0 or commitment.verdict_beat is not None:
+                        if y == 0 or commitment.verdict_closed:
                             self._finalize_verdict(commitment)
-                        if commitment.verdict_beat is not None:
+                        if commitment.verdict_closed:
                             del self.pending[commitment.handle]
                     else:
                         # No verdict was announced for this forecast: the payoff fact alone
@@ -554,7 +557,7 @@ class FeedbackMixin:
     def _verdicts_waiting(self) -> set[str]:
         """The judged returns with a verdict whose window has not yet judged it."""
         return {p.about for p in self.pending.values()
-                if p.channel == NORM_COMMITMENT and p.verdict_beat is None}
+                if p.channel == NORM_COMMITMENT and not p.verdict_closed}
 
     def _verdict_window(self, commitment: PendingJudgement) -> str:
         """Whether the judged return's window has closed: open, closed, or released."""
@@ -567,22 +570,40 @@ class FeedbackMixin:
         """A verdict settles once, when the judged return's window has closed, against the
         share of that window's charter blame the pricing pass attributed to the return.
 
-        The realised normative outcome is 1 minus that share (1 when nothing was
-        attributed). Nothing is skipped under the cadence: a verdict whose window
-        has not closed by the consequence backstop, or whose evidence was released
-        before it could be read, settles at 1. The Brier enters the judge's
+        The realised normative outcome is 1 minus that share (1 when the window
+        closed and attributed nothing to the return). Nothing is skipped under the
+        cadence: the commitment is closed out at the consequence backstop whatever
+        happened. But a window that never closed never judged the return, and
+        attribution evidence released before it could be read is gone: there is no
+        fact either way, so the verdict carries no information. It is closed out
+        unscored — nothing enters the judge's standing, nothing enters the base
+        rate of unblamed returns, and the metas that conformed to it are graded on
+        the payoff fact alone (``Settler``: missing facts never become
+        performance). Where the fact is real, the Brier enters the judge's
         standing beside payoff skill; a high verdict on a blamed return exposes
         the judge to the antagonist that made it; the judge is told, privately.
         """
         backstop = self.ev.consequence_backstop_events
         due = [p for p in self.pending.values()
-               if p.channel == NORM_COMMITMENT and p.verdict_beat is None]
+               if p.channel == NORM_COMMITMENT and not p.verdict_closed]
         for c in due:
             state = self._verdict_window(c)
             if state == "open" and self.n < c.opened_at_event + backstop:
                 continue
-            closed = state == "closed" and c.about in self.price_origins
-            terms = self._penalty_terms(c.cards, c.about) if closed else []
+            c.verdict_closed = True
+            if not (state == "closed" and c.about in self.price_origins):
+                # No window judged this return: an unread fact is not a good verdict.
+                self.ledger.append({
+                    "kind": "verdict.unread", "handle": c.judge,
+                    "forecast_handle": c.handle, "about_handle": c.about,
+                    "evaluator_id": c.evaluator_id, "cards": c.cards, "q": c.q,
+                    "window": c.window, "reason": state, "ts": self.clock.now_ns,
+                })
+                if c.payoff_beat is not None:
+                    self._finalize_verdict(c)
+                    del self.pending[c.handle]
+                continue
+            terms = self._penalty_terms(c.cards, c.about)
             total = sum(t["weight"] for t in terms)
             share = sum(t["weight"] * t["share"] for t in terms) / total if total > 0 else 0.0
             share = min(1.0, max(0.0, share))
@@ -594,7 +615,7 @@ class FeedbackMixin:
                 "kind": "verdict.consequence", "handle": c.judge,
                 "forecast_handle": c.handle, "about_handle": c.about,
                 "evaluator_id": c.evaluator_id, "cards": c.cards, "q": c.q,
-                "window": c.window, "window_closed": closed, "share": share,
+                "window": c.window, "window_closed": True, "share": share,
                 "outcome": result.outcome, "brier": result.brier,
                 "baseline_brier": result.baseline_brier, "beat_baseline": c.verdict_beat,
                 "terms": terms, "ts": self.clock.now_ns,
@@ -623,11 +644,17 @@ class FeedbackMixin:
     def _finalize_verdict(self, commitment: PendingJudgement) -> None:
         """Whether the verdict was right is decided once: the top metas that conformed to it
         are graded on it, and a meta arriving later finds the same outcome. The commitment
-        stays until both facts are in, so nothing commits or grades it twice."""
+        stays until both facts are in, so nothing commits or grades it twice.
+
+        A verdict the charter never judged has only one fact to be right about, so
+        the payoff forecast alone decides it, exactly as it did before the verdict
+        had a normative outcome of its own.
+        """
         if commitment.graded:
             return
         commitment.graded = True
-        y = int(bool(commitment.payoff_beat) and bool(commitment.verdict_beat))
+        y = int(bool(commitment.payoff_beat)
+                and (commitment.verdict_beat is None or bool(commitment.verdict_beat)))
         self.verdict_outcomes[commitment.judge] = (y, self.n, commitment.handle)
         for meta_handle, conformity in self.pending_meta.pop(commitment.judge, []):
             self._settle_meta_consequence(meta_handle, conformity, y, commitment.handle)
