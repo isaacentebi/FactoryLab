@@ -33,12 +33,12 @@ from itertools import islice
 from typing import Any
 
 from factorylab.cortex.registration import measured_role
-from factorylab.cortex.request import Return
+from factorylab.cortex.request import Request, Return
 from factorylab.cortex.sandbox import NoJail, jail_probe
 from factorylab.cortex.schematics import SchematicsMixin
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.money import money_to_usd
-from factorylab.kernel.queue import SettleStatus
+from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.learners.router import Sample
 from factorylab.runtime.bootstrap import BootstrapMixin
 from factorylab.runtime.cadence import settle_forecasts
@@ -59,11 +59,11 @@ from factorylab.runtime.shared import (
     DEF_VERDICT,
     NOOP,
     _to_plain,
+    assembly_rewards,
 )
 from factorylab.runtime.summary import SummaryMixin, _as_unit
 from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
-from factorylab.settlement import SEED_VOCABULARY
 from factorylab.world.clock import ClockSource, DripSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.market import X402Provider
@@ -108,6 +108,13 @@ class Runtime(
         settle_forecasts(self, super()._settle_due_forecasts)
         self._record_card_forecasts(pending, baseline)
 
+    def _settle_priced(self, handle, *, cards, **kwargs):
+        """Custom emitted kinds answer for their own cards on every reward shape."""
+        emitted = self.return_kinds.get(handle)
+        if emitted and emitted not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
+            cards = measured_role(emitted)
+        return super()._settle_priced(handle, cards=cards, **kwargs)
+
     def _settle_exchange_effects(self, events) -> None:
         super()._settle_exchange_effects(events)
         self._record_pricing_fills(events)
@@ -126,7 +133,8 @@ class Runtime(
         excluded = self._subject_authors(kind, ev)
         return [a for a in universe
                 if a == NOOP or a not in excluded
-                or not set(self.assemblies[a].spec.emits) & {"Verdict", "MetaVerdict"}]
+                or not set(assembly_rewards(self.assemblies[a].spec).values())
+                & {"forecast", "conformity"}]
 
     def _novelty_compute(self, handle: str, reason: str) -> bool:
         """A requested child spends its parent's money, never the protected share.
@@ -642,7 +650,11 @@ class Runtime(
             if emitted == "Verdict":
                 self._evaluator_step(ev, handle, sample, deadline, returned=ret)
                 return
-            if emitted == "MetaVerdict":
+            shape = assembly_rewards(self.assemblies[sample.chosen].spec).get(emitted)
+            if shape == "forecast":
+                self._forecast_step(ev, handle, sample, ret, emitted)
+                return
+            if shape == "conformity":
                 self._meta_step(ev, handle, sample, deadline, returned=ret)
                 return
             if emitted is None:
@@ -651,7 +663,7 @@ class Runtime(
                                   status=SettleStatus.CENSORED,
                                   definition_version="unselected-return-v1", sampling_ref=None)
                 return
-            adversarial = emitted == "Exposure"
+            adversarial = shape == "exposure"
             if self._may_write(handle):
                 self._execute_outputs(ret)
             self._apply_registrations(handle, ret)
@@ -709,6 +721,67 @@ class Runtime(
         if emitted == "Exposure" and self.routers.get("Exposure"):
             self._emit("Exposure", payload)
 
+    def _forecast_step(self, ev, handle, sample, ret, emitted) -> None:
+        """Population forecast work is rewarded only by its future public facts."""
+        self.consequences.finish(handle, ret.cost)
+        self._apply_registrations(handle, ret)
+        self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
+            {"handle": handle, "outputs": ret.outputs, "verdict": None})
+        forecasts = self._open_forecasts(
+            handle, sample.chosen, self._event_subject(ev) or handle,
+            ret.outputs.get("forecasts") if ret.status == "ok" else None)
+        self.forecast_returns[handle] = {"handles": forecasts, "results": {}}
+        self._settle_forecast_returns()
+        self._emit(emitted, {"about_handle": handle, "outputs": ret.outputs,
+                             "cost": ret.cost, "status": ret.status,
+                             "propensity": self._public_propensity(handle)})
+
+    def _invoke_child(self, action_id, parent, item, ceiling):
+        """New work shapes use the same bounded child admission and declared-shape dispatch."""
+        target = action_id if item.target == "self" else item.target
+        spec = self.assemblies[target].spec if target in self.assemblies else None
+        if (spec is None or target in self.retired_assemblies
+                or not any(k not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
+                           and shape != "judged" for k, shape in assembly_rewards(spec).items())):
+            return super()._invoke_child(action_id, parent, item, ceiling)
+        depth, cursor = 0, parent.handle
+        while self.queue.get(cursor).parent_handle is not None:
+            depth += 1
+            cursor = self.queue.get(cursor).parent_handle
+        if depth >= self.m.tools.max_depth:
+            reason = "tools.max_depth reached"
+            self.ledger.append({"kind": "requests.refused", "handle": parent.handle,
+                                "reason": reason, "depth": depth})
+            return {"tool": f"assembly:{target}", "args": item.inputs,
+                    "result": {"error": reason}}, 0
+        ceiling = min(ceiling, max(0, self._compute_available(parent.handle)))
+        actor = self.queue.get(parent.handle).actor
+        channels = self._return_channels(target)
+        channel = next(iter(channels.values()))
+        handle = self.queue.open(
+            actor=actor, event_id=f"child-{parent.handle}",
+            propensity=PropensityRecord((target,), (1.,), target, 0, actor, "parent-selected"),
+            channel=channel, deadline_ns=parent.deadline_ns, parent_handle=parent.handle,
+            cost_ceiling=ceiling, return_channels=channels)
+        self.ledger.append({"kind": "request.child", "handle": handle, "target": target,
+                            "resource_liability": parent.handle, "cost_ceiling": ceiling,
+                            "description": item.description, "inputs": item.inputs,
+                            "outcome_schema": item.outcome_schema})
+        self.stats.decisions += 1
+        self.consequences.start(handle, self.n)
+        self.handle_to_assembly[handle] = target
+        req = Request(handle, item.description, {**item.inputs, "world": self._world_block()},
+                      {}, item.outcome_schema, parent.deadline_ns, ceiling, parent.handle,
+                      "a JSON object satisfying the outcome schema", channel, parent.handle)
+        ret = self._invoke(target, req, "child", child=True)
+        event = Event(f"child-input-{handle}", EventKind.REGISTERED,
+                      self.clock.now_ns, item.inputs, "request")
+        sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
+        self._producer_step(event, handle, sample, parent.deadline_ns, returned=ret)
+        return {"tool": f"assembly:{target}", "args": item.inputs,
+                "result": {"outputs": ret.outputs, "status": ret.status,
+                           "cost_micro": ret.cost}}, ret.cost
+
     def _evaluator_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
                         *, returned: Return | None = None) -> None:
         self._start_return(handle)
@@ -738,7 +811,7 @@ class Runtime(
             "charter": self._charter_text(),
             "predicates": [
                 {"predicate": p.id, "description": p.description, "params": list(p.param_schema)}
-                for p in SEED_VOCABULARY
+                for p in self.predicates.all()
             ],
             "forecast_example": {
                 "predicate": "wallet_up",
@@ -876,7 +949,8 @@ class Runtime(
                    *, returned: Return | None = None) -> None:
         self._start_return(handle)
         payload = _to_plain(ev.payload)
-        recursive = ev.kind is EventKind.META_VERDICT
+        recursive = (ev.kind is EventKind.META_VERDICT
+                     or self._kind_rewards().get(str(ev.kind)) == "conformity")
         about = self._event_subject(ev)
         tier = payload["tier"] + 1 if recursive else 2
         channel = self.queue.get(handle).channel
@@ -989,8 +1063,9 @@ class Runtime(
             )
             self.pending[handle] = PendingJudgement(handle, channel, self.n, tier)
         if conformity is not None:
+            emitted = self.return_kinds.get(handle, "MetaVerdict")
             self._emit(
-                EventKind.META_VERDICT,
+                EventKind.META_VERDICT if emitted == "MetaVerdict" else emitted,
                 {
                     "about": about,
                     "tier": tier,
@@ -999,6 +1074,7 @@ class Runtime(
                     "evaluator_handle": judge_handle,
                     "propensity": self._public_propensity(handle),
                     "rationale": str(ret.outputs.get("rationale", ""))[:2000],
+                    **({"about_handle": handle} if emitted != "MetaVerdict" else {}),
                 },
             )
 

@@ -30,6 +30,9 @@ MAX_WORLD_SAMPLES = 1024
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
 # not, so these are rebuilt by hand rather than copied through.
 ANONYMISED_WINDOW_FIELDS = ("verdicts", "revision_handles")
+# Facts fixed when the window opens rather than accumulated inside it: a
+# since-a-forecast view of the window carries them unchanged.
+WINDOW_IDENTITY_FACTS = ("index", "equity_start_micro")
 
 
 @dataclass(frozen=True)
@@ -317,6 +320,63 @@ def window_facts(window: Any) -> dict:
     facts["verdicts"] = _anonymous_verdicts(raw.get("verdicts"))
     facts["revised_decisions"] = len(raw.get("revision_handles") or ())
     return facts
+
+
+def window_cursor(window: Any) -> dict:
+    """Mark one position in the public window: each counter's value, each series' length.
+
+    Sealed when a forecast is made, so the claim it opened can later be resolved
+    over what the window accumulated *after* it and never over what was already
+    there. Carries no window content, only how much of it had happened.
+    """
+    return _cursor(window_facts(window))
+
+
+def window_facts_since(window: Any, cursor: Mapping | None) -> dict:
+    """Return the public facts the window accumulated strictly after a sealed cursor.
+
+    Counters arrive as their increase since the mark and series as the samples
+    appended after it, so a fact that was already true when the cursor was
+    sealed cannot resolve anything sealed against it. ``index`` and
+    ``equity_start_micro`` describe the window itself and are fixed when it
+    opens, so they pass through unchanged. A cursor from an earlier window (or
+    no cursor at all) yields the whole current window, which opened after the
+    mark and is therefore already entirely after it.
+    """
+    facts = window_facts(window)
+    if not isinstance(cursor, Mapping) or cursor.get("index") != facts.get("index"):
+        return facts
+    return {
+        key: value if key in WINDOW_IDENTITY_FACTS else _since(value, cursor.get(key))
+        for key, value in facts.items()
+    }
+
+
+def _cursor(value: Any) -> Any:
+    """A counter marks its value, a series its length, and anything else nothing."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int | float):
+        return value
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, dict):
+        return {key: _cursor(item) for key, item in value.items()}
+    return None
+
+
+def _since(value: Any, mark: Any) -> Any:
+    """Subtract a counter's mark, drop a series' prefix, and pass anything else through."""
+    if isinstance(value, list):
+        return value[mark:] if type(mark) is int else value
+    if isinstance(value, dict):
+        marks = mark if isinstance(mark, Mapping) else {}
+        return {key: _since(item, marks.get(key)) for key, item in value.items()}
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, int | float) and type(mark) in (int, float):
+        return value - mark
+    return value
 
 
 def window_fact_names() -> list[str]:
