@@ -18,7 +18,9 @@ from factorylab.runtime.loop import Runtime
 from factorylab.runtime.resume import RecoveryJournal, ResumeError, encode, resume_world
 from factorylab.runtime.worlds import load_manifest
 
-pytestmark = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
+# Round three, group F2 closes finding 9 (triage T44). The rest of this module
+# reproduces findings 2 and 5, which are another group's rows and still open.
+OPEN = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 
 
 class Died(BaseException):
@@ -30,6 +32,7 @@ def _runtime(path, events):
                    ledger_path=str(path), drip=True, router_gamma=.1)
 
 
+@OPEN
 @pytest.mark.parametrize("name", ["sandbox.run", "observation.run"])
 def test_finding_2_a_jailed_run_interrupted_after_its_io_call_is_replayable(name):
     """A population tool or observation runs in the jail with no network and no side
@@ -55,6 +58,7 @@ def test_finding_2_a_jailed_run_interrupted_after_its_io_call_is_replayable(name
     assert result == {"value": 1}
 
 
+@OPEN
 @pytest.mark.parametrize("name", ["sandbox.run", "observation.run"])
 def test_finding_2_a_jailed_run_later_in_an_interrupted_event_fails_instead_of_running(name):
     """The other face of the same omission. While the interrupted event is re-executed
@@ -79,6 +83,7 @@ def test_finding_2_a_jailed_run_later_in_an_interrupted_event_fails_instead_of_r
     assert result == {"value": 1}
 
 
+@OPEN
 def test_finding_2_death_during_a_population_tool_run_wedges_the_scripted_world(tmp_path):
     from tests.cortex.test_jail import require_jail
 
@@ -104,6 +109,7 @@ def test_finding_2_death_during_a_population_tool_run_wedges_the_scripted_world(
     assert summary["stats"]["resumes"] == 1 and summary["ledger_verify"]
 
 
+@OPEN
 def test_finding_5_a_ledger_shorter_than_its_own_head_is_a_rollback_not_a_resume(tmp_path):
     """The encrypted ``.head`` records the authenticated byte offset of the last checkpoint.
     A ledger file shorter than that offset (a restored backup, a copy truncated on a line

@@ -86,11 +86,23 @@ def test_body_cap_exact_and_oversize_refusal():
 
 
 @pytest.mark.parametrize("status", [301, 302, 401, 500])
-def test_redirects_and_http_errors_do_not_expose_bodies_or_make_second_requests(status):
+def test_non_2xx_answers_report_their_status_and_never_make_a_second_request(status):
+    """An origin that answered within the bounds is not an error: a data API whose root
+    is 404, 403 or 301 answered as truly as a 200 front page. The status is always
+    reported, no redirect is ever followed, and one fetch is exactly one request."""
     transport = Transport(b"private remote error", status)
     result = ConnectorProxy(ConnectorsSpec(), transport).fetch("https://example.org", "/")
-    assert "body" not in result and "error" in result
+    assert "error" not in result and result["status"] == status
+    assert result["bytes"] == len(b"private remote error")
     assert len(transport.calls) == 1
+
+
+def test_an_answer_outside_the_bounds_is_still_an_error_whatever_its_status():
+    """Only the bounds refuse: an oversize body is refused with no body at any status."""
+    bounds = replace(ConnectorsSpec(), max_bytes=4)
+    transport = Transport(b"12345", 404)
+    result = ConnectorProxy(bounds, transport).fetch("https://example.org", "/")
+    assert result == {"error": "body exceeds max_bytes", "status": 404, "bytes": 5}
 
 
 @pytest.mark.parametrize("error,reason", [
@@ -164,7 +176,7 @@ def test_https_uses_pinned_ip_verified_host_get_and_only_public_headers(monkeypa
 def test_total_deadline_applies_to_each_header_read(monkeypatch):
     sock = SimpleNamespace(makefile=lambda *a, **k: io.BytesIO(b"HTTP"),
                            settimeout=lambda _: None)
-    reader = _DeadlineReader(sock, 10)
+    reader = _DeadlineReader(sock, 10, 1024)
     monkeypatch.setattr("factorylab.world.connector.time.monotonic", lambda: 11)
     with pytest.raises(TimeoutError):
         reader.readinto(bytearray(1))
