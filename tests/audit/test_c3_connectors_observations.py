@@ -16,7 +16,7 @@ from tests.runtime.test_connectors import decision, register
 from tests.runtime.test_loop import _consequence_produce, _consequence_runtime
 from tests.world.test_connector import Transport
 
-pytestmark = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
+OPEN = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +54,7 @@ def test_finding_7_a_short_connector_body_makes_any_return_that_mentions_it_malf
     assert ret.outputs["action"] == "order"
 
 
+@OPEN
 def test_finding_8_registered_observations_no_card_names_run_at_every_window_close():
     """Every registered observation is executed in the jail at every window close, whether
     or not a card names it, under the tool limits (5 s wall each). The trial that admits
