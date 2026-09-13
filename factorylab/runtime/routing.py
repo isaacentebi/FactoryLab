@@ -110,13 +110,23 @@ class ContractQueue:
             raise ValueError("settlement must address the selected return channel")
         return self.queue.settle(handle, channel=self.queue.get(handle).channel, **kwargs)
 
+    def _mapped(self, handle, ret):
+        """Return the same feedback under its selected channel, retaining every other field.
+
+        Only a polymorphic ``emits`` return can name a different channel, and a
+        return the selection never touches is handed back unchanged: an immutable
+        record equals its own copy, so rebuilding one would only cost the reader.
+        """
+        if ret.channel != "emits":
+            return ret
+        channel = self._channel(handle, ret.channel)
+        return ret if channel == ret.channel else replace(ret, channel=channel)
+
     def history(self, handle):
-        return tuple(replace(r, channel=self._channel(handle, r.channel))
-                     for r in self.queue.history(handle))
+        return tuple(self._mapped(handle, r) for r in self.queue.history(handle))
 
     def returns_for(self, actor):
-        return tuple(replace(r, channel=self._channel(r.handle, r.channel))
-                     for r in self.queue.returns_for(actor))
+        return tuple(self._mapped(r.handle, r) for r in self.queue.returns_for(actor))
 
 
 @dataclass
