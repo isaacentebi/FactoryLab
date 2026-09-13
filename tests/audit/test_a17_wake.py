@@ -7,13 +7,13 @@ and return text and per-decision scores stay sealed until death.
 """
 
 import json
+import shutil
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
 from factorylab.kernel.ledger import Ledger
-from factorylab.runtime.loop import run_world
 from factorylab.runtime.wake import (
     PUBLIC_KIND,
     SECTIONS,
@@ -45,11 +45,9 @@ MARKER = "SEALED_ONLY_PRIVATE_TEXT"
 
 
 @pytest.fixture(scope="module")
-def scripted(tmp_path_factory):
-    """A scripted world with its own ledger and its own key; no network, no other key file."""
-    path = tmp_path_factory.mktemp("a17") / "scripted.jsonl"
-    run_world(load_manifest("scripted"), events=EVENTS, seed=1, ledger_path=str(path))
-    return path
+def scripted(scripted_run):
+    """A shared scripted ledger; consumers must copy its directory before writing."""
+    return scripted_run("scripted", EVENTS, 1).ledger_path
 
 
 @pytest.fixture(scope="module")
@@ -199,6 +197,9 @@ def test_a17_five_aggregates_publish_role_totals_without_assembly_names():
 
 def test_a17_no_sealed_field_appears_anywhere_in_the_output(scripted, tmp_path):
     """Private items exist in the diary; none of them, and no sealed key, is published."""
+    directory = tmp_path / "private-world"
+    shutil.copytree(scripted.parent, directory)
+    scripted = directory / scripted.name
     manifest = load_manifest("scripted")
     writer = Ledger.reopen(scripted, manifest=json.loads(manifest.canonical_json()))
     writer.append({"kind": "invocation", "assembly_id": "eval-a", "role": "evaluator",
