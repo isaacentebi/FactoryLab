@@ -220,7 +220,14 @@ class SchematicsMixin:
             "composition": SEED_SYSTEM_PROMPT,
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
-            "venue": self.exchange.instruments(),
+            "venue": self._traded_instruments(),
+            "venue_listing": (
+                "venue is the instrument record of each market in trading_markets. The "
+                "venue lists far more than those: call the venue.instruments public read "
+                "for the whole listing, and register a market proposal to trade one of them. "
+                "venue.mids, venue.funding, venue.candles, venue.order_book and "
+                "venue.funding_history read any listed coin or pair without registering it."
+            ),
             "trading_markets": {"perp": list(self.venue_tools.coins),
                                 "spot": list(self.venue_tools.spot_pairs)},
             "notes": {**counts(self.notes), "max_keys": self.m.notes.max_keys,
@@ -228,7 +235,7 @@ class SchematicsMixin:
                       "byte_window_micro": self.m.notes.byte_window_micro,
                       "pricing": "UTF-8 key and text bytes; storage per window, reads per byte. "
                       "Unpaid storage rent is due before a read or overwrite; text is retained."},
-            "tools": list(self.tool_specs.values()),
+            "tools": self._published_tool_specs(),
             "connectors": {"registered": self._connector_catalogue(),
                            "max_bytes": self.m.connectors.max_bytes,
                            "timeout_s": self.m.connectors.timeout_s,
@@ -340,8 +347,51 @@ class SchematicsMixin:
         }
 
     def _charter_text(self) -> str:
-        """Every duplicate charter disclosure uses the same current controller prices."""
-        return self.charter.render({c.id: self.controller.price(c.id) for c in self.charter.cards})
+        """Every duplicate charter disclosure is the same text, and it holds still.
+
+        The controller re-prices every card at every closed window, so a charter
+        with its lambdas written into it would be a different charter on every
+        call and no prefix cache could ever hold it. The prices are published
+        unabridged in ``world.card_prices``, beside each card's region, where
+        they move without rewriting the disclosure that carries them.
+        """
+        return self.charter.render(price_label="in world.card_prices")
+
+    def _traded_instruments(self) -> dict[str, list[dict[str, Any]]]:
+        """The instrument record of each market this world may trade, and no other.
+
+        The venue's own listing runs to thousands of instruments; carrying it in
+        every prompt cost about 100k input tokens a call and told an assembly
+        nothing it could not read on demand. What a trading decision needs is the
+        lot size, tick size and order floor of the markets it may actually send an
+        order to, which is ``trading_markets``. The listing itself stays one
+        ``venue.instruments`` call away, and ``world.venue_listing`` says so.
+        """
+        traded = {"perp": set(self.venue_tools.coins), "spot": set(self.venue_tools.spot_pairs)}
+        return {market: [row for row in rows if row.get("coin") in traded.get(market, ())]
+                for market, rows in self.exchange.instruments().items()}
+
+    def _published_tool_specs(self) -> list[dict[str, Any]]:
+        """Publish every tool contract, naming the venue's listing rather than enumerating it.
+
+        The public reads accept any coin or pair the venue lists, so their schema
+        carries an enum as long as the listing. Dispatch still checks that enum —
+        this is only how the contract is disclosed, and an unlisted coin is still
+        refused with a reason.
+        """
+        specs: list[dict[str, Any]] = []
+        for tool_id, spec in self.tool_specs.items():
+            schema = spec.get("args_schema", {})
+            coin = schema.get("properties", {}).get("coin", {})
+            if (tool_id in self.venue_tools.PUBLIC_READS and isinstance(coin, dict)
+                    and "enum" in coin):
+                coin = {**{k: v for k, v in coin.items() if k != "enum"},
+                        "description": "any coin or pair the venue lists; "
+                                       "venue.instruments lists them"}
+                schema = {**schema, "properties": {**schema["properties"], "coin": coin}}
+                spec = {**spec, "args_schema": schema}
+            specs.append(spec)
+        return specs
 
     def _mechanics_block(self) -> dict[str, Any]:
         """Expose the committed parameters and operative formulas without learner state."""

@@ -307,6 +307,22 @@ def _description_from_prompt(text: str) -> str:
 
 
 
+def _world_from_prompt(text: str) -> dict[str, Any]:
+    """Read the stable world block the request renders ahead of everything else.
+
+    The world facts that hold still between calls lead the prompt so a provider's
+    prefix cache can hold them; the ones that move stay in ``INPUTS``. A reader of
+    the prompt wants the whole world, so it reads both and joins them.
+    """
+    if not text.startswith("WORLD\n"):
+        return {}
+    try:
+        start = text.index("{")
+        return json.loads(text[start:text.index("\n\nREQUEST\n", start)])
+    except (ValueError, json.JSONDecodeError):
+        return {}
+
+
 def _inputs_from_prompt(text: str) -> dict[str, Any]:
     try:
         start = text.index("INPUTS\n") + len("INPUTS\n")
@@ -320,6 +336,11 @@ def _inputs_from_prompt(text: str) -> dict[str, Any]:
         )
         if end < 0:
             return {}
-        return json.loads(text[start:end])
+        inputs = json.loads(text[start:end])
     except (ValueError, json.JSONDecodeError):
         return {}
+    stable = _world_from_prompt(text)
+    if stable:
+        moving = inputs.get("world")
+        inputs["world"] = {**stable, **moving} if isinstance(moving, dict) else stable
+    return inputs

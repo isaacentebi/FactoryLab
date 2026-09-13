@@ -93,6 +93,17 @@ class Assembly:
         actually sent. Stamping it here also means a parent cannot forge its
         child's identity: whatever ``inputs`` carried, the assembly overwrites it
         with its own.
+
+        The prompt's stable prefix (``Request.stable_prefix``) lives at the head
+        of this user message and not in the system message. The system message is
+        world-supplied and differs between assemblies, so a prefix placed there
+        would be a different prefix for every assembly; it also may not describe
+        kernel rules, which is most of what the stable block says. As the first
+        user message it is byte-identical for every assembly of a world, which is
+        all DeepSeek's and OpenAI's automatic prompt caching asks for — they key
+        on an identical leading token sequence and need no ``cache_control``
+        marker, so none is sent. Handle-scoped memory, when a world registers it,
+        is the one thing that precedes it and costs that assembly the hit.
         """
         req = replace(req, inputs={**req.inputs, "you": self.spec.id})
         messages: list[dict[str, Any]] = []
@@ -196,11 +207,15 @@ def _provider_report(resp: Any, max_tokens: int) -> dict[str, Any]:
     """Return the provider's own account of the completion; unreported fields are None."""
     raw = resp.raw if isinstance(raw := getattr(resp, "raw", None), dict) else {}
     reasoning = raw.get("reasoning_tokens")
+    # Input the provider served from its own prompt cache. Absent where the
+    # provider does not report it, which is not a miss and must not read as one.
+    cached = raw.get("cached_tokens")
     return {
         "finish_reason": resp.stop_reason,
         "input_tokens": resp.input_tokens if type(resp.input_tokens) is int else None,
         "output_tokens": resp.output_tokens if type(resp.output_tokens) is int else None,
         "reasoning_tokens": reasoning if type(reasoning) is int else None,
+        "cached_tokens": cached if type(cached) is int else None,
         "max_tokens": max_tokens,
     }
 

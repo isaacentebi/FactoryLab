@@ -239,9 +239,19 @@ class VenueTools:
             )
             for name, description, properties, required in definitions
         }
-        for name in ("instruments", "mids", "funding"):
+        # ``instruments`` is where the venue's whole listing lives. The world block
+        # carries only the trading markets' records, so this description is what
+        # tells an assembly the rest of the listing is one call away.
+        listings = {
+            "instruments": "Every market the venue lists, with its lot size, tick size and "
+                           "minimum order value. world.venue carries these records for the "
+                           "world's trading_markets only; this read returns the full listing.",
+            "mids": "Public venue mids for all listed markets.",
+            "funding": "Public venue funding for all listed markets.",
+        }
+        for name, description in listings.items():
             self._specs[f"venue.{name}"] = ToolSpec(
-                f"venue.{name}", f"Public venue {name} for all listed markets.",
+                f"venue.{name}", description,
                 {"type": "object", "properties": {}, "required": [],
                  "additionalProperties": False}, 0)
         # Read identities are checked against the venue at dispatch, not the seed.

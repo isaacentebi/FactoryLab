@@ -64,8 +64,16 @@ class Charter:
             if c.norm not in self.norms:
                 raise ValueError(f"card {c.id} references an unknown norm")
 
-    def render(self, prices: dict[str, float] | None = None) -> str:
-        """Expose the full charter, including each window, role and current supplied price."""
+    def render(self, prices: dict[str, float] | None = None, *,
+               price_label: str | None = None) -> str:
+        """Expose the full charter, including each window, role and current supplied price.
+
+        ``price_label`` names where the prices are instead of inlining them. The
+        controller moves every card's lambda at every closed window, so a charter
+        rendered with its prices inside is a different charter on every call; the
+        disclosure that has to hold still between calls names ``world.card_prices``
+        and lets the moving numbers travel there.
+        """
         lines = [f"CHARTER (edition {self.edition})", "", "NORMS"]
         lines += [f"- {n}" for n in self.norms]
         lines += ["", "METRIC CARDS"]
@@ -75,7 +83,8 @@ class Charter:
                 f"  {c.description}",
                 f"  units: {c.units}; window: {c.window}; acceptable: {c.acceptable_region}",
                 f"  observation: {c.observation}; answers_for: {c.answers_for}",
-                f"  lambda: {prices.get(c.id, 0.0) if prices is not None else 'unassigned'}",
+                "  lambda: " + (price_label if price_label is not None else str(
+                    prices.get(c.id, 0.0) if prices is not None else "unassigned")),
             ]
         return "\n".join(lines)
 

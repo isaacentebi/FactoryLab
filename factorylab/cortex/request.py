@@ -22,6 +22,31 @@ from typing import Any
 
 Money = int
 
+# The world facts that hold still between calls: everything fixed within a charter
+# edition and a registration state. They are rendered first, in one contiguous
+# block, so consecutive calls to any assembly of a world begin with byte-identical
+# text and a provider's automatic prefix cache (DeepSeek and OpenAI cache on an
+# identical prefix, with no cache_control marker) can hit. Everything not named
+# here moves — the account, the mids, the pots, the note counts, the pathologies,
+# the reserve, the controller's prices, the governance queue, the measured tick —
+# and is rendered after the block, inside ``INPUTS`` with the request itself.
+# A key absent from this set is treated as moving, which costs cache, never
+# correctness: adding a world key can only shrink the stable prefix.
+STABLE_WORLD_KEYS = frozenset({
+    "a_return_may_include", "action_labels", "addressing", "assemblies", "catalogue",
+    "charter", "charter_edition", "clock", "committee", "composition", "connectors",
+    "contracts", "event_kinds", "event_schemas", "mechanics", "meta_input", "models",
+    "observation_facts", "observations", "population_tools", "prices", "proposal_shapes",
+    "reserved_return_fields", "routers", "scoring", "sellers", "tools", "trading_markets",
+    "venue", "venue_listing", "work",
+})
+
+WORLD_HEADER = (
+    "WORLD\nWhat holds for every call in this world while its charter edition and its "
+    "registrations stand. The facts that move — the account, the mids, the prices on "
+    "the cards, the reserve — arrive below with the work.\n"
+)
+
 # The kernel bounds only the size of a declared action set, never its contents.
 MAX_DECLARED_ACTIONS = 32
 MAX_ACTION_ID_CHARS = 64
@@ -123,16 +148,42 @@ class Request:
         """
         return replace(self, inputs=inputs, cost_ceiling=cost_ceiling)
 
+    def _world_split(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Separate the world facts that hold still from the ones that move."""
+        world = self.inputs.get("world")
+        if not isinstance(world, dict):
+            return {}, {}
+        stable = {k: v for k, v in world.items() if k in STABLE_WORLD_KEYS}
+        return stable, {k: v for k, v in world.items() if k not in STABLE_WORLD_KEYS}
+
+    def stable_prefix(self) -> str:
+        """The leading text every request in this world renders identically.
+
+        Guarantees it is a pure function of the world facts named in
+        ``STABLE_WORLD_KEYS`` — no description, no identity, no event, no
+        account — so two requests to two different assemblies about two
+        different events begin with the same bytes, and a provider's automatic
+        prefix cache scores a hit on the second of them. It is the empty string
+        when the request carries no world block.
+        """
+        stable, _ = self._world_split()
+        if not stable:
+            return ""
+        return f"{WORLD_HEADER}{json.dumps(stable, sort_keys=True, indent=2)}\n\n"
+
     def prompt_text(self) -> str:
-        """Render the request as the executor sees it: description, inputs, schema, criterion.
+        """Render the request as the executor sees it: world, description, inputs, schema.
 
         Guarantees the rendering is a pure function of the request's fields and
         contains no handle, parent, or channel information the executor does
-        not need to do the work.
+        not need to do the work. The stable world block comes first and nothing
+        that moves between calls precedes it.
         """
+        stable, moving = self._world_split()
+        inputs = {**self.inputs, "world": moving} if stable else self.inputs
         blocks = [
             f"REQUEST\n{self.description}",
-            f"INPUTS\n{json.dumps(self.inputs, sort_keys=True, indent=2)}",
+            f"INPUTS\n{json.dumps(inputs, sort_keys=True, indent=2)}",
         ]
         if self.propensity is not None:
             blocks.append(
@@ -145,7 +196,7 @@ class Request:
             f"OUTCOME SCHEMA\n{json.dumps(self.outcome_schema, sort_keys=True, indent=2)}",
             f"COMPLETION CRITERION\n{self.completion_criterion}",
         ])
-        return "\n\n".join(blocks)
+        return self.stable_prefix() + "\n\n".join(blocks)
 
 
 @dataclass(frozen=True)
@@ -171,5 +222,6 @@ class Return:
     stop_reason: str | None = None
     tool_calls: tuple[dict[str, Any], ...] = ()
     # What the provider reported about the completion: finish_reason, input_tokens,
-    # output_tokens, reasoning_tokens (None when unreported) and the max_tokens sent.
+    # output_tokens, reasoning_tokens, cached_tokens (None when unreported) and the
+    # max_tokens sent.
     provider: dict[str, Any] = field(default_factory=dict)

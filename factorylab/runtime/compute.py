@@ -778,7 +778,11 @@ class ComputeMixin:
                 "usage": {
                     key: ret.provider.get(key)
                     for key in ("input_tokens", "output_tokens", "reasoning_tokens", "max_tokens")
-                },
+                    # A provider that never reports its cache leaves the key out
+                    # rather than claiming a miss; the shape stays additive, so a
+                    # ledger written before this key resumes and reads unchanged.
+                } | ({"cached_tokens": cached}
+                     if type(cached := ret.provider.get("cached_tokens")) is int else {}),
                 "outputs": json.dumps(ret.outputs, default=str)[:4000],
                 "ts": self.clock.now_ns,
             }

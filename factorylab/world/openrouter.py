@@ -150,6 +150,11 @@ class OpenRouterProvider:
             raw["request_id"] = wire.request_id
         if wire.reasoning_tokens is not None:
             raw["reasoning_tokens"] = wire.reasoning_tokens
+        # The provider's own count of the input it served from its prompt cache.
+        # Cost is not adjusted here: OpenRouter's reported ``usage.cost`` already
+        # reflects the discount, and this is the diary's view of the hit rate.
+        if wire.cached_tokens is not None:
+            raw["cached_tokens"] = wire.cached_tokens
         return ModelResponse(
             model_id=wire.model or req.model_id,
             text=wire.text,

@@ -122,6 +122,28 @@ every request's `world.mechanics`. Their runtime values, including temporary
 controller decay, are used in that disclosure. The scoring block states the
 capped, attributed formula recorded under "Observation units and attribution".
 
+A rendered request puts the world facts that hold still first, in one contiguous
+`WORLD` block, and everything that moves after it. The block carries the keys
+named in `cortex/request.py:STABLE_WORLD_KEYS` — the charter text, mechanics,
+scoring, tool, connector, work and observation catalogues, the assembly
+catalogue and contracts, the trading markets and their instrument records — and
+is byte-identical across consecutive calls to every assembly of a world, so
+DeepSeek's and OpenAI's automatic prefix caching hits it without any
+`cache_control` marker. It is the head of the first user message, not the system
+message: the system prompt is world-supplied, differs per assembly and may not
+describe kernel rules. It changes when the charter edition, the mechanics or one
+of those catalogues changes, and at nothing else. Everything that moves between
+calls — `inputs.you`, the event, the account, `recent_mids`, the pots, note
+counts, pathologies, the reserve remaining, `governance`, `tick_intervals`,
+`registration_feedback` and `card_prices` — is rendered after it, inside
+`INPUTS`. The controller re-prices every card at every closed window, so the
+charter disclosure names `world.card_prices` instead of inlining each lambda;
+`card_prices` still publishes every card's current price and region. Where the
+provider reports it, `usage.prompt_tokens_details.cached_tokens` is recorded as
+`usage.cached_tokens` on the `invocation` item, absent where it is not reported.
+Cost metering is unchanged: OpenRouter's reported `usage.cost` already carries
+the cache discount.
+
 ## Round-two W2: judges, consequences, the reserve
 
 ### `[evaluation]`
@@ -699,7 +721,14 @@ and `max_call_micro` beside the origin and version.
 `exchange.coins` and `venue.spot_pairs` are the launch seed of trading
 permission, not the limit of what may be read: public venue data is readable for
 any coin the venue lists, and a `market` registration adds a pair the venue
-lists, under a novelty trial, surviving resume. `venue.instruments`,
+lists, under a novelty trial, surviving resume. The venue's listing is not in the
+prompt: `world.venue` carries the instrument record of each market in
+`world.trading_markets` and nothing else, and `world.venue_listing` says that
+`venue.instruments` returns the whole listing. A listing of a few thousand
+instruments therefore costs the world block nothing, and the published schema of
+the three per-coin public reads names the listing rather than enumerating it;
+dispatch still checks the coin against the venue and refuses an unlisted one.
+`venue.instruments`,
 `venue.mids` and `venue.funding` cover every listed market;
 `venue.candles`, `venue.order_book` and `venue.funding_history` accept any coin
 or pair the venue lists, and `venue.funding_history` refuses a spot pair.
