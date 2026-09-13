@@ -75,11 +75,13 @@ def nonnegative_usd_micro(value: Any, *, rounding: str) -> Money:
     pricing fault can surface as another provider's failure.
     """
     try:
-        micros = usd_to_micro(value, rounding=rounding)
+        amount = value if isinstance(value, (Decimal, str)) else Decimal(str(value))
+        amount = Decimal(amount)
+        if not amount.is_finite() or amount < 0:
+            raise ValueError("negative or non-finite")
+        micros = usd_to_micro(amount, rounding=rounding)
     except (ArithmeticError, TypeError, ValueError) as exc:
         raise ValueError("amount must be a finite nonnegative USD value") from exc
-    if micros < 0:
-        raise ValueError("amount must be a finite nonnegative USD value")
     return micros
 
 

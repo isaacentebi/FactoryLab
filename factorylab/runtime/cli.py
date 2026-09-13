@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping
+from types import MappingProxyType
 
 from factorylab.runtime.reasons import (
     PAYMENT_MAY_HAVE_SETTLED,
@@ -41,13 +43,13 @@ never do this:
 
 #: What a command that only reads says when it cannot finish. Money and worlds
 #: have their own handlers below; these five neither spend nor write.
-READ_ONLY_FAILURE: dict[str, Reason] = {
+READ_ONLY_FAILURE: Mapping[str, Reason] = MappingProxyType({
     "manifest": Reason.MANIFEST_UNAVAILABLE,
     "probe": Reason.VENUE_UNREACHABLE,
     "report": Reason.EVIDENCE_UNREADABLE,
     "postmortem": Reason.EVIDENCE_UNREADABLE,
     "versions": Reason.EVIDENCE_UNREADABLE,
-}
+})
 
 
 def refuse(command: str, reason: Reason) -> None:

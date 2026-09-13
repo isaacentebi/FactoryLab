@@ -68,3 +68,14 @@ def test_an_unnamed_rounding_is_refused():
 def test_exact_refuses_a_fraction_of_a_micro():
     with pytest.raises(ValueError):
         usd_to_micro("0.0000001", rounding="exact")
+
+
+def test_a_negative_sub_micro_wire_amount_is_refused_before_rounding():
+    import pytest
+
+    from factorylab.kernel.money import nonnegative_usd_micro
+    with pytest.raises(ValueError):
+        nonnegative_usd_micro("-0.0000001", rounding="ceil")
+    with pytest.raises(ValueError):
+        nonnegative_usd_micro("-0.0000001", rounding="nearest")
+    assert nonnegative_usd_micro("0.0000001", rounding="ceil") == 1
