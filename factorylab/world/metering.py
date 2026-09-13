@@ -46,24 +46,21 @@ class VeniceError(ProviderVeniceError, UnbilledFailure):
 
 
 def classify_provider_failure(exc: Exception) -> Exception:
-    """Only bounded pre-generation evidence turns a provider error into an unbilled one."""
+    """Only definitive pre-dispatch evidence turns a provider error into an unbilled one."""
     if isinstance(exc, UnbilledFailure):
         return exc
     if not isinstance(exc, (ProviderOpenRouterError, ProviderVeniceError)):
         return exc
-    # These are adapter-generated messages, not guesses based on vendor response bodies.
-    provider = "OpenRouter" if isinstance(exc, ProviderOpenRouterError) else "Venice"
-    connection = str(exc) == f"{provider} error (None): Connection failed"
-    missing_key = (isinstance(exc, ProviderOpenRouterError) and exc.status is None
-                   and exc.body == "API key environment variable is not set")
-    if isinstance(exc, ProviderVeniceError) and isinstance(exc.__context__, ProviderVeniceError):
-        missing_key = str(exc.__context__) == (
-            "Venice error (None): Set VENICE_API_KEY or RESERVE_PRIVATE_KEY"
-        )
-    if not (connection or missing_key or type(exc.status) is int and 400 <= exc.status < 500):
+    # The adapter clears ``sent`` only when the request body never reached the provider
+    # (unresolved host, refused connection, rejected handshake, missing key). A dropped
+    # connection can follow a POST the provider accepted, generated and billed, so it
+    # stays billing-uncertain. A 4xx is a rejection the provider made before generating.
+    unsent = exc.sent is False
+    rejected = type(exc.status) is int and 400 <= exc.status < 500
+    if not (unsent or rejected):
         return exc
     cls = OpenRouterError if isinstance(exc, ProviderOpenRouterError) else VeniceError
-    return cls(exc.status, "Request failed before generation")
+    return cls(exc.status, "Request failed before generation", sent=exc.sent)
 
 
 class BillingUncertain(RuntimeError):

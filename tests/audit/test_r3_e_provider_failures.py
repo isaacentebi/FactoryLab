@@ -15,18 +15,26 @@ from factorylab.world.models import ModelRequest, PriceTable, TokenPrice
 from factorylab.world.openrouter import OpenRouterProvider
 from factorylab.world.venice import VeniceProvider
 
+# A failure only releases the hold when the request provably never reached the provider.
+UNBILLED = ("dns", "refused", "401", "429")
+
 
 @pytest.mark.parametrize("provider_type", [OpenRouterProvider, VeniceProvider])
-@pytest.mark.parametrize("failure", ["connection", "dns", "timeout", "401", "429", "500", "decode"])
+@pytest.mark.parametrize(
+    "failure", ["connection", "dns", "refused", "timeout", "401", "429", "500", "decode"]
+)
 def test_provider_failure_billing_and_identity_survive_replay(provider_type, failure):
     calls = []
 
     def transport(*args):
         calls.append(args)
         if failure == "connection":
+            # A drop after the POST was written: the provider may have generated and billed.
             raise ConnectionError("secret transport details")
         if failure == "dns":
             raise URLError(socket.gaierror("secret transport details"))
+        if failure == "refused":
+            raise URLError(ConnectionRefusedError("secret transport details"))
         if failure == "timeout":
             raise TimeoutError("secret transport details")
         if failure in ("401", "429", "500"):
@@ -54,13 +62,13 @@ def test_provider_failure_billing_and_identity_survive_replay(provider_type, fai
         assert wallet.state()["reservations"] == []
         assert wallet.check_conservation()
         assert wallet.balance == wallet.available == 10000 - ret.cost
-        assert (ret.cost > 0) if failure in ("decode", "500") else (ret.cost == 0)
+        assert (ret.cost == 0) if failure in UNBILLED else (ret.cost > 0)
         return ret
 
     first = invoke()
     items = ledger._recovery_items()
     assert items[-1]["error"] == error_name
-    assert items[-1]["unbilled"] is (failure not in ("decode", "500"))
+    assert items[-1]["unbilled"] is (failure in UNBILLED)
     assert items[-1]["status"] == (int(failure) if failure.isdigit() else None)
     assert "secret" not in str(items)
     journal.recovering = True
@@ -70,12 +78,17 @@ def test_provider_failure_billing_and_identity_survive_replay(provider_type, fai
 
 
 @pytest.mark.parametrize("provider_type", [OpenRouterProvider, VeniceProvider])
-def test_runtime_invocation_records_provider_error_without_a_debit(provider_type):
+@pytest.mark.parametrize("sent", [False, True])
+def test_runtime_invocation_records_provider_error_and_debits_only_when_uncertain(
+    provider_type, sent
+):
     from factorylab.runtime.loop import Runtime
     from factorylab.runtime.worlds import load_manifest
 
     def transport(*_):
-        raise ConnectionError("secret transport details")
+        if sent:  # a dropped connection after dispatch keeps its provisional debit
+            raise ConnectionError("secret transport details")
+        raise URLError(socket.gaierror("secret transport details"))
 
     runtime = Runtime(load_manifest("scripted"), events=3, seed=1,
                       initial_balance_micro=100_000_000, ledger_path=None, drip=False,
@@ -97,7 +110,8 @@ def test_runtime_invocation_records_provider_error_without_a_debit(provider_type
     invocations = [i for i in runtime.ledger._recovery_items() if i["kind"] == "invocation"]
     assert invocations
     error_name = "VeniceError" if provider_type is VeniceProvider else "OpenRouterError"
-    assert all(error_name in i["outputs"] and i["cost"] == 0 for i in invocations)
+    assert all(error_name in i["outputs"] for i in invocations)
+    assert all((i["cost"] > 0) if sent else (i["cost"] == 0) for i in invocations)
     assert "secret" not in str(invocations)
     assert not runtime.wallet.state()["reservations"]
 
