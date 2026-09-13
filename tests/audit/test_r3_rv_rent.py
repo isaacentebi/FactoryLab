@@ -141,12 +141,19 @@ def test_recurring_rent_moves_the_cost_card_and_its_penalty_share():
     assert shares[other] == pytest.approx(1 / 3)
 
 
+def well_formed_card(rt, n=2):
+    """A rate card over the same selected responses the cost card is priced on."""
+    return MetricCard("wf", rt.charter.norms[1], "Selected response schema", "rate",
+                      {"kind": "returns", "n": n, "per": "role"}, "at least 0.9",
+                      "well_formed_rate", "producer")
+
+
 def test_a_storage_charge_is_measured_as_a_cost_and_never_as_a_response():
     """The charge is money the decision spent, not an answer it gave.
 
     It carries the writer's own handle and measured role in the window it landed
     in, so the cost cards read it; the rate observations, which count responses,
-    do not.
+    do not — and a horizon of responses it cannot answer in is not filled by it.
     """
     rt = cost_runtime("producer", kind="returns", n=2, per="role")
     writer = stored_writer(rt, own_cost=1_000, note_bytes=NOTE_BYTES, status="malformed")
@@ -156,8 +163,46 @@ def test_a_storage_charge_is_measured_as_a_cost_and_never_as_a_response():
     assert (row["handle"], row["role"], row["window"], row["cost"]) == (
         writer, "producer", 2, NOTE_BYTES)
 
-    well_formed = MetricCard("wf", rt.charter.norms[1], "Selected response schema", "rate",
-                             {"kind": "returns", "n": 2, "per": "role"}, "at least 0.9",
-                             "well_formed_rate", "producer")
-    # The one selected response was malformed; the charge does not answer for it.
-    assert measure_card(well_formed, rt.card_samples) == {"producer": 0.0}
+    # One malformed response and one charge are not two responses: the rate
+    # stays unsupported rather than reading 0.0 off a half-filled horizon.
+    assert measure_card(well_formed_card(rt), rt.card_samples) == {}
+
+
+def test_a_storage_charge_does_not_displace_a_response_in_a_full_horizon():
+    """A full horizon selects the last n responses, and the charge is not one.
+
+    With two real responses behind it, a charge that took a slot would push the
+    oldest response out of the window and measure the rate over what is left.
+    """
+    rt = cost_runtime("producer", kind="returns", n=2, per="role")
+    stored_writer(rt, own_cost=1_000, note_bytes=NOTE_BYTES)
+    returned(rt, "seed-decider", "producer", 1_000, status="malformed")
+    rt.n = 10
+    boundary(rt)
+    assert rt.card_samples.returns[-1].get("storage") is True
+    assert measure_card(well_formed_card(rt), rt.card_samples) == {"producer": 0.5}
+
+
+def test_recurring_rent_moves_a_global_window_cost_card_and_its_shares():
+    """A card over whole closed windows is measured from their own cost statistics.
+
+    That path never reads the selected return rows, so a charge that only
+    reaches those rows leaves the card exactly where it was while the window's
+    frozen shares still hand the writer the larger part of its violation.
+    """
+    rt = cost_runtime("producer", kind="windows", n=2, per=None)
+    writer = stored_writer(rt, own_cost=1_000, note_bytes=NOTE_BYTES)
+    other = returned(rt, "seed-decider", "producer", 3_000)
+    rt.n = 10
+    boundary(rt)
+    assert ledger_items(rt, "note.rent")[-1]["cost"] == NOTE_BYTES
+    assert rt.window.index == 2  # the charge landed in the window that just opened
+
+    rt.n = 20
+    rt._close_price_window()
+    # Without the charge the same two returns measure 2,000 over the two windows.
+    assert rt.window.closed_values == {"cost": pytest.approx(3_000)}
+    assert rt.card_samples.medians["cost"] == 3_000
+    shares = rt.window.closed_shares[0]["shares"]
+    assert shares[writer] == pytest.approx(2 / 3)
+    assert shares[other] == pytest.approx(1 / 3)

@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 # The per-decision attribution the runtime keeps on the same window object
 # is not a public window fact and never reaches a registered observation.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
-                         "closed_cards", "closed_prices", "series_discarded")
+                         "closed_cards", "closed_prices", "series_discarded", "storage_rows")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
@@ -473,7 +473,14 @@ def window_fact_names() -> list[str]:
 
 
 def record_venue_facts(window, tool: str, args: dict, result: dict, now_ns: int) -> None:
-    """Paid public reads add bounded numeric facts without account or author identities."""
+    """Paid public reads add bounded numeric facts without account or author identities.
+
+    A venue-wide read observes every instrument it names, so the whole batch is
+    appended and ``trim_series`` applies the bound. Slicing the batch first would
+    drop samples the window took without counting them, and an uncounted
+    eviction is exactly what lets a sealed cursor read a moved position as a
+    still one.
+    """
     from decimal import Decimal
 
     from factorylab.kernel.money import usd_to_micro
@@ -495,7 +502,7 @@ def record_venue_facts(window, tool: str, args: dict, result: dict, now_ns: int)
         elif tool in ("venue.funding", "venue.funding_history"):
             key = "funding" if tool == "venue.funding" else "funding_history"
             rows = []
-            for item in result[key][-MAX_WORLD_SAMPLES:]:
+            for item in result[key]:
                 rate = float(item["rate"])
                 if math.isfinite(rate):
                     rows.append({"coin": item["coin"], "ts_ns": int(item["ts_ns"]),
@@ -506,7 +513,7 @@ def record_venue_facts(window, tool: str, args: dict, result: dict, now_ns: int)
             rows = [{"coin": coin, "ts_ns": now_ns,
                      "value": usd_to_micro(Decimal(str(value)), rounding="nearest")}
                     for coin, value in result["mids"].items()]
-            window.mids.extend(rows[-MAX_WORLD_SAMPLES:])
+            window.mids.extend(rows)
             trim_series(window, "mids", per_coin=True)
     except (KeyError, TypeError, ValueError, ArithmeticError, OverflowError):
         return  # Malformed or unavailable venue data supplies no measurement.

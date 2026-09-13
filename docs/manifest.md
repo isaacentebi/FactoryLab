@@ -167,9 +167,11 @@ graded on the payoff fact alone. A missing fact is never performance.
 `returns` selects the latest `n` completed invocation responses in each selected
 scope. A continuation's cost belongs to its invocation, and a child invocation
 is a separate response. For cost, only successful responses in those selected
-rows contribute to the mean. Well-formedness uses all selected responses as its
-denominator. The other supported return observations are `noop_share`,
-`revision_rate` and `tool_calls`.
+rows contribute to the mean, and a retained-storage charge is selected beside
+them as a cost row of the decision that holds it; no other observation selects
+one, so a charge never fills a response slot. Well-formedness uses all selected
+responses as its denominator. The other supported return observations are
+`noop_share`, `revision_rate` and `tool_calls`.
 
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before
@@ -766,17 +768,19 @@ rule; the wake's `notes` section publishes counts only; the notebook survives
 resume.
 
 Retained storage is an explicit, resumable liability of the decision that holds
-the note, not only a wallet debit. Every paid charge is added to that decision's
-cost contribution for the window the charge landed in and enters that window's
-measured rows as a cost of the same decision and never as a response, so the
-charter's cost cards and the penalty shares they attribute both see it, and
-while the decision's own consequence outcome is still open it is also carried
-into that outcome's cost, so a return cannot resolve `return_paid_off = 1` on a
-margin its storage has already consumed. An outcome is fixed once and never
-reopened, so rent falling due afterwards stays with the note's current owner
-decision as a cost contribution alone, and the note is kept rather than
-released: public text other decisions may already have read is not deleted
-because one account closed. The carried amount is
+the note, not only a wallet debit. Every paid charge is added to that
+decision's cost contribution for the window the charge landed in and enters
+that window's measured rows — a producer's charge its cost statistics too, as
+that decision's spend and not as a second spender — as a cost of the same
+decision and never as a response, so a cost card sees it whether it selects
+returns or whole closed windows, and so do the penalty shares it attributes,
+and while the decision's own consequence outcome is still open it is also
+carried into that outcome's cost, so a return cannot resolve
+`return_paid_off = 1` on a margin its storage has already consumed. An outcome
+is fixed once and never reopened, so rent falling due afterwards stays with the
+note's current owner decision as a cost contribution alone, and the note is
+kept rather than released: public text other decisions may already have read is
+not deleted because one account closed. The carried amount is
 `ReturnAccount.carried_micro`, resumes with the consequence table, and appears
 as `consequence.carried`; the matching `price.contribution` item carries
 `storage` and `carried`.

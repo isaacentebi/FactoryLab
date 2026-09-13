@@ -16,7 +16,7 @@ RETURN_OBSERVATIONS = frozenset({
 # The runtime keeps per-decision attribution on the same window object;
 # measurement never observes it.
 ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_cards",
-                      "closed_prices", "series_discarded")
+                      "closed_prices", "series_discarded", "storage_rows")
 FORECAST_OBSERVATIONS = frozenset({
     "forecast_skill", "verdict_mean", "verdict_std", "consequence_paid_off_rate", "censored_share",
 })
@@ -92,7 +92,8 @@ class CardSamples:
         a charge that falls due in a window its decision never responded in is
         still measured there: it joins that decision's own row when it has one
         in the window, and otherwise enters as its own successful cost row. It
-        is a cost and not a response, so the rate observations skip it.
+        is a cost and not a response, so a selection that counts responses drops
+        it before its horizon is applied and it never occupies a response slot.
         """
         for sample in reversed(self.returns):
             if sample["handle"] == handle and sample["window"] == window:
@@ -145,7 +146,7 @@ class CardSamples:
             for card in cards:
                 if card.window.kind != kind:
                     continue
-                for group in _groups(card, rows).values():
+                for group in _groups(card, _selected(card.observation, rows)).values():
                     keep.update(id(row) for row in group[-card.window.n:])
             rows[:] = [row for row in rows if (
                 row["handle"] in pending_handles or id(row) in keep
@@ -256,6 +257,19 @@ def preflight_measurement(card: MetricCard, observations=None, *,
         raise ValueError(f"card {card.id} window: measurement preflight produced no value")
 
 
+def _selected(observation: str, rows: list[dict]) -> list[dict]:
+    """Drop retained-storage charges from every selection but a cost one.
+
+    Only cost is measured over a charge: it is money spent, not a response, so
+    it neither answers a schema nor declares an action. It is removed before the
+    horizon is applied, not after, so it can neither fill a slot a response
+    never filled nor push a real response out of a full window.
+    """
+    if observation.strip().lower() == "cost_per_return":
+        return rows
+    return [row for row in rows if not row.get("storage")]
+
+
 def _groups(card: MetricCard, rows: list[dict]) -> dict[str, list[dict]]:
     groups = defaultdict(list)
     subject = card.observation.strip().lower() in ("verdict_mean", "verdict_std")
@@ -280,11 +294,6 @@ def _measure_rows(observation: str, rows: list[dict]) -> float | None:
     if observation == "cost_per_return":
         values = [row["cost"] for row in rows if row["ok"]]
         return fmean(values) if values else None
-    # Only cost is measured over a retained-storage charge: it is money spent,
-    # not a response, so it neither answers a schema nor declares an action.
-    rows = [row for row in rows if not row.get("storage")]
-    if not rows:
-        return None
     if observation in ("well_formed_rate", "noop_share", "revision_rate"):
         key = {"well_formed_rate": "ok", "noop_share": "noop", "revision_rate": "revision"}[
             observation
@@ -353,6 +362,7 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
                 if selected[0]["index"] <= r["window"] <= selected[-1]["index"]]
     else:
         rows = getattr(samples, window.kind)
+    rows = _selected(observation.id, rows)
     result = {}
     for scope, group in _groups(card, rows).items():
         if window.kind != "windows":

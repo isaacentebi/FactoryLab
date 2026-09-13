@@ -69,6 +69,10 @@ class MeasureWindow:
     # path it is published at. Private attribution, never a window observation:
     # it is what turns a retained index back into a position in the whole window.
     series_discarded: dict[str, int] = field(default_factory=dict)
+    # Where in ``costs`` each decision's retained-storage charge for this window
+    # sits, so a second charge joins the first instead of counting as a second
+    # spender. Private attribution, never a window observation.
+    storage_rows: dict[str, int] = field(default_factory=dict)
 
 
 class PricingMixin:
@@ -132,12 +136,16 @@ class PricingMixin:
         Retained public storage is an explicit liability of the decision that
         holds it. Every charge enters that decision's cost contribution for the
         window it landed in and the measured rows the charter's cost cards and
-        their penalty shares are read from, so both see it where it was spent.
-        While the decision's own consequence outcome is still open the
-        charge is also carried into that outcome's cost, so a return cannot pay
-        off on a margin its storage has already consumed. An outcome is fixed
-        once and never reopened, so afterwards the cost contribution is the whole
-        of the liability and it stays with the note's current owner decision.
+        their penalty shares are read from, so both see it where it was spent. A
+        producer's charge enters the window's own cost statistics too, as that
+        decision's spend in the window and not as a second spender, so a card
+        measured over whole closed windows moves with the charge its shares
+        already blame the writer for. While the decision's own consequence
+        outcome is still open the charge is also carried into that outcome's
+        cost, so a return cannot pay off on a margin its storage has already
+        consumed. An outcome is fixed once and never reopened, so afterwards the
+        cost contribution is the whole of the liability and it stays with the
+        note's current owner decision.
         """
         if cost_micro <= 0:
             return
@@ -145,6 +153,16 @@ class PricingMixin:
         sample["cost"] += cost_micro
         self.card_samples.stored(handle=handle, assembly=self.handle_to_assembly.get(handle),
                                  role=sample["role"], window=self.window.index, cost=cost_micro)
+        if sample["role"] == "producer":
+            # ``costs`` holds one entry per well-formed producer return; a charge
+            # is one decision's spend, so its first charge in the window opens an
+            # entry and every later one is added to it.
+            row = self.window.storage_rows.get(handle)
+            if row is None:
+                self.window.storage_rows[handle] = len(self.window.costs)
+                self.window.costs.append(cost_micro)
+            else:
+                self.window.costs[row] += cost_micro
         carried = self.consequences.carry(handle, cost_micro)
         self.ledger.append({"kind": "price.contribution", "handle": handle,
                             "window": self.window.index, "role": sample["role"],

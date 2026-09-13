@@ -15,6 +15,7 @@ from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.observations import (
     MAX_WORLD_SAMPLES,
+    record_venue_facts,
     window_cursor,
     window_facts_since,
 )
@@ -211,3 +212,55 @@ def test_the_position_of_an_absent_coin_survives_resume(monkeypatch):
     feed_mids(restored, MAX_WORLD_SAMPLES, start=MAX_WORLD_SAMPLES)
     status, _score = settle(restored, forecast)
     assert status is SettleStatus.CENSORED
+
+
+def feed_funding(rt, count, *, start=0, coin="BTC"):
+    """Deliver real Funding rate events through the ordinary observation path."""
+    for index in range(count):
+        rt._observe_delivered_event(Event(
+            f"funding-{coin}-{start + index}", EventKind.FUNDING, start + index + 1,
+            {"coin": coin, "rate": "0.0001"}, "world"))
+
+
+def batch_coins(coin, extra=8):
+    """One venue-wide read: the named coin first, then more instruments than fit."""
+    return [coin] + [f"C{index}" for index in range(MAX_WORLD_SAMPLES + extra)]
+
+
+def test_a_batched_mids_read_counts_the_samples_it_dropped():
+    """A venue-wide read is one paid observation of every instrument it names.
+
+    More instruments than the bound retains is an eviction like any other: the
+    samples the read itself never kept are still samples the window took, and a
+    coin whose position they moved must not read as a coin that stood still.
+    """
+    rt = make_runtime()
+    feed_mids(rt, 1, coin="ETH")
+    cursor = window_cursor(rt.window)
+    record_venue_facts(rt.window, "venue.mids", {},
+                       {"mids": {coin: "100" for coin in batch_coins("ETH")}}, 1)
+    assert "ETH" not in {row["coin"] for row in rt.window.mids}
+    assert rt.window.series_discarded["mids/ETH"] == 2
+    assert window_facts_since(rt.window, cursor) is None
+
+
+def test_a_batched_funding_read_counts_the_samples_it_dropped():
+    rt = make_runtime()
+    feed_funding(rt, 1, coin="ETH")
+    cursor = window_cursor(rt.window)
+    record_venue_facts(rt.window, "venue.funding", {}, {"funding": [
+        {"coin": coin, "ts_ns": 1, "rate": "0.0001"} for coin in batch_coins("ETH")]}, 1)
+    assert "ETH" not in {row["coin"] for row in rt.window.funding}
+    assert rt.window.series_discarded["funding/ETH"] == 2
+    assert window_facts_since(rt.window, cursor) is None
+
+
+def test_a_batched_read_that_fits_discards_nothing_of_a_marked_coin():
+    """The accounting only moves when the bound actually evicts something."""
+    rt = make_runtime()
+    feed_mids(rt, 1, coin="ETH")
+    cursor = window_cursor(rt.window)
+    record_venue_facts(rt.window, "venue.mids", {},
+                       {"mids": {coin: "100" for coin in ["ETH", "BTC", "SOL"]}}, 1)
+    since = window_facts_since(rt.window, cursor)
+    assert len(since["mids"]["ETH"]) == 1 and rt.window.series_discarded == {}
