@@ -1,7 +1,7 @@
 """Supported observations; absent evidence never becomes a score.
 
 The twenty-two seed observations below are the factory's starting measurement
-vocabulary. They are not the whole of it: spec A11 lets the population register
+vocabulary. They are not the whole of it: the population may also register
 its own observation — a pure ``observe(facts) -> float`` over the public
 per-window facts, run in the tool jail — and a card may then name it. Seed and
 registered observations are read through one :class:`ObservationBook`, so every
@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from factorylab.runtime.pricing import MeasureWindow
 
-# The per-decision attribution the runtime keeps on the same window object (A4)
+# The per-decision attribution the runtime keeps on the same window object
 # is not a public window fact and never reaches a registered observation.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions")
 # Fields holding a public quantity filed under a private identity: a decision

@@ -1,7 +1,7 @@
 """The event loop dispatches public events through registered accepts/emits contracts.
 
-Spec v0.4 section 4.11 and v0.5 sections 3, 4. The loop owns no money, no
-scores and no rules; it is glue over kernel physics.
+The loop owns no money, no scores and no rules; it is glue over kernel
+physics.
 
 Contracts. Any assembly may accept any event kind and select a declared
 output kind. Producer-shaped and custom returns receive verdict feedback;
@@ -12,9 +12,9 @@ Unjudged returns are censored, and retirement preserves delayed feedback.
 
 Prices. At each reserve-window boundary the runtime measures the window
 that closed using the factory's observation vocabulary — the twenty-two seeds
-and whatever measurements the population has registered (A11) —
+and whatever measurements the population has registered —
 and hands each priced metric card one observation. The price controller
-(spec v0.6 section 8.1) revises a bounded λ per card; verdict and conformity
+revises a bounded λ per card; verdict and conformity
 scores settle net of Σ λ·violation, clipped to [0, 1]. The consequence and
 exposure channels, the novelty reserve and router exploration are outside
 its authority.
@@ -88,7 +88,7 @@ class Runtime(
         self._init_fidelity()
 
     def _invoke(self, action_id, req, role, *, child=False):
-        """A6: retain one typed measurement sample for each completed return."""
+        """Retain one typed measurement sample for each completed return."""
         tool_calls = self.window.tool_calls
         ret = super()._invoke(action_id, req, role, child=child)
         self.card_samples.returned(handle=req.handle, assembly=action_id,
@@ -191,7 +191,7 @@ class Runtime(
 
         self.wallet.drip(self.clock.now_ns)
         self._manage_reserve_window()
-        self.treasury.open_window(self.stats.reserve_windows)  # A12: reserve-window top-up cap
+        self.treasury.open_window(self.stats.reserve_windows)  # reserve-window top-up cap
         if previous_window is not None and previous_window != self.reserve_window_start:
             self._sampling_actuator()
         self._observe_delivered_event(ev)
@@ -339,14 +339,14 @@ class Runtime(
 
     def _emit(self, kind: EventKind | str, payload: dict[str, Any],
               source: str = "runtime") -> None:
-        from factorylab.cortex.assembly import _validate_schema
+        from factorylab.cortex.assembly import validate_schema
 
         if str(kind) not in {str(k) for k in EventKind}:
             if kind != "Exposure":
                 if kind not in self.event_schemas:
                     raise ValueError("population event has no declared schema")
                 if payload.get("status") == "ok":
-                    _validate_schema({k: v for k, v in payload["outputs"].items()
+                    validate_schema({k: v for k, v in payload["outputs"].items()
                                       if k not in ("emits", "register", "about_handle",
                                                    "status", "reason")},
                                      self.event_schemas[kind])
@@ -526,7 +526,7 @@ class Runtime(
             "payload": payload,
             "world": self._world_block(),
             "your_recent_returns": list(self.memory.get(sample.chosen, ())),
-            "your_action_policy": self._action_policy(sample.chosen),  # A10, private
+            "your_action_policy": self._action_policy(sample.chosen),  # private
         }
         if sample.chosen == NOOP:
             self.stats.noops += 1
@@ -536,7 +536,7 @@ class Runtime(
                 "type": "object",
                 "properties": {
                     "action": {"type": "string"},
-                    "propensity": {"type": "object"},  # A10
+                    "propensity": {"type": "object"},
                     "register": self._register_schema(),
                     **({"payoff": {"type": "number", "minimum": 0, "maximum": 1}}
                        if adversarial else {}),
@@ -607,12 +607,12 @@ class Runtime(
                 "about_handle": handle,
                 "description": description,
                 # Judges see the event the producer answered, never the producer's private
-                # memory or its copy of the world block, and never its name (v0.4 §1.6).
+                # memory or its copy of the world block, and never its name.
                 "inputs": {"kind": inputs["kind"], "payload": inputs["payload"]},
                 "outputs": ret.outputs,
                 "cost": ret.cost,
                 "status": ret.status,
-                # A10: the one private thing the essay directs forward (II.I.b), so the
+                # The one private thing the essay directs forward (II.I.b), so the
                 # judge can price the roads this return did not take.
                 "propensity": self._public_propensity(handle),
             }
@@ -645,7 +645,7 @@ class Runtime(
                 "outputs": payload.get("outputs", payload),
                 "cost_micro_usd": payload.get("cost", 0),
                 "status": payload.get("status", "ok"),
-                # A10: what it says it was choosing among, and what it chose.
+                # what it says it was choosing among, and what it chose.
                 "propensity": payload.get("propensity"),
             },
             "charter": self._charter_text(),
@@ -661,7 +661,7 @@ class Runtime(
             "world": self._world_block(),
             "your_recent_returns": list(self.memory.get(sample.chosen, ())),
             "your_consequence_standing": self._standing_for(sample.chosen),
-            "your_action_policy": self._action_policy(sample.chosen),  # A10, private
+            "your_action_policy": self._action_policy(sample.chosen),  # private
         }
         generic = ev.kind is not EventKind.PRODUCER_RETURN
         if generic:
@@ -673,7 +673,7 @@ class Runtime(
                 "verdict": {"type": "number", "minimum": 0, "maximum": 1},
                 "payoff": {"type": "number", "minimum": 0, "maximum": 1},
                 "rationale": {"type": "string"},
-                "propensity": {"type": "object"},  # A10
+                "propensity": {"type": "object"},
                 "forecasts": self._forecast_schema(),
                 "register": self._register_schema(),
                 "about_handle": {"type": "string"},
@@ -810,14 +810,14 @@ class Runtime(
                 "verdict": payload.get("score") if recursive else payload.get("verdict"),
                 **({} if recursive else {"payoff": payload.get("payoff")}),
                 "rationale": payload.get("rationale", ""),
-                # A10: the judge's own account of the verdicts it was choosing among.
+                # The judge's own account of the verdicts it was choosing among.
                 "propensity": payload.get("propensity"),
             },
             "producer_outputs": payload.get("producer_outputs", {}),
             "charter": self._charter_text(),
             "world": self._world_block(),
         }
-        inputs["your_action_policy"] = self._action_policy(sample.chosen)  # A10, private
+        inputs["your_action_policy"] = self._action_policy(sample.chosen)  # private
         if "window" in payload:
             inputs["window"] = payload["window"]
         if recursive:
@@ -833,7 +833,7 @@ class Runtime(
             "properties": {
                 "conformity": {"type": "number"},
                 "rationale": {"type": "string"},
-                "propensity": {"type": "object"},  # A10
+                "propensity": {"type": "object"},
                 "register": self._register_schema(),
                 "about_handle": {"type": "string"},
             },
@@ -881,7 +881,7 @@ class Runtime(
             self.stats.fast_settlements += 1
         elif channel == CH_FAST:
             # The top meta earns nothing for being well formed: its conformity is graded by
-            # Brier against the judged verdict's eventual consequence (A14).
+            # Brier against the judged verdict's eventual consequence.
             known = self.verdict_outcomes.get(judge_handle)
             if known is not None:
                 y, _at, forecast_handle = known
@@ -923,7 +923,6 @@ def run_world(
     seed: int | None = None,
     initial_balance_micro: int | None = None,
     ledger_path: str | None = None,
-    horizon_events: int = 10,
     router_gamma: float = 0.1,
     drip: bool = True,
     provider: Any | None = None,

@@ -1,7 +1,7 @@
 import pytest
 
-from factorylab.versioning import summary
 from factorylab.versioning.operator import contraction, total_variation, transition_operator
+from factorylab.versioning.report import summary
 
 
 def test_identity_has_no_gap_bound():

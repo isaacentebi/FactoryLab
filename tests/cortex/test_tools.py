@@ -169,7 +169,7 @@ def test_schema_property_types_are_validated_before_execution(monkeypatch, kind,
 
     def run(code, **kwargs):
         calls.append(kwargs)
-        return SandboxResult(kwargs["stdin"], "", 0, False, False)
+        return SandboxResult(kwargs["stdin"], "", 0, False)
 
     monkeypatch.setattr("factorylab.cortex.tools.run_python", run)
     tool = _tool(schema={"type": "object", "properties": {"value": {"type": kind}}})
@@ -239,7 +239,7 @@ def test_runner_passes_wall_and_cpu_limits(monkeypatch, timeout_s):
         assert json.loads(kwargs["stdin"]) == {}
         assert kwargs["timeout_s"] == timeout_s
         assert kwargs["cpu_s"] == min(timeout_s, 2)
-        return SandboxResult("{}", "", 0, False, False)
+        return SandboxResult("{}", "", 0, False)
 
     monkeypatch.setattr("factorylab.cortex.tools.run_python", run)
     assert ToolRunner().run(_tool(timeout_s=timeout_s), {}) == {}
@@ -287,7 +287,7 @@ def test_invalid_output_budget_is_a_configuration_error(cap):
 def test_stderr_character_budget_survives_byte_bounded_capture(monkeypatch):
     def bounded_capture(code, **kwargs):
         stderr = ("é" * 600).encode()[:kwargs["max_output_bytes"]].decode()
-        return SandboxResult("", stderr, 7, False, False)
+        return SandboxResult("", stderr, 7, False)
 
     monkeypatch.setattr("factorylab.cortex.tools.run_python", bounded_capture)
     assert ToolRunner(max_output_bytes=2).run(_tool(), {}) == {

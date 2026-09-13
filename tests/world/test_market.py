@@ -362,8 +362,8 @@ def test_x402_cli_probe_cap_refuses_before_reserve_read(monkeypatch, capsys):
     monkeypatch.setattr(cli, "_load_dotenv", lambda: None)
     monkeypatch.setattr("factorylab.world.market.http_request", fake)
     assert cli.main(["probe", "--provider", "x402", "--seller", "https://seller.test",
-                     "--model", "model/flash"]) == 1
-    assert "max-cost-usd" in capsys.readouterr().err
+                     "--model", "model/flash"]) == 2
+    assert capsys.readouterr().err == "factorylab probe: quote_above_cap\n"
     assert len(fake.calls) == 1 and not fake.payments
 
 

@@ -1,4 +1,4 @@
-"""The deciding agent's own propensity (spec A10).
+"""The deciding agent's own propensity.
 
 Essay II.I.b: a reward that is only a score builds ordinary no-regret learners,
 because nothing in it lets a learner reconstruct a road not taken. The remedy is

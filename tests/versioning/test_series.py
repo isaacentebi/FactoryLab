@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from factorylab.versioning import render, summary
+from factorylab.versioning.report import render, summary
 from factorylab.versioning.series import windows
 
 

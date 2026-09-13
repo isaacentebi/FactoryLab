@@ -1,27 +1,12 @@
-"""Cold-audit regressions use only synthetic venues, models and credentials."""
+"""Each subsystem's bookkeeping survives an awkward ordering in a neighbouring one."""
 
-from dataclasses import replace
 from types import SimpleNamespace
 
 from factorylab.charter.amendment import PredictedEffect
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.runtime.live import LiveClock
-from factorylab.runtime.loop import Runtime
-from factorylab.runtime.worlds import load_manifest
 from factorylab.world.events import WorldEvent, WorldEventKind
-from factorylab.world.exchange import FakeExchange
-from factorylab.world.scripted import ScriptedProvider
-
-
-def make_runtime(*, balance=100_000_000, live=False, clock_source=None):
-    manifest = load_manifest("scripted")
-    if live:
-        manifest = replace(manifest, exchange=replace(manifest.exchange, kind="hyperliquid"),
-                           drip=None)
-    return Runtime(manifest, events=0, seed=1, initial_balance_micro=balance,
-                   ledger_path=None, drip=False, router_gamma=.1,
-                   exchange=FakeExchange(), provider=ScriptedProvider(),
-                   clock_source=clock_source)
+from tests.conftest import make_runtime
 
 
 def test_both_live_fill_cursors_and_launch_snapshot_start_at_launch():

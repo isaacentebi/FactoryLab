@@ -32,11 +32,11 @@ Python 3.13 and `uv`. The scripted worlds need no network, no keys and no money.
 
 ```bash
 uv sync
-uv run factorylab run --world scripted --events 400 --seed 1
+uv run factorylab run --world scripted --events 500 --seed 1
 uv run factorylab run --world scripted-crash --events 600 --seed 2
 ```
 
-The first runs a deterministic world for 400 events and prints a summary. The second halves the price of BTC four times under a leveraged long; the world dies of `balance_zero` and releases its key. Then the tests:
+The first runs a deterministic world for 500 events and prints a summary. The second halves the price of BTC four times under a leveraged long; the world dies of `balance_zero` and releases its key. Then the tests:
 
 ```bash
 uv run pytest

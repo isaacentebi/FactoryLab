@@ -22,7 +22,7 @@ from typing import Any
 
 Money = int
 
-# A10: the kernel bounds only the size of a declared action set, never its contents.
+# The kernel bounds only the size of a declared action set, never its contents.
 MAX_DECLARED_ACTIONS = 32
 MAX_ACTION_ID_CHARS = 64
 PROPENSITY_TOLERANCE = 1e-6

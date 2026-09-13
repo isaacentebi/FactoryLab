@@ -10,7 +10,7 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelResponse
 from factorylab.world.scripted import ScriptedProvider
-from tests.runtime.test_fa_defects import make_runtime
+from tests.conftest import make_runtime
 
 
 def test_every_published_tool_accepts_its_examples():

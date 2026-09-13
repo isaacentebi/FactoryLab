@@ -2,7 +2,7 @@ import pytest
 
 from factorylab.charter.controller import CardRegion, PriceController, violation
 from factorylab.kernel.ledger import Ledger
-from factorylab.versioning import summary
+from factorylab.versioning.report import summary
 from factorylab.versioning.versions import slope
 
 

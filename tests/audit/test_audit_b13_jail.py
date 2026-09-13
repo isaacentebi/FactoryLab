@@ -50,7 +50,7 @@ def test_run_refuses_a_world_offering_tools_when_the_jail_cannot_start(monkeypat
 
 
 def test_scripted_world_registers_and_calls_a_population_tool_in_the_jail(tmp_path):
-    """Spec v0.6 section 7.2's condition: one population tool registered and then called,
+    """The launch condition: one population tool registered and then called,
     with the calls and their results in the diary, not only in the summary."""
     require_jail()
     m = load_manifest("scripted")

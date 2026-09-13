@@ -1,9 +1,8 @@
-"""Command-line entry point.
+"""The operator's whole interface to a world: create one, watch it, read it after it dies.
 
-Commands:
-  factorylab manifest --world <name>   validate a manifest and print its hash
-  factorylab probe --world <name>      read live mids and funding (network)
-  factorylab run --world <name> ...    run the event loop (runtime workstream)
+Every failure here prints one code from ``runtime.reasons.Reason`` and nothing
+else, so a supervisor can classify it and no provider message, address or key
+can reach a log.
 """
 
 from __future__ import annotations
@@ -11,11 +10,52 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping
+from types import MappingProxyType
 
+from factorylab.runtime.reasons import (
+    PAYMENT_MAY_HAVE_SETTLED,
+    CredentialMissing,
+    Reason,
+    record,
+)
 from factorylab.runtime.worlds import load_manifest
 
+ARGUMENT_EXIT = 2  # A refusal that protects a world, a key or the committed first move.
 TERMINATED_EXIT = 3  # deploy/factorylab.service: SuccessExitStatus + RestartPreventExitStatus
 LEDGER_BUSY_EXIT = 4
+NO_LAUNCH_EXIT = 5  # deploy/start.sh: authenticated evidence shows no world exists yet.
+
+EPILOG = """exit codes:
+  0  the command succeeded
+  1  the command failed; the reason code says how
+  2  a refusal: an argument, a key, or the world's own committed first move
+  3  the world is terminated; this is final and the supervisor must not restart
+  4  another process holds the ledger's writer lock
+  5  no launch exists in the ledger yet (start.sh then runs the world)
+
+never do this:
+  never read, print or commit a *.key file while its world is alive
+  never write worlds/funded.toml or touch a running world: the first move is
+  made once, and after it the experimenter does not intervene
+"""
+
+
+#: What a command that only reads says when it cannot finish. Money and worlds
+#: have their own handlers below; these five neither spend nor write.
+READ_ONLY_FAILURE: Mapping[str, Reason] = MappingProxyType({
+    "manifest": Reason.MANIFEST_UNAVAILABLE,
+    "probe": Reason.VENUE_UNREACHABLE,
+    "report": Reason.EVIDENCE_UNREADABLE,
+    "postmortem": Reason.EVIDENCE_UNREADABLE,
+    "versions": Reason.EVIDENCE_UNREADABLE,
+})
+
+
+def refuse(command: str, reason: Reason) -> None:
+    """Print exactly one reason code for one command, and leave it where a supervisor reads it."""
+    print(f"factorylab {command}: {reason.value}", file=sys.stderr)
+    record(reason)
 
 
 class KeyFileModeError(ValueError):
@@ -78,13 +118,14 @@ def _cmd_manifest(args: argparse.Namespace) -> int:
 
 def _cmd_probe(args: argparse.Namespace) -> int:
     if args.provider == "x402":
+        from factorylab.kernel.money import nonnegative_usd_micro
         from factorylab.world.market import X402Provider, seller_root
         from factorylab.world.models import ModelRequest
-        from factorylab.world.x402 import BASE_RPC, X402Error, usd_micro
+        from factorylab.world.x402 import BASE_RPC
 
         if not args.seller or not args.model:
-            print("x402 probe requires --seller URL --model M", file=sys.stderr)
-            return 2
+            refuse("probe", Reason.ARGUMENTS_INCOMPLETE)
+            return ARGUMENT_EXIT
         model_id = f"x402:{seller_root(args.seller)}#{args.model}"
         provider = X402Provider(rpc=args.rpc or BASE_RPC)
         req = ModelRequest(
@@ -94,8 +135,9 @@ def _cmd_probe(args: argparse.Namespace) -> int:
             32,
         )
         quote = provider.quote(req)
-        if quote.amount_micro > usd_micro(args.max_cost_usd):
-            raise X402Error("Probe quote exceeds --max-cost-usd")
+        if quote.amount_micro > nonnegative_usd_micro(args.max_cost_usd, rounding="floor"):
+            refuse("probe", Reason.QUOTE_ABOVE_CAP)
+            return ARGUMENT_EXIT
         provider.register(model_id, quote.amount_micro)
         response = provider.complete(req, quoted=quote)
         settlement = response.raw.get("settlement") or {}
@@ -121,8 +163,8 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         from factorylab.world.x402 import VENICE_URL
 
         if not args.model or not args.model.startswith("venice:"):
-            print("Venice probe requires --model venice:<id>", file=sys.stderr)
-            return 2
+            refuse("probe", Reason.ARGUMENTS_INCOMPLETE)
+            return ARGUMENT_EXIT
         provider = VeniceProvider(
             base_url=args.base_url or VENICE_URL,
             reasoning_config={args.model: {"enabled": False}},
@@ -151,14 +193,14 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         )
         return 0
     if not args.world:
-        print("probe requires --world or --provider venice --model venice:<id>", file=sys.stderr)
-        return 2
+        refuse("probe", Reason.ARGUMENTS_INCOMPLETE)
+        return ARGUMENT_EXIT
     from factorylab.world.probe import probe_hyperliquid
 
     m = load_manifest(args.world)
     if m.exchange.kind != "hyperliquid":
-        print(f"world {m.name!r} has no live venue to probe", file=sys.stderr)
-        return 2
+        refuse("probe", Reason.NO_LIVE_VENUE)
+        return ARGUMENT_EXIT
     out = probe_hyperliquid(mainnet=m.exchange.mainnet, coins=m.exchange.coins)
     print(json.dumps(out, indent=2))
     return 0
@@ -198,8 +240,8 @@ def _cmd_reserve(args: argparse.Namespace) -> int:
             # O_EXCL refuses existing files and symlinks without ever opening them for reading.
             fd = os.open(Path.cwd() / "reserve.key", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
-            print("reserve.key already exists; refusing to overwrite", file=sys.stderr)
-            return 2
+            refuse("reserve init", Reason.RESERVE_KEY_EXISTS)
+            return ARGUMENT_EXIT
         with os.fdopen(fd, "w") as stream:
             account = Account.create(os.urandom(32))
             os.fchmod(stream.fileno(), 0o600)
@@ -212,16 +254,15 @@ def _cmd_reserve(args: argparse.Namespace) -> int:
         from factorylab.runtime.treasury_cli import world_ledger_exists
 
         if world_ledger_exists(Path.cwd(), getattr(args, "ledger", None)):
-            print("World ledger exists: CLI top-up is pre-launch only; use the population's "
-                  "treasury.transfer to_venice contract.", file=sys.stderr)
-            return 2
+            refuse("reserve topup", Reason.WORLD_EXISTS)
+            return ARGUMENT_EXIT
         try:
             amount = Decimal(args.usd)
             if not amount.is_finite() or amount != Decimal("5"):
                 raise ValueError
         except (InvalidOperation, ValueError):
-            print("Only --usd 5 is supported by the verified Venice quote", file=sys.stderr)
-            return 2
+            refuse("reserve topup", Reason.TOPUP_AMOUNT_REFUSED)
+            return ARGUMENT_EXIT
     client = X402Client(base_url=args.base_url or VENICE_URL, rpc=args.rpc or BASE_RPC)
     if args.reserve_cmd == "status":
         usdc, eth, venice = client.usdc_balance(), client.eth_balance(), client.venice_balance()
@@ -257,23 +298,20 @@ def _cmd_reserve(args: argparse.Namespace) -> int:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
-    try:
-        from factorylab.runtime.loop import run_world
-    except ImportError:
-        print("factorylab run: the runtime loop is not built yet", file=sys.stderr)
-        return 1
+    from factorylab.runtime.loop import run_world
+
     m = load_manifest(args.world)
     if args.tick_interval:
-        from factorylab.runtime.worlds import _ns
+        from factorylab.runtime.worlds import duration_ns
 
-        if _ns(args.tick_interval) != m.tick_interval_ns:
-            print("factorylab run: tick_override_refused", file=sys.stderr)
-            return 2
+        if duration_ns(args.tick_interval) != m.tick_interval_ns:
+            refuse("run", Reason.TICK_OVERRIDE_REFUSED)
+            return ARGUMENT_EXIT
     events = args.events
     if args.duration:
-        from factorylab.runtime.worlds import _ns
+        from factorylab.runtime.worlds import duration_ns
 
-        events = max(1, _ns(args.duration) // m.tick_interval_ns)
+        events = max(1, duration_ns(args.duration) // m.tick_interval_ns)
     summary = run_world(
         m,
         events=events,
@@ -358,15 +396,15 @@ def _cmd_resume(args: argparse.Namespace, *, load_keys: bool = False) -> int:
         with LedgerLock(args.ledger) as lock:
             return _cmd_resume_locked(args, load_keys=load_keys, lock=lock)
     except LedgerBusyError:
-        print("factorylab resume: ledger_busy: ledger already in use", file=sys.stderr)
+        refuse("resume", Reason.LEDGER_BUSY)
         return LEDGER_BUSY_EXIT
     except KeyFileModeError:
-        print("factorylab resume: credentials_unavailable", file=sys.stderr)
-        return 2
+        refuse("resume", Reason.CREDENTIAL_UNSAFE)
+        return ARGUMENT_EXIT
     except Exception as exc:
         from factorylab.runtime.resume import resume_reason
 
-        print(f"factorylab resume: {resume_reason(exc).value}", file=sys.stderr)
+        refuse("resume", resume_reason(exc))
         return 1
 
 
@@ -384,14 +422,14 @@ def _cmd_resume_locked(args: argparse.Namespace, *, load_keys: bool, lock) -> in
         summary = resume_world(manifest, args.ledger, _lock=lock)
     except Exception as exc:
         if isinstance(exc, KeyFileModeError):
-            print("factorylab resume: credentials_unavailable", file=sys.stderr)
-            return 2
+            refuse("resume", Reason.CREDENTIAL_UNSAFE)
+            return ARGUMENT_EXIT
         if isinstance(exc, LedgerIntegrityError) and str(exc) == "cannot resume a terminated world":
-            print("factorylab resume: terminated: world terminated", file=sys.stderr)
+            refuse("resume", Reason.TERMINATED)
             return TERMINATED_EXIT
-        reason = resume_reason(exc).value
-        print(f"factorylab resume: {reason}", file=sys.stderr)
-        return 5 if reason == "no_launch" else 1
+        reason = resume_reason(exc)
+        refuse("resume", reason)
+        return NO_LAUNCH_EXIT if reason is Reason.NO_LAUNCH else 1
     print(json.dumps(summary, indent=2, default=str))
     return TERMINATED_EXIT if summary["terminated"] else 0
 
@@ -401,15 +439,20 @@ def _cmd_wake(args: argparse.Namespace) -> int:
     from factorylab.runtime.wake import UNAVAILABLE, write_wake
 
     data = write_wake(args.ledger, args.out)
-    return 1 if data["wallet_series"] == UNAVAILABLE else 0
+    if data["wallet_series"] == UNAVAILABLE:
+        refuse("wake", Reason.WAKE_UNAVAILABLE)
+        return 1
+    return 0
 
 
 def _cmd_versions(args: argparse.Namespace) -> int:
-    """Behaviour-based versions, pathologies and early warnings over a dead world's diary
-    (spec v0.8 A3). Thresholds come from the genesis manifest carried by Launch.
-    Read-only; needs the released key like postmortem."""
-    from factorylab.versioning import render, summary
+    """Behaviour-based versions, pathologies and early warnings over a dead world's diary.
+
+    Thresholds come from the genesis manifest carried by Launch. Read-only;
+    needs the released key like postmortem.
+    """
     from factorylab.versioning.reader import read_diary
+    from factorylab.versioning.report import render, summary
 
     report = summary(read_diary(args.ledger, args.key))
     print(json.dumps(report, default=str) if args.json else render(report))
@@ -424,7 +467,8 @@ def _cmd_postmortem(args: argparse.Namespace) -> int:
     """
     from cryptography.fernet import Fernet
 
-    key = open(args.key, "rb").read().strip()
+    with open(args.key, "rb") as stream:
+        key = stream.read().strip()
     f = Fernet(key)
     kinds = set(args.kinds.split(",")) if args.kinds else None
     shown = 0
@@ -459,64 +503,91 @@ def _cmd_postmortem(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_treasury_testnet(args: argparse.Namespace) -> int:
+def _cmd_treasury(args: argparse.Namespace) -> int:
     from factorylab.runtime.treasury_cli import command
 
     return command(args)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="factorylab")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    """Build the whole command surface, with help on every command and argument."""
+    p = argparse.ArgumentParser(
+        prog="factorylab",
+        description="Run, watch and read back one bounded world. A world is created once "
+                    "from a manifest in worlds/, runs unattended until it dies, and is only "
+                    "read afterwards from its own sealed diary.",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = p.add_subparsers(dest="cmd", required=True, metavar="command")
 
-    m = sub.add_parser("manifest", help="validate a world manifest and print its hash")
-    m.add_argument("--world", required=True)
+    m = sub.add_parser("manifest", help="validate a world manifest and print its hash",
+                       description="Parse a manifest, print its canonical hash and charter. "
+                                   "Writes nothing.")
+    m.add_argument("--world", required=True,
+                   help="a manifest name in worlds/ (without .toml), or a path to one")
     m.set_defaults(func=_cmd_manifest)
 
-    pr = sub.add_parser("probe", help="read live venue data for a world (network)")
+    pr = sub.add_parser("probe", help="read live venue data for a world (network)",
+                        description="Read one live price, model completion or seller quote. "
+                                    "Touches the network and, for x402, the reserve's money.")
     probe_target = pr.add_mutually_exclusive_group(required=True)
-    probe_target.add_argument("--world")
-    probe_target.add_argument("--provider", choices=("venice", "x402"))
-    pr.add_argument("--model")
+    probe_target.add_argument("--world", help="probe this world's venue for mids and funding")
+    probe_target.add_argument("--provider", choices=("venice", "x402"),
+                              help="probe a compute rail instead of a venue")
+    pr.add_argument("--model", help="venice:<id>, or the seller's model name for x402")
     pr.add_argument("--seller", help="x402 seller root or chat-completions URL")
     pr.add_argument("--max-cost-usd", default="0.10", help="x402 probe payment cap (default $0.10)")
     pr.add_argument("--base-url", help="Venice API root, including /api/v1")
     pr.add_argument("--rpc", help="Base RPC override for the x402 reserve balance check")
     pr.set_defaults(func=_cmd_probe)
 
-    market = sub.add_parser("market", help="discover public x402 sellers")
-    market_sub = market.add_subparsers(dest="market_cmd", required=True)
-    discovery = market_sub.add_parser("discover")
-    discovery.add_argument("--url-substring")
-    discovery.add_argument("--query")
-    discovery.add_argument("--limit", type=int, default=20)
+    market = sub.add_parser("market", help="discover public x402 sellers",
+                            description="Read the public x402 discovery index. "
+                                        "Loads no credentials and pays nothing.")
+    market_sub = market.add_subparsers(dest="market_cmd", required=True, metavar="subcommand")
+    discovery = market_sub.add_parser("discover", help="list sellers from the public index")
+    discovery.add_argument("--url-substring", help="keep only resources whose URL contains this")
+    discovery.add_argument("--query", help="free-text query passed to the index")
+    discovery.add_argument("--limit", type=int, default=20, help="maximum sellers to print")
     discovery.add_argument("--discovery-url", help="override the public discovery index URL")
     discovery.set_defaults(func=_cmd_market)
 
-    reserve = sub.add_parser("reserve", help="initialize, inspect or fund the Venice reserve")
-    reserve_sub = reserve.add_subparsers(dest="reserve_cmd", required=True)
+    reserve = sub.add_parser("reserve", help="initialize, inspect or fund the Venice reserve",
+                             description="The reserve is the wallet that buys Venice compute. "
+                                         "Only init writes a key; only topup spends money.")
+    reserve_sub = reserve.add_subparsers(dest="reserve_cmd", required=True, metavar="subcommand")
     init = reserve_sub.add_parser("init", help="create reserve.key once; print only its address")
     init.set_defaults(func=_cmd_reserve)
-    for name in ("status", "topup"):
-        command = reserve_sub.add_parser(name)
+    for name, summary in (("status", "print reserve balances without spending"),
+                          ("topup", "buy exactly $5 of Venice credit, before launch only")):
+        command = reserve_sub.add_parser(name, help=summary)
         command.add_argument("--rpc", help="Base JSON-RPC URL")
         command.add_argument("--base-url", help="Venice API root, including /api/v1")
         if name == "topup":
-            command.add_argument("--usd", required=True, help="exactly 5; never rounded")
+            command.add_argument("--usd", required=True,
+                                 help="exactly 5; the quote is verified and never rounded")
             command.add_argument("--ledger", help="world ledger path to check before seed funding")
         command.set_defaults(func=_cmd_reserve)
 
-    r = sub.add_parser("run", help="run a world's event loop")
-    r.add_argument("--world", required=True)
-    r.add_argument("--events", type=int, default=200)
-    r.add_argument("--seed", type=int, default=None)
-    r.add_argument("--initial-balance", type=int, default=None, help="micro-USD override")
-    r.add_argument("--ledger", default=None, help="ledger file path; in-memory if omitted")
+    r = sub.add_parser("run", help="run a world's event loop",
+                       description="Create a world from its manifest and run it. A world is "
+                                   "created once: an existing ledger is never reopened here.")
+    r.add_argument("--world", required=True,
+                   help="a manifest name in worlds/ (without .toml), or a path to one")
+    r.add_argument("--events", type=int, default=200,
+                   help="world events to run (default 200); internal events they cause are extra")
+    r.add_argument("--seed", type=int, default=None,
+                   help="seed for every sampled decision; omit for the manifest's own")
+    r.add_argument("--initial-balance", type=int, default=None,
+                   help="starting wallet balance in micro-USD, overriding the manifest")
+    r.add_argument("--ledger", default=None,
+                   help="ledger file path; its .key is written beside it. In-memory if omitted")
     r.add_argument("--no-drip", action="store_true", help="launch without the manifest's drip")
-    r.add_argument(
-        "--duration", default=None, help="wall-clock length like 30m; overrides --events"
-    )
-    r.add_argument("--tick-interval", default=None, help="override the manifest tick, e.g. 10s")
+    r.add_argument("--duration", default=None,
+                   help="wall-clock length like 30m; overrides --events")
+    r.add_argument("--tick-interval", default=None,
+                   help="must equal the manifest tick, e.g. 10s; any other value is refused")
     r.add_argument(
         "--kill-at-end",
         action="store_true",
@@ -524,74 +595,104 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.set_defaults(func=_cmd_run)
 
-    treasury = sub.add_parser("treasury-testnet", help="journaled native CCTP testnet acceptance")
-    treasury_sub = treasury.add_subparsers(dest="treasury_command", required=True)
-    for name in ("status", "transfer", "advance"):
-        command = treasury_sub.add_parser(name)
-        command.add_argument("--ledger", default="runs/treasury-testnet.jsonl")
+    treasury = sub.add_parser(
+        "treasury", help="journaled native CCTP treasury acceptance",
+        description="Move USDC between the venue and the reserve over the real rails, "
+                    "journaled and recoverable. Testnet only.")
+    treasury_sub = treasury.add_subparsers(dest="treasury_command", required=True,
+                                           metavar="subcommand")
+    for name, summary in (("status", "print the journal's state and both rails' balances"),
+                          ("transfer", "submit one transfer and journal every step"),
+                          ("advance", "continue an interrupted transfer; never start another")):
+        command = treasury_sub.add_parser(name, help=summary)
+        command.add_argument("--ledger", default="runs/treasury-testnet.jsonl",
+                             help="acceptance journal path")
+        command.add_argument("--network", default="testnet", choices=("testnet",),
+                             help="the only network these rails accept")
         if name == "transfer":
-            command.add_argument("--direction", required=True, choices=("to_reserve", "to_venue"))
-            command.add_argument("--usd", required=True)
-        command.set_defaults(func=_cmd_treasury_testnet)
+            command.add_argument("--direction", required=True, choices=("to_reserve", "to_venue"),
+                                 help="which way the USDC moves")
+            command.add_argument("--usd", required=True, help="amount in USD, as text")
+        command.set_defaults(func=_cmd_treasury)
 
-    resume = sub.add_parser("resume", help="continue a process-interrupted world")
-    resume.add_argument("--world", required=True)
+    resume = sub.add_parser("resume", help="continue a process-interrupted world",
+                            description="Reopen an existing world after its process died, "
+                                        "replay its authenticated tail and carry on. Refuses "
+                                        "anything it cannot authenticate.")
+    resume.add_argument("--world", required=True, help="the world's original manifest name")
     resume.add_argument("--ledger", required=True, help="ledger with an adjacent .key file")
     resume.set_defaults(func=_cmd_resume)
 
-    wake = sub.add_parser("wake", help="publish sealed aggregates and account balances")
-    wake.add_argument("--ledger", required=True)
-    wake.add_argument("--out", required=True)
+    wake = sub.add_parser("wake", help="publish sealed aggregates and account balances",
+                          description="Write the one public page a living world has. "
+                                      "Reads the diary; publishes only role totals and the "
+                                      "world block the population already sees.")
+    wake.add_argument("--ledger", required=True, help="the living world's ledger")
+    wake.add_argument("--out", required=True, help="directory for wake.json and wake.html")
     wake.set_defaults(func=_cmd_wake)
 
-    rp = sub.add_parser("report", help="print a run summary readably")
-    rp.add_argument("summary")
+    rp = sub.add_parser("report", help="print a run summary readably",
+                        description="Format a summary JSON file that run or resume printed.")
+    rp.add_argument("summary", help="path to a summary JSON file")
     rp.set_defaults(func=_cmd_report)
 
-    pm = sub.add_parser("postmortem", help="decrypt a dead world's diary and print entries")
-    pm.add_argument("ledger")
-    pm.add_argument("key")
+    pm = sub.add_parser("postmortem", help="decrypt a dead world's diary and print entries",
+                        description="Read the interior of a world that has died. Its key is "
+                                    "released only by termination; reading a living world's "
+                                    "key breaks the non-intervention covenant.")
+    pm.add_argument("ledger", help="the dead world's ledger")
+    pm.add_argument("key", help="the released .key file beside it")
     pm.add_argument("--kinds", default=None, help="comma list, e.g. invocation,event:Registered")
-    pm.add_argument("--limit", type=int, default=50)
-    pm.add_argument("--width", type=int, default=400)
+    pm.add_argument("--limit", type=int, default=50, help="maximum entries to print")
+    pm.add_argument("--width", type=int, default=400, help="characters of each entry to print")
     pm.set_defaults(func=_cmd_postmortem)
 
-    vs = sub.add_parser("versions", help="version a dead world's diary by behaviour")
-    vs.add_argument("ledger")
-    vs.add_argument("key")
+    vs = sub.add_parser("versions", help="version a dead world's diary by behaviour",
+                        description="Segment a dead world into behavioural versions and name "
+                                    "the pathologies it died of. Thresholds come from the "
+                                    "genesis manifest, not from this command.")
+    vs.add_argument("ledger", help="the dead world's ledger")
+    vs.add_argument("key", help="the released .key file beside it")
     vs.add_argument("--json", action="store_true", help="print the full summary as JSON")
     vs.set_defaults(func=_cmd_versions)
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Dispatch one command, translating every failure into one reason code."""
     args = build_parser().parse_args(argv)
     if args.cmd == "run":
+        from factorylab.cortex.sandbox import NoJail
         from factorylab.kernel.ledger import LedgerBusyError
 
         try:
             _load_dotenv()
             return int(args.func(args))
-        except LedgerBusyError as exc:
-            print(f"factorylab run: {exc}", file=sys.stderr)
+        except LedgerBusyError:
+            refuse("run", Reason.LEDGER_BUSY)
             return LEDGER_BUSY_EXIT
-        except KeyFileModeError as exc:
-            print(f"factorylab run: {exc}", file=sys.stderr)
-            return 2
-    if args.cmd == "treasury-testnet":
-        from factorylab.world.evm import RailError
-
+        except KeyFileModeError:
+            refuse("run", Reason.CREDENTIAL_UNSAFE)
+            return ARGUMENT_EXIT
+        except CredentialMissing:
+            refuse("run", Reason.CREDENTIAL_MISSING)
+            return ARGUMENT_EXIT
+        except NoJail:
+            refuse("run", Reason.JAIL_UNAVAILABLE)
+            return ARGUMENT_EXIT
+        except Exception:
+            # A world's interior — provider bodies, addresses, keys — is never
+            # printed, not even while it is failing to be created.
+            refuse("run", Reason.ADAPTER_UNAVAILABLE)
+            return 1
+    if args.cmd == "treasury":
         try:
             _load_dotenv()
             return int(args.func(args))
-        except RailError as exc:
-            print(str(exc), file=sys.stderr)
         except Exception:
-            print(
-                "Testnet treasury unavailable; preserve the journal and reconcile its references."
-                " No new transfer should be submitted to replace an uncertain one.",
-                file=sys.stderr,
-            )
+            refuse("treasury", Reason.TREASURY_UNAVAILABLE)
+            print("Preserve the journal and reconcile its references. No new transfer should"
+                  " be submitted to replace an uncertain one.", file=sys.stderr)
         return 1
     if args.cmd in {"wake", "resume"}:
         try:
@@ -600,27 +701,19 @@ def main(argv: list[str] | None = None) -> int:
             _load_dotenv()
             return int(args.func(args))
         except Exception:
-            print(f"factorylab {args.cmd}: unavailable", file=sys.stderr)
+            refuse(args.cmd, Reason.ADAPTER_UNAVAILABLE)
             return 1
     is_reserve = args.cmd == "reserve"
     is_venice_probe = args.cmd == "probe" and args.provider == "venice"
     is_x402 = args.cmd == "market" or (args.cmd == "probe" and args.provider == "x402")
     if is_x402:
-        from factorylab.world.x402 import X402Error
-
         try:
             if args.cmd == "probe":
                 _load_dotenv()
             return int(args.func(args))
-        except X402Error as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
         except Exception:
-            print(
-                "Market command failed; check endpoint and reserve configuration. "
-                "A submitted payment may have settled; do not blindly retry.",
-                file=sys.stderr,
-            )
+            refuse(args.cmd, Reason.MARKET_UNAVAILABLE)
+            print(PAYMENT_MAY_HAVE_SETTLED, file=sys.stderr)
             return 1
     if is_reserve or is_venice_probe:
         try:
@@ -630,22 +723,25 @@ def main(argv: list[str] | None = None) -> int:
                 from factorylab.runtime.treasury_cli import world_ledger_exists
 
                 if world_ledger_exists(Path.cwd(), args.ledger):
-                    print("World ledger exists: CLI top-up is pre-launch only; use the "
-                          "population's treasury.transfer to_venice contract.", file=sys.stderr)
-                    return 2
+                    refuse("reserve topup", Reason.WORLD_EXISTS)
+                    return ARGUMENT_EXIT
             if not (is_reserve and args.reserve_cmd == "init"):
                 _load_dotenv()
             return int(args.func(args))
         except Exception:
-            # Loading/signing/transport exceptions can include secrets. No traceback or body.
-            print(
-                "Reserve/Venice command failed; check key setup and endpoint status. "
-                "After a top-up submission, check balances before retrying.",
-                file=sys.stderr,
-            )
+            # Loading, signing and transport exceptions can include secrets. No text escapes.
+            refuse(args.cmd, Reason.RESERVE_UNAVAILABLE)
+            print(PAYMENT_MAY_HAVE_SETTLED, file=sys.stderr)
             return 1
-    _load_dotenv()
-    return int(args.func(args))
+    try:
+        _load_dotenv()
+        return int(args.func(args))
+    except KeyFileModeError:
+        refuse(args.cmd, Reason.CREDENTIAL_UNSAFE)
+        return ARGUMENT_EXIT
+    except Exception:
+        refuse(args.cmd, READ_ONLY_FAILURE.get(args.cmd, Reason.ADAPTER_UNAVAILABLE))
+        return 1
 
 
 if __name__ == "__main__":

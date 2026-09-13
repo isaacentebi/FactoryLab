@@ -8,10 +8,12 @@ from collections import deque
 from decimal import Decimal
 from typing import Any
 
+from factorylab.charter.book import CharterBook
 from factorylab.charter.charter import Charter
 from factorylab.charter.controller import CardRegion
 from factorylab.charter.measurement import CardSamples
 from factorylab.cortex.assembly import Assembly, AssemblySpec
+from factorylab.cortex.tools import ObservationRunner, ToolRunner
 from factorylab.kernel.events import Bus, Event
 from factorylab.kernel.ledger import Ledger, LedgerLock
 from factorylab.kernel.money import money_to_usd
@@ -23,10 +25,16 @@ from factorylab.kernel.timing import TimingRegistry, UpwardBuffer
 from factorylab.kernel.wallet import DripSchedule, Wallet
 from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cascade import CascadeGate
+from factorylab.runtime.compute import ContractConsequences
+from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.immune import ImmunePriceController
 from factorylab.runtime.live import LiveClock, LiveVenue, Reconciler, build_provider
 from factorylab.runtime.observations import seed_book
+from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.resume import JournalProxy, RecoveryJournal
+from factorylab.runtime.routing import RouterState
+from factorylab.runtime.shared import SimClock, _to_plain
+from factorylab.runtime.summary import RunStats, _assembly_contract, _model_contract
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement import (
     ConsequenceStanding,
@@ -41,29 +49,8 @@ from factorylab.world.exchange import FakeExchange, HyperliquidExchange, live_ex
 from factorylab.world.market import MultiProvider, X402Provider
 from factorylab.world.metering import Meter
 from factorylab.world.models import FakeModel, TokenPrice
-
-try:  # phase 3 packages; hard imports once every workstream is merged
-    from factorylab.world.venue_tools import VenueTools
-except ImportError:  # pragma: no cover
-    VenueTools = None  # type: ignore[assignment]
-
-
-from factorylab.cortex.tools import ObservationRunner, ToolRunner
-
-try:
-    from factorylab.charter.amendment import Amendment
-    from factorylab.charter.book import CharterBook
-except ImportError:  # pragma: no cover
-    Amendment = CharterBook = None  # type: ignore[assignment]
-
-
-from factorylab.runtime.compute import ContractConsequences
-from factorylab.runtime.feedback import PendingJudgement
-from factorylab.runtime.pricing import MeasureWindow
-from factorylab.runtime.routing import RouterState
-from factorylab.runtime.shared import SimClock, _to_plain
-from factorylab.runtime.summary import RunStats, _assembly_contract, _model_contract
 from factorylab.world.scripted import ScriptedProvider
+from factorylab.world.venue_tools import VenueTools
 
 
 class BootstrapMixin:
@@ -175,7 +162,7 @@ class BootstrapMixin:
 
             if ledger_path and Path(ledger_path).exists():
                 ledger = Ledger.reopen(ledger_path, manifest=manifest_data, clock_ns=self.clock)
-                if ledger._event_times()["launch"]:
+                if ledger.event_times()["launch"]:
                     raise FileExistsError("world already launched; use resume")
                 ledger.append({"kind": "launch.retry"})
             else:
@@ -314,15 +301,15 @@ class BootstrapMixin:
         for kind in self._routable_kinds():
             self._build_router(kind, "exp3", router_gamma)
         self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened event
-        # antagonist handle -> which of the two exposure facts have arrived (A5)
+        # antagonist handle -> which of the two exposure facts have arrived
         self.exposure_evidence: dict[str, dict[str, bool]] = {}
-        # judge handle -> top-meta (handle, conformity) pairs awaiting the judge's payoff (A14)
+        # judge handle -> top-meta (handle, conformity) pairs awaiting the judge's payoff
         self.pending_meta: dict[str, list[tuple[str, float]]] = {}
         # judge handle -> (verdict beat baseline, event, forecast handle), pruned by backstop
         self.verdict_outcomes: dict[str, tuple[int, int, str]] = {}
-        self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator (A14)
+        self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator
         self.sampling_history: list[dict[str, Any]] = []
-        # learning-death grant: the window it is live for and the assemblies that spent it (A13)
+        # learning-death grant: the window it is live for and the assemblies that spent it
         self.novelty_grant: dict[str, Any] = {"window": None, "consumed": []}
         self.delivered_seen: dict[str, int] = {
             st.learner.id: 0 for st in self._all_router_states()
@@ -343,22 +330,20 @@ class BootstrapMixin:
         self.tool_specs: dict[str, dict[str, Any]] = {}  # tool id -> spec dict (world block)
         self.population_tools: dict[str, Any] = {}
         self.tool_owner: dict[str, str] = {}  # population tool id -> proposing assembly id
-        self.venue_tools = None
-        if VenueTools is not None:
-            self.venue_tools = VenueTools(
-                self.exchange,
-                coins=manifest.exchange.coins,
-                spot_pairs=manifest.exchange.spot_pairs,
-                max_leverage=manifest.tools.max_leverage,
-            )
-            for spec in self.venue_tools.contracts():
-                self.tool_specs[spec.id] = {
-                    "id": spec.id,
-                    "description": spec.description,
-                    "args_schema": _to_plain(spec.args_schema),
-                    "price_micro_per_call": spec.price_micro_per_call,
-                    "kind": spec.kind,
-                }
+        self.venue_tools = VenueTools(
+            self.exchange,
+            coins=manifest.exchange.coins,
+            spot_pairs=manifest.exchange.spot_pairs,
+            max_leverage=manifest.tools.max_leverage,
+        )
+        for spec in self.venue_tools.contracts():
+            self.tool_specs[spec.id] = {
+                "id": spec.id,
+                "description": spec.description,
+                "args_schema": _to_plain(spec.args_schema),
+                "price_micro_per_call": spec.price_micro_per_call,
+                "kind": spec.kind,
+            }
         self.tool_specs["treasury.transfer"] = {
             "id": "treasury.transfer",
             "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, "
@@ -433,16 +418,16 @@ class BootstrapMixin:
         available = self.tool_runner.available
         self.ledger.append({"kind": "sandbox.availability", "available": available})
         self.tool_jail_available = available
-        # A11: population measurements run in the same jail, under the tool limits.
+        # Population measurements run in the same jail, under the tool limits.
         self.observation_runner = JournalProxy(ObservationRunner(), self.ledger, "observation")
         self.registered_observations: dict[str, dict[str, Any]] = {}
-        # A10: a learner over an assembly's own declared action set, and its open rounds.
+        # A learner over an assembly's own declared action set, and its open rounds.
         self.assembly_learners: dict[str, Any] = {}
         self.assembly_rounds: dict[str, str] = {}
         self.charter_book = CharterBook(self.ledger, self.charter)
         self.pending_votes: list[Any] = []  # committees awaiting tally
 
-        # prices (spec v0.6 section 8.1): regions are parsed here, the controller only prices
+        # prices: regions are parsed here, the controller only prices
         pr = manifest.prices
         self.controller = ImmunePriceController(
             self.ledger,
@@ -496,7 +481,7 @@ class BootstrapMixin:
                 _assembly_contract(seed.id, seed.role, seed.accepts, seed.max_tokens,
                                    emits=seed.emits, schemas=seed.schemas)
             )
-        # A11: the seed catalogue is registered the same way the population's own
+        # The seed catalogue is registered the same way the population's own
         # measurements are, so the vocabulary has one registry and one versioning
         # rule. What a seed does not carry is code: the kernel measures it natively.
         for observation in seed_book().all():

@@ -19,11 +19,11 @@ class ImmunePriceController(PriceController):
         """
         if not isfinite(value) or value <= 0:
             raise ValueError("decay must be finite and positive")
-        before = self.snapshot()["parameters"]["decay"]
+        before = self.decay
         if before != value:
             ledger.append({"kind": "immune.decay", "window": window,
                            "decay_before": before, "decay_after": value})
-            self._PriceController__decay = value
+            self.decay = value
 
 
 def _bases(saved: dict) -> list[dict]:
@@ -97,7 +97,7 @@ def close_window(rt, values: dict[str, float]) -> None:
                       "regions": current["regions"], "charter_edition": rt.charter.edition})
     rt.stats.immune_windows = windows
     # Learning death's response is this flag alone: the reserve reads it at the next
-    # window boundary and issues the one extra novelty trial per assembly (A13).
+    # window boundary and issues the one extra novelty trial per assembly.
     rt.stats.pathologies = flags
     # Oscillation has priority if coarse cells make the two signals overlap.
     if flags["thrash"]:

@@ -15,13 +15,14 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation
-from fractions import Fraction
+from decimal import Decimal
 from typing import Any
 from urllib import error, parse, request
 
 from eth_account import Account
 from eth_account.messages import encode_defunct, encode_typed_data
+
+from factorylab.kernel.money import nonnegative_usd_micro
 
 BASE_RPC = "https://mainnet.base.org"
 VENICE_URL = "https://api.venice.ai/api/v1"
@@ -79,19 +80,6 @@ def http_request(method: str, url: str, payload: dict | None, headers: dict) -> 
         if not isinstance(decoded, dict):
             raise X402Error("Expected a JSON object")
         return HTTPResponse(response.status, decoded, dict(response.headers.items()))
-
-
-def usd_micro(value: Any, *, round_up: bool = False) -> int:
-    """Finite nonnegative USD becomes integer micro-USD, down for balances, up for costs."""
-    try:
-        amount = Decimal(str(value))
-        if not amount.is_finite() or amount < 0:
-            raise ValueError
-        exact = Fraction(amount) * 1_000_000
-        quotient, remainder = divmod(exact.numerator, exact.denominator)
-        return quotient + int(round_up and remainder != 0)
-    except (InvalidOperation, ValueError, TypeError, OverflowError):
-        raise X402Error("Invalid USD amount") from None
 
 
 def redact(value: Any, secrets: tuple[str, ...]) -> Any:
@@ -442,7 +430,10 @@ class X402Client:
         data = response.body.get("data", response.body)
         if not isinstance(data, dict):
             raise X402Error("Invalid Venice balance response")
-        return usd_micro(data.get("balanceUsd"))
+        try:
+            return nonnegative_usd_micro(data.get("balanceUsd"), rounding="floor")
+        except ValueError:
+            raise X402Error("Invalid USD amount") from None
 
     def top_up(self, amount_micro: int = TOP_UP_MICRO) -> dict:
         """A validated $5 quote is signed once and submitted once, with no automatic retry.

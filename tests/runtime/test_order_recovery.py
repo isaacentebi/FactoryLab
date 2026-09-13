@@ -3,8 +3,8 @@ import pytest
 
 from factorylab.cortex.request import Return
 from factorylab.runtime.resume import restore_runtime, runtime_state
-from tests.runtime.test_fa_defects import make_runtime
-from tests.runtime.test_fc_children import parent_request
+from tests.conftest import make_runtime
+from tests.runtime.test_child_requests import parent_request
 
 
 def test_lost_ack_is_intented_before_submission_and_fill_keeps_original_handle(monkeypatch):

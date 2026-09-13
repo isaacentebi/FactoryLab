@@ -17,11 +17,12 @@ from collections import deque
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from decimal import Decimal
-from enum import Enum, StrEnum
+from enum import Enum
 from fractions import Fraction
 from typing import Any
 
-from factorylab.kernel.ledger import Ledger, LedgerLock, _canonical
+from factorylab.kernel.ledger import Ledger, LedgerLock, canonical
+from factorylab.runtime.reasons import CredentialMissing, Reason
 
 
 class ResumeError(RuntimeError):
@@ -32,36 +33,24 @@ class ResumeError(RuntimeError):
         self.code = code
 
 
-class ResumeReason(StrEnum):
-    """Refusal diagnostics expose only this closed set, never exception text."""
-
-    INVALID_SNAPSHOT = "invalid_snapshot"
-    LEDGER_INTEGRITY = "ledger_integrity"
-    MANIFEST_UNAVAILABLE = "manifest_unavailable"
-    VENUE_ACCOUNT_MISMATCH = "venue_account_mismatch"
-    ADAPTER_MISMATCH = "adapter_mismatch"
-    REPLAY_DIVERGED = "replay_diverged"
-    NO_LAUNCH = "no_launch"
-    ADAPTER_UNAVAILABLE = "adapter_unavailable"
-    TERMINATED = "terminated"
-    LEDGER_BUSY = "ledger_busy"
-    CREDENTIALS_UNAVAILABLE = "credentials_unavailable"
-
-
-def resume_reason(exc: Exception) -> ResumeReason:
+def resume_reason(exc: Exception) -> Reason:
     """Translate internal failures to bounded, non-secret operational diagnostics."""
-    from factorylab.kernel.ledger import LedgerIntegrityError
+    from factorylab.kernel.ledger import GenesisMismatchError, LedgerIntegrityError
 
     if isinstance(exc, ResumeError):
         try:
-            return ResumeReason(exc.code)
+            return Reason(exc.code)
         except ValueError:
-            return ResumeReason.INVALID_SNAPSHOT
+            return Reason.INVALID_SNAPSHOT
+    if isinstance(exc, CredentialMissing):
+        return Reason.CREDENTIAL_MISSING
+    if isinstance(exc, GenesisMismatchError):
+        return Reason.MANIFEST_MISMATCH
     if isinstance(exc, LedgerIntegrityError):
-        return ResumeReason.LEDGER_INTEGRITY
+        return Reason.LEDGER_INTEGRITY
     if isinstance(exc, (FileNotFoundError, ValueError)):
-        return ResumeReason.MANIFEST_UNAVAILABLE
-    return ResumeReason.ADAPTER_UNAVAILABLE
+        return Reason.MANIFEST_UNAVAILABLE
+    return Reason.ADAPTER_UNAVAILABLE
 
 
 class _ReplayFault(BaseException):
@@ -159,7 +148,7 @@ def encode(value: Any) -> Any:
         return {"$tuple": [encode(v) for v in value]}
     if isinstance(value, (set, frozenset)):
         return {"$frozen" if isinstance(value, frozenset) else "$set":
-                sorted((encode(v) for v in value), key=_canonical)}
+                sorted((encode(v) for v in value), key=canonical)}
     if isinstance(value, list):
         return [encode(v) for v in value]
     raise TypeError(f"unsupported checkpoint type: {type(value).__name__}")
@@ -289,7 +278,7 @@ class RecoveryJournal:
         actual = dict(entry)
         actual.setdefault("ts", self.clock())
         saved = {k: v for k, v in expected.items() if k not in ("seq", "prev_hash", "hash")}
-        if _canonical(actual) != _canonical(saved):
+        if canonical(actual) != canonical(saved):
             self.fail(
                 f"tail diverged at seq {expected['seq']}: "
                 f"expected {saved.get('kind')}, produced {actual.get('kind')}"
@@ -311,7 +300,7 @@ class RecoveryJournal:
         arguments = {k: v for k, v in kwargs.items() if k != "record"}
         replayed = self.peek() is not None
         ambiguous_retry = False
-        fingerprint = hashlib.sha256(_canonical(encode((args, arguments)))).hexdigest()
+        fingerprint = hashlib.sha256(canonical(encode((args, arguments)))).hexdigest()
         seq = self.append({"kind": "io.call", "name": name, "input_hash": fingerprint})
         if replayed and not deterministic:
             payment_submitted = False
@@ -461,7 +450,7 @@ _RUNTIME_FIELDS = (
     "event_schemas",
     "return_bindings",
     "return_events",
-    # W5: A11's registered measurements and A10's open assembly-learner rounds.
+    # The population's registered measurements and its open assembly-learner rounds.
     "registered_observations", "assembly_rounds",
     "connector_calls", "connector_calls_day",
 )
@@ -519,7 +508,7 @@ def runtime_state(rt) -> dict:
                               for a in rt.assemblies.values()]),
         "prices": encode(rt.prices.prices),
         "routers": [st.state() for st in rt._all_router_states()],
-        # A10: an assembly's own learner over its declared action set, frozen rounds included.
+        # An assembly's own learner over its declared action set, frozen rounds included.
         "assembly_learners": {aid: learner.state()
                               for aid, learner in rt.assembly_learners.items()},
         "retired_routers": [st.state() for st in rt.retired_routers.values()],
@@ -632,7 +621,7 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     )
     snapshot, tail = ledger._recovery_tail()
     if snapshot is None:
-        if not ledger._event_times()["launch"]:
+        if not ledger.event_times()["launch"]:
             raise ResumeError("ledger has not launched", code="no_launch")
         raise ResumeError("ledger has no recoverable snapshot")
     state = snapshot["state"]

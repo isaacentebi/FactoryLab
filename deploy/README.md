@@ -29,9 +29,10 @@ its checkout, or restore an older ledger over it.
    snapshot), S restored runtime state, T replay-tail objects, and A aggregate
    output. Streaming only the loop in `resume` or `wake` cannot remove the
    kernel reader's full-file allocation. A bounded reader/aggregate API requires
-   a separate kernel-ledger change; this FC pass uses the documentation fallback.
+   a separate kernel-ledger change; this runbook records the operating bound
+   instead.
 
-   The FC synthetic reader probe (1,000-character nested payloads) measured
+   A synthetic reader probe (1,000-character nested payloads) measured
    approximately linear growth when doubling item count; this is an allocation
    test, not a production sizing ratio. The cold audit measured 56 MB RSS for a
    6.2 MB diary on its fixture. Neither coefficient is a guaranteed upper bound:
@@ -151,12 +152,14 @@ FACTORY_WEBHOOK_URL=https://REPLACE_WITH_RECEIVER
 
 The receiver accepts precisely one JSON line such as
 `{"world":"funded","event":"terminated"}` or
-`{"world":"funded","event":"failed_resume"}`. It gets no reason, exception,
-summary, ledger path, balances, key or model content. HTTPS is required; redirects
-are not followed. Alert delivery is best effort (20-second timeout); failure
-cannot revive a terminated world. systemd loads the env file; scripts never
-source arbitrary shell from it. Test the receiver before launch using a synthetic
-payload, and configure its own retention and uptime before the covenant begins.
+`{"world":"funded","event":"failed_resume","reason":"manifest_mismatch"}`. The
+reason is one code from the closed vocabulary below, or `none`; it gets no
+exception text, summary, ledger path, balances, key or model content. HTTPS is
+required; redirects are not followed. Alert delivery is best effort (20-second
+timeout); failure cannot revive a terminated world. systemd loads the env file;
+scripts never source arbitrary shell from it. Test the receiver before launch
+using a synthetic payload, and configure its own retention and uptime before the
+covenant begins.
 
 The CLI loads the usual root key files; the ledger's existing
 `runs/funded.jsonl.key` is created by `run`, mode 0600, and reused privately by
@@ -209,11 +212,37 @@ choices, no live service upgrade, and no automatic replacement world.
 
 ### Exit-code contract
 
-| Path | Exit | Supervisor behavior |
+Every code the CLI can return, and what a supervisor does with it.
+
+| Exit | Path | Supervisor behavior |
 | --- | --- | --- |
-| Resume returns a live summary | 0 | Restart with the same saved budget |
-| Resume finds an authenticated Terminated event, or terminates while running | 3 | Final success; no restart; termination webhook |
-| Resume fails authentication, replay, credentials or provider setup | 1 | Failed-resume webhook; restart with backoff |
+| 0 | Resume returns a live summary; any command succeeded | Restart with the same saved budget |
+| 1 | Resume fails authentication, replay, credentials or provider setup | Failed-resume webhook; restart with backoff |
+| 2 | A refusal: an unsafe key file mode, a changed tick, a top-up after launch, a missing argument | Do not restart; the operator must act |
+| 3 | Resume finds an authenticated Terminated event, or the world terminates while running | Final success; no restart; termination webhook |
+| 4 | Another process already holds the ledger's writer lock | Do not start a second writer; investigate |
+| 5 | Authenticated startup evidence contains no Launch: no world exists yet | `start.sh` runs the world, then resumes |
+
+`factorylab --help` prints this table too, so an operator on the box has it
+without this file.
+
+### Reason codes
+
+Every failing command prints exactly one line, `factorylab <command>: <code>`,
+where the code comes from the closed vocabulary in `factorylab/runtime/reasons.py`
+(`ledger_integrity`, `manifest_mismatch`, `credential_missing` for a key the
+environment lacks, `credential_unsafe` for a key file whose mode or owner is
+wrong, `venue_unreachable`, `jail_unavailable`, and the rest). No exception
+text, no interpolation and no provider response body is ever printed, so nothing
+that could carry a key, an address or a body can reach a log or a webhook. The same
+code is written to `$RUNTIME_DIRECTORY/reason` (mode 0600, cleared at every
+start) and `alert.sh` puts it in the webhook body:
+
+```json
+{"world": "funded", "event": "failed_resume", "reason": "manifest_mismatch"}
+```
+
+A code the webhook cannot match against that vocabulary is reported as `none`.
 
 `run` retains its existing code 0; the wrapper immediately enters `resume` after
 it returns, which recognizes termination without another world event. Every

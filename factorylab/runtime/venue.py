@@ -6,8 +6,8 @@ import json
 from decimal import ROUND_CEILING, Decimal
 
 from factorylab.cortex.request import Return
-from factorylab.kernel.money import money_to_usd
-from factorylab.runtime.shared import _to_plain, _usd_to_micro
+from factorylab.kernel.money import money_to_usd, usd_to_micro
+from factorylab.runtime.shared import _to_plain
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import Order, OrderKind, OrderResult
 
@@ -17,7 +17,7 @@ class VenueMixin:
 
     def _equity_micro(self) -> int:
         try:
-            return _usd_to_micro(self.exchange.account().equity_usd)
+            return usd_to_micro(self.exchange.account().equity_usd, rounding="nearest")
         except RuntimeError:  # read-only live venue: the wallet is the only equity there is
             return self.wallet.balance
 
@@ -38,7 +38,7 @@ class VenueMixin:
                 )
         if not notionals:
             return
-        peak = max(_usd_to_micro(abs(value)) for value in notionals.values())
+        peak = max(usd_to_micro(abs(value), rounding="nearest") for value in notionals.values())
         previous = self.window.max_position_notional_micro
         if previous is None or peak > previous:
             self.ledger.append(
@@ -72,13 +72,13 @@ class VenueMixin:
                 we.payload["realized_usd"] = str(realized)
         for we in evs:
             if we.kind is WorldEventKind.FILL:
-                delta = _usd_to_micro(we.payload["realized_usd"]) - _usd_to_micro(
+                delta = usd_to_micro(we.payload["realized_usd"], rounding="nearest") - usd_to_micro(
                     we.payload["fee_usd"]
-                )
+                , rounding="nearest")
                 if delta:
                     settlements.append((delta, f"fill:{we.payload['order_id']}", "exchange_pnl"))
             elif we.kind is WorldEventKind.FUNDING:
-                paid = _usd_to_micro(we.payload["paid_usd"])
+                paid = usd_to_micro(we.payload["paid_usd"], rounding="nearest")
                 if paid:
                     settlements.append((-paid, f"funding:{we.payload['coin']}:{we.ts_ns}",
                                         "funding"))
@@ -90,17 +90,17 @@ class VenueMixin:
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
                 self.window.fills += 1
-                self.window.notional_micro += _usd_to_micro(
+                self.window.notional_micro += usd_to_micro(
                     Decimal(str(we.payload["size"])) * Decimal(str(we.payload["px"]))
-                )
-                realized = _usd_to_micro(we.payload["realized_usd"])
+                , rounding="nearest")
+                realized = usd_to_micro(we.payload["realized_usd"], rounding="nearest")
                 self.window.realized_pnl_micro += realized
-                fee = _usd_to_micro(we.payload["fee_usd"])
+                fee = usd_to_micro(we.payload["fee_usd"], rounding="nearest")
                 self.realized_to_date += realized
                 self.fees_to_date += fee
 
             elif we.kind is WorldEventKind.FUNDING:
-                paid = _usd_to_micro(we.payload["paid_usd"])
+                paid = usd_to_micro(we.payload["paid_usd"], rounding="nearest")
                 self.funding_to_date -= paid
 
             self.internal.append(self._kernel_event(we))

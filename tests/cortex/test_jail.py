@@ -46,7 +46,7 @@ def test_no_jail_refuses_registration_and_execution(monkeypatch, failure):
 
 
 def test_no_jail_is_visible_in_the_world_block(monkeypatch):
-    from tests.runtime.test_fa_defects import make_runtime
+    from tests.conftest import make_runtime
 
     monkeypatch.setattr(shutil, "which", lambda *args, **kwargs: None)
     rt = make_runtime()

@@ -2,7 +2,7 @@
 name = "factorylab"
 version = "0.4.0"
 description = "A bounded experimental world informed by The Superdark Factory: one wallet, a deterministic nervous system, ephemeral LLM assemblies."
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
     "hyperliquid-python-sdk>=0.24.0",
     "anthropic>=0.80.0",
@@ -36,7 +36,7 @@ addopts = "-m 'not network and not slow' -n auto"
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

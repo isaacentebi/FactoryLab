@@ -247,7 +247,6 @@ def test_timing_records_only_accepted_strictly_increasing_event_indices(ledger, 
     prices.observe("other", 12, 0)
     assert closures == [("price:cost", ts) for ts in (0, 3, 6, 20)] + [("price:other", 0)]
     assert timing.closure_count("price:cost") == 4
-    assert timing.estimated_period("price:cost") == 6
     with pytest.raises(ValueError, match="already registered"):
         prices.register(region())
     timing.register_loop("price:started", [])

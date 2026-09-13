@@ -3,7 +3,7 @@
 import hashlib
 from dataclasses import dataclass, fields, replace
 
-from factorylab.kernel.ledger import Ledger, _canonical
+from factorylab.kernel.ledger import Ledger, canonical
 from factorylab.kernel.queue import DecisionQueue, PropensityRecord
 from factorylab.kernel.registry import _freeze
 from factorylab.settlement.scoring import _require_id, _require_probability
@@ -56,7 +56,7 @@ class ForecastBook:
             for field in fields(forecast)
             if field.name != "seal"
         }
-        digest = hashlib.sha256(_canonical(payload)).hexdigest()
+        digest = hashlib.sha256(canonical(payload)).hexdigest()
         sealed = replace(forecast, seal=digest)
         existing = self.__forecasts.get(forecast.handle)
         if existing is not None:

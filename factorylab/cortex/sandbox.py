@@ -35,7 +35,6 @@ class SandboxResult:
     stderr: str
     returncode: int
     timed_out: bool
-    cpu_limited: bool
 
 
 # The jail binary is resolved on the system path only: the caller's PATH can
@@ -97,7 +96,7 @@ def _command(jail: str, work: Path, prefix: Path, python: Path, seccomp_fd: int)
     # grant is limited to this interpreter; dylibs must come from its prefix
     # or the OS shared cache. If the installed runtime needs more, the probe
     # fails closed instead of broadening the filesystem grant.
-    #
+
     # dyld's shared-cache lookup (dyld4::CacheFinder) opens the root directory
     # itself before any image loads; without that one read the interpreter is
     # aborted (SIGABRT from ignition_halt) before its first instruction. The
@@ -228,7 +227,6 @@ def run_python(
             stderr.read(max_output_bytes).decode("utf-8", errors="replace"),
             -1 if timed_out else proc.returncode,
             timed_out,
-            not timed_out and proc.returncode in (-9, -24, 137, 152),
         )
 
 

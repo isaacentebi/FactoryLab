@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from factorylab.charter.amendment import PredictedEffect
 from factorylab.cortex.registration import RouterProposal, parse_proposals
 from factorylab.cortex.request import Return
-from tests.runtime.test_fa_defects import make_runtime
+from tests.conftest import make_runtime
 
 
 def test_router_string_booleans_are_case_insensitive_and_do_not_use_truthiness():

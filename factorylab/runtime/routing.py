@@ -244,10 +244,10 @@ class RoutingMixin:
     def _higher_tier_universe(self, chosen: str) -> list[str]:
         """The assemblies that could judge the meta verdict ``chosen`` is about to emit.
 
-        Nothing judges its own output (A9), so the tier above this decision always
+        Nothing judges its own output , so the tier above this decision always
         excludes the meta making it: a recursive meta that is the only assembly
         accepting ``MetaVerdict`` is terminal on the tier it judges, and its
-        conformity is graded against the consequence (A14) rather than waiting for
+        conformity is graded against the consequence rather than waiting for
         a verdict that no one can give.
         """
         return sorted(
@@ -362,7 +362,7 @@ class RoutingMixin:
     def _novelty_grant_open(self, assembly_id: str) -> bool:
         """A learning-death grant is one extra trial per assembly, live only in the window
         it was issued for and spent by that assembly's first delivered trial beyond the
-        base allowance (spec A13); an unspent grant expires at the next boundary."""
+        base allowance; an unspent grant expires at the next boundary."""
         grant = self.novelty_grant
         return (grant["window"] == self.stats.reserve_windows
                 and assembly_id not in grant["consumed"])
@@ -371,7 +371,7 @@ class RoutingMixin:
                              *, refuse: str = ""):
         """A refused registration returns its trial to the window; only a registered
         contract consumes the novelty share. ``refuse`` states a refusal the registry
-        cannot see, so it is still paid for and refunded like any other (A13)."""
+        cannot see, so it is still paid for and refunded like any other."""
         receipt = self.reserve.reserve_for(contract, amount)
         try:
             if refuse:

@@ -268,8 +268,9 @@ def _description_from_prompt(text: str) -> str:
 def _inputs_from_prompt(text: str) -> dict[str, Any]:
     try:
         start = text.index("INPUTS\n") + len("INPUTS\n")
-        # The request renders further sections after the inputs (A10 adds PROPENSITY
-        # between the inputs and the schema); stop at whichever comes first.
+        # The request renders further sections after the inputs (a propensity
+        # declaration sits between the inputs and the schema); stop at whichever
+        # comes first.
         end = min(
             (text.index(header, start) for header in ("\n\nPROPENSITY", "\n\nOUTCOME SCHEMA")
              if header in text[start:]),

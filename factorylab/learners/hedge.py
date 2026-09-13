@@ -48,10 +48,6 @@ class Hedge:
         self._last_support = Support(support, tuple(a for a in self.actions if a not in support))
         return _weights(self._log_weights, support)
 
-    def last_support(self) -> Support:
-        """Return immutable feasible and unavailable IDs from the last distribution."""
-        return self._last_support
-
     def update(self, feedback: Feedback) -> None:
         """Multiply each weight by exp(-eta * loss), rejecting incomplete feedback."""
         if not isinstance(feedback, FullInfoFeedback):
