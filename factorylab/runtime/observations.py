@@ -23,8 +23,9 @@ if TYPE_CHECKING:
 
 # The per-decision attribution the runtime keeps on the same window object
 # is not a public window fact and never reaches a registered observation.
-PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_cards",
-                         "closed_prices")
+PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
+                         "closed_cards", "closed_prices")
+MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
 # not, so these are rebuilt by hand rather than copied through.
@@ -51,7 +52,7 @@ class Observation:
 
     @property
     def scale(self) -> float:
-        """The declared unit interval fixes normalization independently of a card."""
+        """Return the declared unit width, the fallback scale for zero-bound cards."""
         return self.unit_range[1] - self.unit_range[0]
 
     @property
@@ -276,7 +277,14 @@ def window_facts(window: Any) -> dict:
     it gets the numbers, never the handles, assembly ids, model ids or evaluator
     ids they were filed under.
 
-    Guarantees no string survives into the facts. Every public window fact is a
+    World series retain the latest 1024 samples in each window (across coins).
+    ``mids`` and ``funding`` map public coin symbols to [timestamp_ns, value]
+    pairs; mids are integer micro-USD and funding rates are dimensionless.
+    Wallet balances are integer micro-USD sampled at delivered ticks, alongside
+    ``tick_timestamps_ns``. Multi-window observations retain at most 1024 latest
+    samples per series too. Coin symbols are the only allowed text values.
+
+    Every other public window fact is a
     number (or a list of numbers), so a field that arrives carrying text — now or
     after some later field is added to the window — is withheld rather than
     disclosed, because a name is the one thing an identity can hide in.
@@ -286,6 +294,14 @@ def window_facts(window: Any) -> dict:
     for key, value in raw.items():
         if key in PRIVATE_WINDOW_FIELDS or key in ANONYMISED_WINDOW_FIELDS:
             continue
+        if key in ("mids", "funding"):
+            series = {}
+            for row in value[-MAX_WORLD_SAMPLES:]:
+                series.setdefault(row["coin"], []).append([row["ts_ns"], row["value"]])
+            facts[key] = series
+            continue
+        if key in ("wallet_balance_micro", "tick_timestamps_ns"):
+            value = value[-MAX_WORLD_SAMPLES:]
         if key.startswith("_"):
             continue
         plain = _plain(value)
@@ -382,12 +398,13 @@ class ObservationBook:
         if seed is not None:
             return seed
         entry = self.registered.get(key)
-        return None if entry is None else _from_entry(key, entry)
+        return None if entry is None or entry.get("retired") else _from_entry(key, entry)
 
     def all(self) -> list[Observation]:
         """Return every observation the factory can currently make, seeds first."""
         return list(CATALOGUE) + [
             _from_entry(key, entry) for key, entry in sorted(self.registered.items())
+            if not entry.get("retired")
         ]
 
     def value(self, observation: Observation, window: Any) -> float | None:
