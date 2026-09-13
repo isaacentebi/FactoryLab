@@ -10,7 +10,7 @@ from factorylab.cortex.request import Return
 from factorylab.kernel.ledger import canonical
 from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.resume import restore_runtime, runtime_state
-from factorylab.versioning.series import windows
+from factorylab.versioning.series import profile, windows
 from factorylab.versioning.versions import diagnose
 from tests.audit.test_v3_seat4_boundaries import _decision
 from tests.conftest import make_runtime
@@ -158,3 +158,73 @@ def test_immune_uses_frozen_regions_after_live_region_changes():
     close_window(rt, {"cost_per_return": 0})
     assert rt.stats.immune_windows[-1]["regions"] == frozen
     assert rt.stats.immune_windows[-1]["profile"]["card:cost"] == 1_000
+
+
+@pytest.mark.parametrize("role,assembly", [("evaluator", "eval-a"), ("producer", "seed-decider")])
+def test_within_window_settlement_pays_its_own_live_cost_share(role, assembly):
+    """A decision settled in the window it was made in owns its cost in the live sample."""
+    rt = cost_runtime(role, n=2)
+    early = [returned(rt, assembly, role, 3_000) for _ in range(2)]
+    rt.n = 10
+    rt._close_price_window()
+    assert rt.window.closed_values == {"cost": 3_000}
+    rt.window = MeasureWindow(2, rt.wallet.balance)
+    fresh = returned(rt, assembly, role, 1_000)
+    term = next(t for t in rt._penalty_terms(role, fresh) if t["card_id"] == "cost")
+    # The live window prices it, not the last closed window's frozen ownership.
+    assert term["window"] == 2
+    assert term["share"] == pytest.approx(0.25)  # 1_000 of the 4_000 selected micro-USD
+    assert rt._penalty_for(role, fresh) == pytest.approx(0.125)
+    assert rt._penalty_for(role, early[0]) == pytest.approx(0.25)  # frozen half of window 1
+
+
+def test_settlement_delayed_past_its_window_keeps_the_frozen_share():
+    """Ownership frozen at closure survives a later window's unrelated returns."""
+    rt = cost_runtime("evaluator", n=2)
+    early = returned(rt, "eval-a", "evaluator", 3_000)
+    rt.n = 10
+    rt._close_price_window()
+    rt.window = MeasureWindow(2, rt.wallet.balance)
+    delayed = returned(rt, "eval-a", "evaluator", 1_000)
+    rt.n = 20
+    rt._close_price_window()
+    assert rt.window.closed_shares[0]["shares"] == {early: 0.75, delayed: 0.25}
+    frozen = rt._penalty_for("evaluator", delayed)
+    rt.window = MeasureWindow(3, rt.wallet.balance)
+    live = [returned(rt, "eval-a", "evaluator", 5_000) for _ in range(2)]
+    assert delayed not in rt._cost_shares(rt.charter.cards[0], live=True)
+    assert rt._penalty_for("evaluator", delayed) == frozen == pytest.approx(0.125)
+    assert rt._penalty_for("evaluator", live[0]) == pytest.approx(0.25)
+
+
+def test_offline_reconstruction_reads_the_same_within_window_settlement(monkeypatch):
+    """The diary's penalised settlement and card value reconstruct offline unchanged."""
+    rt = cost_runtime("producer", n=2)
+    entries = []
+    append = rt.ledger.append
+
+    def capture(item):
+        seq = append(item)
+        entries.append(json.loads(canonical(dict(item, seq=seq))))
+        return seq
+
+    monkeypatch.setattr(rt.ledger, "append", capture)
+    for _ in range(2):
+        returned(rt, "seed-decider", "producer", 3_000)
+    rt.n = 10
+    rt._close_price_window()
+    rt.window = MeasureWindow(2, rt.wallet.balance)
+    fresh = returned(rt, "seed-decider", "producer", 1_000)
+    rt._settle_priced(fresh, channel="verdict", score=0.8, definition_version="test",
+                      sampling_ref=None, cards="producer")
+    item = next(i for i in reversed(entries) if i["kind"] == "price.penalty")
+    assert item["handle"] == fresh and item["penalty"] == pytest.approx(0.125)
+    assert item["terms"][0]["window"] == 2 and item["terms"][0]["share"] == pytest.approx(0.25)
+    rt.n = 20
+    rt._close_price_window()
+    offline = windows(entries)[-1]
+    assert offline["profile"]["card:cost"] == rt.window.closed_values["cost"]
+    group = [i for i in entries if offline["start_seq"] <= i["seq"] <= offline["end_seq"]]
+    # The reader finds the penalised settlement in the window whose cost priced it.
+    assert profile(group, ["cost"])["verdict"] == pytest.approx(item["effective"])
+    assert profile(group, ["cost"])["cost"] == rt.window.closed_values["cost"]

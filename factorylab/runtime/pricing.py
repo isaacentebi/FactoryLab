@@ -387,11 +387,6 @@ class PricingMixin:
                 continue
             window = self.price_windows.get(origins.get(observation.id, origins.get("origin")),
                                             self.window)
-            if observation.id == "cost_per_return" and window.closed_values is None:
-                window = max(
-                    (w for w in self.price_windows.values() if w.closed_values is not None),
-                    key=lambda w: w.index, default=window,
-                )
             # The card's own typed measurement, from its decision's window when that closed.
             values = (self.card_samples.values if window.closed_values is None
                       else window.closed_values)
@@ -405,23 +400,48 @@ class PricingMixin:
                 window, handle, observation.id, card.answers_for, region, values[card.id]
             )
             if handle is not None and observation.id == "cost_per_return":
-                for support in window.closed_shares:
-                    if support["card_id"] == card.id:
-                        share = support["shares"].get(handle, 0.0)
-                        break
+                share = self._cost_share(card, window, handle, share)
             terms.append({"card_id": card.id, "observation": observation.id,
                           "window": window.index, "violation": amount,
                           "lambda": self.controller.price(card.id), "weight": weight,
                           "share": share})
         return terms
 
-    def _cost_shares(self, card) -> dict[str, float]:
-        """Cost ownership uses exactly the supported scopes and successful selected returns."""
+    def _cost_share(self, card, window, handle: str, contributed: float) -> float:
+        """A closed window owns the shares it froze; a live one re-reads its sample now.
+
+        A decision made and settled inside one window is priced on the card's
+        selected returns as they stand, so its own cost carries its own part of
+        the pressure. Only a settlement delayed past its window's closure reads
+        that window's frozen ownership, and a live window whose card selects no
+        returns falls back to its observed contribution totals.
+        """
+        if window.closed_values is not None:
+            for frozen in window.closed_shares:
+                if frozen["card_id"] == card.id:
+                    return frozen["shares"].get(handle, 0.0)
+            return contributed
+        shares = self._cost_shares(card, live=True)
+        return shares.get(handle, 0.0) if shares else contributed
+
+    def _cost_shares(self, card, *, live: bool = False) -> dict[str, float]:
+        """Cost ownership uses exactly the supported scopes and successful selected returns.
+
+        A closed window owns the scopes its own measurement supported. A live
+        window has no closed record to select yet, so a window-selector card
+        reads the returns that window has made so far, in every scope it shows.
+        """
         samples = self.card_samples
+        supported = None if live else samples.scopes.get(card.id, {})
         rows = samples.returns
         if card.window.kind == "windows":
-            selected = samples.windows[-card.window.n:]
-            first, last = selected[0]["index"], selected[-1]["index"]
+            if live:
+                first = last = self.window.index
+            elif samples.windows:
+                selected = samples.windows[-card.window.n:]
+                first, last = selected[0]["index"], selected[-1]["index"]
+            else:
+                return {}
             rows = [r for r in rows if first <= r["window"] <= last]
             if card.window.per is None:
                 rows = [r for r in rows if r["role"] == "producer"]
@@ -433,7 +453,7 @@ class PricingMixin:
                             if d["role"] == "producer"]
         shares: dict[str, Fraction] = {}
         for scope, group in _groups(card, rows).items():
-            if scope not in samples.scopes.get(card.id, {}):
+            if supported is not None and scope not in supported:
                 continue
             if card.window.kind == "returns":
                 group = group[-card.window.n:]
