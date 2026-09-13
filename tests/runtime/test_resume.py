@@ -267,6 +267,8 @@ def test_resume_before_first_decision_keeps_sample_handle_and_every_summary_fiel
     snapshot = next(i for i in items(path, m) if i["kind"] == "snapshot")
     prefix = b"".join(path.read_bytes().splitlines(keepends=True)[: snapshot["seq"] + 2])
     path.write_bytes(prefix)
+    # This synthetic crash predates the completed run's authenticated head.
+    path.with_suffix(path.suffix + ".head").unlink()
     resumed = resume_world(m, str(path))
     assert resumed["stats"]["resumes"] == 1
     resumed["stats"]["resumes"] = 0
@@ -320,6 +322,8 @@ def test_unacknowledged_live_model_call_books_uncertainty_without_resubmission(t
     # A prefix ending after dispatch intent models the exact durable evidence at that cut.
     prefix = b"".join(path.read_bytes().splitlines(keepends=True)[: call["seq"] + 2])
     path.write_bytes(prefix)
+    # A process dying at this call could not have written the final run's head.
+    path.with_suffix(path.suffix + ".head").unlink()
     calls, orders = provider.calls, venue.orders_sent
     restored = resume_runtime(m, str(path), provider=provider, exchange=venue, now_ns=10**15)
     assert (provider.calls, venue.orders_sent) == (calls, orders)
