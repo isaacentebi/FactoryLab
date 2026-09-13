@@ -49,10 +49,10 @@ class Colluders(ScriptedProvider):
         return {"conformity": self.conformity, "rationale": "conforms"}
 
 
-def _blaming_runtime(provider, *, answers_for="producer"):
+def _blaming_runtime(provider, *, answers_for="producer", manifest=None):
     """A world whose charter blames inaction: a priced noop-share card that the lazy
     return violates alone, measured on the window it worked in."""
-    runtime = _consequence_runtime(provider=provider)
+    runtime = _consequence_runtime(provider=provider, manifest=manifest)
     runtime._manage_reserve_window()  # window 1 opens; regions derive from the charter
     charter = runtime.charter
     card = MetricCard("no-inaction", charter.norms[0], "noop share", "fraction",
@@ -238,7 +238,14 @@ def test_the_meta_scores_when_the_verdict_and_the_payoff_forecast_both_beat_base
 
 
 def test_an_antagonist_exposes_a_high_verdict_on_a_return_the_window_blamed():
-    runtime = _blaming_runtime(Colluders(self_payoff=0.0), answers_for="antagonist")
+    # The exposure has to outlive its own timeout while the verdict is still unsettled, so
+    # that timeout is shortened to sit well inside the scripted world's consequence
+    # backstop (20 events): past the backstop the verdict settles on its still-open window,
+    # unblamed, and there is nothing left for the antagonist to expose.
+    base = load_manifest("scripted")
+    manifest = replace(base, evaluation=replace(base.evaluation, verdict_timeout_events=2))
+    runtime = _blaming_runtime(Colluders(self_payoff=0.0), answers_for="antagonist",
+                               manifest=manifest)
     about, event = _consequence_produce(runtime, "antagonist-a", "exposure")
     _consequence_judge(runtime, event, "eval-a")
     runtime.n = runtime.ev.verdict_timeout_events + 5
