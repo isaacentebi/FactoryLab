@@ -200,7 +200,7 @@ draft `worlds/edition1-example.toml`, which becomes `worlds/funded.toml` at step
 | Thinking wallet | $90, inside the $92 OpenRouter credit that cannot be refilled; more thinking is bought through Venice from trading profit | `initial_balance_usd = "90"` |
 | Death floor | $0 | `balance_floor_usd = "0"` |
 | Markets seeded | BTC and ETH perps only; the draft's testnet spot pair removed. Any listed perp or spot pair is one proposal away (`{"kind": "market", "coin"}` or `{"kind": "market", "pair"}`, one novelty trial); the disclosure already shows the form and points at the full listing | `[exchange] coins`, no `[venue]` block in the draft |
-| eval-b | Meta Muse Spark replaces Qwen 3.8 flash as the fourth evaluator (about a dollar a day extra) | `model_id = "meta/muse-spark-1.3"`, `max_tokens = 1500` |
+| eval-b | Qwen 3.8 flash, kept. Muse Spark was tried on this seat in the final rehearsal (`docs/audits/v3/rehearsal-final.md`): 8 of 8 answers perfect, but 58% of all spend, $7.20 a day against $3.47, so it went back on the menu | `model_id = "qwen/qwen3.8-flash"`, `max_tokens = 3000` |
 | Muse Spark otherwise | stays on the menu for the population to buy | `[[models]]` |
 | Cost card | at most a quarter of a cent per answer (2,500 micro-dollars); the draft's 500 was unreachable by every seat | `model_cost_efficiency.acceptable_region` |
 | Consequence horizon | 60 events in the draft, matching testnet (the draft had the 200 default) | `consequence_backstop_events = 60` |
