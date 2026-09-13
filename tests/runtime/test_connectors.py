@@ -48,6 +48,7 @@ def register(rt, monkeypatch, owner="seed-decider", origin="https://example.org"
         "seed-decider": "producer", "eval-a": "evaluator", "meta-a": "meta"})
     rt._apply_registrations(handle, Return(handle, {"register": [{
         "kind": "connector", "id": "source", "description": "Public data", "origin": origin,
+        "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease", "window": 1},
     }]}, 0, "ok"))
     return handle
 
@@ -86,7 +87,9 @@ def test_preflight_vote_then_versioned_admission_with_proposer_excluded(monkeypa
     assert {seat["assembly_id"] for seat in seats} == {"eval-a", "meta-a"}
     ballots = ledger_items(rt, "connector.vote")
     assert len(ballots) == 2 and all(row["vote"] is True for row in ballots)
-    assert all(rt.queue.history(row["handle"]) for row in ballots)
+    assert all(not rt.queue.history(row["handle"]) for row in ballots)
+    assert {v["handle"] for v in rt.pending_votes} == {row["handle"] for row in ballots}
+    assert all(v["activation_window"] == rt.window.index for v in rt.pending_votes)
     register(rt, monkeypatch, origin="https://example.net")
     assert rt.registry.get("connector:source").version == 2
     assert rt.registry.get("connector:source", 1).input_schema["origin"] == "https://example.org"
@@ -126,6 +129,7 @@ def test_empty_experienced_population_refuses_admission(monkeypatch):
     assert rt._committee_eligible() == {}
     rt._apply_registrations(handle, Return(handle, {"register": [{
         "kind": "connector", "id": "source", "description": "Data", "origin": "https://example.org",
+        "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease", "window": 1},
     }]}, 0, "ok"))
     assert not rt.registry.available("connector")
     assert "majority" in rt.registration_feedback[-1]["reason"]
@@ -268,7 +272,8 @@ def test_observatory_contains_connector_versions_and_daily_counts(monkeypatch):
                    ("admission", "preflight", "sortition", "vote", "majority", "committee"))
     assert block["proposal_shapes"]["connector"] == {
         "kind": "connector", "id": "public-source", "description": "Public information",
-        "origin": "https://example.org"}
+        "origin": "https://example.org",
+        "predicted_effect": {"card_id": "a current card id", "direction": "decrease", "window": 1}}
 
 
 @pytest.mark.parametrize("fields", [

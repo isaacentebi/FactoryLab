@@ -6,8 +6,6 @@ audited commit. Nothing here touches a network.
 
 import json
 
-import pytest
-
 from factorylab.cortex.registration import AssemblyProposal
 from factorylab.cortex.request import ChildRequest
 from factorylab.kernel.queue import SettleStatus
@@ -16,8 +14,6 @@ from tests.conftest import make_runtime
 from tests.runtime.test_child_requests import parent_request
 from tests.runtime.test_fidelity import decision
 from tests.runtime.test_loop import _consequence_produce
-
-OPEN = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 
 
 def _judge_reply(monkeypatch, rt, verdict, payoff):
@@ -69,7 +65,6 @@ def test_finding_1_the_child_judge_path_skips_the_hindsight_guard(monkeypatch):
     assert rt.standing.snapshot().get("eval-a") is None
 
 
-@OPEN
 def test_finding_12_child_requests_manufacture_committee_eligibility(monkeypatch):
     """Eligibility counts settled consequences on decisions the assembly did not request
     itself. A confederate requested by *another* assembly earns them without ever being

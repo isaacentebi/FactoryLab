@@ -14,8 +14,6 @@ from factorylab.world.exchange import FakeExchange, Order
 from factorylab.world.scripted import ScriptedProvider
 from tests.runtime.test_loop import _consequence_decision
 
-pytestmark = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
-
 
 def _venue():
     return FakeExchange(coins=("BTC", "ETH"), spot_pairs=("BTC/USDC",), start_cash_usd=Decimal(100),
@@ -73,7 +71,8 @@ def test_finding_4_an_unattributed_spot_buy_poisons_the_lot_table_for_the_next_s
         assert stray.status == "filled"
         rt._settle_exchange_effects(exchange.drain_events())  # journaled, refused by the table
         refused = [i for i in rt.ledger._recovery_items() if i["kind"] == "consequence.refused"]
-        assert refused and rt.spot_inventory["BTC/USDC"][0] == Decimal("0.2")
+        # T36: the old assertion required the bug; a refused fill must not credit inventory.
+        assert refused and rt.spot_inventory.get("BTC/USDC", (Decimal(0), Decimal(0)))[0] == 0
         handle = _producer(rt)
         try:
             result, _cost = rt._run_tool("seed-decider", handle, {
