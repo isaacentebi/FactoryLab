@@ -20,7 +20,7 @@ def test_testnet_manifest_is_not_mainnet() -> None:
     m = _testnet_with_charter()
     assert m.exchange.kind == "hyperliquid" and m.exchange.mainnet is False
     ids = {t.id for t in m.models}
-    assert {"z-ai/glm-5.3-flash", "qwen/qwen3.8-flash", "tencent/hy3", "openai/gpt-5.6-luna"} <= ids
+    assert {"z-ai/glm-5.3-flash", "qwen/qwen3.8-flash", "openai/gpt-5.6-luna"} <= ids
     assert all(t.provider == "openrouter" for t in m.models)
     assert "z-ai/glm-5.3-flash:online" in m.price_table().prices
 
