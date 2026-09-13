@@ -7,7 +7,7 @@ from factorylab.runtime.worlds import load_manifest, manifest_from_dict
 from factorylab.world.market import X402Provider
 from factorylab.world.models import TokenPrice
 from factorylab.world.x402 import BASE_NETWORK, BASE_USDC, X402Error, authorization_typed_data
-from tests.runtime.test_fa_defects import make_runtime
+from tests.conftest import make_runtime
 from tests.world.test_market import MODEL, SellerHTTP
 
 

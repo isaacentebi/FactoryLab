@@ -28,7 +28,7 @@ def test_contracts_are_deeply_immutable(ledger, contract_factory):
         contract.resource_bounds.max_duration_ns = 0
 
 
-def test_registry_versions_provenance_and_purchasables(ledger, contract_factory):
+def test_registry_versions_provenance_and_kind_filter(ledger, contract_factory):
     registry = Registry(ledger)
     first = contract_factory(provenance="forged-handle")
     registry.register(first)
@@ -41,7 +41,7 @@ def test_registry_versions_provenance_and_purchasables(ledger, contract_factory)
     assert registry.get("new", 1).description == first.description
     assert registry.get("new").version == 2
     registry.register(contract_factory(id="purchase", kind="purchase"))
-    assert [item.id for item in registry.purchasables()] == ["purchase"]
+    assert [item.id for item in registry.available("purchase")] == ["purchase"]
     assert len(registry.available("assembly")) == 1
     with pytest.raises(KeyError):
         registry.get("missing")

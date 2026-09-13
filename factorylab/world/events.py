@@ -13,7 +13,7 @@ from typing import Any
 
 
 class WorldEventKind(StrEnum):
-    """Event kinds a world adapter may emit. Mirrors spec section 4.5."""
+    """Every event kind a world adapter may emit, matching the kernel's own names."""
 
     TICK = "Tick"
     DRIP = "Drip"

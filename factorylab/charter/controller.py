@@ -295,6 +295,22 @@ class PriceController:
             0.0,
         )
 
+    @property
+    def decay(self) -> float:
+        """Return the per-window decay applied to a card whose observation is inside its region."""
+        return self.__decay
+
+    @decay.setter
+    def decay(self, value: float) -> None:
+        """Replace the decay with another finite positive rate; nothing else is touched.
+
+        The controller owns exactly one decay slot, checkpointed with the rest of
+        its parameters. Whoever revises it is responsible for recording why.
+        """
+        self.__decay = _number(value, "decay")
+        if self.__decay <= 0:
+            raise ValueError("eta, decay and lambda_max must be positive")
+
     def snapshot(self) -> dict:
         """Return detached parameters and per-card prices, cadence and revision evidence."""
         return {

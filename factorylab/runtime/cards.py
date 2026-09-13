@@ -1,9 +1,9 @@
 """Metric-card prose becomes numeric regions here, never inside the controller.
 
-The controller (spec v0.6 section 8.1) refuses to parse acceptable-region
-text. This module understands the handful of phrasings the seed charter and
-the population's amendments use, and returns ``None`` for anything else so
-an unparsed card simply carries no price.
+The controller refuses to parse acceptable-region text. This module
+understands the handful of phrasings the seed charter and the population's
+amendments use, and returns ``None`` for anything else so an unparsed card
+simply carries no price.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def region_for(
     and yields None until that record exists. Scale is the width of the
     observation's declared unit range; card prose and bound magnitude cannot
     change it, and a population-registered observation declares that range too
-    (A11). Without a book only the seed vocabulary is readable.
+    Without a book only the seed vocabulary is readable.
     """
     bounds = _parse(card.acceptable_region)
     observation = (observations or seed_book()).get(card.observation)

@@ -51,8 +51,8 @@ class RunStats:
     tool_calls: int = 0
     tool_call_failures: int = 0
     population_tools_registered: int = 0
-    observations_registered: int = 0  # A11
-    assembly_learners_registered: int = 0  # A10
+    observations_registered: int = 0
+    assembly_learners_registered: int = 0
     amendments_proposed: int = 0
     amendments_passed: int = 0
     amendments_activated: int = 0
@@ -71,7 +71,7 @@ class RunStats:
     invocations_by_role: dict[str, int] = field(default_factory=dict)
     stop_reasons: dict[str, int] = field(default_factory=dict)
     invocations_by_assembly: dict[str, int] = field(default_factory=dict)
-    # settled consequences delivered per assembly (novelty trials, A13)
+    # settled consequences delivered per assembly (the novelty reserve's trials)
     consequences_by_assembly: dict[str, int] = field(default_factory=dict)
     registered_window: dict[str, int] = field(default_factory=dict)  # assembly -> window index
     immune_windows: list[dict] = field(default_factory=list)

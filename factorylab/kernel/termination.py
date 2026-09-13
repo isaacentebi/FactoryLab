@@ -22,7 +22,9 @@ class Termination:
         required = frozenset(("balance_zero", "explicit_kill", "ledger_failure"))
         self.__conditions = frozenset(conditions)
         if self.__conditions != required:
-            raise ValueError("phase 1 requires balance_zero, explicit_kill and ledger_failure")
+            raise ValueError(
+                "termination requires exactly balance_zero, explicit_kill and ledger_failure"
+            )
         if bus.ledger is not ledger:
             raise ValueError("termination bus and ledger must belong to the same world")
         self.__ledger = ledger
@@ -33,7 +35,7 @@ class Termination:
 
     @property
     def conditions(self) -> frozenset[str]:
-        """Mandatory phase 1 termination conditions cannot be removed."""
+        """The three mandatory termination conditions cannot be removed."""
         return self.__conditions
 
     @property

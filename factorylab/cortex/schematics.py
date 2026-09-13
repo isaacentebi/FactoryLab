@@ -373,7 +373,7 @@ class SchematicsMixin:
 
 
     def _scoring_block(self) -> dict[str, Any]:
-        """How decisions settle, stated as facts about the world (v0.4 §1.6: schematics are
+        """How decisions settle, stated as facts about the world (schematics are
         public; no goals). Run 7 showed judges grading conformity alone because nothing told
         them a verdict is also a forecast, and producers reinforced by verdicts that never
         answered to money. Every formula here is the one the runtime applies."""

@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
-
-from factorylab.kernel.money import usd_to_money
 
 NOOP = "NOOP"
 
@@ -31,11 +28,6 @@ class SimClock:
 
     def __call__(self) -> int:
         return self.now_ns
-
-
-def _usd_to_micro(value: str | Decimal) -> int:
-    q = Decimal(str(value)).quantize(Decimal("0.000001"), rounding=ROUND_HALF_EVEN)
-    return usd_to_money(str(q))
 
 
 def _to_plain(payload: Any) -> Any:

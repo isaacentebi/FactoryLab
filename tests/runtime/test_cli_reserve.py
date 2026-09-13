@@ -82,7 +82,7 @@ def test_init_prints_only_address_creates_0600_and_never_overwrites(monkeypatch,
     assert path.read_text().strip() == TEST_KEY
     assert main(["reserve", "init"]) == 2
     second = capsys.readouterr()
-    assert "refusing to overwrite" in second.err and not second.out
+    assert second.err == "factorylab reserve init: reserve_key_exists\n" and not second.out
     assert path.stat().st_mtime_ns == before.st_mtime_ns
     assert TEST_KEY[2:] not in first.out + first.err + second.out + second.err
 
@@ -234,7 +234,7 @@ def test_topup_keeps_transaction_reference_if_balance_refresh_fails(keyfile, wir
 @pytest.mark.parametrize("amount", ["4.999999", "5.000001", "10", "-5", "nan", "inf", "bad"])
 def test_unapproved_cli_amount_never_contacts_http(keyfile, wire, capsys, amount):
     assert main(["reserve", "topup", "--usd", amount]) == 2
-    assert "Only --usd 5" in capsys.readouterr().err
+    assert capsys.readouterr().err == "factorylab reserve topup: topup_amount_refused\n"
     assert not wire[1]
 
 
@@ -282,7 +282,8 @@ def test_cli_failure_never_prints_transport_secret(keyfile, wire, capsys):
     wire[0].append(RuntimeError(TEST_KEY))
     assert main(["probe", "--provider", "venice", "--model", "venice:test-flash"]) == 1
     captured = capsys.readouterr()
-    assert "failed" in captured.err and TEST_KEY[2:] not in captured.out + captured.err
+    assert captured.err.startswith("factorylab probe: reserve_unavailable\n")
+    assert TEST_KEY[2:] not in captured.out + captured.err
 
 
 def manifest(*providers):
@@ -392,5 +393,5 @@ def test_resume_reports_insecure_key_metadata_without_reading_it(tmp_path, monke
     monkeypatch.setattr(Path, "read_text", lambda *_a, **_kw: pytest.fail("must not read key"))
     assert main(["resume", "--world", "scripted", "--ledger", str(path)]) == 2
     captured = capsys.readouterr()
-    assert captured.err == "factorylab resume: credentials_unavailable\n"
+    assert captured.err == "factorylab resume: credential_unsafe\n"
     assert captured.out == ""

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, Literal, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from factorylab.world.models import ModelProvider, ModelRequest, ModelResponse, PriceTable
 
@@ -52,7 +52,7 @@ class Metered[T]:
     reserved: int
     handle: str
     overrun: int = 0  # portion beyond the ceiling, already included in the debit
-    cost_source: Literal["reported", "table"] = "table"
+    cost_source: str = "table"  # "table", "reported", or a rail's own provenance
 
 
 @dataclass

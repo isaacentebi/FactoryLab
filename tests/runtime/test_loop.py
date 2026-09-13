@@ -111,7 +111,7 @@ def test_scripted_world_phase3_spec_condition_2() -> None:
     assert st["amendments_proposed"] >= 1 and st["votes_cast"] >= 3
     assert st["amendments_passed"] >= 1 and st["amendments_activated"] >= 1
     assert s["charter_edition"] >= 2
-    # prices (spec v0.6 section 8.1): a 2-minute window over 500 one-second ticks closes four
+    # prices: a 2-minute window over 500 one-second ticks closes four
     # windows, and every closed window hands the well_formed_rate card one observation
     cards = s["prices"]["cards"]
     closed = st["reserve_windows"] - 1
@@ -1323,7 +1323,7 @@ def test_two_roles_measure_same_observation_with_independent_bounds():
     window = next(e for e in items if e["kind"] == "price.window")
     assert window["observations"]["noop_share"] == 0.5
     assert window["values"] == {"low": 0.5, "high": 0.5}
-    from factorylab.versioning import summary
+    from factorylab.versioning.report import summary
 
     report = summary(items, **{
         name: getattr(rt.m.immune, name) for name in (

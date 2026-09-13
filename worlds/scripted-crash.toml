@@ -2,7 +2,7 @@
 # holds a leveraged long (it buys on tick 4k+2 after the venue moves; the drop lands on 4k+3). The
 # venue liquidates when equity falls below maintenance margin and the realised
 # loss lands in the wallet.
-# Used to demonstrate death by world event (spec section 6, condition 3).
+# Used to demonstrate death by world event: the wallet reaches zero.
 name = "scripted-crash"
 seed = 2
 initial_balance_usd = "20"

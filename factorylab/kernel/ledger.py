@@ -23,6 +23,15 @@ class LedgerIntegrityError(RuntimeError):
     """Evidence is unavailable when its authenticated chain is invalid."""
 
 
+class GenesisMismatchError(LedgerIntegrityError):
+    """This ledger was opened with a genesis header the caller's manifest does not produce.
+
+    An integrity error like any other, and separable from one: it is the single
+    failure an operator can fix, by resuming the world with the manifest it was
+    created from.
+    """
+
+
 class LedgerBusyError(RuntimeError):
     """Another runtime already holds the exclusive writer lock."""
 
@@ -91,7 +100,13 @@ def _plain(value):
     return value
 
 
-def _canonical(value) -> bytes:
+def canonical(value) -> bytes:
+    """Return the one byte encoding every hash in the factory is taken over.
+
+    Sorted keys, no insignificant whitespace, no NaN and no lone surrogate.
+    Three packages hash with it, so it is the kernel's public canonicalisation
+    and not an implementation detail of the ledger's own chain.
+    """
     return json.dumps(
         _plain(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode("utf-8")
@@ -169,7 +184,7 @@ class Ledger:
         self.__index = self._empty_index()
         self.__persist_head = key_path is not None
         self.__decision_ids: dict[int, str] = {}
-        self.__genesis = hashlib.sha256(_canonical({"manifest": manifest or {}})).hexdigest()
+        self.__genesis = hashlib.sha256(canonical({"manifest": manifest or {}})).hexdigest()
         self.__header = {"format": 1, "genesis_hash": self.__genesis}
         self.__head = self.__genesis
         self.__verified_tokens: tuple[bytes, ...] = ()
@@ -181,7 +196,7 @@ class Ledger:
         if self.__path is not None:
             fd = os.open(self.__path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as stream:
-                line = _canonical(self.__header) + b"\n"
+                line = canonical(self.__header) + b"\n"
                 stream.write(line)
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -195,8 +210,7 @@ class Ledger:
 
         The file must not already exist: a world never reuses another world's
         key. The file permits process recovery and post-mortem decryption.
-        Automatic recovery may read it without releasing the public seal
-        (v0.7 section 6).
+        Automatic recovery may read it without releasing the public seal.
         """
         if key_path is None:
             return None
@@ -334,7 +348,7 @@ class Ledger:
         try:
             fd, temporary = tempfile.mkstemp(prefix=".ledger-head-", dir=self.__path.parent)
             with os.fdopen(fd, "wb") as stream:
-                stream.write(self.__keys._encrypt(_canonical(data)))
+                stream.write(self.__keys._encrypt(canonical(data)))
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, str(self.__path) + ".head")
@@ -360,7 +374,7 @@ class Ledger:
         with self.__path.open("rb") as stream:
             header = stream.readline()
             if not header.endswith(b"\n") or json.loads(header) != self.__header:
-                raise LedgerIntegrityError("genesis header changed")
+                raise GenesisMismatchError("genesis header changed")
             digest.update(header)
             checkpoint = self.__checkpoint
             if checkpoint is not None and len(header) <= checkpoint["offset"] <= size:
@@ -385,7 +399,7 @@ class Ledger:
                 item = json.loads(self.__keys._decrypt(token))
                 claimed = item.pop("hash")
                 if (item["seq"] != count or item["prev_hash"] != previous
-                        or hashlib.sha256(_canonical(item)).hexdigest() != claimed):
+                        or hashlib.sha256(canonical(item)).hexdigest() != claimed):
                     raise LedgerIntegrityError("ledger chain differs")
                 self._index_item(index, item)
                 decisions += item.get("kind") == "decision.handle"
@@ -459,11 +473,33 @@ class Ledger:
             raise LedgerIntegrityError("ledger verification failed")
         return list(self._iter_items())
 
+    @classmethod
+    def open_read_only(cls, path: str | Path, *, manifest: dict) -> "Ledger":
+        """Open a frozen ledger for reading: one authenticated byte boundary, no repair.
+
+        The boundary is fixed at open time, so a writer appending underneath does
+        not change what this reader sees, and a terminated world opens normally.
+        Appends are refused. Nothing here releases the public seal.
+        """
+        return cls.reopen(path, manifest=manifest, read_only=True)
+
+    def items(self) -> Iterator[dict]:
+        """Yield every item up to this ledger's own boundary, decrypting one at a time.
+
+        Streaming keeps a reader's memory bounded by the largest single item
+        rather than by the diary. A writable disk ledger refuses, because its
+        boundary moves under the reader; the chain itself is authenticated by
+        ``verify()``, which ``aggregate()`` calls before every view.
+        """
+        if self.__path is not None and not self.__read_only:
+            raise PermissionError("open the ledger read-only to iterate its items")
+        return self._iter_items()
+
     def decision_id(self, seq: int) -> str:
         """Return the handle ordinal for a new append or an authenticated replay-tail item."""
         return self.__decision_ids[seq]
 
-    def _event_times(self) -> dict:
+    def event_times(self) -> dict:
         """Only verified event boundaries and launch/finality flags leave the kernel index."""
         if not self.verify():
             raise LedgerIntegrityError("ledger verification failed")
@@ -522,15 +558,15 @@ class Ledger:
             raise TypeError("entry must be a dict")
         if {"seq", "prev_hash", "hash"} & entry.keys():
             raise ValueError("chain metadata belongs to the ledger")
-        item = json.loads(_canonical(entry))
+        item = json.loads(canonical(entry))
         item.setdefault("ts", self.__clock())
         if type(item["ts"]) is not int or item["ts"] < 0:
             raise ValueError("ts must be nonnegative integer nanoseconds")
         item.update(seq=self.__count, prev_hash=self.__head)
-        item["hash"] = hashlib.sha256(_canonical(item)).hexdigest()
-        token = self.__keys._encrypt(_canonical(item))
+        item["hash"] = hashlib.sha256(canonical(item)).hexdigest()
+        token = self.__keys._encrypt(canonical(item))
         if self.__path is not None:
-            line = _canonical({"item": token.decode("ascii")}) + b"\n"
+            line = canonical({"item": token.decode("ascii")}) + b"\n"
             with self.__path.open("ab") as stream:
                 stream.write(line)
                 stream.flush()
@@ -585,7 +621,7 @@ class Ledger:
                 digest = item.pop("hash")
                 if item["seq"] != seq or item["prev_hash"] != previous:
                     return False
-                if hashlib.sha256(_canonical(item)).hexdigest() != digest:
+                if hashlib.sha256(canonical(item)).hexdigest() != digest:
                     return False
                 previous = digest
             if previous != self.__head:

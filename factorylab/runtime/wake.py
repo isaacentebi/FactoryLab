@@ -1,6 +1,6 @@
 """The public wake contains only authenticated aggregates and account statements.
 
-A17, widened: the control tower sees whatever the population already sees. The
+The control tower sees whatever the population already sees. The
 world block an assembly reads on every request is public by construction, so its
 standing facts (roster, tools, observations, charter, pots, portfolio) are
 projected into one unsealed ledger item at each window close and republished
@@ -28,7 +28,7 @@ from pathlib import Path
 
 from cryptography.fernet import InvalidToken
 
-from factorylab.kernel.ledger import Ledger, LedgerIntegrityError, _canonical
+from factorylab.kernel.ledger import Ledger, LedgerIntegrityError, canonical
 from factorylab.runtime.worlds import WORLDS_DIR, load_manifest
 
 VIEWS = (
@@ -360,7 +360,7 @@ class _Snapshot(Ledger):
         mode = key_path.lstat().st_mode
         if not stat.S_ISREG(mode) or stat.S_IMODE(mode) != 0o600:
             raise LedgerIntegrityError("ledger key unavailable")
-        frozen = Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()), read_only=True)
+        frozen = Ledger.open_read_only(path, manifest=json.loads(manifest.canonical_json()))
         self.__dict__.update(frozen.__dict__)
 
     def append(self, entry: dict) -> int:
@@ -369,7 +369,7 @@ class _Snapshot(Ledger):
 
     def timing(self, *, live: bool, now_ns: int) -> dict:
         """Only event timestamps escape; payloads, identities and kinds remain private."""
-        times = self._event_times()
+        times = self.event_times()
         start = times["first_tick"] if live else 0
         last = times["last_event"]
         end = now_ns if live and not times["terminated"] else last
@@ -387,7 +387,7 @@ class _Snapshot(Ledger):
         allowed = {"producer", "evaluator", "meta", "antagonist"}
         # Streaming projection avoids materialising the item diary. Identities
         # are only join keys here; unknown provenance never becomes public text.
-        for item in self._iter_items():
+        for item in self.items():
             if observatory is not None:
                 observatory.feed(item)
             if item.get("kind") == "event":
@@ -413,7 +413,7 @@ def _open_snapshot(path: Path):
         header = json.loads(stream.readline())
     for manifest_path in sorted(WORLDS_DIR.glob("*.toml")):
         manifest = load_manifest(str(manifest_path))
-        genesis = hashlib.sha256(_canonical(
+        genesis = hashlib.sha256(canonical(
             {"manifest": json.loads(manifest.canonical_json())},
         )).hexdigest()
         if header == {"format": 1, "genesis_hash": genesis}:

@@ -134,13 +134,13 @@ class ComputeMixin:
     def _validate_output_contract(self, parsed: dict, req: Request) -> None:
         """Every tool argument and proposal bound is checked before any effect in a reply."""
         from factorylab.cortex.assembly import (
-            _positive_wire_decimal,
-            _validate_schema,
+            positive_wire_decimal,
             reserved_return_fields,
+            validate_schema,
         )
         from factorylab.world.venue_tools import _validate
 
-        _validate_schema(parsed, {"type": "object", "properties": reserved_return_fields(
+        validate_schema(parsed, {"type": "object", "properties": reserved_return_fields(
             max_children=self.m.tools.max_children, max_tool_calls=self.m.tools.max_tool_calls)})
         binding = self.return_bindings.get(req.handle)
         if binding is not None:
@@ -161,7 +161,7 @@ class ComputeMixin:
                 raise ValueError("select a declared emits kind")
             if emits in spec.schemas:
                 # The caller's outcome schema cannot weaken a custom event's declaration.
-                _validate_schema(
+                validate_schema(
                     {k: v for k, v in parsed.items()
                      if k not in ("emits", "register", "requests", "tool_calls", "about_handle",
                                   "status", "reason")},
@@ -176,14 +176,14 @@ class ComputeMixin:
                     _validate(call["args"], spec["args_schema"])
                     for key in ("size", "price"):
                         if call["args"].get(key) is not None:
-                            _positive_wire_decimal(call["args"][key])
+                            positive_wire_decimal(call["args"][key])
                 else:
-                    _validate_schema(call["args"], spec["args_schema"])
+                    validate_schema(call["args"], spec["args_schema"])
         known = {p.id: p for p in SEED_VOCABULARY}
         for forecast in parsed.get("forecasts", []):
             if forecast["predicate"] not in known:
                 raise ValueError("unknown forecast predicate")
-            _validate_schema(
+            validate_schema(
                 forecast["params"], _to_plain(known[forecast["predicate"]].param_schema)
             )
 
@@ -435,7 +435,7 @@ class ComputeMixin:
         return self.consequences.account_open(handle)
 
     def _allowed_tools(self, action_id: str) -> set[str]:
-        """Every registered tool is a public primitive; schematics are public (v0.4 §1.6)."""
+        """Every registered tool is a public primitive; schematics are public."""
         return set(self.tool_specs)
 
     def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
@@ -550,7 +550,7 @@ class ComputeMixin:
                 and isinstance(ret.outputs.get("reason"), str)):
             ret = replace(ret, status="refused", children=(), tool_calls=())
         if ret.status == "ok":
-            # A1: the channel is the emitted kind of the contract this assembly declared.
+            # The channel is the emitted kind of the contract this assembly declared.
             kinds = self.assemblies[action_id].spec.emits
             emitted = ret.outputs.get("emits", kinds[0] if len(kinds) == 1 else None)
             if emitted not in kinds:
@@ -606,7 +606,7 @@ class ComputeMixin:
                 tool_cost += cost
                 results.append(result)
             seen_results.extend(results)
-            # A10: the continuation is the same request, and it is the billed call
+            # The continuation is the same request, and it is the billed call
             # that produces the final verdict — so everything the first call was
             # shown, the PROPENSITY block included, rides along unchanged.
             note = ("Return the final answer; this request's continuation has been "
@@ -641,11 +641,11 @@ class ComputeMixin:
                                     "reason": "continuation already consumed",
                                     "ts": self.clock.now_ns})
             if not ret.tool_calls or tool_round >= round_limit:
-                from factorylab.cortex.assembly import _validate_schema
+                from factorylab.cortex.assembly import validate_schema
 
                 if ret.status == "ok":
                     try:
-                        _validate_schema(ret.outputs, req.outcome_schema)
+                        validate_schema(ret.outputs, req.outcome_schema)
                         self._validate_output_contract(ret.outputs, req)
                     except (ValueError, TypeError, RecursionError):
                         ret = replace(ret, status="malformed",
@@ -706,7 +706,7 @@ class ComputeMixin:
         del self.ledger.connector_bodies[body_mark:]
         return ret
 
-    # --- spec A10: the deciding agent's propensity rides on the request ---------
+    # --- the deciding agent's propensity rides on the request -------------------
 
     def _assembly_learner_id(self, assembly_id: str) -> str:
         """One durable learning identity per assembly, distinct from any router's."""
@@ -738,7 +738,7 @@ class ComputeMixin:
         """Log the woken assembly's own distribution as a second propensity on the handle.
 
         Absent or unusable, it is recorded degenerate: the action taken at 1.0
-        (spec A10). The reason an offered declaration could not be used goes back
+        The reason an offered declaration could not be used goes back
         to the population, because a refusal nobody can read is repeated.
         """
         from factorylab.learners.base import state_bytes
@@ -885,7 +885,7 @@ class ComputeMixin:
             payload = {"about_handle": handle, "description": item.description,
                        "inputs": item.inputs, "outputs": ret.outputs,
                        "cost": ret.cost, "status": ret.status,
-                       "propensity": self._public_propensity(handle)}  # A10
+                       "propensity": self._public_propensity(handle)}
             self._emit("ProducerReturn" if emitted == "Exposure" else emitted, payload)
             if emitted == "Exposure" and self.routers.get("Exposure"):
                 self._emit("Exposure", payload)
@@ -912,7 +912,7 @@ class ComputeMixin:
         channel: str,
         propensity: dict[str, Any] | None = None,
     ) -> Request:
-        """A10: a request about someone else's decision carries that decision's propensity."""
+        """A request about someone else's decision carries that decision's propensity."""
         declared = chosen = None
         if isinstance(propensity, dict) and isinstance(propensity.get("over"), dict):
             declared, chosen = propensity["over"], propensity.get("chosen")

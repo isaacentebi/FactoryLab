@@ -10,7 +10,7 @@ from factorylab.runtime.immune import close_window
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.worlds import load_manifest
-from factorylab.versioning import manifest_parameters, summary
+from factorylab.versioning.report import manifest_parameters, summary
 from factorylab.versioning.versions import diagnose
 
 

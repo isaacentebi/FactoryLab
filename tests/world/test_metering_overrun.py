@@ -9,7 +9,7 @@ from factorylab.kernel.reserve import NoveltyReserve
 from factorylab.kernel.wallet import Infeasible, Wallet
 from factorylab.world.metering import Meter
 from factorylab.world.models import ModelResponse
-from tests.runtime.test_fa_defects import make_runtime
+from tests.conftest import make_runtime
 
 
 @pytest.mark.parametrize("initial,ceiling,actual,booked", [

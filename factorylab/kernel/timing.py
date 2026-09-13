@@ -40,13 +40,6 @@ class TimingRegistry:
         """Return the cumulative count used to enforce release separation."""
         return len(self.__closures[loop_id])
 
-    def estimated_period(self, loop_id: str) -> int | None:
-        """Return floored mean inter-closure nanoseconds, or None before two closures."""
-        closures = self.__closures[loop_id]
-        if len(closures) < 2:
-            return None
-        return (closures[-1] - closures[0]) // (len(closures) - 1)
-
     def state(self) -> dict:
         """Retain registered dependencies and every closure without sharing mutable lists."""
         return {"governs": dict(self.__governs),

@@ -21,7 +21,7 @@ MAX_PROMPT_CHARS = 4000
 MAX_PROPOSALS_PER_RETURN = 3
 LEARNERS = ("exp3", "blum_mansour")
 ROLES = ("producer", "evaluator", "meta", "antagonist")
-# A10: an assembly's declared action set is its own; the kernel bounds only its size.
+# An assembly's declared action set is its own; the kernel bounds only its size.
 MAX_DECLARED_ACTIONS = 32
 MAX_ACTION_ID_CHARS = 64
 
@@ -127,7 +127,7 @@ class ToolProposal:
 
 @dataclass(frozen=True)
 class ObservationProposal:
-    """Spec A11: a measurement the population writes, priced like any other card input."""
+    """A measurement the population writes, priced like any other card input."""
 
     id: str
     description: str
@@ -138,7 +138,7 @@ class ObservationProposal:
 
 @dataclass(frozen=True)
 class LearnerProposal:
-    """Spec A10: a learner over an assembly's own declared action set."""
+    """A learner over an assembly's own declared action set."""
 
     assembly_id: str
     learner: str
@@ -347,7 +347,7 @@ def _tool(
     return ToolProposal(tid, description, schema, code, timeout_s)
 
 
-# --- spec A10/A11: propensity and measurement (workstream W5) -----------------
+# --- propensity and measurement ----------------------------------------------
 # Kept in its own section: the two kinds below are independent of the assembly,
 # model, router and tool kinds above.
 
@@ -373,7 +373,7 @@ def _finite_bound(value: Any) -> float:
 def _observation(
     item: dict[str, Any], seed_observations: frozenset[str], *, jail: bool | None = None,
 ) -> ObservationProposal:
-    """A11: shape-check a population measurement before the runtime preflights it.
+    """Shape-check a population measurement before the runtime preflights it.
 
     Merit is not decided here: whether the code actually measures the last closed
     window is settled by running it in the jail at registration.
@@ -417,7 +417,7 @@ def _observation(
 
 
 def _learner(item: dict[str, Any], known_assemblies: frozenset[str]) -> LearnerProposal:
-    """A10: a learner over an assembly's own declared action set.
+    """A learner over an assembly's own declared action set.
 
     The action set is declared here because a Blum--Mansour construction needs one
     copy per action before the first round; the assembly's returns then declare a

@@ -1,4 +1,13 @@
-"""Sealed forecasts receive observable, addressable consequence scores."""
+"""Sealed forecasts receive observable, addressable consequence scores.
+
+Owns the forecast book and its seals, Brier scoring against a prevalence
+baseline, the lot table that turns fills into realised consequence, and the
+standing each judge accumulates from how its own forecasts settled.
+
+Imports ``kernel`` and the standard library, and nothing else: a score must not
+be able to reach the thing it is scoring.
+``tests/settlement/test_settlement_boundaries.py`` enforces it.
+"""
 
 from factorylab.settlement.forecast import Forecast, ForecastBook, open_forecast_decision
 from factorylab.settlement.scoring import PrevalenceBaseline, brier

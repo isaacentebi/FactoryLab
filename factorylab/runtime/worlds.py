@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from factorylab.charter.charter import Charter, MetricCard, seed_charter
+from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.cards import parses
 from factorylab.runtime.observations import observation_for
 from factorylab.world.connector import DEFAULT_DENYLIST, validate_denylist
@@ -29,14 +30,6 @@ NS_PER_SECOND = 1_000_000_000
 NS_PER_HOUR = 3_600 * NS_PER_SECOND
 NS_PER_DAY = 24 * NS_PER_HOUR
 WORLDS_DIR = Path(__file__).resolve().parents[2] / "worlds"
-
-
-def usd_to_micro(value: str | int | float | Decimal) -> int:
-    """Exact micro-USD for a dollar amount given as a string or Decimal-friendly number."""
-    d = Decimal(str(value)) * Decimal(1_000_000)
-    if d != d.to_integral_value():
-        raise ValueError(f"{value!r} is not representable in micro-USD")
-    return int(d)
 
 
 @dataclass(frozen=True)
@@ -148,7 +141,7 @@ class TreasurySpec:
 
 @dataclass(frozen=True)
 class PricesSpec:
-    """Price controller parameters (spec v0.6 section 8.1). Not money: bare rates and bounds."""
+    """Price controller parameters. Not money: bare rates and bounds."""
 
     eta: float = 0.5
     decay: float = 0.1
@@ -263,7 +256,7 @@ class WorldManifest:
             t.register(m.id, base)
             web = dict(m.web)
             if web:
-                per_request = usd_to_micro(web.get("usd_per_request", "0"))
+                per_request = usd_to_micro(web.get("usd_per_request", "0"), rounding="exact")
                 t.register(
                     f"{m.id}:online",
                     TokenPrice(base.input_micro, base.output_micro, per_request),
@@ -423,8 +416,11 @@ class WorldManifest:
             raise ValueError("prices: eta, decay, lambda_max > 0 and min_window_events >= 1")
 
 
-def _ns(value: Any) -> int:
-    """Accept an int of ns, or a string like '1h', '30m', '10s', '7d'."""
+def duration_ns(value: Any) -> int:
+    """Return nanoseconds for an int of nanoseconds or a string like '1h', '30m', '10s', '7d'.
+
+    The manifest and the CLI both state durations this way, so both read them here.
+    """
     if isinstance(value, int):
         return value
     s = str(value).strip()
@@ -479,7 +475,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         raise ValueError("connectors.call_price_usd must be exact USD text or integer")
     connectors = ConnectorsSpec(
         max_bytes=conn.get("max_bytes", 262144), timeout_s=conn.get("timeout_s", 10),
-        call_price_micro=usd_to_micro(connector_price),
+        call_price_micro=usd_to_micro(connector_price, rounding="exact"),
         max_calls_per_window=conn.get("max_calls_per_window", 60),
         origin_denylist=conn.get("origin_denylist", DEFAULT_DENYLIST),
     )
@@ -496,10 +492,10 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     if "drip" in d:
         dd = d["drip"]
         drip = DripSpec(
-            amount_micro=usd_to_micro(dd["amount_usd"]),
-            period_ns=_ns(dd["period"]),
-            start_ns=_ns(dd.get("start", 0)),
-            end_ns=_ns(dd["end"]),
+            amount_micro=usd_to_micro(dd["amount_usd"], rounding="exact"),
+            period_ns=duration_ns(dd["period"]),
+            start_ns=duration_ns(dd.get("start", 0)),
+            end_ns=duration_ns(dd["end"]),
         )
     ex = d.get("exchange", {})
     spot_pairs = d.get("venue", {}).get("spot_pairs", [])
@@ -551,7 +547,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         max_forecasts_per_verdict=int(ev.get("max_forecasts_per_verdict", 2)),
         verdict_timeout_events=int(ev.get("verdict_timeout_events", 20)),
         min_coverage=float(ev.get("min_coverage", 0.5)),
-        trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10")),
+        trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10"), rounding="exact"),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
         consequence_backstop_events=ev.get("consequence_backstop_events", 200),
         adversarial_share=ev.get("adversarial_share", 0.15),
@@ -579,12 +575,12 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     m = WorldManifest(
         name=d["name"],
         seed=int(d.get("seed", 0)),
-        initial_balance_micro=usd_to_micro(d["initial_balance_usd"]),
+        initial_balance_micro=usd_to_micro(d["initial_balance_usd"], rounding="exact"),
         drip=drip,
         exchange=exchange,
         models=models,
         assemblies=assemblies,
-        novelty=NoveltySpec(nov.get("share", 0.1), _ns(nov.get("window", "1d")),
+        novelty=NoveltySpec(nov.get("share", 0.1), duration_ns(nov.get("window", "1d")),
                             nov.get("trials", 3), nov.get("max_lifetime_windows", 6)),
         committee=CommitteeSpec(**d.get("committee", {})),
         immune=ImmuneSpec(**d.get("immune", {})),
@@ -594,7 +590,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             tim.get("min_support", 30),
         ),
         termination=TerminationSpec(
-            usd_to_micro(term.get("balance_floor_usd", 0)),
+            usd_to_micro(term.get("balance_floor_usd", 0), rounding="exact"),
             term.get("max_events"),
         ),
         charter=charter,
@@ -617,18 +613,19 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             hyperevm_gas_budget_wei=(d.get("treasury") or {}).get("hyperevm_gas_budget_wei", 0),
             base_gas_budget_wei=(d.get("treasury") or {}).get("base_gas_budget_wei", 0),
             max_transfer_fee_micro=usd_to_micro(
-                (d.get("treasury") or {}).get("max_transfer_fee_usd", "2")),
+                (d.get("treasury") or {}).get("max_transfer_fee_usd", "2"), rounding="exact"),
             withdrawal_fee_micro=usd_to_micro(
-                (d.get("treasury") or {}).get("withdrawal_fee_usd", "1")),
+                (d.get("treasury") or {}).get("withdrawal_fee_usd", "1"), rounding="exact"),
             cctp_max_fee_micro=usd_to_micro(
-                (d.get("treasury") or {}).get("cctp_max_fee_usd", "0.10")),
-            fake_fee_micro=usd_to_micro((d.get("treasury") or {}).get("fake_fee_usd", "0.01")),
+                (d.get("treasury") or {}).get("cctp_max_fee_usd", "0.10"), rounding="exact"),
+            fake_fee_micro=usd_to_micro(
+                (d.get("treasury") or {}).get("fake_fee_usd", "0.01"), rounding="exact"),
             max_request_micro=(d.get("treasury") or {}).get("max_request_micro", 500_000),
             reported_cost_multiple=(d.get("treasury") or {}).get("reported_cost_multiple", 10),
-            max_venice_per_window=usd_to_micro(venice_cap),
+            max_venice_per_window=usd_to_micro(venice_cap, rounding="exact"),
         ),
-        clock=ClockSpec(_ns(clock.get("min_tick", default_min_tick))),
-        tick_interval_ns=_ns(d.get("tick_interval", "10s")),
+        clock=ClockSpec(duration_ns(clock.get("min_tick", default_min_tick))),
+        tick_interval_ns=duration_ns(d.get("tick_interval", "10s")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
     m.validate()

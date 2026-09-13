@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 
 from factorylab.runtime.resume import ResumeError, decode, encode
-from tests.runtime.test_fa_defects import make_runtime
+from tests.conftest import make_runtime
 
 
 @pytest.mark.parametrize('value', [0., -0., 5e-324, 1.7976931348623157e308, -1e308,

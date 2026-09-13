@@ -6,7 +6,7 @@ import pytest
 
 from factorylab.cortex.assembly import _validate_return, reserved_return_fields
 from factorylab.world.models import ModelResponse
-from tests.runtime.test_fa_defects import make_runtime
+from tests.conftest import make_runtime
 
 
 @pytest.mark.parametrize("bad", [

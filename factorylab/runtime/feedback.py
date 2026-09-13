@@ -198,7 +198,7 @@ class FeedbackMixin:
 
     def _standing_for(self, evaluator_id: str) -> dict[str, Any] | None:
         """A judge's own consequence standing: skill against the prevalence baseline, sample
-        size, selection weight. Its own running score, private to it (v0.4 §1.6)."""
+        size, selection weight. Its own running score, private to it."""
         st = self.standing.snapshot().get(evaluator_id)
         if not st or not st.get("n"):
             return None
@@ -337,7 +337,7 @@ class FeedbackMixin:
                 top_level = self.queue.get(payoff.handle).parent_handle is None
             except KeyError:
                 top_level = True
-            if top_level:  # continuations and children are not trials (A13)
+            if top_level:  # continuations and children are not trials
                 self._count_consequence(self.handle_to_assembly.get(payoff.handle))
         pending = {f.handle: f for f in self.book.pending()}
         settled = self.settler.settle_due(self.n, self._facts_for)
@@ -465,7 +465,7 @@ class FeedbackMixin:
             del self.pending[p.handle]
 
     def _close_assembly_rounds(self) -> None:
-        """Close every assembly round whose decision now has an outcome (A10).
+        """Close every assembly round whose decision now has an outcome.
 
         The evidence is the same thin score the router receives: the first
         settlement or timeout on the handle. A round is closed once, whatever
@@ -486,7 +486,7 @@ class FeedbackMixin:
             self._close_assembly_round(handle, reward)
 
     def _close_assembly_round(self, handle: str, reward: float | None) -> None:
-        """Train an assembly's own learner from the reward that settled its decision (A10).
+        """Train an assembly's own learner from the reward that settled its decision.
 
         The reward is the same thin score the router receives; what differs is the
         distribution it is attributed to. The router's record prices the choice of

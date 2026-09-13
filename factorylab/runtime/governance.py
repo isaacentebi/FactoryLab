@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass
 from statistics import fmean
 from typing import Any
 
+from factorylab.charter.amendment import Amendment
+from factorylab.charter.book import Refusal
 from factorylab.charter.charter import Charter
 from factorylab.charter.measurement import measure_card, preflight_measurement
 from factorylab.cortex.assembly import AssemblySpec
@@ -33,17 +35,9 @@ from factorylab.runtime.observations import (
     SEED_IDS,
     window_facts,
 )
-from factorylab.world.x402 import X402Error
-
-try:
-    from factorylab.charter.amendment import Amendment
-    from factorylab.charter.book import CharterBook, Refusal
-except ImportError:  # pragma: no cover
-    Amendment = CharterBook = Refusal = None  # type: ignore[assignment]
-
-
 from factorylab.runtime.shared import _to_plain
 from factorylab.runtime.summary import _assembly_contract, _model_contract
+from factorylab.world.x402 import X402Error
 
 
 @dataclass(frozen=True)
@@ -100,7 +94,7 @@ class GovernanceMixin:
                         continue
                     prop = ModelProposal(mid) if namespaced else accepted[0]
                     self._register(handle, prop)
-                    # Only an accepted registration is a revision (A14); proposals and
+                    # Only an accepted registration is a revision; proposals and
                     # tool calls that changed nothing do not count.
                     if not isinstance(prop, RetireProposal):
                         self.window.revision_handles.add(handle)
@@ -127,7 +121,7 @@ class GovernanceMixin:
                                            if k not in ("kind", "handle")})
 
     def _register_observation(self, handle: str, prop: Any) -> None:
-        """A11: admit a population measurement only after it measures the last closed window.
+        """Admit a population measurement only after it measures the last closed window.
 
         The code is the population's; the preflight is the kernel's, and it is the
         same execution the pricing path will make: the last closed window's public
@@ -182,7 +176,7 @@ class GovernanceMixin:
                                           "version": version, "preflight_value": value})
 
     def _register_learner(self, handle: str, prop: Any) -> None:
-        """A10: give an assembly a learner over its own declared action set.
+        """Give an assembly a learner over its own declared action set.
 
         Blum--Mansour builds a no-swap-regret learner out of one ordinary learner
         per action (essay II.I.a), so the action set has to be declared before the
@@ -343,11 +337,6 @@ class GovernanceMixin:
             # Everything that can refuse this router is checked before the receipt is
             # spent: a registry entry cannot be withdrawn, so a later failure would leave
             # an orphan contract and a burnt novelty trial.
-            if prop.learner == "blum_mansour":
-                try:
-                    import factorylab.learners.delayed  # noqa: F401
-                except ImportError as exc:
-                    raise ValueError("blum_mansour router unavailable in this build") from exc
             if prop.add and (
                 len(self.routers.get(prop.event_kind, [])) >= self.m.tools.max_routers_per_kind
             ):
@@ -482,7 +471,7 @@ class GovernanceMixin:
             for card in out:
                 if not parses(card):
                     raise ValueError("card acceptable_region has no finite usable bounds")
-                # A11: a card may name a registered observation; an unregistered one
+                # A card may name a registered observation; an unregistered one
                 # is refused here, before a vote, with the reason.
                 region_for(card, rolling={}, observations=self.observations)
                 preflight_measurement(card, self.observations)
@@ -569,7 +558,7 @@ class GovernanceMixin:
                and row["status"] in ("voting", "passed")
                for row in self.retirement_proposals.values()):
             raise ValueError("retirement is already pending for this assembly version")
-        # A17: the motion id reaches the public wake through the governance queue, and
+        # The motion id reaches the public wake through the governance queue, and
         # the wake never names an assembly — so the id identifies the proposal, not its
         # target. The target is on the sealed ledger row below.
         motion = Retirement(f"retire:{handle}:{len(self.retirement_proposals) + 1}",
@@ -867,7 +856,7 @@ class GovernanceMixin:
             self.stats.amendments_activated += 1
             self.window.amendments_activated += 1
             self.card_samples.revised(am.proposer_handle)
-            self.window.revision_returns += 1  # an activated amendment is a revision (A14)
+            self.window.revision_returns += 1  # An activated amendment is a revision
             new = self._next_charter_activation()
 
     def _settle_policy(self, handle, score, status) -> None:

@@ -18,14 +18,13 @@ def feedback(handle="h", score=1.0, status="settled"):
     return LearningReturn(handle, "outcome", score, "v1", status, None)
 
 
-def test_period_estimate_and_invalid_closures():
+def test_closure_counting_and_invalid_closures():
     registry = hierarchy()
-    assert registry.estimated_period("fast") is None
+    assert registry.closure_count("fast") == 0
     registry.record_closure("fast", 10)
-    assert registry.estimated_period("fast") is None
     registry.record_closure("fast", 21)
     registry.record_closure("fast", 40)
-    assert registry.estimated_period("fast") == 15
+    assert registry.closure_count("fast") == 3
     for time in (40, 39, -1, 1.5, True):
         with pytest.raises(ValueError):
             registry.record_closure("fast", time)

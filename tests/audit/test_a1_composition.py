@@ -22,8 +22,8 @@ from factorylab.runtime.shared import CH_CONFORMITY, CH_VERDICT
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.models import FakeModel, ModelResponse
 from factorylab.world.scripted import _description_from_prompt, _inputs_from_prompt
-from tests.runtime.test_fa_defects import make_runtime as _runtime
-from tests.runtime.test_fc_children import parent_request
+from tests.conftest import make_runtime as _runtime
+from tests.runtime.test_child_requests import parent_request
 from tests.runtime.test_fidelity import decision
 
 

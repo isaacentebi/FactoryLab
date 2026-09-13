@@ -30,8 +30,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from random import Random
 
-from .base import FullInfoFeedback, Learner, _actions, _probabilities
-from .delayed import SnapshotLearner
+from factorylab.learners.base import FullInfoFeedback, Learner, _actions, _probabilities
+from factorylab.learners.delayed import SnapshotLearner
 
 
 @dataclass(frozen=True)

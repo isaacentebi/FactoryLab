@@ -8,7 +8,7 @@ code wins where any document disagrees with it.
 
 ## Rules
 
-- Python ≥ 3.12. `uv` manages the environment: `uv sync`, `uv run pytest`,
+- Python 3.13. `uv` manages the environment: `uv sync`, `uv run pytest`,
   `uv run ruff check .`. Do not add tooling.
 - Allowed third-party packages: `hyperliquid-python-sdk`, `anthropic`,
   `cryptography`, `pytest`, `ruff`. Anything else needs a written reason.

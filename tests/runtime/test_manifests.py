@@ -1,26 +1,14 @@
 import pytest
 
 from factorylab.runtime.cli import main
-from factorylab.runtime.worlds import (
-    NS_PER_HOUR,
-    load_manifest,
-    manifest_from_dict,
-    usd_to_micro,
-)
-
-
-def test_usd_to_micro_exact() -> None:
-    assert usd_to_micro("100") == 100_000_000
-    assert usd_to_micro("0.000001") == 1
-    with pytest.raises(ValueError):
-        usd_to_micro("0.0000001")
+from factorylab.runtime.worlds import NS_PER_HOUR, load_manifest, manifest_from_dict
 
 
 def test_scripted_manifest_loads_and_hashes_stably() -> None:
     m = load_manifest("scripted")
     assert m.name == "scripted" and m.exchange.kind == "fake"
     assert m.initial_balance_micro == 100_000_000
-    assert m.drip is None  # phase 2: one starting balance, no drip in the seed worlds
+    assert m.drip is None  # one starting balance, no drip in the seed worlds
     # short windows so charter editions can activate within a test run
     assert m.novelty.window_ns == 2 * 60 * 1_000_000_000
     assert m.price_table().cost("fake-opus", 1000, 100) == 1000 * 5 + 100 * 25

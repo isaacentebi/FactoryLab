@@ -6,7 +6,7 @@ from factorylab.kernel.events import Event, EventKind
 from factorylab.world.market import X402MeteredModel, X402Provider
 from factorylab.world.models import TokenPrice
 from tests.audit.test_audit_money_paths import MODEL, _seller_that_drops_the_paid_request
-from tests.runtime.test_fa_defects import make_runtime
+from tests.conftest import make_runtime
 
 
 def test_next_tick_reconciles_uncertainty_without_recharging_or_inventing_a_refund(monkeypatch):

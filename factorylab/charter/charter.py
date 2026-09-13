@@ -80,7 +80,7 @@ SEED_NORMS = (
 
 
 def seed_charter() -> Charter:
-    """The phase 2 charter: four norms, three cards, edition 1."""
+    """The seed charter: four norms, three cards, edition 1."""
     return Charter(
         edition=1,
         norms=SEED_NORMS,

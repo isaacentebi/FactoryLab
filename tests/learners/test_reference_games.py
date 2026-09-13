@@ -5,7 +5,7 @@ import pytest
 
 from factorylab.learners.blum_mansour import BlumMansour
 from factorylab.learners.hedge import Hedge
-from factorylab.learners.reference_games import (
+from tests.learners.reference_games import (
     MatrixGame,
     Round,
     external_regret,

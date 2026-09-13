@@ -169,10 +169,6 @@ class Registry:
             matches.append(contract)
         return matches
 
-    def purchasables(self) -> list[Contract]:
-        """Return the latest contracts explicitly registered with kind purchase."""
-        return self.available("purchase")
-
     def state(self) -> dict:
         """Retain every immutable version and provenance, including superseded contracts."""
         return {"contracts": {k: dict(v) for k, v in self.__contracts.items()}}

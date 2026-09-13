@@ -26,7 +26,7 @@ class PropensityRecord:
 
     ``source`` is ``sampled`` for a distribution the kernel drew from itself, which
     must replay exactly from its seed. It is ``declared`` for the deciding agent's
-    own accounting of the field it drew from (spec A10): nothing in the kernel
+    own accounting of the field it drew from: nothing in the kernel
     sampled it, so the seed cannot reproduce it; the chosen action must simply
     carry positive mass in the distribution the agent disclosed.
     """
@@ -133,7 +133,7 @@ class DecisionQueue:
         self.__deliveries: dict[str, list[LearningReturn]] = {}
         self.__returns: dict[str, list[LearningReturn]] = {}
         self.__settled_contracts: set[str] = set()
-        # A10: the deciding agent's own distribution over its own actions, recorded
+        # The deciding agent's own distribution over its own actions, recorded
         # as a second propensity on the handle the router already opened.
         self.__declared: dict[str, list[PropensityRecord]] = {}
 
@@ -190,7 +190,7 @@ class DecisionQueue:
     def record_propensity(self, handle: str, propensity: PropensityRecord) -> None:
         """Log a deciding agent's own propensity as a second record on an open handle.
 
-        Spec A10. The router's record stays exactly as it was: this one is about
+        The router's record stays exactly as it was: this one is about
         the action the woken assembly took, over the action set it declared. It is
         evidence, not addressing, so it never changes the decision's channel,
         actor or status, and it can only be added while the decision is open.

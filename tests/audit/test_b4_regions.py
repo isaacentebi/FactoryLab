@@ -6,7 +6,7 @@ import pytest
 
 from factorylab.cortex.request import Return
 from factorylab.runtime.cards import region_for
-from tests.runtime.test_fa_defects import make_runtime
+from tests.conftest import make_runtime
 
 
 @pytest.mark.parametrize("prose", ["at most 1e400", "at least -1e400", "between 0 and 1e400",

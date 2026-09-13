@@ -47,7 +47,7 @@ else:
             text=True, timeout=30,
         )
         assert second.returncode == 4, second.stderr
-        assert "ledger already in use" in second.stderr
+        assert second.stderr == f"factorylab {contender}: ledger_busy\n"
         assert path.read_bytes() == before
     finally:
         first.kill()

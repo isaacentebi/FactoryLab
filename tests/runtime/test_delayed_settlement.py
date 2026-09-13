@@ -10,7 +10,7 @@ from factorylab.learners.delayed import SnapshotLearner
 from factorylab.learners.exp3 import EXP3
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.routing import _KeyedLearner
-from tests.runtime.test_fa_defects import make_runtime
+from tests.conftest import make_runtime
 
 
 def test_standing_mix_uses_executed_propensity_and_preserves_unbiased_row_estimator():

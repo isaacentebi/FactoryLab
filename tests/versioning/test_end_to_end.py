@@ -4,8 +4,8 @@ from pathlib import Path
 
 from factorylab.runtime.loop import run_world
 from factorylab.runtime.worlds import load_manifest
-from factorylab.versioning import render, summary
 from factorylab.versioning.reader import read_diary
+from factorylab.versioning.report import render, summary
 
 
 def test_scripted_800_event_diaries_have_equal_summaries(tmp_path):

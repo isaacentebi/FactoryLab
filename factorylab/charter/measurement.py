@@ -13,7 +13,8 @@ from factorylab.charter.charter import MetricCard
 RETURN_OBSERVATIONS = frozenset({
     "cost_per_return", "well_formed_rate", "noop_share", "revision_rate", "tool_calls",
 })
-# A4 keeps per-decision attribution on the same window object; measurement never observes it.
+# The runtime keeps per-decision attribution on the same window object;
+# measurement never observes it.
 ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions")
 FORECAST_OBSERVATIONS = frozenset({
     "forecast_skill", "verdict_mean", "verdict_std", "consequence_paid_off_rate", "censored_share",
@@ -23,7 +24,7 @@ FORECAST_OBSERVATIONS = frozenset({
 def measurement_catalogue(observations=None) -> list[dict]:
     """Public card metadata states selector semantics separately from raw window diagnostics.
 
-    A11: a population-registered observation appears here beside the seeds, with
+    A population-registered observation appears here beside the seeds, with
     its declared units and range, so a card can name it the same way.
     """
     from factorylab.runtime.observations import seed_book
@@ -94,7 +95,8 @@ class CardSamples:
         if not self.windows or self.windows[-1]["index"] != window.index:
             record = deepcopy(asdict(window))
             for key in ATTRIBUTION_FIELDS:
-                record.pop(key, None)  # A4 per-decision attribution is not a window observation
+                # Per-decision attribution is not a window observation.
+                record.pop(key, None)
             self.windows.append(record)
 
     def prune(self, cards, *, pending_handles=frozenset()) -> None:
@@ -241,7 +243,7 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
                         <= selected[-1]["index"]]
                 value = _measure_rows(observation.id, rows)
             else:
-                # A11: a registered observation is measured by its own code here.
+                # A registered observation is measured by its own code here.
                 value = book.value(observation, SimpleNamespace(**merged))
             return {"all": value} if value is not None else {}
         kind = "returns" if observation.id in RETURN_OBSERVATIONS else "forecasts"

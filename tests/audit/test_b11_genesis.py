@@ -5,7 +5,8 @@ from argparse import Namespace
 import pytest
 
 from factorylab.runtime.cli import _cmd_resume, _cmd_run
-from factorylab.runtime.resume import ResumeError, ResumeReason
+from factorylab.runtime.reasons import Reason
+from factorylab.runtime.resume import ResumeError
 from factorylab.runtime.worlds import load_manifest
 
 
@@ -22,11 +23,11 @@ def test_changed_tick_override_is_refused_before_creating_a_diary(tmp_path, caps
 
 @pytest.mark.parametrize("error,code", [
     (ResumeError("private exception detail", code="venue_account_mismatch"),
-     ResumeReason.VENUE_ACCOUNT_MISMATCH),
+     Reason.VENUE_ACCOUNT_MISMATCH),
     (ResumeError("private exception detail", code="arbitrary-provider-text"),
-     ResumeReason.INVALID_SNAPSHOT),
-    (RuntimeError("private exception detail"), ResumeReason.ADAPTER_UNAVAILABLE),
-    (FileNotFoundError("private exception detail"), ResumeReason.MANIFEST_UNAVAILABLE),
+     Reason.INVALID_SNAPSHOT),
+    (RuntimeError("private exception detail"), Reason.ADAPTER_UNAVAILABLE),
+    (FileNotFoundError("private exception detail"), Reason.MANIFEST_UNAVAILABLE),
 ])
 def test_refused_resume_emits_only_a_closed_reason_code(tmp_path, monkeypatch, capsys, error, code):
     def refuse(*args, **kwargs):

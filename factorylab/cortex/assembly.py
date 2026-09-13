@@ -41,6 +41,9 @@ class AssemblySpec:
     version: int
     model_id: str
     system_prompt: str = SEED_SYSTEM_PROMPT
+    # Not read at runtime — an assembly's tools come from the registry — but every
+    # snapshot serialises this dataclass field by field, so it is part of the
+    # recorded evidence and of the resume format. Removing it changes the diary.
     tool_ids: tuple[str, ...] = ()
     memory_policy: str = "none"  # "none" | "handle-scoped"
     max_tokens: int = 2048
@@ -238,14 +241,14 @@ def _finite_json(value: Any) -> None:
             _finite_json(item)
 
 
-def _validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None:
+def validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None:
     """Enforce the supported JSON-schema types, required fields, enums and numeric bounds."""
     if not isinstance(schema, dict):
         raise ValueError("schema must be an object")
     if "anyOf" in schema:
         for alternative in schema["anyOf"]:
             try:
-                _validate_schema(value, alternative, partial=partial)
+                validate_schema(value, alternative, partial=partial)
                 break
             except (ValueError, TypeError):
                 pass
@@ -276,17 +279,17 @@ def _validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None
         properties = schema.get("properties", {})
         for key, item in value.items():
             if key in properties:
-                _validate_schema(item, properties[key])
+                validate_schema(item, properties[key])
             elif schema.get("additionalProperties") is False:
                 raise ValueError("unexpected field")
             elif isinstance(schema.get("additionalProperties"), dict):
-                _validate_schema(item, schema["additionalProperties"])
+                validate_schema(item, schema["additionalProperties"])
     if isinstance(value, list):
         if (len(value) < schema.get("minItems", 0)
                 or len(value) > schema.get("maxItems", len(value))):
             raise ValueError("array length out of range")
         for item in value:
-            _validate_schema(item, schema.get("items", {}))
+            validate_schema(item, schema.get("items", {}))
 
 
 def reserved_return_fields(*, max_children: int | None = None,
@@ -299,7 +302,7 @@ def reserved_return_fields(*, max_children: int | None = None,
                        for k in ("verdict", "payoff", "conformity")})
     properties.update({
         "vote": {"type": "boolean"},
-        # A10: the deciding agent's own distribution over its own actions.
+        # The deciding agent's own distribution over its own actions.
         "propensity": {"type": "object"},
         "register": {"type": "array"},
         "tool_calls": {"type": "array", "items": {
@@ -328,15 +331,15 @@ def reserved_return_fields(*, max_children: int | None = None,
 def _validate_return(parsed: dict, schema: dict) -> None:
     """Validate reply effects; each registration is admitted independently by the runtime."""
     properties = reserved_return_fields()
-    _validate_schema(parsed, {"type": "object", "properties": properties})
+    validate_schema(parsed, {"type": "object", "properties": properties})
     if parsed.get("action") == "order":
-        _validate_schema(parsed, {"properties": {
+        validate_schema(parsed, {"properties": {
             "side": {"enum": ["buy", "sell"]}}, "required": ["coin", "size"]})
-        _positive_wire_decimal(parsed["size"])
+        positive_wire_decimal(parsed["size"])
     # Tool/child requests may precede the final answer, but fields already supplied are typed.
     continuation = bool(parsed.get("tool_calls") or parsed.get("requests"))
     cannot = parsed.get("status") == "cannot" and isinstance(parsed.get("reason"), str)
-    _validate_schema(parsed, schema, partial=continuation or cannot)
+    validate_schema(parsed, schema, partial=continuation or cannot)
     for child in parsed.get("requests", []):
         if not child["target"] or not child["description"].strip():
             raise ValueError("child needs target and description")
@@ -360,7 +363,7 @@ def validate_proposal(proposal: dict) -> None:
                    "range": {"type": "array", "items": {"type": "number"}},
                    "actions": {"type": "array", "items": {"type": "string"}},
                    "args_schema": {"type": "object"}})
-    _validate_schema(proposal, {"type": "object", "properties": fields, "required": ["kind"]})
+    validate_schema(proposal, {"type": "object", "properties": fields, "required": ["kind"]})
     if proposal["kind"] == "router" and "add" in proposal:
         add = proposal["add"]
         if not isinstance(add, bool) and not (isinstance(add, str)
@@ -370,13 +373,13 @@ def validate_proposal(proposal: dict) -> None:
         from factorylab.charter.amendment import effect_schema
         from factorylab.charter.windows import window_schema
 
-        _validate_schema(proposal, {"properties": {
+        validate_schema(proposal, {"properties": {
             "predicted_effect": effect_schema(),
             "add": {"type": "array", "items": {"type": "object"}},
             "replace": {"type": "array", "items": {"type": "object"}},
             "remove": {"type": "array", "items": {"type": "string"}}}})
         for card in proposal.get("add", []) + proposal.get("replace", []):
-            _validate_schema(card, {"properties": {
+            validate_schema(card, {"properties": {
                 **{k: {"type": "string"} for k in (
                     "id", "norm", "description", "units", "acceptable_region",
                     "observation", "answers_for")},
@@ -384,7 +387,7 @@ def validate_proposal(proposal: dict) -> None:
                 "lambda": {"type": "number", "minimum": 0}}})
 
 
-def _positive_wire_decimal(value: Any) -> None:
+def positive_wire_decimal(value: Any) -> None:
     """Model amounts must be positive, finite, and representable by the venue wire format."""
     if type(value) not in (str, int, float):
         raise ValueError("invalid decimal amount")

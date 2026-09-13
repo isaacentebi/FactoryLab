@@ -1,6 +1,6 @@
 """The live path: wall-clock ticks, a real venue, real models.
 
-Spec v0.5 section 8. Nothing here changes physics. ``LiveClock`` paces the
+Nothing here changes physics. ``LiveClock`` paces the
 loop against wall-clock time; ``LiveVenue`` turns venue reads into the same
 world events the fake venue produces; ``Reconciler`` periodically compares
 the wallet with the two real pots (OpenRouter credits, venue equity) and
@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+from factorylab.runtime.reasons import CredentialMissing
 from factorylab.world.clock import ClockIterator
 from factorylab.world.events import WorldEvent, WorldEventKind
 
@@ -240,9 +241,10 @@ class Reconciler:
 def build_provider(manifest: Any) -> Any:
     """Return the model provider a manifest asks for.
 
-    ``openrouter`` needs ``OPENROUTER_API_KEY`` in the environment; the error
-    says so without echoing anything. ``fake`` returns None so the runtime
-    uses its scripted provider.
+    ``openrouter`` needs ``OPENROUTER_API_KEY`` in the environment; a missing
+    credential raises ``CredentialMissing``, which the CLI reports as one code
+    and never echoes. ``fake`` returns None so the runtime uses its scripted
+    provider.
     """
     providers = {t.provider for t in manifest.models}
     if providers == {"fake"}:
@@ -256,12 +258,12 @@ def build_provider(manifest: Any) -> Any:
         if not providers <= {"venice", "openrouter", "x402"}:
             raise RuntimeError(f"unsupported provider set {sorted(providers)}")
         if not os.environ.get("RESERVE_PRIVATE_KEY"):
-            raise RuntimeError("x402 needs RESERVE_PRIVATE_KEY")
+            raise CredentialMissing("x402 needs RESERVE_PRIVATE_KEY")
         from factorylab.world.openrouter import OpenRouterProvider
         from factorylab.world.venice import VeniceProvider
 
         if "openrouter" in providers and not os.environ.get("OPENROUTER_API_KEY"):
-            raise RuntimeError("OPENROUTER_API_KEY is not set")
+            raise CredentialMissing("OPENROUTER_API_KEY is not set")
         if any(not t.id.startswith("x402:") for t in manifest.models if t.provider == "x402"):
             raise RuntimeError("x402 model ids must start with x402:")
         config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
@@ -273,7 +275,7 @@ def build_provider(manifest: Any) -> Any:
         from factorylab.world.venice import VeniceProvider
 
         if not (os.environ.get("VENICE_API_KEY") or os.environ.get("RESERVE_PRIVATE_KEY")):
-            raise RuntimeError("Venice needs VENICE_API_KEY or RESERVE_PRIVATE_KEY")
+            raise CredentialMissing("Venice needs VENICE_API_KEY or RESERVE_PRIVATE_KEY")
         if not providers <= {"venice", "openrouter"}:
             raise RuntimeError(f"unsupported provider set {sorted(providers)}")
         if any(not t.id.startswith("venice:") for t in manifest.models if t.provider == "venice"):
@@ -283,7 +285,7 @@ def build_provider(manifest: Any) -> Any:
         if providers == {"venice"}:
             return venice
         if not os.environ.get("OPENROUTER_API_KEY"):
-            raise RuntimeError("OPENROUTER_API_KEY is not set")
+            raise CredentialMissing("OPENROUTER_API_KEY is not set")
         from factorylab.world.openrouter import OpenRouterProvider
 
         return MultiProvider(OpenRouterProvider(
@@ -291,7 +293,7 @@ def build_provider(manifest: Any) -> Any:
         ), venice, market)
     if "openrouter" in providers:
         if not os.environ.get("OPENROUTER_API_KEY"):
-            raise RuntimeError("OPENROUTER_API_KEY is not set; the testnet world needs it")
+            raise CredentialMissing("OPENROUTER_API_KEY is not set; the testnet world needs it")
         from factorylab.world.openrouter import OpenRouterProvider
         from factorylab.world.venice import VeniceProvider
 

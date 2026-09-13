@@ -18,7 +18,7 @@ from factorylab.runtime.worlds import WORLDS_DIR, ConnectorsSpec, manifest_from_
 from factorylab.world.connector import ConnectorProxy
 from factorylab.world.models import ModelResponse
 from factorylab.world.scripted import ScriptedProvider
-from tests.runtime.test_fa_defects import make_runtime
+from tests.conftest import make_runtime
 from tests.world.test_connector import Transport
 
 

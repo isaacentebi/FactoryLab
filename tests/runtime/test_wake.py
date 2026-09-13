@@ -40,7 +40,10 @@ def isolated(monkeypatch, tmp_path):
 
 @pytest.fixture
 def world(tmp_path):
-    path = tmp_path / "scripted.jsonl"
+    """A finished scripted world in its own directory, not the one the test chdir'd into."""
+    directory = tmp_path / "world"
+    directory.mkdir()
+    path = directory / "scripted.jsonl"
     run_world(load_manifest("scripted"), events=5, seed=1, ledger_path=str(path))
     return path
 
@@ -241,7 +244,7 @@ def test_terminated_world_exit_contract_and_wake(tmp_path, capsys):
     assert main(["resume", "--world", "scripted", "--ledger", str(path)]) == TERMINATED_EXIT == 3
     assert path.read_bytes() == before
     assert collect_wake(path)["world"] == "scripted"
-    assert "world terminated" in capsys.readouterr().err
+    assert capsys.readouterr().err == "factorylab resume: terminated\n"
     unit = (DEPLOY / "factorylab.service").read_text()
     assert f"RestartPreventExitStatus={TERMINATED_EXIT}\n" in unit
     assert f"SuccessExitStatus={TERMINATED_EXIT}\n" in unit
@@ -307,11 +310,21 @@ def test_live_uptime_uses_first_tick_and_stops_at_termination(tmp_path):
 
 
 @pytest.mark.parametrize("damage", ["ciphertext", "reorder", "header", "missing_key"])
-def test_untrusted_snapshot_never_emits_aggregates(world, damage):
+def test_untrusted_snapshot_never_emits_aggregates(tmp_path, damage):
+    # Not the shared world fixture: pytest names a temporary directory after the
+    # first thirty characters of the test, which is the same string for all four
+    # parameters, so each damage builds its own world where only it can write.
+    directory = tmp_path / f"damaged-{damage}"
+    directory.mkdir()
+    world = directory / "scripted.jsonl"
+    run_world(load_manifest("scripted"), events=5, seed=1, ledger_path=str(world))
     lines = world.read_bytes().splitlines(keepends=True)
     if damage == "ciphertext":
+        # One byte of the last token, always changed: a Fernet token is base64url,
+        # and the byte at this offset varies with the world's own random key.
         record = json.loads(lines[-1])
-        record["item"] = record["item"][:30] + "X" + record["item"][31:]
+        flipped = "Y" if record["item"][30] == "X" else "X"
+        record["item"] = record["item"][:30] + flipped + record["item"][31:]
         lines[-1] = json.dumps(record).encode() + b"\n"
     elif damage == "reorder":
         lines[1], lines[2] = lines[2], lines[1]
@@ -330,11 +343,15 @@ def test_untrusted_snapshot_never_emits_aggregates(world, damage):
     ("exited", "0", "resume", None),
     ("exited", "1", "run", None),
 ])
-def test_alert_posts_only_allowed_json_line(tmp_path, code, status, mode, event):
+@pytest.mark.parametrize("reason", [None, "manifest_mismatch", "not a reason code"])
+def test_alert_posts_only_allowed_json_line(tmp_path, code, status, mode, event, reason):
     runtime, bin_path = tmp_path / "runtime", tmp_path / "bin"
     runtime.mkdir()
     bin_path.mkdir()
     (runtime / "mode").write_text(mode)
+    if reason is not None:
+        (runtime / "reason").write_text(reason + "\n")
+    expected_reason = reason if reason == "manifest_mismatch" else "none"
     curl = bin_path / "curl"
     # Capture the wire body and prove the webhook was not passed as an argument.
     curl.write_text('#!/usr/bin/env python3\nimport json, os, sys\n'
@@ -354,7 +371,9 @@ def test_alert_posts_only_allowed_json_line(tmp_path, code, status, mode, event)
     assert proc.returncode == 0 and not proc.stdout and not proc.stderr
     if event:
         assert capture.read_text().endswith("\n")
-        assert json.loads(capture.read_text()) == {"world": "funded", "event": event}
+        assert json.loads(capture.read_text()) == {
+            "world": "funded", "event": event, "reason": expected_reason
+        }
     else:
         assert not capture.exists()
 

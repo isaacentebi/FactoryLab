@@ -216,7 +216,7 @@ def test_a17_no_sealed_field_appears_anywhere_in_the_output(scripted, tmp_path):
 
 def test_a17_window_close_item_is_public_and_carries_no_prompt_or_size(scripted):
     ledger, manifest = _open_snapshot(scripted)
-    items = [item for item in ledger._iter_items() if item.get("kind") == PUBLIC_KIND]
+    items = [item for item in ledger.items() if item.get("kind") == PUBLIC_KIND]
     assert items, "a closed window publishes exactly one public world block"
     for item in items:
         assert set(item) >= {"window", "window_end_event", "roster", "tools", "observations",

@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable, Iterable, Mapping
-from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any
 from urllib import error, request
 
+from factorylab.kernel.money import nonnegative_usd_micro, usd_to_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
+from factorylab.world.openai_wire import parse_completion
 
 
 class OpenRouterError(Exception):
@@ -125,31 +126,27 @@ class OpenRouterProvider:
             payload["reasoning"] = dict(self._reasoning_config[base_id])
         elif req.effort in {"low", "medium", "high"} and base_id in self._reasoning_models:
             payload["reasoning"] = {"effort": req.effort}
-        response = self._request("POST", "/chat/completions", payload)
-        choice = response["choices"][0]
-        content = choice["message"]["content"]
-        if isinstance(content, list):
-            content = "".join(part["text"] for part in content if part.get("type") == "text")
-        usage = response["usage"]
-        cost = usage.get("cost")
+        wire = parse_completion(
+            self._request("POST", "/chat/completions", payload), error=OpenRouterError
+        )
+        cost = wire.usage.get("cost")
         cost_micro = None
         if cost is not None:
-            amount = Decimal(str(cost))
-            if not amount.is_finite() or amount < 0:
-                raise OpenRouterError(None, "Invalid reported cost")
-            cost_micro = int((amount * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
+            try:
+                cost_micro = nonnegative_usd_micro(cost, rounding="ceil")
+            except ValueError:
+                raise OpenRouterError(None, "Invalid reported cost") from None
         raw = {}
-        if response.get("id") is not None:
-            raw["request_id"] = response["id"]
-        details = usage.get("completion_tokens_details") or {}
-        if "reasoning_tokens" in details:
-            raw["reasoning_tokens"] = details["reasoning_tokens"]
+        if wire.request_id is not None:
+            raw["request_id"] = wire.request_id
+        if wire.reasoning_tokens is not None:
+            raw["reasoning_tokens"] = wire.reasoning_tokens
         return ModelResponse(
-            model_id=response.get("model") or req.model_id,
-            text=content or "",
-            input_tokens=usage["prompt_tokens"],
-            output_tokens=usage["completion_tokens"],
-            stop_reason=choice.get("finish_reason") or "",
+            model_id=wire.model or req.model_id,
+            text=wire.text,
+            input_tokens=wire.input_tokens,
+            output_tokens=wire.output_tokens,
+            stop_reason=wire.stop_reason,
             refused=False,
             raw=raw,
             cost_micro=cost_micro,
@@ -174,4 +171,4 @@ class OpenRouterProvider:
         remaining = self._request("GET", "/key")["data"].get("limit_remaining")
         if remaining is None:
             return None
-        return int((Decimal(str(remaining)) * 1_000_000).to_integral_value(rounding=ROUND_FLOOR))
+        return usd_to_micro(remaining, rounding="floor")

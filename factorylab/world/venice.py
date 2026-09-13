@@ -11,8 +11,10 @@ from decimal import Decimal
 from typing import Any
 from urllib import error
 
+from factorylab.kernel.money import nonnegative_usd_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse, TokenPrice
-from factorylab.world.x402 import VENICE_URL, X402Client, http_request, redact, usd_micro
+from factorylab.world.openai_wire import parse_completion
+from factorylab.world.x402 import VENICE_URL, X402Client, http_request, redact
 
 
 def prepare_top_up(client: X402Client, *, now_s: int, nonce: bytes) -> dict:
@@ -241,41 +243,32 @@ class VeniceProvider:
         if parallel_tool_calls is not None:
             payload["parallel_tool_calls"] = parallel_tool_calls
         response = self._request("POST", "/chat/completions", payload)
+        wire = parse_completion(response, error=VeniceError)
         try:
-            choice = response["choices"][0]
-            message = choice["message"]
-            content = message.get("content") or ""
-            if isinstance(content, list):
-                content = "".join(p["text"] for p in content if p.get("type") == "text")
-            usage = response["usage"]
-            input_tokens, output_tokens = usage["prompt_tokens"], usage["completion_tokens"]
-            if any(type(n) is not int or n < 0 for n in (input_tokens, output_tokens)):
-                raise ValueError
-            serving_id = "venice:" + (response.get("model") or wire_id).removeprefix("venice:")
+            serving_id = "venice:" + (wire.model or wire_id).removeprefix("venice:")
             reported = (response.get("cost") or {}).get("usd")
             if reported is not None:
-                cost = usd_micro(reported, round_up=True)
+                cost = nonnegative_usd_micro(reported, rounding="ceil")
                 raw["cost_source"] = "reported"
             else:
                 if serving_id not in self._prices:
                     self.catalogue()
                 price_id = serving_id if serving_id in self._prices else "venice:" + wire_id
-                cost = self._prices[price_id].cost(input_tokens, output_tokens)
+                cost = self._prices[price_id].cost(wire.input_tokens, wire.output_tokens)
                 raw.update(cost_source="table", price_model_id=price_id, cost_scope="tokens_only")
-            if response.get("id") is not None:
-                raw["request_id"] = response["id"]
-            details = usage.get("completion_tokens_details") or {}
-            if "reasoning_tokens" in details:
-                raw["reasoning_tokens"] = details["reasoning_tokens"]
+            if wire.request_id is not None:
+                raw["request_id"] = wire.request_id
+            if wire.reasoning_tokens is not None:
+                raw["reasoning_tokens"] = wire.reasoning_tokens
             for key in ("tool_calls", "reasoning_content", "reasoning_details"):
-                if key in message:
-                    raw[key] = message[key]
+                if key in wire.message:
+                    raw[key] = wire.message[key]
             return ModelResponse(
                 serving_id,
-                content,
-                input_tokens,
-                output_tokens,
-                choice.get("finish_reason") or "",
+                wire.text,
+                wire.input_tokens,
+                wire.output_tokens,
+                wire.stop_reason,
                 False,
                 raw,
                 cost,

@@ -9,11 +9,11 @@ from factorylab.charter.controller import CardRegion, violation
 from factorylab.charter.measurement import measure_cards
 from factorylab.cortex.registration import measured_role
 from factorylab.kernel.events import Event, EventKind
+from factorylab.kernel.money import usd_to_micro
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.immune import close_window
 from factorylab.runtime.observations import ObservationBook
-from factorylab.runtime.shared import _usd_to_micro
 
 
 @dataclass
@@ -62,7 +62,7 @@ class PricingMixin:
     def observations(self) -> ObservationBook:
         """The factory's live measurement vocabulary: the seeds plus what it registered.
 
-        A11. Every consumer of a card's observation reads through this book, so a
+        Every consumer of a card's observation reads through this book, so a
         registered measurement is priced, published and diagnosed exactly like a
         seed one; only the way it is computed differs. The book holds this
         runtime's own registrations and no other's.
@@ -131,7 +131,8 @@ class PricingMixin:
         handle = owners.get(str(payload["order_id"]))
         if handle is None:
             return
-        notional = _usd_to_micro(Decimal(str(payload["size"])) * Decimal(str(payload["px"])))
+        notional = usd_to_micro(
+            Decimal(str(payload["size"])) * Decimal(str(payload["px"])), rounding="nearest")
         sample = self._contribution(handle, "producer")
         self.ledger.append({"kind": "price.contribution", "handle": handle,
                             "window": self.window.index, "notional_micro": notional})
@@ -160,7 +161,7 @@ class PricingMixin:
             self._activate_charter_if_due()
             self._derive_regions()
             if closed is not None:
-                # A17: the closed window's public world block, ledgered once, after any
+                # The closed window's public world block, ledgered once, after any
                 # charter activation at this boundary, so the wake never shows an
                 # activated amendment against the edition it replaced.
                 from factorylab.runtime.wake import public_window_item
@@ -170,7 +171,7 @@ class PricingMixin:
 
     def _issue_novelty_grant(self) -> None:
         """Learning death in the window that closed grants one extra novelty trial per
-        assembly for the window that opens (spec A13); whatever the previous grant left
+        assembly for the window that opens; whatever the previous grant left
         unspent expires here, and the flag must be raised again to re-issue it."""
         flagged = bool(self.stats.pathologies.get("learning_death"))
         window = self.stats.reserve_windows if flagged else None
@@ -278,10 +279,10 @@ class PricingMixin:
         w = replace(self.window, forecast_skills=skills)
         book = self.observations
         values = {o.id: value for o in book.all() if (value := book.value(o, w)) is not None}
-        # A6: typed windows. A11: a card may name a registered observation.
+        # Typed windows. A card may name a registered observation.
         card_values = measure_cards(self.charter.cards, self.card_samples, w, observations=book)
         card_values = {cid: value for cid, value in card_values.items() if cid in self.regions}
-        # A4: a decision settling late is priced on the window it worked in.
+        # A decision settling late is priced on the window it worked in.
         self.window.closed_values = dict(card_values)
         self.window.closed_regions = dict(self.regions)
         self.ledger.append(
@@ -309,7 +310,7 @@ class PricingMixin:
                 self.stats.price_skipped += 1
         self.rolling.update({f"{cid}_prev_median": value
                              for cid, value in self.card_samples.medians.items()})
-        self._close_policy_window(w.index)  # A15: delayed committee liability
+        self._close_policy_window(w.index)  # delayed committee liability
         self.stats.last_window_values = values
         self.controller.set_decay(self.m.prices.decay, ledger=self.ledger, window=w.index)
         close_window(self, values)
@@ -325,7 +326,7 @@ class PricingMixin:
                 continue
             window = self.price_windows.get(origins.get(observation.id, origins.get("origin")),
                                             self.window)
-            # A6: the card's own typed measurement, from its decision's window when that closed.
+            # The card's own typed measurement, from its decision's window when that closed.
             values = (self.card_samples.values if window.closed_values is None
                       else window.closed_values)
             regions = self.regions if window.closed_values is None else window.closed_regions

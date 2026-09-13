@@ -357,8 +357,8 @@ def test_window_facts_never_carry_per_decision_attribution():
 def test_a_continuation_carries_the_propensity_the_first_call_was_given(monkeypatch):
     """The billed second call produces the final verdict, so it sees the same field."""
     from factorylab.world.models import ModelResponse
-    from tests.runtime.test_fa_defects import make_runtime
-    from tests.runtime.test_fc_children import parent_request
+    from tests.conftest import make_runtime
+    from tests.runtime.test_child_requests import parent_request
 
     rt = make_runtime()
     field = {"hold": 0.7, "buy:BTC:xs": 0.3}

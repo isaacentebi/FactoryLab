@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from factorylab.kernel.ledger import _canonical
+from factorylab.kernel.ledger import canonical
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 
@@ -22,7 +22,7 @@ def w1_scripted_diary():
     def capture(item):
         seq = append(item)
         if item["kind"] != "snapshot":
-            entries.append(json.loads(_canonical(dict(item, seq=seq))))
+            entries.append(json.loads(canonical(dict(item, seq=seq))))
         return seq
 
     rt.ledger.append = capture

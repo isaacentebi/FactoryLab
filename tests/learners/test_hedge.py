@@ -3,7 +3,7 @@ import math
 import pytest
 
 from factorylab.learners.base import BanditFeedback, FullInfoFeedback
-from factorylab.learners.hedge import Hedge, Support
+from factorylab.learners.hedge import Hedge
 
 
 def test_original_multiplicative_update_and_conditioning():
@@ -15,7 +15,6 @@ def test_original_multiplicative_update_and_conditioning():
     filtered = learner.distribution(("b", "a"))
     assert tuple(filtered) == ("b", "a")
     assert filtered == pytest.approx({a: dist[a] / (dist["a"] + dist["b"]) for a in ("b", "a")})
-    assert learner.last_support() == Support(("b", "a"), ("c",))
     assert learner.distribution(("a", "b", "c")) == dist
 
 

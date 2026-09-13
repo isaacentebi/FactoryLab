@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from factorylab.world.market import X402Provider, discover
 from factorylab.world.x402 import HTTPResponse
-from tests.runtime.test_fa_defects import make_runtime
+from tests.conftest import make_runtime
 
 
 def test_unique_endless_index_has_a_page_budget():
