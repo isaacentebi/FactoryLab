@@ -244,7 +244,7 @@ def test_example_manifest_and_cli_resolve_population_charter(capsys):
     assert {c.id: c.observation for c in example.charter.cards} == {
         "model_cost_efficiency": "cost_per_return", "revision_rate": "revision_rate",
         "well_formed_rate": "well_formed_rate",
-        "verdict_mean_score": "verdict_mean",
+        "verdict_mean_score": "verdict_mean", "forecast_skill": "forecast_skill",
     }
     assert main(["manifest", "--world", "edition1-example"]) == 0
     out = json.loads(capsys.readouterr().out)

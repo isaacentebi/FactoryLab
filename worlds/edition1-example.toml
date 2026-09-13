@@ -233,6 +233,16 @@ acceptable_region = "at least 0.8"
 observation = "verdict_mean"
 answers_for = "producer"
 
+[[charter.cards]]
+id = "forecast_skill"
+norm = "useful inquiry"
+description = "Mean Brier score of settled forecasts minus the prevalence baseline."
+units = "score difference"
+window = { kind = "forecasts", n = 50, per = "assembly" }
+acceptable_region = "above zero"
+observation = "forecast_skill"
+answers_for = "evaluator"
+
 [committee]
 min_settled = 5
 

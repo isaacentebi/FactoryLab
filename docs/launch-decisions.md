@@ -115,6 +115,8 @@ not mention the venue listing being in the prompt; it does not).
 
 ## Decision 6: charter edition 1
 
+`docs/charter-explained.md` sets the cards against the essay: why they are thin on purpose, how each can be gamed and what catches it, and why a card is a price rather than a wall.
+
 The charter is the population's constitution: four norms and a set of cards, each card a
 measurable observation with an acceptable region, priced by the controller. Edition 1 as
 drafted in `worlds/edition1-example.toml` is what the closure review judged against.
@@ -203,6 +205,10 @@ draft `worlds/edition1-example.toml`, which becomes `worlds/funded.toml` at step
 | Cost card | at most a quarter of a cent per answer (2,500 micro-dollars); the draft's 500 was unreachable by every seat | `model_cost_efficiency.acceptable_region` |
 | Consequence horizon | 60 events in the draft, matching testnet (the draft had the 200 default) | `consequence_backstop_events = 60` |
 | Seed prompt | unchanged | `factorylab/cortex/assembly.py` |
+| Cost rule style | fixed line, a fine not a wall: expensive thinking pays in proportion and can still be worth it | `acceptable_region = "at most 2500"` |
+| forecast_skill card | added back from the seed charter: evaluators' settled forecasts must beat the base rate; gives "useful inquiry" a card and is the one measure words cannot hack | fifth `[[charter.cards]]` |
+| Trading card | none; the wallet alone judges trading | |
+| Norms | the four kept, read-only for the population | `[charter] norms` |
 | Other three cards | unchanged | `[[charter.cards]]` |
 
 Testnet keeps its own spot pair and the seed charter; only the tick, wallet and eval-b seat
