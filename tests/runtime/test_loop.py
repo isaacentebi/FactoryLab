@@ -154,7 +154,9 @@ def test_scripted_amendment_lambda_is_voted_adopted_and_visible(scripted_runtime
     assert updates and updates[0]["lambda_before"] == 0.6
     from factorylab.charter.measurement import measurement_catalogue as catalogue
 
-    assert all(w["observations"] == catalogue() for w in worlds)
+    # The scripted world registers its own observation (T29), so the world block carries
+    # the seed catalogue plus the population's; the seed entries must all be present.
+    assert all(all(o in w["observations"] for o in catalogue()) for w in worlds)
     assert all(am["add"][0]["observation"] == "turnover" for am in votes)
     windows = [e for e in entries if e["kind"] == "price.window"]
     assert windows and all("revision_rate" in e["observations"] for e in windows)
@@ -776,8 +778,10 @@ def test_consequence_backstop_manifest_default_override_and_validation():
 
     from factorylab.runtime.worlds import WORLDS_DIR, manifest_from_dict
 
-    assert load_manifest("scripted").evaluation.consequence_backstop_events == 200
+    assert load_manifest("scripted").evaluation.consequence_backstop_events == 20
     raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
+    raw["evaluation"].pop("consequence_backstop_events")
+    assert manifest_from_dict(raw).evaluation.consequence_backstop_events == 200
     raw["evaluation"]["consequence_backstop_events"] = 7
     manifest = manifest_from_dict(raw)
     assert manifest.evaluation.consequence_backstop_events == 7
