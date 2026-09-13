@@ -84,10 +84,30 @@ class CardSamples:
             "verdict": ret.outputs.get("verdict"),
         })
 
+    def stored(self, *, handle: str, assembly: str | None, role: str, window: int,
+               cost: int) -> None:
+        """One metered retained-storage charge is a cost sample of the decision that holds it.
+
+        The cost cards and their penalty shares are measured from these rows, so
+        a charge that falls due in a window its decision never responded in is
+        still measured there: it joins that decision's own row when it has one
+        in the window, and otherwise enters as its own successful cost row. It
+        is a cost and not a response, so the rate observations skip it.
+        """
+        for sample in reversed(self.returns):
+            if sample["handle"] == handle and sample["window"] == window:
+                sample["cost"] += cost
+                return
+        self.returns.append({
+            "handle": handle, "assembly": assembly, "role": role, "window": window,
+            "cost": cost, "ok": True, "noop": False, "revision": False, "tool_calls": 0,
+            "verdict": None, "storage": True,
+        })
+
     def revised(self, handle: str) -> None:
         """Accepted registrations mark their own return, including pre-continuation proposals."""
         for sample in reversed(self.returns):
-            if sample["handle"] == handle:
+            if sample["handle"] == handle and not sample.get("storage"):
                 sample["revision"] = True
                 return
 
@@ -139,7 +159,7 @@ def record_card_forecasts(runtime, pending, baseline) -> None:
     from factorylab.kernel.events import EventKind
 
     samples = runtime.card_samples
-    returns = {row["handle"]: row for row in samples.returns}
+    returns = {row["handle"]: row for row in samples.returns if not row.get("storage")}
     for event in runtime.internal:
         if event.kind is not EventKind.FORECAST_SETTLED:
             continue
@@ -260,6 +280,11 @@ def _measure_rows(observation: str, rows: list[dict]) -> float | None:
     if observation == "cost_per_return":
         values = [row["cost"] for row in rows if row["ok"]]
         return fmean(values) if values else None
+    # Only cost is measured over a retained-storage charge: it is money spent,
+    # not a response, so it neither answers a schema nor declares an action.
+    rows = [row for row in rows if not row.get("storage")]
+    if not rows:
+        return None
     if observation in ("well_formed_rate", "noop_share", "revision_rate"):
         key = {"well_formed_rate": "ok", "noop_share": "noop", "revision_rate": "revision"}[
             observation

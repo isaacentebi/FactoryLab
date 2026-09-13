@@ -8,14 +8,18 @@ storage already consumed.
 
 import pytest
 
+from factorylab.charter.charter import MetricCard
+from factorylab.charter.measurement import measure_card
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.settlement.lots import LotTable
+from tests.audit.test_r3_d_card_evidence import cost_runtime, returned
 from tests.conftest import make_runtime
 from tests.runtime.test_connectors import decision, ledger_items
 
 RENT = 15  # "fact" + "public fact" = 15 UTF-8 bytes at one micro-USD per byte-window
 COST = 10  # the return's own metered compute
 GROSS = 20  # marked profit: more than the compute cost, less than compute plus rent
+NOTE_BYTES = 5_000  # key plus text bytes, at one micro-USD per byte-window
 
 
 def writer(rt):
@@ -100,3 +104,60 @@ def test_a_carried_liability_is_money_and_cannot_reopen_a_fixed_outcome():
     assert fixed.account("r").payoff is not None
     with pytest.raises(ValueError, match="already final"):
         fixed.carry("r", 1)
+
+
+def stored_writer(rt, *, own_cost, note_bytes, status="ok"):
+    """One producer return that both answers and retains a public note."""
+    handle = returned(rt, "seed-decider", "producer", own_cost, status=status)
+    result, cost = rt._run_tool("seed-decider", handle, {
+        "tool": "note.put", "args": {"key": "fact", "text": "x" * (note_bytes - 4)}})
+    assert "error" not in result and cost == note_bytes
+    return handle
+
+
+def test_recurring_rent_moves_the_cost_card_and_its_penalty_share():
+    """The charge is measured where the cost card and its shares actually read.
+
+    Rent falls due in a window the writer never responded in. Unless the charge
+    enters the selected return rows of that window, the card measures the same
+    mean it would have measured without the note and the writer carries the same
+    share of its violation.
+    """
+    rt = cost_runtime("producer", kind="windows", n=2, per="role")
+    writer = stored_writer(rt, own_cost=1_000, note_bytes=NOTE_BYTES)
+    other = returned(rt, "seed-decider", "producer", 3_000)
+    rt.n = 10
+    boundary(rt)
+    assert ledger_items(rt, "note.rent")[-1]["cost"] == NOTE_BYTES
+    assert rt.window.index == 2  # the charge landed in the window that just opened
+
+    rt.n = 20
+    rt._close_price_window()
+    # Without the charge the same two returns measure 2,000 and leave the writer
+    # a quarter of the violation; the rent is the whole of the difference.
+    assert rt.window.closed_values == {"cost": pytest.approx(3_000)}
+    shares = rt.window.closed_shares[0]["shares"]
+    assert shares[writer] == pytest.approx(2 / 3)
+    assert shares[other] == pytest.approx(1 / 3)
+
+
+def test_a_storage_charge_is_measured_as_a_cost_and_never_as_a_response():
+    """The charge is money the decision spent, not an answer it gave.
+
+    It carries the writer's own handle and measured role in the window it landed
+    in, so the cost cards read it; the rate observations, which count responses,
+    do not.
+    """
+    rt = cost_runtime("producer", kind="returns", n=2, per="role")
+    writer = stored_writer(rt, own_cost=1_000, note_bytes=NOTE_BYTES, status="malformed")
+    rt.n = 10
+    boundary(rt)
+    row = rt.card_samples.returns[-1]
+    assert (row["handle"], row["role"], row["window"], row["cost"]) == (
+        writer, "producer", 2, NOTE_BYTES)
+
+    well_formed = MetricCard("wf", rt.charter.norms[1], "Selected response schema", "rate",
+                             {"kind": "returns", "n": 2, "per": "role"}, "at least 0.9",
+                             "well_formed_rate", "producer")
+    # The one selected response was malformed; the charge does not answer for it.
+    assert measure_card(well_formed, rt.card_samples) == {"producer": 0.0}

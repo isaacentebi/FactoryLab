@@ -767,16 +767,19 @@ resume.
 
 Retained storage is an explicit, resumable liability of the decision that holds
 the note, not only a wallet debit. Every paid charge is added to that decision's
-cost contribution for the window the charge landed in, and while the decision's
-own consequence outcome is still open it is also carried into that outcome's
-cost, so a return cannot resolve `return_paid_off = 1` on a margin its storage
-has already consumed. An outcome is fixed once and never reopened, so rent
-falling due afterwards stays with the note's current owner decision as a cost
-contribution alone, and the note is kept rather than released: public text other
-decisions may already have read is not deleted because one account closed. The
-carried amount is `ReturnAccount.carried_micro`, resumes with the consequence
-table, and appears as `consequence.carried`; the matching `price.contribution`
-item carries `storage` and `carried`.
+cost contribution for the window the charge landed in and enters that window's
+measured rows as a cost of the same decision and never as a response, so the
+charter's cost cards and the penalty shares they attribute both see it, and
+while the decision's own consequence outcome is still open it is also carried
+into that outcome's cost, so a return cannot resolve `return_paid_off = 1` on a
+margin its storage has already consumed. An outcome is fixed once and never
+reopened, so rent falling due afterwards stays with the note's current owner
+decision as a cost contribution alone, and the note is kept rather than
+released: public text other decisions may already have read is not deleted
+because one account closed. The carried amount is
+`ReturnAccount.carried_micro`, resumes with the consequence table, and appears
+as `consequence.carried`; the matching `price.contribution` item carries
+`storage` and `carried`.
 
 Window facts carry the market, funding, wallet and tick series of the closed
 window, retained to `MAX_WORLD_SAMPLES`, so a registered observation can measure

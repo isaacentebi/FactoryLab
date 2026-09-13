@@ -366,6 +366,9 @@ def window_cursor(window: Any) -> dict:
     there. Carries no window content, only how much of it had happened. A series
     position counts every sample the window ever took, including the ones its
     bound has since discarded, so the mark does not slide when the series rolls.
+    A path whose samples were all discarded before the mark is marked too, so an
+    unmarked path is unambiguously one that stood at zero: anything the window
+    later discards of it was discarded after the claim was sealed.
     """
     return _cursor(window_facts(window), series_offsets(window))
 
@@ -411,16 +414,26 @@ def _cursor(value: Any, offset: Any = None) -> Any:
         return len(value) + (offset if type(offset) is int else 0)
     if isinstance(value, dict):
         offsets = offset if isinstance(offset, Mapping) else {}
-        return {key: _cursor(item, offsets.get(key)) for key, item in value.items()}
+        marks = {key: _cursor(item, offsets.get(key)) for key, item in value.items()}
+        for key, discarded in offsets.items():
+            # A path whose samples have all been discarded already is absent from
+            # the facts but is still a position in the window. Marking it keeps
+            # an unmarked path unambiguous: it stood at zero and has lost nothing.
+            if key not in marks and type(discarded) is int:
+                marks[key] = discarded
+        return marks
     return None
 
 
 def _since(value: Any, mark: Any, offset: Any = None) -> Any:
     """Subtract a counter's mark, drop a series' retained prefix, and pass the rest through."""
     if isinstance(value, list):
+        discarded = offset if type(offset) is int else 0
         if type(mark) is not int:
-            return value
-        start = mark - (offset if type(offset) is int else 0)
+            # An unmarked path stood at position zero when the cursor was sealed,
+            # so every sample this one has discarded was discarded after the mark.
+            return _DISCARDED if discarded > 0 else value
+        start = mark - discarded
         return value[start:] if start >= 0 else _DISCARDED
     if isinstance(value, dict):
         marks = mark if isinstance(mark, Mapping) else {}
@@ -431,11 +444,13 @@ def _since(value: Any, mark: Any, offset: Any = None) -> Any:
             if since is _DISCARDED:
                 return _DISCARDED
             result[key] = since
-        for key, seen in marks.items():
+        for key, discarded in offsets.items():
             # A series the window no longer publishes at all — one coin's samples
-            # evicted by another's — hides its discarded tail behind an absence.
-            if key not in value and type(seen) is int and type(offsets.get(key)) is int and (
-                offsets[key] > seen
+            # evicted by another's, including a coin first seen after the mark —
+            # hides its discarded tail behind an absence.
+            seen = marks.get(key)
+            if key not in value and type(discarded) is int and discarded > (
+                seen if type(seen) is int else 0
             ):
                 return _DISCARDED
         return result

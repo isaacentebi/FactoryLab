@@ -131,8 +131,9 @@ class PricingMixin:
 
         Retained public storage is an explicit liability of the decision that
         holds it. Every charge enters that decision's cost contribution for the
-        window it landed in, so the charter's cost cards see it where it was
-        spent. While the decision's own consequence outcome is still open the
+        window it landed in and the measured rows the charter's cost cards and
+        their penalty shares are read from, so both see it where it was spent.
+        While the decision's own consequence outcome is still open the
         charge is also carried into that outcome's cost, so a return cannot pay
         off on a margin its storage has already consumed. An outcome is fixed
         once and never reopened, so afterwards the cost contribution is the whole
@@ -142,6 +143,8 @@ class PricingMixin:
             return
         sample = self._contribution(handle, self._decision_role(handle))
         sample["cost"] += cost_micro
+        self.card_samples.stored(handle=handle, assembly=self.handle_to_assembly.get(handle),
+                                 role=sample["role"], window=self.window.index, cost=cost_micro)
         carried = self.consequences.carry(handle, cost_micro)
         self.ledger.append({"kind": "price.contribution", "handle": handle,
                             "window": self.window.index, "role": sample["role"],
