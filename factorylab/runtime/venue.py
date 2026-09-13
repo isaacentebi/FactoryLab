@@ -16,6 +16,33 @@ from factorylab.world.exchange import Order, OrderKind, OrderResult
 class VenueMixin:
     """Preserve runtime state and behavior for venue operations."""
 
+    def _trading_markets(self) -> tuple[str, ...]:
+        """Return the markets this world trades: the manifest seed plus every registration.
+
+        Read through the venue tools rather than copied, so a registered market
+        is in the set from the next tick and a resume that rebuilds the tools
+        and replays the ``market:`` contracts restores it. Before the tools
+        exist the manifest seed is the whole set.
+        """
+        tools = getattr(self, "venue_tools", None)
+        if tools is None:
+            return (*self.m.exchange.coins, *self.m.exchange.spot_pairs)
+        return (*tools.coins, *tools.spot_pairs)
+
+    def _refuse_order(self, handle: str, reason: str, *, kind: str = "order.refused",
+                      **extra) -> dict:
+        """Publish one refusal that happened before any intent, and tell its author why.
+
+        A refusal the population cannot read is a refusal it will repeat: the
+        reason goes to the diary as ``kind`` and to ``registration_feedback``,
+        the same surface a refused proposal uses, so the next return sees it in
+        its own world block. Returns the rejection the caller hands back.
+        """
+        self.ledger.append({"kind": kind, "handle": handle, "reason": reason,
+                            **extra, "ts": self.clock.now_ns})
+        self.registration_feedback.append({"reason": f"order: {reason}"})
+        return {"status": "rejected", "error": reason}
+
     def _equity_micro(self) -> int:
         try:
             return usd_to_micro(self.exchange.account().equity_usd, rounding="nearest")
@@ -91,14 +118,28 @@ class VenueMixin:
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
                 self.window.fills += 1
-                self.window.notional_micro += usd_to_micro(
+                notional = usd_to_micro(
                     Decimal(str(we.payload["size"])) * Decimal(str(we.payload["px"]))
                 , rounding="nearest")
+                self.window.notional_micro += notional
                 realized = usd_to_micro(we.payload["realized_usd"], rounding="nearest")
                 self.window.realized_pnl_micro += realized
                 fee = usd_to_micro(we.payload["fee_usd"], rounding="nearest")
                 self.realized_to_date += realized
                 self.fees_to_date += fee
+                # Counting and publishing are the same moment. The Fill this
+                # event becomes is ledgered again as ``event:Fill`` when the
+                # population is delivered it, which can be many events later or
+                # never; a count with no item is a fill an operator cannot find.
+                self.ledger.append({
+                    "kind": "fill.counted", "order_id": str(we.payload["order_id"]),
+                    "coin": we.payload["coin"], "market": we.payload.get("market", "perp"),
+                    "is_buy": we.payload["is_buy"], "size": str(we.payload["size"]),
+                    "px": str(we.payload["px"]), "notional_micro": notional,
+                    "realized_micro": realized, "fee_micro": fee,
+                    "liquidation": we.payload.get("liquidation", False),
+                    "window": self.window.index, "event": self.n, "ts": we.ts_ns,
+                })
 
             elif we.kind is WorldEventKind.FUNDING:
                 paid = usd_to_micro(we.payload["paid_usd"], rounding="nearest")
@@ -123,7 +164,9 @@ class VenueMixin:
                 client_id=ret.handle,
                 market=out.get("market", "perp"),
             )
-        except (KeyError, ValueError, ArithmeticError):
+        except (KeyError, ValueError, ArithmeticError) as exc:
+            self._refuse_order(ret.handle,
+                               f"order output is not a readable order: {type(exc).__name__}")
             return
         reason = self._order_exclusion(ret.handle, order.coin, order.size, order.is_buy)
         result = ({"status": "rejected", "error": reason} if reason else self._venue_write(
@@ -143,14 +186,12 @@ class VenueMixin:
         if (pending and pending["status"] == "submitted"
                 and pending["direction"] in ("spot_to_perps", "perps_to_spot")
                 and operation != "venue.cancel"):
-            return {"status": "rejected", "error": "class transfer awaiting receipt"}
+            return self._refuse_order(handle, "class transfer awaiting receipt")
         client_id = handle if slot == "output" else f"{handle}:{slot}"
         previous = self.order_intents.get(client_id)
         if previous is not None:
             if previous["operation"] != operation or previous["args"] != args:
-                self.ledger.append({"kind": "order.refused", "handle": handle,
-                                    "reason": "client id already binds another intent"})
-                return {"status": "rejected", "error": "client id already binds another intent"}
+                return self._refuse_order(handle, "client id already binds another intent")
             if previous["result"]["status"] == "uncertain":
                 return self._recover_order(client_id)
             return dict(previous["result"])
@@ -165,14 +206,10 @@ class VenueMixin:
             lots = sum((lot.size for lot in self.consequences.table.lots
                         if lot.coin == args["coin"] and lot.market == "spot"), 0)
             if quantity <= 0 or quantity > min(held, lots):
-                reason = "spot sell exceeds accounted inventory"
-                self.ledger.append({"kind": "order.refused", "handle": handle, "reason": reason})
-                return {"status": "rejected", "error": reason}
+                return self._refuse_order(handle, "spot sell exceeds accounted inventory")
         if any(i["result"]["status"] == "uncertain" and i["args"]["coin"] == args["coin"]
                for i in self.order_intents.values()):
-            self.ledger.append({"kind": "order.refused", "handle": handle,
-                                "reason": "prior order on this coin is still uncertain"})
-            return {"status": "rejected", "error": "prior order on this coin is still uncertain"}
+            return self._refuse_order(handle, "prior order on this coin is still uncertain")
         intent = {"handle": handle, "client_id": client_id, "operation": operation,
                   "args": dict(args), "result": {"status": "uncertain"}}
         self.ledger.append({"kind": "order.intent", **intent})
@@ -332,8 +369,8 @@ class VenueMixin:
             reason = "order collateral exceeds available wallet balance"
         except (AttributeError, KeyError, ValueError, ArithmeticError, RuntimeError) as exc:
             reason = f"order collateral unavailable: {type(exc).__name__}"
-        self.ledger.append({"kind": "order.infeasible", "handle": handle, "reason": reason,
-                            "available": self.wallet.available, "ts": self.clock.now_ns})
+        self._refuse_order(handle, reason, kind="order.infeasible",
+                           available=self.wallet.available)
         return reason
 
     def _order_leverage(self, coin: str) -> Decimal:

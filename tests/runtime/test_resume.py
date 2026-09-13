@@ -689,9 +689,12 @@ def test_live_order_process_cut_after_acceptance_recovers_original_handle(tmp_pa
     venue.armed = True
     provider = OrderCutProvider(f'venue.{operation}', args)
     path = tmp_path / 'order-cut.jsonl'
+    # Three ticks, because a live tick now broadcasts only the world's own
+    # trading markets: one BTC MarketMid per tick, so the producer that writes
+    # the order needs one more routed event than the old whole-venue broadcast.
     rt = make_runtime(m, path, provider=provider, exchange=venue,
-                      clock_source=ClockSource(1_000_000_000, 1_000_000_000, 2).events())
-    rt.events_budget = 2
+                      clock_source=ClockSource(1_000_000_000, 1_000_000_000, 3).events())
+    rt.events_budget = 3
     with pytest.raises(ProcessDeath):
         rt.run()
     before = items(path, m)

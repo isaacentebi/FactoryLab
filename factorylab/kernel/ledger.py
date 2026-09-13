@@ -37,15 +37,24 @@ class LedgerBusyError(RuntimeError):
 
 
 class LedgerLock:
-    """Hold one OS writer lock until close or process exit; never unlink its inode."""
+    """Hold one OS writer lock until close or process exit; never unlink its inode.
+
+    Ownership never leaves this process. The descriptor is close-on-exec from
+    the syscall that creates it, so a child — a jailed population tool above
+    all — can neither inherit the lock nor keep a dead world locked after its
+    runtime is gone: an ``flock`` lives on the open file description, and a
+    description no survivor holds dies with the process that opened it.
+    """
 
     def __init__(self, path: str | Path | None) -> None:
         self.fd = None
         if path is None:
             return
         lock_path = str(Path(path).resolve()) + ".lock"
-        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fd = os.open(lock_path,
+                     os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         try:
+            os.set_inheritable(fd, False)  # explicit, and a no-op where O_CLOEXEC held
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             os.close(fd)
@@ -214,7 +223,8 @@ class Ledger:
         self.__authority = None
         self.__wallet = None
         if self.__path is not None:
-            fd = os.open(self.__path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            fd = os.open(self.__path,
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
             with os.fdopen(fd, "wb") as stream:
                 line = canonical(self.__header) + b"\n"
                 stream.write(line)
@@ -235,7 +245,8 @@ class Ledger:
         if key_path is None:
             return None
         key = Fernet.generate_key()
-        fd = os.open(Path(key_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        fd = os.open(Path(key_path),
+                     os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
         with os.fdopen(fd, "wb") as stream:
             stream.write(key)
             stream.flush()
@@ -583,7 +594,7 @@ class Ledger:
         if self.__path is None:
             return True
         try:
-            descriptor = os.open(self.__path, os.O_RDONLY)
+            descriptor = os.open(self.__path, os.O_RDONLY | os.O_CLOEXEC)
         except OSError:
             return False
         try:
@@ -623,7 +634,8 @@ class Ledger:
         token = self.__keys._encrypt(canonical(item))
         if self.__path is not None:
             line = canonical({"item": token.decode("ascii")}) + b"\n"
-            descriptor = os.open(self.__path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+            descriptor = os.open(self.__path,
+                                 os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o666)
             try:
                 remaining = memoryview(line)
                 while remaining:
