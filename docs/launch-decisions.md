@@ -186,3 +186,36 @@ world dies, the post-mortem is the result, and a second edition is a new world.
   the sellers' behaviour, not ours; nothing to do unless cost matters more later.
 - The rendered prompt is not stored in the ledger, only its hash. If you ever want to audit
   what an agent saw, a prompt digest or body would need to be recorded. Not needed for launch.
+
+## Decisions taken (interview on 13 September)
+
+Applied to both `worlds/testnet.toml` (for the clean one-hour rehearsal) and the edition 1
+draft `worlds/edition1-example.toml`, which becomes `worlds/funded.toml` at step 2.
+
+| Decision | Taken | Where |
+|---|---|---|
+| Tick | 10 minutes | `tick_interval = "600s"` |
+| Thinking wallet | $90, inside the $92 OpenRouter credit that cannot be refilled; more thinking is bought through Venice from trading profit | `initial_balance_usd = "90"` |
+| Death floor | $0 | `balance_floor_usd = "0"` |
+| Markets seeded | BTC and ETH perps only; the draft's testnet spot pair removed. Any listed perp or spot pair is one proposal away (`{"kind": "market", "coin"}` or `{"kind": "market", "pair"}`, one novelty trial); the disclosure already shows the form and points at the full listing | `[exchange] coins`, no `[venue]` block in the draft |
+| eval-b | Meta Muse Spark replaces Qwen 3.8 flash as the fourth evaluator (about a dollar a day extra) | `model_id = "meta/muse-spark-1.3"`, `max_tokens = 1500` |
+| Muse Spark otherwise | stays on the menu for the population to buy | `[[models]]` |
+| Cost card | at most a quarter of a cent per answer (2,500 micro-dollars); the draft's 500 was unreachable by every seat | `model_cost_efficiency.acceptable_region` |
+| Consequence horizon | 60 events in the draft, matching testnet (the draft had the 200 default) | `consequence_backstop_events = 60` |
+| Seed prompt | unchanged | `factorylab/cortex/assembly.py` |
+| Other three cards | unchanged | `[[charter.cards]]` |
+
+Testnet keeps its own spot pair and the seed charter; only the tick, wallet and eval-b seat
+changed there, so the rehearsal prices the same calls the funded world will make.
+
+### How a tick wakes them, in plain words
+
+Nothing happens between ticks. Every ten minutes the kernel takes one snapshot: a `Tick`
+event, then the current price of each seeded market (one `MarketMid` each) and the current
+funding rate of each seeded perp (one `Funding` each). Six events at launch. Each seat
+declares which events it wakes on: the decider wakes on the tick and on fills, the observer on
+prices and funding, the antagonist on the tick and prices, evaluators whenever a producer
+answers, meta judges whenever an evaluator answers. A wake is a chance to think, not an
+obligation: most wakes end in a noop that costs nothing. Prices moving between snapshots wake
+nobody; a seat can look them up with the venue read tools if it is already awake. A registered
+market joins the snapshot from the next tick.

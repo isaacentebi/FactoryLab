@@ -2,8 +2,8 @@
 # real prices, a fake-USD wallet. Rehearsal only. No real money moves.
 name = "testnet"
 seed = 4
-initial_balance_usd = "100"
-tick_interval = "120s"
+initial_balance_usd = "90"
+tick_interval = "600s"
 
 [exchange]
 kind = "hyperliquid"
@@ -95,11 +95,9 @@ effort = "low"
 [[assemblies]]
 id = "eval-b"
 role = "evaluator"
-model_id = "qwen/qwen3.8-flash"
+model_id = "meta/muse-spark-1.3"
 accepts = ["ProducerReturn"]
-# A reasoning seed spends its budget on reasoning before any content: 1500 returned
-# empty content on `length` for a third of this seat's answers in the launch rehearsal.
-max_tokens = 3000
+max_tokens = 1500
 effort = "low"
 
 [[assemblies]]
