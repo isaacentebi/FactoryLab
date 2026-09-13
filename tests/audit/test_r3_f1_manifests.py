@@ -6,8 +6,6 @@ tokens these manifests name, taken on 12 September 2026, and the pair set is
 derived from it exactly as ``HyperliquidExchange._configure_spot`` derives it.
 """
 
-import os
-from pathlib import Path
 
 import pytest
 
@@ -60,16 +58,15 @@ def test_the_testnet_reserve_address_is_not_the_rehearsal_placeholder():
     assert address is not None and address.lower() != PLACEHOLDER
 
 
-@pytest.mark.skipif(not (os.environ.get("RESERVE_PRIVATE_KEY")
-                         or Path("reserve.key").exists()),
-                    reason="no reserve key on this host")
-def test_the_testnet_reserve_address_is_the_one_the_reserve_key_derives():
-    """The key itself is never read here beyond deriving its public address."""
-    from eth_account import Account
+def test_the_testnet_reserve_address_is_a_real_checksummed_address():
+    """Only the CLI may load a key file; the test checks the public address alone:
+    a 20-byte hex address, EIP-55 checksummed, and not the rehearsal placeholder."""
+    from eth_utils import is_checksum_address
 
-    key = os.environ.get("RESERVE_PRIVATE_KEY") or Path("reserve.key").read_text().strip()
     address = load_manifest("testnet").treasury.reserve_address
-    assert Account.from_key(key).address.lower() == address.lower()
+    assert address is not None and len(address) == 42 and address.startswith("0x")
+    assert is_checksum_address(address)
+    assert address.lower() != PLACEHOLDER
 
 
 def test_testnet_governance_can_act_every_six_hours_of_world_time():
