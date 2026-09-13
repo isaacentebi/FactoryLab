@@ -264,8 +264,15 @@ class FeedbackMixin:
             # The same evidence surface observations read, restricted to what the
             # window accumulated after the claim was sealed: a fill that had already
             # happened resolves nothing. No private handles or attribution enter the
-            # resolver.
-            public = {"public_window": window_facts_since(self.window, f.window_cursor)}
+            # resolver. A bounded series that has discarded part of the sealed
+            # interval supplies nothing at all, so the claim closes unscored rather
+            # than resolving false against evidence the window no longer holds.
+            since = window_facts_since(self.window, f.window_cursor)
+            if since is None:
+                self.ledger.append({"kind": "forecast.evidence_discarded", "handle": f.handle,
+                                    "predicate": f.predicate_id, "window": self.window.index,
+                                    "ts": self.clock.now_ns})
+            public = {"public_window": since}
         return WindowFacts(
             balance_at_forecast=self.balance_at[start],
             balance_at_settlement=self.wallet.balance,

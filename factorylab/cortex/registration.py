@@ -59,6 +59,10 @@ def measured_role(emits: str | tuple[str, ...] | None) -> str:
 
 
 BUILTIN_RETURNS = frozenset({"ProducerReturn", "Verdict", "MetaVerdict", "Exposure"})
+# A metric card's accountability scope is either a role alias, ``all``, or an
+# emitted kind. These spellings name populations, so no emitted kind may take one
+# in any case: a kind and the scope that measures it must never be the same name.
+RESERVED_SCOPES = frozenset({*ROLES, "all"})
 
 
 def event_name(value: Any) -> str:
@@ -104,6 +108,8 @@ def output_contracts(emits: Any, schemas: Any) -> tuple[tuple[str, ...], dict[st
         raise ValueError("schemas must map declared emits kinds to outcome schemas")
     custom = {}
     for kind in kinds:
+        if kind.lower() in RESERVED_SCOPES:
+            raise ValueError("a return kind cannot take a reserved measurement scope name")
         if kind in BUILTIN_RETURNS:
             if kind in schemas:
                 raise ValueError("built-in return schemas cannot be replaced")

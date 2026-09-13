@@ -645,7 +645,11 @@ channel. `forecast` settles on the consequence channel, except that the seed
 their own consequence decisions. `conformity` settles on the conformity channel
 when a higher tier exists to judge it, and on the fast channel otherwise.
 `exposure` settles on the
-exposure channel. A forecast-shaped return earns the mean of its own resolved
+exposure channel. Cascade admission follows the declared shape too: the seed
+`Verdict` is a tier-one arrival and every `conformity`-shaped kind, seed or
+population, is buffered with the others at the tier its own payload declares, so
+a judgement cannot reach the tier above it sooner by being registered under a new
+name. A forecast-shaped return earns the mean of its own resolved
 predictions once, as `forecast-mean-v1`; a return with any unresolved prediction
 is censored rather than scored. Admitted shapes survive resume in
 `kind_reward_shapes`, so a kind keeps its meaning after the assembly that
@@ -655,7 +659,11 @@ A card's `answers_for` may name any registered emitted kind, and that kind is
 measured in its own scope rather than as a producer. A launch manifest's cards
 are narrower: `answers_for` there must be a seed role, `all`, or a kind one of
 the manifest's own assemblies emits. An amendment naming an unregistered kind is
-refused before the vote.
+refused before the vote. The role aliases and `all` are reserved spellings: a
+registration emitting `Producer`, `ALL` or any other capitalisation of one is
+refused with feedback, and a card's emitted-kind scope keeps the kind's exact
+spelling instead of being folded into an alias, so an admitted kind's card can
+never silently measure a different population.
 
 A forecast predicate registers like an observation: a jailed
 `resolve(facts) -> bool` preflighted against the last closed window, versioned
@@ -757,6 +765,19 @@ carries the text. The `note.read` journal call is replayable read-only work.
 rule; the wake's `notes` section publishes counts only; the notebook survives
 resume.
 
+Retained storage is an explicit, resumable liability of the decision that holds
+the note, not only a wallet debit. Every paid charge is added to that decision's
+cost contribution for the window the charge landed in, and while the decision's
+own consequence outcome is still open it is also carried into that outcome's
+cost, so a return cannot resolve `return_paid_off = 1` on a margin its storage
+has already consumed. An outcome is fixed once and never reopened, so rent
+falling due afterwards stays with the note's current owner decision as a cost
+contribution alone, and the note is kept rather than released: public text other
+decisions may already have read is not deleted because one account closed. The
+carried amount is `ReturnAccount.carried_micro`, resumes with the consequence
+table, and appears as `consequence.carried`; the matching `price.contribution`
+item carries `storage` and `carried`.
+
 Window facts carry the market, funding, wallet and tick series of the closed
 window, retained to `MAX_WORLD_SAMPLES`, so a registered observation can measure
 the world and not only the factory. `window_facts.books` maps each coin to
@@ -766,6 +787,14 @@ and `venue.order_book` are what fill `mids`, `funding` and `books`;
 `wallet_balance_micro` and `tick_timestamps_ns` are sampled at delivered ticks.
 Malformed or unavailable venue data contributes no sample. No series carries an
 account, an author or a handle.
+
+A predicate forecast seals a cursor into the open window, and that cursor marks
+monotonic sample positions: each bounded series counts the samples it has already
+discarded, so the mark does not slide when the series rolls and evidence that
+arrived after the claim is still found. When the retained prefix no longer
+reaches back to the mark, the required interval has been discarded: the window
+supplies no facts at all and the forecast is closed unscored rather than resolved
+false, with `forecast.evidence_discarded` in the diary.
 
 ## Operator controls and recovery
 

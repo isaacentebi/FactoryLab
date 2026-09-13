@@ -31,9 +31,11 @@ class MetricCard:
                                else self.answers_for)
         except ValueError as exc:
             raise ValueError(f"card {self.id} answers_for: {exc}") from None
-        if scope.lower() in (*ROLES, "all"):
-            scope = scope.lower()
-        else:
+        # A role alias is its own exact lower-case spelling, and a seed kind names
+        # the alias of the population that emits it. Every other scope keeps the
+        # emitted kind's exact name: ``Producer`` is a kind the registry would
+        # refuse, never the producer population under a different capitalisation.
+        if scope not in (*ROLES, "all"):
             scope = CONTRACT_ROLES.get(scope, scope)
         object.__setattr__(self, "answers_for", scope)
 

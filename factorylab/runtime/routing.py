@@ -494,10 +494,15 @@ class RoutingMixin:
 
     def _route(self, ev: Event) -> None:
         kind = str(ev.kind)
-        if (ev.kind is EventKind.META_VERDICT
-                or self._kind_rewards().get(kind) == "conformity"):
+        conformity = (ev.kind is EventKind.META_VERDICT
+                      or self._kind_rewards().get(kind) == "conformity")
+        if conformity:
             self._deliver_meta_verdict(ev)
-        if ev.kind in (EventKind.VERDICT, EventKind.META_VERDICT):
+        # Admission is by declared reward shape, not by seed kind name: a judgement
+        # buys no faster path to the tier above it by being registered under a new
+        # name. Tier one is the seed Verdict; every conformity-shaped kind, seed or
+        # population, is buffered with the others at the tier it judges.
+        if ev.kind is EventKind.VERDICT or conformity:
             ev = self._cascade_arrival(ev)
             if ev is None:
                 return

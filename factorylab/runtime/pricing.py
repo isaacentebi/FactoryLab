@@ -15,7 +15,7 @@ from factorylab.kernel.money import usd_to_micro
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.immune import close_window
-from factorylab.runtime.observations import MAX_WORLD_SAMPLES, ObservationBook, normalise
+from factorylab.runtime.observations import ObservationBook, normalise, trim_series
 
 
 @dataclass
@@ -65,6 +65,10 @@ class MeasureWindow:
     wallet_balance_micro: list[list[int]] = field(default_factory=list)
     tick_timestamps_ns: list[int] = field(default_factory=list)
     books: list[dict] = field(default_factory=list)
+    # How many samples each bounded public series has already discarded, by the
+    # path it is published at. Private attribution, never a window observation:
+    # it is what turns a retained index back into a position in the whole window.
+    series_discarded: dict[str, int] = field(default_factory=dict)
 
 
 class PricingMixin:
@@ -112,6 +116,36 @@ class PricingMixin:
             "role": role, "cost": 0, "ok": 0, "invocations": 0, "tool_calls": 0,
             "notional_micro": 0,
         })
+
+    def _decision_role(self, handle: str) -> str:
+        """The measurement scope a decision's return was, or would be, priced in."""
+        emitted = self.return_kinds.get(handle)
+        if emitted is None:
+            action_id = self.handle_to_assembly.get(handle)
+            if action_id in self.assemblies:
+                emitted = self.assemblies[action_id].spec.emits
+        return measured_role(emitted) if emitted else "producer"
+
+    def _charge_storage(self, handle: str, cost_micro: int) -> None:
+        """Bind a metered retained-storage charge to a decision that can be scored for it.
+
+        Retained public storage is an explicit liability of the decision that
+        holds it. Every charge enters that decision's cost contribution for the
+        window it landed in, so the charter's cost cards see it where it was
+        spent. While the decision's own consequence outcome is still open the
+        charge is also carried into that outcome's cost, so a return cannot pay
+        off on a margin its storage has already consumed. An outcome is fixed
+        once and never reopened, so afterwards the cost contribution is the whole
+        of the liability and it stays with the note's current owner decision.
+        """
+        if cost_micro <= 0:
+            return
+        sample = self._contribution(handle, self._decision_role(handle))
+        sample["cost"] += cost_micro
+        carried = self.consequences.carry(handle, cost_micro)
+        self.ledger.append({"kind": "price.contribution", "handle": handle,
+                            "window": self.window.index, "role": sample["role"],
+                            "cost": cost_micro, "storage": True, "carried": carried})
 
     def _invoke(self, action_id, req, role, *, child=False):
         """Prices retain the completed decision's own cost, schema result and tool attempts."""
@@ -221,12 +255,12 @@ class PricingMixin:
                      if key == "mids" else float(ev.payload["rate"]))
             series = getattr(self.window, key)
             series.append({"coin": str(ev.payload["coin"]), "ts_ns": ev.ts_ns, "value": value})
-            del series[:-MAX_WORLD_SAMPLES]
+            trim_series(self.window, key, per_coin=True)
         elif ev.kind is EventKind.TICK:
             self.window.tick_timestamps_ns.append(ev.ts_ns)
-            del self.window.tick_timestamps_ns[:-MAX_WORLD_SAMPLES]
+            trim_series(self.window, "tick_timestamps_ns")
             self.window.wallet_balance_micro.append([ev.ts_ns, self.wallet.balance])
-            del self.window.wallet_balance_micro[:-MAX_WORLD_SAMPLES]
+            trim_series(self.window, "wallet_balance_micro")
         elif ev.kind is EventKind.REGISTERED and ev.payload.get("kind") == "observation":
             entry = self.registered_observations.get(ev.payload["id"])
             if (entry is not None and entry["version"] == ev.payload["version"]

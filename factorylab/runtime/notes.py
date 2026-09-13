@@ -1,4 +1,9 @@
-"""Bounded public notes retain contents and pay storage rent from their writer's compute."""
+"""Bounded public notes retain contents and pay storage rent from their writer's compute.
+
+Rent is a liability of the decision that holds the note, resumable with the
+notebook itself: an unpaid window stays outstanding until it is paid, and a paid
+one is attributed to that decision's cost, not merely subtracted from the wallet.
+"""
 
 from copy import deepcopy
 from dataclasses import dataclass
@@ -74,7 +79,14 @@ def rent_bytes(entry: dict, window: int) -> int:
 
 
 def charge_window(rt) -> None:
-    """Every retained note pays each elapsed window or retains its unpaid rent and text."""
+    """Every retained note pays each elapsed window or retains its unpaid rent and text.
+
+    A paid charge is a scored liability of the decision that holds the note, not
+    only a wallet debit: it enters that decision's cost contribution for this
+    window and, while its consequence outcome is still open, that outcome's cost.
+    Unpaid rent stays outstanding, so nothing is forgiven by an unaffordable
+    boundary and nothing is charged twice.
+    """
     from factorylab.world.metering import Infeasible
 
     for key, entry in rt.notes.items():
@@ -93,6 +105,7 @@ def charge_window(rt) -> None:
         rt.ledger.append({"kind": "note.rent", "key": key, "cost": paid.cost,
                           "window": rt.window.index, "handle": entry["handle"],
                           "ts": rt.clock.now_ns})
+        rt._charge_storage(entry["handle"], paid.cost)
         entry["paid_window"] = rt.window.index
 
 

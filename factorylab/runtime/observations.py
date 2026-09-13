@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 # The per-decision attribution the runtime keeps on the same window object
 # is not a public window fact and never reaches a registered observation.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
-                         "closed_cards", "closed_prices")
+                         "closed_cards", "closed_prices", "series_discarded")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
@@ -322,17 +322,55 @@ def window_facts(window: Any) -> dict:
     return facts
 
 
+# A retained series that no longer reaches back to a sealed mark supplies no evidence.
+_DISCARDED = object()
+
+
+def trim_series(window: Any, key: str, *, per_coin: bool = False) -> None:
+    """Bound one public series in place, counting every sample it discards.
+
+    A bounded series keeps only its latest ``MAX_WORLD_SAMPLES`` samples, so the
+    position of a retained sample within the window's whole history is its index
+    plus the number already dropped from in front of it. That count is what a
+    sealed cursor is compared against; it only ever grows, for the life of the
+    window. Per-coin series are counted under the coin they are published by.
+    """
+    series = getattr(window, key)
+    excess = len(series) - MAX_WORLD_SAMPLES
+    if excess <= 0:
+        return
+    discarded = window.series_discarded
+    for row in series[:excess]:
+        path = f"{key}/{row['coin']}" if per_coin else key
+        discarded[path] = discarded.get(path, 0) + 1
+    del series[:excess]
+
+
+def series_offsets(window: Any) -> dict:
+    """Shape the retained-prefix offsets like the facts the series appear in."""
+    offsets: dict[str, Any] = {}
+    for path, count in getattr(window, "series_discarded", {}).items():
+        key, _, coin = path.partition("/")
+        if coin:
+            offsets.setdefault(key, {})[coin] = count
+        else:
+            offsets[key] = count
+    return offsets
+
+
 def window_cursor(window: Any) -> dict:
-    """Mark one position in the public window: each counter's value, each series' length.
+    """Mark one position in the public window: each counter's value, each series' position.
 
     Sealed when a forecast is made, so the claim it opened can later be resolved
     over what the window accumulated *after* it and never over what was already
-    there. Carries no window content, only how much of it had happened.
+    there. Carries no window content, only how much of it had happened. A series
+    position counts every sample the window ever took, including the ones its
+    bound has since discarded, so the mark does not slide when the series rolls.
     """
-    return _cursor(window_facts(window))
+    return _cursor(window_facts(window), series_offsets(window))
 
 
-def window_facts_since(window: Any, cursor: Mapping | None) -> dict:
+def window_facts_since(window: Any, cursor: Mapping | None) -> dict | None:
     """Return the public facts the window accumulated strictly after a sealed cursor.
 
     Counters arrive as their increase since the mark and series as the samples
@@ -342,36 +380,65 @@ def window_facts_since(window: Any, cursor: Mapping | None) -> dict:
     opens, so they pass through unchanged. A cursor from an earlier window (or
     no cursor at all) yields the whole current window, which opened after the
     mark and is therefore already entirely after it.
+
+    Returns ``None`` when a bounded series has discarded a sample the cursor
+    still needs: the interval the claim was sealed over is no longer evidence,
+    and absent evidence is never a resolution.
     """
     facts = window_facts(window)
     if not isinstance(cursor, Mapping) or cursor.get("index") != facts.get("index"):
         return facts
-    return {
-        key: value if key in WINDOW_IDENTITY_FACTS else _since(value, cursor.get(key))
-        for key, value in facts.items()
-    }
+    offsets = series_offsets(window)
+    result = {}
+    for key, value in facts.items():
+        if key in WINDOW_IDENTITY_FACTS:
+            result[key] = value
+            continue
+        since = _since(value, cursor.get(key), offsets.get(key))
+        if since is _DISCARDED:
+            return None
+        result[key] = since
+    return result
 
 
-def _cursor(value: Any) -> Any:
-    """A counter marks its value, a series its length, and anything else nothing."""
+def _cursor(value: Any, offset: Any = None) -> Any:
+    """A counter marks its value, a series its position, and anything else nothing."""
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, int | float):
         return value
     if isinstance(value, list):
-        return len(value)
+        return len(value) + (offset if type(offset) is int else 0)
     if isinstance(value, dict):
-        return {key: _cursor(item) for key, item in value.items()}
+        offsets = offset if isinstance(offset, Mapping) else {}
+        return {key: _cursor(item, offsets.get(key)) for key, item in value.items()}
     return None
 
 
-def _since(value: Any, mark: Any) -> Any:
-    """Subtract a counter's mark, drop a series' prefix, and pass anything else through."""
+def _since(value: Any, mark: Any, offset: Any = None) -> Any:
+    """Subtract a counter's mark, drop a series' retained prefix, and pass the rest through."""
     if isinstance(value, list):
-        return value[mark:] if type(mark) is int else value
+        if type(mark) is not int:
+            return value
+        start = mark - (offset if type(offset) is int else 0)
+        return value[start:] if start >= 0 else _DISCARDED
     if isinstance(value, dict):
         marks = mark if isinstance(mark, Mapping) else {}
-        return {key: _since(item, marks.get(key)) for key, item in value.items()}
+        offsets = offset if isinstance(offset, Mapping) else {}
+        result = {}
+        for key, item in value.items():
+            since = _since(item, marks.get(key), offsets.get(key))
+            if since is _DISCARDED:
+                return _DISCARDED
+            result[key] = since
+        for key, seen in marks.items():
+            # A series the window no longer publishes at all — one coin's samples
+            # evicted by another's — hides its discarded tail behind an absence.
+            if key not in value and type(seen) is int and type(offsets.get(key)) is int and (
+                offsets[key] > seen
+            ):
+                return _DISCARDED
+        return result
     if isinstance(value, bool) or value is None:
         return value
     if isinstance(value, int | float) and type(mark) in (int, float):
@@ -409,7 +476,7 @@ def record_venue_facts(window, tool: str, args: dict, result: dict, now_ns: int)
                        for price, size in row[side]):
                     return
             window.books.append(row)
-            del window.books[:-MAX_WORLD_SAMPLES]
+            trim_series(window, "books", per_coin=True)
         elif tool in ("venue.funding", "venue.funding_history"):
             key = "funding" if tool == "venue.funding" else "funding_history"
             rows = []
@@ -419,13 +486,13 @@ def record_venue_facts(window, tool: str, args: dict, result: dict, now_ns: int)
                     rows.append({"coin": item["coin"], "ts_ns": int(item["ts_ns"]),
                                  "value": rate})
             window.funding.extend(rows)
-            del window.funding[:-MAX_WORLD_SAMPLES]
+            trim_series(window, "funding", per_coin=True)
         elif tool == "venue.mids":
             rows = [{"coin": coin, "ts_ns": now_ns,
                      "value": usd_to_micro(Decimal(str(value)), rounding="nearest")}
                     for coin, value in result["mids"].items()]
             window.mids.extend(rows[-MAX_WORLD_SAMPLES:])
-            del window.mids[:-MAX_WORLD_SAMPLES]
+            trim_series(window, "mids", per_coin=True)
     except (KeyError, TypeError, ValueError, ArithmeticError, OverflowError):
         return  # Malformed or unavailable venue data supplies no measurement.
 

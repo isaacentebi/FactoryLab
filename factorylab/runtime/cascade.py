@@ -22,12 +22,21 @@ def release_threshold(min_ratio: int, jitter_fraction: float, draw: float) -> in
 
 
 def event_tier(event: Event) -> int:
-    """Only verdict events enter the cascade; producer judgements occupy tier one."""
+    """Only judgement events enter the cascade; producer judgements occupy tier one.
+
+    A judgement of a producer return is the seed ``Verdict`` and occupies tier
+    one. Every higher arrival — the seed ``MetaVerdict`` or a population kind
+    whose declared reward shape is ``conformity`` — states the tier it judges in
+    its own payload, so a window is separated by declared position rather than
+    by a fixed pair of kind names. Which kinds are admitted at all is the
+    caller's reward-shape decision; anything else has no tier here.
+    """
     if event.kind is EventKind.VERDICT:
         return 1
-    if event.kind is EventKind.META_VERDICT:
-        return event.payload["tier"]
-    raise ValueError("cascade arrivals must be Verdict or MetaVerdict events")
+    tier = event.payload.get("tier")
+    if type(tier) is not int or tier < 2:
+        raise ValueError("cascade arrivals must be Verdict or conformity judgements")
+    return tier
 
 
 @dataclass(frozen=True)
