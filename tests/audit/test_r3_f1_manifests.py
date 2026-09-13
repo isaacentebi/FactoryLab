@@ -41,7 +41,7 @@ def _available_pairs(meta: dict) -> set[str]:
             for row in meta["universe"]}
 
 
-@pytest.mark.parametrize("world", ["testnet", "edition1-example"])
+@pytest.mark.parametrize("world", ["testnet"])
 def test_every_seeded_spot_pair_exists_on_the_network_the_world_runs_on(world):
     """``_configure_spot`` raises on a pair the venue has never heard of, from a
     constructor that runs before genesis, so a manifest naming one cannot launch."""
@@ -70,14 +70,18 @@ def test_the_testnet_reserve_address_is_a_real_checksummed_address():
 
 
 def test_testnet_governance_can_act_every_six_hours_of_world_time():
-    """Two-minute tick, sixty-event consequence backstop: two hours for a trade to
-    be judged, and ``min_ratio`` of those between charter activations."""
+    """Ten-minute tick, sixty-event consequence backstop, six world events per tick:
+    ten ticks (100 minutes) for a trade to be judged, and ``min_ratio`` of those,
+    five hours, between charter activations (docs/launch-decisions.md)."""
     manifest = load_manifest("testnet")
-    assert manifest.tick_interval_ns == 120 * 1_000_000_000
+    assert manifest.tick_interval_ns == 600 * 1_000_000_000
     assert manifest.evaluation.consequence_backstop_events == 60
-    backstop_s = 60 * manifest.tick_interval_ns / 1_000_000_000
-    assert backstop_s == 7200
-    assert manifest.timing.min_ratio * backstop_s == 21600
+    backstop_s = 60 // 6 * manifest.tick_interval_ns / 1_000_000_000
+    assert backstop_s == 6000
+    assert manifest.timing.min_ratio * backstop_s == 18000
+
+    # The funded draft seeds no spot pair: the population registers pairs itself.
+    assert load_manifest("edition1-example").exchange.spot_pairs == ()
 
 
 def test_a_launch_refusal_names_the_subsystem_that_refused(capsys):

@@ -82,10 +82,12 @@ def test_marker_partition_includes_transitive_fixtures(tmp_path):
     unit.write_text("pass\n")
     marked = []
     items = [
-        SimpleNamespace(path=direct, fixturenames=[], add_marker=marked.append),
+        SimpleNamespace(path=direct, fixturenames=[], add_marker=marked.append,
+                        get_closest_marker=lambda name: None),
         SimpleNamespace(path=unit, fixturenames=["wake", "scripted_run"],
-                        add_marker=marked.append),
-        SimpleNamespace(path=unit, fixturenames=[], add_marker=marked.append),
+                        add_marker=marked.append, get_closest_marker=lambda name: None),
+        SimpleNamespace(path=unit, fixturenames=[], add_marker=marked.append,
+                        get_closest_marker=lambda name: None),
     ]
     subject.pytest_collection_modifyitems(items)
     assert [marker.name for marker in marked] == ["world", "world", "fast"]
