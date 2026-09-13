@@ -9,7 +9,8 @@ storage already consumed.
 import pytest
 
 from factorylab.charter.charter import MetricCard
-from factorylab.charter.measurement import measure_card
+from factorylab.charter.measurement import CardSamples, measure_card
+from factorylab.cortex.request import Return
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.settlement.lots import LotTable
 from tests.audit.test_r3_d_card_evidence import cost_runtime, returned
@@ -244,3 +245,100 @@ def test_rent_adds_cost_mass_to_a_global_window_card_and_no_phantom_return():
     restore_runtime(restored, runtime_state(rt))
     assert restored.window.storage_cost_micro == rt.window.storage_cost_micro == RENT_ONE
     assert restored.window.costs == rt.window.costs == []
+
+
+def cost_card(rt, n=2):
+    """The same selected-response cost card `cost_runtime` prices on."""
+    return MetricCard("cost", rt.charter.norms[1], "Selected response cost", "micro-USD",
+                      {"kind": "returns", "n": n, "per": "role"}, "at most 500",
+                      "cost_per_return", "producer")
+
+
+def response(samples, handle, window, cost, *, status="ok"):
+    samples.returned(handle=handle, assembly="seed-decider", role="producer",
+                     window=window, ret=Return(handle, {}, cost, status))
+
+
+def test_a_returns_horizon_selects_responses_and_rent_only_adds_their_cost_mass():
+    """The horizon is n responses; the charge is mass on top of them, not one of them.
+
+    Two 10,000-micro responses and one micro of rent are two responses costing
+    20,001 together. Selecting the charge as one of the two would discard the
+    older response and read 10,001 off a single one, so paying rent would cost
+    a tenth of a micro rather than a whole one.
+    """
+    rt = cost_runtime("producer", kind="returns", n=2, per="role")
+    writer = returned(rt, "seed-decider", "producer", 10_000)
+    result, cost = rt._run_tool("seed-decider", writer, {
+        "tool": "note.put", "args": {"key": "f", "text": ""}})
+    assert "error" not in result and cost == RENT_ONE
+    rt.n = 10
+    boundary(rt)  # the rent falls due in a window its writer never responded in
+    assert ledger_items(rt, "note.rent")[-1]["cost"] == RENT_ONE
+    returned(rt, "seed-decider", "producer", 10_000)
+    rows = rt.card_samples.returns
+    assert [r.get("storage") is True for r in rows] == [False, True, False]
+
+    assert measure_card(cost_card(rt), rt.card_samples) == {"producer": 10_000.5}
+    # A median is a value one response took, and the charge is no response's cost.
+    rt.n = 20
+    rt._close_price_window()
+    assert rt.card_samples.medians["cost"] == 10_000
+
+
+def test_rent_never_supports_a_cost_horizon_that_is_short_a_response():
+    """A scope with n-1 responses is unavailable however much rent it paid.
+
+    Counting the charge as the missing response would price a two-response
+    horizon off one response and one line of money.
+    """
+    rt = cost_runtime("producer", kind="returns", n=2, per="role")
+    writer = returned(rt, "seed-decider", "producer", 10_000)
+    result, cost = rt._run_tool("seed-decider", writer, {
+        "tool": "note.put", "args": {"key": "f", "text": ""}})
+    assert "error" not in result and cost == RENT_ONE
+    rt.n = 10
+    boundary(rt)
+    assert rt.card_samples.returns[-1].get("storage") is True
+    assert measure_card(cost_card(rt), rt.card_samples) == {}
+
+
+@pytest.mark.parametrize("rent_window,expected", [(2, 10_000.5), (1, 10_000.0)])
+def test_only_rent_from_the_selected_responses_own_windows_joins_their_horizon(
+        rent_window, expected):
+    """A charge belongs to the horizon measured over the windows it landed in.
+
+    The selected responses span windows 2 through 2, so a charge metered there
+    is part of what they cost and one metered in window 1, beside a response the
+    horizon already rolled past, is not.
+    """
+    rt = make_runtime()
+    samples = CardSamples()
+    response(samples, "old", 1, 2_000)
+    response(samples, "a", 2, 10_000)
+    response(samples, "b", 2, 10_000)
+    samples.stored(handle="rent", assembly="seed-decider", role="producer",
+                   window=rent_window, cost=1)
+    assert measure_card(cost_card(rt), samples) == {"producer": expected}
+
+
+def test_pruning_keeps_the_responses_a_horizon_needs_and_not_rent_it_never_reads():
+    """Retention follows the same selection: rent is kept beside responses, never over them.
+
+    A charge that displaced a response here would evict the horizon's own
+    samples, and a charge outside every horizon's window span is money already
+    measured that no future selection reads.
+    """
+    rt = cost_runtime("producer", kind="returns", n=2, per="role")
+    samples = CardSamples()
+    response(samples, "old", 1, 2_000)
+    response(samples, "a", 2, 10_000)
+    response(samples, "b", 2, 10_000)
+    samples.stored(handle="stale", assembly="seed-decider", role="producer",
+                   window=1, cost=1)
+    samples.stored(handle="live", assembly="seed-decider", role="producer",
+                   window=2, cost=1)
+
+    samples.prune(rt.charter.cards)
+    assert [row["handle"] for row in samples.returns] == ["a", "b", "live"]
+    assert measure_card(cost_card(rt), samples) == {"producer": 10_000.5}

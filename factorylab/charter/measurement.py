@@ -150,7 +150,12 @@ class CardSamples:
                 if card.window.kind != kind:
                     continue
                 for group in _groups(card, _selected(card.observation, rows)).values():
-                    keep.update(id(row) for row in group[-card.window.n:])
+                    # Retain the horizon measurement would select, including a
+                    # partly filled one: a charge never evicts a response from
+                    # it, and a charge outside its window span is not kept for
+                    # a horizon that will never read it.
+                    keep.update(id(row) for row in _horizon(
+                        card.observation, group, card.window.n, partial=True))
             rows[:] = [row for row in rows if (
                 row["handle"] in pending_handles or id(row) in keep
                 or (first_window is not None and row["window"] >= first_window)
@@ -264,13 +269,39 @@ def _selected(observation: str, rows: list[dict]) -> list[dict]:
     """Drop retained-storage charges from every selection but a cost one.
 
     Only cost is measured over a charge: it is money spent, not a response, so
-    it neither answers a schema nor declares an action. It is removed before the
-    horizon is applied, not after, so it can neither fill a slot a response
-    never filled nor push a real response out of a full window.
+    it neither answers a schema nor declares an action. Every other observation
+    loses it here, before any grouping or horizon; a cost selection keeps it for
+    `_horizon`, which admits it as mass and never as a slot.
     """
     if observation.strip().lower() == "cost_per_return":
         return rows
     return [row for row in rows if not row.get("storage")]
+
+
+def _horizon(observation: str, group: list[dict], n: int, *,
+             partial: bool = False) -> list[dict] | None:
+    """Select the latest `n` responses, then re-admit the rent those responses cover.
+
+    The horizon is chosen over responses alone: a retained-storage charge is a
+    cost and not a response, so it never occupies one of the `n` slots, never
+    pushes a real response out of a full horizon, and never counts toward the
+    support a scope needs. The charges that belong to a selected horizon are the
+    ones metered in the same measurement windows as its selected responses —
+    the same closed span a windows selector reads its rows over — so rent paid
+    while those responses were being measured adds to what they cost and rent
+    from outside their span does not. `partial` keeps a horizon that has not
+    filled yet, which retention needs and measurement refuses.
+    """
+    responses = [row for row in group if not row.get("storage")]
+    if len(responses) < n and not partial:
+        return None
+    responses = responses[-n:]
+    keep = {id(row) for row in responses}
+    if responses and observation.strip().lower() == "cost_per_return":
+        first, last = responses[0]["window"], responses[-1]["window"]
+        keep.update(id(row) for row in group
+                    if row.get("storage") and first <= row["window"] <= last)
+    return [row for row in group if id(row) in keep]
 
 
 def _groups(card: MetricCard, rows: list[dict]) -> dict[str, list[dict]]:
@@ -373,8 +404,8 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
     result = {}
     for scope, group in _groups(card, rows).items():
         if window.kind != "windows":
-            group = group[-window.n:]
-            if len(group) < window.n:
+            group = _horizon(observation.id, group, window.n)
+            if group is None:
                 continue
         value = _measure_rows(observation.id, group)
         if value is not None:
@@ -409,9 +440,9 @@ def measure_cards(cards, samples: CardSamples, window, observations=None) -> dic
             scope_medians = []
             for group in _groups(card, rows).values():
                 if card.window.kind == "returns":
-                    if len(group) < card.window.n:
+                    group = _horizon("cost_per_return", group, card.window.n)
+                    if group is None:
                         continue
-                    group = group[-card.window.n:]
                 costs = [r["cost"] for r in group if r["ok"] and not r.get("storage")]
                 if costs:
                     scope_medians.append(median(costs))

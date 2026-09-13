@@ -170,10 +170,14 @@ is a separate response. For cost, only successful responses in those selected
 rows contribute to the mean, and a retained-storage charge is selected beside
 them as a cost row of the decision that holds it: it adds to what those
 responses cost and is never divided into as one of them, so paying rent can only
-raise a cost per response. No other observation selects one, so a charge never
-fills a response slot. Well-formedness uses all selected responses as its
-denominator. The other supported return observations are `noop_share`,
-`revision_rate` and `tool_calls`.
+raise a cost per response. The `n` are counted over responses alone, before any
+charge joins them, and the charges that join a selected horizon are the ones
+metered in the same measurement windows as its selected responses, so a charge
+never fills a response slot, never displaces a response from a full horizon and
+never supplies the support a short scope lacks. No other observation selects
+one. Well-formedness uses all selected responses as its denominator. The other
+supported return observations are `noop_share`, `revision_rate` and
+`tool_calls`.
 
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before

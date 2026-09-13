@@ -8,7 +8,7 @@ from fractions import Fraction
 
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.controller import CardRegion, relative_region, violation
-from factorylab.charter.measurement import _groups, measure_cards
+from factorylab.charter.measurement import _groups, _horizon, measure_cards
 from factorylab.cortex.registration import measured_role
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.money import usd_to_micro
@@ -551,7 +551,9 @@ class PricingMixin:
             if supported is not None and scope not in supported:
                 continue
             if card.window.kind == "returns":
-                group = group[-card.window.n:]
+                # The same horizon the card measured: a retained-storage charge
+                # is the holder's cost inside it, never one of its n responses.
+                group = _horizon(card.observation, group, card.window.n, partial=True)
             successful = [r for r in group if r["ok"]]
             for row in successful:
                 handle = row["handle"]
