@@ -175,7 +175,10 @@ def pytest_collection_modifyitems(items):
             )
         shared = {"scripted_run", "scripted_runtime_run", "w1_scripted_diary"}
         world = modules[path] or bool(shared.intersection(getattr(item, "fixturenames", ())))
-        item.add_marker(pytest.mark.world if world else pytest.mark.fast)
+        if world:
+            item.add_marker(pytest.mark.world)
+        elif not any(item.get_closest_marker(m) for m in ("network", "slow")):
+            item.add_marker(pytest.mark.fast)
 
 
 def make_runtime(*, balance=100_000_000, live=False, clock_source=None):
