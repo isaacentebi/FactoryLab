@@ -28,6 +28,10 @@ class VenueUnavailable(RuntimeError):
 NS_PER_MS = 1_000_000
 NS_PER_HOUR = 3_600 * 1_000_000_000
 
+# Hyperliquid refuses any perp or spot order worth less than this, on both networks.
+# Published with lot and tick size so a size is known to be legal before it is paid for.
+MIN_ORDER_VALUE_USD = "10"
+
 
 def _interval_ns(interval: str) -> int:
     return {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}[interval] * 1_000_000_000
@@ -191,6 +195,7 @@ class FakeExchange:
     max_leverage: Decimal = Decimal("3")
     shocks: dict[int, dict[str, Decimal]] = field(default_factory=dict)  # step -> coin -> mult
     maintenance_fraction: Decimal = Decimal("0.5")  # of initial margin; below it, liquidate
+    min_order_value_usd: Decimal = Decimal(0)  # published and enforced; the fake has no floor
 
     def __post_init__(self) -> None:
         self._rng = random.Random(self.seed)
@@ -323,6 +328,11 @@ class FakeExchange:
         if order.market == "spot" and (order.size % Decimal("0.000001")
                 or order.limit_px is not None and order.limit_px % Decimal("0.01")):
             return OrderResult(None, "rejected", Decimal(0), None, "invalid spot tick or lot size")
+        if self.min_order_value_usd:
+            px = order.limit_px if order.limit_px is not None else self._mids[order.coin]
+            if order.size * px < self.min_order_value_usd:
+                return OrderResult(None, "rejected", Decimal(0), None,
+                                   "order below the venue minimum value")
         oid = str(self._next_oid)
         self._next_oid += 1
         if order.kind is OrderKind.LIMIT:
@@ -583,6 +593,13 @@ class FakeExchange:
         Maintenance margin is ``maintenance_fraction`` of initial margin
         (notional / each coin's leverage). The realised loss lands in cash like any
         other fill, so a leveraged position can take the account negative.
+
+        Guarantees liquidation at the first observed price below maintenance margin,
+        never that the loss stops there: one step of the price path is atomic, so a
+        gap larger than the maintenance buffer is realised in full and the account,
+        and the world wallet that settles it, end below zero by the overshoot. A
+        world's ``termination.balance_floor_usd`` is therefore a condition tested
+        after each settlement, not a level the venue can be held to.
         """
         if not self._positions:
             return []
@@ -636,8 +653,9 @@ class FakeExchange:
         self._cash += amount if to_perp else -amount
 
     def instruments(self) -> dict:
-        """Publish deterministic lot and price increments for configured markets."""
-        return {market: [{"coin": c, "lot_size": "0.000001", "tick_size": "0.01"}
+        """Publish deterministic lot and price increments and the venue's order floor."""
+        return {market: [{"coin": c, "lot_size": "0.000001", "tick_size": "0.01",
+                          "min_order_value_usd": str(self.min_order_value_usd)}
                          for c in coins]
                 for market, coins in (("perp", self.coins), ("spot", self.spot_pairs))}
 
@@ -733,19 +751,26 @@ class HyperliquidExchange:
         self._sz_decimals = {a["name"]: int(a["szDecimals"]) for a in meta["universe"]}
         self._spot_names = {}
         self._spot_tokens = {}
-        if spot_pairs:
-            self._configure_spot(self._info.spot_meta())
+        # Spot metadata is read whatever the manifest configures: a fill is classified
+        # by the venue's own universe, never by the subset this world may trade.
+        self._configure_spot(self._info.spot_meta())
         self.transient_failures = 0
         self.account_fallbacks = 0
         self._last_mids: dict[str, Decimal] | None = None
         self._last_account: AccountState | None = None
 
     def _configure_spot(self, meta: dict) -> None:
+        """Record the venue's whole spot universe, and the wire names of traded pairs."""
         tokens = {t["index"]: t for t in meta["tokens"]}
         self._spot_marks = {}
+        self._spot_universe = {}
         for row in meta["universe"]:
-            base, quote = (tokens[i] for i in row["tokens"])
+            try:
+                base, quote = (tokens[i] for i in row["tokens"])
+            except (KeyError, ValueError):
+                continue  # a pair naming a token this metadata does not carry is not ours
             pair = f'{base["name"]}/{quote["name"]}'
+            self._spot_universe[row["name"]] = pair
             if quote["name"] == "USDC":
                 self._spot_marks[base["name"]] = row["name"]
             if pair in self.spot_pairs:
@@ -760,15 +785,20 @@ class HyperliquidExchange:
         return getattr(self, "_spot_names", {}).get(coin, coin)
 
     def _public_coin(self, coin: str) -> str:
-        return next((p for p, name in getattr(self, "_spot_names", {}).items()
-                     if name == coin), coin)
+        """A wire name in the venue's spot universe names its pair, configured or not."""
+        return getattr(self, "_spot_universe", {}).get(coin, coin)
+
+    def _is_spot(self, coin: str) -> bool:
+        """Classify by the venue's spot universe, never by the manifest's traded subset."""
+        return coin in getattr(self, "_spot_universe", {})
 
     def instruments(self) -> dict:
-        """Expose lot precision and the venue's price precision rule without guessing a tick."""
+        """Expose lot precision, the venue's price precision rule and its order floor."""
         return {market: [{"coin": c, "lot_size": str(Decimal(1).scaleb(-self._sz_decimals[c])),
                           "tick_size": str(Decimal(1).scaleb(
                               -(8 if market == "spot" else 6) + self._sz_decimals[c])),
-                          "price_significant_figures": 5, "integer_prices_allowed": True}
+                          "price_significant_figures": 5, "integer_prices_allowed": True,
+                          "min_order_value_usd": MIN_ORDER_VALUE_USD}
                          for c in coins]
                 for market, coins in (("perp", self.coins),
                                       ("spot", getattr(self, "spot_pairs", ())))}
@@ -963,7 +993,8 @@ class HyperliquidExchange:
                           for key in ("sz", "px", "fee", "closedPnl")]
                 size, px, fee, realized = values
                 pair = self._public_coin(f["coin"])
-                if pair in getattr(self, "spot_pairs", ()):
+                market = "spot" if self._is_spot(f["coin"]) else "perp"
+                if market == "spot":
                     token = f.get("feeToken", "USDC")
                     if token == pair.split("/")[0]:
                         size -= fee if f["side"] == "B" else -fee
@@ -977,12 +1008,11 @@ class HyperliquidExchange:
                         or not isinstance(f["coin"], str) or not f["coin"]):
                     continue
                 out.append(Fill(
-                    order_id=str(f["oid"]), coin=self._public_coin(f["coin"]),
+                    order_id=str(f["oid"]), coin=pair,
                     is_buy=f["side"] == "B",
                     size=Decimal(str(f["sz"])), px=px, fee=fee, ts_ns=stamp, realized=realized,
                     liquidation=bool(f.get("liquidation")),
-                    market="spot" if self._public_coin(f["coin"]) in
-                    getattr(self, "spot_pairs", ()) else "perp",
+                    market=market,
                     inventory_size=size,
                 ))
             except (KeyError, TypeError, ValueError, ArithmeticError, AttributeError):

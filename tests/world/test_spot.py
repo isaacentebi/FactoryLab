@@ -119,19 +119,29 @@ def test_fake_class_transfers_are_receipted_and_conserve():
     assert wallet.check_conservation()
 
 
-def test_class_receipt_requires_exact_direction_amount_and_nonce():
+def test_class_receipt_requires_direction_amount_hash_and_a_bounded_execution_time():
+    """The venue stamps its own execution time, so the row is matched in a bounded
+    window after the signed nonce, never at it, and never when two rows could match."""
+    from factorylab.world.treasury import CLASS_EXECUTION_TOLERANCE_MS
+
     ex, _ = live()
     ex.name = 'fake-live'
     rail = UnconfiguredRail(ex)
     state = {'amount_micro': 10_000_000, 'nonce': 123}
     state['reference'] = rail.class_prepare('perps_to_spot', state)
-    rows = [{'time': 124, 'hash': 'wrong', 'delta': {
-        'type': 'accountClassTransfer', 'usdc': '10', 'toPerp': False}}]
+    row = {'time': 1958, 'hash': '0xabc', 'delta': {
+        'type': 'accountClassTransfer', 'usdc': '10', 'toPerp': False}}
+    rows = [row]
     ex._info.user_non_funding_ledger_updates = lambda *_: rows
-    assert rail.class_poll(state) is None
-    rows[0]['time'] = 123
+    assert rail.class_poll(state)['evidence'] is row
+    row['time'] = 123 + CLASS_EXECUTION_TOLERANCE_MS
     assert rail.class_poll(state)['confirmed']
-    rows[0]['delta']['toPerp'] = True
+    for wrong in ({'time': 122}, {'time': 124 + CLASS_EXECUTION_TOLERANCE_MS}, {'hash': ''},
+                  {'delta': {**row['delta'], 'toPerp': True}},
+                  {'delta': {**row['delta'], 'usdc': '9'}}):
+        rows[:] = [{**row, **wrong}]
+        assert rail.class_poll(state) is None
+    rows[:] = [row, {**row, 'hash': '0xdef'}]  # two candidates confirm nothing
     assert rail.class_poll(state) is None
 
 

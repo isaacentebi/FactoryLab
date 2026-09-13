@@ -29,6 +29,8 @@ packages = ["factorylab"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
+    "fast: tests without a world-run import or shared scripted fixture",
+    "world: tests importing run_world or consuming shared scripted fixtures",
     "network: requires network access (deselected in CI)",
     "slow: kills and resumes real subprocesses; run before merging to main (`-m ''`)",
 ]

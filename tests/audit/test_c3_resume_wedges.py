@@ -18,8 +18,6 @@ from factorylab.runtime.loop import Runtime
 from factorylab.runtime.resume import RecoveryJournal, ResumeError, encode, resume_world
 from factorylab.runtime.worlds import load_manifest
 
-pytestmark = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
-
 
 class Died(BaseException):
     pass
@@ -53,6 +51,12 @@ def test_finding_2_a_jailed_run_interrupted_after_its_io_call_is_replayable(name
     except BaseException as exc:  # _ReplayFault is a BaseException
         pytest.fail(f"an interrupted {name} cannot be resumed: {exc}")
     assert result == {"value": 1}
+    assert recorded == [{"kind": "io.result", "call": 0, "result": encode({"value": 1})}]
+    journal.tail = [
+        {"kind": "io.call", "name": name, "input_hash": fingerprint, "seq": 0, "ts": 0},
+        {**recorded[0], "seq": 1, "ts": 0},
+    ]
+    assert journal.call(name, lambda: pytest.fail("completed jail run repeated"), (), {}) == result
 
 
 @pytest.mark.parametrize("name", ["sandbox.run", "observation.run"])
@@ -77,6 +81,8 @@ def test_finding_2_a_jailed_run_later_in_an_interrupted_event_fails_instead_of_r
     except Exception as exc:
         pytest.fail(f"{name} refused during re-execution of the interrupted event: {exc}")
     assert result == {"value": 1}
+    assert [item["kind"] for item in recorded] == ["io.call", "io.result"]
+    assert recorded[-1]["call"] == 0 and recorded[-1]["result"] == encode(result)
 
 
 def test_finding_2_death_during_a_population_tool_run_wedges_the_scripted_world(tmp_path):

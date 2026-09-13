@@ -46,8 +46,8 @@ def items(path, manifest):
 
 
 @pytest.fixture(scope="module")
-def uninterrupted():
-    return run_world(load_manifest("scripted"), events=140, seed=1)
+def uninterrupted(scripted_run):
+    return scripted_run("scripted", 140, 1).summary
 
 
 @pytest.mark.parametrize("stop", ["event250", "between_windows"])
@@ -195,7 +195,9 @@ def stop_after(rt, predicate):
         rt.run()
 
 
-def test_partial_event_replays_settlement_after_durable_item_before_mutation(tmp_path):
+def test_partial_event_replays_settlement_after_durable_item_before_mutation(
+    tmp_path, scripted_run,
+):
     m = load_manifest("scripted")
     path = tmp_path / "partial.jsonl"
     rt = make_runtime(m, path)
@@ -213,7 +215,7 @@ def test_partial_event_replays_settlement_after_durable_item_before_mutation(tmp
         rt.run()
     resumed = resume_world(m, str(path))
     resumed["stats"]["resumes"] = 0
-    assert resumed == run_world(m, events=8, seed=1)
+    assert resumed == scripted_run(m, 8, 1).summary
 
 
 def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_memory(tmp_path):
@@ -241,7 +243,7 @@ def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_me
     assert restored.run()["ledger_verify"]
 
 
-def test_second_resume_replays_the_first_resume_items(tmp_path):
+def test_second_resume_replays_the_first_resume_items(tmp_path, scripted_run):
     m = load_manifest("scripted")
     path = tmp_path / "twice.jsonl"
     rt = make_runtime(m, path)
@@ -252,16 +254,21 @@ def test_second_resume_replays_the_first_resume_items(tmp_path):
     resumed = resume_world(m, str(path))
     assert resumed["stats"]["resumes"] == 2
     resumed["stats"]["resumes"] = 0
-    assert resumed == run_world(m, events=8, seed=1)
+    assert resumed == scripted_run(m, 8, 1).summary
 
 
-def test_resume_before_first_decision_keeps_sample_handle_and_every_summary_field(tmp_path):
+def test_resume_before_first_decision_keeps_sample_handle_and_every_summary_field(
+    tmp_path, scripted_run,
+):
     m = load_manifest("scripted")
-    path = tmp_path / "early.jsonl"
-    expected = run_world(m, events=3, seed=1, ledger_path=str(path))
+    record = scripted_run(m, 3, 1)
+    path = record.copy_to(tmp_path / "early")
+    expected = record.summary
     snapshot = next(i for i in items(path, m) if i["kind"] == "snapshot")
     prefix = b"".join(path.read_bytes().splitlines(keepends=True)[: snapshot["seq"] + 2])
     path.write_bytes(prefix)
+    # This synthetic crash predates the completed run's authenticated head.
+    path.with_suffix(path.suffix + ".head").unlink()
     resumed = resume_world(m, str(path))
     assert resumed["stats"]["resumes"] == 1
     resumed["stats"]["resumes"] = 0
@@ -315,6 +322,8 @@ def test_unacknowledged_live_model_call_books_uncertainty_without_resubmission(t
     # A prefix ending after dispatch intent models the exact durable evidence at that cut.
     prefix = b"".join(path.read_bytes().splitlines(keepends=True)[: call["seq"] + 2])
     path.write_bytes(prefix)
+    # A process dying at this call could not have written the final run's head.
+    path.with_suffix(path.suffix + ".head").unlink()
     calls, orders = provider.calls, venue.orders_sent
     restored = resume_runtime(m, str(path), provider=provider, exchange=venue, now_ns=10**15)
     assert (provider.calls, venue.orders_sent) == (calls, orders)
@@ -400,7 +409,7 @@ def test_snapshot_codec_preserves_fraction_float_mapping_order_and_deque():
     assert restored[5][1].hex() == value[5][1].hex()
 
 
-def test_resume_command_keeps_saved_seed_and_budget(tmp_path, capsys):
+def test_resume_command_keeps_saved_seed_and_budget(tmp_path, capsys, scripted_run):
     from factorylab.runtime.cli import _cmd_resume, build_parser
 
     m = load_manifest("scripted")
@@ -414,10 +423,10 @@ def test_resume_command_keeps_saved_seed_and_budget(tmp_path, capsys):
     assert summary["seed"] == 1 and summary["manifest_hash"] == m.manifest_hash()
     assert summary["stats"]["resumes"] == 1
     summary["stats"]["resumes"] = 0
-    assert summary == json.loads(json.dumps(run_world(m, events=3, seed=1)))
+    assert summary == json.loads(json.dumps(scripted_run(m, 3, 1).summary))
 
 
-def test_resume_recovers_a_torn_tail_and_replays_past_repair_items(tmp_path):
+def test_resume_recovers_a_torn_tail_and_replays_past_repair_items(tmp_path, scripted_run):
     m = load_manifest("scripted")
     path = tmp_path / "torn.jsonl"
     rt = make_runtime(m, path)
@@ -428,7 +437,7 @@ def test_resume_recovers_a_torn_tail_and_replays_past_repair_items(tmp_path):
     path.write_bytes(raw[:-17])
     resumed = resume_world(m, str(path))
     resumed["stats"]["resumes"] = 0
-    assert resumed == run_world(m, events=5, seed=1)
+    assert resumed == scripted_run(m, 5, 1).summary
     assert path.read_bytes().startswith(prefix)
     diary = items(path, m)
     assert sum(i["kind"] == "ledger.repaired" for i in diary) == 1

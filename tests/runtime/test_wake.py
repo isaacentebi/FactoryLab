@@ -39,13 +39,9 @@ def isolated(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path, scripted_run):
     """A finished scripted world in its own directory, not the one the test chdir'd into."""
-    directory = tmp_path / "world"
-    directory.mkdir()
-    path = directory / "scripted.jsonl"
-    run_world(load_manifest("scripted"), events=5, seed=1, ledger_path=str(path))
-    return path
+    return scripted_run("scripted", 5, 1).copy_to(tmp_path / "world")
 
 
 class Page(HTMLParser):
@@ -310,14 +306,9 @@ def test_live_uptime_uses_first_tick_and_stops_at_termination(tmp_path):
 
 
 @pytest.mark.parametrize("damage", ["ciphertext", "reorder", "header", "missing_key"])
-def test_untrusted_snapshot_never_emits_aggregates(tmp_path, damage):
-    # Not the shared world fixture: pytest names a temporary directory after the
-    # first thirty characters of the test, which is the same string for all four
-    # parameters, so each damage builds its own world where only it can write.
-    directory = tmp_path / f"damaged-{damage}"
-    directory.mkdir()
-    world = directory / "scripted.jsonl"
-    run_world(load_manifest("scripted"), events=5, seed=1, ledger_path=str(world))
+def test_untrusted_snapshot_never_emits_aggregates(tmp_path, damage, scripted_run):
+    # Each damage gets every ledger sidecar in a private directory.
+    world = scripted_run("scripted", 5, 1).copy_to(tmp_path / f"damaged-{damage}")
     lines = world.read_bytes().splitlines(keepends=True)
     if damage == "ciphertext":
         # One byte of the last token, always changed: a Fernet token is base64url,
