@@ -1374,3 +1374,70 @@ def test_manifest_charter_is_edition_one_and_seeds_prices():
     rt._derive_regions()
     assert rt.controller.snapshot()["cards"]["deferred"]["lambda"] == 0.3
     assert rt.run()["ledger_verify"]
+
+
+def _synthetic_contract_queue(clock_ns):
+    """A ContractQueue over a real kernel queue and the smallest runtime it addresses."""
+    from types import SimpleNamespace
+
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.kernel.queue import DecisionQueue
+    from factorylab.runtime.routing import ContractQueue
+
+    ledger = Ledger(clock_ns=clock_ns)
+    runtime = SimpleNamespace(ledger=ledger, return_bindings={})
+    return ContractQueue(DecisionQueue(ledger, clock_ns=clock_ns), runtime)
+
+
+def _scanned_returns(contract_queue, actor):
+    """The unindexed reading: rebuild every return the kernel delivered to ``actor``."""
+    return tuple(
+        replace(r, channel=contract_queue._channel(r.handle, r.channel))
+        for r in contract_queue.queue.returns_for(actor)
+    )
+
+
+def test_returns_for_reads_exactly_what_a_scan_of_every_return_would():
+    now = [1_000]
+    queue = _synthetic_contract_queue(lambda: now[0])
+
+    def propensity(actor):
+        return PropensityRecord(("act", "NOOP"), (1.0, 0.0), "act", 7, actor, "s" * 64)
+
+    def opened(actor, channels=None):
+        return queue.open(
+            actor=actor, event_id="tick", propensity=propensity(actor),
+            channel="outcome" if channels is None else "emits",
+            deadline_ns=now[0] + 10, parent_handle=None, cost_ceiling=0,
+            return_channels=channels,
+        )
+
+    polymorphic = opened("router", {"Verdict": "conformity", "Exposure": "exposure"})
+    plain = opened("router")
+    stranger = opened("other")
+    # A selection binds before the settlement that carries it, and never after.
+    assert queue.bind(polymorphic, "Exposure") == "exposure"
+    queue.settle(polymorphic, channel="exposure", score=0.5, status=SettleStatus.SETTLED,
+                 definition_version="v1", sampling_ref=None)
+    queue.settle(plain, channel="outcome", score=0.25, status=SettleStatus.CENSORED,
+                 definition_version="v1", sampling_ref=None)
+    now[0] += 100
+    assert queue.expire(now[0]) == [stranger]
+    queue.settle(stranger, channel="outcome", score=1.0, status=SettleStatus.SETTLED,
+                 definition_version="v1", sampling_ref=None)
+
+    for actor in ("router", "other", "absent"):
+        scanned = _scanned_returns(queue, actor)
+        assert queue.returns_for(actor) == scanned
+        assert [r.channel for r in queue.returns_for(actor)] == [r.channel for r in scanned]
+    assert [(r.handle, r.channel) for r in queue.returns_for("router")] == [
+        (polymorphic, "exposure"), (plain, "outcome")
+    ]
+    assert [(r.handle, r.channel) for r in queue.returns_for("other")] == [
+        (stranger, "timeout"), (stranger, "outcome")
+    ]
+    for handle in (polymorphic, plain, stranger):
+        assert queue.history(handle) == tuple(
+            replace(r, channel=queue._channel(handle, r.channel))
+            for r in queue.queue.history(handle)
+        )

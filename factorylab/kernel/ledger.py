@@ -77,6 +77,8 @@ def utf8_text(text: str) -> str:
 
     Idempotent, so an item written through it compares equal to itself on replay.
     """
+    if text.isascii():  # No ASCII string carries a surrogate, so none can fail to encode.
+        return text
     try:
         text.encode("utf-8")
     except UnicodeEncodeError:
@@ -85,19 +87,36 @@ def utf8_text(text: str) -> str:
 
 
 def _plain(value):
+    # The exact builtin types below take the same branch as the isinstance chain
+    # that follows, and no other: dispatching on them first only spares the walk
+    # the abstract checks, never a different answer.
+    kind = type(value)
+    if kind is str:
+        return utf8_text(value)
+    if kind is int or kind is float or kind is bool or value is None:
+        return value
+    if kind is dict:
+        return _plain_mapping(value)
+    if kind is list or kind is tuple:
+        return [_plain(item) for item in value]
     if isinstance(value, str):
         return utf8_text(value)
     if is_dataclass(value) and not isinstance(value, type):
         return {field.name: _plain(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, Mapping):
-        if any(not isinstance(key, str) for key in value):
-            raise TypeError("JSON object keys must be strings")
-        return {utf8_text(key): _plain(item) for key, item in value.items()}
+        return _plain_mapping(value)
     if isinstance(value, (tuple, list)):
         return [_plain(item) for item in value]
     if isinstance(value, (frozenset, set)):
         return sorted(_plain(item) for item in value)
     return value
+
+
+def _plain_mapping(value):
+    for key in value:
+        if type(key) is not str and not isinstance(key, str):
+            raise TypeError("JSON object keys must be strings")
+    return {utf8_text(key): _plain(item) for key, item in value.items()}
 
 
 def canonical(value) -> bytes:
@@ -189,6 +208,7 @@ class Ledger:
         self.__head = self.__genesis
         self.__verified_tokens: tuple[bytes, ...] = ()
         self.__verified_head = self.__genesis
+        self.__verified_count = -1  # No item count has had its full walk yet.
         self.__path = Path(path) if path is not None else None
         self.__final = False
         self.__authority = None
@@ -290,6 +310,25 @@ class Ledger:
                 "first_tick": None, "last_event": None, "launch": False, "terminated": False}
 
     @staticmethod
+    def _copy_index(index: dict) -> dict:
+        """Return an index detached from its original: indexing one never reaches the other.
+
+        ``_index_item`` only ever appends to ``wallet_series`` and assigns into the
+        four counter maps, so fresh containers for those are the whole of detachment.
+        The observations inside them are written once and never edited, and the one
+        public view of them, ``aggregate``, deep-copies what it hands out.
+        """
+        copied = dict(index)
+        series = index.get("wallet_series")
+        if type(series) is list:
+            copied["wallet_series"] = list(series)
+        for name in ("choices", "spend", "invocations", "actions"):
+            counter = index.get(name)
+            if type(counter) is dict:
+                copied[name] = dict(counter)
+        return copied
+
+    @staticmethod
     def _index_item(index: dict, item: dict) -> None:
         kind = item.get("kind")
         if kind in ("wallet.initial", "wallet.commit", "wallet.drip", "wallet.settle"):
@@ -340,7 +379,7 @@ class Ledger:
         return {"format": 1, "genesis": self.__genesis, "offset": self.__size,
                 "digest": self.__raw_hash.hexdigest(), "head": self.__head,
                 "count": self.__count, "decisions": self.__decision_count,
-                "index": deepcopy(self.__index)}
+                "index": self._copy_index(self.__index)}
 
     def checkpoint(self) -> None:
         """Persist an authenticated prefix digest and kernel indexes without changing the diary."""
@@ -391,7 +430,7 @@ class Ledger:
                 if digest.hexdigest() != checkpoint["digest"]:
                     raise LedgerIntegrityError("verified ledger prefix changed")
                 previous, count = checkpoint["head"], checkpoint["count"]
-                decisions, index = checkpoint["decisions"], deepcopy(checkpoint["index"])
+                decisions, index = checkpoint["decisions"], self._copy_index(checkpoint["index"])
             else:
                 previous, count, decisions, index = self.__genesis, 0, 0, self._empty_index()
             while stream.tell() < size:
@@ -525,23 +564,37 @@ class Ledger:
     def healthy(self) -> bool:
         """Cheap integrity check: persisted size and tail match what this ledger wrote.
 
-        Every ``full_verify_every`` items it also walks the whole chain. Same-size
-        in-place edits to an earlier line are caught by that periodic walk, by
-        ``verify()``, and by ``aggregate()``; size changes, truncation, reordering
-        of the tail and a forged header are caught immediately.
+        Every ``full_verify_every`` items it also walks the whole chain, once. A
+        second question about the same unappended prefix is answered by the walk
+        that prefix already had, so the cadence is one walk per
+        ``full_verify_every`` items rather than one per caller, and the cheap
+        check still runs on every call. Same-size in-place edits to an earlier
+        line are caught by that periodic walk, by ``verify()``, and by
+        ``aggregate()``; size changes, truncation, reordering of the tail and a
+        forged header are caught immediately.
         """
-        if self.__count % self.__full_every == 0:
-            return self.verify()
+        if self.__count % self.__full_every == 0 and self.__verified_count != self.__count:
+            if not self.verify():
+                return False
+            self.__verified_count = self.__count
+        return self._tail_intact()
+
+    def _tail_intact(self) -> bool:
         if self.__path is None:
             return True
         try:
-            if os.stat(self.__path).st_size != self.__size:
-                return False
-            with self.__path.open("rb") as stream:
-                stream.seek(max(0, self.__size - len(self.__last_line)))
-                return stream.read() == self.__last_line
+            descriptor = os.open(self.__path, os.O_RDONLY)
         except OSError:
             return False
+        try:
+            if os.fstat(descriptor).st_size != self.__size:
+                return False
+            tail = len(self.__last_line)
+            return os.pread(descriptor, tail, max(0, self.__size - tail)) == self.__last_line
+        except OSError:
+            return False
+        finally:
+            os.close(descriptor)
 
     def append(self, entry: dict) -> int:
         """Durably append one encrypted item; reject final or corrupted ledgers.
@@ -570,10 +623,14 @@ class Ledger:
         token = self.__keys._encrypt(canonical(item))
         if self.__path is not None:
             line = canonical({"item": token.decode("ascii")}) + b"\n"
-            with self.__path.open("ab") as stream:
-                stream.write(line)
-                stream.flush()
-                os.fsync(stream.fileno())
+            descriptor = os.open(self.__path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+            try:
+                remaining = memoryview(line)
+                while remaining:
+                    remaining = remaining[os.write(descriptor, remaining):]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
             self.__size += len(line)
             self.__last_line = line
             self.__raw_hash.update(line)
@@ -607,7 +664,7 @@ class Ledger:
                 if checked["count"] != self.__count or checked["head"] != self.__head:
                     return False
                 self.__checkpoint, self.__raw_hash = checked, hasher
-                self.__index = deepcopy(checked["index"])
+                self.__index = self._copy_index(checked["index"])
                 return True
             tokens = self.__tokens
             if len(tokens) != self.__count:

@@ -195,3 +195,39 @@ def test_retirement_does_not_turn_missingness_into_performance(status, queue, op
     settle(queue, handle, status=status)
     assert queue.history(handle)[0].status == SettleStatus.HISTORICAL
     assert not queue.has_history("new")
+
+
+def test_returns_for_matches_a_scan_of_every_delivery_the_queue_made(
+    queue, open_decision, propensity_factory, clock
+):
+    """The per-actor index answers exactly what a scan over every return would.
+
+    Ordering and content are pinned twice: against the literal delivery stream
+    this script produces, and against a filter over every return the queue holds.
+    """
+    inherited = open_decision(actor="learner", propensity=propensity_factory(actor="learner"))
+    queue.register_successor("learner", "heir", {"outcome": "heir-outcome"})
+    settle(queue, inherited, score=0.25)
+    own = open_decision(actor="heir", propensity=propensity_factory(actor="heir"))
+    other = open_decision(actor="other", propensity=propensity_factory(actor="other"))
+    settle(queue, other, score=0.75)
+    clock.now += 100
+    assert queue.expire(clock.now) == [own]
+    settle(queue, own, score=0.5)
+
+    assert [(r.handle, r.channel, r.score, r.status) for r in queue.returns_for("heir")] == [
+        (inherited, "heir-outcome", 0.25, SettleStatus.SETTLED),
+        (own, "timeout", 0.0, SettleStatus.TIMED_OUT),
+        (own, "outcome", 0.5, SettleStatus.SETTLED),
+    ]
+    assert queue.returns_for("learner") == () and queue.returns_for("absent") == ()
+
+    every = [
+        (actor, item)
+        for actor, items in queue.state()["deliveries"].items()
+        for item in items
+    ]
+    for actor in ("heir", "other", "learner", "absent"):
+        assert queue.returns_for(actor) == tuple(
+            item for owner, item in every if owner == actor
+        )

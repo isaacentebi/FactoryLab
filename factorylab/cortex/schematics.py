@@ -205,6 +205,9 @@ class SchematicsMixin:
             }
         except RuntimeError:
             account = {"equity_usd": str(money_to_usd(self.wallet.balance)), "positions": []}
+        # One mechanics block answers both disclosures; building it twice per request
+        # only re-reads the same committed parameters.
+        mechanics = self._mechanics_block()
         account["realized_pnl_usd_to_date"] = str(money_to_usd(self.realized_to_date))
         account["fees_usd_to_date"] = str(money_to_usd(self.fees_to_date))
         account["funding_usd_to_date"] = str(money_to_usd(self.funding_to_date))
@@ -213,7 +216,7 @@ class SchematicsMixin:
             "pots": self.wallet.pots(),
             "charter_edition": self.charter.edition,
             "charter": self._charter_text(),
-            "mechanics": self._mechanics_block(),
+            "mechanics": mechanics,
             "composition": SEED_SYSTEM_PROMPT,
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
@@ -252,7 +255,7 @@ class SchematicsMixin:
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
                         "max_lifetime_windows": self.m.novelty.max_lifetime_windows},
-            "committee": self._mechanics_block()["committee"],
+            "committee": dict(mechanics["committee"]),
             "pathologies": dict(self.stats.pathologies),
             "novelty_reserve_remaining_usd": str(money_to_usd(self.reserve.remaining())),
             "models": [
