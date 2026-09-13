@@ -105,7 +105,9 @@ id = "eval-b"
 role = "evaluator"
 model_id = "qwen/qwen3.8-flash"
 accepts = ["ProducerReturn"]
-max_tokens = 1500
+# Reasoning seeds: a 1500-token budget is spent on reasoning and returns empty
+# content on `length`, which is what made the launch roster fail well_formed_rate.
+max_tokens = 3000
 effort = "low"
 
 [[assemblies]]
@@ -113,7 +115,7 @@ id = "eval-c"
 role = "evaluator"
 model_id = "tencent/hy3"
 accepts = ["ProducerReturn"]
-max_tokens = 1500
+max_tokens = 3000
 effort = "low"
 
 [[assemblies]]
@@ -130,7 +132,7 @@ id = "antagonist-a"
 role = "antagonist"
 model_id = "qwen/qwen3.8-flash"
 accepts = ["Tick", "MarketMid"]
-max_tokens = 1000
+max_tokens = 2500
 effort = "low"
 
 [[assemblies]]
@@ -250,4 +252,7 @@ gamma_max = 0.5
 decay_step = 0.1
 
 [venue]
-spot_pairs = ["BTC/USDC", "ETH/USDC"]
+# Testnet spot names. ETH/USDC does not exist on testnet, and BTC/USDC there is
+# szDecimals 0 at a ~$6,100 mid. A mainnet re-draft names UBTC/USDC and UETH/USDC:
+# neither BTC/USDC nor ETH/USDC exists on mainnet either.
+spot_pairs = ["PURR/USDC"]
