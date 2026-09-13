@@ -291,8 +291,14 @@ def window_facts(window: Any) -> dict:
     """
     raw = dict(vars(window)) if not isinstance(window, dict) else dict(window)
     facts: dict[str, Any] = {}
+    facts["books"] = {}
     for key, value in raw.items():
         if key in PRIVATE_WINDOW_FIELDS or key in ANONYMISED_WINDOW_FIELDS:
+            continue
+        if key == "books":
+            for row in value[-MAX_WORLD_SAMPLES:]:
+                facts["books"].setdefault(row["coin"], []).append({
+                    "ts_ns": row["ts_ns"], "bids": row["bids"], "asks": row["asks"]})
             continue
         if key in ("mids", "funding"):
             series = {}
@@ -322,6 +328,46 @@ def window_fact_names() -> list[str]:
     from factorylab.runtime.pricing import MeasureWindow
 
     return sorted(window_facts(MeasureWindow(index=0, equity_start_micro=0)))
+
+
+def record_venue_facts(window, tool: str, args: dict, result: dict, now_ns: int) -> None:
+    """Paid public reads add bounded numeric facts without account or author identities."""
+    from decimal import Decimal
+
+    from factorylab.kernel.money import usd_to_micro
+
+    if result.get("error"):
+        return
+    try:
+        if tool == "venue.order_book":
+            row = {"coin": args["coin"], "ts_ns": int(result["ts_ns"])}
+            for side in ("bids", "asks"):
+                row[side] = [[usd_to_micro(Decimal(str(level["price"])), rounding="nearest"),
+                              float(Decimal(str(level["size"])))]
+                             for level in result[side][:20]]
+                if any(price <= 0 or not math.isfinite(size) or size < 0
+                       for price, size in row[side]):
+                    return
+            window.books.append(row)
+            del window.books[:-MAX_WORLD_SAMPLES]
+        elif tool in ("venue.funding", "venue.funding_history"):
+            key = "funding" if tool == "venue.funding" else "funding_history"
+            rows = []
+            for item in result[key][-MAX_WORLD_SAMPLES:]:
+                rate = float(item["rate"])
+                if math.isfinite(rate):
+                    rows.append({"coin": item["coin"], "ts_ns": int(item["ts_ns"]),
+                                 "value": rate})
+            window.funding.extend(rows)
+            del window.funding[:-MAX_WORLD_SAMPLES]
+        elif tool == "venue.mids":
+            rows = [{"coin": coin, "ts_ns": now_ns,
+                     "value": usd_to_micro(Decimal(str(value)), rounding="nearest")}
+                    for coin, value in result["mids"].items()]
+            window.mids.extend(rows[-MAX_WORLD_SAMPLES:])
+            del window.mids[:-MAX_WORLD_SAMPLES]
+    except (KeyError, TypeError, ValueError, ArithmeticError, OverflowError):
+        return  # Malformed or unavailable venue data supplies no measurement.
 
 
 def _anonymous_verdicts(verdicts: Any) -> list[list[list[float]]]:

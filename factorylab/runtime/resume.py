@@ -331,7 +331,7 @@ class RecoveryJournal:
                           OrderResult(None, "uncertain", Decimal(0), None))
                 self.append({"kind": "io.result", "call": seq, "result": encode(result)})
                 return result
-            if name == "market.complete":
+            if name in ("market.complete", "connector.paid_fetch"):
                 error = "PaymentOutcomeUnknown" if payment_submitted else "UnbilledFailure"
                 self.append({"kind": "io.result", "call": seq, "error": error})
                 raise _recorded_error(error)
@@ -378,7 +378,7 @@ class RecoveryJournal:
 
 
 def _read_only(name: str) -> bool:
-    if name in ("sandbox.run", "observation.run"):
+    if name in ("sandbox.run", "observation.run", "note.read"):
         return True
     if name == "treasury.provider_pots" or (
         name.startswith("treasury.rail.")
@@ -389,7 +389,7 @@ def _read_only(name: str) -> bool:
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
         "open_orders", "balance_micro", "affordable", "catalogue", "discover", "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
-        "reserve_balance", "discover_index",
+        "reserve_balance", "discover_index", "instruments",
     )
 
 
@@ -475,6 +475,7 @@ _RUNTIME_FIELDS = (
     # The population's registered measurements and its open assembly-learner rounds.
     "registered_observations", "assembly_rounds",
     "connector_calls", "connector_calls_day",
+    "notes",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
@@ -620,6 +621,20 @@ def restore_runtime(rt, state: dict) -> None:
             component.target.__dict__.update(decode(state[name]))
     for model_id in rt.sellers:
         rt.market.register(model_id, rt.prices.price(model_id).per_request_micro)
+    if rt.venue_tools:
+        from factorylab.world.venue_tools import VenueTools
+
+        # Rebuild from the launch seed, exactly as bootstrap did, so the restored
+        # schemas match byte for byte before registered markets are replayed below.
+        tool_log = rt.venue_tools.log
+        rt.venue_tools = VenueTools(rt.exchange, coins=rt.m.exchange.coins,
+                                   spot_pairs=rt.m.exchange.spot_pairs,
+                                   max_leverage=rt.m.tools.max_leverage)
+        rt.venue_tools.log = tool_log
+        rt._refresh_venue_schemas()
+    for contract in rt.registry.available("exchange"):
+        if contract.id.startswith("market:"):
+            rt._admit_market(contract.input_schema["coin"], contract.input_schema["market"])
 
 
 def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, exchange=None,

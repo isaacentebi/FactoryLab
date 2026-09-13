@@ -21,6 +21,7 @@ from typing import Any
 from factorylab.charter.charter import Charter, MetricCard, seed_charter
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.cards import parses
+from factorylab.runtime.notes import NotesSpec
 from factorylab.runtime.observations import observation_for
 from factorylab.world.connector import DEFAULT_DENYLIST, validate_denylist
 from factorylab.world.market import DISCOVERY_URL
@@ -229,6 +230,7 @@ class WorldManifest:
     evaluation: EvaluationSpec = EvaluationSpec()
     tools: ToolsSpec = ToolsSpec()
     connectors: ConnectorsSpec = ConnectorsSpec()
+    notes: NotesSpec = NotesSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
     clock: ClockSpec = ClockSpec()
@@ -474,6 +476,10 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
 
 
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
+    note = d.get("notes", {})
+    if not isinstance(note, dict) or set(note) - {"max_keys", "max_bytes", "byte_window_micro"}:
+        raise ValueError("unknown notes manifest key")
+    notes = NotesSpec(**note)
     conn = d.get("connectors", {})
     if not isinstance(conn, dict) or set(conn) - {
         "max_bytes", "timeout_s", "call_price_usd", "max_calls_per_window", "origin_denylist"
@@ -607,6 +613,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         charter_explicit="charter" in d,
         evaluation=evaluation,
         connectors=connectors,
+        notes=notes,
         tools=ToolsSpec(
             int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
             int((d.get("tools") or {}).get("max_leverage", 3)),

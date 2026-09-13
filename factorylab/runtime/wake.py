@@ -35,7 +35,7 @@ VIEWS = (
     "wallet_series", "spend_by_capability", "invocations_by_assembly",
     "action_frequencies", "settlement_latency",
 )
-SECTIONS = ("roster", "tools", "connectors", "observations", "charter", "compute", "pots",
+SECTIONS = ("roster", "tools", "connectors", "notes", "observations", "charter", "compute", "pots",
             "immune", "portfolio")
 UNAVAILABLE = "unavailable"
 PUBLIC_KIND = "wake.public"
@@ -74,6 +74,7 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
     call and adds no resumable state.
     """
     from factorylab.charter.measurement import measurement_catalogue
+    from factorylab.runtime.notes import counts
 
     roster: Counter = Counter()
     for assembly in rt.assemblies.values():
@@ -88,6 +89,7 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
         "tools": [{"id": spec["id"], "description": spec["description"],
                    "version": _tool_version(rt, spec["id"])}
                   for spec in sorted(rt.tool_specs.values(), key=lambda spec: spec["id"])],
+        "notes": counts(rt.notes),
         "connectors": {"registered": rt._connector_catalogue(),
                        "calls_per_day": {
                            datetime.fromtimestamp(day * 86400, UTC).date().isoformat(): count
@@ -309,6 +311,7 @@ class _Observatory:
                        "registered": self.registered, "retired": self.retired},
             "tools": latest.get("tools", []),
             "connectors": latest.get("connectors", {"registered": [], "calls_per_day": {}}),
+            "notes": latest.get("notes", {"keys": 0, "bytes": 0}),
             "observations": latest.get("observations", []),
             "charter": {**(latest.get("charter") or _genesis_charter(manifest)),
                         "amendments": list(self.amendments.values())},
@@ -539,12 +542,12 @@ def render_wake(data: dict) -> str:
     sections = []
     order = (
         "world", "manifest_hash", "uptime_ns", "last_event_time_ns", "venue", "reserve",
-        "portfolio", "pots", "roster", "tools", "connectors", "observations", "charter",
+        "portfolio", "pots", "roster", "tools", "connectors", "notes", "observations", "charter",
         "compute", "immune",
         *VIEWS,
     )
     folded = {"wallet_series": "Balance series", "roster": "Roster", "tools": "Tools",
-              "connectors": "Connectors", "observations": "Observations",
+              "connectors": "Connectors", "notes": "Notes", "observations": "Observations",
               "charter": "Charter and amendments",
               "compute": "Compute", "immune": "Windows", "pots": "Pots and transfers"}
     for field in order:

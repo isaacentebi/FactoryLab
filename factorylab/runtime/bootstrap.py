@@ -221,6 +221,9 @@ class BootstrapMixin:
             "exchange",
             deterministic=isinstance(self.exchange, FakeExchange) and not self.live,
         )
+        from factorylab.world.venue_tools import seed_markets
+
+        seed_markets(self.exchange, manifest.exchange)
         # Fills before launch belong to nobody; funding uses the same launch boundary.
         self.venue = (
             LiveVenue(self.exchange, last_fill_ns=self.clock.now_ns, ledger=self.ledger,
@@ -344,6 +347,7 @@ class BootstrapMixin:
                                     "size": size, "entry_px": px, "source": "launch"})
                 self.spot_inventory[coin] = (Decimal(size), Decimal(px))
         self.memory: dict[str, deque[dict[str, Any]]] = {}
+        self.notes: dict[str, dict] = {}
         self.handle_to_assembly: dict[str, str] = {}
         self.tool_specs: dict[str, dict[str, Any]] = {}  # tool id -> spec dict (world block)
         self.population_tools: dict[str, Any] = {}
@@ -362,6 +366,9 @@ class BootstrapMixin:
                 "price_micro_per_call": spec.price_micro_per_call,
                 "kind": spec.kind,
             }
+            if spec.id in self.venue_tools.PUBLIC_READS:
+                self.tool_specs[spec.id]["price_micro_per_call"] = (
+                    manifest.connectors.call_price_micro)
         self.tool_specs["treasury.transfer"] = {
             "id": "treasury.transfer",
             "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, "
@@ -415,6 +422,7 @@ class BootstrapMixin:
         }
         coin = manifest.exchange.coins[0]
         examples = {
+            "venue.instruments": [{}], "venue.mids": [{}], "venue.funding": [{}],
             "venue.candles": [{"coin": coin, "interval": "1m", "n": 20}],
             "venue.order_book": [{"coin": coin, "depth": 5}],
             "venue.funding_history": [{"coin": coin, "n": 10}],
@@ -432,6 +440,9 @@ class BootstrapMixin:
         }
         for tool_id, spec in self.tool_specs.items():
             spec["args_schema"]["examples"] = examples[tool_id]
+        from factorylab.runtime.notes import specs as note_specs
+
+        self.tool_specs.update(note_specs(manifest.notes))
         self.tool_runner = JournalProxy(ToolRunner(), self.ledger, "sandbox")
         available = self.tool_runner.available
         self.ledger.append({"kind": "sandbox.availability", "available": available})

@@ -196,17 +196,19 @@ class FakeExchange:
     shocks: dict[int, dict[str, Decimal]] = field(default_factory=dict)  # step -> coin -> mult
     maintenance_fraction: Decimal = Decimal("0.5")  # of initial margin; below it, liquidate
     min_order_value_usd: Decimal = Decimal(0)  # published and enforced; the fake has no floor
+    listed_coins: tuple[str, ...] = ()
+    listed_spot_pairs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         self._rng = random.Random(self.seed)
         self._now_ns = 0
         self._step = 0
         self._mids: dict[str, Decimal] = dict(self.start_prices)
-        for c in self.coins:
+        for c in (*self.coins, *self.listed_coins):
             self._mids.setdefault(c, Decimal("100"))
         self._spot_cash = Decimal(0)
         self._spot_positions: dict[str, Position] = {}
-        for pair in self.spot_pairs:
+        for pair in (*self.spot_pairs, *self.listed_spot_pairs):
             self._mids.setdefault(pair.split("/")[0], Decimal("100"))
             self._mids[pair] = self._mids[pair.split("/")[0]]
         self._cash = Decimal(self.start_cash_usd)
@@ -239,7 +241,9 @@ class FakeExchange:
         self._now_ns = ts_ns
         self._step += 1
         events: list[WorldEvent] = []
-        for coin in dict.fromkeys((*self.coins, *(p.split("/")[0] for p in self.spot_pairs))):
+        for coin in dict.fromkeys((*self.coins, *self.listed_coins,
+                                   *(p.split("/")[0] for p in
+                                     (*self.spot_pairs, *self.listed_spot_pairs)))):
             self._mids[coin] = self._next_price(coin)
             self._mid_history[coin].append((ts_ns, self._mids[coin]))
             events.append(
@@ -250,7 +254,7 @@ class FakeExchange:
                     {"coin": coin, "mid": str(self._mids[coin])},
                 )
             )
-        for pair in self.spot_pairs:
+        for pair in dict.fromkeys((*self.spot_pairs, *self.listed_spot_pairs)):
             self._mids[pair] = self._mids[pair.split("/")[0]]
             self._mid_history[pair].append((ts_ns, self._mids[pair]))
             events.append(WorldEvent(WorldEventKind.MARKET_MID, ts_ns, self.name,
@@ -289,7 +293,8 @@ class FakeExchange:
         return dict(self._mids)
 
     def funding(self) -> list[FundingEvent]:
-        return [FundingEvent(c, self.funding_rate, None, self._now_ns) for c in self.coins]
+        return [FundingEvent(c, self.funding_rate, None, self._now_ns)
+                for c in dict.fromkeys((*self.coins, *self.listed_coins))]
 
     def funding_payments(self, since_ns: int) -> list[FundingPayment]:
         """Return actual simulated cash flows at or after an inclusive nanosecond cursor."""
@@ -657,7 +662,9 @@ class FakeExchange:
         return {market: [{"coin": c, "lot_size": "0.000001", "tick_size": "0.01",
                           "min_order_value_usd": str(self.min_order_value_usd)}
                          for c in coins]
-                for market, coins in (("perp", self.coins), ("spot", self.spot_pairs))}
+                for market, coins in (
+                    ("perp", tuple(dict.fromkeys((*self.coins, *self.listed_coins)))),
+                    ("spot", tuple(dict.fromkeys((*self.spot_pairs, *self.listed_spot_pairs)))))}
 
     def _fill_spot(self, oid: str, order: Order, px: Decimal) -> OrderResult:
         pos = self._spot_positions.get(order.coin)
@@ -684,7 +691,7 @@ class FakeExchange:
 
     def _apply_funding(self) -> list[WorldEvent]:
         events: list[WorldEvent] = []
-        for coin in self.coins:
+        for coin in dict.fromkeys((*self.coins, *self.listed_coins)):
             self._funding_history.append(FundingEvent(coin, self.funding_rate, None, self._now_ns))
             pos = self._positions.get(coin)
             paid = Decimal(0)
@@ -749,6 +756,7 @@ class HyperliquidExchange:
             self._exchange = HLExchange(wallet, self.base_url, account_address=self._address)
         meta = self._info.meta()
         self._sz_decimals = {a["name"]: int(a["szDecimals"]) for a in meta["universe"]}
+        self._listed_coins = tuple(self._sz_decimals)
         self._spot_names = {}
         self._spot_tokens = {}
         # Spot metadata is read whatever the manifest configures: a fill is classified
@@ -773,7 +781,7 @@ class HyperliquidExchange:
             self._spot_universe[row["name"]] = pair
             if quote["name"] == "USDC":
                 self._spot_marks[base["name"]] = row["name"]
-            if pair in self.spot_pairs:
+            if quote["name"] == "USDC":
                 self._spot_names[pair] = row["name"]
                 self._spot_tokens[pair] = base["name"]
                 self._sz_decimals[pair] = int(base["szDecimals"])
@@ -800,8 +808,8 @@ class HyperliquidExchange:
                           "price_significant_figures": 5, "integer_prices_allowed": True,
                           "min_order_value_usd": MIN_ORDER_VALUE_USD}
                          for c in coins]
-                for market, coins in (("perp", self.coins),
-                                      ("spot", getattr(self, "spot_pairs", ())))}
+                for market, coins in (("perp", getattr(self, "_listed_coins", self.coins)),
+                                      ("spot", tuple(getattr(self, "_spot_names", {}))))}
 
     def _guarded(self, what: str, call: Any, attempts: int = 3) -> Any:
         """Call the API with retries on transient failures; raise VenueUnavailable after.
@@ -837,7 +845,8 @@ class HyperliquidExchange:
                 raise
             return dict(self._last_mids)
         self._last_mids = {c: Decimal(str(raw[self._wire_coin(c)]))
-                           for c in (*self.coins, *getattr(self, "spot_pairs", ()))
+                           for c in (*getattr(self, "_listed_coins", self.coins),
+                                     *getattr(self, "_spot_names", {}))
                            if self._wire_coin(c) in raw}
         return dict(self._last_mids)
 
@@ -857,7 +866,7 @@ class HyperliquidExchange:
         now_ns = time.time_ns()
         out: list[FundingEvent] = []
         for asset, ctx in zip(meta["universe"], ctxs, strict=False):
-            if not isinstance(asset, dict) or asset.get("name") not in self.coins:
+            if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):
                 continue
             name = asset["name"]
             try:
@@ -1161,6 +1170,8 @@ class HyperliquidExchange:
                 return OrderResult(None, "rejected", Decimal(0), None, "spot buy cannot reduce")
         elif order.coin in getattr(self, "spot_pairs", ()):
             return OrderResult(None, "rejected", Decimal(0), None, "pair requires market spot")
+        if order.market == "perp" and order.coin not in self.coins:
+            return OrderResult(None, "rejected", Decimal(0), None, "unregistered perp coin")
         if order.market == "perp" and order.reduce_only and order.kind is OrderKind.MARKET:
             try:
                 pos = next((p for p in self.account().positions if p.coin == order.coin), None)
