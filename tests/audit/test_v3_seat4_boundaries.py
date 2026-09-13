@@ -148,6 +148,7 @@ def test_immune_uses_the_cards_configured_sample():
         rt.card_samples.values = {card.id: measured}
         rt.window = MeasureWindow(i, 100_000_000, invocations=1, ok=0)
         rt.window.closed_values = {card.id: measured}
+        rt.window.closed_regions = dict(rt.regions)
         close_window(rt, {"well_formed_rate": 0.0, "registrations": 0, "revision_rate": 0})
     assert not rt.stats.pathologies["stable_failure"]
 
