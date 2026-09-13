@@ -136,6 +136,18 @@ class LiveVenue:
     Each tick reads mids and funding; when the exchange has an account, new
     fills since the last poll are emitted with their realised P&L. Rates remain
     observations; separate venue-identified funding payments carry actual cash.
+
+    ``markets`` bounds the per-tick broadcast to the world's own trading
+    markets: the manifest seed plus every market the population has registered,
+    read fresh on each tick so a registration joins from the next one and a
+    resume restores the set with the runtime that replays it. A venue lists far
+    more than a world trades — 212 perpetuals and 1,263 USDC spot pairs on
+    Hyperliquid testnet — and one delivered event is one routed decision, so an
+    unbounded broadcast prices a tick at the size of the venue rather than the
+    size of the world. It bounds the broadcast only: public reads of any listed
+    coin are unaffected, and money — fills and settled funding payments — is
+    never filtered, because a payment on a market the world stopped trading is
+    still cash that moved. ``None`` broadcasts everything the venue returns.
     """
 
     exchange: Any
@@ -144,6 +156,7 @@ class LiveVenue:
     ledger: Any = None
     last_funding_ns: int | None = None
     seen_funding: set[str] = field(default_factory=set)
+    markets: Callable[[], tuple[str, ...]] | None = None
 
     def funding_payments(self, now_ns: int) -> list[WorldEvent]:
         """Emit post-launch funding once, with an inclusive cursor that keeps timestamp peers."""
@@ -174,13 +187,22 @@ class LiveVenue:
                            {"coin": p.coin, "rate": str(p.rate), "paid_usd": str(p.paid_usd),
                             "payment_id": p.id, "observed_at_ns": now_ns}) for p in payments]
 
+    def _broadcast(self) -> frozenset[str] | None:
+        """Return this tick's trading markets, or None when nothing bounds the broadcast."""
+        if self.markets is None:
+            return None
+        return frozenset(self.markets())
+
     def on_tick(self, now_ns: int) -> list[WorldEvent]:
+        traded = self._broadcast()
         out: list[WorldEvent] = []
         try:
             mids = self.exchange.mids()
         except (RuntimeError, OSError, ValueError, ArithmeticError):
             mids = {}
         for coin, mid in mids.items():
+            if traded is not None and coin not in traded:
+                continue
             out.append(
                 WorldEvent(
                     WorldEventKind.MARKET_MID,
@@ -194,6 +216,8 @@ class LiveVenue:
         except (RuntimeError, OSError, ValueError, ArithmeticError):
             funding = []
         for f in funding:
+            if traded is not None and f.coin not in traded:
+                continue
             out.append(
                 WorldEvent(
                     WorldEventKind.FUNDING,

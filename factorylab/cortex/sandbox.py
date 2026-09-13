@@ -150,6 +150,26 @@ def jail_available() -> bool:
     return jail_probe() is None
 
 
+def _kill_group(proc) -> None:
+    """End the whole confined process group, then reap it, whatever it was doing.
+
+    The group is the jail and everything under it, because the child was
+    started in its own session. Linux additionally ties the tree's lifetime to
+    this process through ``bwrap --die-with-parent``, which tears down the PID
+    namespace; ``sandbox-exec`` has no equivalent, so on macOS a confined
+    process outlives a parent that is killed outright and only a parent that
+    still runs can end it. That is what this does.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+    try:
+        proc.communicate()
+    except (OSError, ValueError):  # streams already closed by the interrupted call
+        pass
+
+
 def run_python(
     code: str,
     *,
@@ -205,21 +225,24 @@ def run_python(
             seccomp.seek(0)
         command = _command(jail, work, prefix, python, seccomp.fileno())
         timed_out = False
+        # Its own session, so the group is the confined tree and nothing else,
+        # and close_fds, so the only descriptors it holds are the three it was
+        # given: the runtime's ledger lock and diary are never among them.
         with subprocess.Popen(
             command, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr,
-            cwd=work, env={}, start_new_session=True,
+            cwd=work, env={}, start_new_session=True, close_fds=True,
             pass_fds=(seccomp.fileno(),) if sys.platform == "linux" else (),
         ) as proc:
             try:
                 proc.communicate(stdin.encode("utf-8"), timeout=timeout_s)
             except subprocess.TimeoutExpired:
                 timed_out = True
-                # bwrap's --die-with-parent tears down its PID namespace too.
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                proc.communicate()
+                _kill_group(proc)
+            except BaseException:
+                # An interrupted caller must not leave a confined process behind,
+                # and must not block in Popen.__exit__ waiting for one.
+                _kill_group(proc)
+                raise
         stdout.seek(0)
         stderr.seek(0)
         return SandboxResult(
