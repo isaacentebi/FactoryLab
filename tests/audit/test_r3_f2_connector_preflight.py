@@ -47,7 +47,10 @@ def _register(rt, monkeypatch, origin, cid="kraken"):
         "seed-decider": "producer", "eval-a": "evaluator", "meta-a": "meta"})
     rt._apply_registrations(handle, Return(handle, {"register": [{
         "kind": "connector", "id": cid, "description": "Public market data",
-        "origin": origin}]}, 0, "ok"))
+        "origin": origin,
+        # Every proposal names the card it promises to improve (T17, decision 4).
+        "predicted_effect": {"card_id": "forecast_skill", "direction": "increase",
+                             "window": 1}}]}, 0, "ok"))
     return handle
 
 

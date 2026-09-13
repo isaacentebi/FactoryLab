@@ -84,6 +84,17 @@ class Assembly:
     validator: Callable[[dict[str, Any], Request], None] | None = None
 
     def build_model_request(self, req: Request) -> ModelRequest:
+        """Render the exact prompt this assembly will be billed for.
+
+        The executor's own id is stamped here, where the prompt is rendered, and
+        nowhere else: an identity added after a caller has priced the request
+        would make every ceiling derived from that request — the metered
+        ceiling, the router's affordability check — smaller than the prompt
+        actually sent. Stamping it here also means a parent cannot forge its
+        child's identity: whatever ``inputs`` carried, the assembly overwrites it
+        with its own.
+        """
+        req = replace(req, inputs={**req.inputs, "you": self.spec.id})
         messages: list[dict[str, Any]] = []
         if self.spec.memory_policy == "handle-scoped" and req.parent_handle:
             messages.extend(self.memory.get(req.parent_handle, []))

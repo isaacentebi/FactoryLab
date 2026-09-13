@@ -189,7 +189,11 @@ def test_an_amendment_at_the_boundary_cannot_unblame_a_closed_windows_verdict():
     assert {k: item[k] for k in keys} == {k: unchanged[k] for k in keys}
 
 
-def test_a_verdict_whose_window_never_closes_settles_at_one_at_the_backstop():
+def test_a_verdict_whose_window_never_closes_is_closed_out_unscored_at_the_backstop():
+    """A window that never closed never judged the return, so the verdict has no fact to
+    have been right or wrong about. The commitment is still closed out at the backstop —
+    nothing waits on it forever — but unscored: nothing reaches the judge's standing and
+    nothing reaches the base rate of unblamed returns."""
     manifest = load_manifest("scripted")
     manifest = replace(manifest, evaluation=replace(manifest.evaluation,
                                                     consequence_backstop_events=30))
@@ -199,12 +203,19 @@ def test_a_verdict_whose_window_never_closes_settles_at_one_at_the_backstop():
     _consequence_judge(runtime, event, "eval-a")
     runtime.n = 29
     runtime._settle_due_forecasts()
-    assert _items(runtime, "verdict.consequence") == []
+    assert _items(runtime, "verdict.consequence") == _items(runtime, "verdict.unread") == []
     runtime.n = 31
     runtime._settle_due_forecasts()
-    item = _items(runtime, "verdict.consequence")[0]
-    assert item["window"] == 1 and item["window_closed"] is False
-    assert item["share"] == 0.0 and item["outcome"] == 1.0 and item["terms"] == []
+    item = _items(runtime, "verdict.unread")[0]
+    assert item["window"] == 1 and item["reason"] == "open" and item["q"] == 1.0
+    assert _items(runtime, "verdict.consequence") == []
+    standing = runtime.standing.snapshot()["eval-a"]
+    assert standing["verdict_n"] == 0 and standing["verdict_skill"] == 0.0
+    assert standing["skill"] == pytest.approx(standing["payoff_skill"])
+    # It is closed out exactly once: nothing settles it again at a later event.
+    runtime.n = 61
+    runtime._settle_due_forecasts()
+    assert len(_items(runtime, "verdict.unread")) == 1
 
 
 def test_the_meta_is_graded_against_the_verdicts_normative_outcome_too():

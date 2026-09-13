@@ -35,6 +35,13 @@ class ScriptedProvider:
     router_add_at_call: int = 100
     _producer_calls: int = 0
     spot_pair: str | None = None
+    # The population's own observation and the amendment that puts it on a card. They are
+    # counted in producer calls, and the world makes several of those per event: a
+    # 260-event run makes about 1220, a 500-event run about 2520, an 800-event run about
+    # 3950. These sit past the short runs — which assert on the one amendment the world
+    # proposes early — and well inside the long ones, which watch this one activate.
+    late_observation_call: int = 1600
+    late_amendment_call: int = 1610
 
     def complete(self, req: ModelRequest) -> ModelResponse:
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
@@ -98,14 +105,14 @@ class ScriptedProvider:
                 ]],
             }]
         # Late calls leave the scripted world's first window available for preflight.
-        if n == 1000:
+        if n == self.late_observation_call:
             reply["register"] = [{
                 "kind": "observation", "id": "scripted-fill-count",
                 "description": "Number of fills in the closed window.",
                 "unit": "count", "range": [0, 10000],
                 "code": "def observe(facts):\n    return facts['fills']\n",
             }]
-        if n == 1010:
+        if n == self.late_amendment_call:
             reply["register"] = [{
                 "kind": "amendment", "id": "scripted-fill-card",
                 "add": [{

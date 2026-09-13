@@ -34,7 +34,7 @@ def test_missing_wallet_does_not_fall_back_to_venue_equity():
 
 def test_registers_observation_then_names_it_in_amendment():
     provider = ScriptedProvider()
-    proposals = [(n, p) for n in range(1, 1011)
+    proposals = [(n, p) for n in range(1, provider.late_amendment_call + 1)
                  for p in provider._produce("event MarketMid", {}).get("register", [])]
     observations = [(n, p) for n, p in proposals if p["kind"] == "observation"]
     assert len(observations) == 1
