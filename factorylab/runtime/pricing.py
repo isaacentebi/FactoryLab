@@ -207,6 +207,9 @@ class PricingMixin:
 
     def _observe_delivered_event(self, ev: Event) -> None:
         """Only ledgered deliveries contribute window samples or start observation trials."""
+        if ev.kind is EventKind.FUNDING and "rate" not in ev.payload:
+            # A funding *payment* (paid_usd) is a wallet fact, not a market series sample.
+            return
         if ev.kind in (EventKind.MARKET_MID, EventKind.FUNDING):
             key = "mids" if ev.kind is EventKind.MARKET_MID else "funding"
             value = (usd_to_micro(Decimal(str(ev.payload["mid"])), rounding="nearest")
