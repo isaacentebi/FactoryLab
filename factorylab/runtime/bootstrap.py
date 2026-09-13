@@ -438,12 +438,17 @@ class BootstrapMixin:
                                   for amount in ("5", 5)],
             "catalogue.search": [{"substring": "flash", "limit": 20}],
             "market.discover": [{"query": "inference", "limit": 20}],
+            "note.put": [{"key": "shared-plan", "text": "What the last window showed."}],
+            "note.get": [{"key": "shared-plan"}],
         }
-        for tool_id, spec in self.tool_specs.items():
-            spec["args_schema"]["examples"] = examples[tool_id]
         from factorylab.runtime.notes import specs as note_specs
 
         self.tool_specs.update(note_specs(manifest.notes))
+        # Every published tool carries examples its own schema accepts (B1). Stamping
+        # after the whole seed set is assembled keeps that total: a seed tool added
+        # without an example fails at launch rather than reaching the population.
+        for tool_id, spec in self.tool_specs.items():
+            spec["args_schema"]["examples"] = examples[tool_id]
         self.tool_runner = JournalProxy(ToolRunner(), self.ledger, "sandbox")
         available = self.tool_runner.available
         self.ledger.append({"kind": "sandbox.availability", "available": available})

@@ -282,3 +282,25 @@ def test_launch_seed_is_trading_permission_not_a_listing():
     assert exchange.spot_pairs == ()  # the venue lists no spot pair
     assert exchange.listed_spot_pairs == ()
     assert rail.balances() == before  # a perps-only venue keeps one venue pot
+
+
+def test_an_adapter_that_publishes_no_listing_is_left_alone_by_the_seed():
+    """An adapter without a listing keeps none; the manifest seed still grants trading.
+
+    A minimal live-shaped adapter exposes reads and orders, not a market
+    universe. Its listing is unknown, not empty: nothing is written onto it, and
+    the venue tools go on granting exactly the manifest's seeded markets.
+    """
+    from factorylab.world.venue_tools import seed_markets
+
+    class BareAdapter:
+        name = "bare"
+
+    spec = replace(load_manifest("scripted").exchange, coins=("BTC",),
+                   spot_pairs=("BTC/USDC",))
+    adapter = BareAdapter()
+    seed_markets(adapter, spec)
+    assert not hasattr(adapter, "coins") and not hasattr(adapter, "spot_pairs")
+    tools = VenueTools(adapter, coins=spec.coins, spot_pairs=spec.spot_pairs)
+    assert (tools.coins, tools.spot_pairs) == (("BTC",), ("BTC/USDC",))
+    assert tools.public_coins == ("BTC", "BTC/USDC")
