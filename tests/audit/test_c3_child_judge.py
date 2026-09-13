@@ -6,8 +6,6 @@ audited commit. Nothing here touches a network.
 
 import json
 
-import pytest
-
 from factorylab.cortex.registration import AssemblyProposal
 from factorylab.cortex.request import ChildRequest
 from factorylab.kernel.queue import SettleStatus
@@ -24,7 +22,6 @@ def _judge_reply(monkeypatch, rt, verdict, payoff):
         request.model_id, json.dumps(body), 1, 1, "stop"))
 
 
-@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_finding_1_a_parent_can_hire_a_child_judge_to_settle_a_strangers_verdict(monkeypatch):
     """A producer's child request may target an evaluator and name any pending return in
     ``inputs.about_handle``; the child's verdict settles that return's verdict channel. The
@@ -46,7 +43,6 @@ def test_finding_1_a_parent_can_hire_a_child_judge_to_settle_a_strangers_verdict
         rt.queue.history(victim))
 
 
-@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_finding_1_the_child_judge_path_skips_the_hindsight_guard(monkeypatch):
     """A9 refuses a payoff forecast on a return whose consequence is already fixed, but only
     when the judge chose the target itself (``about != subject``). A parent that puts the
@@ -90,7 +86,6 @@ def test_finding_12_child_requests_manufacture_committee_eligibility(monkeypatch
     assert "confederate" not in rt._committee_eligible()
 
 
-@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_finding_13_an_incumbent_with_no_money_buys_compute_through_a_fresh_child(monkeypatch):
     """The novelty share is compute for unhistoried actions. A broke incumbent that requests
     a fresh assembly as a child has that child's model call paid from the protected share,
