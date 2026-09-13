@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, field, replace
 from decimal import Decimal
 from fractions import Fraction
 
+from factorylab.charter.charter import MetricCard
 from factorylab.charter.controller import CardRegion, relative_region, violation
 from factorylab.charter.measurement import _groups, measure_cards
 from factorylab.cortex.registration import measured_role
@@ -55,6 +56,10 @@ class MeasureWindow:
     closed_values: dict[str, float] | None = None
     closed_regions: dict[str, CardRegion] = field(default_factory=dict)
     closed_shares: list[dict] = field(default_factory=list)
+    # The edition that priced the window, frozen with its prices at the close. A later
+    # amendment cannot remove or restate a card out of what this window already attributed.
+    closed_cards: tuple[MetricCard, ...] = ()
+    closed_prices: dict[str, float] = field(default_factory=dict)
     mids: list[dict] = field(default_factory=list)
     funding: list[dict] = field(default_factory=list)
     wallet_balance_micro: list[list[int]] = field(default_factory=list)
@@ -375,18 +380,50 @@ class PricingMixin:
         self.stats.last_window_values = values
         self.controller.set_decay(self.m.prices.decay, ledger=self.ledger, window=w.index)
         close_window(self, values)
+        # The window's own blame is settled here, before any amendment can activate at this
+        # boundary: the cards it measured and the prices its close left them holding. A verdict
+        # or a late settlement from this window is attributed by this edition, never by the one
+        # that replaced it (docs/manifest.md, observation units and attribution).
+        self.window.closed_cards = tuple(c for c in self.charter.cards if c.id in card_values)
+        self.window.closed_prices = {c.id: self.controller.price(c.id)
+                                     for c in self.window.closed_cards}
         self._prune_price_evidence()
+
+    def _priced_cards(self, origins: dict[str, int]) -> list[tuple]:
+        """The (card, observation, window, price) a decision is priced on, one per card id.
+
+        A card is measured in the window its observation is attributed to. An open
+        window is priced by the edition in force now; a closed one by the edition and
+        the prices frozen at its close, so an amendment activated at a boundary cannot
+        remove or restate a card out of what the window already attributed.
+        """
+        book = self.observations
+        windows = [self.price_windows.get(origins.get("origin"), self.window)]
+        windows += [self.price_windows[index] for key, index in origins.items()
+                    if key != "origin" and index in self.price_windows]
+        priced: list[tuple] = []
+        seen: set[str] = set()
+        for window in windows:
+            closed = window.closed_values is not None and bool(window.closed_cards)
+            for card in (window.closed_cards if closed else self.charter.cards):
+                observation = book.get(card.observation)
+                if card.id in seen or observation is None:
+                    continue
+                if self.price_windows.get(origins.get(observation.id, origins.get("origin")),
+                                          self.window) is not window:
+                    continue
+                seen.add(card.id)
+                priced.append((card, observation, window, window.closed_prices[card.id] if closed
+                               else self.controller.price(card.id)))
+        return priced
 
     def _penalty_terms(self, cards: str, handle: str | None) -> list[dict]:
         """Late decisions keep their own windows; current windows use observed causal prefixes."""
         terms = []
         origins = self.price_origins.get(handle, {})
-        for card in self.charter.cards:
-            observation = self.observations.get(card.observation)
-            if card.answers_for not in (cards, "all") or observation is None:
+        for card, observation, window, price in self._priced_cards(origins):
+            if card.answers_for not in (cards, "all"):
                 continue
-            window = self.price_windows.get(origins.get(observation.id, origins.get("origin")),
-                                            self.window)
             # The card's own typed measurement, from its decision's window when that closed.
             values = (self.card_samples.values if window.closed_values is None
                       else window.closed_values)
@@ -395,7 +432,7 @@ class PricingMixin:
             if region is None or card.id not in values:
                 continue
             amount = violation(region, values[card.id])
-            weight = self.controller.price(card.id) * amount
+            weight = price * amount
             share = 1.0 if handle is None else self._decision_share(
                 window, handle, observation.id, card.answers_for, region, values[card.id]
             )
@@ -403,7 +440,7 @@ class PricingMixin:
                 share = self._cost_share(card, window, handle, share)
             terms.append({"card_id": card.id, "observation": observation.id,
                           "window": window.index, "violation": amount,
-                          "lambda": self.controller.price(card.id), "weight": weight,
+                          "lambda": price, "weight": weight,
                           "share": share})
         return terms
 

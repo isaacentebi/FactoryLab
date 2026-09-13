@@ -363,8 +363,13 @@ contributes zero. Other observations use `1/n` decisions for the card's role
 (or all roles for `answers_for = "all"`). The final score is
 `clip(raw_score - penalty, 0, 1)`.
 
-Closed windows retain their observations, regions and contributions for delayed
-settlements. Before a window closes, the most recent closed observations supply
+Closed windows retain their observations, regions, contributions, and the cards
+and prices of the edition in force at the close, for delayed settlements. A
+closed window is therefore priced by the edition that measured it: an amendment
+activated at a window boundary, which takes effect after the close, cannot
+remove or restate a card out of what that window already attributed, so a
+verdict or a late settlement from it keeps the blame the window assigned.
+Before a window closes, the most recent closed observations supply
 pressure and the current window's observed contribution totals supply shares.
 A cost settlement inside its own window reads the selected returns as they
 stand, falling back to observed contributions when no shares are available.

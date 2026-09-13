@@ -51,7 +51,10 @@ def _three_events(provider):
     runtime.n += 1
     runtime.balance_at.append(runtime.wallet.balance)
     runtime._settle_due_forecasts()
-    runtime.n = runtime.ev.verdict_timeout_events + 5
+    # Past the judgement timeout and the consequence backstop: the judge's verdict on the
+    # return settles too (at 1; its window never closed), so nothing about it is pending.
+    runtime.n = max(runtime.ev.verdict_timeout_events,
+                    runtime.ev.consequence_backstop_events) + 5
     runtime._settle_due_forecasts()
     return runtime, about
 

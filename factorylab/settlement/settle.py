@@ -6,9 +6,12 @@ from dataclasses import asdict, dataclass
 from factorylab.kernel.queue import DecisionQueue, SettleStatus
 from factorylab.settlement.forecast import Forecast, ForecastBook
 from factorylab.settlement.lots import Payoff
-from factorylab.settlement.scoring import PrevalenceBaseline, brier
+from factorylab.settlement.scoring import PrevalenceBaseline, _require_probability, brier
 from factorylab.settlement.standing import ConsequenceStanding
 from factorylab.settlement.vocabulary import RETURN_PAID_OFF, Observer, WindowFacts
+
+# The verdict's own outside anchor: the base rate of returns the charter did not blame.
+VERDICT_NOT_BLAMED = "verdict_not_blamed"
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,26 @@ class Settled:
     baseline_brier: float | None
     status: SettleStatus
     marked: bool = False
+
+
+@dataclass(frozen=True)
+class SettledVerdict:
+    """One verdict scored against the charter's realised blame on the return it judged."""
+
+    evaluator_id: str
+    about_handle: str
+    q: float
+    share: float
+    outcome: float
+    brier: float
+    baseline_brier: float
+
+
+def normative_brier(q: float, outcome: float) -> float:
+    """Return 1 - (q - outcome)^2 in [0, 1] for a probability and a unit-interval outcome."""
+    _require_probability(q, "q")
+    _require_probability(outcome, "outcome")
+    return 1.0 - (q - outcome) ** 2
 
 
 class Settler:
@@ -151,6 +174,34 @@ class Settler:
                 self.__recorded[about_handle] = y
                 self.__baseline.record(RETURN_PAID_OFF.id, y)
         return results
+
+    def settle_verdict(
+        self, *, evaluator_id: str, about_handle: str, q: float, share: float
+    ) -> SettledVerdict:
+        """Score one verdict against the charter's realised blame on the return it judged.
+
+        The realised normative outcome is 1 minus the return's attributed share
+        of its window's charter blame (1 when nothing was attributed). Every
+        verdict about one return is scored against the same pre-outcome base
+        rate of unblamed returns, whether it settles in this call or a later
+        one, and the return's blame enters that base rate once. The score trains
+        the judge's verdict skill; coverage is untouched.
+        """
+        _require_probability(share, "share")
+        outcome = 1.0 - share
+        key = f"{VERDICT_NOT_BLAMED}:{about_handle}"
+        baseline_q = self.__snapshots.get(key)
+        if baseline_q is None:
+            baseline_q = self.__snapshots[key] = self.__baseline.baseline_q(VERDICT_NOT_BLAMED)
+        score = normative_brier(q, outcome)
+        baseline_score = normative_brier(baseline_q, outcome)
+        self.__standing.record_verdict(evaluator_id, score, baseline_score)
+        if key not in self.__recorded:
+            unblamed = int(share == 0)
+            self.__recorded[key] = unblamed
+            self.__baseline.record(VERDICT_NOT_BLAMED, unblamed)
+        return SettledVerdict(evaluator_id, about_handle, q, share, outcome, score,
+                              baseline_score)
 
     def __baseline_before(self, about_handle: str) -> float:
         """The payoff base rate as it stood before this return's outcome was first scored,

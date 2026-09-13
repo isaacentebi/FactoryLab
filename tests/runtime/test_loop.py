@@ -556,7 +556,7 @@ def _consequence_runtime(*, provider=None, exchange=None, manifest=None):
     )
 
 
-def _consequence_decision(runtime, action, channel):
+def _consequence_decision(runtime, action, channel, *, deadline_ns=None):
     from factorylab.kernel.queue import PropensityRecord
 
     return runtime.queue.open(
@@ -564,7 +564,8 @@ def _consequence_decision(runtime, action, channel):
         event_id=f"test-{runtime.n}",
         channel=channel,
         propensity=PropensityRecord((action,), (1.0,), action, 0, "test-router", "state"),
-        deadline_ns=runtime.clock.now_ns + 100_000_000_000,
+        deadline_ns=(runtime.clock.now_ns + 100_000_000_000 if deadline_ns is None
+                     else deadline_ns),
         parent_handle=None,
         cost_ceiling=runtime.wallet.available,
     )
