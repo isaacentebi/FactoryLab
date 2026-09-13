@@ -18,7 +18,8 @@ from tests.cortex.test_jail import require_jail
 
 
 def _items(path, manifest):
-    return Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()))._recovery_items()
+    return Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()),
+                         read_only=True)._recovery_items()
 
 
 def test_a_claimed_jail_that_cannot_start_fails_the_gate_instead_of_skipping(monkeypatch):
@@ -49,13 +50,14 @@ def test_run_refuses_a_world_offering_tools_when_the_jail_cannot_start(monkeypat
     assert summary["stats"]["events"] >= 3
 
 
-def test_scripted_world_registers_and_calls_a_population_tool_in_the_jail(tmp_path):
+def test_scripted_world_registers_and_calls_a_population_tool_in_the_jail(scripted_run):
     """The launch condition: one population tool registered and then called,
     with the calls and their results in the diary, not only in the summary."""
     require_jail()
     m = load_manifest("scripted")
-    path = str(tmp_path / "w.jsonl")
-    summary = run_world(m, events=500, seed=1, ledger_path=path)
+    record = scripted_run(m, 500, 1)
+    path = record.ledger_path
+    summary = record.summary
     assert summary["stats"]["population_tools_registered"] >= 1
     assert "spread-check" in summary["tools"]
     items = _items(path, m)

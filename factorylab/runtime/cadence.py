@@ -126,6 +126,15 @@ class GovernanceCadence:
             self._deferred[amendment_id] = window
         return False
 
+    def refused(self, amendment_id: str, reason: str) -> None:
+        """Remove an unactivated candidate without consuming a consequence boundary."""
+        if amendment_id not in self._waiting:
+            return
+        self._ledger.append({"kind": "charter.cadence_refused", "amendment_id": amendment_id,
+                             "reason": reason, "event": self._current_event})
+        self._waiting.pop(amendment_id)
+        self._deferred.pop(amendment_id, None)
+
     def activated(self, amendment_id: str, now_ns: int, tick_interval_ns: int) -> None:
         """Record the measured period before advancing the activation anchor and waiting list."""
         self._ledger.append({

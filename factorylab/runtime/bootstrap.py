@@ -325,6 +325,24 @@ class BootstrapMixin:
         self.fees_to_date = 0
         self.funding_to_date = 0
         self.spot_inventory = {}
+        if not self.ledger.bootstrap:
+            # Launch holdings have no author. Their basis is the observed launch mark,
+            # so a later closer is credited only for the world's subsequent price move.
+            balances = self.exchange.account().spot_balances
+            held = [balance for balance in balances if balance.coin != "USDC" and balance.total]
+            mids = self.exchange.mids() if held else {}
+            for balance in held:
+                coin = f"{balance.coin}/USDC"
+                if coin not in mids:
+                    self._ledger_lock.close()
+                    raise ValueError(f"launch spot inventory has no price: {coin}")
+                size, px = str(balance.total), str(mids[coin])
+                table = self.consequences.table.seed_spot(coin, size, px)
+                self.consequences._apply("spot_seed", {"coin": coin, "size": size,
+                                                       "entry_px": px}, table)
+                self.ledger.append({"kind": "spot.inventory", "coin": coin,
+                                    "size": size, "entry_px": px, "source": "launch"})
+                self.spot_inventory[coin] = (Decimal(size), Decimal(px))
         self.memory: dict[str, deque[dict[str, Any]]] = {}
         self.handle_to_assembly: dict[str, str] = {}
         self.tool_specs: dict[str, dict[str, Any]] = {}  # tool id -> spec dict (world block)
