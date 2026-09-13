@@ -376,9 +376,12 @@ For card j, `v_j = distance_outside_region / card_region.scale`, and
 `min(S, prices.penalty_cap) * share`. When cards measure different quantities,
 `share = sum(lambda_j * v_j * share_j) / S`, or zero when S is zero.
 
-Cost shares use the card's selected scopes and successful returns. Each return
-contributes its cost divided by the successful return count in that scope;
-the contributions are normalised across supported scopes. Evaluator and meta
+Cost shares use the card's selected scopes and successful returns. Each selected
+row contributes its cost divided by the count of successful responses in that
+scope, so a retained-storage charge adds its own cost to the scope it is held in
+and is never one of the responses that count is taken over; a scope with no
+response of its own is measured nowhere and attributed nowhere. The
+contributions are normalised across supported scopes. Evaluator and meta
 cost cards therefore charge those roles. Global window cost retains the
 producer-cost sufficient statistics. Tool attempts and turnover use the
 decision's contribution divided by the window total.
@@ -386,8 +389,9 @@ A lower-bound well-formedness violation is allocated by malformed
 invocations, so a correct return does not pay for someone else's malformed one;
 an upper-bound violation uses well-formed invocations. A zero attributable total
 contributes zero. Other observations use `1/n` decisions for the card's role
-(or all roles for `answers_for = "all"`). The final score is
-`clip(raw_score - penalty, 0, 1)`.
+(or all roles for `answers_for = "all"`), counting the decisions that responded
+in the window and not one whose only entry there is a retained-storage charge.
+The final score is `clip(raw_score - penalty, 0, 1)`.
 
 Closed windows retain their observations, regions, contributions, and the cards
 and prices of the edition in force at the close, for delayed settlements. A

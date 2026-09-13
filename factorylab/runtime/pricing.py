@@ -540,9 +540,11 @@ class PricingMixin:
             rows = [r for r in rows if first <= r["window"] <= last]
             if card.window.per is None:
                 rows = [r for r in rows if r["role"] == "producer"]
-                if not rows:
+                if all(r.get("storage") for r in rows):
                     # Global window sufficient statistics also support native callers
                     # that supplied contribution records without invocation samples.
+                    # A retained-storage charge is not one of those responses, so a
+                    # span holding rent alone still reads the window's own records.
                     rows = [dict(d, handle=h) for index, w in self.price_windows.items()
                             if first <= index <= last for h, d in w.decisions.items()
                             if d["role"] == "producer"]
@@ -555,10 +557,17 @@ class PricingMixin:
                 # is the holder's cost inside it, never one of its n responses.
                 group = _horizon(card.observation, group, card.window.n, partial=True)
             successful = [r for r in group if r["ok"]]
+            # The scope's mean cost, measured the way the card measured it: a
+            # retained-storage charge adds its cost to the responses it is
+            # divided over and is never one of them, so a scope with no
+            # response has no measured cost to own and is not attributed.
+            responses = sum(1 for r in successful if not r.get("storage"))
+            if not responses:
+                continue
             for row in successful:
                 handle = row["handle"]
                 shares[handle] = shares.get(handle, Fraction()) + Fraction(
-                    row["cost"], len(successful))
+                    row["cost"], responses)
         total = sum(shares.values())
         return {h: float(amount / total) for h, amount in shares.items()} if total else {}
 
@@ -581,7 +590,12 @@ class PricingMixin:
             key = "tool_calls" if observation == "tool_calls" else "notional_micro"
             numerator, denominator = own.get(key, 0), getattr(window, key)
         else:
-            n = sum(role == "all" or d["role"] == role for d in samples.values())
+            # A decision whose only entry in this window is money spent — a
+            # retained-storage charge falling due where it never responded —
+            # made no response this observation reads, so it does not take a
+            # share of the violation and does not dilute the shares that do.
+            n = sum(role == "all" or d["role"] == role for d in samples.values()
+                    if d["invocations"] or d["ok"] or not d["cost"])
             return 1 / max(1, n)
         return min(1.0, numerator / denominator) if denominator > 0 else 0.0
 

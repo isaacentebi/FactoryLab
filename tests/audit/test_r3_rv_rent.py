@@ -342,3 +342,79 @@ def test_pruning_keeps_the_responses_a_horizon_needs_and_not_rent_it_never_reads
     samples.prune(rt.charter.cards)
     assert [row["handle"] for row in samples.returns] == ["a", "b", "live"]
     assert measure_card(cost_card(rt), samples) == {"producer": 10_000.5}
+
+
+def rent_row(rt, assembly, cost, window=None):
+    """A charge that falls due for a decision with no response in that window."""
+    handle = f"rent-{assembly}-{cost}"
+    rt.card_samples.stored(handle=handle, assembly=assembly, role="producer",
+                           window=rt.window.index if window is None else window, cost=cost)
+    return handle
+
+
+def test_rent_is_cost_mass_in_a_scope_and_never_one_of_its_responses():
+    """A scope's share of the blame follows its measured cost, rent included.
+
+    Assembly A answers once for 10,000 and holds 10,000 of rent; assembly B
+    answers once for 10,000. Measurement reads 20,000 and 10,000, so A owns two
+    thirds of the violation. Dividing A's rows by two responses instead of one
+    hands each assembly a half and lets rent dilute the writer it belongs to.
+    """
+    rt = cost_runtime("producer", kind="returns", n=1, per="assembly")
+    a = returned(rt, "asm-a", "producer", 10_000)
+    rent = rent_row(rt, "asm-a", 10_000)
+    b = returned(rt, "asm-b", "producer", 10_000)
+    rt.n = 10
+    rt._close_price_window()
+
+    assert rt.card_samples.scopes["cost"] == {"asm-a": 20_000, "asm-b": 10_000}
+    shares = rt.window.closed_shares[0]["shares"]
+    assert shares[a] == pytest.approx(1 / 3)
+    assert shares[rent] == pytest.approx(1 / 3)
+    assert shares[b] == pytest.approx(1 / 3)
+    assert shares[a] + shares[rent] == pytest.approx(2 / 3)
+
+
+def test_a_rent_only_span_still_reads_the_windows_own_cost_records():
+    """A global window card is measured from window statistics, and rent is not a return.
+
+    The span's only sample row is a charge, so there is no response row to
+    attribute over. Treating that charge as the span's returns would hand the
+    whole violation to the renter instead of the decisions whose returns the
+    window's own statistics measured.
+    """
+    rt = cost_runtime("producer", kind="windows", n=1, per=None)
+    a = returned(rt, "seed-decider", "producer", 10_000)
+    b = returned(rt, "seed-decider", "producer", 30_000)
+    rent = rent_row(rt, "seed-decider", 10_000)
+    rt.card_samples.returns[:] = [r for r in rt.card_samples.returns if r.get("storage")]
+    rt.n = 10
+    rt._close_price_window()
+
+    shares = rt.window.closed_shares[0]["shares"]
+    assert rent not in shares
+    assert shares[a] == pytest.approx(0.25)
+    assert shares[b] == pytest.approx(0.75)
+
+
+def test_rent_does_not_dilute_the_equal_split_of_a_non_cost_violation():
+    """An equal split divides a violation over the decisions that responded.
+
+    A charge falling due in a window its writer never responded in opens a cost
+    line there and nothing else. Counting that line as a supporting decision
+    would halve what the one real responder owes for its own noop share.
+    """
+    rt = cost_runtime("producer", kind="returns", n=1, per="role")
+    responder = returned(rt, "seed-decider", "producer", 10_000)
+    renter = decision(rt)
+    rt._charge_storage(renter, 10_000)
+    assert rt.window.decisions[renter] == {
+        "role": "producer", "cost": 10_000, "ok": 0, "invocations": 0,
+        "tool_calls": 0, "notional_micro": 0}
+
+    with_rent = type(rt)._decision_share(
+        rt.window, responder, "noop_share", "producer", None, 1.0)
+    del rt.window.decisions[renter]
+    without_rent = type(rt)._decision_share(
+        rt.window, responder, "noop_share", "producer", None, 1.0)
+    assert with_rent == without_rent == pytest.approx(1.0)
