@@ -51,16 +51,19 @@ class Wallet:
         *,
         clock_ns: Callable[[], int] = time_ns,
         reported_cost_multiple: int = 10,
+        balance_floor_micro: Money = 0,
     ) -> None:
         if type(reported_cost_multiple) is not int or reported_cost_multiple < 1:
             raise ValueError("reported cost multiple must be a positive integer")
         self.__reported_cost_multiple = reported_cost_multiple
         require_money(initial, nonnegative=True)
+        require_money(balance_floor_micro, nonnegative=True)
+        self.__balance_floor_micro = balance_floor_micro
         if drip_schedule is not None and not isinstance(drip_schedule, DripSchedule):
             raise TypeError("drip_schedule must be immutable DripSchedule")
         self.__ledger = ledger
         self.__initial = self.__balance = initial
-        self.__exhausted = initial <= 0
+        self.__exhausted = initial <= self.__balance_floor_micro
         self.__schedule = drip_schedule
         self.__clock = clock_ns
         self.__reservations: dict[str, Reservation] = {}
@@ -131,9 +134,14 @@ class Wallet:
         return self.__schedule
 
     @property
+    def balance_floor_micro(self) -> Money:
+        """The death threshold is immutable for this wallet's lifetime."""
+        return self.__balance_floor_micro
+
+    @property
     def dead(self) -> bool:
-        """Crossing zero is final, even when later observed settlements recover cash."""
-        return self.__exhausted or self.__balance <= 0
+        """Reaching the floor is final, even when later observed settlements recover cash."""
+        return self.__exhausted or self.__balance <= self.__balance_floor_micro
 
     def _live(self) -> None:
         if self.dead or self.__ledger.final:
@@ -233,7 +241,7 @@ class Wallet:
             released=max(0, reservation.amount - actual),
         )
         self.__balance = balance
-        self.__exhausted |= balance <= 0
+        self.__exhausted |= balance <= self.__balance_floor_micro
         self.__commits += actual
         self._refund_novelty(reservation, actual)
         del self.__reservations[reservation.id]
@@ -271,7 +279,7 @@ class Wallet:
         self.settle_batch([(delta, handle, reason)])
 
     def settle_batch(self, settlements: list[tuple[Money, str, str]]) -> None:
-        """Book every observed exchange effect; crossing zero is final even if cash recovers.
+        """Book every observed exchange effect; reaching the floor is final even if cash recovers.
 
         Validate the whole batch before writing. Preserve one ordinary settlement
         item per effect, then publish the new state only after all appends succeed.
@@ -288,7 +296,7 @@ class Wallet:
             if not isinstance(handle, str) or not handle:
                 raise ValueError("settlement handle is required")
             balance += delta
-            exhausted |= balance <= 0
+            exhausted |= balance <= self.__balance_floor_micro
             entries.append((delta, balance, handle, reason))
         for delta, after, handle, reason in entries:
             self._log("settle", delta, after, handle, reason)
@@ -326,6 +334,7 @@ class Wallet:
         return {
             "initial": self.__initial, "balance": self.__balance, "schedule": self.__schedule,
             "exhausted": self.__exhausted, "reported_cost_multiple": self.__reported_cost_multiple,
+            "balance_floor_micro": self.__balance_floor_micro,
             "reservations": [replace(r, _issuer=None) for r in self.__reservations.values()],
             "next_reservation": self.__next_reservation, "drip_count": self.__drip_count,
             "drips": self.__drips, "settlements": self.__settlements, "commits": self.__commits,
@@ -341,13 +350,15 @@ class Wallet:
             raise ValueError("wallet launch configuration differs")
         if state.get("reported_cost_multiple", 10) != self.__reported_cost_multiple:
             raise ValueError("wallet reported-cost policy differs")
+        if state.get("balance_floor_micro", 0) != self.__balance_floor_micro:
+            raise ValueError("wallet balance floor differs")
         for name in ("balance", "drips", "settlements", "commits"):
             require_money(state[name])
         if state["balance"] != (
             state["initial"] + state["drips"] + state["settlements"] - state["commits"]
         ):
             raise ValueError("checkpoint violates conservation")
-        exhausted = state.get("exhausted", state["balance"] <= 0)
+        exhausted = state.get("exhausted", state["balance"] <= self.__balance_floor_micro)
         if type(exhausted) is not bool:
             raise ValueError("checkpoint exhaustion must be boolean")
         holds = {r.id: replace(r, _issuer=self) for r in state["reservations"]}
@@ -356,7 +367,7 @@ class Wallet:
         ):
             setattr(self, f"_Wallet__{name}", state[name])
         self.__reservations = holds
-        self.__exhausted = exhausted or self.__balance <= 0
+        self.__exhausted = exhausted or self.__balance <= self.__balance_floor_micro
         self.__novelty_holds = dict(state.get("novelty_holds", {}))
         self.__uncertain_bills = dict(state.get("uncertain_bills", {}))
 

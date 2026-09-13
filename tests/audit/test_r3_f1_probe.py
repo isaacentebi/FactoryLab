@@ -77,7 +77,7 @@ def test_an_empty_completion_that_stopped_on_length_is_a_failed_probe(seller, ca
     assert out["text"] == "" and out["stop_reason"] == "length" and out["answered"] is False
     assert out["settlement"] == SETTLEMENT and out["cost_micro"] == 1000
     assert code == 1
-    assert captured.err.splitlines()[0] == "factorylab probe: adapter_unavailable"
+    assert captured.err.splitlines()[0] == "factorylab probe: empty_completion"
 
 
 def test_the_probe_budget_is_an_argument():

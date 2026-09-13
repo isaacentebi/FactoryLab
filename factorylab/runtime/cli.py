@@ -142,8 +142,9 @@ def _cmd_manifest(args: argparse.Namespace) -> int:
         if card["id"] in prices:
             card["lambda"] = prices[card["id"]]
     out["charter"] = charter
+    out["venue_validation"] = m.validate_venue_metadata()
     print(json.dumps(out))
-    return 0
+    return 1 if out["venue_validation"]["status"] == "invalid" else 0
 
 
 def _cmd_probe(args: argparse.Namespace) -> int:
@@ -193,10 +194,8 @@ def _cmd_probe(args: argparse.Namespace) -> int:
             )
         )
         if not answered:
-            # The seller answered nothing and was paid anyway. `reasons.py` has no
-            # code for an empty completion and is another group's file; until it
-            # has one this is the adapter failing to produce a usable answer.
-            refuse("probe", Reason.ADAPTER_UNAVAILABLE)
+            # The seller answered nothing and was paid anyway.
+            refuse("probe", Reason.EMPTY_COMPLETION)
             return 1
         return 0
     if args.provider == "venice":
