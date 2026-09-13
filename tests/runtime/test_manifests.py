@@ -117,7 +117,10 @@ def test_clock_bounds_seed_validation_and_hash():
 def test_clock_seed_intervals_remain_unchanged():
     assert load_manifest("scripted").tick_interval_ns == 1_000_000_000
     assert load_manifest("scripted-crash").tick_interval_ns == 1_000_000_000
-    assert load_manifest("testnet").tick_interval_ns == 60_000_000_000
+    # Two minutes: a 60-event consequence backstop then gives a trade two hours of
+    # world time to be judged, and governance six hours between activations.
+    assert load_manifest("testnet").tick_interval_ns == 120_000_000_000
+    assert load_manifest("testnet").evaluation.consequence_backstop_events == 60
     assert load_manifest("testnet").clock.min_tick_ns == 10_000_000_000
 
 
@@ -226,7 +229,13 @@ def test_example_manifest_and_cli_resolve_population_charter(capsys):
 
     example = load_manifest("edition1-example")
     base = load_manifest("testnet")
-    assert replace(example, name=base.name, charter=base.charter, treasury=base.treasury) == base
+    # The launch world's cadence decision is the launch world's: edition 1 is
+    # re-drafted with the actual roster and takes a cadence then. Everything else
+    # about the two files is still the same file.
+    assert replace(example, name=base.name, charter=base.charter, treasury=base.treasury,
+                   tick_interval_ns=base.tick_interval_ns, evaluation=base.evaluation) == base
+    assert example.tick_interval_ns == 60_000_000_000
+    assert example.evaluation.consequence_backstop_events == 200
     assert {c.id: c.observation for c in example.charter.cards} == {
         "model_cost_efficiency": "cost_per_return", "revision_rate": "revision_rate",
         "well_formed_rate": "well_formed_rate",

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -23,12 +24,28 @@ from factorylab.world.events import WorldEvent, WorldEventKind
 NS_PER_SECOND = 1_000_000_000
 
 
+#: Tick gaps retained for the measured interval. Long enough to cover a reserve
+#: window at the manifest's own cadence, short enough that a slow hour is still
+#: visible after the loop recovers.
+MEASURED_SAMPLE = 64
+
+
 @dataclass
 class LiveClock:
     """Yields one ``Tick`` per ``interval_ns`` of wall-clock time, ``count`` times.
 
     The first tick is immediate. ``sleep`` and ``now_ns`` are injectable so
     tests run without waiting. Guarantees strictly increasing timestamps.
+
+    ``interval_ns`` is what the manifest declared; it is not what the loop
+    achieves. A tick whose work outlasts the interval simply fires late, so the
+    clock also retains the gaps it actually delivered and reports their mean as
+    ``measured_interval_ns``. Anything converting events into real time — the
+    governance cadence above all — must use the measured interval, or it prices
+    the world's slowest loop at a speed the world never ran at.
+
+    ``deadline_ns``, when set, ends the stream at the first tick at or after it,
+    so a wall-clock length stays a wall-clock length however long a tick takes.
     """
 
     interval_ns: int
@@ -38,12 +55,29 @@ class LiveClock:
     source: str = "wallclock"
     index: int = 0
     last_ns: int = -1
+    deadline_ns: int | None = None
+    gaps: deque[int] = field(default_factory=lambda: deque(maxlen=MEASURED_SAMPLE))
 
     def set_interval(self, interval_ns: int) -> None:
         """Adopt positive integer nanoseconds for the next tick after the current yield."""
         if type(interval_ns) is not int or interval_ns <= 0:
             raise ValueError("interval_ns must be positive integer nanoseconds")
         self.interval_ns = interval_ns
+
+    def measured_interval_ns(self) -> int:
+        """Return the mean delivered tick gap of the retained window, never below one ns.
+
+        Falls back to the declared interval until two ticks have been delivered:
+        an unmeasured loop is not evidence that the loop is fast.
+        """
+        if not self.gaps:
+            return self.interval_ns
+        return max(1, sum(self.gaps) // len(self.gaps))
+
+    def intervals(self) -> dict:
+        """Publish both intervals and the sample behind the measured one."""
+        return {"declared_ns": self.interval_ns, "measured_ns": self.measured_interval_ns(),
+                "samples": len(self.gaps)}
 
     def events(self) -> ClockIterator:
         """Return a wall-clock stream whose interval remains amendable when injected."""
@@ -57,13 +91,22 @@ class LiveClock:
                 if wait > 0:
                     self.sleep(min(wait, self.interval_ns) / NS_PER_SECOND)
             ts = max(self.now_ns(), self.last_ns + 1)
+            if self.deadline_ns is not None and ts >= self.deadline_ns:
+                return
+            if self.last_ns >= 0:
+                self.gaps.append(ts - self.last_ns)
             self.last_ns = ts
             i = self.index
             self.index += 1
             yield WorldEvent(WorldEventKind.TICK, ts, self.source, {"index": i})
 
     def state(self) -> dict:
-        """Retain the original budget, next tick index and last delivered timestamp."""
+        """Retain the original budget, next tick index and last delivered timestamp.
+
+        The deadline and the measured sample are deliberately not saved: a
+        resumed world continues its saved event budget, and an absolute deadline
+        from a dead process would end it before its first tick.
+        """
         return {"interval_ns": self.interval_ns, "count": self.count, "source": self.source,
                 "index": self.index, "last_ns": self.last_ns}
 

@@ -17,6 +17,8 @@ from factorylab.runtime.wake import (
     VIEWS,
     _open_snapshot,
     _realized,
+    _reserve,
+    _venue,
     collect_wake,
     render_wake,
 )
@@ -181,9 +183,15 @@ def test_optional_accounts_are_projected_and_independent(world, monkeypatch):
     monkeypatch.setattr("factorylab.world.x402.X402Client", lambda: SimpleNamespace(
         usdc_balance=lambda: 12, venice_balance=fail,
     ))
+    assert _venue(load_manifest("testnet")) == {"equity_micro": 1123456,
+                                               "realized_to_date_micro": 3}
+    assert _reserve() == {"usdc_micro": 12, "venice_micro": UNAVAILABLE}
+    # The keys are in the environment, but this world owns neither account: a
+    # fake world's page must not carry the architect's real equity beside its own.
     result = collect_wake(world)
-    assert result["venue"] == {"equity_micro": 1123456, "realized_to_date_micro": 3}
-    assert result["reserve"] == {"usdc_micro": 12, "venice_micro": UNAVAILABLE}
+    assert result["venue"] == {"equity_micro": UNAVAILABLE,
+                               "realized_to_date_micro": UNAVAILABLE}
+    assert result["reserve"] == {"usdc_micro": UNAVAILABLE, "venice_micro": UNAVAILABLE}
     assert "NEVER SHOW" not in json.dumps(result)
 
 
@@ -211,10 +219,15 @@ def test_wake_venue_is_built_with_spot_pairs_and_counts_spot_equity(world, monke
         return venue
 
     monkeypatch.setattr("factorylab.world.exchange.HyperliquidExchange", construct)
-    result = collect_wake(world)
+    venue = _venue(load_manifest("scripted"))
     assert built["spot_pairs"] == load_manifest("scripted").exchange.spot_pairs == ("BTC/USDC",)
     # 1 USDC of perps account value, 2 of spot cash and 3 BTC marked at 100.
-    assert result["venue"] == {"equity_micro": 303_000_000, "realized_to_date_micro": 0}
+    assert venue == {"equity_micro": 303_000_000, "realized_to_date_micro": 0}
+    # ...and the venue of a world whose exchange is fake is never constructed at all.
+    built.clear()
+    assert collect_wake(world)["venue"] == {"equity_micro": UNAVAILABLE,
+                                            "realized_to_date_micro": UNAVAILABLE}
+    assert built == {}
 
 
 def test_realized_pagination_preserves_boundary_and_refuses_retention_limit():

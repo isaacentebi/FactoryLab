@@ -12,8 +12,6 @@ from factorylab.cortex.request import Return
 from tests.conftest import make_runtime
 from tests.runtime.test_fidelity import decision
 
-pytestmark = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
-
 
 def _experienced(rt, assemblies=None):
     rt._manage_reserve_window()
@@ -31,6 +29,7 @@ def _boundary(rt):
     rt._activate_charter_if_due()
 
 
+@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_finding_3_a_refused_amendment_blocks_every_later_retirement():
     """``activate_due`` refuses a passed amendment that an earlier activation made
     redundant. The refusal closes its ballots but never removes it from the cadence's
@@ -60,6 +59,7 @@ def test_finding_3_a_refused_amendment_blocks_every_later_retirement():
     assert "eval-a" in rt.retired_assemblies, f"retirement never activates; waiting={waiting}"
 
 
+@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_finding_10_an_assembly_votes_on_its_own_retirement():
     """The proposer is excluded from the draw; the assembly being retired is not."""
     rt = make_runtime()

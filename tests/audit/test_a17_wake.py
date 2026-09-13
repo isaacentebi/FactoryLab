@@ -168,12 +168,12 @@ def test_a17_immune_responses_name_the_organs_answer_without_learner_state():
     assert not _keys(window) & {"gamma", "gamma_after", "router", "lambda"}
 
 
-def test_a17_portfolio_publishes_equity_pnl_and_side_only_positions(wake):
+def test_a17_portfolio_publishes_equity_and_pnl_and_no_position(wake):
+    """A17 publishes no positions at all: a coin with a side is a position."""
     portfolio = wake["portfolio"]
-    assert set(portfolio) == {"equity_micro", "realized_to_date_micro", "open_positions"}
+    assert set(portfolio) == {"equity_micro", "realized_to_date_micro"}
     assert isinstance(portfolio["realized_to_date_micro"], int)
-    assert all(set(position) == {"coin", "side"} and position["side"] in ("buy", "sell")
-               for position in portfolio["open_positions"])
+    assert "open_positions" not in json.dumps(wake)
 
 
 def test_a17_five_aggregates_and_uptime_are_unchanged(scripted, wake):
@@ -222,8 +222,7 @@ def test_a17_window_close_item_is_public_and_carries_no_prompt_or_size(scripted)
         assert set(item) >= {"window", "window_end_event", "roster", "tools", "observations",
                              "charter", "pots", "portfolio"}
         assert not _keys(item) & SEALED_KEYS
-        assert all(set(position) == {"coin", "side"}
-                   for position in item["portfolio"]["open_positions"])
+        assert set(item["portfolio"]) == {"equity_micro", "realized_to_date_micro"}
 
 
 def test_a17_venue_projection_omits_positions_and_entry_prices(monkeypatch):

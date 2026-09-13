@@ -210,6 +210,29 @@ do not inspect the interior or change anything. systemd resumes the same ledger
 after process failure/reboot. There is no polling agent making intervention
 choices, no live service upgrade, and no automatic replacement world.
 
+### The one control: kill
+
+`systemctl stop` is not a kill. It leaves the world unterminated, the seal
+unreleased and the diary unreadable, and the next start resumes it. Ending the
+experiment is one command, and it is the only intervention the architect keeps:
+
+```sh
+systemctl stop factorylab.service
+sudo -u factory /srv/factorylab/repo/.venv/bin/factorylab kill \
+    --world funded --ledger /srv/factorylab/runs/funded.jsonl
+```
+
+It takes the writer lock (so stop the unit first, or it exits 4), records
+`explicit_kill:operator` in the world's own diary through the only authority
+that may publish a `Terminated` event, releases the seal and exits 3. Killing an
+already dead world prints `terminated` and exits 3 again, changing nothing.
+It takes no other argument: there is nothing to steer, only to end.
+
+Afterwards `systemctl disable --now factorylab.service` stops systemd from
+starting a resume that would only exit 3. The diary can then be read with
+`postmortem` and `versions`; before the kill, reading `runs/funded.jsonl.key`
+breaks the covenant.
+
 ### Exit-code contract
 
 Every code the CLI can return, and what a supervisor does with it.
@@ -219,7 +242,7 @@ Every code the CLI can return, and what a supervisor does with it.
 | 0 | Resume returns a live summary; any command succeeded | Restart with the same saved budget |
 | 1 | Resume fails authentication, replay, credentials or provider setup | Failed-resume webhook; restart with backoff |
 | 2 | A refusal: an unsafe key file mode, a changed tick, a top-up after launch, a missing argument | Do not restart; the operator must act |
-| 3 | Resume finds an authenticated Terminated event, or the world terminates while running | Final success; no restart; termination webhook |
+| 3 | Resume finds an authenticated Terminated event, the world terminates while running, or `kill` ends it | Final success; no restart; termination webhook |
 | 4 | Another process already holds the ledger's writer lock | Do not start a second writer; investigate |
 | 5 | Authenticated startup evidence contains no Launch: no world exists yet | `start.sh` runs the world, then resumes |
 
@@ -234,7 +257,13 @@ where the code comes from the closed vocabulary in `factorylab/runtime/reasons.p
 environment lacks, `credential_unsafe` for a key file whose mode or owner is
 wrong, `venue_unreachable`, `jail_unavailable`, and the rest). No exception
 text, no interpolation and no provider response body is ever printed, so nothing
-that could carry a key, an address or a body can reach a log or a webhook. The same
+that could carry a key, an address or a body can reach a log or a webhook.
+`run` and `kill` add a second line, `factorylab <command>: raised <Class> in
+factorylab.<module>`, because a launch that cannot construct otherwise says only
+`adapter_unavailable` and the operator cannot tell which subsystem refused. A
+class name and a module path are written in this repository, never by a provider;
+no message is read. Supervisors classify on the first line, which never changes.
+The same
 code is written to `$RUNTIME_DIRECTORY/reason` (mode 0600, cleared at every
 start) and `alert.sh` puts it in the webhook body:
 

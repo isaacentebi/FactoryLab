@@ -67,10 +67,11 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
 
     Every field here is already public to every assembly through the world block
     (roster counts, tool and observation catalogues, the charter with its prices
-    and regions, the pots, the account). Prompts, sizes and entry prices are not
-    copied: an open position is a coin and a side. Nothing is read that the
-    runtime does not already hold, so this item costs no external call and adds
-    no resumable state.
+    and regions, the pots, the account). No position is copied: A17 publishes no
+    positions, no entry prices and no assembly ids, and a coin with a side is a
+    position. The portfolio escapes as equity and realised P&L only. Nothing is
+    read that the runtime does not already hold, so this item costs no external
+    call and adds no resumable state.
     """
     from factorylab.charter.measurement import measurement_catalogue
 
@@ -78,9 +79,6 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
     for assembly in rt.assemblies.values():
         roster[(assembly.spec.role, assembly.spec.model_id)] += 1
     pots = rt.wallet.pots()
-    table = getattr(rt.consequences, "table", None)
-    positions = sorted({(lot.coin, "buy" if lot.is_buy else "sell")
-                        for lot in (table.lots if table is not None else ()) if lot.size})
     return {
         "kind": PUBLIC_KIND,
         "window": window,
@@ -112,7 +110,6 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
         "portfolio": {
             "equity_micro": pots.get("venue"),
             "realized_to_date_micro": rt.realized_to_date,
-            "open_positions": [{"coin": coin, "side": side} for coin, side in positions],
         },
     }
 
@@ -325,8 +322,7 @@ class _Observatory:
             "pots": {"current": latest.get("pots") or {}, "transfers": self.transfers},
             "immune": list(self.windows.values()),
             "portfolio": latest.get("portfolio") or {"equity_micro": UNAVAILABLE,
-                                                     "realized_to_date_micro": UNAVAILABLE,
-                                                     "open_positions": []},
+                                                     "realized_to_date_micro": UNAVAILABLE},
         }
 
 
@@ -500,13 +496,23 @@ def collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.slee
         except (LedgerIntegrityError, InvalidToken, OSError, ValueError, KeyError, TypeError):
             if attempt == 0:
                 sleep(0.1)
+    # An account is published only when this world owns it. A key in the
+    # environment says what the host can reach, not what the world is: reading
+    # the live venue for a fake world put the architect's real equity on the
+    # page beside the world's own, two contradictory figures on one page.
+    live_venue = manifest is not None and manifest.exchange.kind == "hyperliquid"
+    configured_reserve = (manifest is not None
+                          and getattr(manifest.treasury, "reserve_address", None) is not None)
     if os.environ.get("HL_PRIVATE_KEY"):
-        result["venue"] = _venue(manifest) if manifest else {
+        result["venue"] = _venue(manifest) if live_venue else {
             "equity_micro": UNAVAILABLE,
             "realized_to_date_micro": UNAVAILABLE,
         }
     if os.environ.get("RESERVE_PRIVATE_KEY"):
-        result["reserve"] = _reserve()
+        result["reserve"] = _reserve() if configured_reserve else {
+            "usdc_micro": UNAVAILABLE,
+            "venice_micro": UNAVAILABLE,
+        }
     return result
 
 

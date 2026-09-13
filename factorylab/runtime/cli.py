@@ -1,8 +1,11 @@
 """The operator's whole interface to a world: create one, watch it, read it after it dies.
 
-Every failure here prints one code from ``runtime.reasons.Reason`` and nothing
-else, so a supervisor can classify it and no provider message, address or key
-can reach a log.
+Every failure here prints one code from ``runtime.reasons.Reason`` on its first
+line, so a supervisor can classify it and no provider message, address or key
+can reach a log. The two commands that create or end a world add a second line
+naming the class and the module that refused — words this repository wrote,
+never a provider's — because a launch that cannot construct is otherwise one
+undiagnosable word.
 """
 
 from __future__ import annotations
@@ -52,9 +55,36 @@ READ_ONLY_FAILURE: Mapping[str, Reason] = MappingProxyType({
 })
 
 
-def refuse(command: str, reason: Reason) -> None:
-    """Print exactly one reason code for one command, and leave it where a supervisor reads it."""
+def _origin(exc: BaseException) -> str | None:
+    """Name the exception's class and the factory module that raised it, and nothing else.
+
+    A class name and a module path are written by this repository, never by a
+    provider, a venue or a key; an exception *message* can carry all three, so
+    no message is read here. Returns ``None`` when the raise never passed
+    through ``factorylab``.
+    """
+    module, traceback = None, exc.__traceback__
+    while traceback is not None:
+        name = traceback.tb_frame.f_globals.get("__name__")
+        if isinstance(name, str) and name.split(".")[0] == "factorylab":
+            module = name
+        traceback = traceback.tb_next
+    return f"{type(exc).__name__} in {module}" if module else None
+
+
+def refuse(command: str, reason: Reason, cause: BaseException | None = None) -> None:
+    """Print exactly one reason code for one command, and leave it where a supervisor reads it.
+
+    The commands that create or end a world add a second line naming the failing
+    subsystem — an exception class and the module it was raised in — because
+    ``adapter_unavailable`` alone cost two audit seats a source read each before
+    they could tell which of two faults had refused the launch. Every other
+    command still prints exactly one line. The first line and the recorded
+    reason never change, so a supervisor classifies on one code either way.
+    """
     print(f"factorylab {command}: {reason.value}", file=sys.stderr)
+    if cause is not None and (origin := _origin(cause)) is not None:
+        print(f"factorylab {command}: raised {origin}", file=sys.stderr)
     record(reason)
 
 
@@ -132,7 +162,7 @@ def _cmd_probe(args: argparse.Namespace) -> int:
             model_id,
             "Reply briefly.",
             ({"role": "user", "content": "Reply with OK."},),
-            32,
+            args.max_tokens,
         )
         quote = provider.quote(req)
         if quote.amount_micro > nonnegative_usd_micro(args.max_cost_usd, rounding="floor"):
@@ -141,12 +171,18 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         provider.register(model_id, quote.amount_micro)
         response = provider.complete(req, quoted=quote)
         settlement = response.raw.get("settlement") or {}
+        # A reasoning seller spends the budget on reasoning and returns no content:
+        # the payment settled, so the probe reports it, but it answered nothing.
+        answered = bool(response.text.strip())
         print(
             json.dumps(
                 {
                     "provider": "x402",
                     "model": model_id,
                     "text": response.text,
+                    "max_tokens": args.max_tokens,
+                    "stop_reason": response.stop_reason,
+                    "answered": answered,
                     "cost_micro": response.cost_micro,
                     "cost_source": response.raw["cost_source"],
                     "quote": response.raw["quote"],
@@ -156,6 +192,12 @@ def _cmd_probe(args: argparse.Namespace) -> int:
                 default=str,
             )
         )
+        if not answered:
+            # The seller answered nothing and was paid anyway. `reasons.py` has no
+            # code for an empty completion and is another group's file; until it
+            # has one this is the adapter failing to produce a usable answer.
+            refuse("probe", Reason.ADAPTER_UNAVAILABLE)
+            return 1
         return 0
     if args.provider == "venice":
         from factorylab.world.models import ModelRequest
@@ -174,7 +216,7 @@ def _cmd_probe(args: argparse.Namespace) -> int:
                 args.model,
                 "Reply briefly.",
                 ({"role": "user", "content": "Reply with OK."},),
-                max_tokens=32,
+                max_tokens=args.max_tokens,
             )
         )
         print(
@@ -307,11 +349,24 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if duration_ns(args.tick_interval) != m.tick_interval_ns:
             refuse("run", Reason.TICK_OVERRIDE_REFUSED)
             return ARGUMENT_EXIT
-    events = args.events
+    events, clock_source = args.events, None
     if args.duration:
+        import time
+
         from factorylab.runtime.worlds import duration_ns
 
-        events = max(1, duration_ns(args.duration) // m.tick_interval_ns)
+        span_ns = duration_ns(args.duration)
+        events = max(1, span_ns // m.tick_interval_ns)
+        if m.exchange.kind != "fake":
+            # A live tick lasts as long as its work, not as long as the declared
+            # interval, so an event count is not a wall-clock length. The clock
+            # keeps the budget as a ceiling and stops at the first tick after the
+            # deadline. A simulated world advances by the interval, so its count
+            # already is its duration.
+            from factorylab.runtime.live import LiveClock
+
+            clock_source = LiveClock(m.tick_interval_ns, events,
+                                     deadline_ns=time.time_ns() + span_ns)
     summary = run_world(
         m,
         events=events,
@@ -320,9 +375,51 @@ def _cmd_run(args: argparse.Namespace) -> int:
         ledger_path=args.ledger,
         drip=not args.no_drip,
         kill_at_end=args.kill_at_end,
+        clock_source=clock_source,
     )
     print(json.dumps(summary, indent=2, default=str))
     return 0
+
+
+def _cmd_kill(args: argparse.Namespace) -> int:
+    """End a living world now, finally, and release its seal. The operator's one control.
+
+    Takes the writer lock first, so a running process cannot be killed underneath
+    itself: stop the unit, then kill. Records ``explicit_kill:operator`` through
+    ``Termination``, which is the only authority that may publish ``Terminated``
+    and the only path that releases the ledger key. Takes no argument that could
+    steer a world: a world is created once and ended once, and nothing in
+    between is the experimenter's to say.
+    """
+    from factorylab.kernel.events import Bus
+    from factorylab.kernel.ledger import Ledger, LedgerBusyError, LedgerIntegrityError, LedgerLock
+    from factorylab.kernel.termination import Termination
+
+    try:
+        with LedgerLock(args.ledger):
+            manifest = load_manifest(args.world)
+            ledger = Ledger.reopen(args.ledger, manifest=json.loads(manifest.canonical_json()))
+            termination = Termination(ledger=ledger, bus=Bus(ledger))
+            termination.kill("explicit_kill:operator")
+            print(json.dumps({
+                "world": manifest.name,
+                "terminated": True,
+                "termination_reason": termination.reason,
+                "seal_key_released": ledger.seal_key_released(),
+            }))
+        return TERMINATED_EXIT
+    except LedgerBusyError:
+        refuse("kill", Reason.LEDGER_BUSY)
+        return LEDGER_BUSY_EXIT
+    except LedgerIntegrityError as exc:
+        if str(exc) == "cannot resume a terminated world":
+            refuse("kill", Reason.TERMINATED)  # already final; killing again changes nothing
+            return TERMINATED_EXIT
+        refuse("kill", Reason.LEDGER_INTEGRITY, exc)
+        return 1
+    except Exception as exc:
+        refuse("kill", Reason.ADAPTER_UNAVAILABLE, exc)
+        return 1
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
@@ -538,6 +635,9 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--model", help="venice:<id>, or the seller's model name for x402")
     pr.add_argument("--seller", help="x402 seller root or chat-completions URL")
     pr.add_argument("--max-cost-usd", default="0.10", help="x402 probe payment cap (default $0.10)")
+    pr.add_argument("--max-tokens", type=int, default=256,
+                    help="completion budget for a model probe (default 256); a reasoning "
+                         "model spends a small budget on reasoning and answers nothing")
     pr.add_argument("--base-url", help="Venice API root, including /api/v1")
     pr.add_argument("--rpc", help="Base RPC override for the x402 reserve balance check")
     pr.set_defaults(func=_cmd_probe)
@@ -585,7 +685,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="ledger file path; its .key is written beside it. In-memory if omitted")
     r.add_argument("--no-drip", action="store_true", help="launch without the manifest's drip")
     r.add_argument("--duration", default=None,
-                   help="wall-clock length like 30m; overrides --events")
+                   help="wall-clock length like 30m; overrides --events. A live world stops "
+                        "at the first tick after the deadline, never later than the ticks "
+                        "the duration buys at the manifest interval")
     r.add_argument("--tick-interval", default=None,
                    help="must equal the manifest tick, e.g. 10s; any other value is refused")
     r.add_argument(
@@ -614,6 +716,16 @@ def build_parser() -> argparse.ArgumentParser:
                                  help="which way the USDC moves")
             command.add_argument("--usd", required=True, help="amount in USD, as text")
         command.set_defaults(func=_cmd_treasury)
+
+    kill = sub.add_parser("kill", help="end a living world now and release its seal",
+                          description="The one control the experimenter keeps after launch. "
+                                      "Records an explicit kill in the world's own diary, "
+                                      "which is final and releases the ledger seal. Stop the "
+                                      "unit first: this takes the writer lock. It steers "
+                                      "nothing and takes no other argument.")
+    kill.add_argument("--world", required=True, help="the world's original manifest name")
+    kill.add_argument("--ledger", required=True, help="the living world's ledger")
+    kill.set_defaults(func=_cmd_kill)
 
     resume = sub.add_parser("resume", help="continue a process-interrupted world",
                             description="Reopen an existing world after its process died, "
@@ -661,6 +773,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """Dispatch one command, translating every failure into one reason code."""
     args = build_parser().parse_args(argv)
+    if args.cmd == "kill":
+        # Finality must not depend on a credential: kill loads none and reaches
+        # no network. It handles its own failures and names its own exit code.
+        return int(args.func(args))
     if args.cmd == "run":
         from factorylab.cortex.sandbox import NoJail
         from factorylab.kernel.ledger import LedgerBusyError
@@ -680,10 +796,12 @@ def main(argv: list[str] | None = None) -> int:
         except NoJail:
             refuse("run", Reason.JAIL_UNAVAILABLE)
             return ARGUMENT_EXIT
-        except Exception:
+        except Exception as exc:
             # A world's interior — provider bodies, addresses, keys — is never
-            # printed, not even while it is failing to be created.
-            refuse("run", Reason.ADAPTER_UNAVAILABLE)
+            # printed, not even while it is failing to be created. The class and
+            # the module that raised are this repository's own words, so they do
+            # name which subsystem refused.
+            refuse("run", Reason.ADAPTER_UNAVAILABLE, exc)
             return 1
     if args.cmd == "treasury":
         try:
