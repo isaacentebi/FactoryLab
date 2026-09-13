@@ -64,7 +64,6 @@ def test_one_decision_round_trip_counts_its_profit_once(market, coin):
     assert (payoff.net_micro, payoff.y) == (600_000, 0)
 
 
-@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_evaluator_cost_card_attributes_its_measured_cost():
     """The same evaluator cost selected for measurement supplies its penalty share."""
     card = MetricCard(
@@ -107,7 +106,6 @@ def test_evaluator_cost_card_attributes_its_measured_cost():
     assert share == 1.0
 
 
-@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_immune_uses_the_cards_configured_sample():
     """A compliant 100-return card cannot become stable failure from one bad return."""
     rt = make_runtime()

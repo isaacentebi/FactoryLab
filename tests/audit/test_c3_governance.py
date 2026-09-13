@@ -6,8 +6,6 @@ audited commit. Nothing here touches a network.
 
 from dataclasses import asdict
 
-import pytest
-
 from factorylab.cortex.request import Return
 from tests.conftest import make_runtime
 from tests.runtime.test_fidelity import decision
@@ -29,7 +27,6 @@ def _boundary(rt):
     rt._activate_charter_if_due()
 
 
-@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_finding_3_a_refused_amendment_blocks_every_later_retirement():
     """``activate_due`` refuses a passed amendment that an earlier activation made
     redundant. The refusal closes its ballots but never removes it from the cadence's
@@ -61,7 +58,6 @@ def test_finding_3_a_refused_amendment_blocks_every_later_retirement():
     assert "eval-a" in rt.retired_assemblies, f"retirement never activates; waiting={waiting}"
 
 
-@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_finding_10_an_assembly_votes_on_its_own_retirement():
     """The proposer is excluded from the draw; the assembly being retired is not."""
     rt = make_runtime()
@@ -77,7 +73,6 @@ def test_finding_10_an_assembly_votes_on_its_own_retirement():
     assert "eval-a" not in seated, seated
 
 
-@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_finding_6_the_operator_has_a_kill_control():
     """README: after launch there is one live view and one control: kill. Termination has
     an ``explicit_kill`` condition, but no command reaches it on a running world; the
