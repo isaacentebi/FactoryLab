@@ -719,7 +719,7 @@ refused. Admission costs one novelty trial, registers the contract
 payload `{"kind": "market", "coin", "market", "version"}`. `world.trading_markets`
 publishes the `perp` and `spot` lists the population may trade. Resume rebuilds
 the venue tools from the launch seed and replays every `market:` contract, so
-registered markets, inventory and lots survive a restart.
+registered markets, inventory and lots survive a restart. An order refused before it reaches the venue is ledgered with its reason, `order.infeasible` when available collateral excludes it and `order.refused` for every other pre-submission refusal, and the reason also reaches `registration_feedback`. Every counted fill writes one `fill.counted` item at the moment it is counted, with the order id, coin, market, size, price, notional, realised P&L, fee and window; the `event:Fill` the population is delivered is a separate item written on delivery. A live tick broadcasts one `MarketMid` per trading market and one `Funding` per trading perpetual, the manifest seed plus every registered market, never the venue's whole listing, so a registered market enters the broadcast from the next tick and resume restores the set; fills and settled funding payments are never filtered, because they carry cash.
 
 A connector may pay for data through x402 with an exact per-call cap from the
 world's own wallet, journaled as one `io.call`/`io.result` pair and never
@@ -768,6 +768,8 @@ Malformed or unavailable venue data contributes no sample. No series carries an
 account, an author or a handle.
 
 ## Operator controls and recovery
+
+The ledger writer lock and every ledger descriptor are close-on-exec, so no child can inherit one or keep a dead world locked; a jailed run that ends in a timeout, an error or an interrupt kills its confined process group before returning, but `sandbox-exec` has no `--die-with-parent`, so on macOS a confined process can still outlive a runtime that is killed outright.
 
 `factorylab kill --world W --ledger L` takes the ledger writer lock, reopens
 the original world, records `explicit_kill:operator`, releases the seal and

@@ -62,10 +62,10 @@ Proof names the node id run to close the row; every file is under `tests/audit/`
 
 **Totals: 49 closed, 2 known (T9, T30), 1 open (T47).**
 
-| T53 | LiveVenue.on_tick emits MarketMid for every venue-listed perp and USDC spot pair and Funding for the whole perp universe (~1,687 events per tick on testnet); the shipped testnet world never finishes a tick | rehearsal | B | broken | live testnet run | fix (tick emits only the world's trading markets: seed plus registered; on-demand public reads stay) | open | |
-| T54 | An order refused pre-submission by _order_exclusion leaves no ledger item and no feedback | rehearsal | S | broken | live | fix (ledger the refusal with its reason; registration_feedback) | open | |
-| T55 | After SIGKILL the jailed child survives on macOS and holds the ledger writer lock: resume reports ledger_busy | rehearsal | S | broken | live | fix (lock fds close-on-exec; jail children die with the parent) | open | |
-| T56 | stats.fills and the window's fills count 2 while no event:Fill item exists in the diary | rehearsal | S | broken | live | verify and fix (fills must be ledgered as events) | open | |
+| T53 | LiveVenue.on_tick emits MarketMid for every venue-listed perp and USDC spot pair and Funding for the whole perp universe (~1,687 events per tick on testnet); the shipped testnet world never finishes a tick | rehearsal | B | broken | live testnet run | fix (tick emits only the world's trading markets: seed plus registered; on-demand public reads stay) | closed | tests/audit/test_r3_rh_tick_broadcast.py |
+| T54 | An order refused pre-submission by _order_exclusion leaves no ledger item and no feedback | rehearsal | S | broken | live | fix (ledger the refusal with its reason; registration_feedback) | closed | tests/audit/test_r3_rh_order_refusal.py |
+| T55 | After SIGKILL the jailed child survives on macOS and holds the ledger writer lock: resume reports ledger_busy | rehearsal | S | broken | live | fix (lock fds close-on-exec; jail children die with the parent) | closed | tests/audit/test_r3_rh_jail_lock.py |
+| T56 | stats.fills and the window's fills count 2 while no event:Fill item exists in the diary | rehearsal | S | broken | live | verify and fix (fills must be ledgered as events) | closed | tests/audit/test_r3_rh_fill_items.py |
 
 ## Open
 
