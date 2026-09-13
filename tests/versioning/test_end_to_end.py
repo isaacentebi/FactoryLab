@@ -35,13 +35,12 @@ def test_scripted_800_event_diaries_have_equal_summaries(tmp_path):
         assert len(report["windows"]) == sum(item.get("kind") == "price.window" for item in items)
         assert len(report["windows"]) >= 3
         assert report["operator"]["matrix"] and report["versions"]
-        # The scripted amendment adding the turnover card is approved at event 25, but A2's
-        # cadence floors the period at the consequence backstop (200 events) while fewer
-        # than timing.min_support forecasts have settled, so the next activation cannot
-        # precede launch + min_ratio * 200 = event 601. A3 opens a dimension only for a
-        # card with a live region in a closed window, and the scripted measurement window
-        # is 120 events, so the first window carrying the new card closes at event 721.
-        # The budget must therefore outrun that boundary, not merely the activation.
+        # The scripted amendment adding the turnover card is approved at event 25. With the
+        # scripted consequence backstop at 20 events, A2's cadence allows activation from
+        # launch + min_ratio * 20 = event 61, and the scripted measurement window is 120
+        # events, so the first window carrying the new card closes at event 121. The
+        # scripted fill-card amendment proposed later in the run does not activate inside
+        # this budget, so exactly one activation is expected.
         activation = [item for item in items if item.get("kind") == "charter.activate"]
         assert [item["amendment_id"] for item in activation] == ["turnover-card"]
         assert "card:turnover" in report["operator"]["dimensions"]
