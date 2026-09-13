@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 # The per-decision attribution the runtime keeps on the same window object
 # is not a public window fact and never reaches a registered observation.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
-                         "closed_cards", "closed_prices", "series_discarded", "storage_rows")
+                         "closed_cards", "closed_prices", "series_discarded")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
@@ -72,6 +72,21 @@ def _mean(values: list[float] | list[int]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
+def _cost_per_return(w: MeasureWindow) -> float | None:
+    """Mean cost of the window's well-formed producer returns, rent included.
+
+    Retained-storage rent is cost the window spent without a return to carry
+    it, so it is added to what those returns cost and never counted as one of
+    them: a window paying rent measures a higher cost per return, not a lower
+    one. Rent alone is therefore unmeasurable — a window with no well-formed
+    producer return has no per-return cost, however much storage it paid for.
+    """
+    costs = w.costs
+    if not costs:
+        return None
+    return (sum(costs) + getattr(w, "storage_cost_micro", 0)) / len(costs)
+
+
 def _disagreement(w: MeasureWindow) -> float | None:
     groups = [
         pstdev([fmean(scores) for scores in judges.values()])
@@ -92,9 +107,9 @@ def _verdict_std(w: MeasureWindow) -> float | None:
 CATALOGUE: tuple[Observation, ...] = (
     Observation(
         "cost_per_return",
-        "Mean cost of well-formed producer returns.",
+        "Mean cost of well-formed producer returns, including retained-storage rent.",
         "micro-USD per return",
-        lambda w: _mean(w.costs),
+        _cost_per_return,
         (0.0, 1_000_000.0),
     ),
     Observation(

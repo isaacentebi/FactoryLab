@@ -134,8 +134,9 @@ def test_recurring_rent_moves_the_cost_card_and_its_penalty_share():
     rt.n = 20
     rt._close_price_window()
     # Without the charge the same two returns measure 2,000 and leave the writer
-    # a quarter of the violation; the rent is the whole of the difference.
-    assert rt.window.closed_values == {"cost": pytest.approx(3_000)}
+    # a quarter of the violation; the rent is the whole of the difference, spread
+    # over the two responses it did not become a third of.
+    assert rt.window.closed_values == {"cost": pytest.approx(4_500)}
     shares = rt.window.closed_shares[0]["shares"]
     assert shares[writer] == pytest.approx(2 / 3)
     assert shares[other] == pytest.approx(1 / 3)
@@ -200,9 +201,46 @@ def test_recurring_rent_moves_a_global_window_cost_card_and_its_shares():
 
     rt.n = 20
     rt._close_price_window()
-    # Without the charge the same two returns measure 2,000 over the two windows.
-    assert rt.window.closed_values == {"cost": pytest.approx(3_000)}
-    assert rt.card_samples.medians["cost"] == 3_000
+    # Without the charge the same two returns measure 2,000 over the two windows;
+    # the rent raises what they cost without becoming a third return.
+    assert rt.window.closed_values == {"cost": pytest.approx(4_500)}
+    # A median is a value one return took, and the charge is no return's cost.
+    assert rt.card_samples.medians["cost"] == 2_000
     shares = rt.window.closed_shares[0]["shares"]
     assert shares[writer] == pytest.approx(2 / 3)
     assert shares[other] == pytest.approx(1 / 3)
+
+
+RENT_ONE = 1  # a one-byte key with empty text, at one micro-USD per byte-window
+
+
+def test_rent_adds_cost_mass_to_a_global_window_card_and_no_phantom_return():
+    """Rent is money the window spent, never a return it received.
+
+    A global closed-window cost card divides the window's cost mass by the
+    returns it holds. Two 10,000-micro responses and one micro of rent are two
+    returns costing 20,001 together, not three costing 20,001: counting the
+    charge in the denominator would let paying rent improve the cost card.
+    """
+    rt = cost_runtime("producer", kind="windows", n=2, per=None)
+    writer = returned(rt, "seed-decider", "producer", 10_000)
+    result, cost = rt._run_tool("seed-decider", writer, {
+        "tool": "note.put", "args": {"key": "f", "text": ""}})
+    assert "error" not in result and cost == RENT_ONE
+    other = returned(rt, "seed-decider", "producer", 10_000)
+    rt.n = 10
+    boundary(rt)  # the rent falls due in a window neither decision responded in
+    assert ledger_items(rt, "note.rent")[-1]["cost"] == RENT_ONE
+
+    rt.n = 20
+    rt._close_price_window()
+    assert rt.window.closed_values == {"cost": pytest.approx(10_000.5)}
+    # The two returns cost the same, so the rent alone separates their shares.
+    shares = rt.window.closed_shares[0]["shares"]
+    assert shares[writer] > shares[other]
+
+    # The window's separate cost mass is checkpointed with the window itself.
+    restored = make_runtime()
+    restore_runtime(restored, runtime_state(rt))
+    assert restored.window.storage_cost_micro == rt.window.storage_cost_micro == RENT_ONE
+    assert restored.window.costs == rt.window.costs == []

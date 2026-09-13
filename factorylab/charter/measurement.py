@@ -16,7 +16,7 @@ RETURN_OBSERVATIONS = frozenset({
 # The runtime keeps per-decision attribution on the same window object;
 # measurement never observes it.
 ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_cards",
-                      "closed_prices", "series_discarded", "storage_rows")
+                      "closed_prices", "series_discarded")
 FORECAST_OBSERVATIONS = frozenset({
     "forecast_skill", "verdict_mean", "verdict_std", "consequence_paid_off_rate", "censored_share",
 })
@@ -32,7 +32,8 @@ def measurement_catalogue(observations=None) -> list[dict]:
 
     descriptions = {
         "cost_per_return": "Mean successful response cost in the selected rows; global closed "
-        "windows use successful producer returns.",
+        "windows use successful producer returns. A retained-storage charge adds to what those "
+        "responses cost and is never counted as one of them.",
         "well_formed_rate": "Successful responses over selected invocation responses, "
         "including ballots.",
         "forecast_skill": "Mean selected forecast Brier minus its paired pre-outcome "
@@ -93,7 +94,9 @@ class CardSamples:
         still measured there: it joins that decision's own row when it has one
         in the window, and otherwise enters as its own successful cost row. It
         is a cost and not a response, so a selection that counts responses drops
-        it before its horizon is applied and it never occupies a response slot.
+        it before its horizon is applied and it never occupies a response slot,
+        and a cost selection adds it to what the selected responses cost instead
+        of dividing that total by it.
         """
         for sample in reversed(self.returns):
             if sample["handle"] == handle and sample["window"] == window:
@@ -292,8 +295,12 @@ def _measure_rows(observation: str, rows: list[dict]) -> float | None:
     if not rows:
         return None
     if observation == "cost_per_return":
-        values = [row["cost"] for row in rows if row["ok"]]
-        return fmean(values) if values else None
+        # A retained-storage charge is cost without a response: it is added to
+        # what the selected responses cost and never divided into as one of
+        # them, so paying rent can only raise a cost per response.
+        values = [row["cost"] for row in rows if row["ok"] and not row.get("storage")]
+        rent = sum(row["cost"] for row in rows if row["ok"] and row.get("storage"))
+        return (sum(values) + rent) / len(values) if values else None
     if observation in ("well_formed_rate", "noop_share", "revision_rate"):
         key = {"well_formed_rate": "ok", "noop_share": "noop", "revision_rate": "revision"}[
             observation
@@ -405,7 +412,7 @@ def measure_cards(cards, samples: CardSamples, window, observations=None) -> dic
                     if len(group) < card.window.n:
                         continue
                     group = group[-card.window.n:]
-                costs = [r["cost"] for r in group if r["ok"]]
+                costs = [r["cost"] for r in group if r["ok"] and not r.get("storage")]
                 if costs:
                     scope_medians.append(median(costs))
             if scope_medians:

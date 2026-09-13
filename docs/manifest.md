@@ -168,10 +168,12 @@ graded on the payoff fact alone. A missing fact is never performance.
 scope. A continuation's cost belongs to its invocation, and a child invocation
 is a separate response. For cost, only successful responses in those selected
 rows contribute to the mean, and a retained-storage charge is selected beside
-them as a cost row of the decision that holds it; no other observation selects
-one, so a charge never fills a response slot. Well-formedness uses all selected
-responses as its denominator. The other supported return observations are
-`noop_share`, `revision_rate` and `tool_calls`.
+them as a cost row of the decision that holds it: it adds to what those
+responses cost and is never divided into as one of them, so paying rent can only
+raise a cost per response. No other observation selects one, so a charge never
+fills a response slot. Well-formedness uses all selected responses as its
+denominator. The other supported return observations are `noop_share`,
+`revision_rate` and `tool_calls`.
 
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before
@@ -194,9 +196,9 @@ samples and, unless `answers_for=all`, selects entities with that role. A scope
 with fewer than `n` responses or forecasts is unavailable. A windows selector
 requires `n` closed windows. The controller receives the equal mean of supported
 scope measurements; private entity values never enter the public topology view.
-Previous-cost-median bounds use the same selector's cost samples. New horizons
-may need to warm up when retained history is shorter than a newly adopted card.
-The buffers and their active measurements survive resume.
+Previous-cost-median bounds use the same selector's per-response cost samples.
+New horizons may need to warm up when retained history is shorter than a newly
+adopted card. The buffers and their active measurements survive resume.
 
 ## Committee liability
 
@@ -771,7 +773,7 @@ Retained storage is an explicit, resumable liability of the decision that holds
 the note, not only a wallet debit. Every paid charge is added to that
 decision's cost contribution for the window the charge landed in and enters
 that window's measured rows — a producer's charge its cost statistics too, as
-that decision's spend and not as a second spender — as a cost of the same
+cost the window spent and never as a return it received — as a cost of the same
 decision and never as a response, so a cost card sees it whether it selects
 returns or whole closed windows, and so do the penalty shares it attributes,
 and while the decision's own consequence outcome is still open it is also
