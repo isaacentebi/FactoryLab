@@ -39,12 +39,16 @@ def test_t30_a_gap_through_maintenance_margin_realises_more_than_the_equity_behi
 
 
 def test_t30_scripted_crash_dies_below_its_zero_floor_with_money_conserved():
-    """The world-level reproduction, pinned: the terminal wallet is negative, not zero."""
+    """The world-level reproduction: the terminal wallet is negative, not zero.
+
+    The exact overshoot moves whenever the scripted diary moves (a gap liquidation lands
+    whatever the leveraged position was at the shock), so the invariant is asserted, not
+    a magic number: below the floor by more than one whole dollar, money conserved."""
     m = load_manifest("scripted-crash")
     assert m.termination.balance_floor_micro == 0
     rt = Runtime(m, events=600, seed=2, initial_balance_micro=None, ledger_path=None,
                  drip=False, router_gamma=.1)
     summary = rt.run()
     assert summary["termination_reason"] == "balance_zero" and summary["seal_key_released"]
-    assert summary["wallet_balance_micro"] == -4_204_470 < m.termination.balance_floor_micro
+    assert summary["wallet_balance_micro"] < m.termination.balance_floor_micro - 1_000_000
     assert summary["wallet_conservation"] and summary["ledger_verify"]
