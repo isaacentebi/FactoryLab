@@ -132,7 +132,6 @@ def test_finding_5_a_ledger_shorter_than_its_own_head_is_a_rollback_not_a_resume
         Ledger.reopen(path, manifest=json.loads(m.canonical_json()))
 
 
-@pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 def test_finding_9_a_class_transfer_confirmed_after_a_loss_does_not_kill_the_world():
     """The fake rail confirms a class transfer at the next tick by calling
     ``FakeExchange.class_transfer``, which re-checks availability and raises when a

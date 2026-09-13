@@ -6,12 +6,8 @@ here opens a real connection (the socket and resolver are replaced before any ca
 
 from types import SimpleNamespace
 
-import pytest
-
 import factorylab.world.connector as connector_module
 from factorylab.world.connector import HTTPSTransport
-
-pytestmark = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 
 
 class Raw:
