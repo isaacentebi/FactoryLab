@@ -77,7 +77,7 @@ Group E's T27 append site is in `runtime/loop.py`, which B owns: E hands B a one
    - The process is killed inside a population tool run; resume comes back identical. `factorylab kill` releases the seal and the diary decrypts.
    - `factorylab wake` shows the world's own venue, no reserve section on a world without one, no positions.
    - Conservation and chain verification true at the end.
-4. **Closure review.** The one Fable seat of this round: reads the merged diffs and the rehearsal diary against every triage row and states, row by row, closed, known, or open. Open rows go back to their group. When the table has no open row, `handoff.md` records it and we go to the droplet.
+4. **Closure review.** Codex high, cold: reads the merged diffs and the rehearsal diary against every triage row and states, row by row, closed, known, or open. Open rows go back to their group. When the table has no open row, `handoff.md` records it and we go to the droplet.
 
 ## Decisions, taken
 
@@ -90,7 +90,7 @@ Group E's T27 append site is in `runtime/loop.py`, which B owns: E hands B a one
 
 ## Models, by budget
 
-Fable is the scarce one: groups B and G only, the two where who-judges-whom and who-may-write are decided. Codex high takes C, J and K. Codex medium takes Step 0, A, D, E and H. Opus takes F (long, live, needs keys) and every review-comment fix. The closure review at the end is the third and last Fable seat.
+Fable is the scarce one: groups B and G only, the two where who-judges-whom and who-may-write are decided. Codex high takes C, J, K and the closure review at the end, a reviewer that wrote none of the code. Codex medium takes Step 0, A, D, E and H. Opus takes F (long, live, needs keys) and every review-comment fix.
 
 ## Timeline, wall clock
 
