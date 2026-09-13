@@ -118,9 +118,13 @@ settings".
 
 The existing `committee.min_settled`, `novelty.window`, `novelty.share`,
 `novelty.trials`, prices, timing and clock parameters are disclosed in
-every request's `world.mechanics`. Their runtime values, including temporary
-controller decay, are used in that disclosure. The scoring block states the
-capped, attributed formula recorded under "Observation units and attribution".
+every request's `world.mechanics`, at the values the manifest committed and an
+amendment last activated. The two the runtime adapts live — the consequence mix
+the sampling actuator raises and steps back, and the decay the immune controller
+borrows on thrash — are published in `world.adaptive_scoring` instead, beside a
+pointer back to their committed values; `mechanics` and `scoring` name that key
+rather than quoting either number. The scoring block states the capped,
+attributed formula recorded under "Observation units and attribution".
 
 A rendered request puts the world facts that hold still first, in one contiguous
 `WORLD` block, and everything that moves after it. The block carries the keys
@@ -129,16 +133,22 @@ scoring, tool, connector, work and observation catalogues, the assembly
 catalogue and contracts, the trading markets and their instrument records — and
 is byte-identical across consecutive calls to every assembly of a world, so
 DeepSeek's and OpenAI's automatic prefix caching hits it without any
-`cache_control` marker. It is the head of the first user message, not the system
-message: the system prompt is world-supplied, differs per assembly and may not
-describe kernel rules. It changes when the charter edition, the mechanics or one
-of those catalogues changes, and at nothing else. Everything that moves between
-calls — `inputs.you`, the event, the account, `recent_mids`, the pots, note
-counts, pathologies, the reserve remaining, `governance`, `tick_intervals`,
-`registration_feedback` and `card_prices` — is rendered after it, inside
-`INPUTS`. The controller re-prices every card at every closed window, so the
-charter disclosure names `world.card_prices` instead of inlining each lambda;
-`card_prices` still publishes every card's current price and region. Where the
+`cache_control` marker. It is the head of the **system message**, ahead of the
+assembly's own system prompt, because the wire every provider builds is
+`[system, *messages]`: a block leading the user message would sit behind system
+text that differs per registered assembly, and no cross-assembly hit could
+land. The rule that a world-supplied system prompt may not describe kernel
+rules is untouched — this block is the kernel's own disclosure of public
+schematics, placed by the kernel in every assembly's prompt. It changes when the
+charter edition, the mechanics or one of those catalogues changes, and at
+nothing else; a live adaptation does not change it. Everything that moves
+between calls — `inputs.you`, the event, the account, `recent_mids`, the pots,
+note counts, pathologies, the reserve remaining, `governance`, `tick_intervals`,
+`registration_feedback`, `adaptive_scoring` and `card_prices` — is rendered
+after it, in the user message inside `INPUTS`. The controller re-prices every
+card at every closed window, so the charter disclosure names `world.card_prices`
+instead of inlining each lambda; `card_prices` still publishes every card's
+current price and region. Where the
 provider reports it, `usage.prompt_tokens_details.cached_tokens` is recorded as
 `usage.cached_tokens` on the `invocation` item, absent where it is not reported.
 Cost metering is unchanged: OpenRouter's reported `usage.cost` already carries

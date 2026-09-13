@@ -322,6 +322,9 @@ class SchematicsMixin:
                 max_children=self.m.tools.max_children,
                 max_tool_calls=self.m.tools.max_tool_calls),
             "scoring": self._scoring_block(),
+            # Moving by construction: the sampling actuator and the immune controller
+            # change these, so they are published here and never inside the prefix.
+            "adaptive_scoring": self._adaptive_scoring_block(),
             "prices": {"lambda_max": self.m.prices.lambda_max,
                        "penalty_cap": self.m.prices.penalty_cap},
             "amendment_feedback": getattr(self, "amendment_feedback", None),
@@ -360,6 +363,11 @@ class SchematicsMixin:
     def _traded_instruments(self) -> dict[str, list[dict[str, Any]]]:
         """The instrument record of each market this world may trade, and no other.
 
+        Guarantees the returned records are exactly the venue's own for the coins
+        and pairs in ``world.trading_markets``, unabridged and unrewritten, and
+        that the block's size follows that permission rather than the venue's
+        listing: a venue that lists a thousand more instruments adds nothing here.
+
         The venue's own listing runs to thousands of instruments; carrying it in
         every prompt cost about 100k input tokens a call and told an assembly
         nothing it could not read on demand. What a trading decision needs is the
@@ -372,12 +380,14 @@ class SchematicsMixin:
                 for market, rows in self.exchange.instruments().items()}
 
     def _published_tool_specs(self) -> list[dict[str, Any]]:
-        """Publish every tool contract, naming the venue's listing rather than enumerating it.
+        """Every registered tool's contract, with the venue's listing named rather than spelled.
 
-        The public reads accept any coin or pair the venue lists, so their schema
-        carries an enum as long as the listing. Dispatch still checks that enum —
-        this is only how the contract is disclosed, and an unlisted coin is still
-        refused with a reason.
+        Guarantees each registered spec is published exactly once and changed in
+        one way only: a public venue read whose ``coin`` argument enumerates the
+        whole listing is disclosed as naming it instead. Nothing dispatch reads is
+        touched — the registry keeps its own enum and still refuses an unlisted
+        coin with a reason — so this narrows what the prompt says, never what a
+        call may do.
         """
         specs: list[dict[str, Any]] = []
         for tool_id, spec in self.tool_specs.items():
@@ -394,7 +404,16 @@ class SchematicsMixin:
         return specs
 
     def _mechanics_block(self) -> dict[str, Any]:
-        """Expose the committed parameters and operative formulas without learner state."""
+        """Expose the committed parameters and operative formulas without learner state.
+
+        Guarantees every number here is one the manifest committed or an amendment
+        activated, and none is one the runtime's own adaptation moves between
+        calls: the sampling actuator's consequence mix and the immune
+        controller's decay are named here and published in
+        ``world.adaptive_scoring``, which moves with them. That is what lets this
+        block sit in the prompt's stable prefix, which an adaptation must not
+        invalidate.
+        """
         pr, nov = self.m.prices, self.m.novelty
         return {
             "tools": {"max_depth": self.m.tools.max_depth,
@@ -419,8 +438,7 @@ class SchematicsMixin:
                         "trials": nov.trials,
                         "max_lifetime_windows": nov.max_lifetime_windows},
             "controller": {
-                "eta": pr.eta, "kappa": pr.kappa, "decay": self.controller.snapshot()[
-                    "parameters"]["decay"],
+                "eta": pr.eta, "kappa": pr.kappa, "decay": pr.decay,
                 "lambda_max": pr.lambda_max, "min_window_events": pr.min_window_events,
                 "penalty_cap": getattr(pr, "penalty_cap", None),
                 "recurrence": "v = distance outside the inclusive region / scale; "
@@ -429,7 +447,11 @@ class SchematicsMixin:
             },
             "cascade": {"min_ratio": self.m.timing.min_ratio,
                         "jitter_fraction": self.m.timing.jitter_fraction},
-            "consequence_mix": getattr(self, "consequence_mix", self.ev.consequence_share),
+            "consequence_mix": self.ev.consequence_share,
+            "adaptive": "the committed values are here; the two the runtime moves between "
+            "calls — the consequence mix the sampling actuator raises and steps back, and "
+            "the decay the immune controller borrows — are in world.adaptive_scoring, and "
+            "controller.decay and consequence_mix above are what they were committed at",
             "treasury": {"max_venice_per_window_micro": self.m.treasury.max_venice_per_window,
                          "venice_tranche_usd": "5"},
             "tick_bounds_ns": {"min": self.m.clock.min_tick_ns, "max": self.m.max_tick_ns},
@@ -441,6 +463,22 @@ class SchematicsMixin:
             "their denominators.",
         }
 
+    def _adaptive_scoring_block(self) -> dict[str, Any]:
+        """The scoring values in force this window: the ones the runtime's adaptation moves.
+
+        Guarantees every value an actuator or a controller can change between two
+        calls of one charter edition is published here and inlined nowhere in the
+        stable world block, so a live adaptation is visible to the population in
+        the same call it takes effect and still leaves the prompt's cached prefix
+        byte-identical. What each value was committed at stays in
+        ``world.mechanics``.
+        """
+        return {
+            "consequence_mix": getattr(self, "consequence_mix", self.ev.consequence_share),
+            "controller_decay": self.controller.snapshot()["parameters"]["decay"],
+            "committed": "world.mechanics carries the committed value of each of these; a "
+            "difference is this runtime's own adaptation, not an amendment",
+        }
 
     @staticmethod
     def _register_schema() -> dict[str, Any]:
@@ -480,7 +518,13 @@ class SchematicsMixin:
         """How decisions settle, stated as facts about the world (schematics are
         public; no goals). Run 7 showed judges grading conformity alone because nothing told
         them a verdict is also a forecast, and producers reinforced by verdicts that never
-        answered to money. Every formula here is the one the runtime applies."""
+        answered to money. Every formula here is the one the runtime applies.
+
+        Guarantees the formulas name the weights the runtime's adaptation moves
+        rather than quoting them, so this block holds still between calls of one
+        charter edition and can sit in the prompt's stable prefix; the weight in
+        force is in ``world.adaptive_scoring``.
+        """
         ev = self.ev
         return {
             "producer_or_antagonist_return": (
@@ -517,8 +561,9 @@ class SchematicsMixin:
                 "mean Brier of the evaluator's payoff forecasts minus the prevalence "
                 "baseline's, capped below minimum coverage; it enters selection among contracts "
                 "declaring Verdict on any accepted event kind with "
-                f"weight consequence_mix (now {self.consequence_mix}, manifest "
-                f"{ev.consequence_share}) beside the learned selection; when the verdict mean "
+                f"weight consequence_mix (committed {ev.consequence_share}; the weight in "
+                "force this window is world.adaptive_scoring.consequence_mix) beside the "
+                "learned selection; when the verdict mean "
                 f"rises while payoff skill falls over {self.m.immune.k} windows the mix rises by "
                 f"{ev.sampling_step} for the next window, capped at {ev.sampling_cap}, and "
                 "steps back otherwise"

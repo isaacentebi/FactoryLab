@@ -7,12 +7,19 @@ venue's listing. And everything static within a charter edition and registration
 state is rendered first, in one contiguous block that is byte-identical across
 consecutive calls to any assembly, so a provider's automatic prefix cache can
 hit; the identity stamp, the account, the prices and the event come after it.
+
+The prefix claims are proved on the message list a provider actually posts —
+``[system, *messages]`` — and not on the user text alone: the assemblies of one
+world hold different system prompts, and a block that led only the user message
+would sit behind bytes that differ per assembly.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -22,9 +29,11 @@ from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.openai_wire import parse_completion
+from factorylab.world.openrouter import OpenRouterProvider
 from factorylab.world.scripted import ScriptedProvider
 from tests.conftest import make_runtime
 from tests.runtime.test_connectors import decision, ledger_items
+from tests.world.test_openrouter import FakeTransport
 
 TRADING = {"perp": ["BTC", "ETH"], "spot": ["BTC/USDC"]}
 
@@ -53,9 +62,30 @@ def request_for(rt: Runtime, description: str, payload: dict,
         {"type": "object", "properties": {"action": {"type": "string"}}}, 10**15, "verdict")
 
 
+def wire(rt: Runtime, assembly_id: str, description: str, payload: dict) -> list[dict[str, Any]]:
+    """The message list a provider posts for this request, taken from the provider.
+
+    ``OpenRouterProvider`` and ``VeniceProvider`` both build
+    ``[{"role": "system", ...}, *req.messages]``; this drives the OpenRouter one
+    over a fake transport so the sequence asserted on is the one that is sent,
+    not a reconstruction of it.
+    """
+    mreq = rt.assemblies[assembly_id].build_model_request(request_for(rt, description, payload))
+    transport = FakeTransport([{
+        "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }])
+    OpenRouterProvider(transport=transport).complete(mreq)
+    return transport.calls[-1][2]["messages"]
+
+
+def wire_text(messages: list[dict[str, Any]]) -> str:
+    """The wire's bytes in order: what a provider's prefix cache tokenises."""
+    return "".join(f"{m['role']}\n{m['content']}\n" for m in messages)
+
+
 def prompt_for(rt: Runtime, assembly_id: str, description: str, payload: dict) -> str:
-    request = request_for(rt, description, payload)
-    return rt.assemblies[assembly_id].build_model_request(request).messages[-1]["content"]
+    return wire_text(wire(rt, assembly_id, description, payload))
 
 
 # --------------------------------------------------------------- the listing leaves
@@ -89,13 +119,33 @@ def test_the_world_block_says_where_the_full_listing_is():
 # ------------------------------------------------------------------ a stable prefix
 
 
-def test_two_assemblies_on_two_events_share_one_byte_identical_prefix():
+def test_two_assemblies_on_two_events_share_one_byte_identical_wire_prefix():
+    """Different system prompts, one shared prefix — asserted on the posted messages."""
     rt = make_runtime()
-    first = prompt_for(rt, "seed-decider", "Respond to event Tick on scripted.", {"index": 1})
-    second = prompt_for(rt, "seed-observer", "Respond to event MarketMid on scripted.",
-                        {"index": 99, "coin": "ETH"})
+    rt._manage_reserve_window()
+    rt._register("author", AssemblyProposal(
+        id="own-prompt", model_id="fake-haiku", role="producer", accepts=("Tick",),
+        system_prompt="A WHOLLY DIFFERENT SYSTEM PROMPT", max_tokens=128, effort="low"))
+    decider, other = rt.assemblies["seed-decider"], rt.assemblies["own-prompt"]
+    # A registered assembly brings its own system prompt: without one there is nothing
+    # here to prove, because identical system text would share a prefix wherever it sat.
+    assert decider.spec.system_prompt != other.spec.system_prompt
+    first_wire = wire(rt, "seed-decider", "Respond to event Tick on scripted.", {"index": 1})
+    second_wire = wire(rt, "own-prompt", "Respond to event MarketMid on scripted.",
+                       {"index": 99, "coin": "ETH"})
+    first, second = wire_text(first_wire), wire_text(second_wire)
     prefix = request_for(rt, "any", {}).stable_prefix()
-    assert first.startswith(prefix) and second.startswith(prefix)
+    # The system message leads the wire and the block leads the system message, so the
+    # two wires agree byte for byte for at least the whole of it.
+    assert [m["role"] for m in first_wire][0] == [m["role"] for m in second_wire][0] == "system"
+    assert first_wire[0]["content"].startswith(prefix)
+    assert second_wire[0]["content"].startswith(prefix)
+    shared = os.path.commonprefix([first, second])
+    assert prefix in shared and shared.index(prefix) == len("system\n")
+    # What differs between the assemblies begins only after the block.
+    assert decider.spec.system_prompt not in shared
+    assert other.spec.system_prompt not in shared
+    assert first.startswith(prefix, len("system\n")) and second.startswith(prefix, len("system\n"))
     block = rt._world_block()
     assert json.dumps(block["charter"]) in prefix  # the charter text, escaped as JSON
     for card in rt.charter.cards:
@@ -124,13 +174,16 @@ def test_the_prefix_changes_on_a_charter_edition_and_on_a_registration():
 def test_the_identity_stamp_and_the_event_are_outside_the_prefix():
     rt = make_runtime()
     request = request_for(rt, "Respond to event Tick on scripted.", {"marker": "EVENT-MARKER"})
-    prompt = rt.assemblies["seed-decider"].build_model_request(request).messages[-1]["content"]
+    mreq = rt.assemblies["seed-decider"].build_model_request(request)
     prefix = request.stable_prefix()
-    assert '"you": "seed-decider"' in prompt and '"you"' not in prefix
-    assert "EVENT-MARKER" in prompt and "EVENT-MARKER" not in prefix
-    assert "Respond to event Tick" in prompt[len(prefix):]
+    user = mreq.messages[-1]["content"]
+    # The block is the system message's head; everything about this call is the user's.
+    assert mreq.system == prefix + rt.assemblies["seed-decider"].spec.system_prompt
+    assert '"you": "seed-decider"' in user and '"you"' not in prefix
+    assert "EVENT-MARKER" in user and "EVENT-MARKER" not in prefix
+    assert "Respond to event Tick" in user and prefix not in user
     # Controller prices move every closed window, so they are named, not inlined.
-    assert '"card_prices"' in prompt[len(prefix):]
+    assert '"card_prices"' in user
 
 
 def test_the_prefix_holds_still_while_the_account_and_the_prices_move():
@@ -143,6 +196,50 @@ def test_the_prefix_holds_still_while_the_account_and_the_prices_move():
     assert after == before
     prompt = request_for(rt, "a", {}).prompt_text()
     assert "0.7" in prompt[len(after):] and "MOVED" in prompt[len(after):]
+
+
+def diverge(rt: Runtime) -> float:
+    """Run the sampling actuator over a diverging window history; return the new mix."""
+    rt.sampling_history = [{"window": 0, "verdict": 0.1, "consequence": 0.9},
+                           {"window": 1, "verdict": 0.2, "consequence": 0.8}][:rt.m.immune.k - 1]
+    rt.stats.last_window_values = {"verdict_mean": 0.3, "forecast_skill": 0.7}
+    rt._sampling_actuator()
+    return rt.consequence_mix
+
+
+def test_a_live_adaptation_moves_the_values_and_leaves_the_prefix_byte_identical():
+    """The two values this runtime adapts live are outside the prefix it must not break.
+
+    The sampling actuator raises the consequence mix when verdicts rise while payoff
+    skill falls, and the immune controller borrows extra decay on thrash. Both are
+    weights the population reads, and neither may cost a cached prefix.
+    """
+    rt = make_runtime()
+    before_wire = wire(rt, "seed-decider", "Respond to event Tick on scripted.", {"index": 1})
+    prefix = request_for(rt, "a", {}).stable_prefix()
+    committed_mix, committed_decay = rt.ev.consequence_share, rt.m.prices.decay
+
+    mix = diverge(rt)
+    # Exactly the immune controller's own intervention (runtime/immune.py, on thrash).
+    decay = committed_decay + rt.m.immune.decay_step
+    rt.controller.set_decay(decay, ledger=rt.ledger, window=1)
+    assert mix != committed_mix and decay != committed_decay  # something really changed
+
+    after_wire = wire(rt, "seed-decider", "Respond to event Tick on scripted.", {"index": 1})
+    # The system message, byte for byte: prefix and all.
+    assert after_wire[0]["content"] == before_wire[0]["content"]
+    assert request_for(rt, "a", {}).stable_prefix() == prefix
+    # The prefix carries the committed parameters and names where the live ones are.
+    assert f'"consequence_mix": {committed_mix}' in prefix
+    assert f'"decay": {committed_decay}' in prefix
+    assert f'"consequence_mix": {mix}' not in prefix and f'"decay": {decay}' not in prefix
+    assert "world.adaptive_scoring" in prefix
+    # The moving part carries what is actually in force.
+    user = after_wire[-1]["content"]
+    adaptive = json.loads(user.split("INPUTS\n")[1].split("\n\nOUTCOME")[0])["world"][
+        "adaptive_scoring"]
+    assert adaptive["consequence_mix"] == mix and adaptive["controller_decay"] == decay
+    assert "adaptive_scoring" not in STABLE_WORLD_KEYS
 
 
 # ------------------------------------------------------------- the cache hit lands

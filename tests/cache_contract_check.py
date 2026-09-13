@@ -98,7 +98,8 @@ def test_runtime_capture_preserves_live_evidence(tmp_path):
 
     class RecordingProvider(ScriptedProvider):
         def complete(self, request):
-            text = "\n".join(str(m.get("content", "")) for m in request.messages)
+            text = "\n".join(
+                [request.system, *(str(m.get("content", "")) for m in request.messages)])
             requests.append(_inputs_from_prompt(text))
             return super().complete(request)
 

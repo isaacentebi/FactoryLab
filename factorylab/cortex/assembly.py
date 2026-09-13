@@ -7,7 +7,14 @@ a memory policy is set, the memory lives in the registry-controlled store the
 runtime passes in, keyed by handle scope.
 
 The system prompt is world-supplied. It must not describe kernel rules (the
-kernel enforces them); it describes only how to answer a request.
+kernel enforces them); it describes only how to answer a request. The system
+*message* is not only that prompt: the kernel renders the request's stable
+world block ahead of it. That block is the kernel's own disclosure of public
+schematics — placed by the kernel, in every prompt of every assembly, and
+identical across them — so the rule above is untouched by it: what a world may
+not write about the kernel, the kernel may still publish about itself, and the
+population rule it keeps is the other one (physics is enforced, never
+announced).
 """
 
 from __future__ import annotations
@@ -94,25 +101,28 @@ class Assembly:
         child's identity: whatever ``inputs`` carried, the assembly overwrites it
         with its own.
 
-        The prompt's stable prefix (``Request.stable_prefix``) lives at the head
-        of this user message and not in the system message. The system message is
-        world-supplied and differs between assemblies, so a prefix placed there
-        would be a different prefix for every assembly; it also may not describe
-        kernel rules, which is most of what the stable block says. As the first
-        user message it is byte-identical for every assembly of a world, which is
-        all DeepSeek's and OpenAI's automatic prompt caching asks for — they key
-        on an identical leading token sequence and need no ``cache_control``
-        marker, so none is sent. Handle-scoped memory, when a world registers it,
-        is the one thing that precedes it and costs that assembly the hit.
+        The prompt's stable prefix (``Request.stable_prefix``) heads the system
+        message, ahead of this assembly's own system prompt, and the moving half
+        of the rendering is the user message. The wire every provider builds is
+        ``[system, *messages]``, so this is the only placement under which two
+        assemblies of one world — which hold different system prompts — begin
+        with the same bytes; put in the user message, the differing system text
+        would precede it and no cross-assembly prefix cache could ever hit. That
+        is all DeepSeek's and OpenAI's automatic prompt caching asks for: they
+        key on an identical leading token sequence and need no ``cache_control``
+        marker, so none is sent. The block is the kernel's disclosure, not the
+        world's, so placing it inside a world-supplied message leaves the rule in
+        this module's docstring intact. Nothing now precedes it: handle-scoped
+        memory, when a world registers it, sits in the messages after it.
         """
         req = replace(req, inputs={**req.inputs, "you": self.spec.id})
         messages: list[dict[str, Any]] = []
         if self.spec.memory_policy == "handle-scoped" and req.parent_handle:
             messages.extend(self.memory.get(req.parent_handle, []))
-        messages.append({"role": "user", "content": req.prompt_text()})
+        messages.append({"role": "user", "content": req.moving_text()})
         return ModelRequest(
             model_id=self.spec.model_id,
-            system=self.spec.system_prompt,
+            system=req.stable_prefix() + self.spec.system_prompt,
             messages=tuple(messages),
             max_tokens=self.spec.max_tokens,
             effort=self.spec.effort,
@@ -169,7 +179,10 @@ class Assembly:
             scope = req.parent_handle or req.handle
             self.memory.setdefault(scope, []).extend(
                 [
-                    {"role": "user", "content": req.prompt_text()},
+                    # The user message as it was sent: the stable block is the system
+                    # message's, and a remembered copy of it would be a stale world
+                    # repeated inside the very prefix it is supposed to leave alone.
+                    {"role": "user", "content": req.moving_text()},
                     {"role": "assistant", "content": resp.text},
                 ]
             )

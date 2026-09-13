@@ -94,7 +94,11 @@ def _cached_scripted_run(directory, manifest, events, seed, *, mode, drip=True):
 
                 class RecordingProvider(ScriptedProvider):
                     def complete(self, request):
-                        text = "\n".join(str(m.get("content", "")) for m in request.messages)
+                        # [system, *messages] is the wire: the stable world block heads
+                        # the system message, and the recorded inputs want the whole world.
+                        text = "\n".join(
+                            [request.system,
+                             *(str(m.get("content", "")) for m in request.messages)])
                         requests.append(_inputs_from_prompt(text))
                         return super().complete(request)
 
