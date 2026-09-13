@@ -8,17 +8,15 @@ the novelty reserve, charter disclosure, committee liability, typed windows and
 the Venice top-up. From the architecture pass: the deciding agent's propensity,
 registrable observations, spot trading, and the wake as an observatory.
 
-Not merged: full composition (registrable `accepts`/`emits`, retirement by vote,
-recursive children) is open as PR #44; connectors are specified and not built;
-the polish pass has not started. `docs/build-log.md` has the detail.
+Everything from both audit rounds is merged, including full composition (PR #44), registrable connectors (PR #45) and the polish pass (PR #46). `docs/build-log.md` has the detail.
 
 ## The gate
 
 ```
 uv run pytest
-1972 passed in 624.38s (0:10:24)
+2114 passed (about ten minutes with the machine idle; twenty under load)
 uv run pytest -m slow -o addopts="" tests/runtime/test_resume.py
-30 passed in 146.52s (0:02:26)
+30 passed (about two and a half minutes)
 ```
 
 ## Secrets and money
@@ -31,7 +29,7 @@ of OpenRouter credit, a Base reserve of about 4.97 USDC and 4.98 Venice credit.
 ## What remains, in order
 
 1. Testnet watch: a run long enough for a position to close and settle.
-2. Round three: a cold audit of this main from three seats.
+2. Round three: a cold audit of this main from six seats (`docs/audit-brief-v3.md`), launched with the experimenter.
 3. Edition 1 re-drafted with the launch roster.
 4. The first-move review: prompts, roster, charter edition, tick, pots.
 5. Droplet provisioning from the pinned commit, per `deploy/README.md`.
