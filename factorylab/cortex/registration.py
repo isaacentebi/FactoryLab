@@ -202,25 +202,63 @@ class ConnectorProposal:
     id: str
     description: str
     origin: str
+    preflight_path: str = "/"
+    pay: str | None = None
+    max_call_micro: int = 0
+
+
+@dataclass(frozen=True)
+class MarketProposal:
+    """A market names exactly one venue-listed perpetual or USDC spot pair."""
+
+    coin: str
+    market: str = "perp"
+
+
+def _market(item: dict[str, Any]) -> MarketProposal:
+    if set(item) not in ({"kind", "coin"}, {"kind", "pair"}):
+        raise ValueError("market requires exactly one coin or pair")
+    value = item.get("coin", item.get("pair"))
+    if (not isinstance(value, str) or not value or len(value) > 128
+            or any(c.isspace() or not c.isprintable() for c in value)):
+        raise ValueError("market must name a coin or pair")
+    if "pair" in item and (value.count("/") != 1 or not value.endswith("/USDC")):
+        raise ValueError("spot pair must be BASE/USDC")
+    if "coin" in item and "/" in value:
+        raise ValueError("perpetual coin cannot be a pair")
+    return MarketProposal(value, "spot" if "pair" in item else "perp")
 
 
 def _connector(item: dict[str, Any]) -> ConnectorProposal:
-    from factorylab.world.connector import origin_host
+    from factorylab.kernel.money import nonnegative_usd_micro
+    from factorylab.world.connector import origin_host, validate_path
 
-    if set(item) != {"kind", "id", "description", "origin"}:
-        raise ValueError("connector fields are kind, id, description, origin")
+    required = {"kind", "id", "description", "origin"}
+    optional = {"preflight_path", "pay", "max_call_usd"}
+    if not required <= set(item) or set(item) - required - optional:
+        raise ValueError("invalid connector fields")
     if not isinstance(item["id"], str) or not SLUG.fullmatch(item["id"]):
         raise ValueError("connector id must be a slug")
     if (not isinstance(item["description"], str) or not item["description"].strip()
             or len(item["description"]) > 500):
         raise ValueError("connector description must contain 1..500 characters")
     origin_host(item["origin"])
-    return ConnectorProposal(item["id"], item["description"], item["origin"])
+    path = item.get("preflight_path", "/")
+    validate_path(path)
+    pay, cap = item.get("pay"), item.get("max_call_usd")
+    if pay is not None and pay != "x402":
+        raise ValueError("connector pay must be x402")
+    if (pay is None and "max_call_usd" in item
+            or pay == "x402" and type(cap) not in (str, int)):
+        raise ValueError("x402 requires max_call_usd as exact USD text or integer")
+    micro = nonnegative_usd_micro(cap, rounding="exact") if pay else 0
+    return ConnectorProposal(item["id"], item["description"], item["origin"], path, pay, micro)
 
 
 Proposal = (
     ModelProposal | AssemblyProposal | RouterProposal | ToolProposal | RetireProposal
     | ObservationProposal | PredicateProposal | LearnerProposal | ConnectorProposal
+    | MarketProposal
 )
 
 
@@ -285,6 +323,8 @@ def parse_proposals(
                 accepted.append(RetireProposal(aid))
             elif kind == "connector":
                 accepted.append(_connector(item))
+            elif kind == "market":
+                accepted.append(_market(item))
             elif kind == "observation":
                 accepted.append(_observation(item, seed_observations, jail=tool_jail))
             elif kind == "predicate":

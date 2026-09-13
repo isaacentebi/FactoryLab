@@ -12,7 +12,7 @@ import ssl
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from hyperliquid.utils.constants import MAINNET_API_URL, TESTNET_API_URL
@@ -126,6 +126,7 @@ class ConnectorResponse:
 
     status: int
     body: bytes
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 # http.client buffers every response header before the body read begins, and its
@@ -187,7 +188,7 @@ class HTTPSTransport:
     """GET stays in the runtime process, with checked DNS, pinned IP and verified TLS."""
 
     def get(self, host: str, path: str, *, max_bytes: int, timeout_s: int,
-            denylist: tuple[str, ...]) -> ConnectorResponse:
+            denylist: tuple[str, ...], payment_signature: str | None = None) -> ConnectorResponse:
         """DNS, connect, headers and body share one deadline and one total byte budget."""
         deadline = time.monotonic() + timeout_s
         # libc DNS has no deadline API. Only resolution uses a disposable, bounded
@@ -225,6 +226,8 @@ class HTTPSTransport:
             connection.putrequest("GET", path, skip_accept_encoding=True)
             connection.putheader("Accept", "*/*")
             connection.putheader("User-Agent", "FactoryLab-Connector/1")
+            if payment_signature is not None:
+                connection.putheader("PAYMENT-SIGNATURE", payment_signature)
             connection.endheaders()
             response = connection.getresponse()
             try:
@@ -236,7 +239,9 @@ class HTTPSTransport:
                     if not chunk:
                         break
                     chunks.extend(chunk)
-                return ConnectorResponse(response.status, bytes(chunks))
+                return ConnectorResponse(response.status, bytes(chunks), {
+                    k: v for k, v in response.getheaders()
+                    if k.lower() in ("payment-required", "payment-response", "x-payment-response")})
             finally:
                 response.close()
         finally:
@@ -299,3 +304,13 @@ class ConnectorProxy:
             return {"error": "connector timeout", "status": "refused", "bytes": 0}
         except Exception:
             return {"error": "connector transport failed", "status": "refused", "bytes": 0}
+
+    def payment_transport(self, origin: str, path: str, signature: str | None = None):
+        """Only rail-generated payment headers cross the same pinned, bounded GET transport."""
+        host = self.validate(origin, path)
+        response = self.transport.get(
+            host, path, max_bytes=self.bounds.max_bytes, timeout_s=self.bounds.timeout_s,
+            denylist=self.denylist(), payment_signature=signature)
+        if len(response.body) > self.bounds.max_bytes:
+            raise ConnectorRefused("body exceeds max_bytes")
+        return response

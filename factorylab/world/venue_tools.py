@@ -11,6 +11,37 @@ from typing import Any
 from factorylab.world.exchange import Exchange, Order, OrderKind
 
 
+def seed_markets(exchange, spec) -> None:
+    """The venue keeps its listing universe while the manifest seeds trading permission.
+
+    The seed only ever adds, and only markets the venue lists: a manifest coin
+    or pair the adapter does not list is dropped here for the same reason a
+    ``market`` registration is refused, and an adapter never acquires a market
+    class it was not built with.
+    """
+    from factorylab.world.exchange import FakeExchange
+
+    target = getattr(exchange, "target", exchange)
+    coins, pairs = spec.coins, spec.spot_pairs
+    if isinstance(target, FakeExchange):
+        target.listed_coins = tuple(dict.fromkeys((*target.coins, *target.listed_coins)))
+        target.listed_spot_pairs = tuple(dict.fromkeys(
+            (*target.spot_pairs, *target.listed_spot_pairs)))
+        coins = tuple(c for c in coins if c in target.listed_coins)
+        pairs = tuple(p for p in pairs if p in target.listed_spot_pairs)
+        for coin in target.listed_coins:
+            target._mids.setdefault(coin, Decimal(100))
+            target._mid_history.setdefault(coin, [])
+        for pair in target.listed_spot_pairs:
+            base = pair.split("/")[0]
+            target._mids.setdefault(base, Decimal(100))
+            target._mids.setdefault(pair, target._mids[base])
+            target._mid_history.setdefault(base, [])
+            target._mid_history.setdefault(pair, [])
+    exchange.coins = tuple(dict.fromkeys((*exchange.coins, *coins)))
+    exchange.spot_pairs = tuple(dict.fromkeys((*exchange.spot_pairs, *pairs)))
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     """A tool's identity and price are fixed; schemas use JSON Schema keywords."""
@@ -84,6 +115,9 @@ def _json_value(value: Any) -> Any:
 class VenueTools:
     """Only schema-valid requests reach the exchange; every attempt has an audit entry."""
 
+    PUBLIC_READS = frozenset({"venue.instruments", "venue.mids", "venue.funding",
+                              "venue.candles", "venue.order_book", "venue.funding_history"})
+
     def __init__(self, exchange: Exchange, *, coins: tuple[str, ...], max_leverage: int = 3,
                  spot_pairs: tuple[str, ...] = ()):
         if type(max_leverage) is not int or max_leverage < 1:
@@ -91,6 +125,16 @@ class VenueTools:
         if not coins or any(not isinstance(coin, str) or not coin for coin in coins):
             raise ValueError("coins must contain nonempty coin names")
         self.exchange = exchange
+        self.coins, self.spot_pairs = tuple(coins), tuple(spot_pairs)
+        public = list((*coins, *spot_pairs))
+        for name in ("coins", "spot_pairs", "listed_coins", "listed_spot_pairs", "_listed_coins"):
+            values = getattr(exchange, name, ())
+            if isinstance(values, (list, tuple)):
+                public.extend(values)
+        spot_names = getattr(exchange, "_spot_names", {})
+        if isinstance(spot_names, dict):
+            public.extend(spot_names)
+        self.public_coins = tuple(dict.fromkeys(public))
         self.log: list[tuple[str, dict, bool]] = []
         coin = {"type": "string", "enum": list(dict.fromkeys((*coins, *spot_pairs)))}
         positive = {
@@ -191,9 +235,30 @@ class VenueTools:
             )
             for name, description, properties, required in definitions
         }
+        for name in ("instruments", "mids", "funding"):
+            self._specs[f"venue.{name}"] = ToolSpec(
+                f"venue.{name}", f"Public venue {name} for all listed markets.",
+                {"type": "object", "properties": {}, "required": [],
+                 "additionalProperties": False}, 0)
+        # Read identities are checked against the venue at dispatch, not the seed.
+        for name in ("candles", "order_book", "funding_history"):
+            self._specs[f"venue.{name}"].args_schema["properties"]["coin"] = {
+                "type": "string", "enum": list(self.public_coins)}
+
+    def admit_market(self, coin: str, market: str) -> None:
+        """A validated registration expands only the world's trading schemas."""
+        attr = "spot_pairs" if market == "spot" else "coins"
+        setattr(self, attr, tuple(dict.fromkeys((*getattr(self, attr), coin))))
+        self.public_coins = tuple(dict.fromkeys((*self.public_coins, coin)))
+        for name in ("candles", "order_book", "funding_history"):
+            self._specs[f"venue.{name}"].args_schema["properties"]["coin"]["enum"] = list(
+                self.public_coins)
+        for name in ("place_market", "place_limit", "close", "cancel", "set_leverage"):
+            self._specs[f"venue.{name}"].args_schema["properties"]["coin"]["enum"] = list(
+                dict.fromkeys((*self.coins, *self.spot_pairs)))
 
     def contracts(self) -> list[ToolSpec]:
-        """Return all ten contracts; editing returned schemas cannot alter validation."""
+        """Return detached contracts; editing their schemas cannot alter validation."""
         return deepcopy(list(self._specs.values()))
 
     def call(self, tool_id: str, args: dict) -> dict:
@@ -229,6 +294,21 @@ class VenueTools:
 
     def _dispatch(self, tool_id: str, args: dict) -> Any:
         ex = self.exchange
+        if tool_id == "venue.instruments":
+            return ex.instruments()
+        if tool_id == "venue.mids":
+            return {"mids": ex.mids()}
+        if tool_id == "venue.funding":
+            return {"funding": ex.funding()}
+        if tool_id in ("venue.candles", "venue.order_book", "venue.funding_history"):
+            if (args["coin"] not in self.public_coins
+                    or tool_id == "venue.funding_history" and "/" in args["coin"]):
+                return {"error": "coin is not listed for this public read"}
+        if tool_id in ("venue.place_market", "venue.place_limit", "venue.close",
+                       "venue.set_leverage"):
+            allowed = self.spot_pairs if args.get("market", "perp") == "spot" else self.coins
+            if args["coin"] not in allowed:
+                return {"error": "market is not registered for trading"}
         if tool_id == "venue.candles":
             return {"candles": ex.candles(args["coin"], args["interval"], args["n"])}
         if tool_id == "venue.order_book":

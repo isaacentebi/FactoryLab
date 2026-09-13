@@ -46,7 +46,10 @@ class SchematicsMixin:
         },
         "retire": {"kind": "retire", "assembly_id": "an id from world.catalogue"},
         "connector": {"kind": "connector", "id": "public-source",
-                      "description": "Public information", "origin": "https://example.org"},
+                      "description": "Public information", "origin": "https://example.org",
+                      "preflight_path": "/data", "pay": "x402", "max_call_usd": "0.003"},
+        "market": {"kind": "market", "coin": "listed perp coin; omit when using pair",
+                   "pair": "listed BASE/USDC pair; omit when using coin"},
         "tool": {
             "kind": "tool",
             "id": "slug",
@@ -151,7 +154,9 @@ class SchematicsMixin:
         "tick_interval is an optional duration within world.clock bounds. A prediction names a "
         "card_id, direction (increase or decrease), and a positive window count after activation. "
         "Unmeasurable windows, duplicate role/observation bindings and unchanged amendments "
-        "are refused before a vote.",
+        "are refused before a vote. A connector may omit preflight_path (default /), pay, "
+        "and max_call_usd; pay=x402 requires an exact max_call_usd cap. A market proposal "
+        "names exactly one coin or pair from venue.instruments.",
         "tool_calls": (
             'a list of {"tool": id, "args": {...}} bounded by mechanics.tools.max_tool_calls; '
             'results come back in one continuation per request'
@@ -184,6 +189,7 @@ class SchematicsMixin:
     def _world_block(self) -> dict[str, Any]:
         """Facts about the world any assembly may see. No rules, no goals, no private state."""
         self._ensure_connector_tool()
+        from factorylab.runtime.notes import counts
         try:
             acct = self.exchange.account()
             account = {
@@ -212,6 +218,13 @@ class SchematicsMixin:
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
             "venue": self.exchange.instruments(),
+            "trading_markets": {"perp": list(self.venue_tools.coins),
+                                "spot": list(self.venue_tools.spot_pairs)},
+            "notes": {**counts(self.notes), "max_keys": self.m.notes.max_keys,
+                      "max_bytes": self.m.notes.max_bytes,
+                      "byte_window_micro": self.m.notes.byte_window_micro,
+                      "pricing": "UTF-8 key and text bytes; storage per window, reads per byte. "
+                      "Unpaid storage rent is due before a read or overwrite; text is retained."},
             "tools": list(self.tool_specs.values()),
             "connectors": {"registered": self._connector_catalogue(),
                            "max_bytes": self.m.connectors.max_bytes,
@@ -221,8 +234,11 @@ class SchematicsMixin:
                            "window_ns": self.m.novelty.window_ns,
                            "origin_denylist": list(self.m.connectors.origin_denylist),
                            "method": "GET",
+                           "optional_fields": ["pay", "max_call_usd"],
+                           "payment": "pay=x402 uses max_call_usd as the seller charge cap; "
+                           "the flat call price is additional. Omit pay for free sources.",
                            "result": "UTF-8 text in seen_tool_results[].result.body",
-                           "tool_rounds": 2, "continuation_tool_kinds": ["population"],
+                           "tool_rounds": 2, "continuation_tool_kinds": ["population", "note"],
                            "encoding": "UTF-8 with replacement", "redirects": "refused",
                            "oversize": "refused", "credentials": False},
             "population_tools": {
@@ -381,8 +397,8 @@ class SchematicsMixin:
                 "type": "object",
                 "properties": {"kind": {"enum": ["model", "assembly", "router", "tool",
                                                    "observation", "predicate", "learner",
-                                                   "amendment",
-                                                   "retire", "connector"]}},
+                                                   "amendment", "retire", "connector",
+                                                   "market"]}},
                 "required": ["kind"],
             },
         }
@@ -501,6 +517,12 @@ class SchematicsMixin:
                 "number for the last closed window, and its declared range is the scale a "
                 "card's violation is divided by. A card naming an unregistered observation "
                 "is refused before the vote"
+                ". Window facts include mids (micro-USD), funding (dimensionless), "
+                "wallet_balance_micro and tick_timestamps_ns. Coin series carry nanosecond "
+                "timestamps. Paid venue reads also contribute books (price in micro-USD, "
+                "size in base units) and funding history for listed markets; each series "
+                "retains at most 1024 samples. venue.instruments lists public markets; "
+                "a market proposal adds trading permission for a listed coin or pair"
             ),
             "revision": (
                 "a producer return counts as a revision only when a registration it carried "

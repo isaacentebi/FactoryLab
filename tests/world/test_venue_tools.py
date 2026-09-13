@@ -49,6 +49,9 @@ def test_contracts_are_complete_zero_priced_and_schema_copies(venue):
             "cancel",
             "close",
             "set_leverage",
+            "instruments",
+            "mids",
+            "funding",
         )
     }
     for spec in specs:

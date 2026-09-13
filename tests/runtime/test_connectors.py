@@ -273,6 +273,7 @@ def test_observatory_contains_connector_versions_and_daily_counts(monkeypatch):
     assert block["proposal_shapes"]["connector"] == {
         "kind": "connector", "id": "public-source", "description": "Public information",
         "origin": "https://example.org",
+        "preflight_path": "/data", "pay": "x402", "max_call_usd": "0.003",
         "predicted_effect": {"card_id": "a current card id", "direction": "decrease", "window": 1}}
 
 

@@ -18,6 +18,7 @@ from factorylab.cortex.registration import (
     AssemblyProposal,
     ConnectorProposal,
     LearnerProposal,
+    MarketProposal,
     ModelProposal,
     ObservationProposal,
     PredicateProposal,
@@ -324,6 +325,9 @@ class GovernanceMixin:
     def _register(self, handle: str, prop: Any, *,
                   predicted_effect: PredictedEffect | None = None) -> None:
         amount = self.ev.trial_amount_micro
+        if isinstance(prop, MarketProposal):
+            self._register_market(handle, prop)
+            return
         if isinstance(prop, RetireProposal):
             self._propose_retirement(handle, prop, predicted_effect=predicted_effect)
             return
@@ -492,14 +496,16 @@ class GovernanceMixin:
         from factorylab.charter.committee import Committee, draw
 
         predicted_effect = self._policy_prediction(predicted_effect)
+        if prop.pay == "x402" and prop.max_call_micro > self.m.treasury.max_request_micro:
+            raise ValueError("connector cap exceeds treasury.max_request_micro")
         owner = self.handle_to_assembly.get(handle)
         if owner is None:
             try:
                 owner = self.queue.get(handle).propensity.chosen
             except KeyError:
                 raise ValueError("connector proposal needs a caller decision") from None
-        result, _ = self._fetch_connector(owner, handle, {"id": prop.id, "path": "/"},
-                                          origin=prop.origin)
+        result, _ = self._fetch_connector(
+            owner, handle, {"id": prop.id, "path": prop.preflight_path}, origin=prop.origin)
         # Preflight establishes bounds, not information for the proposer.
         if "error" in result:
             raise ValueError(f"connector preflight: {result['error']}")
@@ -520,7 +526,9 @@ class GovernanceMixin:
             raise ValueError("connector sortition vote did not reach a majority")
         contract = Contract(
             id=f"connector:{prop.id}", version=version, kind="connector",
-            description=prop.description, input_schema={"origin": prop.origin},
+            description=prop.description, input_schema={
+                "origin": prop.origin, "preflight_path": prop.preflight_path,
+                "pay": prop.pay, "max_call_micro": prop.max_call_micro},
             output_schema={"type": "string"},
             price=PriceSpec({"call": self.m.connectors.call_price_micro}),
             permissions=frozenset({"connector.fetch"}),
@@ -536,11 +544,47 @@ class GovernanceMixin:
         self.ledger.append({"kind": "connector.registered", "id": prop.id,
                             "version": version, "description": prop.description,
                             "origin": prop.origin, "handle": handle, "vote_id": vote_id,
+                            "preflight_path": prop.preflight_path, "pay": prop.pay,
+                            "max_call_micro": prop.max_call_micro,
                             "predicted_effect": asdict(predicted_effect),
                             "ts": self.clock.now_ns})
         self._activate_policy_ballots(vote_id)
         self._emit(EventKind.REGISTERED, {"kind": "connector", "id": prop.id,
                                           "version": version, "origin": prop.origin})
+
+    def _register_market(self, handle: str, prop: MarketProposal) -> None:
+        """One novelty trial admits a listed market, with durable identity before effects."""
+        listed = self.exchange.instruments()
+        if prop.coin not in {row["coin"] for row in listed.get(prop.market, [])}:
+            raise ValueError("market is not listed by the venue")
+        allowed = self.venue_tools.spot_pairs if prop.market == "spot" else self.venue_tools.coins
+        if prop.coin in allowed:
+            raise ValueError("market is already registered for trading")
+        contract = Contract(
+            id=f"market:{prop.market}:{prop.coin}", version=1, kind="exchange",
+            description=f"Trade {prop.market} {prop.coin}",
+            input_schema={"coin": prop.coin, "market": prop.market},
+            output_schema={}, price=PriceSpec({}), permissions=frozenset(),
+            resource_bounds=ResourceBounds())
+        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        self.ledger.append({"kind": "market.registered", "coin": prop.coin,
+                            "market": prop.market, "handle": handle, "ts": self.clock.now_ns})
+        self._admit_market(prop.coin, prop.market)
+        self._emit(EventKind.REGISTERED, {"kind": "market", "coin": prop.coin,
+                                         "market": prop.market, "version": 1})
+
+    def _admit_market(self, coin: str, market: str) -> None:
+        """Rebuilding trading permission requires no new external write or payment."""
+        self.venue_tools.admit_market(coin, market)
+        attr = "spot_pairs" if market == "spot" else "coins"
+        setattr(self.exchange, attr, tuple(dict.fromkeys((*getattr(self.exchange, attr), coin))))
+        self._refresh_venue_schemas()
+
+    def _refresh_venue_schemas(self) -> None:
+        """Current market permissions preserve existing tool examples and prices."""
+        for spec in self.venue_tools.contracts():
+            if spec.id in self.tool_specs:
+                self.tool_specs[spec.id]["args_schema"].update(_to_plain(spec.args_schema))
 
     def _propose_amendment(self, handle: str, item: dict[str, Any]) -> None:
         from factorylab.charter.amendment import (
