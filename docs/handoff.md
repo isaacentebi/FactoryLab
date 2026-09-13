@@ -21,6 +21,8 @@ Only the experimenter runs the gate; agents run targeted files. Pull requests #5
 
 ## What remains, in order
 
+`docs/launch-decisions.md` explains every remaining decision in plain language with a recommendation, the cost of each tick interval, and the launch steps with their commands. Read it first.
+
 1. Two decisions at the experimenter's keyboard: whether to reseat or provider-pin eval-b (`qwen/qwen3.8-flash`, six OpenRouter errors in the first re-check, clean in the second), and whether to try one Muse Spark evaluator seat now that a call costs a third of a cent. A clean-machine testnet run of an hour would confirm the tick holds at 120 s and give T47's first priced window.
 2. Edition 1 re-drafted with the launch roster at the experimenter's keyboard, taking the cadence and those decisions; `worlds/edition1-example.toml` still carries the old 60 s tick.
 3. The first-move review: prompts, roster, charter edition, tick, pots.
