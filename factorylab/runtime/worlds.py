@@ -239,6 +239,7 @@ class WorldManifest:
 
     charter: Charter = field(default_factory=seed_charter)
     charter_prices: tuple[tuple[str, float], ...] = ()
+    charter_explicit: bool = False
 
     # ---- derived
 
@@ -273,7 +274,10 @@ class WorldManifest:
         return out
 
     def canonical_json(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
+        payload = asdict(self)
+        # Admission provenance does not change the world defined by identical cards.
+        payload.pop("charter_explicit")
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
         """sha256 of the canonical JSON. Two manifests with equal hashes are the same world seed."""
@@ -282,6 +286,11 @@ class WorldManifest:
     # ---- validation
 
     def validate(self) -> None:
+        if (self.exchange.kind == "hyperliquid" and self.exchange.mainnet
+                and self.charter_explicit is not True):
+            # Real money launches on the population's charter, never the seed cards.
+            # Testnet rehearsals may run on the seed charter before edition 1 is drafted.
+            raise ValueError("live_exchange_requires_explicit_charter: mainnet needs [charter]")
         if self.initial_balance_micro < 0:
             raise ValueError("initial balance must be non-negative")
         if type(self.treasury.insolvency_events) is not int or self.treasury.insolvency_events < 1:
@@ -595,6 +604,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         ),
         charter=charter,
         charter_prices=charter_prices,
+        charter_explicit="charter" in d,
         evaluation=evaluation,
         connectors=connectors,
         tools=ToolsSpec(

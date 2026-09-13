@@ -30,8 +30,9 @@ class CharterBook:
     boundary scheduling; each ``activate_due`` call is one boundary notification.
     """
 
-    def __init__(self, ledger: Ledger, seed_charter: Charter) -> None:
+    def __init__(self, ledger: Ledger, seed_charter: Charter, observations=None) -> None:
         self.__ledger = ledger
+        self.__observations = observations
         # Detach even a seed constructed with lists from caller-owned containers.
         self.__editions = [
             Charter(seed_charter.edition, tuple(seed_charter.norms), tuple(seed_charter.cards))
@@ -42,6 +43,16 @@ class CharterBook:
         self.__activated: set[str] = set()
         self.__activations: dict[int, Amendment] = {}
 
+    def bind_observations(self, observations) -> None:
+        """Resolve the runtime vocabulary afresh, including after checkpoint restoration."""
+        self.__observations = observations
+
+    def _observation_book(self, observations=None):
+        from factorylab.runtime.observations import seed_book
+
+        book = observations if observations is not None else self.__observations
+        return (book() if callable(book) else book) or seed_book()
+
     def current(self) -> Charter:
         """Return the most recently activated immutable edition."""
         return self.__editions[-1]
@@ -50,13 +61,19 @@ class CharterBook:
         """Return every edition in activation order without exposing mutable storage."""
         return tuple(self.__editions)
 
-    def propose(self, amendment: Amendment) -> None:
+    def propose(self, amendment: Amendment, observations=None) -> None:
         """Freeze a unique candidate valid against the current edition's cards and norms."""
-        self.validate(amendment)
-        self.__ledger.append({"kind": "charter.propose", **asdict(amendment)})
+        self.validate(amendment, observations)
+        book = self._observation_book(observations)
+        cards = {c.id: c for c in (*self.current().cards, *amendment.replace, *amendment.add)}
+        bindings = {card.id: {"id": observation.id, "version": observation.version}
+                    for card in cards.values()
+                    if (observation := book.get(card.observation)) is not None}
+        self.__ledger.append({"kind": "charter.propose", **asdict(amendment),
+                              "observation_bindings": bindings})
         self.__proposals[amendment.id] = amendment
 
-    def validate(self, amendment: Amendment) -> None:
+    def validate(self, amendment: Amendment, observations=None) -> None:
         """Reject unchanged or unmeasurable candidate editions before any vote or reservation."""
         if not isinstance(amendment, Amendment):
             raise ValueError("proposal must be an Amendment")
@@ -69,7 +86,7 @@ class CharterBook:
         for card in (*amendment.add, *amendment.replace):
             if card.norm not in charter.norms:
                 raise ValueError("card references an unknown norm; norms are read-only")
-            preflight_card(card)
+            preflight_card(card, self._observation_book(observations))
         for card_id in (*amendment.remove, *(card.id for card in amendment.replace)):
             if card_id not in ids:
                 raise ValueError(f"unknown card id: {card_id}; norms are read-only")
