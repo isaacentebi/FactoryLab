@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 # The per-decision attribution the runtime keeps on the same window object
 # is not a public window fact and never reaches a registered observation.
 PRIVATE_WINDOW_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_shares",
-                         "closed_cards", "closed_prices")
+                         "closed_cards", "closed_prices", "series_discarded")
 MAX_WORLD_SAMPLES = 1024
 # Fields holding a public quantity filed under a private identity: a decision
 # handle, an evaluator's assembly id. The quantity is disclosed, the identity is
@@ -72,6 +72,21 @@ def _mean(values: list[float] | list[int]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
+def _cost_per_return(w: MeasureWindow) -> float | None:
+    """Mean cost of the window's well-formed producer returns, rent included.
+
+    Retained-storage rent is cost the window spent without a return to carry
+    it, so it is added to what those returns cost and never counted as one of
+    them: a window paying rent measures a higher cost per return, not a lower
+    one. Rent alone is therefore unmeasurable — a window with no well-formed
+    producer return has no per-return cost, however much storage it paid for.
+    """
+    costs = w.costs
+    if not costs:
+        return None
+    return (sum(costs) + getattr(w, "storage_cost_micro", 0)) / len(costs)
+
+
 def _disagreement(w: MeasureWindow) -> float | None:
     groups = [
         pstdev([fmean(scores) for scores in judges.values()])
@@ -92,9 +107,9 @@ def _verdict_std(w: MeasureWindow) -> float | None:
 CATALOGUE: tuple[Observation, ...] = (
     Observation(
         "cost_per_return",
-        "Mean cost of well-formed producer returns.",
+        "Mean cost of well-formed producer returns, including retained-storage rent.",
         "micro-USD per return",
-        lambda w: _mean(w.costs),
+        _cost_per_return,
         (0.0, 1_000_000.0),
     ),
     Observation(
@@ -322,17 +337,58 @@ def window_facts(window: Any) -> dict:
     return facts
 
 
+# A retained series that no longer reaches back to a sealed mark supplies no evidence.
+_DISCARDED = object()
+
+
+def trim_series(window: Any, key: str, *, per_coin: bool = False) -> None:
+    """Bound one public series in place, counting every sample it discards.
+
+    A bounded series keeps only its latest ``MAX_WORLD_SAMPLES`` samples, so the
+    position of a retained sample within the window's whole history is its index
+    plus the number already dropped from in front of it. That count is what a
+    sealed cursor is compared against; it only ever grows, for the life of the
+    window. Per-coin series are counted under the coin they are published by.
+    """
+    series = getattr(window, key)
+    excess = len(series) - MAX_WORLD_SAMPLES
+    if excess <= 0:
+        return
+    discarded = window.series_discarded
+    for row in series[:excess]:
+        path = f"{key}/{row['coin']}" if per_coin else key
+        discarded[path] = discarded.get(path, 0) + 1
+    del series[:excess]
+
+
+def series_offsets(window: Any) -> dict:
+    """Shape the retained-prefix offsets like the facts the series appear in."""
+    offsets: dict[str, Any] = {}
+    for path, count in getattr(window, "series_discarded", {}).items():
+        key, _, coin = path.partition("/")
+        if coin:
+            offsets.setdefault(key, {})[coin] = count
+        else:
+            offsets[key] = count
+    return offsets
+
+
 def window_cursor(window: Any) -> dict:
-    """Mark one position in the public window: each counter's value, each series' length.
+    """Mark one position in the public window: each counter's value, each series' position.
 
     Sealed when a forecast is made, so the claim it opened can later be resolved
     over what the window accumulated *after* it and never over what was already
-    there. Carries no window content, only how much of it had happened.
+    there. Carries no window content, only how much of it had happened. A series
+    position counts every sample the window ever took, including the ones its
+    bound has since discarded, so the mark does not slide when the series rolls.
+    A path whose samples were all discarded before the mark is marked too, so an
+    unmarked path is unambiguously one that stood at zero: anything the window
+    later discards of it was discarded after the claim was sealed.
     """
-    return _cursor(window_facts(window))
+    return _cursor(window_facts(window), series_offsets(window))
 
 
-def window_facts_since(window: Any, cursor: Mapping | None) -> dict:
+def window_facts_since(window: Any, cursor: Mapping | None) -> dict | None:
     """Return the public facts the window accumulated strictly after a sealed cursor.
 
     Counters arrive as their increase since the mark and series as the samples
@@ -340,38 +396,80 @@ def window_facts_since(window: Any, cursor: Mapping | None) -> dict:
     sealed cannot resolve anything sealed against it. ``index`` and
     ``equity_start_micro`` describe the window itself and are fixed when it
     opens, so they pass through unchanged. A cursor from an earlier window (or
-    no cursor at all) yields the whole current window, which opened after the
-    mark and is therefore already entirely after it.
+    no cursor at all) marks nothing in this one: the window opened after the
+    mark, so every sample it holds is already after it — and so is every sample
+    it has since discarded, which is read exactly like a path that stood at zero.
+
+    Returns ``None`` when a bounded series has discarded a sample the cursor
+    still needs: the interval the claim was sealed over is no longer evidence,
+    and absent evidence is never a resolution.
     """
     facts = window_facts(window)
     if not isinstance(cursor, Mapping) or cursor.get("index") != facts.get("index"):
-        return facts
-    return {
-        key: value if key in WINDOW_IDENTITY_FACTS else _since(value, cursor.get(key))
-        for key, value in facts.items()
-    }
+        cursor = {}  # A window opened after the mark stands wholly after it.
+    offsets = series_offsets(window)
+    result = {}
+    for key, value in facts.items():
+        if key in WINDOW_IDENTITY_FACTS:
+            result[key] = value
+            continue
+        since = _since(value, cursor.get(key), offsets.get(key))
+        if since is _DISCARDED:
+            return None
+        result[key] = since
+    return result
 
 
-def _cursor(value: Any) -> Any:
-    """A counter marks its value, a series its length, and anything else nothing."""
+def _cursor(value: Any, offset: Any = None) -> Any:
+    """A counter marks its value, a series its position, and anything else nothing."""
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, int | float):
         return value
     if isinstance(value, list):
-        return len(value)
+        return len(value) + (offset if type(offset) is int else 0)
     if isinstance(value, dict):
-        return {key: _cursor(item) for key, item in value.items()}
+        offsets = offset if isinstance(offset, Mapping) else {}
+        marks = {key: _cursor(item, offsets.get(key)) for key, item in value.items()}
+        for key, discarded in offsets.items():
+            # A path whose samples have all been discarded already is absent from
+            # the facts but is still a position in the window. Marking it keeps
+            # an unmarked path unambiguous: it stood at zero and has lost nothing.
+            if key not in marks and type(discarded) is int:
+                marks[key] = discarded
+        return marks
     return None
 
 
-def _since(value: Any, mark: Any) -> Any:
-    """Subtract a counter's mark, drop a series' prefix, and pass anything else through."""
+def _since(value: Any, mark: Any, offset: Any = None) -> Any:
+    """Subtract a counter's mark, drop a series' retained prefix, and pass the rest through."""
     if isinstance(value, list):
-        return value[mark:] if type(mark) is int else value
+        discarded = offset if type(offset) is int else 0
+        if type(mark) is not int:
+            # An unmarked path stood at position zero when the cursor was sealed,
+            # so every sample this one has discarded was discarded after the mark.
+            return _DISCARDED if discarded > 0 else value
+        start = mark - discarded
+        return value[start:] if start >= 0 else _DISCARDED
     if isinstance(value, dict):
         marks = mark if isinstance(mark, Mapping) else {}
-        return {key: _since(item, marks.get(key)) for key, item in value.items()}
+        offsets = offset if isinstance(offset, Mapping) else {}
+        result = {}
+        for key, item in value.items():
+            since = _since(item, marks.get(key), offsets.get(key))
+            if since is _DISCARDED:
+                return _DISCARDED
+            result[key] = since
+        for key, discarded in offsets.items():
+            # A series the window no longer publishes at all — one coin's samples
+            # evicted by another's, including a coin first seen after the mark —
+            # hides its discarded tail behind an absence.
+            seen = marks.get(key)
+            if key not in value and type(discarded) is int and discarded > (
+                seen if type(seen) is int else 0
+            ):
+                return _DISCARDED
+        return result
     if isinstance(value, bool) or value is None:
         return value
     if isinstance(value, int | float) and type(mark) in (int, float):
@@ -391,7 +489,14 @@ def window_fact_names() -> list[str]:
 
 
 def record_venue_facts(window, tool: str, args: dict, result: dict, now_ns: int) -> None:
-    """Paid public reads add bounded numeric facts without account or author identities."""
+    """Paid public reads add bounded numeric facts without account or author identities.
+
+    A venue-wide read observes every instrument it names, so the whole batch is
+    appended and ``trim_series`` applies the bound. Slicing the batch first would
+    drop samples the window took without counting them, and an uncounted
+    eviction is exactly what lets a sealed cursor read a moved position as a
+    still one.
+    """
     from decimal import Decimal
 
     from factorylab.kernel.money import usd_to_micro
@@ -409,23 +514,23 @@ def record_venue_facts(window, tool: str, args: dict, result: dict, now_ns: int)
                        for price, size in row[side]):
                     return
             window.books.append(row)
-            del window.books[:-MAX_WORLD_SAMPLES]
+            trim_series(window, "books", per_coin=True)
         elif tool in ("venue.funding", "venue.funding_history"):
             key = "funding" if tool == "venue.funding" else "funding_history"
             rows = []
-            for item in result[key][-MAX_WORLD_SAMPLES:]:
+            for item in result[key]:
                 rate = float(item["rate"])
                 if math.isfinite(rate):
                     rows.append({"coin": item["coin"], "ts_ns": int(item["ts_ns"]),
                                  "value": rate})
             window.funding.extend(rows)
-            del window.funding[:-MAX_WORLD_SAMPLES]
+            trim_series(window, "funding", per_coin=True)
         elif tool == "venue.mids":
             rows = [{"coin": coin, "ts_ns": now_ns,
                      "value": usd_to_micro(Decimal(str(value)), rounding="nearest")}
                     for coin, value in result["mids"].items()]
-            window.mids.extend(rows[-MAX_WORLD_SAMPLES:])
-            del window.mids[:-MAX_WORLD_SAMPLES]
+            window.mids.extend(rows)
+            trim_series(window, "mids", per_coin=True)
     except (KeyError, TypeError, ValueError, ArithmeticError, OverflowError):
         return  # Malformed or unavailable venue data supplies no measurement.
 

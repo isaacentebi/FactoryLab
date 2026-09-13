@@ -8,14 +8,14 @@ from fractions import Fraction
 
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.controller import CardRegion, relative_region, violation
-from factorylab.charter.measurement import _groups, measure_cards
+from factorylab.charter.measurement import _groups, _horizon, measure_cards
 from factorylab.cortex.registration import measured_role
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.money import usd_to_micro
 from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.cards import parses, region_for
 from factorylab.runtime.immune import close_window
-from factorylab.runtime.observations import MAX_WORLD_SAMPLES, ObservationBook, normalise
+from factorylab.runtime.observations import ObservationBook, normalise, trim_series
 
 
 @dataclass
@@ -65,6 +65,14 @@ class MeasureWindow:
     wallet_balance_micro: list[list[int]] = field(default_factory=list)
     tick_timestamps_ns: list[int] = field(default_factory=list)
     books: list[dict] = field(default_factory=list)
+    # How many samples each bounded public series has already discarded, by the
+    # path it is published at. Private attribution, never a window observation:
+    # it is what turns a retained index back into a position in the whole window.
+    series_discarded: dict[str, int] = field(default_factory=dict)
+    # Retained-storage rent paid in this window, in micro-USD. Cost the window
+    # spent without a return to carry it, so it enters the cost mass of a
+    # per-return observation and never that observation's denominator.
+    storage_cost_micro: int = 0
 
 
 class PricingMixin:
@@ -112,6 +120,48 @@ class PricingMixin:
             "role": role, "cost": 0, "ok": 0, "invocations": 0, "tool_calls": 0,
             "notional_micro": 0,
         })
+
+    def _decision_role(self, handle: str) -> str:
+        """The measurement scope a decision's return was, or would be, priced in."""
+        emitted = self.return_kinds.get(handle)
+        if emitted is None:
+            action_id = self.handle_to_assembly.get(handle)
+            if action_id in self.assemblies:
+                emitted = self.assemblies[action_id].spec.emits
+        return measured_role(emitted) if emitted else "producer"
+
+    def _charge_storage(self, handle: str, cost_micro: int) -> None:
+        """Bind a metered retained-storage charge to a decision that can be scored for it.
+
+        Retained public storage is an explicit liability of the decision that
+        holds it. Every charge enters that decision's cost contribution for the
+        window it landed in and the measured rows the charter's cost cards and
+        their penalty shares are read from, so both see it where it was spent. A
+        producer's charge enters the window's own cost statistics too, as cost
+        the window spent and never as a return it received, so a card measured
+        over whole closed windows moves with the charge its shares already blame
+        the writer for while its per-return denominator stays its returns. While
+        the decision's own consequence outcome is still open the charge is also
+        carried into that outcome's cost, so a return cannot pay off on a margin
+        its storage has already consumed. An outcome is fixed once and never
+        reopened, so afterwards the cost contribution is the whole of the
+        liability and it stays with the note's current owner decision.
+        """
+        if cost_micro <= 0:
+            return
+        sample = self._contribution(handle, self._decision_role(handle))
+        sample["cost"] += cost_micro
+        self.card_samples.stored(handle=handle, assembly=self.handle_to_assembly.get(handle),
+                                 role=sample["role"], window=self.window.index, cost=cost_micro)
+        if sample["role"] == "producer":
+            # ``costs`` holds one entry per well-formed producer return, and a
+            # charge is not a return, so it joins the window's separate storage
+            # total instead of opening an entry of its own there.
+            self.window.storage_cost_micro += cost_micro
+        carried = self.consequences.carry(handle, cost_micro)
+        self.ledger.append({"kind": "price.contribution", "handle": handle,
+                            "window": self.window.index, "role": sample["role"],
+                            "cost": cost_micro, "storage": True, "carried": carried})
 
     def _invoke(self, action_id, req, role, *, child=False):
         """Prices retain the completed decision's own cost, schema result and tool attempts."""
@@ -221,12 +271,12 @@ class PricingMixin:
                      if key == "mids" else float(ev.payload["rate"]))
             series = getattr(self.window, key)
             series.append({"coin": str(ev.payload["coin"]), "ts_ns": ev.ts_ns, "value": value})
-            del series[:-MAX_WORLD_SAMPLES]
+            trim_series(self.window, key, per_coin=True)
         elif ev.kind is EventKind.TICK:
             self.window.tick_timestamps_ns.append(ev.ts_ns)
-            del self.window.tick_timestamps_ns[:-MAX_WORLD_SAMPLES]
+            trim_series(self.window, "tick_timestamps_ns")
             self.window.wallet_balance_micro.append([ev.ts_ns, self.wallet.balance])
-            del self.window.wallet_balance_micro[:-MAX_WORLD_SAMPLES]
+            trim_series(self.window, "wallet_balance_micro")
         elif ev.kind is EventKind.REGISTERED and ev.payload.get("kind") == "observation":
             entry = self.registered_observations.get(ev.payload["id"])
             if (entry is not None and entry["version"] == ev.payload["version"]
@@ -490,9 +540,11 @@ class PricingMixin:
             rows = [r for r in rows if first <= r["window"] <= last]
             if card.window.per is None:
                 rows = [r for r in rows if r["role"] == "producer"]
-                if not rows:
+                if all(r.get("storage") for r in rows):
                     # Global window sufficient statistics also support native callers
                     # that supplied contribution records without invocation samples.
+                    # A retained-storage charge is not one of those responses, so a
+                    # span holding rent alone still reads the window's own records.
                     rows = [dict(d, handle=h) for index, w in self.price_windows.items()
                             if first <= index <= last for h, d in w.decisions.items()
                             if d["role"] == "producer"]
@@ -501,12 +553,21 @@ class PricingMixin:
             if supported is not None and scope not in supported:
                 continue
             if card.window.kind == "returns":
-                group = group[-card.window.n:]
+                # The same horizon the card measured: a retained-storage charge
+                # is the holder's cost inside it, never one of its n responses.
+                group = _horizon(card.observation, group, card.window.n, partial=True)
             successful = [r for r in group if r["ok"]]
+            # The scope's mean cost, measured the way the card measured it: a
+            # retained-storage charge adds its cost to the responses it is
+            # divided over and is never one of them, so a scope with no
+            # response has no measured cost to own and is not attributed.
+            responses = sum(1 for r in successful if not r.get("storage"))
+            if not responses:
+                continue
             for row in successful:
                 handle = row["handle"]
                 shares[handle] = shares.get(handle, Fraction()) + Fraction(
-                    row["cost"], len(successful))
+                    row["cost"], responses)
         total = sum(shares.values())
         return {h: float(amount / total) for h, amount in shares.items()} if total else {}
 
@@ -529,7 +590,12 @@ class PricingMixin:
             key = "tool_calls" if observation == "tool_calls" else "notional_micro"
             numerator, denominator = own.get(key, 0), getattr(window, key)
         else:
-            n = sum(role == "all" or d["role"] == role for d in samples.values())
+            # A decision whose only entry in this window is money spent — a
+            # retained-storage charge falling due where it never responded —
+            # made no response this observation reads, so it does not take a
+            # share of the violation and does not dilute the shares that do.
+            n = sum(role == "all" or d["role"] == role for d in samples.values()
+                    if d["invocations"] or d["ok"] or not d["cost"])
             return 1 / max(1, n)
         return min(1.0, numerator / denominator) if denominator > 0 else 0.0
 

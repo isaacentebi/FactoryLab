@@ -57,6 +57,20 @@ class ReturnConsequences:
             self.table.finish(handle, cost_micro),
         )
 
+    def carry(self, handle: str, cost_micro: int) -> bool:
+        """Add a retained liability to an open return; report whether it could be borne.
+
+        A charge that arrives after the return's outcome is final changes
+        nothing here: an outcome is fixed once and never reopened, so the caller
+        keeps the liability wherever else it is scored.
+        """
+        try:
+            table = self.table.carry(handle, cost_micro)
+        except (KeyError, ValueError):
+            return False
+        self._apply("carried", {"handle": handle, "cost_micro": cost_micro}, table)
+        return True
+
     def account_open(self, handle: str) -> bool:
         """Only a return admitted here and not yet resolved may create venue exposure."""
         try:

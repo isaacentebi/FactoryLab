@@ -54,11 +54,18 @@ class Lot:
 
 @dataclass(frozen=True)
 class ReturnAccount:
-    """Cost is unknown until all invocation rounds and tools have returned."""
+    """Cost is unknown until all invocation rounds and tools have returned.
+
+    ``cost_micro`` is the return's own metered compute and tools, fixed once. A
+    liability the return keeps carrying afterwards — retained public storage
+    renewing each window — accrues separately in ``carried_micro`` while the
+    outcome is open, and the outcome's threshold is their sum.
+    """
 
     handle: str
     opened_at_event: int
     cost_micro: int | None = None
+    carried_micro: int = 0
     realized_micro: Fraction = Fraction(0)
     opened_lots: int = 0
     closed_lots: int = 0
@@ -111,6 +118,19 @@ class LotTable:
         if account.cost_micro is not None:
             raise ValueError("return cost already final")
         return self._accounts({handle: replace(account, cost_micro=cost_micro)})
+
+    def carry(self, handle: str, cost_micro: int) -> "LotTable":
+        """Add a nonnegative retained liability to a return whose outcome is still open.
+
+        Guarantees: a fixed outcome is never reopened, the charge is money, and
+        the return's own final compute cost is left exactly as it was recorded.
+        """
+        require_money(cost_micro, nonnegative=True)
+        account = self.account(handle)
+        if account.payoff is not None:
+            raise ValueError("return outcome already final")
+        return self._accounts({handle: replace(
+            account, carried_micro=account.carried_micro + cost_micro)})
 
     def account(self, handle: str) -> ReturnAccount:
         """Return the original account or fail for an unknown return."""
@@ -264,7 +284,8 @@ class LotTable:
         The backstop counts runtime events from the return, including any time
         awaiting a fill. Accepted unfilled orders defer early settlement. A return
         pays off when the realised result credited to it, as opener or closer,
-        exceeds its own cost; a no-fill return cannot inherit anyone's P&L.
+        exceeds its own cost, carried liabilities included; a no-fill return
+        cannot inherit anyone's P&L.
         """
         _require_event_index(event, "event")
         _require_event_index(backstop, "backstop", positive=True)
@@ -288,12 +309,14 @@ class LotTable:
                         1 if lot.is_buy else -1
                     ) * 1_000_000 - lot.charges_micro
             micro = net.numerator // net.denominator
+            # Everything the return cost: its own compute and tools, plus every
+            # liability it was still carrying when the outcome was fixed.
+            cost = account.cost_micro + account.carried_micro
             outcome = Payoff(
                 account.handle,
-                int((account.opened_lots > 0 or account.closes > 0)
-                    and micro > account.cost_micro),
+                int((account.opened_lots > 0 or account.closes > 0) and micro > cost),
                 micro,
-                account.cost_micro,
+                cost,
                 event,
                 bool(lots),
                 account.liquidated,

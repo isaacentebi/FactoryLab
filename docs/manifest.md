@@ -167,9 +167,17 @@ graded on the payoff fact alone. A missing fact is never performance.
 `returns` selects the latest `n` completed invocation responses in each selected
 scope. A continuation's cost belongs to its invocation, and a child invocation
 is a separate response. For cost, only successful responses in those selected
-rows contribute to the mean. Well-formedness uses all selected responses as its
-denominator. The other supported return observations are `noop_share`,
-`revision_rate` and `tool_calls`.
+rows contribute to the mean, and a retained-storage charge is selected beside
+them as a cost row of the decision that holds it: it adds to what those
+responses cost and is never divided into as one of them, so paying rent can only
+raise a cost per response. The `n` are counted over responses alone, before any
+charge joins them, and the charges that join a selected horizon are the ones
+metered in the same measurement windows as its selected responses, so a charge
+never fills a response slot, never displaces a response from a full horizon and
+never supplies the support a short scope lacks. No other observation selects
+one. Well-formedness uses all selected responses as its denominator. The other
+supported return observations are `noop_share`, `revision_rate` and
+`tool_calls`.
 
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before
@@ -192,9 +200,9 @@ samples and, unless `answers_for=all`, selects entities with that role. A scope
 with fewer than `n` responses or forecasts is unavailable. A windows selector
 requires `n` closed windows. The controller receives the equal mean of supported
 scope measurements; private entity values never enter the public topology view.
-Previous-cost-median bounds use the same selector's cost samples. New horizons
-may need to warm up when retained history is shorter than a newly adopted card.
-The buffers and their active measurements survive resume.
+Previous-cost-median bounds use the same selector's per-response cost samples.
+New horizons may need to warm up when retained history is shorter than a newly
+adopted card. The buffers and their active measurements survive resume.
 
 ## Committee liability
 
@@ -368,9 +376,12 @@ For card j, `v_j = distance_outside_region / card_region.scale`, and
 `min(S, prices.penalty_cap) * share`. When cards measure different quantities,
 `share = sum(lambda_j * v_j * share_j) / S`, or zero when S is zero.
 
-Cost shares use the card's selected scopes and successful returns. Each return
-contributes its cost divided by the successful return count in that scope;
-the contributions are normalised across supported scopes. Evaluator and meta
+Cost shares use the card's selected scopes and successful returns. Each selected
+row contributes its cost divided by the count of successful responses in that
+scope, so a retained-storage charge adds its own cost to the scope it is held in
+and is never one of the responses that count is taken over; a scope with no
+response of its own is measured nowhere and attributed nowhere. The
+contributions are normalised across supported scopes. Evaluator and meta
 cost cards therefore charge those roles. Global window cost retains the
 producer-cost sufficient statistics. Tool attempts and turnover use the
 decision's contribution divided by the window total.
@@ -378,8 +389,9 @@ A lower-bound well-formedness violation is allocated by malformed
 invocations, so a correct return does not pay for someone else's malformed one;
 an upper-bound violation uses well-formed invocations. A zero attributable total
 contributes zero. Other observations use `1/n` decisions for the card's role
-(or all roles for `answers_for = "all"`). The final score is
-`clip(raw_score - penalty, 0, 1)`.
+(or all roles for `answers_for = "all"`), counting the decisions that responded
+in the window and not one whose only entry there is a retained-storage charge.
+The final score is `clip(raw_score - penalty, 0, 1)`.
 
 Closed windows retain their observations, regions, contributions, and the cards
 and prices of the edition in force at the close, for delayed settlements. A
@@ -645,7 +657,11 @@ channel. `forecast` settles on the consequence channel, except that the seed
 their own consequence decisions. `conformity` settles on the conformity channel
 when a higher tier exists to judge it, and on the fast channel otherwise.
 `exposure` settles on the
-exposure channel. A forecast-shaped return earns the mean of its own resolved
+exposure channel. Cascade admission follows the declared shape too: the seed
+`Verdict` is a tier-one arrival and every `conformity`-shaped kind, seed or
+population, is buffered with the others at the tier its own payload declares, so
+a judgement cannot reach the tier above it sooner by being registered under a new
+name. A forecast-shaped return earns the mean of its own resolved
 predictions once, as `forecast-mean-v1`; a return with any unresolved prediction
 is censored rather than scored. Admitted shapes survive resume in
 `kind_reward_shapes`, so a kind keeps its meaning after the assembly that
@@ -655,7 +671,11 @@ A card's `answers_for` may name any registered emitted kind, and that kind is
 measured in its own scope rather than as a producer. A launch manifest's cards
 are narrower: `answers_for` there must be a seed role, `all`, or a kind one of
 the manifest's own assemblies emits. An amendment naming an unregistered kind is
-refused before the vote.
+refused before the vote. The role aliases and `all` are reserved spellings: a
+registration emitting `Producer`, `ALL` or any other capitalisation of one is
+refused with feedback, and a card's emitted-kind scope keeps the kind's exact
+spelling instead of being folded into an alias, so an admitted kind's card can
+never silently measure a different population.
 
 A forecast predicate registers like an observation: a jailed
 `resolve(facts) -> bool` preflighted against the last closed window, versioned
@@ -757,6 +777,24 @@ carries the text. The `note.read` journal call is replayable read-only work.
 rule; the wake's `notes` section publishes counts only; the notebook survives
 resume.
 
+Retained storage is an explicit, resumable liability of the decision that holds
+the note, not only a wallet debit. Every paid charge is added to that
+decision's cost contribution for the window the charge landed in and enters
+that window's measured rows — a producer's charge its cost statistics too, as
+cost the window spent and never as a return it received — as a cost of the same
+decision and never as a response, so a cost card sees it whether it selects
+returns or whole closed windows, and so do the penalty shares it attributes,
+and while the decision's own consequence outcome is still open it is also
+carried into that outcome's cost, so a return cannot resolve
+`return_paid_off = 1` on a margin its storage has already consumed. An outcome
+is fixed once and never reopened, so rent falling due afterwards stays with the
+note's current owner decision as a cost contribution alone, and the note is
+kept rather than released: public text other decisions may already have read is
+not deleted because one account closed. The carried amount is
+`ReturnAccount.carried_micro`, resumes with the consequence table, and appears
+as `consequence.carried`; the matching `price.contribution` item carries
+`storage` and `carried`.
+
 Window facts carry the market, funding, wallet and tick series of the closed
 window, retained to `MAX_WORLD_SAMPLES`, so a registered observation can measure
 the world and not only the factory. `window_facts.books` maps each coin to
@@ -766,6 +804,17 @@ and `venue.order_book` are what fill `mids`, `funding` and `books`;
 `wallet_balance_micro` and `tick_timestamps_ns` are sampled at delivered ticks.
 Malformed or unavailable venue data contributes no sample. No series carries an
 account, an author or a handle.
+
+A predicate forecast seals a cursor into the open window, and that cursor marks
+monotonic sample positions: each bounded series counts the samples it has already
+discarded, so the mark does not slide when the series rolls and evidence that
+arrived after the claim is still found. When the retained prefix no longer
+reaches back to the mark, the required interval has been discarded: the window
+supplies no facts at all and the forecast is closed unscored rather than resolved
+false, with `forecast.evidence_discarded` in the diary. A claim that comes due
+after a window boundary is read against a window that opened after the mark, so
+every sample in it counts and any sample it has already discarded censors the
+claim the same way.
 
 ## Operator controls and recovery
 
