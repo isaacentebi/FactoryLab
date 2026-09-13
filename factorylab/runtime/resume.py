@@ -318,7 +318,9 @@ class RecoveryJournal:
                 result = decode(item["result"]) if "error" not in item else None
                 self.append(result_entry)
                 if "error" in item:
-                    raise _recorded_error(item["error"], item.get("reason"))
+                    raise _recorded_error(item["error"], item.get("reason"),
+                                          status=item.get("status"),
+                                          unbilled=item.get("unbilled", False))
                 return result
             if name in ("exchange.place", "exchange.close", "exchange.cancel"):
                 from factorylab.world.exchange import OrderResult
@@ -349,6 +351,9 @@ class RecoveryJournal:
             encoded_result = encode(result)
         except Exception as exc:
             from factorylab.world.evm import Pending, RailError
+            from factorylab.world.metering import UnbilledFailure, classify_provider_failure
+            from factorylab.world.openrouter import OpenRouterError
+            from factorylab.world.venice import VeniceError
 
             failure = exc
             if ambiguous_retry:
@@ -359,14 +364,22 @@ class RecoveryJournal:
             error = type(failure).__name__
             # RailError messages are locally generated bounded reasons, never provider bodies.
             reason = str(failure) if isinstance(failure, RailError) else None
+            billing = {}
+            if isinstance(failure, (OpenRouterError, VeniceError)):
+                status = failure.status if type(failure.status) is int else None
+                billing = {"status": status,
+                           "unbilled": isinstance(classify_provider_failure(failure),
+                                                  UnbilledFailure)}
             self.append({"kind": "io.result", "call": seq, "error": error,
-                         **({"reason": reason} if reason is not None else {})})
-            raise _recorded_error(error, reason) from None
+                         **({"reason": reason} if reason is not None else {}), **billing})
+            raise _recorded_error(error, reason, **billing) from None
         self.append({"kind": "io.result", "call": seq, "result": encoded_result})
         return result
 
 
 def _read_only(name: str) -> bool:
+    if name in ("sandbox.run", "observation.run"):
+        return True
     if name == "treasury.provider_pots" or (
         name.startswith("treasury.rail.")
         and name.rsplit(".", 1)[-1] in ("balances", "preflight", "plan", "prepare", "poll")
@@ -380,17 +393,26 @@ def _read_only(name: str) -> bool:
     )
 
 
-def _recorded_error(name: str, reason: str | None = None) -> Exception:
+def _recorded_error(name: str, reason: str | None = None, *,
+                    status: int | None = None, unbilled: bool = False) -> Exception:
     from factorylab.world.evm import Pending, RailError
     from factorylab.world.exchange import VenueUnavailable
     from factorylab.world.market import PaymentOutcomeUnknown
     from factorylab.world.metering import UnbilledFailure
+    from factorylab.world.openrouter import OpenRouterError
+    from factorylab.world.venice import VeniceError
     from factorylab.world.x402 import InsufficientReserve, X402Error
 
     classes = (VenueUnavailable, UnbilledFailure, ConnectionError, TimeoutError, OSError,
                ValueError, TypeError, KeyError, RuntimeError, PermissionError,
-               InsufficientReserve, X402Error, PaymentOutcomeUnknown)
+               InsufficientReserve, X402Error, PaymentOutcomeUnknown, OpenRouterError, VeniceError)
     cls = next((c for c in classes if c.__name__ == name), RuntimeError)
+    if cls in (OpenRouterError, VeniceError):
+        if unbilled:
+            from factorylab.world import metering
+
+            cls = metering.OpenRouterError if cls is OpenRouterError else metering.VeniceError
+        return cls(status, "Provider request failed")
     if name in ("RailError", "Pending"):
         return (Pending if name == "Pending" else RailError)(reason or "treasury rail unavailable")
     return cls(f"external call failed ({name})")

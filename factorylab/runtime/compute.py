@@ -295,14 +295,16 @@ class ComputeMixin:
         if not self._compute_routed:
             return
         count = self.insolvency_count + 1 if self._compute_unaffordable else 0
-        self._record_market(
-            {
-                "kind": "treasury.insolvency",
-                "event_id": ev.id,
-                "consecutive_events": count,
-                "unaffordable": self._compute_unaffordable,
-            }
-        )
+        if (bool(count) != bool(self.insolvency_count)
+                or count == self.m.treasury.insolvency_events):
+            self._record_market(
+                {
+                    "kind": "treasury.insolvency",
+                    "event_id": ev.id,
+                    "consecutive_events": count,
+                    "unaffordable": self._compute_unaffordable,
+                }
+            )
         self.insolvency_count = count
 
     def _init_connectors(self) -> None:
