@@ -20,7 +20,6 @@ from factorylab.cortex.registration import (
     ObservationProposal,
     RetireProposal,
     ToolProposal,
-    measured_role,
     parse_proposals,
 )
 from factorylab.cortex.request import Return
@@ -892,26 +891,7 @@ class GovernanceMixin:
                                 pending_handles=pending_handles)
 
     def _record_card_forecasts(self, pending, baseline) -> None:
-        """Paired Brier samples keep the pre-outcome baseline and the original judge identity."""
-        for event in self.internal:
-            if event.kind is not EventKind.FORECAST_SETTLED:
-                continue
-            row = event.payload
-            forecast = pending.get(row["handle"])
-            if forecast is None:
-                continue
-            skill = None
-            if row["brier"] is not None:
-                skill = row["brier"] - baseline.baseline_brier(row["predicate"], row["y"])
-                baseline.record(row["predicate"], row["y"])
-            parent = self.queue.get(forecast.handle).parent_handle
-            source = next((r for r in reversed(self.card_samples.returns)
-                           if r["handle"] == parent), {})
-            assembly = forecast.evaluator_id
-            role = (measured_role(self.assemblies[assembly].spec.emits)
-                    if assembly in self.assemblies else "evaluator")
-            self.card_samples.forecasts.append({
-                "handle": forecast.handle, "assembly": assembly, "role": role,
-                "window": self.window.index, "skill": skill, "predicate": row["predicate"],
-                "y": row["y"], "status": row["status"], "verdict": source.get("verdict"),
-            })
+        """Resolved samples retain distinct forecaster and judged-return identities."""
+        from factorylab.charter.measurement import record_card_forecasts
+
+        record_card_forecasts(self, pending, baseline)
