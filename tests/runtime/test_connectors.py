@@ -437,6 +437,11 @@ def test_body_cannot_redact_connector_paths_ids_or_metering_metadata():
 
 
 def test_short_body_cannot_rewrite_an_order_side_into_a_different_action(monkeypatch):
+    """A body shorter than ``MIN_PROTECTED_BODY_CHARS`` is a fact, not text: it is neither
+    redacted nor refused, so the side the return declared stands exactly as written.
+    A body at the threshold is text and stays off every durable surface."""
+    from factorylab.runtime.compute import MIN_PROTECTED_BODY_CHARS
+
     rt = make_runtime()
     register(rt, monkeypatch)
     rt.connector_proxy = ConnectorProxy(rt.m.connectors, Transport(b"buy"))
@@ -449,5 +454,17 @@ def test_short_body_cannot_rewrite_an_order_side_into_a_different_action(monkeyp
     monkeypatch.setattr(rt, "_invoke_compute", lambda *a: next(calls))
     req = rt._request(handle, "Read", {}, {"type": "object"}, 10**15, "verdict")
     ret = rt._invoke("seed-decider", req, "producer")
-    assert ret.status == "malformed" and "action" not in ret.outputs
+    assert ret.status == "ok" and ret.outputs["side"] == "buy"
     assert ret.tool_calls == () and ret.children == ()
+    assert not rt.ledger.connector_bodies
+    text = "b" * MIN_PROTECTED_BODY_CHARS
+    rt.connector_proxy = ConnectorProxy(rt.m.connectors, Transport(text.encode()))
+    handle = decision(rt)
+    calls = iter([
+        Return(handle, {}, 0, "ok", tool_calls=({"tool": "connector.fetch",
+                "args": {"id": "source", "path": "/"}},)),
+        Return(handle, {"action": "hold", "rationale": f"the source said {text}"}, 0, "ok"),
+    ])
+    req = rt._request(handle, "Read", {}, {"type": "object"}, 10**15, "verdict")
+    ret = rt._invoke("seed-decider", req, "producer")
+    assert ret.status == "malformed" and "action" not in ret.outputs

@@ -19,7 +19,7 @@ from factorylab.settlement.lots import LotTable
 from factorylab.world.models import ModelResponse
 from tests.conftest import make_runtime
 
-pytestmark = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
+OPEN = pytest.mark.xfail(strict=False, reason="round three, open: docs/audits/v3/triage.md")
 
 
 def _decision(rt, assembly, *, channel="verdict"):
@@ -35,6 +35,7 @@ def _decision(rt, assembly, *, channel="verdict"):
     return handle
 
 
+@OPEN
 @pytest.mark.parametrize("market,coin", [("perp", "BTC"), ("spot", "BTC/USDC")])
 def test_one_decision_round_trip_counts_its_profit_once(market, coin):
     """A decision with 0.60 USD trading profit and 1 USD compute does not pay off."""
@@ -52,6 +53,7 @@ def test_one_decision_round_trip_counts_its_profit_once(market, coin):
     assert (payoff.net_micro, payoff.y) == (600_000, 0)
 
 
+@OPEN
 def test_evaluator_cost_card_attributes_its_measured_cost():
     """The same evaluator cost selected for measurement supplies its penalty share."""
     card = MetricCard(
@@ -75,6 +77,7 @@ def test_evaluator_cost_card_attributes_its_measured_cost():
     assert share == 1.0
 
 
+@OPEN
 def test_immune_uses_the_cards_configured_sample():
     """A compliant 100-return card cannot become stable failure from one bad return."""
     rt = make_runtime()
@@ -104,6 +107,7 @@ def test_immune_uses_the_cards_configured_sample():
     assert not rt.stats.pathologies["stable_failure"]
 
 
+@OPEN
 def test_settled_terminal_meta_consequences_qualify_for_committee():
     """Completed terminal meta consequence scores count toward sortition experience."""
     rt = make_runtime()
@@ -136,6 +140,7 @@ def test_policy_ballot_has_no_venue_write_authority(monkeypatch):
     assert rt.exchange.fills(0) == []
 
 
+@OPEN
 def test_registered_observation_can_enter_a_charter_proposal():
     """A measurable registered observation stays available through charter validation."""
     rt = make_runtime()

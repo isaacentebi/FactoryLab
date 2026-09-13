@@ -112,6 +112,39 @@ class Runtime(
         super()._settle_exchange_effects(events)
         self._record_pricing_fills(events)
 
+    def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
+        """An assembly that can judge never sits on the router for its own subject.
+
+        A contract that emits only producing kinds may still process its own
+        event (it continues its own work); one whose contract includes Verdict or
+        MetaVerdict would be woken, paid, and refused at ``_judged_event``, so it
+        is excluded before the draw whatever else it emits.
+        """
+        universe = super()._universe_for(kind, ev)
+        if ev is None:
+            return universe
+        excluded = self._subject_authors(kind, ev)
+        return [a for a in universe
+                if a == NOOP or a not in excluded
+                or not set(self.assemblies[a].spec.emits) & {"Verdict", "MetaVerdict"}]
+
+    def _novelty_compute(self, handle: str, reason: str) -> bool:
+        """A requested child spends its parent's money, never the protected share.
+
+        The novelty reserve funds unhistoried actions the router chose; a decision
+        nested under another decision (a child request) is the parent's
+        subcontracting and is classified like the parent's ordinary spending.
+        Policy ballots keep their own classification: a committee seat is the
+        kernel's request, not the proposer's.
+        """
+        try:
+            decision = self.queue.get(handle)
+        except KeyError:
+            return False
+        if decision.parent_handle is not None and decision.channel != "policy":
+            return False
+        return super()._novelty_compute(handle, reason)
+
     def run(self) -> dict[str, Any]:
         """Keep exclusive ledger ownership through the last runtime action or process death."""
         try:
@@ -454,40 +487,87 @@ class Runtime(
             return "judgement would settle after the chosen return's consequence backstop"
         return None
 
+    CHILD_SUBJECT_REFUSAL = ("a requested judgement may only address the requesting decision "
+                             "or its ancestors; judging anyone else's return is the router's")
+
+    def _child_subject_refusal(self, parent_handle: str, subject: Any) -> str | None:
+        """Name why a child may not judge ``subject``, or None when it lies in the chain.
+
+        Guarantees a judging child never reaches a stranger's return: the subject
+        must be the requesting decision or one of its own ancestors, so the
+        router's sampling, the adversarial share and the cascade stay the only
+        way a return acquires a judge.
+        """
+        if isinstance(subject, str) and subject in self._ancestry(parent_handle):
+            return None
+        return self.CHILD_SUBJECT_REFUSAL
+
+    def _refuse_judgement(self, handle: str, reason: str, about: Any = None) -> None:
+        """A refused judgement is public evidence the population can read.
+
+        The paid return is discarded, so the reason reaches
+        ``registration_feedback`` the way a refused propensity does: a refusal
+        nobody can read is repeated.
+        """
+        self.ledger.append({"kind": "return.refused", "handle": handle, "reason": reason,
+                            **({"about_handle": about} if about is not None else {})})
+        self.registration_feedback.append({"reason": f"judgement: {reason}"})
+
     def _judged_event(self, ev: Event, handle: str, ret: Return,
                       *, seals_payoff: bool = False) -> Event | None:
         """A judgement may address a public return handle, excluding its complete ancestry."""
         subject = self._event_subject(ev)
         about = ret.outputs.get("about_handle", subject)
-        try:
-            self.queue.get(about)
-        except (KeyError, TypeError):
-            self.ledger.append({"kind": "return.refused", "handle": handle,
-                                "reason": "judgement needs an addressable return handle"})
-            return None
+
+        def addressable(value: Any) -> bool:
+            try:
+                self.queue.get(value)
+            except (KeyError, TypeError):
+                return False
+            return True
+
+        if not addressable(about):
+            if about == subject or not addressable(subject):
+                self._refuse_judgement(handle, "judgement needs an addressable return handle")
+                return None
+            # A value that names no return is not a choice of target: the judgement
+            # stands about the return the router delivered, and the population is
+            # told why its about_handle went unread.
+            reason = ("about_handle must be a return handle from the request; the "
+                      "delivered subject was judged instead")
+            self.ledger.append({"kind": "about_handle.ignored", "handle": handle,
+                                "about_handle": str(about)[:64], "subject": subject,
+                                "reason": reason, "ts": self.clock.now_ns})
+            self.registration_feedback.append({"reason": f"judgement: {reason}"})
+            about = subject
         target = self.return_events.get(about)
         if target is None and about == subject:
             target = ev
         author = self.handle_to_assembly.get(handle)
         if target is None or author in self._subject_authors(str(target.kind), target):
-            self.ledger.append({"kind": "return.refused", "handle": handle,
-                                "about_handle": about,
-                                "reason": "judgement needs an independent, addressable return"})
+            self._refuse_judgement(
+                handle, "judgement needs an independent, addressable return", about)
+            return None
+        parent = self.queue.get(handle).parent_handle
+        # A requested judge addresses only the chain that requested it; the router,
+        # not a paying parent, chooses who judges anyone else's return.
+        if parent is not None and (
+                reason := self._child_subject_refusal(parent, about)) is not None:
+            self._refuse_judgement(handle, reason, about)
             return None
         # A child cannot judge the requester or any earlier request ancestor either.
-        parents = self._ancestry(self.queue.get(handle).parent_handle)
+        parents = self._ancestry(parent)
         if about in parents or self.handle_to_assembly.get(about) in {
             self.handle_to_assembly.get(p) for p in parents
         }:
-            self.ledger.append({"kind": "return.refused", "handle": handle,
-                                "about_handle": about, "reason": "self-judgement: ancestor"})
+            self._refuse_judgement(handle, "self-judgement: ancestor", about)
             return None
-        # A payoff forecast on a target this return chose for itself, rather than the
-        # one the router delivered, must still be sealed before the outcome is fixed.
-        if seals_payoff and about != subject and (
+        # A payoff forecast on a target anyone chose — the return itself, or the
+        # parent that requested it — rather than the one the router delivered,
+        # must still be sealed before the outcome is fixed.
+        if seals_payoff and (about != subject or parent is not None) and (
                 reason := self._hindsight_reason(handle, about)) is not None:
-            self.ledger.append({"kind": "return.refused", "handle": handle,
-                                "about_handle": about, "reason": reason})
+            self._refuse_judgement(handle, reason, about)
             return None
         self.decision_subjects[handle] = about
         return target

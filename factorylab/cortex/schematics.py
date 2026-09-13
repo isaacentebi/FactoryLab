@@ -8,7 +8,7 @@ from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, reserved_return_fields
 from factorylab.kernel.money import money_to_usd
 from factorylab.runtime.observations import window_fact_names
-from factorylab.runtime.propensity import action_vocabulary
+from factorylab.runtime.propensity import MIN_DECLARED_MASS, action_vocabulary
 from factorylab.runtime.summary import _duration_str, _price_str
 from factorylab.settlement import SEED_VOCABULARY
 
@@ -42,7 +42,7 @@ class SchematicsMixin:
             "gamma": 0.1,
             "add": False,
         },
-        "retire": {"kind": "retire", "assembly_id": "a registered assembly id"},
+        "retire": {"kind": "retire", "assembly_id": "an id from world.catalogue"},
         "connector": {"kind": "connector", "id": "public-source",
                       "description": "Public information", "origin": "https://example.org"},
         "tool": {
@@ -64,7 +64,7 @@ class SchematicsMixin:
         },
         "learner": {
             "kind": "learner",
-            "assembly_id": "a registered assembly id",
+            "assembly_id": "an id from world.catalogue, usually inputs.you",
             "learner": "blum_mansour",
             "actions": ["hold", "buy:BTC", "sell:BTC"],
             "gamma": 0.1,
@@ -112,22 +112,36 @@ class SchematicsMixin:
             "same probability about your own return. Either is sealed as the kernel's payoff "
             "forecast and graded by Brier against the realised predicate (see scoring)"
         ),
+        "about_handle": (
+            "judging returns (optional): the return handle your verdict or conformity is "
+            "about, exactly as it appears in the request (inputs.subject_handle when present, "
+            "otherwise the delivered return); omit it to judge the delivered return. Prose or "
+            "any value that is not a return handle is ignored, the delivered return is judged, "
+            "and the reason appears in registration_feedback; naming your own return, an "
+            "ancestor, a return whose consequence is already fixed, or (from a requested "
+            "child) anything outside the requesting chain is refused"
+        ),
         "propensity": (
             "optional on any return: your own distribution over the actions you were "
             "choosing among, as {action_id: probability} summing to one and including "
-            "the action you took (see action_labels for the shape of an action id). It "
+            "the action you took (see action_labels for the shape of an action id; the "
+            "action includes what the return executed through venue and treasury tools "
+            "and the children it requested). The action taken needs at least "
+            f"{MIN_DECLARED_MASS} mass or is floored to it before it weights a reward. It "
             "travels forward on the request about this return, so the judges of this "
             "return read it"
         ),
         "register": "a list of up to three proposals, including amendments, shaped like "
         "proposal_shapes; router add=false replaces, add=true adds a router. Learners: exp3 or "
         "blum_mansour. Roles are descriptive labels; accepts and emits define the contract. "
-        "A retire proposal removes an assembly from every router; a retired id may be "
+        "A retire proposal names an id from world.catalogue (any assembly, the seeds "
+        "included) and removes it from every router; a retired id may be "
         "registered again as its next version. Effort: low, medium, high. An observation "
         "registers a measurement: its code runs in the tool jail over a closed window's "
         "public facts and is admitted only if it produces a finite number on the last "
         "closed window; a card may then name it, and re-registering the same id supersedes "
-        "it with a new version. A learner gives one assembly a learner over the action set "
+        "it with a new version. A learner gives one assembly (assembly_id, normally your own "
+        "inputs.you) a learner over the action set "
         "it declares, trained by that assembly's declared propensities and the rewards its "
         "decisions settle at. Cards answer for producer, evaluator, meta, "
         "antagonist or all; window is "
@@ -150,7 +164,7 @@ class SchematicsMixin:
             "schema uses a new name. Built-in world and kernel events cannot be emitted."
         ),
         "requests": (
-            'objects: {"target":"assembly-id or self","description":"task",'
+            'objects: {"target":"an id from world.catalogue, or self","description":"task",'
             '"inputs":{},"outcome_schema":{"type":"object"}}; children have tools and '
             'may request children to mechanics.tools.max_depth (root depth 0), with '
             'mechanics.tools.max_children children per request. Each depth has one '
@@ -246,6 +260,21 @@ class SchematicsMixin:
                     for a in self.assemblies.values()
                     if a.spec.id not in self.retired_assemblies})
             ],
+            # Ids and contracts are public schematics: every assembly can be named
+            # in requests[].target, retire.assembly_id and learner.assembly_id. The
+            # model behind an id, its prompt, its learner state, the routers'
+            # weights and who judged whom stay sealed.
+            "catalogue": [
+                {"id": a.spec.id, "version": a.spec.version,
+                 "accepts": sorted(a.spec.accepts), "emits": list(a.spec.emits)}
+                for a in sorted(self.assemblies.values(), key=lambda a: a.spec.id)
+                if a.spec.id not in self.retired_assemblies
+            ],
+            "addressing": (
+                "inputs.you is your own assembly id. catalogue lists every live assembly "
+                "as {id, version, accepts, emits}; those ids are what requests[].target, "
+                "a retire proposal's assembly_id and a learner proposal's assembly_id name"
+            ),
             "event_schemas": dict(self.event_schemas),
             "routers": [
                 {"event_kind": kind, "count": len(states)}

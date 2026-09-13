@@ -27,14 +27,19 @@ def test_a7_every_role_reads_the_full_charter_and_current_mechanics():
 
 
 def test_a8_initial_block_has_counts_and_no_assembly_model_edges():
+    """Ids and contracts are public schematics (round three, T7); what A8 seals is the
+    wiring: which model and prompt sit behind an id, and the routers' menus."""
     rt = runtime()
     block = rt._world_block()
     for view in ("assemblies", "routers"):
         assert all(set(row) == {"event_kind", "count"} for row in block[view])
+    assert all(set(row) == {"id", "version", "accepts", "emits"} for row in block["catalogue"])
+    assert {row["id"] for row in block["catalogue"]} == {a.id for a in rt.m.assemblies}
     text = json.dumps(block)
     assert '"menu"' not in text
     for assembly in rt.m.assemblies:
-        assert assembly.id not in text
+        assert f'"{assembly.id}": ' not in text  # an id keys nothing: no id -> model edge
+        assert assembly.model_id not in json.dumps(block["catalogue"])
 
 
 def test_a8_registration_discloses_contract_without_prompt_model_or_author():
