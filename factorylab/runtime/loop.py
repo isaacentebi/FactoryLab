@@ -356,6 +356,9 @@ class Runtime(
         if we.kind is WorldEventKind.TICK:
             self.ticks_consumed += 1
             if isinstance(self.tick_clock, (ClockSource, LiveClock)):
+                if (isinstance(self.tick_clock, LiveClock)
+                        and 0 <= self.tick_clock.last_ns < we.ts_ns):
+                    self.tick_clock.gaps.append(we.ts_ns - self.tick_clock.last_ns)
                 self.tick_clock.index = self.ticks_consumed
                 self.tick_clock.last_ns = we.ts_ns
         elif we.kind is WorldEventKind.DRIP:

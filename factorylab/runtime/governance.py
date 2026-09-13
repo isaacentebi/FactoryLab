@@ -631,7 +631,7 @@ class GovernanceMixin:
         active = {am.id for am in self.charter_book.pending()}
         active.update(pid for pid, row in self.retirement_proposals.items()
                       if row["status"] == "passed")
-        waiting = self.cadence.world_block(self.tick_clock.interval_ns)["waiting"]
+        waiting = self.cadence.world_block(self.tick_clock)["waiting"]
         for proposal_id in waiting:
             if proposal_id not in active:
                 self.cadence.refused(proposal_id, "proposal is no longer pending")
@@ -646,7 +646,7 @@ class GovernanceMixin:
             if waiting and waiting[0] != row["proposal"].id:
                 continue
             if not self.cadence.ready(now_ns=self.clock.now_ns,
-                                      tick_interval_ns=self.tick_clock.interval_ns,
+                                      tick_interval_ns=self.tick_clock,
                                       window=self.stats.reserve_windows):
                 return
             motion = row["proposal"]
@@ -661,7 +661,7 @@ class GovernanceMixin:
             self._retire_assembly(motion.assembly_id, motion.id)
             row["status"] = "activated"
             self._activate_policy_ballots(motion.id)
-            self.cadence.activated(motion.id, self.clock.now_ns, self.tick_clock.interval_ns)
+            self.cadence.activated(motion.id, self.clock.now_ns, self.tick_clock)
             self.card_samples.revised(motion.proposer_handle)
             self.window.revision_returns += 1
             return
@@ -835,7 +835,7 @@ class GovernanceMixin:
             self.cadence.approve(am.id)
             self.cadence.ready(
                 now_ns=self.clock.now_ns,
-                tick_interval_ns=self.tick_clock.interval_ns,
+                tick_interval_ns=self.tick_clock,
                 window=self.stats.reserve_windows,
             )
             if not retiring:
@@ -850,7 +850,7 @@ class GovernanceMixin:
             return None
         if not self.cadence.ready(
             now_ns=self.clock.now_ns,
-            tick_interval_ns=self.tick_clock.interval_ns,
+            tick_interval_ns=self.tick_clock,
             window=self.stats.reserve_windows,
         ):
             return None
@@ -864,7 +864,7 @@ class GovernanceMixin:
         if new is not None:
             am = self.charter_book.activated_amendment(new.edition)
             self._activate_policy_ballots(am.id)
-            self.cadence.activated(am.id, self.clock.now_ns, self.tick_clock.interval_ns)
+            self.cadence.activated(am.id, self.clock.now_ns, self.tick_clock)
         return new
 
     def _close_refused_ballots(self, refusal: Any) -> None:

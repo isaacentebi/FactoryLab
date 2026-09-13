@@ -7,6 +7,7 @@ from typing import Any
 from factorylab.charter.measurement import measurement_catalogue
 from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, reserved_return_fields
 from factorylab.kernel.money import money_to_usd
+from factorylab.runtime.cadence import tick_intervals
 from factorylab.runtime.observations import window_fact_names
 from factorylab.runtime.propensity import MIN_DECLARED_MASS, action_vocabulary
 from factorylab.runtime.summary import _duration_str, _price_str
@@ -284,7 +285,8 @@ class SchematicsMixin:
                 "min_tick": _duration_str(self.m.clock.min_tick_ns),
                 "max_tick": _duration_str(self.m.max_tick_ns),
             },
-            "governance": self.cadence.world_block(self.tick_clock.interval_ns),
+            "governance": self.cadence.world_block(self.tick_clock),
+            "tick_intervals": tick_intervals(self.tick_clock),
             "registration_feedback": list(self.registration_feedback),
             "reserved_return_fields": reserved_return_fields(
                 max_children=self.m.tools.max_children,

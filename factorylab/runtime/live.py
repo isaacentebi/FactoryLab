@@ -103,17 +103,19 @@ class LiveClock:
     def state(self) -> dict:
         """Retain the original budget, next tick index and last delivered timestamp.
 
-        The deadline and the measured sample are deliberately not saved: a
-        resumed world continues its saved event budget, and an absolute deadline
-        from a dead process would end it before its first tick.
+        The measured sample remains cadence evidence after resume. The deadline
+        is not saved: an absolute deadline from a dead process would end the
+        resumed world before its first tick.
         """
         return {"interval_ns": self.interval_ns, "count": self.count, "source": self.source,
-                "index": self.index, "last_ns": self.last_ns}
+                "index": self.index, "last_ns": self.last_ns, "gaps": list(self.gaps)}
 
     @classmethod
     def restore(cls, state: dict, *, now_ns=time.time_ns, sleep=time.sleep) -> LiveClock:
         """Continue the saved clock with fresh process-local time and sleep functions."""
-        return cls(**state, now_ns=now_ns, sleep=sleep)
+        state = dict(state)
+        gaps = state.pop("gaps", ())
+        return cls(**state, gaps=deque(gaps, maxlen=MEASURED_SAMPLE), now_ns=now_ns, sleep=sleep)
 
 
 @dataclass

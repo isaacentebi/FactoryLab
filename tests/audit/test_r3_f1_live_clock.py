@@ -103,7 +103,7 @@ def test_a_clock_without_a_deadline_is_unchanged():
     stamps = fake.run(clock)
     assert [s - stamps[0] for s in stamps] == [0, 60 * SECOND, 120 * SECOND]
     assert clock.state() == {"interval_ns": 60 * SECOND, "count": 3, "source": "wallclock",
-                             "index": 3, "last_ns": stamps[-1]}
+                             "index": 3, "last_ns": stamps[-1], "gaps": [60 * SECOND] * 2}
     assert LiveClock.restore(clock.state(), now_ns=fake.now_ns,
                              sleep=fake.sleep).deadline_ns is None
 

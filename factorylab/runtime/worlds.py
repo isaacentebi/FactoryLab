@@ -285,6 +285,38 @@ class WorldManifest:
 
     # ---- validation
 
+    def validate_venue_metadata(self) -> dict:
+        """Name missing markets before launch; unreachable metadata is explicitly unverified.
+
+        This read-only preflight is separate from deterministic manifest loading.
+        It never constructs a trading adapter or reads account credentials.
+        """
+        if self.exchange.kind != "hyperliquid":
+            return {"status": "not_applicable"}
+        from urllib.request import Request, urlopen
+
+        host = "api.hyperliquid.xyz" if self.exchange.mainnet else "api.hyperliquid-testnet.xyz"
+
+        def metadata(kind):
+            request = Request(f"https://{host}/info", data=json.dumps({"type": kind}).encode(),
+                              headers={"Content-Type": "application/json"})
+            with urlopen(request, timeout=5) as response:
+                return json.load(response)
+
+        try:
+            perps, spot = metadata("meta"), metadata("spotMeta")
+            coins = {row["name"] for row in perps["universe"]}
+            tokens = {row["index"]: row["name"] for row in spot["tokens"]}
+            pairs = {f"{tokens[row['tokens'][0]]}/{tokens[row['tokens'][1]]}"
+                     for row in spot["universe"]}
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            return {"status": "unavailable", "coins": list(self.exchange.coins),
+                    "spot_pairs": list(self.exchange.spot_pairs)}
+        missing_coins = sorted(set(self.exchange.coins) - coins)
+        missing_pairs = sorted(set(self.exchange.spot_pairs) - pairs)
+        return {"status": "invalid" if missing_coins or missing_pairs else "valid",
+                "missing_coins": missing_coins, "missing_spot_pairs": missing_pairs}
+
     def validate(self) -> None:
         if (self.exchange.kind == "hyperliquid" and self.exchange.mainnet
                 and self.charter_explicit is not True):
@@ -293,6 +325,9 @@ class WorldManifest:
             raise ValueError("live_exchange_requires_explicit_charter: mainnet needs [charter]")
         if self.initial_balance_micro < 0:
             raise ValueError("initial balance must be non-negative")
+        if (type(self.termination.balance_floor_micro) is not int
+                or self.termination.balance_floor_micro < 0):
+            raise ValueError("termination balance floor must be non-negative integer micro-USD")
         if type(self.treasury.insolvency_events) is not int or self.treasury.insolvency_events < 1:
             raise ValueError("treasury.insolvency_events must be a positive integer")
         if (type(self.treasury.reported_cost_multiple) is not int
@@ -389,7 +424,7 @@ class WorldManifest:
             raise ValueError("tick_interval must lie within clock.min_tick and derived max_tick")
         if self.exchange.kind not in ("fake", "hyperliquid"):
             raise ValueError("unknown exchange kind")
-        if self.exchange.kind == "hyperliquid" and self.exchange.mainnet and self.name != "funded":
+        if self.exchange.mainnet and self.name != "funded":
             raise ValueError("mainnet is only allowed in the world named 'funded'")
         if self.exchange.shocks and self.exchange.kind != "fake":
             raise ValueError("price shocks exist only on the fake venue")

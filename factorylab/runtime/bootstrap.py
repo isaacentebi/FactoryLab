@@ -178,6 +178,7 @@ class BootstrapMixin:
             d = manifest.drip
             schedule = DripSchedule(d.amount_micro, d.period_ns, d.start_ns, d.end_ns)
         self.wallet = Wallet(self.initial, self.ledger, schedule, clock_ns=self.clock,
+                             balance_floor_micro=manifest.termination.balance_floor_micro,
                              reported_cost_multiple=manifest.treasury.reported_cost_multiple)
         self.bus = Bus(self.ledger)
         self.termination = Termination(ledger=self.ledger, bus=self.bus, clock_ns=self.clock)

@@ -315,7 +315,9 @@ class FakeExchange:
 
     def place(self, order: Order) -> OrderResult:
         """A stable client id admits at most one order, including after a lost acknowledgement."""
-        client_id = order.client_id or f"fake-client-{self._next_oid}"
+        if order.client_id is None:
+            return self._place(order)
+        client_id = order.client_id
         if client_id in self._client_results:
             return self._client_results[client_id]
         result = self._place(order)
