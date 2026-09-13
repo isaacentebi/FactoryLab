@@ -2,13 +2,13 @@
 
 ## What is merged
 
-Everything from three audit rounds. Round three (`docs/audits/v3/`) closed 49 of its 52 triage rows across seventeen pull requests (#47 to #63) and built the six decisions in `docs/audits/v3/fix-plan.md`: a kill command; a two-minute tick with a 60-event consequence horizon; judges answer for their verdicts against the charter's own blame; every proposal names the card it promises to improve and its voters are liable for it; the population may register new kinds of work, its own forecast predicates and one of four reward shapes; the population may read the venue's public data for any listed coin, register markets, pay for data through x402, and keep a metered public notebook. Two rows are known by decision (testnet rehearses on the seed charter; the crash world's overshoot is its demonstration) and one is open: T47, the launch roster's well-formed rate, which needs a live measurement and the decision whether to reseat evaluator C (`tencent/hy3`). `docs/audits/v3/closure.md` is the cold closure review; `docs/manifest.md` describes the code as it is.
+Everything from three audit rounds. Round three (`docs/audits/v3/`) closed 53 of its 56 triage rows across eighteen pull requests (#47 to #64), the last four found by the live rehearsal (`docs/audits/v3/rehearsal.md`) and built the six decisions in `docs/audits/v3/fix-plan.md`: a kill command; a two-minute tick with a 60-event consequence horizon; judges answer for their verdicts against the charter's own blame; every proposal names the card it promises to improve and its voters are liable for it; the population may register new kinds of work, its own forecast predicates and one of four reward shapes; the population may read the venue's public data for any listed coin, register markets, pay for data through x402, and keep a metered public notebook. Two rows are known by decision (testnet rehearses on the seed charter; the crash world's overshoot is its demonstration) and one is open: T47, the launch roster's well-formed rate, which needs a live measurement and the decision whether to reseat evaluator C (`tencent/hy3`). `docs/audits/v3/closure.md` is the cold closure review; `docs/manifest.md` describes the code as it is.
 
 ## The gate
 
 ```
 uv run pytest
-2504 passed (10:51 with the machine idle)
+2520 passed (10:55 with the machine idle)
 uv run pytest -m slow -o addopts="" tests/runtime/test_resume.py
 30 passed (2:13)
 ```
