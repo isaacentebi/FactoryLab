@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 import secrets
@@ -134,8 +135,15 @@ class BootstrapMixin:
             )
         # One launch, one venue identity space. The nonce is drawn here so the
         # pre-launch snapshot already carries it and replay reproduces the exact
-        # Launch event; resume overwrites it from the checkpoint.
-        self.launch_nonce = secrets.token_hex(16)
+        # Launch event; resume overwrites it from the checkpoint. A live venue is
+        # shared across launches, so the nonce is random; the deterministic venue
+        # is private to its run, so the nonce follows the manifest and the seed and
+        # identical inputs still produce a byte-identical diary.
+        if self.live:
+            self.launch_nonce = secrets.token_hex(16)
+        else:
+            self.launch_nonce = hashlib.sha256(
+                f"{manifest.manifest_hash}:{self.seed}".encode()).hexdigest()[:32]
         bind_launch_nonce(self.exchange, self.launch_nonce)
         if provider is None:
             provider = build_provider(manifest)
