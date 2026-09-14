@@ -69,6 +69,7 @@ class Treasury:
         provider=None,
         fee_ceiling_micro=2_000_000,
         max_venice_per_window=10_000_000,
+        max_forward_fees_per_window=1_000_000,
     ):
         self.ledger, self.wallet, self.rail, self.provider = ledger, wallet, rail, provider
         if type(fee_ceiling_micro) is not int or fee_ceiling_micro < 0:
@@ -77,8 +78,13 @@ class Treasury:
         if type(max_venice_per_window) is not int or max_venice_per_window < 0:
             raise ValueError("Venice window budget must be nonnegative integer micro-USD")
         self.max_venice_per_window = max_venice_per_window
+        if type(max_forward_fees_per_window) is not int or max_forward_fees_per_window < 0:
+            raise ValueError("forwarding fee window budget must be nonnegative integer micro-USD")
+        self.max_forward_fees_per_window = max_forward_fees_per_window
         self.venice_window = 0
         self.venice_spent = 0
+        # Forwarding fees quoted for submitted exits this window; a failure still counts.
+        self.forward_spent = 0
         self.state: dict | None = None
         self.next_id = 0
         self.last_nonce = 0
@@ -94,8 +100,9 @@ class Treasury:
         if type(index) is not int or index < self.venice_window:
             raise ValueError("treasury window must advance monotonically")
         if index != self.venice_window:
-            self._write("venice_window", window=index, spent_micro=0)
+            self._write("venice_window", window=index, spent_micro=0, forward_fees_micro=0)
             self.venice_window, self.venice_spent = index, 0
+            self.forward_spent = 0
 
     def pots(self) -> dict:
         """Return a detached observed view; unknown balances are never converted to zero."""
@@ -128,6 +135,12 @@ class Treasury:
             venue = reserve = None
         pots = {"venue": venue, "reserve": reserve, "seed": seed, "sellers": sellers}
         pots.update({k: observed[k] for k in ("perps", "spot") if k in observed})
+        if hasattr(self.rail, "gas_view"):
+            # The exit route's gas position: never money, so it cannot change completeness.
+            try:
+                pots["gas"] = self.rail.gas_view(dict(self.gas_spent))
+            except Exception:
+                pots["gas"] = {"refill_ready": False, "blocked_by": "gas position unavailable"}
         self._write("pots", pots=pots)
         self._pots = pots
         return self.pots()
@@ -179,6 +192,12 @@ class Treasury:
                              venice_spent_after=self.venice_spent + amount)
             reference = self.rail.prepare(steps[0], state, self.gas_spent)
             self._check_fee(reference, state)
+            route = reference.get("gas_route")
+            if route and route.get("forward"):
+                quoted = route["forward_fee_micro"]
+                if self.forward_spent + quoted > self.max_forward_fees_per_window:
+                    raise RailError("treasury.max_forward_fees_per_window exhausted")
+                state["forward_spent_after"] = self.forward_spent + quoted
             fee_budget = (0 if direction in ("to_venice", "spot_to_perps", "perps_to_spot")
                           else self.fee_ceiling_micro)
             if amount + fee_budget > self.wallet.available:
@@ -193,6 +212,9 @@ class Treasury:
                 "refused", direction=direction, reason="rail preflight unavailable", handle=handle
             )
             return {"status": "refused", "error": "rail preflight unavailable"}
+        if route:
+            # The branch the route chose from its own observed position, public before signing.
+            self._write("gas_route", transfer_id=state["id"], direction=direction, **route)
         self.principal_hold = self.wallet.reserve(amount, handle, "treasury:principal")
         try:
             self.fee_hold = self.wallet.reserve(fee_budget, handle, "treasury:fees")
@@ -209,6 +231,8 @@ class Treasury:
         self.last_nonce = nonce
         if direction == "to_venice":
             self.venice_spent = state["venice_spent_after"]
+        if "forward_spent_after" in state:
+            self.forward_spent = state["forward_spent_after"]
         self._send()
         return {
             "status": self.state["status"],
@@ -441,6 +465,7 @@ class Treasury:
                 "fake_venice": self.rail.venice if self.rail.name == "scripted" else None,
                 "venice_window": self.venice_window,
                 "venice_spent": self.venice_spent,
+                "forward_spent": self.forward_spent,
             }
         )
 
@@ -461,6 +486,7 @@ class Treasury:
         self.next_id, self.last_nonce = saved["next_id"], saved["last_nonce"]
         self.gas_spent, self._pots = saved["gas_spent"], saved["pots"]
         self.venice_window, self.venice_spent = saved["venice_window"], saved["venice_spent"]
+        self.forward_spent = saved.get("forward_spent", 0)  # checkpoints predate forwarding
         if saved["fake_reserve"] is not None:
             self.rail.reserve = saved["fake_reserve"]
             self.rail.venice = saved["fake_venice"]

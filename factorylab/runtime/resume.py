@@ -385,7 +385,8 @@ def _read_only(name: str) -> bool:
         return True
     if name == "treasury.provider_pots" or (
         name.startswith("treasury.rail.")
-        and name.rsplit(".", 1)[-1] in ("balances", "preflight", "plan", "prepare", "poll")
+        and name.rsplit(".", 1)[-1] in ("balances", "preflight", "plan", "prepare", "poll",
+                                         "gas_view")
     ):
         return True
     return name.rsplit(".", 1)[-1] in (

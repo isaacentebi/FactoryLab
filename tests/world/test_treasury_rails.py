@@ -127,6 +127,8 @@ def test_route_is_native_cctp_and_pots_count_usdc_only():
 @pytest.mark.parametrize("direction", ["to_reserve", "to_venue"])
 def test_no_gas_and_source_pot_shortage_are_refused(direction):
     rail = setup()
+    # The self-mint branch is pinned; the forwarded exit is covered in test_gas_route.
+    rail.spec = TreasurySpec(reserve_address=rail.reserve_address, cctp_forwarding="never")
     rail.preflight(direction, 10_000_000, {})
     with pytest.raises(RailError, match="source pot"):
         rail.preflight(direction, 51_000_000, {})
@@ -151,6 +153,7 @@ def test_route_upgrade_agent_key_or_disabled_forwarding_refuses():
 
 def test_used_native_budget_is_not_available_again():
     rail = setup()
+    rail.spec = TreasurySpec(reserve_address=rail.reserve_address, cctp_forwarding="never")
     with pytest.raises(RailError, match="exhausted"):
         rail.preflight("to_reserve", 10_000_000, {"base": rail.base.gas_budget_wei})
 

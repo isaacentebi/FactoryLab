@@ -107,6 +107,9 @@ settings".
 | Key | Type | Default / seed | Hard cast? |
 | --- | --- | --- | --- |
 | `treasury.max_venice_per_window` | Exact USD decimal string or integer, nonnegative | `"10"` (10,000,000 micro-USD) | Configured resource bound, fixed for a run; not amendable through metric cards |
+| `treasury.cctp_forwarding` | `"never"`, `"on_empty_gas"` or `"always"` | `"on_empty_gas"` | Configured route rule, fixed for a run; absent or default keys leave the manifest hash unchanged |
+| `treasury.max_forward_fee_usd` | Exact USD decimal string, nonnegative | `"0.20"` | Hard bound on the on-chain forwarding fee quote per exit; a higher quote refuses before signing |
+| `treasury.max_forward_fees_per_window` | Exact USD decimal string or integer, nonnegative | `"1"` | Per-reserve-window cap on forwarding fees quoted for submitted exits; a failed exit still counts |
 | `committee.seats` | Integer, at least 3 so the existing three core roles can be covered | `5` | Configured resource bound, fixed for a run |
 | `charter.cards[].window.kind` | `"returns"`, `"forecasts"`, or `"windows"` | Required for explicit cards | Executable selector type; its value is population amendable |
 | `charter.cards[].window.n` | Positive integer, never a boolean or float | Required; seed cost and well-formedness cards use `100`, forecast skill uses `50` | Population amendable sample horizon |
@@ -291,6 +294,32 @@ keeps the principal held; it is not converted into a second payment or a claimed
 arrival. The mainnet adapter requires wallet-bound Venice credit and Base USDC;
 the testnet rail refuses that live route. The offline fake rail exercises the
 same journal, principal hold, credit view and budget.
+
+The exit route `to_reserve` burns USDC on HyperCore and mints it on Base. Its
+Core gas is spot HYPE in the venue account, which the population buys itself on
+`HYPE/USDC`; HYPE charged as `nativeTokenFee` is not a fill, so runtime spot
+inventory may exceed the venue balance and an oversized sell is refused. At
+`prepare("withdraw_burn")` the world reads the reserve's own Base ETH balance:
+with ETH and Base gas budget for one mint it self-mints (`data = "0x00"`),
+otherwise it sends empty data so Circle's forwarder mints on Base and deducts the
+fee that `CoreDepositWallet.calculateCrossChainWithdrawalFee` quotes on-chain
+before signing. That quote is the burn message's `maxFee`, bounded by
+`treasury.max_forward_fee_usd` and by `treasury.max_forward_fees_per_window`,
+so an executed fee above it can never confirm. `treasury.cctp_forwarding`
+pins the rule (`never` keeps the old ETH requirement; `always` forwards). The
+choice, the quote and the balances read are public in `treasury.gas_route`
+before anything is signed; a zero or over-cap quote refuses with a ledgered
+reason. The forwarded mint step observes Circle's finalized `MessageReceived`
+for the burn's nonce and the exact USDC credit, sends nothing and books the fee
+as USDC, never as native gas; while it waits, a reserve that later holds ETH may
+deliver the unclaimed message itself (`destinationCaller` is zero), which is
+what `factorylab treasury advance` re-evaluates each tick. The pots view the
+population reads carries a `gas` block: `core_hype`, `core_hype_required`,
+`base_eth_wei`, `base_gas_remaining_wei`, the quoted `forward_fee_micro`, the
+`route` the next exit would take, `minimum_micro`, and `refill_ready` with the
+exact `blocked_by` reason. The reverse direction `to_venue` needs reserve Base
+ETH and HyperEVM HYPE and is refused with a public reason without them; nothing
+acquires that gas.
 
 `factorylab reserve topup --usd 5` is for the pre-launch seed. It refuses before
 loading credentials or constructing a payment client when a world journal exists

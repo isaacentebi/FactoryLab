@@ -250,6 +250,7 @@ class BootstrapMixin:
                 provider=self.provider,
                 fee_ceiling_micro=manifest.treasury.max_transfer_fee_micro,
                 max_venice_per_window=manifest.treasury.max_venice_per_window,
+                max_forward_fees_per_window=manifest.treasury.max_forward_fees_per_window,
             )
         self.wallet.bind_pots(self.treasury.pots)
         self.treasury.rail = JournalProxy(
@@ -376,7 +377,10 @@ class BootstrapMixin:
             "or to_venice from "
             "reserve in a fixed $5 tranche, within treasury.max_venice_per_window. "
             "Principal stays held "
-            "until receipt-confirmed arrival. The result carries references or a refusal reason.",
+            "until receipt-confirmed arrival. The result carries references or a refusal reason. "
+            "to_reserve needs spot HYPE in the venue account for the Core gas charge (buy it on "
+            "HYPE/USDC); its Base mint is self-paid when the reserve holds ETH, otherwise Circle "
+            "forwards it for the fee quoted in pots.gas.",
             "args_schema": {
                 "type": "object",
                 "properties": {

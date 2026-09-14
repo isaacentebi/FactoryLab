@@ -11,11 +11,15 @@ https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/hyperevm/json-rpc
 https://github.com/hl-archive-node/nanoreth/blob/node-builder/src/node/types/reth_compat.rs
 https://github.com/circlefin/hyperevm-circle-contracts/blob/master/src/messages/CrossChainWithdrawalHookData.sol
 
-The only route interface is balances/preflight/plan/prepare/send/poll. Its steps
-and carry data are opaque to Treasury. Withdrawals use SDK EIP-712 signing and
-posting with a persisted nonce, then the protocol burns on HyperEVM. Minting on
-Base is self-submitted. Return transfers burn on Base, mint to the reserve on
-HyperEVM and call depositFor to credit the declared main wallet's perps account.
+The only route interface is balances/preflight/plan/prepare/send/poll, plus the
+read-only gas_view the pots publish. Its steps and carry data are opaque to
+Treasury. Withdrawals use SDK EIP-712 signing and posting with a persisted
+nonce, then the protocol burns on HyperEVM. Minting on Base is self-submitted
+when the reserve holds ETH; otherwise the withdrawal sends empty data, so
+Circle's forwarder mints for the fee quoted on-chain before signing, and the
+mint step observes that mint instead of sending one. Return transfers burn on
+Base, mint to the reserve on HyperEVM and call depositFor to credit the
+declared main wallet's perps account.
 HYPE and ETH gas are booked at observed mids when spent, never as USDC principal.
 Native gas consumes its separate manifest budget. Its economic cost counts toward
 the transfer fee cap, but only actual USDC fees debit the USDC/provider-credit
@@ -66,6 +70,21 @@ def gas_micro(wei: int, price: str) -> int:
             rounding=ROUND_CEILING,
         )
     )
+
+
+# Gas allowance used to estimate one receiveMessage on Base at the observed gas price,
+# doubled like the Core charge ceiling. The recorded testnet mint used ~1.06e12 wei.
+MINT_GAS_ALLOWANCE = 200_000
+# CoreDepositWallet marks a forwarded withdrawal with bytes24("cctp-forward").
+FORWARD_MAGIC = b"cctp-forward".ljust(24, b"\0")
+FORWARD_FEE_QUOTE = "CoreDepositWallet.calculateCrossChainWithdrawalFee"
+MESSAGE_RECEIVED = "MessageReceived(address,uint32,bytes32,bytes32,uint32,bytes)"
+
+
+def hype_text(wei: int) -> str:
+    amount = Decimal(wei) / Decimal(10**18)
+    whole = amount == amount.to_integral()
+    return str(amount.quantize(Decimal(1)) if whole else amount.normalize())
 
 
 class LiveRail(ClassTransferRail):
@@ -184,7 +203,12 @@ class LiveRail(ClassTransferRail):
             if amount <= self.spec.withdrawal_fee_micro + self.spec.cctp_max_fee_micro:
                 raise RailError("amount is below the fee-covered venue withdrawal minimum")
             self._core_gas_bound(gas_spent)
-            executing = ("base",)
+            route = self.gas_route(gas_spent)
+            self._route_bound(route)
+            if amount <= self.spec.withdrawal_fee_micro + route["cctp_max_fee_micro"]:
+                raise RailError("amount is below the fee-covered venue withdrawal minimum")
+            # A forwarded mint is Circle's transaction: the reserve needs no Base gas.
+            executing = () if route["forward"] else ("base",)
         else:
             available = self.base.balance(self.base.chain.usdc)
             disabled = int.from_bytes(
@@ -225,30 +249,112 @@ class LiveRail(ClassTransferRail):
     def remaining(self, key: str, spent: dict) -> int:
         return self._evm(key).gas_budget_wei - spent.get(key, 0)
 
-    def _core_fee(self) -> int:
+    def _core_fee(self, forward: bool = False) -> int:
+        """The burn's maxFee as CoreDepositWallet quotes it for this branch, read on-chain."""
         return int.from_bytes(
             self.hyper.read(
                 self.core,
                 calldata(
                     "calculateCrossChainWithdrawalFee(bool,uint32)",
                     ["bool", "uint32"],
-                    [False, self.base.chain.domain],
+                    [forward, self.base.chain.domain],
                 ),
             )
         )
 
-    def _core_gas_bound(self, spent: dict) -> int:
-        """Reserve the documented Core-to-EVM gas charge against the HyperEVM budget."""
+    def _core_gas(self, spent: dict) -> tuple[int, int, int]:
+        """The documented Core-to-EVM gas ceiling, the venue's spot HYPE and the budget left."""
         gas = 200_000 * int(self.hyper.call("eth_gasPrice", []), 16) * 2
         spot = self.exchange._info.spot_user_state(self.venue_address)
         hype = sum(Decimal(r["total"]) for r in spot["balances"] if r["coin"] == "HYPE")
-        if gas <= 0 or gas > self.remaining("hyper", spent):
+        return gas, int(hype * 10**18), self.remaining("hyper", spent)
+
+    def _core_gas_bound(self, spent: dict) -> int:
+        """Reserve the documented Core-to-EVM gas charge against the HyperEVM budget."""
+        gas, hype, remaining = self._core_gas(spent)
+        if gas <= 0 or gas > remaining:
             raise RailError("HyperCore transfer gas budget is exhausted")
-        if Decimal(gas) > hype * 10**18:
+        if gas > hype:
             raise RailError("venue requires spot HYPE for the Core-to-EVM gas charge")
         return gas
 
-    def _withdraw_action(self, amount: int, nonce: int) -> dict:
+    def gas_route(self, gas_spent: dict) -> dict:
+        """Choose the Base mint from the reserve's own observed position; reads only.
+
+        Self-mint needs Base ETH and budget for one receiveMessage; otherwise the
+        withdrawal is forwarded and Circle deducts the fee it quotes here.
+        """
+        mode = self.spec.cctp_forwarding
+        eth = self.base.balance()
+        remaining = self.remaining("base", gas_spent)
+        estimate = MINT_GAS_ALLOWANCE * int(self.base.call("eth_gasPrice", []), 16) * 2
+        self_fee, forward_quote = self._core_fee(False), self._core_fee(True)
+        core_gas, hype, _ = self._core_gas(gas_spent)
+        affordable = 0 < estimate <= min(eth, remaining)
+        if mode in ("never", "always"):
+            forward, reason = mode == "always", "manifest"
+        else:
+            forward = not affordable
+            reason = ("base_eth_available" if affordable
+                      else "no_base_eth" if eth < estimate else "base_gas_budget_exhausted")
+        return {
+            "forward": forward,
+            "reason": reason,
+            "mode": mode,
+            "base_eth_wei": eth,
+            "base_gas_remaining_wei": remaining,
+            "base_mint_estimate_wei": estimate,
+            "core_hype_wei": hype,
+            "core_hype_required_wei": core_gas,
+            "self_mint_fee_micro": self_fee,
+            "forward_fee_micro": forward_quote - self_fee,
+            "cctp_max_fee_micro": forward_quote if forward else self_fee,
+            "quote_source": FORWARD_FEE_QUOTE,
+        }
+
+    def _route_bound(self, route: dict) -> None:
+        """Refuse before signing when the chosen branch is not offered within the manifest."""
+        if route["self_mint_fee_micro"] > self.spec.cctp_max_fee_micro:
+            raise RailError("venue CCTP fee cap exceeds manifest cap")
+        if route["forward"]:
+            fee = route["forward_fee_micro"]
+            if fee <= 0:
+                raise RailError("CoreDepositWallet cannot currently forward the destination mint")
+            if fee > self.spec.max_forward_fee_micro:
+                raise RailError(
+                    f"forwarding fee quote {fee} exceeds treasury.max_forward_fee_micro")
+            return
+        if route["base_gas_remaining_wei"] <= 0:
+            raise RailError("native gas budget is not configured or is exhausted")
+        if route["base_eth_wei"] == 0:
+            raise RailError("reserve requires native ETH on base")
+
+    def gas_view(self, gas_spent: dict) -> dict:
+        """Answer "can the population exit to the reserve now, and what will it cost?"."""
+        route = self.gas_route(gas_spent)
+        blocked = None
+        try:
+            self._core_gas_bound(gas_spent)
+            self._route_bound(route)
+        except RailError as exc:
+            blocked = str(exc)
+        return {
+            "mode": route["mode"],
+            "route": "forwarded" if route["forward"] else "self_mint",
+            "reason": route["reason"],
+            "core_hype": hype_text(route["core_hype_wei"]),
+            "core_hype_required": hype_text(route["core_hype_required_wei"]),
+            "base_eth_wei": route["base_eth_wei"],
+            "base_gas_remaining_wei": route["base_gas_remaining_wei"],
+            "base_mint_estimate_wei": route["base_mint_estimate_wei"],
+            "forward_fee_micro": route["forward_fee_micro"],
+            "cctp_max_fee_micro": route["cctp_max_fee_micro"],
+            "minimum_micro": self.spec.withdrawal_fee_micro + route["cctp_max_fee_micro"] + 1,
+            "refill_ready": blocked is None,
+            "blocked_by": blocked,
+        }
+
+    def _withdraw_action(self, amount: int, nonce: int, forward: bool = False) -> dict:
         return {
             "type": "sendToEvmWithData",
             "token": "USDC",
@@ -258,9 +364,84 @@ class LiveRail(ClassTransferRail):
             "addressEncoding": "hex",
             "destinationChainId": self.base.chain.domain,
             "gasLimit": 200_000,
-            # Nonempty inert metadata disables Circle's automatic forwarding fee.
-            "data": "0x00",
+            # Empty data asks Circle's forwarder to mint on Base for its quoted fee;
+            # nonempty inert metadata keeps the mint, and its gas, with the reserve.
+            "data": "0x" if forward else "0x00",
             "nonce": nonce,
+        }
+
+    def _forwarded_mint(self, burn: dict, gas_spent: dict) -> dict | None:
+        """Observe Circle's forwarder mint of our burn; None lets the reserve self-mint.
+
+        destinationCaller is zero on this route, so anyone may deliver the message.
+        The forwarder's finalized delivery is preferred; a reserve that can pay
+        may deliver an unclaimed message itself. Otherwise the step waits.
+        """
+        message, proof, fee = self.cctp.attestation(self.hyper, self.base, burn)
+        nonce = "0x" + message[12:44].hex()
+        topics = [event_topic(MESSAGE_RECEIVED), None, nonce]
+        logs = self.base.logs(self.base.chain.transmitter, topics, burn["base_start_block"])
+        if len(logs) > 1:
+            raise RailError("ambiguous forwarded mint")
+        if logs:
+            return {
+                "network": f"eip155:{self.base.chain.id}",
+                "chain_key": "base",
+                "forwarded": True,
+                "tx_hash": logs[0]["transactionHash"],
+                "cctp_nonce": nonce,
+                "cctp_fee_micro": fee,
+                "fee_ceiling_micro": fee,
+                "start_block": burn["base_start_block"],
+            }
+        estimate = MINT_GAS_ALLOWANCE * int(self.base.call("eth_gasPrice", []), 16) * 2
+        if 0 < estimate <= min(self.remaining("base", gas_spent), self.base.balance()):
+            data = calldata("receiveMessage(bytes,bytes)", ["bytes", "bytes"], [message, proof])
+            try:
+                # A used nonce reverts this read: the forwarder has minted, unfinalized.
+                unclaimed = self.base.read(self.base.chain.transmitter, data) == (1).to_bytes(32)
+            except Pending:
+                unclaimed = False
+            if unclaimed:
+                return None
+        raise Pending("awaiting the Circle forwarder's Base mint")
+
+    def _forwarded_receipt(self, ref: dict, amount: int) -> dict | None:
+        """Confirm the forwarder's finalized delivery of our nonce and the exact USDC credit."""
+        receipt = self.base.proof(ref["tx_hash"])
+        if receipt is None or int(receipt["status"], 16) != 1:
+            return None
+        transmitter = self.base.chain.transmitter.lower()
+        received = [
+            log for log in receipt.get("logs", [])
+            if log.get("address", "").lower() == transmitter
+            and len(log.get("topics", [])) >= 3
+            and log["topics"][0].lower() == event_topic(MESSAGE_RECEIVED)
+            and log["topics"][2].lower() == ref["cctp_nonce"].lower()
+            and not log.get("removed", False)
+        ]
+        if len(received) != 1:
+            raise RailError("forwarded mint receipt lacks a unique MessageReceived for the burn")
+        fee = ref["cctp_fee_micro"]
+        if not self.cctp.minted(receipt, self.base, amount - fee):
+            raise RailError("forwarded mint receipt does not prove the intended USDC credit")
+        return {
+            "confirmed": True,
+            "received_micro": amount - fee,
+            "fee_micro": fee,
+            "wallet_fee_micro": fee,  # real USDC deducted by Circle; no native gas was spent
+            "chain_key": "base",
+            "principal_moved": True,
+            "evidence": {
+                "network": ref["network"],
+                "tx_hash": ref["tx_hash"],
+                "block_hash": receipt["blockHash"],
+                "cctp_nonce": ref["cctp_nonce"],
+                "cctp_fee_micro": fee,
+                "forwarded": True,
+                "forwarder": receipt["from"],
+                "credited_micro": amount - fee,
+            },
         }
 
     def prepare(self, step: str, state: dict, gas_spent: dict) -> dict:
@@ -279,9 +460,8 @@ class LiveRail(ClassTransferRail):
         if step == "burn_base" and state["route_data"].get("prepared_burn"):
             return deepcopy(state["route_data"]["prepared_burn"])
         if step == "withdraw_burn":
-            cap = self._core_fee()
-            if cap > self.spec.cctp_max_fee_micro:
-                raise RailError("venue CCTP fee cap exceeds manifest cap")
+            route = self.gas_route(gas_spent)
+            self._route_bound(route)
             gas = self._core_gas_bound(gas_spent)
             price = str(self.exchange._info.all_mids()["HYPE"])
             if not Decimal(price).is_finite() or Decimal(price) <= 0:
@@ -293,12 +473,21 @@ class LiveRail(ClassTransferRail):
                 "nonce": state["nonce"],
                 "amount_micro": amount,
                 "start_block": self.hyper.block(),
-                "cctp_max_fee_micro": cap,
+                "base_start_block": self.base.block(),
+                "cctp_max_fee_micro": route["cctp_max_fee_micro"],
                 "core_gas_ceiling_wei": gas,
                 "gas_usd": price,
                 "fee_ceiling_micro": self.spec.withdrawal_fee_micro + gas_micro(gas, price),
-                "action": self._withdraw_action(amount, state["nonce"]),
+                "forward": route["forward"],
+                "gas_route": route,
+                "action": self._withdraw_action(amount, state["nonce"], route["forward"]),
             }
+        fallback = False
+        if step == "mint_base" and state["route_data"]["burn"].get("forwarded"):
+            observed = self._forwarded_mint(state["route_data"]["burn"], gas_spent)
+            if observed is not None:
+                return observed
+            fallback = True  # unclaimed and affordable: the reserve delivers it below
         key = "base" if step.endswith("base") else "hyper"
         chain, remaining = self._evm(key), self.remaining(key, gas_spent)
         approval = (
@@ -321,6 +510,8 @@ class LiveRail(ClassTransferRail):
         elif step.startswith("mint_"):
             source = self.hyper if key == "base" else self.base
             ref = self.cctp.mint(source, chain, state["route_data"]["burn"], remaining)
+            if fallback:
+                ref["fallback"] = "self_mint"
         elif step == "approve_core":
             ref = chain.approve(chain.chain.usdc, self.core, amount, remaining)
         elif step == "deposit_core":
@@ -354,6 +545,8 @@ class LiveRail(ClassTransferRail):
 
             return top_up(self._venice_client(), reference)
         if step != "withdraw_burn":
+            if reference.get("forwarded"):
+                return None  # Circle's forwarder sends this transaction, never the reserve
             chain = self._evm(reference["chain_key"])
             if approval := reference.get("pending_approval"):
                 try:
@@ -368,7 +561,8 @@ class LiveRail(ClassTransferRail):
             or reference["network"] != self.exchange.name
         ):
             raise RailError("withdrawal reference identity mismatch")
-        action = self._withdraw_action(reference["amount_micro"], reference["nonce"])
+        action = self._withdraw_action(
+            reference["amount_micro"], reference["nonce"], reference.get("forward", False))
         if action != reference["action"]:
             raise RailError("withdrawal reference was modified")
         names = (
@@ -484,18 +678,23 @@ class LiveRail(ClassTransferRail):
         fee, gas, burned = int(fee_decimal), int(gas_decimal), amount - int(fee_decimal)
         if "core_gas_ceiling_wei" in ref and gas > ref["core_gas_ceiling_wei"]:
             raise RailError("Core-to-EVM gas charge exceeded its reserved ceiling")
+        forward = ref.get("forward", False)
+        body = b"" if forward else b"\x00"
         data = calldata(
             "coreReceiveWithData(address,bytes32,uint32,uint256,uint64,bytes)",
             ["address", "bytes32", "uint32", "uint256", "uint64", "bytes"],
             [self.venue_address, word_address(self.reserve_address), self.base.chain.domain,
-             burned, ref["nonce"], b"\x00"],
+             burned, ref["nonce"], body],
         )
         system = self.hyper.system_transfer(self.core, data, ref["start_block"], row["time"])
         if system is None:
             return None
-        # The deployed contract wraps the user data, and requests finalized (2000).
-        hook = (bytes(28) + (29).to_bytes(4) + bytes.fromhex(self.venue_address[2:])
-                + ref["nonce"].to_bytes(8) + b"\x00")
+        # The deployed contract wraps the user data as magic | version | length | from |
+        # nonce | data, with the forwarding magic only on empty data, and requests
+        # finalized (2000).
+        hook = ((FORWARD_MAGIC if forward else bytes(24)) + bytes(4)
+                + (len(body) + 28).to_bytes(4) + bytes.fromhex(self.venue_address[2:])
+                + ref["nonce"].to_bytes(8) + body)
         message = self.cctp.expected_message(
             self.hyper, self.base, burned,
             sender=self.core,
@@ -518,7 +717,8 @@ class LiveRail(ClassTransferRail):
             "gas_fee_wei": gas,
             "chain_key": "hyper",
             "principal_moved": True,
-            "route_data": {"burn": burn},
+            "route_data": {"burn": {**burn, "forwarded": forward,
+                                    "base_start_block": ref.get("base_start_block")}},
             "evidence": {
                 "network": f"eip155:{self.hyper.chain.id}",
                 "tx_hash": archive_hash,
@@ -542,6 +742,8 @@ class LiveRail(ClassTransferRail):
         ref, amount = state["reference"], state["received_micro"]
         if step == "withdraw_burn":
             return self._withdrawal(ref, amount)
+        if ref.get("forwarded"):
+            return self._forwarded_receipt(ref, amount)
         chain = self._evm(ref["chain_key"])
         if step == "approve_base":
             mined = chain.receipt(ref, finalized=False)
