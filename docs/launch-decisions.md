@@ -18,16 +18,18 @@ The initial kernel wallet must match the fresh, reconciled starting resources in
 integer micro-USD. It is not just the OpenRouter pot, and the $90 testnet roster is
 not the funded starting balance. See the dated, read-only observations in
 [the deployment record](audits/v3/digitalocean-deployment.md); refresh them immediately
-before preparing the final manifest. The current OpenRouter key has an upstream
-allowance below account credit. Full-account access requires correcting that
-existing provider setting; this is not an allocation limit introduced by FactoryLab.
+before preparing the final manifest. The operator accepts the current OpenRouter key allowance as the finite seed
+endowment. Do not remove it or buy additional OpenRouter credit. Additional inference
+uses Venice; the mixed roster and exhaustion proofs are recorded in
+[audit](audits/v3/compute-continuity.md).
 
 ## Charter and time
 
-The short rehearsal charter was drafted and ratified by the population from the
-charter inputs. Its evidence and exact manifest are in `docs/charter/edition1-short-*`.
-Use the ratified content, and verify its recorded hash and electorate before the
-funded manifest is frozen. Do not replace it with an architect-written trading rule.
+The existing 13-card charter was adopted unchanged by the mixed OpenRouter/Venice
+roster in a 5–0 seed-committee vote. Its approval and ballots are in
+`docs/charter/edition1-compute-continuity-*`; the matching prepared testnet manifest is
+`worlds/compute-continuity-testnet.toml`. Verify the same roster and charter hashes
+when preparing the funded manifest. See [adoption evidence](audits/v3/charter-adoption.md).
 
 A short rehearsal targets ten minutes of wall-clock runtime. A declared tick is a
 scheduling request: serial model calls may take longer. Report achieved tick gaps,
@@ -57,8 +59,10 @@ there. The exact release hashes and test history are in the deployment record.
 
 Finish the engineering checks, actual funding-path preparation, source verification,
 and operating configuration described in `deploy/README.md`. The operator has no
-existing off-host backup bucket or alert webhook. These are evidence-preservation
-and notification mechanisms, not trading controls; their status must be explicit.
+existing off-host backup bucket and prefers a website for operational status rather
+than email notifications. The wake is the existing status surface. A page on the
+same droplet cannot independently announce a complete droplet outage. Off-host
+backup remains evidence-preservation work; it does not constrain trading.
 
 Only after the launch prerequisites are genuinely met should `worlds/funded.toml`
 be created with the ratified charter and fresh starting accounting. Validate its
