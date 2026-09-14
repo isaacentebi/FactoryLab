@@ -173,13 +173,29 @@ class CCTP:
         HyperEVM's official node omits system transaction receipts. The separate
         system-call proof plus Circle's cryptographically checked message replaces
         that missing receipt. eth_call performs no mint or paid write.
+
+        A forwarded withdrawal is delivered by Circle within seconds of the
+        attestation, and the transmitter then reverts the dry run with "Nonce
+        already used" for good. Its own consumed-nonce record is the stronger
+        proof, so it is read first; the dry run remains the check for a message
+        nobody has delivered yet. Neither says the reserve was credited: only the
+        mint step's MessageReceived log and exact USDC Transfer do that.
         """
         burn = {"tx_hash": tx_hash, "message": "0x" + expected.hex()}
         message, proof, _ = self.attestation(source, destination, burn)
-        data = calldata("receiveMessage(bytes,bytes)", ["bytes", "bytes"], [message, proof])
-        if destination.read(destination.chain.transmitter, data) != (1).to_bytes(32):
-            raise RailError("destination contract did not validate the Circle attestation")
+        if not self.consumed(destination, message):
+            data = calldata("receiveMessage(bytes,bytes)", ["bytes", "bytes"], [message, proof])
+            if destination.read(destination.chain.transmitter, data) != (1).to_bytes(32):
+                raise RailError("destination contract did not validate the Circle attestation")
         return {"tx_hash": tx_hash, "message": "0x" + message.hex()}
+
+    @staticmethod
+    def consumed(destination: EVM, message: bytes) -> bool:
+        """True when the pinned transmitter has already accepted this exact CCTP nonce."""
+        return int.from_bytes(destination.read(
+            destination.chain.transmitter,
+            calldata("usedNonces(bytes32)", ["bytes32"], [message[12:44]]),
+        )) == 1
 
     def attestation(self, source: EVM, destination: EVM, burn: dict) -> tuple[bytes, bytes, int]:
         """Match Iris output to the confirmed transaction's message before permitting a mint."""

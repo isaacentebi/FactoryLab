@@ -317,3 +317,70 @@ def test_gas_view_reports_the_position_the_route_and_the_exact_blocker():
     view = setup(mode="never").gas_view({})
     assert view["route"] == "self_mint"
     assert view["blocked_by"] == "reserve requires native ETH on base"
+
+
+def already_delivered(used):
+    """Circle's forwarder has minted our message, so receiveMessage now reverts on Base.
+
+    The live testnet run saw exactly this: the forwarder delivered nonce
+    0x33f8ff37... five Base Sepolia blocks after the burn, and every later
+    ``eth_call`` of ``receiveMessage`` answered "execution reverted: Nonce
+    already used", which ``EVM.call`` reports as ``Pending``.
+    """
+    rail = setup()
+    rail.base.account = SimpleNamespace(address=rail.reserve_address)
+    cctp = CCTP(testnet=True)
+    hook = (b"cctp-forward" + bytes(12) + bytes(4) + (28).to_bytes(4)
+            + bytes.fromhex(rail.venue_address[2:]) + (123).to_bytes(8))
+    expected = cctp.expected_message(rail.hyper, rail.base, 9_000_000, sender=CORE_TEST_WALLET,
+                                     max_fee_micro=200_000, min_finality=2000, hook=hook)
+    attested = bytearray(expected)
+    attested[12:44] = (77).to_bytes(32)
+    attested[144:148] = (2000).to_bytes(4)
+    attested[312:344] = (200_000).to_bytes(32)
+    row = {"status": "complete", "message": "0x" + bytes(attested).hex(),
+           "attestation": "0x" + bytes(65).hex()}
+    cctp.transport = lambda *args: HTTPResponse(200, {"messages": [row]}, {})
+    rail.cctp = cctp
+    used_call = calldata("usedNonces(bytes32)", ["bytes32"], [(77).to_bytes(32)])
+    reads = []
+
+    def read(contract, data):
+        reads.append(data)
+        if data == used_call:
+            return used.to_bytes(32)
+        raise Pending("RPC call rejected or unavailable")
+
+    rail.base.read = read
+    rail.hyper.system = {"type": "0x0", "chainId": hex(998), "nonce": "0x1", "gasPrice": "0x0",
+                         "gas": hex(200_000), "value": "0x0", "to": rail.core, "input": "0x00",
+                         "from": "0x2000000000000000000000000000000000000000",
+                         "hash": "0xsystem", "blockHash": "0xblock"}
+    rail.exchange._info.updates = [{"time": 124, "hash": "0xcore", "delta": {
+        "nonce": 123, "type": "send", "user": rail.venue_address,
+        "destination": "0x2000000000000000000000000000000000000000",
+        "sourceDex": "", "destinationDex": "spot", "token": "USDC", "amount": "10",
+        "fee": "1", "nativeTokenFee": "0.00002"}}]
+    ref = {"nonce": 123, "start_block": 99, "cctp_max_fee_micro": 200_000, "forward": True,
+           "base_start_block": 77, "gas_usd": "40"}
+    return rail, ref, reads, used_call
+
+
+def test_a_forwarded_burn_the_forwarder_already_delivered_confirms_instead_of_stalling():
+    rail, ref, reads, used_call = already_delivered(1)
+    result = rail._withdrawal(ref, 10_000_000)
+    assert result["confirmed"] and result["principal_moved"]
+    assert result["route_data"]["burn"]["forwarded"] is True
+    assert result["route_data"]["burn"]["message"] == "0x" + bytes(
+        rail.cctp.attestation(rail.hyper, rail.base, {
+            "tx_hash": "0x" + "1" * 64,
+            "message": result["route_data"]["burn"]["message"]})[0]).hex()
+    # A consumed nonce is the transmitter's own record: no dry run is attempted.
+    assert reads == [used_call]
+
+
+def test_an_unconsumed_nonce_still_requires_the_destination_to_validate_the_attestation():
+    rail, ref, reads, used_call = already_delivered(0)
+    with pytest.raises(Pending):
+        rail._withdrawal(ref, 10_000_000)
+    assert len(reads) == 2 and reads[0] == used_call and reads[1] != used_call
