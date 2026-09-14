@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
+import secrets
 from collections import deque
 from decimal import Decimal
 from typing import Any
@@ -45,7 +47,12 @@ from factorylab.settlement import (
 )
 from factorylab.settlement.consequence import FillCursor
 from factorylab.world.clock import ClockIterator, ClockSource
-from factorylab.world.exchange import FakeExchange, HyperliquidExchange, live_exchange
+from factorylab.world.exchange import (
+    FakeExchange,
+    HyperliquidExchange,
+    bind_launch_nonce,
+    live_exchange,
+)
 from factorylab.world.market import MultiProvider, X402Provider
 from factorylab.world.metering import Meter
 from factorylab.world.models import FakeModel, TokenPrice
@@ -126,6 +133,18 @@ class BootstrapMixin:
                 start_cash_usd=money_to_usd(self.initial),
                 shocks=shocks,
             )
+        # One launch, one venue identity space. The nonce is drawn here so the
+        # pre-launch snapshot already carries it and replay reproduces the exact
+        # Launch event; resume overwrites it from the checkpoint. A live venue is
+        # shared across launches, so the nonce is random; the deterministic venue
+        # is private to its run, so the nonce follows the manifest and the seed and
+        # identical inputs still produce a byte-identical diary.
+        if self.live:
+            self.launch_nonce = secrets.token_hex(16)
+        else:
+            self.launch_nonce = hashlib.sha256(
+                f"{manifest.manifest_hash}:{self.seed}".encode()).hexdigest()[:32]
+        bind_launch_nonce(self.exchange, self.launch_nonce)
         if provider is None:
             provider = build_provider(manifest)
         self.provider = provider if provider is not None else ScriptedProvider()

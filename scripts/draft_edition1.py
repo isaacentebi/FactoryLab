@@ -20,7 +20,6 @@ ledger; it is a survey of the population, not a run of the world.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import random
 import sys
@@ -36,6 +35,9 @@ from factorylab.charter.charter import Charter, MetricCard
 from factorylab.charter.committee import Ballot, Committee, Seat, draw
 from factorylab.charter.measurement import measurement_catalogue as catalogue
 from factorylab.charter.measurement import preflight_measurement
+
+# The load path enforces these digests; the script and the kernel must agree exactly.
+from factorylab.charter.provenance import charter_digest, roster_hash
 from factorylab.charter.windows import window_schema
 from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, _parse_json_object
 from factorylab.runtime.cards import parses
@@ -110,16 +112,6 @@ class Proposal:
 
 
 # ------------------------------------------------------------------- prompt rendering
-
-
-def roster_hash(manifest: WorldManifest) -> str:
-    """Bind the survey to the exact assemblies and the model configurations they used."""
-    model_ids = {a.model_id for a in manifest.assemblies}
-    roster = {"assemblies": [asdict(a) for a in manifest.assemblies],
-              "system_prompt": SEED_SYSTEM_PROMPT,
-              "models": [asdict(m) for m in manifest.models if m.id in model_ids]}
-    encoded = json.dumps(roster, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def survey_world(world: dict[str, Any]) -> dict[str, Any]:
@@ -414,12 +406,6 @@ def accepted_cards(passing: list[Proposal]) -> list[tuple[MetricCard, float | No
         used.add(cid)
         rendered.append((replace(card, id=cid), p.price))
     return rendered
-
-
-def charter_digest(raw: dict) -> str:
-    """Hash the executable charter rather than its comments or TOML layout."""
-    body = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(body).hexdigest()
 
 
 def export_charter(manifest: WorldManifest, passing: list[Proposal], path: Path) -> None:

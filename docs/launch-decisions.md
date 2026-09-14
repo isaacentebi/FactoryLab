@@ -74,3 +74,20 @@ After launch, the operating covenant remains: no new manifest, no manual refill,
 no population steering, and no live private-diary inspection. The wake publishes
 its sealed views; the kill action ends the world. Automatic process recovery must
 resume the same identity and ledger, rather than resetting the experiment.
+
+## Self-serve gas (decided 14 September)
+
+The population must be able to pay its own exit fees without an architect seed. The
+design is in `docs/audits/v4/gas-design.md`. Two facts reframed it: the Hyperliquid-side fee
+is paid from HYPE held in the venue spot account (about a third of a cent per exit, and
+`HYPE/USDC` is a listed spot pair the population can buy with its trading money), and the
+Base-side mint can be done by Circle's forwarding service for a flat on-chain-quoted fee of
+$0.20 with zero ETH at the reserve, a route our code had deliberately switched off.
+
+Built as "forward-on-empty": at each exit the world reads its own Base ETH balance and
+either self-mints for about a cent or lets Circle mint for the quoted fee; the branch and
+the quote are ledgered (`treasury.gas_route`) and shown to the population in the treasury
+view. Decisions taken: `HYPE/USDC` is seeded as a spot market in the funded manifest as the
+physics of the exit, not a trading instruction; the reverse direction (reserve to venue)
+may refuse with a public reason rather than require gas at the reserve; no API key and no
+architect gas seed are part of the launch.

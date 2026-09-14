@@ -214,6 +214,7 @@ class Runtime(
                 EventKind.LAUNCH,
                 self.clock.now_ns,
                 {"manifest_hash": self.m.manifest_hash(),
+                 "launch_nonce": self.launch_nonce,
                  "manifest": json.loads(self.m.canonical_json())},
                 "kernel",
             )

@@ -243,6 +243,9 @@ class VeniceProvider:
             "max_tokens": req.max_tokens,
             **options,
         }
+        # Venice speaks the OpenAI wire: a request for a JSON object says so there.
+        if req.json_object:
+            payload["response_format"] = {"type": "json_object"}
         if tools is not None:
             payload["tools"] = list(tools)
         if tool_choice is not None:

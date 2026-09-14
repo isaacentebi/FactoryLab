@@ -393,3 +393,26 @@ def test_resume_reports_insecure_key_metadata_without_reading_it(
     captured = capsys.readouterr()
     assert captured.err == "factorylab resume: credential_unsafe\n"
     assert captured.out == ""
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o666, 0o604])
+def test_world_readable_openrouter_key_is_refused_like_the_other_credentials(mode, tmp_path):
+    from factorylab.runtime.cli import KeyFileModeError
+
+    # Synthetic content only; production credentials are never inspected by tests.
+    path = tmp_path / "openrouter.key"
+    path.write_text("sk-fixture\n")
+    path.chmod(mode)
+    with pytest.raises(KeyFileModeError, match="openrouter.key"):
+        _load_dotenv()
+
+
+def test_owner_only_openrouter_key_still_loads(tmp_path, monkeypatch):
+    import os
+
+    path = tmp_path / "openrouter.key"
+    path.write_text("sk-fixture\n")
+    path.chmod(0o600)
+    _load_dotenv()
+    assert os.environ["OPENROUTER_API_KEY"] == "sk-fixture"
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)

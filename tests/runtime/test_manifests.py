@@ -46,7 +46,22 @@ def test_validation_rejects_unpriced_assembly_and_mainnet_outside_funded() -> No
         manifest_from_dict(d)
     d["name"] = "funded"
     d["charter"] = _with_charter()["charter"]
-    assert manifest_from_dict(d).exchange.mainnet is True
+    # A funded world also needs its own venue identity space and its ratified
+    # charter/roster hashes; those refusals are covered in tests/audit/test_r3_l_mainnet.py.
+    with pytest.raises(ValueError, match="client_namespace"):
+        manifest_from_dict(d)
+
+
+def test_mainnet_requires_a_client_namespace_before_the_charter_hashes() -> None:
+    d = _base()
+    d["name"] = "funded"
+    d["exchange"] = {"kind": "hyperliquid", "mainnet": True}
+    d["charter"] = _with_charter()["charter"]
+    with pytest.raises(ValueError, match="client_namespace"):
+        manifest_from_dict(d)
+    d["exchange"]["client_namespace"] = "b" * 32
+    with pytest.raises(ValueError, match="ratified_sha256"):
+        manifest_from_dict(d)
 
 
 def test_duration_strings() -> None:
@@ -238,6 +253,7 @@ def test_example_manifest_and_cli_resolve_population_charter(capsys):
     # its rehearsals exercised. The population registers spot pairs itself.
     assert replace(example, name=base.name, charter=base.charter, treasury=base.treasury,
                    charter_explicit=base.charter_explicit, exchange=base.exchange,
+                   charter_content_sha256=base.charter_content_sha256,
                    tick_interval_ns=base.tick_interval_ns, evaluation=base.evaluation) == base
     assert example.tick_interval_ns == 600_000_000_000
     assert example.evaluation.consequence_backstop_events == 60
