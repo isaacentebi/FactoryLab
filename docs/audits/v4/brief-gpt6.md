@@ -38,6 +38,22 @@ plus a route by which the population can turn trading profit into more thinking.
 - The launch decisions in `docs/launch-decisions.md`, the population-ratified charter under
   `docs/charter/`, and `docs/charter-explained.md`.
 
+**Also read:** Jha, Cicala, Agüera y Arcas, Richards, Jaques, Kleiman-Weiner and Niklasson,
+*Tapes Together Strong: The Co-evolution of Computation and Cooperation* (arXiv:2609.10817,
+September 2026). It proposes Autopoietic Game Theory: worlds in which "social interactions,
+replication mechanisms, and their associated computational costs are endogenous and
+simultaneously co-evolving", and finds that when the cost of computing is tied to an
+agent's energy, defection can become self-defeating and cooperation becomes "a dominant
+scaffolding for building sustainable, self-organizing systems". Factory Lab was built from
+the essay, not from this paper, but it shares the premise: every thought costs wallet
+money, replication is registration, energy is the two pots. Treat the paper as a second
+specification of intent and use it under lens 2 and lens 3 below: is defection actually
+self-defeating in this world's physics, or only fined; does gaming a card destroy shared
+value the way "parasitic stealing destroys shared energy" does in their substrate, or is it
+free; is there any analogue of spatial assortment (sortition, committees, the cascade) that
+lets cooperators find each other; and what, in the paper's terms, this world should be
+measuring that it does not.
+
 ## The standard you judge against
 
 Say whether this world is fit to launch under the essay's own terms, which I take to be:
