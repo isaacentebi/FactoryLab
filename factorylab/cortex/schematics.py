@@ -478,12 +478,16 @@ class SchematicsMixin:
                          "max_forward_fee_micro": self.m.treasury.max_forward_fee_micro,
                          "max_forward_fees_per_window_micro":
                              self.m.treasury.max_forward_fees_per_window,
+                         "forward_wait_windows": self.m.treasury.forward_wait_windows,
                          "exit_route": "to_reserve burns USDC on HyperCore and mints it on "
                          "Base. Spot HYPE in the venue account pays the Core gas charge: buy it "
                          "on HYPE/USDC; HYPE spent as that charge is not a fill. The mint is "
                          "self-paid when the reserve holds Base ETH; otherwise Circle forwards "
                          "it for the on-chain fee quoted in pots.gas, bounded per transfer and "
-                         "per reserve window. pots.gas names the branch and any blocker.",
+                         "per reserve window. pots.gas names the branch and any blocker. A "
+                         "forwarded mint unobserved for forward_wait_windows reserve windows "
+                         "strands recoverably (pots.stranded): its burned principal stays "
+                         "held and re-checked, and new transfers are admitted.",
                          "return_route": "to_venue needs reserve Base ETH and HyperEVM HYPE "
                          "and is refused with a public reason without them; nothing buys "
                          "that gas."},

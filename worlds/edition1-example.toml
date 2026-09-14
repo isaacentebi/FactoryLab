@@ -257,3 +257,8 @@ gain_step = 0.05
 gamma_max = 0.5
 decay_step = 0.1
 
+[venue]
+# HYPE/USDC is the physics of the exit route, not a trading instruction: the spot HYPE
+# the population buys to pay its own Core gas (docs/launch-decisions.md, "Self-serve
+# gas"). One seeded spot market, one more MarketMid per tick.
+spot_pairs = ["HYPE/USDC"]

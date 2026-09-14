@@ -192,9 +192,16 @@ class CCTP:
     @staticmethod
     def consumed(destination: EVM, message: bytes) -> bool:
         """True when the pinned transmitter has already accepted this exact CCTP nonce."""
+        return CCTP.nonce_used(destination, message[12:44])
+
+    @staticmethod
+    def nonce_used(destination: EVM, nonce: bytes) -> bool:
+        """Read the transmitter's own record for one nonce; a zero nonce names no message."""
+        if len(nonce) != 32 or nonce == bytes(32):
+            raise RailError("CCTP message carries no nonce")
         return int.from_bytes(destination.read(
             destination.chain.transmitter,
-            calldata("usedNonces(bytes32)", ["bytes32"], [message[12:44]]),
+            calldata("usedNonces(bytes32)", ["bytes32"], [nonce]),
         )) == 1
 
     def attestation(self, source: EVM, destination: EVM, burn: dict) -> tuple[bytes, bytes, int]:

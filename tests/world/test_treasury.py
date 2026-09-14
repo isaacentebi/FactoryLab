@@ -270,7 +270,7 @@ def test_a_stalled_poll_is_ledgered_bounded_and_public_until_evidence_arrives():
     assert stalls[0] == {"kind": "treasury.pending", "transfer_id": "treasury-0",
                          "step": "to_reserve", "phase": "poll",
                          "reason": "RPC call rejected or unavailable", "attempts": 1,
-                         "since_ns": 2, "reference": None}
+                         "since_ns": 2, "since_window": 0, "reference": None}
     assert all(i["since_ns"] == 2 for i in stalls)
     assert treasury.state["pending"]["attempts"] == 25
     view = wallet.pots()
@@ -317,7 +317,7 @@ def test_a_pending_preparation_is_ledgered_with_its_step_and_carries_the_rail_cu
     assert stalls == [{"kind": "treasury.pending", "transfer_id": "treasury-0",
                        "step": "mint_base", "phase": "prepare",
                        "reason": "awaiting the Circle forwarder's Base mint", "attempts": 1,
-                       "since_ns": 2, "reference": {"scanned_to": 101}}]
+                       "since_ns": 2, "since_window": 0, "reference": {"scanned_to": 101}}]
     for tick in range(3, 12):
         treasury.tick(tick)
     # Each wait resumes from the cursor the previous wait carried back.
@@ -356,4 +356,4 @@ def test_an_old_checkpoint_without_a_pending_record_restores():
     restored.tick(3)
     assert restored.state["pending"] == {
         "step": "to_reserve", "phase": "poll", "reason": "RPC call rejected or unavailable",
-        "attempts": 1, "since_ns": 3, "reference": None}
+        "attempts": 1, "since_ns": 3, "since_window": 0, "reference": None}

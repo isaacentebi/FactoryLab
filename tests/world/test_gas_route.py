@@ -24,6 +24,7 @@ from factorylab.world.evm import (
     event_topic,
     word_address,
 )
+from factorylab.world.treasury import Treasury
 from factorylab.world.treasury_rails import MINT_GAS_ALLOWANCE, gas_micro
 from factorylab.world.x402 import HTTPResponse
 from tests.world.test_treasury_rails import setup as base_setup
@@ -151,10 +152,12 @@ def test_never_mode_keeps_the_self_mint_refusals_and_forwarding_needs_no_base_ga
 def test_on_chain_quote_bounds_the_burn_max_fee_before_anything_is_signed():
     with pytest.raises(RailError, match="CoreDepositWallet cannot currently forward"):
         setup(quotes=(0, 0)).preflight("to_reserve", 10_000_000, {})
-    with pytest.raises(RailError, match="quote 250000 exceeds treasury.max_forward_fee_micro"):
-        setup(quotes=(0, 250_000)).prepare(
+    with pytest.raises(RailError, match="quote 350000 exceeds treasury.max_forward_fee_micro"):
+        setup(quotes=(0, 350_000)).prepare(
             "withdraw_burn", {"received_micro": 10_000_000, "nonce": 1}, {})
-    setup(quotes=(0, 250_000), max_forward_fee_micro=250_000).preflight(
+    # The default cap leaves $0.10 of headroom over the $0.20 quote; the cap is still a cap.
+    setup(quotes=(0, 300_000)).preflight("to_reserve", 10_000_000, {})
+    setup(quotes=(0, 350_000), max_forward_fee_micro=350_000).preflight(
         "to_reserve", 10_000_000, {})
     with pytest.raises(RailError, match="venue CCTP fee cap exceeds manifest cap"):
         setup(quotes=(150_000, 350_000)).preflight("to_reserve", 10_000_000, {})
@@ -163,6 +166,39 @@ def test_on_chain_quote_bounds_the_burn_max_fee_before_anything_is_signed():
     with pytest.raises(RailError, match="fee-covered venue withdrawal minimum"):
         setup().preflight("to_reserve", 1_200_000, {})
     setup().preflight("to_reserve", 1_200_001, {})
+
+
+def flipping_eth(rail, *reads):
+    """The reserve's Base ETH as each native read sees it; empty after the listed reads."""
+    native = iter(reads)
+    rail.base.balance = lambda token=None: 50_000_000 if token else next(native, 0)
+
+
+def test_the_minimum_is_re_applied_against_the_route_actually_signed():
+    from tests.world.test_treasury import setup as treasury_setup
+
+    # Preflight reads ETH twice on the self-mint branch (the route and the gas check):
+    # the minimum it applied was $1.10 (withdrawal fee plus the CCTP cap, no forward fee).
+    # Before signing, the reserve reads empty, the route flips to forwarded and a $1.100001
+    # burn would carry a $0.20 maxFee against $0.100001 burned.
+    rail = setup(eth=10**17)
+    flipping_eth(rail, 10**17, 10**17)
+    rail.preflight("to_reserve", 1_100_001, {})
+    with pytest.raises(RailError, match="fee-covered venue withdrawal minimum"):
+        rail.prepare("withdraw_burn", {"received_micro": 1_100_001, "nonce": 1}, {})
+    ref = rail.prepare("withdraw_burn", {"received_micro": 1_200_001, "nonce": 2}, {})
+    assert ref["forward"] is True and ref["cctp_max_fee_micro"] == 200_000
+    # Through the treasury the flicker is a refusal with a ledgered reason, not a burn.
+    ledger, wallet, records = treasury_setup()
+    rail = setup(eth=10**17)
+    flipping_eth(rail, 10**17, 10**17)
+    treasury = Treasury(ledger, wallet, rail, fee_ceiling_micro=2_000_000)
+    result = treasury.transfer("to_reserve", "1.100001", handle="a", now_ns=1)
+    assert result == {"status": "refused",
+                      "error": "amount is below the fee-covered venue withdrawal minimum"}
+    assert records[-1]["kind"] == "treasury.refused" and records[-1]["reason"] == result["error"]
+    assert wallet.available == wallet.balance == 100_000_000
+    assert not any(i["kind"] in ("treasury.gas_route", "treasury.submitted") for i in records)
 
 
 def forwarded_burn(fee_executed):
@@ -292,6 +328,49 @@ def test_a_stranded_forward_falls_back_to_self_mint_only_while_unclaimed_and_aff
     rail.base.log_rows = []
     with pytest.raises(Pending, match="forwarder"):
         rail.prepare("mint_base", state, {"base": 10**16})
+
+
+def test_a_reverted_fallback_mint_confirms_the_forwarder_delivery_instead_of_stranding():
+    rail, state, log, credit, receipt, nonce = observed_case(eth=10**17)
+    used = []
+    rail.base.consumed = False
+    rail.cctp.nonce_used = lambda destination, value: (
+        used.append(value) or (value == (77).to_bytes(32) and rail.base.consumed))
+    ref = {"network": "eip155:84532", "sender": rail.reserve_address, "tx_hash": "0xself",
+           "tx": {"nonce": 9, "to": BASE_SEPOLIA.transmitter}, "gas_ceiling_wei": 10**13,
+           "l1_fee_ceiling_wei": 0, "cctp_fee_micro": 200_000, "cctp_nonce": nonce,
+           "fallback": "self_mint", "chain_key": "base", "gas_symbol": "ETH", "gas_usd": "3000",
+           "fee_ceiling_micro": gas_micro(10**13, "3000") + 200_000}
+    state["reference"] = ref
+    rail.base.receipt = lambda reference, *, finalized=True: {
+        "success": False, "gas_fee_wei": 5 * 10**12, "blockHash": "0xrevert"}
+    # Nobody delivered the message: the revert is the plain failure it always was.
+    result = rail.poll("mint_base", state)
+    assert result["confirmed"] is False and result["reason"] == "on-chain transaction reverted"
+    assert result["principal_moved"] is False and result["gas_fee_wei"] == 5 * 10**12
+    assert used == [(77).to_bytes(32)]
+    # "Nonce already used": Circle delivered first, so the USDC arrived by the forwarder's
+    # transaction. Until that delivery is finalized the step waits; then it confirms the
+    # credited amount and books only the gas the reverted fallback cost.
+    rail.base.consumed = True
+    assert rail.poll("mint_base", state) is None
+    rail.base.log_rows = [log]
+    assert rail.poll("mint_base", state) is None
+    rail.base.proved = receipt
+    result = rail.poll("mint_base", state)
+    assert result["confirmed"] and result["principal_moved"]
+    assert result["received_micro"] == 8_800_000 and result["wallet_fee_micro"] == 200_000
+    assert result["fee_micro"] == 200_000 + gas_micro(5 * 10**12, "3000")
+    assert result["gas_fee_wei"] == 5 * 10**12 and result["chain_key"] == "base"
+    assert result["evidence"]["tx_hash"] == "0xforwarder"
+    assert result["evidence"]["forwarder"] == "0xf0rwarder"
+    assert result["evidence"]["credited_micro"] == 8_800_000
+    assert result["evidence"]["reverted_fallback"] == {
+        "tx_hash": "0xself", "block_hash": "0xrevert", "gas_fee_wei": 5 * 10**12,
+        "gas_symbol": "ETH", "gas_usd": "3000"}
+    rail.base.log_rows = [log, {**log, "transactionHash": "0xother"}]
+    with pytest.raises(RailError, match="ambiguous"):
+        rail.poll("mint_base", state)
 
 
 def test_gas_view_reports_the_position_the_route_and_the_exact_blocker():

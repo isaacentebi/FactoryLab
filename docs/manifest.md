@@ -108,8 +108,9 @@ settings".
 | --- | --- | --- | --- |
 | `treasury.max_venice_per_window` | Exact USD decimal string or integer, nonnegative | `"10"` (10,000,000 micro-USD) | Configured resource bound, fixed for a run; not amendable through metric cards |
 | `treasury.cctp_forwarding` | `"never"`, `"on_empty_gas"` or `"always"` | `"on_empty_gas"` | Configured route rule, fixed for a run; absent or default keys leave the manifest hash unchanged |
-| `treasury.max_forward_fee_usd` | Exact USD decimal string, nonnegative | `"0.20"` | Hard bound on the on-chain forwarding fee quote per exit; a higher quote refuses before signing |
+| `treasury.max_forward_fee_usd` | Exact USD decimal string, nonnegative | `"0.30"` ($0.10 of headroom over the $0.20 quoted on both networks) | Hard bound on the on-chain forwarding fee quote per exit; a higher quote refuses before signing |
 | `treasury.max_forward_fees_per_window` | Exact USD decimal string or integer, nonnegative | `"1"` | Per-reserve-window cap on forwarding fees quoted for submitted exits; a failed exit still counts |
+| `treasury.forward_wait_windows` | Positive integer | `2` | Reserve windows a forwarded mint may stay unobserved before the exit strands recoverably; absent or default keys leave the manifest hash unchanged |
 | `committee.seats` | Integer, at least 3 so the existing three core roles can be covered | `5` | Configured resource bound, fixed for a run |
 | `charter.cards[].window.kind` | `"returns"`, `"forecasts"`, or `"windows"` | Required for explicit cards | Executable selector type; its value is population amendable |
 | `charter.cards[].window.n` | Positive integer, never a boolean or float | Required; seed cost and well-formedness cards use `100`, forecast skill uses `50` | Population amendable sample horizon |
@@ -297,7 +298,8 @@ same journal, principal hold, credit view and budget.
 
 The exit route `to_reserve` burns USDC on HyperCore and mints it on Base. Its
 Core gas is spot HYPE in the venue account, which the population buys itself on
-`HYPE/USDC`; HYPE charged as `nativeTokenFee` is not a fill, so runtime spot
+`HYPE/USDC` (seeded in both the funded draft and testnet as the physics of the
+exit route); HYPE charged as `nativeTokenFee` is not a fill, so runtime spot
 inventory may exceed the venue balance and an oversized sell is refused. At
 `prepare("withdraw_burn")` the world reads the reserve's own Base ETH balance:
 with ETH and Base gas budget for one mint it self-mints (`data = "0x00"`),
@@ -305,7 +307,14 @@ otherwise it sends empty data so Circle's forwarder mints on Base and deducts th
 fee that `CoreDepositWallet.calculateCrossChainWithdrawalFee` quotes on-chain
 before signing. That quote is the burn message's `maxFee`, bounded by
 `treasury.max_forward_fee_usd` and by `treasury.max_forward_fees_per_window`,
-so an executed fee above it can never confirm. `treasury.cctp_forwarding`
+so an executed fee above it can never confirm; the amount minimum
+(`withdrawal_fee` plus the signed branch's `maxFee`) is applied again at
+`prepare` against the route actually signed, so a gas-price or balance flicker
+between preflight and signing refuses with a ledgered reason rather than burning
+less than the fee cap. Loading refuses a manifest whose `withdrawal_fee_usd`,
+`cctp_max_fee_usd` and `max_forward_fee_usd` together exceed
+`max_transfer_fee_usd`, so a forwarded exit's mint step always fits the transfer
+fee cap after the principal burned. `treasury.cctp_forwarding`
 pins the rule (`never` keeps the old ETH requirement; `always` forwards). The
 choice, the quote and the balances read are public in `treasury.gas_route`
 before anything is signed; a zero or over-cap quote refuses with a ledgered
@@ -313,7 +322,22 @@ reason. The forwarded mint step observes Circle's finalized `MessageReceived`
 for the burn's nonce and the exact USDC credit, sends nothing and books the fee
 as USDC, never as native gas; while it waits, a reserve that later holds ETH may
 deliver the unclaimed message itself (`destinationCaller` is zero), which is
-what `factorylab treasury advance` re-evaluates each tick. While that mint waits,
+what `factorylab treasury advance` re-evaluates each tick. If that self-mint
+reverts because Circle delivered first ("Nonce already used"), the step
+re-checks the transmitter's consumed-nonce record and confirms the forwarder's
+finalized credit, booking only the reverted transaction's gas, instead of
+stranding money that arrived. The wait is bounded: a forwarded mint still
+unobserved once `treasury.forward_wait_windows` reserve windows have opened
+since the wait began is stranded through `treasury.failed` with reason
+`forwarded mint not delivered within treasury.forward_wait_windows`, the wait
+record (`waited`) and `recoverable: true`; such a strand keeps its principal
+hold but leaves the transfer slot, so new transfers are admitted, and whenever
+no transfer is in flight a tick re-checks it exactly as during the wait (the
+forwarder's delivery, or the reserve's own self-mint of the still-unclaimed
+message) and, on a reference, ledgers `treasury.recovered` and completes it
+through the same steps; parked strands are listed in the pots view as
+`stranded` (`transfer_id`, `stranded_micro`, `reason`, `since_ns`) and are
+checkpointed with their holds. While that mint waits,
 the observer keeps the last finalized Base block it scanned in the transfer's
 pending reference (`scanned_to`, checkpointed and replayed on resume) and pages
 `MessageReceived` logs only from the block after it, at most `FORWARD_SCAN_PAGES`
@@ -322,7 +346,12 @@ calls per tick instead of a rescan from the burn. The pots view the
 population reads carries a `gas` block: `core_hype`, `core_hype_required`,
 `base_eth_wei`, `base_gas_remaining_wei`, the quoted `forward_fee_micro`, the
 `route` the next exit would take, `minimum_micro`, and `refill_ready` with the
-exact `blocked_by` reason. The reverse direction `to_venue` needs reserve Base
+exact `blocked_by` reason; while a transfer is pending the money pots stay the
+cached observation but the `gas` block is re-read every refresh (journaled as
+`treasury.pots` with `pending: true`) and names the transfer in flight as
+`blocked_by`, beside `pending_reason` and `pending_since`. A CCTP message whose
+nonce is zero is never treated as consumed: `CCTP.consumed` refuses it. The
+reverse direction `to_venue` needs reserve Base
 ETH and HyperEVM HYPE and is refused with a public reason without them; nothing
 acquires that gas.
 
@@ -624,7 +653,11 @@ after `novelty.max_lifetime_windows` from its trial or inactive window, records
 ## Spot venue
 
 `venue.spot_pairs` is a list of unique `BASE/USDC` pairs, default `[]`, fixed at
-launch. Testnet seeds `["PURR/USDC"]`; scripted seeds `["BTC/USDC"]`.
+launch. Testnet seeds `["PURR/USDC", "HYPE/USDC"]` (`HYPE/USDC` is `@1035`
+there), the funded draft `edition1-example` seeds `["HYPE/USDC"]`, and scripted
+seeds `["BTC/USDC"]`; `HYPE/USDC` is seeded as the physics of the exit route
+(docs/launch-decisions.md, "Self-serve gas"), one spot market and one
+`MarketMid` per tick.
 The mainnet re-draft uses `UBTC/USDC` and `UETH/USDC` for those base assets.
 Live pairs must exist verbatim in SDK spot metadata; unavailable pairs fail launch.
 Orders and closes accept `market: "perp" | "spot"` (default `perp`); spot uses pair
@@ -648,7 +681,8 @@ raising out of the treasury tick.
 A poll or step preparation that cannot complete is ledgered as `treasury.pending`
 with the transfer id, `step`, `phase` (`poll` or `prepare`), a bounded `reason`
 (the rail's own constant message or, for any other exception, its class name,
-never RPC text), the monotone per-step `attempts` count, `since_ns` and the
+never RPC text), the monotone per-step `attempts` count, `since_ns`, the
+reserve window `since_window` the wait began in and the
 rail's carried `reference`, written on the first attempt, on every change of
 reason and on every tenth attempt (`PENDING_JOURNAL_EVERY`), and the pots view
 publishes the current stall as `pending_reason` and `pending_since` until the

@@ -473,6 +473,10 @@ class LiveRail(ClassTransferRail):
         if step == "withdraw_burn":
             route = self.gas_route(gas_spent)
             self._route_bound(route)
+            # The route is read again here, so the minimum is re-applied to the branch
+            # actually signed: a burn must exceed the maxFee it carries.
+            if amount <= self.spec.withdrawal_fee_micro + route["cctp_max_fee_micro"]:
+                raise RailError("amount is below the fee-covered venue withdrawal minimum")
             gas = self._core_gas_bound(gas_spent)
             price = str(self.exchange._info.all_mids()["HYPE"])
             if not Decimal(price).is_finite() or Decimal(price) <= 0:
@@ -810,6 +814,12 @@ class LiveRail(ClassTransferRail):
                 "success": settled["success"], "confirmation": "finalized",
             }
         if not receipt["success"]:
+            if ref.get("fallback") == "self_mint" and self.cctp.nonce_used(
+                    chain, bytes.fromhex(ref["cctp_nonce"].removeprefix("0x"))):
+                # "Nonce already used": Circle delivered before our fallback landed, so
+                # the USDC arrived by the forwarder's transaction. Confirm that credit and
+                # book only the gas the revert cost; never strand money that is here.
+                return self._forwarded_after_fallback(ref, state, amount, receipt)
             return {**result, "principal_moved": False, "reason": "on-chain transaction reverted"}
         if step == "burn_base":
             message = self.cctp.message(
@@ -849,6 +859,32 @@ class LiveRail(ClassTransferRail):
             result["evidence"]["venue_ledger_hash"] = row["hash"]
             result["evidence"]["venue_ledger_nonce"] = row["delta"]["nonce"]
         return result
+
+    def _forwarded_after_fallback(
+        self, ref: dict, state: dict, amount: int, reverted: dict
+    ) -> dict | None:
+        """Confirm the forwarder's finalized delivery that beat our reverted fallback mint."""
+        burn = state["route_data"]["burn"]
+        topics = [event_topic(MESSAGE_RECEIVED), None, ref["cctp_nonce"]]
+        logs = self.base.logs(self.base.chain.transmitter, topics, burn["base_start_block"])
+        if len(logs) > 1:
+            raise RailError("ambiguous forwarded mint")
+        if not logs:
+            return None  # delivered, not yet finalized: the wait is bounded by finality
+        observed = {"network": ref["network"], "tx_hash": logs[0]["transactionHash"],
+                    "cctp_nonce": ref["cctp_nonce"], "cctp_fee_micro": ref["cctp_fee_micro"]}
+        forwarded = self._forwarded_receipt(observed, amount)
+        if forwarded is None:
+            return None
+        gas = reverted["gas_fee_wei"]
+        return {
+            **forwarded,
+            "fee_micro": forwarded["fee_micro"] + gas_micro(gas, ref["gas_usd"]),
+            "gas_fee_wei": gas,
+            "evidence": {**forwarded["evidence"], "reverted_fallback": {
+                "tx_hash": ref["tx_hash"], "block_hash": reverted["blockHash"],
+                "gas_fee_wei": gas, "gas_symbol": ref["gas_symbol"], "gas_usd": ref["gas_usd"]}},
+        }
 
     def _deposit_credit(self, chain: EVM, receipt: dict, ref: dict, amount: int):
         """Require both a unique CoreWriter event and the subsequent real perps credit.

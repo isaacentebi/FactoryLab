@@ -270,6 +270,7 @@ class BootstrapMixin:
                 fee_ceiling_micro=manifest.treasury.max_transfer_fee_micro,
                 max_venice_per_window=manifest.treasury.max_venice_per_window,
                 max_forward_fees_per_window=manifest.treasury.max_forward_fees_per_window,
+                forward_wait_windows=manifest.treasury.forward_wait_windows,
             )
         self.wallet.bind_pots(self.treasury.pots)
         self.treasury.rail = JournalProxy(
