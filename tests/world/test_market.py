@@ -411,3 +411,14 @@ def test_a_paid_json_request_carries_the_contract_on_the_wire():
               if call[1].endswith("/v1/chat/completions")]
     assert len(bodies) == 2  # the unpaid quote and the paid call
     assert all(body["response_format"] == {"type": "json_object"} for body in bodies)
+
+
+def test_an_accepted_extra_body_cannot_override_the_json_contract():
+    """A seller's extra body is applied first; the contract a request asked for wins."""
+    provider = X402Provider(transport=SellerHTTP(),
+                            extra_body={"response_format": {"type": "text"}, "temperature": 0})
+    asked = provider._payload(ModelRequest(MODEL, "system", (), 16, json_object=True))[1]
+    plain = provider._payload(ModelRequest(MODEL, "system", (), 16))[1]
+    assert asked["response_format"] == {"type": "json_object"}
+    assert asked["temperature"] == 0
+    assert plain["response_format"] == {"type": "text"}

@@ -348,12 +348,14 @@ class X402Provider:
         root, model = split_model_id(req.model_id)
         # A seller on the OpenAI wire receives the same JSON-object contract as
         # every other provider; the quote and the paid call carry identical bodies.
+        # The contract is applied after the seller's extra body, so an accepted
+        # extra body can never pay for a call that did not ask for structured JSON.
         contract = {"response_format": {"type": "json_object"}} if req.json_object else {}
         return root + "/v1/chat/completions", {
             "model": model, "messages": [{"role": "system", "content": req.system}, *req.messages],
             "max_tokens": req.max_tokens,
-            **contract,
             **deepcopy(self._extra_body),
+            **contract,
         }
 
     def quote(self, req: ModelRequest) -> PaymentQuote:
