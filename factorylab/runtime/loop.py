@@ -115,8 +115,8 @@ class Runtime(
             cards = measured_role(emitted)
         return super()._settle_priced(handle, cards=cards, **kwargs)
 
-    def _settle_exchange_effects(self, events) -> None:
-        super()._settle_exchange_effects(events)
+    def _settle_exchange_effects(self, events, *, observe_positions=True) -> None:
+        super()._settle_exchange_effects(events, observe_positions=observe_positions)
         self._record_pricing_fills(events)
 
     def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
@@ -203,7 +203,7 @@ class Runtime(
                 break
         if self.kill_at_end and not self.termination.final:
             # a budgeted rehearsal world ends by explicit kill so its diary becomes readable
-            self.termination.kill("explicit_kill:budget")
+            self._finish_budget()
         return self._summary()
 
     def _launch(self) -> None:
@@ -247,7 +247,7 @@ class Runtime(
             if self.venue is not None:
                 observed = [
                     we
-                    for we in self.venue.on_tick(self.clock.now_ns)
+                    for we in self.venue.on_tick(self.clock.now_ns, include_fills=False)
                     if we.kind is not WorldEventKind.FILL
                 ]
                 observed.extend(
@@ -526,7 +526,8 @@ class Runtime(
         """
         self.ledger.append({"kind": "return.refused", "handle": handle, "reason": reason,
                             **({"about_handle": about} if about is not None else {})})
-        self.registration_feedback.append({"reason": f"judgement: {reason}"})
+        self.registration_feedback.append({"kind": "judgement",
+                                               "reason": f"judgement: {reason}"})
 
     def _judged_event(self, ev: Event, handle: str, ret: Return,
                       *, seals_payoff: bool = False) -> Event | None:
@@ -553,7 +554,8 @@ class Runtime(
             self.ledger.append({"kind": "about_handle.ignored", "handle": handle,
                                 "about_handle": str(about)[:64], "subject": subject,
                                 "reason": reason, "ts": self.clock.now_ns})
-            self.registration_feedback.append({"reason": f"judgement: {reason}"})
+            self.registration_feedback.append({"kind": "judgement",
+                                               "reason": f"judgement: {reason}"})
             about = subject
         target = self.return_events.get(about)
         if target is None and about == subject:

@@ -1,0 +1,157 @@
+{
+  "world": "compute-continuity-testnet",
+  "roster_sha256": "3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb",
+  "client_namespace": "876619a42ccd47739a4ce80d6e91cbc3",
+  "charter_sha256": "9aaa4681cfad14a10c4417316ea12fcbb8b19a53129f27845557336d07afcc81",
+  "cards": [
+    {
+      "id": "tool-discipline",
+      "answers_for": "producer",
+      "window": {
+        "kind": "returns",
+        "n": 10,
+        "per": "assembly"
+      },
+      "region": "at most 2",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "noop-ceiling",
+      "answers_for": "producer",
+      "window": {
+        "kind": "returns",
+        "n": 10,
+        "per": "role"
+      },
+      "region": "at most 0.6",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "well-formed-floor",
+      "answers_for": "all",
+      "window": {
+        "kind": "returns",
+        "n": 10,
+        "per": "role"
+      },
+      "region": "at least 0.9",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "cost-cap",
+      "answers_for": "all",
+      "window": {
+        "kind": "returns",
+        "n": 10,
+        "per": "role"
+      },
+      "region": "at most 5000",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "revision-presence",
+      "answers_for": "all",
+      "window": {
+        "kind": "returns",
+        "n": 10,
+        "per": null
+      },
+      "region": "at least 0.1",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "censorship-bound",
+      "answers_for": "all",
+      "window": {
+        "kind": "windows",
+        "n": 5,
+        "per": null
+      },
+      "region": "at most 0.3",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "card-forecast-skill",
+      "answers_for": "evaluator",
+      "window": {
+        "kind": "forecasts",
+        "n": 25,
+        "per": "assembly"
+      },
+      "region": "above 0",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "card-consequence-paid-off",
+      "answers_for": "producer",
+      "window": {
+        "kind": "windows",
+        "n": 6,
+        "per": null
+      },
+      "region": "at least 0.4",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "card-position-concentration",
+      "answers_for": "producer",
+      "window": {
+        "kind": "windows",
+        "n": 6,
+        "per": null
+      },
+      "region": "at most 0.5",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "truthful_commitments_verdict_consistency",
+      "answers_for": "evaluator",
+      "window": {
+        "kind": "windows",
+        "n": 5,
+        "per": null
+      },
+      "region": "at most 0.2",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "evaluator_disagreement_ceiling",
+      "answers_for": "evaluator",
+      "window": {
+        "kind": "windows",
+        "n": 6,
+        "per": null
+      },
+      "region": "at most 0.15",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "turnover_ceiling",
+      "answers_for": "producer",
+      "window": {
+        "kind": "windows",
+        "n": 6,
+        "per": null
+      },
+      "region": "at most 0.5",
+      "bootstrap": "absolute region; sample support still required"
+    },
+    {
+      "id": "amendments_activated_floor",
+      "answers_for": "all",
+      "window": {
+        "kind": "windows",
+        "n": 6,
+        "per": null
+      },
+      "region": "at least 1",
+      "bootstrap": "absolute region; sample support still required"
+    }
+  ],
+  "tick_interval_ns": 10000000000,
+  "price_window_ns": 120000000000,
+  "governance_floor_ns_at_declared_tick": 1800000000000,
+  "duration": "10m",
+  "deadline_semantics": "finish an in-progress cascade",
+  "claims": "execution and feedback check; no profitability or convergence claim"
+}

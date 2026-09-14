@@ -2,7 +2,7 @@
 # BEFORE PROVISIONING replace REPO_URL and PINNED_COMMIT with the reviewed release.
 # No private repository token, wallet key, backup identity or webhook belongs here.
 package_update: true
-packages: [git, curl, ca-certificates, age, rclone, python3, bubblewrap]
+packages: [git, curl, ca-certificates, age, rclone, python3, bubblewrap, apparmor]
 users:
   - default
   - name: factory
@@ -35,6 +35,12 @@ write_files:
       uv run --no-sync ruff check .
       uv run --no-sync pytest
       chmod -R a+rX /opt/factorylab-python
+      # Ubuntu restricts unprivileged user namespaces. Permit bwrap's setup,
+      # then strip its children's capabilities with the upstream stacked profile.
+      if [ ! -e /etc/apparmor.d/bwrap-userns-restrict ]; then
+        install -m 0644 deploy/bwrap-userns-restrict /etc/apparmor.d/bwrap-userns-restrict
+      fi
+      apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
       # The gate above ran as root; the world runs as factory under the unit's
       # restrictions. Population tools exist only if the jail starts there.
       bash deploy/jail-check.sh

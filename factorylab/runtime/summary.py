@@ -164,6 +164,16 @@ class SummaryMixin:
             "wallet_conservation": self.wallet.check_conservation(),
             "ledger_verify": self.ledger.verify(),
             "outstanding_decisions": len(self.queue.outstanding()),
+            "execution": {
+                "intents": len(self.order_intents),
+                "statuses": {status: sum(i["result"]["status"] == status
+                                         for i in self.order_intents.values())
+                             for status in ("filled", "resting", "cancelled",
+                                            "rejected", "uncertain")},
+                "polled_fills": self.stats.fills,
+                "terminal_reconciliation": getattr(self, "terminal_reconciliation", None),
+                "positions_closed_at_exit": False,
+            },
             "exchange_equity_usd": _equity_or_none(self.exchange.target),
             "live": self.live,
             "evaluation_boundary": "registered accepts → selected emits → return channel",
@@ -182,6 +192,12 @@ class SummaryMixin:
             },
             "stats": {**vars(self.stats), **self.consequences.counts()},
         }
+        if self.live:
+            summary["process_io_metrics"] = {
+                "exchange": self.exchange.call_metrics,
+                "provider": self.provider.call_metrics,
+                "scope": "this process only; includes journal overhead, excludes replay",
+            }
         if not self.termination.final or self.kill_at_end:
             summary["aggregates"] = {
                 "action_frequencies": self.ledger.aggregate("action_frequencies"),

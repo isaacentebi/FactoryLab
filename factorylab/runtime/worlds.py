@@ -59,6 +59,7 @@ class ExchangeSpec:
     seed: int = 0
     start_cash_usd: str = "100"
     shocks: tuple[Shock, ...] = ()
+    client_namespace: str | None = None
 
 
 @dataclass(frozen=True)
@@ -279,6 +280,9 @@ class WorldManifest:
         payload = asdict(self)
         # Admission provenance does not change the world defined by identical cards.
         payload.pop("charter_explicit")
+        # Preserve historical manifest identities when the opt-in namespace is absent.
+        if payload["exchange"]["client_namespace"] is None:
+            payload["exchange"].pop("client_namespace")
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -320,6 +324,10 @@ class WorldManifest:
                 "missing_coins": missing_coins, "missing_spot_pairs": missing_pairs}
 
     def validate(self) -> None:
+        namespace = self.exchange.client_namespace
+        if namespace is not None and (not isinstance(namespace, str) or len(namespace) != 32
+                                      or any(c not in "0123456789abcdef" for c in namespace)):
+            raise ValueError("exchange.client_namespace must be 32 lowercase hex characters")
         if (self.exchange.kind == "hyperliquid" and self.exchange.mainnet
                 and self.charter_explicit is not True):
             # Real money launches on the population's charter, never the seed cards.
@@ -560,6 +568,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         raise ValueError("venue.spot_pairs must be a unique list of BASE/USDC pairs")
     exchange = ExchangeSpec(
         kind=ex.get("kind", "fake"),
+        client_namespace=ex.get("client_namespace"),
         mainnet=bool(ex.get("mainnet", False)),
         coins=tuple(ex.get("coins", ["BTC", "ETH"])),
         spot_pairs=tuple(spot_pairs),

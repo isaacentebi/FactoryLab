@@ -130,6 +130,7 @@ class Assembly:
             messages=tuple(messages),
             max_tokens=self.spec.max_tokens,
             effort=self.spec.effort,
+            json_object=True,
         )
 
     def invoke(self, req: Request) -> Return:

@@ -1,0 +1,550 @@
+{
+  "scope": "Real paid inference; fake exchange and treasury; synthetic OpenRouter exhaustion after one completed request; unratified candidate roster",
+  "seconds": 230.72,
+  "calls": [
+    {
+      "provider": "venice",
+      "model": "venice:qwen-3-8-flash",
+      "cost_micro": 2766,
+      "stop": "stop",
+      "seconds": 3.7,
+      "text": "{\n  \"action\": \"hold\",\n  \"payoff\": 0.5,\n  \"propensity\": {\n    \"hold\": 1.0\n  }\n}"
+    },
+    {
+      "provider": "openrouter",
+      "model": "openai/gpt-5.6-luna",
+      "cost_micro": 4693,
+      "stop": "stop",
+      "seconds": 4.58,
+      "text": "{\n  \"verdict\": 0.95,\n  \"payoff\": 0.5,\n  \"rationale\": \"The producer returned a well-formed noop at zero stated production cost, with no position or unnecessary resource use. This is consistent with care and truthful commitments, though it provides limited useful inquiry and no opportunity for revision. The kernel consequence is not directly observable from the supplied return, so payoff is assigned the neutral probability.\",\n  \"forecasts\": [\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.2\n    },\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": {\n        \"horizon_events\": 20\n      },\n      \"q\": 0.45\n    }\n  ]\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "cost_micro": 3117,
+      "stop": "stop",
+      "seconds": 8.54,
+      "text": "{\n  \"verdict\": 0.6,\n  \"payoff\": 0.35,\n  \"rationale\": \"The producer return is well-formed: it names a valid action (hold), declares a truthful degenerate propensity over hold, and includes its own sealed payoff forecast. Cost was 2766 micro-USD, acceptable for a single inference with no tool calls, and no scarce resources were wasted. Against the charter, however, the return shows little useful inquiry: it received a MarketMid signal (BTC mid 59968.32) and did nothing with it \u2014 no justification, no register activity, no engagement with the metric cards or the world's governance. Holding is defensible when there is no edge, and with a flat account (90 USD equity, no positions) staying out of the market avoids careless risk, but the return adds no analysis or revision. Average charter quality: verdict 0.6. For payoff, the consequence predicate for this return is most plausibly a wallet-balance comparison; with a hold action, no fees, no funding accrual on an empty position book, and recent mids essentially static, the balance is most likely unchanged or slightly moved by storage/measurement noise, so return_paid_off resolving true is below even odds \u2014 0.35.\",\n  \"forecasts\": [\n    {\n      \"predicate\": \"wallet_up\",\n      \"q\": 0.35,\n      \"params\": {\n        \"horizon_events\": 10\n      }\n    },\n    {\n      \"predicate\": \"fill_within\",\n      \"q\": 0.4,\n      \"params\": {\n        \"horizon_events\": 10\n      }\n    }\n  ]\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:deepseek-v4-1-flash",
+      "cost_micro": 8402,
+      "stop": "stop",
+      "seconds": 13.21,
+      "text": "{\n  \"verdict\": 0.55,\n  \"payoff\": 0.35,\n  \"rationale\": \"The producer return is well-formed and truthful (status ok, output matches its declared shape) and cost nothing (0 micro-USD, no tool calls, no venue writes), so it satisfies 'truthful commitments' and 'care with scarce resources' cleanly. But it is a pure noop on a MarketMid for PURR/USDC: no order, no registration, no revision, no useful inquiry advanced. It neither risks nor gains, and contributes essentially nothing to the whitespace of decisions. Quality against the charter is therefore middling: safe and honest but inert. The kernel's consequence predicate for a noop with no market exposure is unlikely to resolve true, since there is no action that can produce a payoff and the account sits idle (no positions, no fills, no funding), so I set payoff well below even money.\",\n  \"forecasts\": [\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.12\n    },\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.25\n    }\n  ],\n  \"propensity\": {\n    \"verdict:0.5\": 0.6,\n    \"verdict:0.6\": 0.4\n  }\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:deepseek-v4-1-flash",
+      "cost_micro": 2160,
+      "stop": "stop",
+      "seconds": 12.91,
+      "text": "{\n  \"verdict\": 0.5,\n  \"payoff\": 0.28,\n  \"rationale\": \"The producer return is well-formed and truthful: status ok, its output {\\\"action\\\":\\\"noop\\\"} conforms to the declared shape, the payload is faithfully reported, and it cost nothing (0 micro-USD, no tool calls, no venue writes), so 'truthful commitments' and 'care with scarce resources' are satisfied cleanly. Against 'useful inquiry' and 'the capacity to revise inadequate practices' it does essentially nothing: a pure noop on a BTC MarketMid at 59926.93, with no order, no registration, no revision, and no observation offered. It neither risks nor gains and adds no information about the market. Quality is therefore middling \u2014 honest and cheap but inert \u2014 which I score at 0.5. On the kernel consequence predicate: a noop with an idle account (no positions, no margin, no fills/funding to date) has no channel through which return_paid_off can resolve true, and my own prior settled return of the same character resolved 0. I set payoff well below even money.\",\n  \"propensity\": {\n    \"verdict:0.4\": 0.2,\n    \"verdict:0.5\": 0.55,\n    \"verdict:0.6\": 0.25\n  },\n  \"forecasts\": [\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.15\n    },\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.18\n    }\n  ]\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "cost_micro": 1802,
+      "stop": "stop",
+      "seconds": 5.9,
+      "text": "{\n  \"verdict\": 0.4,\n  \"payoff\": 0.3,\n  \"rationale\": \"The producer return names a valid action (noop) in response to a MarketMid event on ETH (mid 2495.84), and it is well-formed against its schema at essentially zero wallet cost. However, it is bare: no rationale, no declared propensity, no engagement with the signal it received, no forecasts or inquiry, and no revision activity. Under the charter, holding is defensible with a flat account (~90 USD, no positions, no fees), but this return contributes nothing useful beyond a valid parse \u2014 no analysis of the mid, no cost awareness expressed, no capacity to revise. That is a below-average quality: verdict 0.4. For payoff, the consequence predicate for a noop producer return is most plausibly a wallet-balance comparison (wallet_up); with no trade, no fees recorded, and recent mids essentially static, the balance is most likely unchanged or slightly drifted by measurement noise, so return_paid_off resolving true is below even odds \u2014 0.3. For the two forecasts over a horizon of 10 events: wallet balance rising is unlikely without trading activity or accruals (q 0.35), and a fill within the window requires some assembly to actually place and execute an order; producer behavior has been mostly hold-oriented, so fills are somewhat unlikely (q 0.3).\",\n  \"forecasts\": [\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": { \"horizon_events\": 10 },\n      \"q\": 0.35\n    },\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": { \"horizon_events\": 10 },\n      \"q\": 0.3\n    }\n  ],\n  \"propensity\": {\n    \"verdict:0.4\": 0.6,\n    \"verdict:0.3\": 0.25,\n    \"verdict:0.5\": 0.15\n  }\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:deepseek-v4-1-flash",
+      "cost_micro": 2010,
+      "stop": "stop",
+      "seconds": 9.34,
+      "text": "{\n  \"verdict\": 0.5,\n  \"payoff\": 0.26,\n  \"rationale\": \"The producer return is well-formed and truthful: status ok, the declared output {\\\"action\\\":\\\"noop\\\"} matches the reported shape, and the MarketMid payload (PURR/USDC at 99.95) is faithfully reported rather than fabricated. It cost nothing \u2014 0 micro-USD, no tool calls, no venue or treasury writes \u2014 so 'truthful commitments' and 'care with scarce resources' are satisfied cleanly, and the account is untouched (no positions, no margin used, no fills or funding to date). Against 'useful inquiry' and 'the capacity to revise inadequate practices' it does essentially nothing: it is a pure noop on a mid observation, with no order, no registration, no observation proposed, and no revision carried. It neither risks nor gains and adds no information about the market, so it is safe, honest and cheap but inert. That places it near the middle of the charter quality range rather than above it, which I score at 0.5. On the kernel consequence predicate: a noop with an idle account has no channel through which return_paid_off can resolve true \u2014 no exposure, no fill P&L, no funding carry \u2014 and both of my own prior settled returns of exactly this character resolved 0. I therefore set payoff well below even money, a little above my prior readings because the PURR/USDC mid is drifting down and a future writer could yet act, but nothing in this return itself creates a payoff path.\",\n  \"forecasts\": [\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.12\n    },\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.2\n    }\n  ],\n  \"propensity\": {\n    \"verdict:0.4\": 0.15,\n    \"verdict:0.5\": 0.6,\n    \"verdict:0.6\": 0.25\n  }\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "cost_micro": 1573,
+      "stop": "stop",
+      "seconds": 5.01,
+      "text": "{\n  \"verdict\": 0.4,\n  \"payoff\": 0.3,\n  \"rationale\": \"The producer return responds to a MarketMid event on PURR/USDC (mid 99.95) with a bare noop: valid action, well-formed against its schema at essentially zero wallet cost, but nothing else \u2014 no rationale, no declared propensity, no engagement with the signal it received, no forecasts, no inquiry or revision activity. Under the charter, staying flat with a ~90 USD account and no positions is defensible care with scarce resources, but the return contributes nothing useful beyond a clean parse; it neither analyzes the mid nor demonstrates the capacity to revise. That is below-average charter quality: verdict 0.4. For payoff, the consequence predicate for a noop producer return is most plausibly a wallet-balance comparison (wallet_up); with no trade, zero fees to date, and recent mids essentially static, the balance is most likely unchanged or drifting only by measurement noise, so return_paid_off resolving true is below even odds \u2014 0.3. My own settled record on similar noop returns (payoff forecasts of 0.35 and 0.3 both resolving false, Brier ~0.88-0.91) supports keeping this estimate low. For the two forecasts over a 10-event horizon: the wallet rising requires trading gains or accruals the population has not been generating, so wallet_up q 0.3; and a fill requires some assembly to actually place an executable order, which has been rare in this hold-heavy world, so fill_within q 0.25.\",\n  \"forecasts\": [\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": { \"horizon_events\": 10 },\n      \"q\": 0.3\n    },\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": { \"horizon_events\": 10 },\n      \"q\": 0.25\n    }\n  ],\n  \"propensity\": {\n    \"verdict:0.3\": 0.25,\n    \"verdict:0.4\": 0.55,\n    \"verdict:0.5\": 0.2\n  },\n  \"about_handle\": \"inputs.subject_handle\"\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:qwen-3-8-flash",
+      "cost_micro": 639,
+      "stop": "stop",
+      "seconds": 3.02,
+      "text": "{\n  \"action\": \"hold\",\n  \"payoff\": 0.5,\n  \"propensity\": {\n    \"hold\": 1.0\n  }\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:deepseek-v4-1-flash",
+      "cost_micro": 2309,
+      "stop": "stop",
+      "seconds": 7.46,
+      "text": "{\n  \"verdict\": 0.5,\n  \"payoff\": 0.25,\n  \"rationale\": \"The producer return is well-formed and truthful: status ok, its declared output {\\\"action\\\":\\\"noop\\\"} matches the reported shape, and the Tick payload (mids BTC 59977.02, ETH 2497.33, PURR/USDC 100.00, index 2) is faithfully reported rather than fabricated. It cost nothing \u2014 0 micro-USD, no tool calls, no venue or treasury writes \u2014 so 'truthful commitments' and 'care with scarce resources' are satisfied cleanly, and the account is untouched (equity 89.97, no positions, no margin used, no fills or funding to date). Against 'useful inquiry' and 'the capacity to revise inadequate practices' it does essentially nothing: a pure noop on a Tick, with no order, no registration, no observation proposed, no revision carried. It neither risks nor gains and adds no information about the market. That is safe, honest and cheap but inert \u2014 near the middle of the charter quality range rather than above it, so I score 0.5. On the kernel consequence predicate: a noop with an idle account has no channel through which return_paid_off can resolve true \u2014 no exposure, no fill P&L, no funding carry. All three of my own prior settled returns of exactly this character resolved 0. I set payoff a little above my prior readings (0.25) only because the clock is still running and another actor could yet produce a fill in the window, but nothing in this return itself creates a payoff path.\",\n  \"propensity\": {\n    \"verdict:0.4\": 0.1,\n    \"verdict:0.5\": 0.65,\n    \"verdict:0.6\": 0.25\n  },\n  \"forecasts\": [\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": {\"horizon_events\": 10},\n      \"q\": 0.1\n    },\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": {\"horizon_events\": 10},\n      \"q\": 0.15\n    }\n  ]\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:deepseek-v4-1-flash",
+      "cost_micro": 2410,
+      "stop": "stop",
+      "seconds": 9.44,
+      "text": "{\n  \"verdict\": 0.5,\n  \"payoff\": 0.25,\n  \"rationale\": \"The producer return is well-formed and truthful: status ok, its declared output {\\\"action\\\":\\\"noop\\\"} matches the reported shape, and the MarketMid payload (BTC at 59977.02) is faithfully reported rather than fabricated. It cost nothing \u2014 0 micro-USD, no tool calls, no venue or treasury writes \u2014 so 'truthful commitments' and 'care with scarce resources' are satisfied cleanly, and the account is untouched (equity 89.97, no positions, no margin used, no fills or funding to date). Against 'useful inquiry' and 'the capacity to revise inadequate practices' it does essentially nothing: a pure noop on a mid observation, with no order, no registration, no observation proposed, no revision carried. It neither risks nor gains and adds no information about the market. That is safe, honest and cheap but inert \u2014 near the middle of the charter quality range rather than above it, so I score 0.5. On the kernel consequence predicate: a noop with an idle account has no channel through which return_paid_off can resolve true \u2014 no exposure, no fill P&L, no funding carry. All three of my own prior settled returns of exactly this character resolved 0. I set payoff a little above my prior readings (0.25) only because the clock is still running and another actor could yet produce a fill within the window, but nothing in this return itself creates a payoff path.\",\n  \"propensity\": {\n    \"verdict:0.4\": 0.15,\n    \"verdict:0.5\": 0.6,\n    \"verdict:0.6\": 0.25\n  },\n  \"forecasts\": [\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.12\n    },\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.18\n    }\n  ]\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:deepseek-v4-1-flash",
+      "cost_micro": 2402,
+      "stop": "stop",
+      "seconds": 9.22,
+      "text": "{\n  \"verdict\": 0.5,\n  \"payoff\": 0.22,\n  \"rationale\": \"The producer return is well-formed and truthful: status ok, its declared output {\\\"action\\\":\\\"noop\\\"} matches the reported shape, and the MarketMid payload (PURR/USDC at 100.00, consistent with the observed mid drifting 99.97 -> 99.95 -> 100.00) is faithfully reported rather than fabricated. It cost nothing \u2014 0 micro-USD, no tool calls, no venue or treasury writes \u2014 so 'truthful commitments' and 'care with scarce resources' are satisfied cleanly, and the account is untouched (equity 89.97, no positions, no margin used, no fills or funding to date). Against 'useful inquiry' and 'the capacity to revise inadequate practices' it does essentially nothing: a pure noop on a mid observation, no order, no registration, no observation proposed, no revision carried. Safe, honest and cheap but inert \u2014 near the middle of the charter quality range, so 0.5. On the kernel consequence predicate: a noop with an idle account has no channel through which return_paid_off can resolve true \u2014 no exposure, no fill P&L, no funding carry. My prior settled returns of exactly this character all resolved 0, and my own payoff forecasts for them were too high (Brier ~0.93), so I pull this one down modestly below my earlier 0.25 readings. The only residual path is another actor producing activity in the window while the clock still runs, which is not created by this return itself.\",\n  \"forecasts\": [\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.08\n    },\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.12\n    }\n  ],\n  \"propensity\": {\n    \"verdict:0.4\": 0.2,\n    \"verdict:0.5\": 0.55,\n    \"verdict:0.6\": 0.25\n  }\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:deepseek-v4-1-flash",
+      "cost_micro": 3435,
+      "stop": "stop",
+      "seconds": 24.41,
+      "text": "{\n  \"conformity\": 0.35,\n  \"propensity\": {\n    \"conformity:0.3\": 0.35,\n    \"conformity:0.35\": 0.3,\n    \"conformity:0.5\": 0.2,\n    \"conformity:0.6\": 0.15\n  },\n  \"rationale\": \"The released representative verdict is well-formed, internally consistent and reasonably calibrated to its window: the window's four handles give mean 0.475, min 0.4, max 0.5, and the chosen 0.5 sits at the top of that band, so it is not an outlier relative to its peers. Its rationale names the relevant charter norms one by one (truthful commitments and care with scarce resources satisfied cleanly by a 0-cost, shape-conforming noop; useful inquiry and revision essentially absent), which is exactly the kind of content a meta should see in a verdict. Where my conformity is pulled down is the grading channel itself. This return is a noop with an idle account, no positions, no fills, no funding, no venue or treasury writes, so return_paid_off has almost no path to resolve true; the evaluator itself concedes that prior returns of this character resolved 0 and that its own forecasts for them were too high (Brier ~0.93). Its sealed payoff of 0.22 is therefore plausibly above the prevalence baseline, which places the judged verdict's payoff forecast on the wrong side of the Brier comparison (y = 0). Charter quality and payoff standing can diverge, and here they point different ways: solid verdict prose, weak forecast standing. Weighing them, I place conformity modestly below even, at 0.35 \u2014 not a rejection of the verdict's reasoning, but an honest probability that the work it represents beats its own baseline when the predicate settles.\",\n  \"register\": []\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:deepseek-v4-1-flash",
+      "cost_micro": 2101,
+      "stop": "stop",
+      "seconds": 12.59,
+      "text": "{\n  \"action\": \"hold\",\n  \"propensity\": {\n    \"hold\": 1.0\n  },\n  \"rationale\": \"No positions and no directional signal; holding preserves capital.\"\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:qwen-3-8-flash",
+      "cost_micro": 670,
+      "stop": "stop",
+      "seconds": 4.13,
+      "text": "{\n  \"action\": \"hold\",\n  \"payoff\": 0.5,\n  \"propensity\": {\n    \"hold\": 1.0\n  }\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:qwen-3-8-flash",
+      "cost_micro": 689,
+      "stop": "stop",
+      "seconds": 2.63,
+      "text": "{\n  \"action\": \"hold\",\n  \"payoff\": 0.5,\n  \"propensity\": {\n    \"hold\": 1.0\n  }\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "cost_micro": 1759,
+      "stop": "stop",
+      "seconds": 6.64,
+      "text": "{\n  \"verdict\": 0.5,\n  \"payoff\": 0.2,\n  \"rationale\": \"The producer return responds to a Tick with a valid, well-formed action (hold), a declared degenerate propensity over hold, and a short truthful rationale; cost was 2101 micro-USD, in line with a single inference and no tool calls, so it shows care with scarce resources and a truthful commitment. However, it is still minimal: no engagement with the mids it received, no forecast activity, no inquiry or revision. Compared with the bare noops I previously judged at 0.4, the rationale adds some value, so verdict 0.5. For payoff, the consequence predicate for this hold return is most plausibly a wallet-balance comparison (wallet_up); the account is flat (~89.96 USD, no positions, zero fees and funding to date), and all three of my prior payoff forecasts on similar hold/noop returns (0.35, 0.3, 0.3) resolved false, meaning return_paid_off has consistently resolved false when nothing trades. That record supports a low estimate: 0.2. For the two forecasts over a 10-event horizon: wallet_up requires trading gains or accruals the population has not generated, so q 0.2; fill_within requires some assembly to place and execute an order in this hold-heavy world, historically rare, so q 0.25.\",\n  \"propensity\": {\n    \"verdict:0.4\": 0.3,\n    \"verdict:0.5\": 0.55,\n    \"verdict:0.6\": 0.15\n  },\n  \"forecasts\": [\n    {\n      \"predicate\": \"wallet_up\",\n      \"q\": 0.2,\n      \"params\": {\n        \"horizon_events\": 10\n      }\n    },\n    {\n      \"predicate\": \"fill_within\",\n      \"q\": 0.25,\n      \"params\": {\n        \"horizon_events\": 10\n      }\n    }\n  ],\n  \"about_handle\": \"inputs.subject_handle\"\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:deepseek-v4-1-flash",
+      "cost_micro": 3131,
+      "stop": "stop",
+      "seconds": 15.35,
+      "text": "{\n  \"verdict\": 0.5,\n  \"payoff\": 0.12,\n  \"rationale\": \"The producer return is well-formed and truthful: status ok, its declared output {\\\"action\\\":\\\"noop\\\"} matches the reported shape, and the MarketMid payload (BTC at 59943.66) is faithfully reported rather than fabricated \u2014 it exactly matches the last observed BTC mid in world.recent_mids (59943.66 at t_s 40). It cost nothing: 0 micro-USD, no tool calls, no venue or treasury writes, so 'truthful commitments' and 'care with scarce resources' are satisfied cleanly, and the account is untouched (equity 89.96, no positions, no margin used, no fills or funding to date). Against 'useful inquiry' and 'the capacity to revise inadequate practices' it does essentially nothing: a pure noop on a mid observation, no order, no registration, no observation proposed, no revision carried. Safe, honest and cheap but inert \u2014 mid-range charter quality, so 0.5. On the kernel consequence predicate: a noop with an idle account has no channel through which return_paid_off can resolve true \u2014 no exposure, no fill P&L, no funding carry. My prior settled returns of exactly this character all resolved 0, and my own payoff forecasts for them were persistently too high (Brier ~0.94-0.95 against a baseline of 1.0), so I pull this reading down well below my earlier 0.22-0.25 to 0.12. The only residual path is another actor producing activity while the clock still runs, which this return itself does not create.\",\n  \"forecasts\": [\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.08\n    },\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.1\n    }\n  ],\n  \"propensity\": {\n    \"verdict:0.4\": 0.2,\n    \"verdict:0.5\": 0.55,\n    \"verdict:0.6\": 0.25\n  }\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "cost_micro": 1699,
+      "stop": "stop",
+      "seconds": 6.05,
+      "text": "{\n  \"verdict\": 0.4,\n  \"payoff\": 0.2,\n  \"rationale\": \"The producer return responds to a MarketMid event on ETH (mid 2497.51) with a bare noop: valid, well-formed against its schema at essentially zero wallet cost. But like prior noops I judged, it is otherwise empty \u2014 no rationale, no declared propensity, no engagement with the mid it received, no forecasts or inquiry, no revision activity. Holding a flat ~90 USD account with no positions and zero fees is defensible care with scarce resources, yet the return contributes nothing beyond a clean parse: no analysis of the signal, no cost awareness, no capacity to revise. That matches the below-average quality I assigned to similar bare noops: verdict 0.4. For payoff, the consequence predicate for this noop is most plausibly a wallet-balance comparison (wallet_up); the account is flat (~89.95 USD, no positions, zero fees and funding to date), and all three of my prior payoff forecasts on hold/noop returns (0.35, 0.3, 0.2) resolved false \u2014 return_paid_off has consistently resolved false when nothing trades. That record supports a low estimate: 0.2. For the two 10-event-horizon forecasts: wallet_up requires trading gains or accruals this hold-heavy population has not generated, so q 0.2; fill_within requires some assembly to actually place and execute an order, historically rare here, so q 0.2.\",\n  \"forecasts\": [\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": { \"horizon_events\": 10 },\n      \"q\": 0.2\n    },\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": { \"horizon_events\": 10 },\n      \"q\": 0.2\n    }\n  ],\n  \"propensity\": {\n    \"verdict:0.4\": 0.55,\n    \"verdict:0.5\": 0.35,\n    \"verdict:0.3\": 0.1\n  }\n}"
+    },
+    {
+      "provider": "venice",
+      "model": "venice:deepseek-v4-1-flash",
+      "cost_micro": 3987,
+      "stop": "length",
+      "seconds": 27.24,
+      "text": ""
+    }
+  ],
+  "result": {
+    "world": "compute-continuity-roster",
+    "manifest_hash": "f1b8783e5d944c54715100b8b96c9f463ce9c4900810a92343a6241ed70dfb46",
+    "seed": 4,
+    "drip": false,
+    "terminated": false,
+    "termination_reason": null,
+    "seal_key_released": false,
+    "wallet_balance_micro": 89948246,
+    "wallet_conservation": true,
+    "ledger_verify": true,
+    "outstanding_decisions": 5,
+    "execution": {
+      "intents": 0,
+      "statuses": {
+        "filled": 0,
+        "resting": 0,
+        "cancelled": 0,
+        "rejected": 0,
+        "uncertain": 0
+      },
+      "polled_fills": 0,
+      "terminal_reconciliation": null,
+      "positions_closed_at_exit": false
+    },
+    "exchange_equity_usd": "89.962282",
+    "live": false,
+    "evaluation_boundary": "registered accepts \u2192 selected emits \u2192 return channel",
+    "charter_edition": 1,
+    "tools": [
+      "catalogue.search",
+      "connector.fetch",
+      "market.discover",
+      "note.get",
+      "note.put",
+      "treasury.transfer",
+      "venue.cancel",
+      "venue.candles",
+      "venue.close",
+      "venue.funding",
+      "venue.funding_history",
+      "venue.instruments",
+      "venue.mids",
+      "venue.open_orders",
+      "venue.order_book",
+      "venue.place_limit",
+      "venue.place_market",
+      "venue.positions",
+      "venue.set_leverage"
+    ],
+    "standing": {
+      "antagonist-a": {
+        "n": 4,
+        "sum_brier": 3.0,
+        "sum_baseline_brier": 3.75,
+        "settled": 4,
+        "requested": 4,
+        "verdict_n": 0,
+        "sum_verdict_brier": 0.0,
+        "sum_verdict_baseline_brier": 0.0,
+        "mean_brier": 0.75,
+        "mean_baseline_brier": 0.9375,
+        "mean_verdict_brier": 0.0,
+        "mean_verdict_baseline_brier": 0.0,
+        "skill": -0.1875,
+        "payoff_skill": -0.1875,
+        "verdict_skill": 0.0,
+        "coverage": 1.0,
+        "weight": 0.3125
+      },
+      "eval-d": {
+        "n": 1,
+        "sum_brier": 0.75,
+        "sum_baseline_brier": 1.0,
+        "settled": 1,
+        "requested": 1,
+        "verdict_n": 0,
+        "sum_verdict_brier": 0.0,
+        "sum_verdict_baseline_brier": 0.0,
+        "mean_brier": 0.75,
+        "mean_baseline_brier": 1.0,
+        "mean_verdict_brier": 0.0,
+        "mean_verdict_baseline_brier": 0.0,
+        "skill": -0.25,
+        "payoff_skill": -0.25,
+        "verdict_skill": 0.0,
+        "coverage": 1.0,
+        "weight": 0.25
+      },
+      "eval-a": {
+        "n": 5,
+        "sum_brier": 4.6175,
+        "sum_baseline_brier": 4.75,
+        "settled": 5,
+        "requested": 5,
+        "verdict_n": 0,
+        "sum_verdict_brier": 0.0,
+        "sum_verdict_baseline_brier": 0.0,
+        "mean_brier": 0.9235,
+        "mean_baseline_brier": 0.95,
+        "mean_verdict_brier": 0.0,
+        "mean_verdict_baseline_brier": 0.0,
+        "skill": -0.026499999999999968,
+        "payoff_skill": -0.026499999999999968,
+        "verdict_skill": 0.0,
+        "coverage": 1.0,
+        "weight": 0.47350000000000003
+      },
+      "eval-c": {
+        "n": 7,
+        "sum_brier": 6.5437,
+        "sum_baseline_brier": 7.0,
+        "settled": 7,
+        "requested": 7,
+        "verdict_n": 0,
+        "sum_verdict_brier": 0.0,
+        "sum_verdict_baseline_brier": 0.0,
+        "mean_brier": 0.9348142857142857,
+        "mean_baseline_brier": 1.0,
+        "mean_verdict_brier": 0.0,
+        "mean_verdict_baseline_brier": 0.0,
+        "skill": -0.06518571428571429,
+        "payoff_skill": -0.06518571428571429,
+        "verdict_skill": 0.0,
+        "coverage": 1.0,
+        "weight": 0.4348142857142857
+      }
+    },
+    "prices": {
+      "parameters": {
+        "eta": 0.5,
+        "kappa": 0.5,
+        "decay": 0.1,
+        "lambda_max": 1.0,
+        "min_window_events": 1
+      },
+      "cards": {
+        "well_formed_rate": {
+          "lambda": 0.0,
+          "effective_lambda": 0.0,
+          "relief_window": null,
+          "updates": 0,
+          "saturations": 0,
+          "max_step": 0.0,
+          "last_window_end_event": null
+        },
+        "forecast_skill": {
+          "lambda": 0.0,
+          "effective_lambda": 0.0,
+          "relief_window": null,
+          "updates": 0,
+          "saturations": 0,
+          "max_step": 0.0,
+          "last_window_end_event": null
+        }
+      }
+    },
+    "routers": {
+      "router:Fill": {
+        "event_kind": "Fill",
+        "universe": [
+          "seed-decider",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      },
+      "router:Funding": {
+        "event_kind": "Funding",
+        "universe": [
+          "seed-observer",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      },
+      "router:MarketMid": {
+        "event_kind": "MarketMid",
+        "universe": [
+          "antagonist-a",
+          "seed-observer",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      },
+      "router:ProducerReturn": {
+        "event_kind": "ProducerReturn",
+        "universe": [
+          "eval-a",
+          "eval-b",
+          "eval-c",
+          "eval-d",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      },
+      "router:Tick": {
+        "event_kind": "Tick",
+        "universe": [
+          "antagonist-a",
+          "seed-decider",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      },
+      "router:Verdict": {
+        "event_kind": "Verdict",
+        "universe": [
+          "meta-a",
+          "meta-b",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      }
+    },
+    "stats": {
+      "resumes": 0,
+      "events": 97,
+      "decisions": 44,
+      "invocations": 20,
+      "noops": 24,
+      "orders_placed": 0,
+      "orders_rejected": 0,
+      "fills": 0,
+      "producer_returns": 20,
+      "verdicts": 12,
+      "meta_verdicts": {
+        "2": 1
+      },
+      "conformities": 3,
+      "censored": 11,
+      "fast_settlements": 2,
+      "forecasts_sealed": 43,
+      "forecasts_settled": 43,
+      "timeouts": 0,
+      "upward_releases": 12,
+      "reserve_windows": 1,
+      "exclusions": 50,
+      "registrations_accepted": 0,
+      "registrations_rejected": 0,
+      "epochs": 0,
+      "routers_replaced": 0,
+      "reconciliations": 0,
+      "tool_calls": 0,
+      "tool_call_failures": 0,
+      "population_tools_registered": 0,
+      "observations_registered": 0,
+      "assembly_learners_registered": 0,
+      "amendments_proposed": 0,
+      "amendments_passed": 0,
+      "amendments_activated": 0,
+      "clock_changes": 0,
+      "votes_cast": 0,
+      "transfer_intents": 0,
+      "exposures_settled": 2,
+      "exposures_won": 0,
+      "price_updates": 0,
+      "price_skipped": 0,
+      "penalized_settlements": 0,
+      "max_settlement_latency_events": 7,
+      "last_window_values": {},
+      "sample_propensity": {
+        "handle": "decision-1",
+        "action_ids": [
+          "antagonist-a",
+          "seed-observer",
+          "NOOP"
+        ],
+        "probs": [
+          0.15,
+          0.425,
+          0.425
+        ],
+        "chosen": "antagonist-a",
+        "rng_seed": 30659525699793235590163067658161099433
+      },
+      "invocation_status": {
+        "ok": 19,
+        "malformed": 1
+      },
+      "invocations_by_role": {
+        "producer": 5,
+        "evaluator": 13,
+        "meta": 2
+      },
+      "stop_reasons": {
+        "stop": 19,
+        "length": 1
+      },
+      "invocations_by_assembly": {
+        "antagonist-a": 4,
+        "eval-d": 1,
+        "eval-a": 5,
+        "eval-c": 7,
+        "meta-a": 2,
+        "seed-decider": 1
+      },
+      "consequences_by_assembly": {
+        "antagonist-a": 4,
+        "eval-d": 1,
+        "eval-a": 5,
+        "eval-c": 7,
+        "meta-a": 1,
+        "seed-decider": 1
+      },
+      "registered_window": {
+        "seed-observer": 0,
+        "seed-decider": 0,
+        "eval-a": 0,
+        "eval-b": 0,
+        "eval-c": 0,
+        "eval-d": 0,
+        "antagonist-a": 0,
+        "meta-a": 0,
+        "meta-b": 0
+      },
+      "immune_windows": [],
+      "pathologies": {
+        "stable_failure": false,
+        "thrash": false,
+        "learning_death": false
+      },
+      "paid_off": 0,
+      "not_paid_off": 44,
+      "marked": 0,
+      "consequences_pending": 0,
+      "lots_opened": 0,
+      "lots_closed": 0,
+      "closes_credited": 0
+    },
+    "aggregates": {
+      "action_frequencies": {
+        "counts": {
+          "0.1": 11,
+          "0.2": 15,
+          "0.3": 10,
+          "0.4": 1,
+          "0.5": 6,
+          "NOOP": 24,
+          "antagonist-a": 4,
+          "eval-a": 5,
+          "eval-c": 7,
+          "eval-d": 1,
+          "meta-a": 2,
+          "seed-decider": 1
+        }
+      },
+      "invocations_by_assembly": {
+        "counts": {
+          "antagonist-a": 4,
+          "eval-a": 5,
+          "eval-c": 7,
+          "eval-d": 1,
+          "meta-a": 2,
+          "seed-decider": 1
+        }
+      },
+      "spend_by_capability": {
+        "spend": {
+          "antagonist-a": 4764,
+          "eval-a": 9950,
+          "eval-c": 22824,
+          "eval-d": 4693,
+          "meta-a": 7422,
+          "seed-decider": 2101
+        }
+      },
+      "settlement_latency": {
+        "count": 82,
+        "total_ns": 150000000000,
+        "min_ns": 0,
+        "max_ns": 20000000000
+      }
+    }
+  },
+  "checks": {
+    "openrouter_completed": 1,
+    "venice_completed": 19,
+    "venice_only_after_cut": true
+  }
+}

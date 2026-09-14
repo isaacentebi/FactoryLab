@@ -887,3 +887,20 @@ Interrupted `sandbox.run` and `observation.run` journal calls are replayable
 read-only work and may re-execute after a crash. An authenticated ledger head
 whose offset exceeds the file length raises `LedgerIntegrityError`; reopen
 does not silently roll back to the shorter file.
+
+## Short rehearsal order identities
+
+`exchange.client_namespace` is an optional 32-character lowercase hexadecimal string,
+fixed for a world's life. When supplied, Hyperliquid client order IDs hash the namespace
+and decision identity together. Independent preparations use fresh UUID namespaces;
+resume retains the original namespace. Absence preserves legacy client IDs and canonical
+manifest hashes. Never change it on a living or resumable world.
+
+`scripts/rehearsal.py prepare` creates this namespace and binds the exact voted charter
+to its roster hash. `live` requires that charter and a namespace, refuses mainnet and
+paid treasury routes, and marks a prepared manifest used before starting the CLI.
+Repetition requires a new preparation, not reuse of old client order IDs.
+
+The public world exposes actual proposal refusals in `registration_feedback` and
+judgement, propensity and order refusals in `return_feedback`. Existing checkpoint
+buffers remain readable; legacy prefix-only entries are classified on disclosure.

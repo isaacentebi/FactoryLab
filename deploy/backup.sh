@@ -36,9 +36,20 @@ for relative in ('runs/funded.jsonl.key', 'openrouter.key', 'hyperliquid.key', '
         raise RuntimeError('key must be a regular 0600 file')
     shutil.copyfile(source, stage / relative)
     (stage / relative).chmod(0o600)
+# The same ledger can only resume under its exact launch manifest. It may be an
+# uncommitted, content-hashed release, so a Git checkout alone cannot recover it.
+relative = Path('repo/worlds/funded.toml')
+source = root / relative
+if not stat.S_ISREG(source.lstat().st_mode):
+    raise RuntimeError('funded manifest must be a regular file')
+(stage / relative.parent).mkdir(parents=True)
+(stage / 'repo').chmod(0o755)
+(stage / 'repo/worlds').chmod(0o755)
+shutil.copyfile(source, stage / relative)
+(stage / relative).chmod(0o644)
 PY
 # No unencrypted tar is ever created. The stage is root-only in systemd's PrivateTmp.
-tar -C "$stage" -cf - runs openrouter.key hyperliquid.key reserve.key |
+tar -C "$stage" -cf - runs repo openrouter.key hyperliquid.key reserve.key |
     age --encrypt --recipient "$AGE_RECIPIENT" --output "$stage/backup.tar.age"
 name="factorylab-$(date -u +%Y%m%dT%H%M%SZ).tar.age"
 rclone copyto "$stage/backup.tar.age" "${BACKUP_REMOTE%/}/$name" \

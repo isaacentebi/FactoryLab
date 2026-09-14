@@ -16,6 +16,29 @@ from factorylab.world.exchange import Order, OrderKind, OrderResult
 class VenueMixin:
     """Preserve runtime state and behavior for venue operations."""
 
+    def _finish_budget(self) -> None:
+        """Reconcile once without invoking the population, then irreversibly end the run.
+
+        The marker makes this phase replayable after interruption. Only lookups and
+        fill reads occur; no cancellation, resubmission, or liquidation is implied.
+        """
+        self.ledger.append({"kind": "runtime.finish_budget"})
+        report = {"attempted": self.venue is not None, "fill_read_error": None}
+        if self.venue is not None:
+            self._reconcile_orders()
+            try:
+                fills = self.consequence_fills.poll(self.exchange, strict=True)
+            except Exception as exc:
+                # A failed read cannot turn into evidence of an empty fill set.
+                report["fill_read_error"] = type(exc).__name__
+                fills = []
+            observed = [WorldEvent(WorldEventKind.FILL, max(self.clock.now_ns, ts),
+                                  self.exchange.name, payload) for ts, payload in fills]
+            self._settle_exchange_effects(observed, observe_positions=False)
+        self.ledger.append({"kind": "venue.terminal_reconciliation", **report})
+        self.terminal_reconciliation = report
+        self.termination.kill("explicit_kill:budget")
+
     def _trading_markets(self) -> tuple[str, ...]:
         """Return the markets this world trades: the manifest seed plus every registration.
 
@@ -40,7 +63,8 @@ class VenueMixin:
         """
         self.ledger.append({"kind": kind, "handle": handle, "reason": reason,
                             **extra, "ts": self.clock.now_ns})
-        self.registration_feedback.append({"reason": f"order: {reason}"})
+        self.registration_feedback.append({"kind": kind,
+                                           "reason": f"order: {reason}"})
         return {"status": "rejected", "error": reason}
 
     def _equity_micro(self) -> int:
@@ -79,7 +103,8 @@ class VenueMixin:
             )
             self.window.max_position_notional_micro = peak
 
-    def _settle_exchange_effects(self, evs: list[WorldEvent]) -> None:
+    def _settle_exchange_effects(self, evs: list[WorldEvent], *,
+                                 observe_positions: bool = True) -> None:
         settlements = []
         spot_table = self.consequences.table
         refused = set()
@@ -146,15 +171,24 @@ class VenueMixin:
                 self.funding_to_date -= paid
 
             self.internal.append(self._kernel_event(we))
-        if hasattr(self.exchange, "sync_cash"):
+        if observe_positions and hasattr(self.exchange, "sync_cash"):
             self.exchange.sync_cash(
                 getattr(self.treasury, "venue_balance_usd", money_to_usd(self.wallet.balance))
             )
-        self._observe_positions()
+        if observe_positions:
+            self._observe_positions()
 
     def _execute_outputs(self, ret: Return) -> None:
         out = ret.outputs
-        if self.wallet.dead or ret.status != "ok" or out.get("action") != "order":
+        if self.wallet.dead or ret.status != "ok":
+            return
+        if out.get("action") != "order":
+            if str(out.get("action", "")).lower().startswith(("buy:", "sell:")):
+                self._refuse_order(ret.handle, 'action labels are not orders; use action="order" '
+                                   'with explicit coin, side and size')
+            return
+        if str(out.get("side", "buy")).lower() not in ("buy", "sell"):
+            self._refuse_order(ret.handle, "order side must be buy or sell")
             return
         try:
             order = Order(
@@ -236,9 +270,12 @@ class VenueMixin:
                     market=args.get("market", "perp"),
                 ))
             result = _to_plain(vars(result)) if isinstance(result, OrderResult) else result
-        except Exception:
-            result = {"status": "uncertain"}
+        except Exception as exc:
+            result = {"status": "uncertain", "error": f"write exception: {type(exc).__name__}"}
         if not isinstance(result, dict) or result.get("status") == "uncertain":
+            # Preserve the first response before recovery can replace its diagnostic.
+            self._record_order_result(client_id, result if isinstance(result, dict) else {
+                "status": "uncertain", "error": "write returned a non-object acknowledgement"})
             return self._recover_order(client_id)
         return self._record_order_result(client_id, result)
 
@@ -285,15 +322,16 @@ class VenueMixin:
                     result = {"status": "rejected", "error": "target order already terminal"}
                 elif result["status"] != "cancelled":
                     result = {"status": "uncertain"}
-        except Exception:
-            result = {"status": "uncertain"}
+        except Exception as exc:
+            result = {"status": "uncertain", "error": f"recovery exception: {type(exc).__name__}"}
         return self._record_order_result(client_id, result)
 
     def _record_order_result(self, client_id: str, result: dict) -> dict:
         result = json.loads(json.dumps(result, default=str))
         intent = self.order_intents[client_id]
         if result.get("status") not in ("filled", "resting", "cancelled", "rejected"):
-            result = {"status": "uncertain", "error": "venue acknowledgement unavailable"}
+            result = {"status": "uncertain", "error": str(
+                result.get("error") or "venue acknowledgement unavailable")[:300]}
         self.ledger.append({"kind": "order.uncertain" if result["status"] == "uncertain"
                             else "order.acknowledged", "client_id": client_id,
                             "handle": intent["handle"], "result": result})

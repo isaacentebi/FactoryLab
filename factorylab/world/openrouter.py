@@ -116,6 +116,8 @@ class OpenRouterProvider:
             "messages": [{"role": "system", "content": req.system}, *req.messages],
             "max_tokens": req.max_tokens,
         }
+        if req.json_object:
+            payload["response_format"] = {"type": "json_object"}
         # "<id>@<effort>" selects a reasoning level as its own capability; ":online" adds web.
         wire_id, effort_override = req.model_id, None
         if "@" in wire_id:

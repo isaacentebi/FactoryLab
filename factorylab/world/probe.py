@@ -8,11 +8,12 @@ from factorylab.world.exchange import HyperliquidExchange
 def probe_hyperliquid(*, mainnet: bool = False, coins: tuple[str, ...] = ("BTC", "ETH")) -> dict:
     """Return live mids and funding for ``coins``. Network required. Never places orders."""
     ex = HyperliquidExchange(mainnet=mainnet, coins=coins)
+    mids = ex.mids()
     return {
         "venue": ex.name,
-        "mids": {c: str(m) for c, m in ex.mids().items()},
+        "mids": {c: str(mids[c]) for c in coins if c in mids},
         "funding": [
             {"coin": f.coin, "rate": str(f.rate), "premium": str(f.premium), "ts_ns": f.ts_ns}
-            for f in ex.funding()
+            for f in ex.funding() if f.coin in coins
         ],
     }

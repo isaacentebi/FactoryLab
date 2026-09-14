@@ -158,8 +158,7 @@ class GovernanceMixin:
             item["index"] = index
         self.ledger.append({**item, "ts": self.clock.now_ns})
         self.window.registration_rejections += 1
-        self.registration_feedback.append({k: v for k, v in item.items()
-                                           if k not in ("kind", "handle")})
+        self.registration_feedback.append({k: v for k, v in item.items() if k != "handle"})
 
     def _kind_rewards(self) -> dict[str, str]:
         """Kind meanings outlive the assemblies that first declared them."""
@@ -287,6 +286,11 @@ class GovernanceMixin:
             raise ValueError("assembly_id must name a registered assembly")
         if prop.assembly_id in self.assembly_learners:
             raise ValueError("assembly already has a learner")
+        from factorylab.runtime.propensity import canonical_label
+
+        actions = tuple(canonical_label(a) for a in prop.actions)
+        if len(set(actions)) != len(actions):
+            raise ValueError("learner actions overlap after canonicalization")
         contract = Contract(
             id=f"learner:{prop.assembly_id}",
             version=1,
@@ -303,14 +307,14 @@ class GovernanceMixin:
         if prop.learner == "blum_mansour":
             from factorylab.learners.blum_mansour import BlumMansour
 
-            inner = BlumMansour(lambda acts: EXP3(acts, prop.gamma), prop.actions, id=lid)
+            inner = BlumMansour(lambda acts: EXP3(acts, prop.gamma), actions, id=lid)
         else:
-            inner = EXP3(prop.actions, prop.gamma, id=lid)
+            inner = EXP3(actions, prop.gamma, id=lid)
         self.assembly_learners[prop.assembly_id] = SnapshotLearner(inner, id=lid)
         self.stats.assembly_learners_registered += 1
         self._emit(EventKind.REGISTERED, {"kind": "learner", "id": prop.assembly_id,
                                           "learner": prop.learner,
-                                          "actions": list(prop.actions)})
+                                          "actions": list(actions)})
 
     def _policy_prediction(self, value: Any) -> PredictedEffect:
         """Connector and retirement promises bind to an existing measurable charter card."""

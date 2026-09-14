@@ -1,0 +1,139 @@
+# source_roster_sha256 = b46f6ef0e458b025ff64d8b8834d32aeccb29c0d92374bc6cae05e6d804b23a0
+# roster_sha256 = 3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb
+# charter_sha256 = 9aaa4681cfad14a10c4417316ea12fcbb8b19a53129f27845557336d07afcc81
+[charter]
+edition = 1
+norms = ["truthful commitments", "care with scarce resources", "useful inquiry", "the capacity to revise inadequate practices"]
+
+[[charter.cards]]
+id = "tool-discipline"
+norm = "care with scarce resources"
+description = "Attempted tool calls per return stay bounded."
+units = "count"
+window = { kind = "returns", n = 10, per = "assembly" }
+acceptable_region = "at most 2"
+observation = "tool_calls"
+answers_for = "producer"
+
+[[charter.cards]]
+id = "noop-ceiling"
+norm = "useful inquiry"
+description = "Share of responses that declare noop or hold stays limited."
+units = "fraction"
+window = { kind = "returns", n = 10, per = "role" }
+acceptable_region = "at most 0.6"
+observation = "noop_share"
+answers_for = "producer"
+
+[[charter.cards]]
+id = "well-formed-floor"
+norm = "truthful commitments"
+description = "Share of a role's returns that parse as well-formed responses."
+units = "fraction"
+window = { kind = "returns", n = 10, per = "role" }
+acceptable_region = "at least 0.9"
+observation = "well_formed_rate"
+answers_for = "all"
+
+[[charter.cards]]
+id = "cost-cap"
+norm = "care with scarce resources"
+description = "Mean successful response cost across the role's latest returns."
+units = "micro-USD per return"
+window = { kind = "returns", n = 10, per = "role" }
+acceptable_region = "at most 5000"
+observation = "cost_per_return"
+answers_for = "all"
+
+[[charter.cards]]
+id = "revision-presence"
+norm = "the capacity to revise inadequate practices"
+description = "Share of returns carrying accepted registrations or activated amendments."
+units = "fraction"
+window = { kind = "returns", n = 10 }
+acceptable_region = "at least 0.1"
+observation = "revision_rate"
+answers_for = "all"
+
+[[charter.cards]]
+id = "censorship-bound"
+norm = "the capacity to revise inadequate practices"
+description = "Share of resolved outcomes that are censored."
+units = "fraction"
+window = { kind = "windows", n = 5 }
+acceptable_region = "at most 0.3"
+observation = "censored_share"
+answers_for = "all"
+
+[[charter.cards]]
+id = "card-forecast-skill"
+norm = "useful inquiry"
+description = "Mean forecast Brier minus the paired prevalence baseline, with a floor above zero, so inquiry is judged by whether it beats guessing."
+units = "score difference"
+window = { kind = "forecasts", n = 25, per = "assembly" }
+acceptable_region = "above 0"
+observation = "forecast_skill"
+answers_for = "evaluator"
+lambda = 0.5
+
+[[charter.cards]]
+id = "card-consequence-paid-off"
+norm = "useful inquiry"
+description = "Share of settled consequences whose return paid off, with a floor, so inquiry is valued for consequences reached rather than questions raised."
+units = "fraction"
+window = { kind = "windows", n = 6 }
+acceptable_region = "at least 0.4"
+observation = "consequence_paid_off_rate"
+answers_for = "producer"
+lambda = 0.5
+
+[[charter.cards]]
+id = "card-position-concentration"
+norm = "care with scarce resources"
+description = "Peak marked notional on a single coin over starting equity, with an upper bound under the turnover cap, so no one position can end the account."
+units = "ratio"
+window = { kind = "windows", n = 6 }
+acceptable_region = "at most 0.5"
+observation = "position_concentration"
+answers_for = "producer"
+lambda = 0.5
+
+[[charter.cards]]
+id = "truthful_commitments_verdict_consistency"
+norm = "truthful commitments"
+description = "Keep evaluator verdicts sufficiently consistent across the latest judged returns."
+units = "score standard deviation"
+window = { kind = "windows", n = 5 }
+acceptable_region = "at most 0.2"
+observation = "verdict_std"
+answers_for = "evaluator"
+
+[[charter.cards]]
+id = "evaluator_disagreement_ceiling"
+norm = "truthful commitments"
+description = "Mean population standard deviation across judges of the same return, averaged over repeat judges."
+units = "score standard deviation"
+window = { kind = "windows", n = 6 }
+acceptable_region = "at most 0.15"
+observation = "evaluator_disagreement"
+answers_for = "evaluator"
+
+[[charter.cards]]
+id = "turnover_ceiling"
+norm = "care with scarce resources"
+description = "Filled notional over equity at window start, zero without fills."
+units = "ratio"
+window = { kind = "windows", n = 6 }
+acceptable_region = "at most 0.5"
+observation = "turnover"
+answers_for = "producer"
+
+[[charter.cards]]
+id = "amendments_activated_floor"
+norm = "the capacity to revise inadequate practices"
+description = "Amendments activated in the window."
+units = "count"
+window = { kind = "windows", n = 6 }
+acceptable_region = "at least 1"
+observation = "amendments_activated"
+answers_for = "all"

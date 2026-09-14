@@ -1,0 +1,26 @@
+import json
+from dataclasses import replace
+from decimal import Decimal
+from tests.runtime.test_compute_continuity import CreditProvider, ROSTER
+from factorylab.runtime.worlds import load_manifest
+from factorylab.runtime.loop import Runtime
+from factorylab.world.market import MultiProvider
+from factorylab.world.exchange import FakeExchange
+from factorylab.world.clock import ClockSource
+from urllib.request import OpenerDirector
+OpenerDirector.open = lambda *a, **k: (_ for _ in ()).throw(AssertionError('unexpected network'))
+calls=[]
+a=CreditProvider('openrouter', calls, exhaust_after=2)
+b=CreditProvider('venice', calls)
+m=load_manifest(ROSTER)
+m=replace(m, treasury=replace(m.treasury, reserve_address=None))
+rt=Runtime(m, events=12, seed=4, initial_balance_micro=None, ledger_path=None,
+           drip=False, router_gamma=.1, provider=MultiProvider(a,b),
+           exchange=FakeExchange(coins=('BTC','ETH'),start_cash_usd=Decimal('90')),
+           clock_source=ClockSource(m.tick_interval_ns,m.tick_interval_ns,12).events(),
+           reconcile_every=1)
+result=rt.run()
+assert rt.live and not a.available and b.completed>10
+assert not result['terminated'] and result['ledger_verify'] and result['wallet_conservation']
+assert result['stats']['reconciliations']==12
+print(json.dumps(result))

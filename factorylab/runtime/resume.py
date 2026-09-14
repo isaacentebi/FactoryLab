@@ -427,6 +427,7 @@ class JournalProxy:
     def __init__(self, target, journal: RecoveryJournal, name: str, *, deterministic=False):
         self.target, self.journal, self._journal_name = target, journal, name
         self.deterministic = deterministic
+        self.call_metrics = {}
 
     def __getattr__(self, name):
         attr = getattr(self.target, name)
@@ -437,19 +438,26 @@ class JournalProxy:
             return attr
 
         def call(*args, **kwargs):
-            return self.journal.call(f"{self._journal_name}.{name}", attr, args, kwargs,
-                                     deterministic=self.deterministic)
+            started = time.monotonic_ns()
+            try:
+                return self.journal.call(f"{self._journal_name}.{name}", attr, args, kwargs,
+                                         deterministic=self.deterministic)
+            finally:
+                if not self.deterministic and not self.journal.recovering:
+                    metric = self.call_metrics.setdefault(name, {"calls": 0, "elapsed_ns": 0})
+                    metric["calls"] += 1
+                    metric["elapsed_ns"] += time.monotonic_ns() - started
 
         return call
 
     def __setattr__(self, name, value):
-        if name in ("target", "journal", "_journal_name", "deterministic"):
+        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics"):
             object.__setattr__(self, name, value)
         else:
             setattr(self.target, name, value)
 
     def __delattr__(self, name):
-        if name in ("target", "journal", "_journal_name", "deterministic"):
+        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics"):
             object.__delattr__(self, name)
         else:
             delattr(self.target, name)
@@ -689,6 +697,9 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
             if item["kind"] == "runtime.input":
                 if not rt._process_event(rt._next_event(iter(()))):
                     return rt
+            elif item["kind"] == "runtime.finish_budget":
+                rt._finish_budget()
+                return rt
             elif item["kind"] == "resume.begin":
                 rt._resume_at(item["now_ns"])
             else:

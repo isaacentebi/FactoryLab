@@ -49,7 +49,12 @@ Running against Hyperliquid testnet needs an exchange key and a model-provider k
 
 To end a persistent world, stop its running process to release the writer lock, then run `uv run factorylab kill --world W --ledger L` with its original manifest and ledger. This records `explicit_kill:operator`, releases the seal and exits `3`. Stopping the process alone leaves the world resumable. Failures from `run` and `kill` may print a second stderr line naming the exception class and factory module beneath the reason code.
 
-On live worlds, `run --duration 30m` uses a wall-clock deadline checked between ticks and an event ceiling; work already in progress may finish after the deadline. `probe --max-tokens` sets the model probe budget, default `256`; a paid but empty x402 completion fails the probe. The wake reads only the world's configured live accounts and publishes no open positions.
+On live worlds, `run --duration 30m` uses a wall-clock deadline checked between ticks and an event ceiling; work already in progress may finish after the deadline. A budgeted live run finishes with one read-only order/fill reconciliation pass before sealing;
+its summary distinguishes acknowledged order statuses from ingested fills. Shutdown does not
+close venue positions. `order-status --world W --client-id ID` reads an original order identity
+using that manifest’s namespace, without starting or resuming a world.
+
+`probe --max-tokens` sets the model probe budget, default `256`; a paid but empty x402 completion fails the probe. The wake reads only the world's configured live accounts and publishes no open positions.
 
 ## Layout
 

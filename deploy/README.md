@@ -20,27 +20,20 @@ its checkout, or restore an older ledger over it.
    scans grow with the ledger. This implementation neither rotates evidence nor
    promises that a small fixed disk holds an arbitrarily long experiment.
 
-   Memory is also unbounded with diary length. `Ledger.reopen` retains encrypted
-   tokens and temporarily holds the file bytes plus all decrypted item objects;
-   `resume` then materializes the diary again to select the last snapshot and
-   replay tail. Each wake aggregate similarly materializes every item. The
-   working-space bound is O(L + D + S + T + A), where L is encrypted diary size,
-   D the Python objects for its decrypted contents (including every historical
-   snapshot), S restored runtime state, T replay-tail objects, and A aggregate
-   output. Streaming only the loop in `resume` or `wake` cannot remove the
-   kernel reader's full-file allocation. A bounded reader/aggregate API requires
-   a separate kernel-ledger change; this runbook records the operating bound
-   instead.
+   Disk ledgers already stream. `Ledger.reopen` verifies the persisted bytes in
+   chunks, uses an authenticated head when available, and decrypts records one at
+   a time. Recovery finds the latest snapshot backwards and streams its tail;
+   the wake projection also consumes a stream. Neither path retains all historical
+   ciphertexts or all historical snapshots. Earlier runbook descriptions of a
+   full-file reader were stale.
 
-   A synthetic reader probe (1,000-character nested payloads) measured
-   approximately linear growth when doubling item count; this is an allocation
-   test, not a production sizing ratio. The cold audit measured 56 MB RSS for a
-   6.2 MB diary on its fixture. Neither coefficient is a guaranteed upper bound:
-   Python object overhead, nested snapshots, pending decisions and output series
-   vary by world. Budget RAM for the maximum intended diary at simultaneous
-   runtime + wake + backup load, and measure peak RSS in the pinned rehearsal.
-   A 4 GiB host does not support an indefinitely growing diary; disk capacity
-   alone cannot establish that resume and wake will remain available.
+   Remaining memory includes the largest record/current snapshot, runtime state,
+   kernel indexes (including wallet history and decision choices), and requested
+   aggregate output. Some of those indexes still grow with history. Memory-only
+   test worlds deliberately retain ciphertexts and are not a production sizing
+   model. Measure a disk-backed world and concurrent wake/backup work on the
+   actual host; streaming alone is not a guarantee of indefinite capacity.
+
 3. Prepay: in DigitalOcean's team **Billing**, choose **Add funds**, select a
    supported payment method and deposit at least 12 times the droplet's displayed
    monthly price, plus tax, backup storage, expected transfer and a margin. Verify
@@ -62,6 +55,23 @@ its checkout, or restore an older ledger over it.
    nightly full archives, not incremental backups.
 
 ## Provision (no world starts yet)
+
+Ubuntu 24.04 requires an AppArmor profile for bubblewrap's namespace setup.
+The provisioner installs `bwrap-userns-restrict` when that profile is absent,
+then loads it before the service-user jail probe. The vendored profile is unchanged
+from [AppArmor 4.0 commit 72229df83059480f4e9fb1488624201bdbd61755](https://gitlab.com/apparmor/apparmor/-/blob/72229df83059480f4e9fb1488624201bdbd61755/profiles/apparmor/profiles/extras/bwrap-userns-restrict),
+SHA-256 `a964037f6cf0df1099f14226b037eaedde6237c86e715188e93eb460b30be859`.
+It allows bubblewrap's setup and stacks a capability-denying profile on its
+children; the runtime still applies its network/process seccomp filter and
+filesystem isolation. The global user-namespace restriction remains enabled.
+This follows [Ubuntu's targeted bubblewrap guidance](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007).
+
+For process-crash tests on slower disks, `FACTORYLAB_TEST_CHILD_TIMEOUT` can
+increase the test subprocess watchdog from its default 180 seconds. For example,
+`FACTORYLAB_TEST_CHILD_TIMEOUT=1800 uv run pytest -m slow -o addopts="" tests/runtime/test_resume.py`
+retains the exact crash points, replay comparisons and conservation assertions.
+This variable affects tests only. Run expensive disk-writing suites sequentially;
+record any initial watchdog failure and the rerun's actual duration.
 
 Copy `cloud-init.yaml` and replace `PINNED_COMMIT` with the selected SHA and
 `REPO_URL` with a cloneable release source. Upload that file as droplet user-data.

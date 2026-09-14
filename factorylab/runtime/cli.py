@@ -380,6 +380,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_order_status(args: argparse.Namespace) -> int:
+    """Query original client identities without starting a world or submitting any order."""
+    from dataclasses import asdict
+
+    from factorylab.world.exchange import live_exchange
+
+    manifest = load_manifest(args.world)
+    if manifest.exchange.kind != "hyperliquid":
+        raise ValueError("order-status requires a live venue manifest")
+    exchange = live_exchange(manifest.exchange)
+    orders = {identity: asdict(exchange.lookup(identity)) for identity in args.client_id}
+    print(json.dumps({"world": manifest.name, "read_only": True,
+                      "orders": orders}, indent=2, default=str))
+    return 0
+
+
 def _cmd_kill(args: argparse.Namespace) -> int:
     """End a living world now, finally, and release its seal. The operator's one control.
 
@@ -741,6 +757,13 @@ def build_parser() -> argparse.ArgumentParser:
     wake.add_argument("--ledger", required=True, help="the living world's ledger")
     wake.add_argument("--out", required=True, help="directory for wake.json and wake.html")
     wake.set_defaults(func=_cmd_wake)
+
+    order_status = sub.add_parser("order-status", help="read venue status for original client ids")
+    order_status.add_argument("--world", required=True,
+                              help="original manifest, including namespace")
+    order_status.add_argument("--client-id", action="append", required=True,
+                              help="original intent id, repeatable; never resubmitted")
+    order_status.set_defaults(func=_cmd_order_status)
 
     rp = sub.add_parser("report", help="print a run summary readably",
                         description="Format a summary JSON file that run or resume printed.")
