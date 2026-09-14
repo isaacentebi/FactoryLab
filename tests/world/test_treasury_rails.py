@@ -59,6 +59,8 @@ class Chain:
         self.disabled = 0
         self.enabled = 1
         self.log_rows = []
+        self.scans = []
+        self.scanned_to = 99
         self.proved = None
         self.core_fee = 0
         self.credit_transfer = True
@@ -84,6 +86,10 @@ class Chain:
 
     def logs(self, contract, topics, start):
         return self.log_rows
+
+    def scan(self, contract, topics, start, *, max_pages=None):
+        self.scans.append((start, max_pages))
+        return self.log_rows, self.scanned_to
 
     def proof(self, txhash):
         return self.proved

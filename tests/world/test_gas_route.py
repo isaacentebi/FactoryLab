@@ -384,3 +384,35 @@ def test_an_unconsumed_nonce_still_requires_the_destination_to_validate_the_atte
     with pytest.raises(Pending):
         rail._withdrawal(ref, 10_000_000)
     assert len(reads) == 2 and reads[0] == used_call and reads[1] != used_call
+
+
+def test_a_waiting_forward_scans_only_new_blocks_from_the_carried_cursor():
+    from factorylab.world.treasury_rails import FORWARD_SCAN_PAGES
+
+    rail, state, log, credit, receipt, nonce = observed_case()
+    rail.base.scanned_to = 1_000
+    with pytest.raises(Pending, match="forwarder") as info:
+        rail.prepare("mint_base", state, {})
+    assert info.value.carry == {"scanned_to": 1_000}
+    assert rail.base.scans == [(77, FORWARD_SCAN_PAGES)]
+    # The second wait pages from the block after the cursor, never from the burn.
+    state["pending"] = {"step": "mint_base", "reference": info.value.carry}
+    rail.base.scanned_to = 1_300
+    with pytest.raises(Pending, match="forwarder") as info:
+        rail.prepare("mint_base", state, {})
+    assert rail.base.scans[-1] == (1_001, FORWARD_SCAN_PAGES)
+    assert info.value.carry == {"scanned_to": 1_300}
+    # An attestation outage carries no cursor, so the treasury keeps the last one.
+    state["pending"]["reference"] = info.value.carry
+    attestation = rail.cctp.attestation
+    rail.cctp.attestation = lambda *a: (_ for _ in ()).throw(
+        Pending("Circle attestation is pending"))
+    with pytest.raises(Pending, match="attestation") as info:
+        rail.prepare("mint_base", state, {})
+    assert info.value.carry is None and len(rail.base.scans) == 2
+    rail.cctp.attestation = attestation
+    # The forwarder's mint in the new blocks is observed from the cursor.
+    rail.base.log_rows = [log]
+    ref = rail.prepare("mint_base", state, {})
+    assert rail.base.scans[-1] == (1_301, FORWARD_SCAN_PAGES)
+    assert ref["tx_hash"] == "0xforwarder" and ref["start_block"] == 77

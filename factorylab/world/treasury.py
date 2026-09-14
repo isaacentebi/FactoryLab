@@ -10,6 +10,11 @@ from factorylab.kernel.money import money_to_usd, usd_to_money
 from factorylab.world.evm import Pending, RailError
 from factorylab.world.x402 import TOP_UP_MICRO
 
+# A stalled step is ledgered on its first failed attempt, whenever its reason changes,
+# and then once every this many attempts, so a wait of any length stays public without
+# writing one item per tick. Attempts are counted per step and never reset by the limit.
+PENDING_JOURNAL_EVERY = 10
+
 
 def _seed_credits(provider: Any) -> int | None:
     """Account credits are independent of an API key's optional spending allowance."""
@@ -109,6 +114,11 @@ class Treasury:
         pending = bool(self.state and self.state["status"] in {"submitted", "stranded"})
         result = deepcopy(self._pots)
         result["pending"] = pending
+        # A stall is public: the last reason a poll or preparation could not complete,
+        # and when that wait began on the current step.
+        stall = (self.state or {}).get("pending") if pending else None
+        result["pending_reason"] = stall["reason"] if stall else None
+        result["pending_since"] = stall["since_ns"] if stall else None
         values = [result[k] for k in ("venue", "reserve", "seed")]
         values.extend(result["sellers"].values())
         result["complete"] = not pending and all(type(v) is int for v in values)
@@ -282,14 +292,11 @@ class Treasury:
         step = state["steps"][state["index"]]
         try:
             outcome = self.rail.poll(step, {**deepcopy(state), "gas_spent": dict(self.gas_spent)})
-        except (Pending, ConnectionError, TimeoutError):
-            return []
-        except Exception:
-            self._write(
-                "pending", transfer_id=state["id"], reason="receipt verification unavailable"
-            )
+        except Exception as exc:
+            self._stall(step, "poll", exc, now_ns)
             return []
         if outcome is None:
+            self.state = self._settled(state)  # a clean poll with no evidence yet: no stall
             return []
         fee = outcome["fee_micro"]
         if type(fee) is not int or not 0 <= fee <= self.fee_ceiling_micro - state["fees_micro"]:
@@ -301,7 +308,7 @@ class Treasury:
         if type(wallet_fee) is not int or not 0 <= wallet_fee <= fee:
             self._write("pending", transfer_id=state["id"], reason="invalid wallet fee evidence")
             return []
-        updated = deepcopy(state)
+        updated = self._settled(deepcopy(state))
         updated["fees_micro"] += fee
         updated["receipts"].append(outcome["evidence"])
         updated["received_micro"] = outcome["received_micro"]
@@ -345,7 +352,7 @@ class Treasury:
                     # settles nothing, so no principal left and the transfer fails.
                     self.state = {**updated, "principal_moved": False}
                     return [self._fail(f"venue refused the settlement: {exc}")]
-            finished = {**updated, "status": "confirmed"}
+            finished = {**self._settled(updated), "status": "confirmed"}
             self._write("confirmed", state=finished, tx_refs=finished["receipts"], ts=now_ns)
             self.state = finished
             self.wallet.release(self.principal_hold)
@@ -373,13 +380,14 @@ class Treasury:
         }
         self._write("advance", state=next_state)
         self.state = next_state
-        self._prepare_next()
+        self._prepare_next(now_ns)
         return []
 
-    def _prepare_next(self) -> None:
+    def _prepare_next(self, now_ns: int) -> None:
         state = self.state
+        step = state["steps"][state["index"]]
         try:
-            ref = self.rail.prepare(state["steps"][state["index"]], deepcopy(state), self.gas_spent)
+            ref = self.rail.prepare(step, deepcopy(state), self.gas_spent)
             self._check_fee(ref, state)
             if ref.get("fee_ceiling_micro", 0) > (
                 self.fee_hold.amount if self.fee_hold is not None else 0
@@ -388,12 +396,44 @@ class Treasury:
                             required_micro=ref["fee_ceiling_micro"],
                             reserved_micro=self.fee_hold.amount if self.fee_hold else 0)
                 return
-        except Exception:
-            return  # existing transfer and principal hold remain pending
-        updated = {**state, "reference": ref}
+        except Exception as exc:
+            # The existing transfer and principal hold remain pending, and the wait is public.
+            self._stall(step, "prepare", exc, now_ns)
+            return
+        updated = {**self._settled(state), "reference": ref}
         self._write("step_submitted", state=updated, tx_refs=[ref])
         self.state = updated
         self._send()
+
+    @staticmethod
+    def _settled(state: dict) -> dict:
+        """The step made progress: its stall record, if any, is over."""
+        return {k: v for k, v in state.items() if k != "pending"}
+
+    def _stall(self, step: str, phase: str, exc: BaseException, now_ns: int) -> None:
+        """Record why the current step could not advance, bounded and without RPC text.
+
+        The reason is a rail's own locally authored message (RailError and Pending
+        carry no response bodies) or, for any other exception, its class name alone.
+        A Pending ``carry`` replaces the record's reference; a failure without one
+        keeps the reference already carried, so a transient outage never loses a cursor.
+        """
+        state = self.state
+        reason = str(exc) if isinstance(exc, RailError) else type(exc).__name__
+        carry = getattr(exc, "carry", None)
+        previous = state.get("pending")
+        if previous is None:
+            record = {"step": step, "phase": phase, "reason": reason, "attempts": 1,
+                      "since_ns": now_ns, "reference": deepcopy(carry)}
+        else:
+            record = {**previous, "phase": phase, "reason": reason,
+                      "attempts": previous["attempts"] + 1}
+            if carry is not None:
+                record["reference"] = deepcopy(carry)
+        if (previous is None or reason != previous["reason"]
+                or record["attempts"] % PENDING_JOURNAL_EVERY == 0):
+            self._write("pending", transfer_id=state["id"], **record)
+        self.state = {**state, "pending": record}
 
     def _reserve_fees(self) -> None:
         """A trading loss reduces the remaining fee hold without losing receipt reconciliation."""
@@ -414,7 +454,7 @@ class Treasury:
                 self.wallet.release(self.fee_hold)
                 self.fee_hold = None
                 self._reserve_fees()
-            self._prepare_next()
+            self._prepare_next(now_ns)
             return []
         result = self.reconcile(now_ns)
         if (
@@ -432,7 +472,8 @@ class Treasury:
     def _fail(self, reason: str) -> dict:
         state = self.state
         stranded = state["principal_moved"]
-        result = {**state, "status": "stranded" if stranded else "failed", "reason": reason}
+        result = {**self._settled(state), "status": "stranded" if stranded else "failed",
+                  "reason": reason}
         self._write(
             "failed",
             state=result,

@@ -79,6 +79,10 @@ MINT_GAS_ALLOWANCE = 200_000
 FORWARD_MAGIC = b"cctp-forward".ljust(24, b"\0")
 FORWARD_FEE_QUOTE = "CoreDepositWallet.calculateCrossChainWithdrawalFee"
 MESSAGE_RECEIVED = "MessageReceived(address,uint32,bytes32,bytes32,uint32,bytes)"
+# Pages of finalized Base blocks one forwarded-mint wait reads past its cursor: 2,000
+# blocks, about an hour of Base, so a resumed or slow world catches up in a few ticks
+# while a ten-minute tick reads six pages. A code constant, not a manifest setting.
+FORWARD_SCAN_PAGES = 40
 
 
 def hype_text(wei: int) -> str:
@@ -370,17 +374,24 @@ class LiveRail(ClassTransferRail):
             "nonce": nonce,
         }
 
-    def _forwarded_mint(self, burn: dict, gas_spent: dict) -> dict | None:
+    def _forwarded_mint(
+        self, burn: dict, gas_spent: dict, cursor: int | None = None
+    ) -> dict | None:
         """Observe Circle's forwarder mint of our burn; None lets the reserve self-mint.
 
         destinationCaller is zero on this route, so anyone may deliver the message.
         The forwarder's finalized delivery is preferred; a reserve that can pay
-        may deliver an unclaimed message itself. Otherwise the step waits.
+        may deliver an unclaimed message itself. Otherwise the step waits, carrying
+        the last finalized block it scanned so the next wait pages only the blocks
+        after it instead of every block since the burn.
         """
         message, proof, fee = self.cctp.attestation(self.hyper, self.base, burn)
         nonce = "0x" + message[12:44].hex()
         topics = [event_topic(MESSAGE_RECEIVED), None, nonce]
-        logs = self.base.logs(self.base.chain.transmitter, topics, burn["base_start_block"])
+        start = burn["base_start_block"] if cursor is None else cursor + 1
+        logs, scanned_to = self.base.scan(
+            self.base.chain.transmitter, topics, start, max_pages=FORWARD_SCAN_PAGES
+        )
         if len(logs) > 1:
             raise RailError("ambiguous forwarded mint")
         if logs:
@@ -404,7 +415,7 @@ class LiveRail(ClassTransferRail):
                 unclaimed = False
             if unclaimed:
                 return None
-        raise Pending("awaiting the Circle forwarder's Base mint")
+        raise Pending("awaiting the Circle forwarder's Base mint", carry={"scanned_to": scanned_to})
 
     def _forwarded_receipt(self, ref: dict, amount: int) -> dict | None:
         """Confirm the forwarder's finalized delivery of our nonce and the exact USDC credit."""
@@ -484,7 +495,8 @@ class LiveRail(ClassTransferRail):
             }
         fallback = False
         if step == "mint_base" and state["route_data"]["burn"].get("forwarded"):
-            observed = self._forwarded_mint(state["route_data"]["burn"], gas_spent)
+            carried = ((state.get("pending") or {}).get("reference") or {}).get("scanned_to")
+            observed = self._forwarded_mint(state["route_data"]["burn"], gas_spent, carried)
             if observed is not None:
                 return observed
             fallback = True  # unclaimed and affordable: the reserve delivers it below

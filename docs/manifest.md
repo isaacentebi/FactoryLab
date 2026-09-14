@@ -313,7 +313,12 @@ reason. The forwarded mint step observes Circle's finalized `MessageReceived`
 for the burn's nonce and the exact USDC credit, sends nothing and books the fee
 as USDC, never as native gas; while it waits, a reserve that later holds ETH may
 deliver the unclaimed message itself (`destinationCaller` is zero), which is
-what `factorylab treasury advance` re-evaluates each tick. The pots view the
+what `factorylab treasury advance` re-evaluates each tick. While that mint waits,
+the observer keeps the last finalized Base block it scanned in the transfer's
+pending reference (`scanned_to`, checkpointed and replayed on resume) and pages
+`MessageReceived` logs only from the block after it, at most `FORWARD_SCAN_PAGES`
+(40) fifty-block pages per tick, so a long wait costs a bounded number of RPC
+calls per tick instead of a rescan from the burn. The pots view the
 population reads carries a `gas` block: `core_hype`, `core_hype_required`,
 `base_eth_wei`, `base_gas_remaining_wei`, the quoted `forward_fee_micro`, the
 `route` the next exit would take, `minimum_micro`, and `refill_ready` with the
@@ -639,6 +644,15 @@ inclusive interval from the nonce to nonce plus `CLASS_EXECUTION_TOLERANCE_MS`
 confirm nothing. A fake settlement refused by the venue becomes
 `treasury.failed` with a reason and releases the unmoved principal instead of
 raising out of the treasury tick.
+
+A poll or step preparation that cannot complete is ledgered as `treasury.pending`
+with the transfer id, `step`, `phase` (`poll` or `prepare`), a bounded `reason`
+(the rail's own constant message or, for any other exception, its class name,
+never RPC text), the monotone per-step `attempts` count, `since_ns` and the
+rail's carried `reference`, written on the first attempt, on every change of
+reason and on every tenth attempt (`PENDING_JOURNAL_EVERY`), and the pots view
+publishes the current stall as `pending_reason` and `pending_since` until the
+step gets evidence or a reference.
 
 Live fills are classified against the venue's full spot metadata, not the
 manifest's traded subset. Non-USDC launch holdings seed unowned lots at the

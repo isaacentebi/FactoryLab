@@ -324,7 +324,8 @@ class RecoveryJournal:
                 if "error" in item:
                     raise _recorded_error(item["error"], item.get("reason"),
                                           status=item.get("status"),
-                                          unbilled=item.get("unbilled", False))
+                                          unbilled=item.get("unbilled", False),
+                                          carry=item.get("carry"))
                 return result
             if name in ("exchange.place", "exchange.close", "exchange.cancel"):
                 from factorylab.world.exchange import OrderResult
@@ -368,6 +369,9 @@ class RecoveryJournal:
             error = type(failure).__name__
             # RailError messages are locally generated bounded reasons, never provider bodies.
             reason = str(failure) if isinstance(failure, RailError) else None
+            # A rail's pending carry (plain data such as a scan cursor) is part of the
+            # recorded outcome, so the treasury persists the same cursor on replay.
+            carry = getattr(failure, "carry", None) if isinstance(failure, Pending) else None
             billing = {}
             if isinstance(failure, (OpenRouterError, VeniceError)):
                 status = failure.status if type(failure.status) is int else None
@@ -375,8 +379,9 @@ class RecoveryJournal:
                            "unbilled": isinstance(classify_provider_failure(failure),
                                                   UnbilledFailure)}
             self.append({"kind": "io.result", "call": seq, "error": error,
-                         **({"reason": reason} if reason is not None else {}), **billing})
-            raise _recorded_error(error, reason, **billing) from None
+                         **({"reason": reason} if reason is not None else {}),
+                         **({"carry": carry} if carry is not None else {}), **billing})
+            raise _recorded_error(error, reason, carry=carry, **billing) from None
         self.append({"kind": "io.result", "call": seq, "result": encoded_result})
         return result
 
@@ -399,7 +404,8 @@ def _read_only(name: str) -> bool:
 
 
 def _recorded_error(name: str, reason: str | None = None, *,
-                    status: int | None = None, unbilled: bool = False) -> Exception:
+                    status: int | None = None, unbilled: bool = False,
+                    carry: dict | None = None) -> Exception:
     from factorylab.world.evm import Pending, RailError
     from factorylab.world.exchange import VenueUnavailable
     from factorylab.world.market import PaymentOutcomeUnknown
@@ -418,8 +424,10 @@ def _recorded_error(name: str, reason: str | None = None, *,
 
             cls = metering.OpenRouterError if cls is OpenRouterError else metering.VeniceError
         return cls(status, "Provider request failed")
-    if name in ("RailError", "Pending"):
-        return (Pending if name == "Pending" else RailError)(reason or "treasury rail unavailable")
+    if name == "Pending":
+        return Pending(reason or "treasury rail unavailable", carry=carry)
+    if name == "RailError":
+        return RailError(reason or "treasury rail unavailable")
     return cls(f"external call failed ({name})")
 
 

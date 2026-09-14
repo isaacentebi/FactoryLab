@@ -187,3 +187,34 @@ def test_system_call_requires_exact_calldata_sender_and_canonical_block():
         old, tx[key] = tx[key], value
         assert chain.system_transfer(chain.chain.usdc, "0x1234", 8, 1_010_000) is None
         tx[key] = old
+
+
+def test_scan_pages_from_a_cursor_with_a_page_cap_and_reports_the_last_block_read():
+    from factorylab.world.evm import LOG_PAGE_BLOCKS
+
+    _, chain, _ = setup()
+    pages = []
+
+    def call(method, args):
+        if method == "eth_chainId":
+            return hex(998)
+        if method == "eth_getBlockByNumber":
+            return {"number": hex(1_117)}
+        pages.append((int(args[0]["fromBlock"], 16), int(args[0]["toBlock"], 16)))
+        return []
+
+    chain.call = call
+    assert LOG_PAGE_BLOCKS == 50
+    assert chain.scan(chain.chain.usdc, [], 10, max_pages=2) == ([], 109)
+    assert pages == [(10, 59), (60, 109)]
+    del pages[:]
+    assert chain.scan(chain.chain.usdc, [], 110, max_pages=2) == ([], 209)
+    assert pages == [(110, 159), (160, 209)]
+    del pages[:]
+    # Without a cap the scan reaches the finalized head, exactly as logs() does.
+    assert chain.scan(chain.chain.usdc, [], 1_100) == ([], 1_117)
+    assert pages == [(1_100, 1_117)]
+    del pages[:]
+    # Nothing finalized past the cursor: no page is requested and the cursor holds.
+    assert chain.scan(chain.chain.usdc, [], 1_118, max_pages=2) == ([], 1_117)
+    assert pages == []

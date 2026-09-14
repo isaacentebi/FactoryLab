@@ -38,7 +38,7 @@ class GasRail:
     def __init__(self, external=None):
         self.external = external if external is not None else {
             "sends": [], "minted": False, "forward": True, "unavailable": False,
-            "view_fails": False}
+            "view_fails": False, "stalled": False, "head": 100, "scans": []}
 
     def balances(self):
         return {"venue": 100_000_000, "reserve": 0}
@@ -66,7 +66,10 @@ class GasRail:
             return {"tx_hash": "0xburn" + str(state["nonce"]), "forward": forward,
                     "fee_ceiling_micro": 1_000_000, "gas_route": route}
         if not self.external["minted"]:
-            raise Pending("awaiting the Circle forwarder's Base mint")
+            cursor = ((state.get("pending") or {}).get("reference") or {}).get("scanned_to")
+            self.external["scans"].append(77 if cursor is None else cursor + 1)
+            raise Pending("awaiting the Circle forwarder's Base mint",
+                          carry={"scanned_to": self.external["head"]})
         return {"tx_hash": "0xforwarder", "forwarded": True, "chain_key": "base",
                 "cctp_fee_micro": 200_000, "fee_ceiling_micro": 200_000}
 
@@ -75,6 +78,8 @@ class GasRail:
 
     def poll(self, step, state):
         if step == "withdraw_burn":
+            if self.external["stalled"]:
+                raise Pending("RPC call rejected or unavailable")
             if ("withdraw_burn", state["reference"]) not in self.external["sends"]:
                 return None  # the venue has no row for a withdrawal that never reached it
             return {"confirmed": True, "received_micro": 9_000_000, "fee_micro": 1_000_000,
@@ -286,3 +291,95 @@ def test_r3_mechanics_disclose_the_hype_and_forwarding_rule_of_the_exit_route():
     assert "to_venue" in mechanics["return_route"] and "ETH" in mechanics["return_route"]
     spec = rt.tool_specs["treasury.transfer"]["description"]
     assert "HYPE" in spec and "gas" in spec
+
+
+def test_r3_a_stalled_poll_replays_its_ledgered_reason_and_keeps_counting(tmp_path):
+    path = tmp_path / "acceptance.jsonl"
+    rail = GasRail()
+    first = AcceptanceSession(path, rail, CONFIG)
+    first.execute(TRANSFER, 1_000_000_000)
+    rail.external["stalled"] = True
+    append = first.journal.ledger.append
+
+    def crash(item):
+        seq = append(item)
+        if item["kind"] == "treasury.pending":
+            raise Crash()
+        return seq
+
+    first.journal.ledger.append = crash
+    with pytest.raises(Crash):
+        first.execute({"kind": "advance"}, 2_000_000_000)
+    second = AcceptanceSession(path, GasRail(rail.external), CONFIG)
+    items = second.journal.ledger._recovery_items()
+    stalls = [i for i in items if i.get("kind") == "treasury.pending"]
+    assert len(stalls) == 1 and stalls[0]["attempts"] == 1
+    assert stalls[0]["reason"] == "RPC call rejected or unavailable"
+    assert stalls[0]["step"] == "withdraw_burn" and stalls[0]["since_ns"] == 2_000_000_000
+    status = second.status()
+    assert status["status"] == "submitted"
+    assert status["pots"]["pending_reason"] == "RPC call rejected or unavailable"
+    assert status["pots"]["pending_since"] == 2_000_000_000
+    for n in range(2, 12):
+        second.execute({"kind": "advance"}, (n + 1) * 1_000_000_000)
+    third = AcceptanceSession(path, GasRail(rail.external), CONFIG)
+    assert third.treasury.state["pending"]["attempts"] == 11
+    for n in range(12, 21):
+        third.execute({"kind": "advance"}, (n + 1) * 1_000_000_000)
+    stalls = [i for i in third.journal.ledger._recovery_items()
+              if i.get("kind") == "treasury.pending"]
+    assert [i["attempts"] for i in stalls] == [1, 10, 20]
+    assert len(rail.external["sends"]) == 1  # the stall never re-signed the withdrawal
+    rail.external["stalled"] = False
+    third.execute({"kind": "advance"}, 22_000_000_000)
+    # The burn confirms and the poll stall is over; the mint step begins its own wait.
+    assert third.treasury.state["index"] == 1
+    assert third.treasury.state["pending"] == {
+        "step": "mint_base", "phase": "prepare", "attempts": 1, "since_ns": 22_000_000_000,
+        "reason": "awaiting the Circle forwarder's Base mint", "reference": {"scanned_to": 100}}
+    assert third.status()["pots"]["pending_since"] == 22_000_000_000
+    rail.external["minted"] = True
+    third.execute({"kind": "advance"}, 23_000_000_000)
+    assert "pending" not in third.treasury.state
+    assert third.status()["pots"]["pending_reason"] is None
+    result = third.execute({"kind": "advance"}, 24_000_000_000)
+    assert result["status"] == "confirmed" and third.wallet.check_conservation()
+
+
+def test_r3_a_waiting_forward_resumes_from_the_journaled_scan_cursor(tmp_path):
+    path = tmp_path / "acceptance.jsonl"
+    rail = GasRail()
+    first = AcceptanceSession(path, rail, CONFIG)
+    first.execute(TRANSFER, 1_000_000_000)
+    first.execute({"kind": "advance"}, 2_000_000_000)  # the burn confirms; the mint waits
+    assert rail.external["scans"] == [77]
+    assert first.treasury.state["pending"]["reference"] == {"scanned_to": 100}
+    rail.external["head"] = 400
+    append = first.journal.ledger.append
+
+    def crash(item):
+        seq = append(item)
+        if item["kind"] == "io.result" and item.get("error") == "Pending":
+            raise Crash()
+        return seq
+
+    first.journal.ledger.append = crash
+    with pytest.raises(Crash):
+        first.execute({"kind": "advance"}, 3_000_000_000)
+    assert rail.external["scans"] == [77, 101]
+    second = AcceptanceSession(path, GasRail(rail.external), CONFIG)
+    # The replayed wait is served from the journal: no scan, and the cursor it carried.
+    assert rail.external["scans"] == [77, 101]
+    assert second.treasury.state["pending"]["reference"] == {"scanned_to": 400}
+    assert second.treasury.state["pending"]["attempts"] == 2
+    rail.external["head"] = 700
+    second.execute({"kind": "advance"}, 4_000_000_000)
+    assert rail.external["scans"] == [77, 101, 401]
+    third = AcceptanceSession(path, GasRail(rail.external), CONFIG)
+    assert third.treasury.state["pending"]["reference"] == {"scanned_to": 700}
+    rail.external["minted"] = True
+    third.execute({"kind": "advance"}, 5_000_000_000)
+    assert third.treasury.state["reference"]["tx_hash"] == "0xforwarder"
+    assert "pending" not in third.treasury.state
+    result = third.execute({"kind": "advance"}, 6_000_000_000)
+    assert result["status"] == "confirmed" and third.wallet.check_conservation()
