@@ -122,7 +122,12 @@ def main(argv=None) -> int:
     if args.command == "preflight":
         return 0
     # Preflight completes before the CLI loads any keys or constructs live clients.
-    # Reusing a prepared manifest would also reuse its venue client identities.
+    # Reusing a prepared manifest would also reuse its venue client identities, so the
+    # marker is written only once the evidence directory is known to be creatable:
+    # a mistaken --out must not consume the manifest.
+    if args.out.exists():
+        parser.error(f"evidence directory already exists: {args.out}")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     marker = args.world.with_suffix(".used")
     with marker.open("x") as stream:
         stream.write(str(args.out.resolve()) + "\n")
