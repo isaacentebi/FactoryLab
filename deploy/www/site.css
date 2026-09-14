@@ -1,0 +1,187 @@
+:root {
+  --black: #000000;
+  --white: #ffffff;
+  --grey: #8c8c8c;
+  --sans: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+
+html {
+  background: var(--black);
+}
+
+body {
+  margin: 0;
+  background: var(--black);
+  color: var(--white);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+}
+
+main {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem 4rem;
+}
+
+h1 {
+  font-size: 1.75rem;
+  font-weight: 500;
+  line-height: 1.2;
+  margin: 0 0 1.5rem;
+}
+
+h2 {
+  font-size: 1rem;
+  font-weight: 500;
+  margin: 3rem 0 0.75rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--grey);
+}
+
+p {
+  margin: 0 0 0.5rem;
+  max-width: 36rem;
+}
+
+#started {
+  margin-top: 1.25rem;
+}
+
+.grey {
+  color: var(--grey);
+}
+
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+a {
+  color: var(--white);
+  text-underline-offset: 0.15em;
+}
+
+a:focus-visible {
+  outline: 1px solid var(--white);
+  outline-offset: 2px;
+}
+
+/* label / value lists */
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 1.5rem;
+  row-gap: 0.35rem;
+  margin: 0;
+}
+
+dt {
+  margin: 0;
+}
+
+dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+#pots {
+  margin-top: 1.25rem;
+}
+
+/* tables */
+.scroll {
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+th, td {
+  text-align: left;
+  vertical-align: top;
+  padding: 0.35rem 1.5rem 0.35rem 0;
+  border-bottom: 1px solid var(--grey);
+  white-space: nowrap;
+}
+
+th:last-child, td:last-child {
+  padding-right: 0;
+}
+
+th {
+  font-weight: 400;
+  color: var(--grey);
+}
+
+td.mono, td.num {
+  font-family: var(--mono);
+}
+
+td.mono {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+td.wrap {
+  white-space: normal;
+  min-width: 14rem;
+}
+
+/* chart */
+#chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+#chart text {
+  font-family: var(--mono);
+  font-size: 11px;
+  fill: var(--white);
+}
+
+#chart .axis {
+  stroke: var(--grey);
+  stroke-width: 1;
+}
+
+#chart .line {
+  stroke: var(--white);
+  stroke-width: 1.5;
+  fill: none;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+/* links */
+ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+li {
+  margin: 0 0 0.35rem;
+}
+
+@media (max-width: 480px) {
+  body {
+    font-size: 16px;
+  }
+  main {
+    padding: 1.5rem 1rem 3rem;
+  }
+  dl {
+    column-gap: 1rem;
+  }
+  th, td {
+    padding-right: 1rem;
+  }
+}

@@ -176,8 +176,9 @@ The CLI loads the usual root key files; the ledger's existing
 resume and wake. No new viewing key is generated. Wake never releases the public
 seal. Do not use `postmortem`, `report`, summaries or key inspection as a live view.
 The web server has a separate dynamic user and no access to the key files or runs.
-Keep `www` exclusively for `wake.html` and `wake.json`; never symlink private
-files into it.
+`www` holds only the public page (`index.html`, `site.css`, `site.js`,
+`wake.sample.json`) and the wake's `wake.html` and `wake.json`; never symlink
+private files into it.
 
 ## Rehearse, start once, verify, leave it alone
 

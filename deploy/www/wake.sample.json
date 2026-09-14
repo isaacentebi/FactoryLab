@@ -1,0 +1,704 @@
+{
+  "wallet_series": {
+    "series": [
+      {
+        "balance": 90000000,
+        "ts": 1789328433070991000
+      },
+      {
+        "balance": 89997100,
+        "ts": 1789328438203924000
+      },
+      {
+        "balance": 89991097,
+        "ts": 1789328438203924000
+      },
+      {
+        "balance": 89985397,
+        "ts": 1789328438203924000
+      },
+      {
+        "balance": 89980875,
+        "ts": 1789328438203924000
+      },
+      {
+        "balance": 89955588,
+        "ts": 1789328438203924000
+      },
+      {
+        "balance": 89951934,
+        "ts": 1789328438203924000
+      },
+      {
+        "balance": 89947162,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89945724,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89943215,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89942066,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89940840,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89930779,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89925848,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89920886,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89917841,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89892351,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89891561,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89890979,
+        "ts": 1789329038208319000
+      },
+      {
+        "balance": 89890285,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89915815,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89914598,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89913375,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89912157,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89910930,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89900766,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89899324,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89897805,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89896264,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89872056,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89846680,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89841572,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89840990,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89840378,
+        "ts": 1789329638213366000
+      },
+      {
+        "balance": 89837050,
+        "ts": 1789330238221001000
+      },
+      {
+        "balance": 89835817,
+        "ts": 1789330238221001000
+      },
+      {
+        "balance": 89834587,
+        "ts": 1789330238221001000
+      },
+      {
+        "balance": 89833352,
+        "ts": 1789330238221001000
+      },
+      {
+        "balance": 89823155,
+        "ts": 1789330238221001000
+      },
+      {
+        "balance": 89821605,
+        "ts": 1789330238221001000
+      },
+      {
+        "balance": 89794687,
+        "ts": 1789330238221001000
+      },
+      {
+        "balance": 89769286,
+        "ts": 1789330238221001000
+      },
+      {
+        "balance": 89764185,
+        "ts": 1789330238221001000
+      },
+      {
+        "balance": 89760776,
+        "ts": 1789330838229729000
+      },
+      {
+        "balance": 89759529,
+        "ts": 1789330838229729000
+      },
+      {
+        "balance": 89758291,
+        "ts": 1789330838229729000
+      },
+      {
+        "balance": 89757051,
+        "ts": 1789330838229729000
+      },
+      {
+        "balance": 89755803,
+        "ts": 1789330838229729000
+      },
+      {
+        "balance": 89754197,
+        "ts": 1789330838229729000
+      },
+      {
+        "balance": 89728815,
+        "ts": 1789330838229729000
+      },
+      {
+        "balance": 89727887,
+        "ts": 1789330838229729000
+      },
+      {
+        "balance": 89726315,
+        "ts": 1789330838229729000
+      },
+      {
+        "balance": 89725691,
+        "ts": 1789330838229729000
+      },
+      {
+        "balance": 89724450,
+        "ts": 1789331438237855000
+      },
+      {
+        "balance": 89723194,
+        "ts": 1789331438237855000
+      },
+      {
+        "balance": 89721547,
+        "ts": 1789331438237855000
+      },
+      {
+        "balance": 89720673,
+        "ts": 1789331438237855000
+      },
+      {
+        "balance": 89694484,
+        "ts": 1789331438237855000
+      },
+      {
+        "balance": 89690990,
+        "ts": 1789332038247883000
+      },
+      {
+        "ts": 1789332038247883000,
+        "balance": 89689726
+      },
+      {
+        "ts": 1789332038247883000,
+        "balance": 89688467
+      },
+      {
+        "ts": 1789332038247883000,
+        "balance": 89685353
+      },
+      {
+        "ts": 1789332038247883000,
+        "balance": 89684075
+      },
+      {
+        "ts": 1789332038247883000,
+        "balance": 89682776
+      },
+      {
+        "ts": 1789332038247883000,
+        "balance": 89681816
+      },
+      {
+        "ts": 1789332038247883000,
+        "balance": 89676655
+      },
+      {
+        "ts": 1789332038247883000,
+        "balance": 89674950
+      },
+      {
+        "ts": 1789332038247883000,
+        "balance": 89674692
+      }
+    ]
+  },
+  "spend_by_capability": {
+    "spend": {
+      "antagonist": 12224,
+      "evaluator": 295340,
+      "meta": 6312,
+      "producer": 36268
+    }
+  },
+  "invocations_by_assembly": {
+    "counts": {
+      "antagonist": 4,
+      "evaluator": 32,
+      "meta": 6,
+      "producer": 23
+    }
+  },
+  "action_frequencies": {
+    "counts": {
+      "antagonist": 4,
+      "evaluator": 32,
+      "meta": 6,
+      "noop": 32,
+      "other": 100,
+      "producer": 23
+    }
+  },
+  "settlement_latency": {
+    "count": 196,
+    "total_ns": 18000231537000,
+    "min_ns": 0,
+    "max_ns": 600010028000
+  },
+  "roster": {
+    "current": [
+      {
+        "count": 1,
+        "kind": "antagonist",
+        "model_id": "qwen/qwen3.8-flash"
+      },
+      {
+        "count": 1,
+        "kind": "evaluator",
+        "model_id": "deepseek/deepseek-v4.1-flash"
+      },
+      {
+        "count": 1,
+        "kind": "evaluator",
+        "model_id": "meta/muse-spark-1.3"
+      },
+      {
+        "count": 1,
+        "kind": "evaluator",
+        "model_id": "openai/gpt-5.6-luna"
+      },
+      {
+        "count": 1,
+        "kind": "evaluator",
+        "model_id": "z-ai/glm-5.3-flash"
+      },
+      {
+        "count": 1,
+        "kind": "meta",
+        "model_id": "deepseek/deepseek-v4.1-flash"
+      },
+      {
+        "count": 1,
+        "kind": "meta",
+        "model_id": "qwen/qwen3.7-flash"
+      },
+      {
+        "count": 1,
+        "kind": "producer",
+        "model_id": "deepseek/deepseek-v4.1-flash"
+      },
+      {
+        "count": 1,
+        "kind": "producer",
+        "model_id": "z-ai/glm-5.3-flash"
+      }
+    ],
+    "over_time": [
+      {
+        "window": 1,
+        "ts_ns": 1789332038247883000,
+        "by_kind": {
+          "antagonist": 1,
+          "evaluator": 4,
+          "meta": 2,
+          "producer": 2
+        },
+        "by_model": {
+          "deepseek/deepseek-v4.1-flash": 3,
+          "meta/muse-spark-1.3": 1,
+          "openai/gpt-5.6-luna": 1,
+          "qwen/qwen3.7-flash": 1,
+          "qwen/qwen3.8-flash": 1,
+          "z-ai/glm-5.3-flash": 2
+        }
+      }
+    ],
+    "registered": [
+      {
+        "ts_ns": 1789329038208319000,
+        "registered": "learner",
+        "role": null
+      }
+    ],
+    "retired": []
+  },
+  "tools": [
+    {
+      "description": "Search the model catalogues (OpenRouter, Venice, registered sellers) by substring; returns ids with prices per million tokens and context length.",
+      "id": "catalogue.search",
+      "version": 1
+    },
+    {
+      "description": "GET a registered connector path as text",
+      "id": "connector.fetch",
+      "version": 1
+    },
+    {
+      "description": "Discover compute sellers with their resource URLs and listed prices.",
+      "id": "market.discover",
+      "version": 1
+    },
+    {
+      "description": "Read public text, paying returned bytes and any outstanding storage rent.",
+      "id": "note.get",
+      "version": 1
+    },
+    {
+      "description": "Register or overwrite public text under a key; UTF-8 bytes are charged per window.",
+      "id": "note.put",
+      "version": 1
+    },
+    {
+      "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, or to_venice from reserve in a fixed $5 tranche, within treasury.max_venice_per_window. Principal stays held until receipt-confirmed arrival. The result carries references or a refusal reason.",
+      "id": "treasury.transfer",
+      "version": 1
+    },
+    {
+      "description": "Cancel a resting order on its coin.",
+      "id": "venue.cancel",
+      "version": 1
+    },
+    {
+      "description": "Recent OHLCV candles, oldest first; timestamps in nanoseconds.",
+      "id": "venue.candles",
+      "version": 1
+    },
+    {
+      "description": "Reduce a position by size, or close it fully when size is omitted or null.",
+      "id": "venue.close",
+      "version": 1
+    },
+    {
+      "description": "Public venue funding for all listed markets.",
+      "id": "venue.funding",
+      "version": 1
+    },
+    {
+      "description": "Recent funding rates, oldest first; timestamps in nanoseconds.",
+      "id": "venue.funding_history",
+      "version": 1
+    },
+    {
+      "description": "Every market the venue lists, with its lot size, tick size and minimum order value. world.venue carries these records for the world's trading_markets only; this read returns the full listing.",
+      "id": "venue.instruments",
+      "version": 1
+    },
+    {
+      "description": "Public venue mids for all listed markets.",
+      "id": "venue.mids",
+      "version": 1
+    },
+    {
+      "description": "Currently resting orders for the account.",
+      "id": "venue.open_orders",
+      "version": 1
+    },
+    {
+      "description": "Best-first bid and ask price/size levels.",
+      "id": "venue.order_book",
+      "version": 1
+    },
+    {
+      "description": "Place a good-until-cancelled limit order; optionally reduce only.",
+      "id": "venue.place_limit",
+      "version": 1
+    },
+    {
+      "description": "Place a market buy or sell; optionally reduce only.",
+      "id": "venue.place_market",
+      "version": 1
+    },
+    {
+      "description": "Open signed positions and entry prices for the account.",
+      "id": "venue.positions",
+      "version": 1
+    },
+    {
+      "description": "Set cross-margin leverage for a coin.",
+      "id": "venue.set_leverage",
+      "version": 1
+    }
+  ],
+  "connectors": {
+    "calls_per_day": {},
+    "registered": []
+  },
+  "notes": {
+    "bytes": 0,
+    "keys": 0
+  },
+  "observations": [
+    {
+      "description": "Mean successful response cost in the selected rows; global closed windows use successful producer returns. A retained-storage charge adds to what those responses cost and is never counted as one of them.",
+      "id": "cost_per_return",
+      "units": "micro-USD per return"
+    },
+    {
+      "description": "Successful responses over selected invocation responses, including ballots.",
+      "id": "well_formed_rate",
+      "units": "fraction"
+    },
+    {
+      "description": "Mean selected forecast Brier minus its paired pre-outcome prevalence-baseline Brier.",
+      "id": "forecast_skill",
+      "units": "score difference"
+    },
+    {
+      "description": "Filled notional over equity at window start; zero without fills.",
+      "id": "turnover",
+      "units": "ratio"
+    },
+    {
+      "description": "Share of selected responses declaring noop or hold; global closed windows use producer returns.",
+      "id": "noop_share",
+      "units": "fraction"
+    },
+    {
+      "description": "Share of selected responses with accepted registrations or activated amendments; global closed windows use their revision counters.",
+      "id": "revision_rate",
+      "units": "fraction"
+    },
+    {
+      "description": "Accepted population registrations, including amendment proposals.",
+      "id": "registrations",
+      "units": "count"
+    },
+    {
+      "description": "Rejected population registration proposals.",
+      "id": "registration_rejections",
+      "units": "count"
+    },
+    {
+      "description": "Amendments admitted to the charter proposal book.",
+      "id": "amendments_proposed",
+      "units": "count"
+    },
+    {
+      "description": "Amendments activated in this window.",
+      "id": "amendments_activated",
+      "units": "count"
+    },
+    {
+      "description": "Mean evaluator verdict; forecast selectors use the verdicts attached to resolved forecasts, grouped by the judged return's assembly or role.",
+      "id": "verdict_mean",
+      "units": "score"
+    },
+    {
+      "description": "Population standard deviation of evaluator verdicts; forecast selectors group verdicts by the judged return's assembly or role.",
+      "id": "verdict_std",
+      "units": "score standard deviation"
+    },
+    {
+      "description": "Mean population std across judges of the same return; at least two judges in this window, averaging repeats per judge.",
+      "id": "evaluator_disagreement",
+      "units": "score standard deviation"
+    },
+    {
+      "description": "Positive return_paid_off outcomes over selected settled consequences; forecast selectors restrict this to selected forecast records.",
+      "id": "consequence_paid_off_rate",
+      "units": "fraction"
+    },
+    {
+      "description": "Venue fills processed in the window.",
+      "id": "fills",
+      "units": "count"
+    },
+    {
+      "description": "Realized fill P&L before fees and funding.",
+      "id": "realized_pnl_usd",
+      "units": "USD"
+    },
+    {
+      "description": "Peak observed absolute marked notional on one coin over starting equity; unsupported without positions or marks.",
+      "id": "position_concentration",
+      "units": "ratio"
+    },
+    {
+      "description": "Winning antagonist exposure settlements over settled exposures.",
+      "id": "exposure_win_rate",
+      "units": "fraction"
+    },
+    {
+      "description": "Mean raw meta verdict delivered, across all tiers.",
+      "id": "meta_verdict_mean",
+      "units": "score"
+    },
+    {
+      "description": "Censored outcomes over resolved outcomes; forecast selectors use forecast records, global closed windows also include judgements and exposures.",
+      "id": "censored_share",
+      "units": "fraction"
+    },
+    {
+      "description": "Attempted tool calls, including failures; excludes ignored calls.",
+      "id": "tool_calls",
+      "units": "count"
+    },
+    {
+      "description": "Paid x402 requests with a recorded result; excludes free or unresolved requests.",
+      "id": "market_purchases",
+      "units": "count"
+    }
+  ],
+  "charter": {
+    "cards": [
+      {
+        "answers_for": "producer",
+        "id": "cost_per_return",
+        "lambda": 0.0,
+        "norm": "care with scarce resources",
+        "observation": "cost_per_return",
+        "region": null
+      },
+      {
+        "answers_for": "all",
+        "id": "well_formed_rate",
+        "lambda": 0.0,
+        "norm": "truthful commitments",
+        "observation": "well_formed_rate",
+        "region": {
+          "card_id": "well_formed_rate",
+          "hi": null,
+          "kind": "min",
+          "lo": 0.9,
+          "scale": 0.9
+        }
+      },
+      {
+        "answers_for": "evaluator",
+        "id": "forecast_skill",
+        "lambda": 0.0,
+        "norm": "useful inquiry",
+        "observation": "forecast_skill",
+        "region": {
+          "card_id": "forecast_skill",
+          "hi": null,
+          "kind": "min",
+          "lo": 0.0,
+          "scale": 2.0
+        }
+      }
+    ],
+    "edition": 1,
+    "norms": [
+      "truthful commitments",
+      "care with scarce resources",
+      "useful inquiry",
+      "the capacity to revise inadequate practices"
+    ],
+    "amendments": []
+  },
+  "compute": {
+    "spend_by_rail_per_day": {
+      "2026-09-13": {
+        "openrouter": 350144,
+        "venice": 0,
+        "x402": 0
+      }
+    },
+    "spend_by_rail_per_week": {
+      "2026-W37": {
+        "openrouter": 350144,
+        "venice": 0,
+        "x402": 0
+      }
+    },
+    "invocations_by_kind_per_day": {
+      "2026-09-13": {
+        "evaluator": 32,
+        "meta": 6,
+        "producer": 27
+      }
+    }
+  },
+  "pots": {
+    "current": {
+      "complete": false,
+      "reserve": null,
+      "seed": null,
+      "venice": null,
+      "venue": null
+    },
+    "transfers": []
+  },
+  "immune": [
+    {
+      "window": 1,
+      "flags": {
+        "learning_death": false,
+        "stable_failure": false,
+        "thrash": false
+      },
+      "responses": []
+    }
+  ],
+  "portfolio": {
+    "equity_micro": null,
+    "realized_to_date_micro": 0
+  },
+  "world": "testnet",
+  "manifest_hash": "8677378705db65c25bbf774eed2a830531039e6fa9a841a0a43541156e16de9c",
+  "uptime_ns": 3600043959000,
+  "last_event_time_ns": 1789332038247883000
+}
