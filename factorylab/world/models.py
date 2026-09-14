@@ -115,6 +115,7 @@ class ModelRequest:
     messages: tuple[dict[str, Any], ...]
     max_tokens: int = 4096
     effort: str = "medium"
+    json_object: bool = False
 
 
 @dataclass(frozen=True)

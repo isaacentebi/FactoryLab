@@ -246,15 +246,19 @@ def test_runner_passes_wall_and_cpu_limits(monkeypatch, timeout_s):
 
 
 def test_tool_environment_does_not_inherit_path_home_or_keys(monkeypatch, usable_jail):
-    names = ("PATH", "HOME", "OPENROUTER_API_KEY", "HL_PRIVATE_KEY")
+    names = ("PATH", "HOME", "OPENROUTER_API_KEY", "HL_PRIVATE_KEY", "PWD")
     for name in names:
         monkeypatch.setenv(name, "test-value-must-not-reach-tool")
-    tool = _tool("import json, os; print(json.dumps({'keys': sorted(os.environ)}))")
+    tool = _tool("import json, os; print(json.dumps({'env': dict(os.environ)}))")
     result = ToolRunner().run(tool, {})
-    assert "keys" in result
-    assert set(names[1:]).isdisjoint(result["keys"])
-    # Python and macOS may synthesize locale variables even with env={}.
-    assert set(result["keys"]) <= {"PATH", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
+    assert "env" in result
+    env = result["env"]
+    assert {"HOME", "OPENROUTER_API_KEY", "HL_PRIVATE_KEY"}.isdisjoint(env)
+    assert "test-value-must-not-reach-tool" not in env.values()
+    # Python/macOS synthesize locale variables; bwrap sets its confined working directory.
+    assert set(env) <= {"PATH", "PWD", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
+    if "PWD" in env:
+        assert env["PWD"] == "/work"
 
 
 def test_population_tool_is_frozen_and_spec_only_exposes_public_fields():

@@ -14,6 +14,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_DOWN, Decimal
 from enum import StrEnum
+from math import isfinite
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -755,7 +756,8 @@ class HyperliquidExchange:
 
             wallet = Account.from_key(key)
             self._address = self._address or wallet.address
-            self._exchange = HLExchange(wallet, self.base_url, account_address=self._address)
+            self._exchange = HLExchange(wallet, self.base_url, account_address=self._address,
+                                        timeout=timeout)
         meta = self._info.meta()
         self._sz_decimals = {a["name"]: int(a["szDecimals"]) for a in meta["universe"]}
         self._listed_coins = tuple(self._sz_decimals)
@@ -984,17 +986,17 @@ class HyperliquidExchange:
         return sorted(payments.values(), key=lambda p: (p.ts_ns, p.id))
 
     def fills(self, since_ns: int) -> list[Fill]:
-        """Fills since ``since_ns``; an unavailable venue yields none, and the caller's
-        last-seen timestamp makes the next poll pick them up."""
+        """Return observed fills; an exhausted read raises instead of proving an empty set.
+
+        Runtime polling may defer a failed read, while terminal reconciliation
+        reports that failure explicitly. Neither advances the inclusive cursor.
+        """
         if not self._address:
             raise RuntimeError("fills() needs an address or a private key")
-        try:
-            raw = self._guarded(
-                "user_fills_by_time",
-                lambda: self._info.user_fills_by_time(self._address, since_ns // NS_PER_MS),
-            )
-        except VenueUnavailable:
-            return []
+        raw = self._guarded(
+            "user_fills_by_time",
+            lambda: self._info.user_fills_by_time(self._address, since_ns // NS_PER_MS),
+        )
         if not isinstance(raw, list):
             raise VenueUnavailable("invalid fill response")
         out: list[Fill] = []
@@ -1107,12 +1109,22 @@ class HyperliquidExchange:
 
     # ---- writes
 
-    @staticmethod
-    def client_id(handle: str):
-        """Map a persistent decision identity to Hyperliquid's required 128-bit cloid."""
+    def client_id(self, handle: str):
+        """Namespaced worlds cannot reuse another world's venue decision identity.
+
+        Decision handles restart at ``decision-1`` on a fresh ledger and the manifest
+        namespace is fixed, so a launch nonce is folded in as well: a rerun of one
+        manifest can never reproduce a previous launch's identities, while a resumed
+        world restores its nonce and so keeps the identities it already submitted.
+        Absent both, the historical bare-handle derivation is preserved exactly.
+        """
         from hyperliquid.utils.types import Cloid
 
-        return Cloid.from_str("0x" + hashlib.sha256(handle.encode()).hexdigest()[:32])
+        parts = [str(part) for part in (getattr(self, "_client_namespace", None),
+                                        getattr(self, "_launch_nonce", None))
+                 if part is not None]
+        identity = ":".join([*parts, handle])
+        return Cloid.from_str("0x" + hashlib.sha256(identity.encode()).hexdigest()[:32])
 
     def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult:
         """Unknown or unavailable order status is uncertainty, never a negative acknowledgement."""
@@ -1124,6 +1136,14 @@ class HyperliquidExchange:
                 return OrderResult(order_id, "uncertain", Decimal(0), None, "order not observed")
             detail = response["order"]
             order = detail["order"]
+            # A venue answer carrying another launch's identity is not ours to book.
+            # Nothing is claimed about it: this launch's identity stays uncertain.
+            expected = None if order_id is not None else self.client_id(client_id).to_raw()
+            observed = order.get("cloid")
+            if (expected is not None and isinstance(observed, str)
+                    and observed.lower() != expected.lower()):
+                return OrderResult(None, "uncertain", Decimal(0), None,
+                                   "order identity belongs to another launch")
             status, oid = detail["status"], self._order_id(order["oid"])
             size = Decimal(str(order["origSz"]))
             remaining = Decimal(str(order["sz"]))
@@ -1138,9 +1158,10 @@ class HyperliquidExchange:
                 return OrderResult(oid, "cancelled", size - remaining, None)
             if status == "rejected" or status.endswith("Rejected"):
                 return OrderResult(oid, "rejected", Decimal(0), None, "venue rejected order")
-        except Exception:
-            pass
-        return OrderResult(order_id, "uncertain", Decimal(0), None, "order status unavailable")
+        except Exception as exc:
+            return OrderResult(order_id, "uncertain", Decimal(0), None,
+                               f"lookup exception: {type(exc).__name__}")
+        return OrderResult(order_id, "uncertain", Decimal(0), None, "unrecognized order status")
 
     def _submit(self, client_id: str, submit) -> OrderResult:
         """Submit once per identity; a lost or malformed acknowledgement requires lookup."""
@@ -1154,10 +1175,17 @@ class HyperliquidExchange:
             results[client_id] = OrderResult(None, "uncertain", Decimal(0), None)
             try:
                 result = self._parse_order_response(submit())
-            except Exception:
-                result = results[client_id]
+            except Exception as exc:
+                # Exception messages may carry credentials or signed request bodies.
+                result = OrderResult(None, "uncertain", Decimal(0), None,
+                                     f"submit exception: {type(exc).__name__}")
             if result.status == "uncertain":
+                submitted = result
                 result = self.lookup(client_id)
+                if result.status == "uncertain":
+                    result = OrderResult(result.order_id, "uncertain", result.filled_size,
+                                         result.avg_px,
+                                         f"submit: {submitted.error}; lookup: {result.error}")
         results[client_id] = result
         return result
 
@@ -1165,6 +1193,8 @@ class HyperliquidExchange:
         if self._exchange is None:
             return OrderResult(None, "rejected", Decimal(0), None, "no signing key")
         client_id = order.client_id or str(uuid4())
+        if client_id in self.__dict__.get("_client_results", {}):
+            return self._submit(client_id, lambda: None)  # existing identity only reconciles
         if order.market == "spot":
             if order.coin not in getattr(self, "spot_pairs", ()):
                 return OrderResult(None, "rejected", Decimal(0), None, "unknown spot pair")
@@ -1175,25 +1205,47 @@ class HyperliquidExchange:
         if order.market == "perp" and order.coin not in self.coins:
             return OrderResult(None, "rejected", Decimal(0), None, "unregistered perp coin")
         if order.market == "perp" and order.reduce_only and order.kind is OrderKind.MARKET:
-            try:
-                pos = next((p for p in self.account().positions if p.coin == order.coin), None)
-            except Exception:
-                return OrderResult(None, "rejected", Decimal(0), None, "position unavailable")
-            if pos is None or (pos.size > 0) == order.is_buy:
-                return OrderResult(None, "rejected", Decimal(0), None, "not reducing position")
-            return self.close(order.coin, min(order.size, abs(pos.size)), client_id=client_id)
-        rounded = self._round_size(order.coin, order.size)
-        if not rounded.is_finite() or rounded <= 0:
-            return OrderResult(None, "rejected", Decimal(0), None, "size below venue precision")
+            return self._close_perp(order.coin, order.size, client_id, is_buy=order.is_buy)
+        try:
+            rounded = self._round_size(order.coin, order.size)
+            sz = self._wire_number(rounded)
+            price = (self._wire_number(order.limit_px)
+                     if order.kind is OrderKind.LIMIT else None)
+        except Exception as exc:
+            return OrderResult(None, "rejected", Decimal(0), None,
+                               f"order preparation failed: {type(exc).__name__}")
         cloid = self.client_id(client_id)
-        sz = float(rounded)  # SDK wire format only; accounting remains exact Decimal.
         if order.kind is OrderKind.MARKET:
-            return self._submit(client_id, lambda: self._exchange.market_open(
-                self._wire_coin(order.coin), order.is_buy, sz, cloid=cloid))
+            return self._market_order(order.coin, order.is_buy, rounded, client_id)
         return self._submit(client_id, lambda: self._exchange.order(
-            self._wire_coin(order.coin), order.is_buy, sz, float(order.limit_px),
+            self._wire_coin(order.coin), order.is_buy, sz, price,
             {"limit": {"tif": "Gtc"}},
             reduce_only=order.reduce_only and order.market == "perp", cloid=cloid))
+
+    def _market_order(self, coin: str, is_buy: bool, size: Decimal, client_id: str,
+                      *, reduce_only: bool = False) -> OrderResult:
+        """Fresh quote validation precedes dispatch; write-phase failures require reconciliation."""
+        from hyperliquid.exchange import Exchange as SDKExchange
+
+        wire = self._wire_coin(coin)
+        try:
+            # Match the SDK's market-order preparation without using cached marks.
+            # Keep its existing default price calculation; introduce no new price limit.
+            dex = wire.split(":", 1)[0] if ":" in wire else ""
+            mids = self._info.all_mids(dex) if dex else self._info.all_mids()
+            mid = float(Decimal(str(mids[wire])))
+            if not isfinite(mid) or mid <= 0:
+                raise ValueError("invalid market quote")
+            price = self._exchange._slippage_price(wire, is_buy, SDKExchange.DEFAULT_SLIPPAGE, mid)
+            price = self._wire_number(price)
+            sz = self._wire_number(size)
+        except Exception as exc:
+            return OrderResult(None, "rejected", Decimal(0), None,
+                               f"market preparation failed: {type(exc).__name__}")
+        cloid = self.client_id(client_id)
+        return self._submit(client_id, lambda: self._exchange.order(
+            wire, is_buy, sz, price, {"limit": {"tif": "Ioc"}},
+            reduce_only=reduce_only, cloid=cloid))
 
     def cancel(self, order_id: str, *, coin: str | None = None,
                client_id: str | None = None) -> dict:
@@ -1204,6 +1256,10 @@ class HyperliquidExchange:
         """
         if self._exchange is None:
             return {"status": "rejected", "error": "no signing key"}
+        try:
+            order_id = self._order_id(order_id)
+        except ValueError:
+            return {"status": "rejected", "error": "invalid venue order identity"}
         client_id = client_id or str(uuid4())
         results = self.__dict__.setdefault("_cancel_results", {})
         if client_id in results and results[client_id]["status"] != "uncertain":
@@ -1227,6 +1283,8 @@ class HyperliquidExchange:
                         return dict(results[client_id])
                 except Exception:
                     break  # Never try another market after an ambiguous submission.
+        # A repeated caller cannot redirect reconciliation to a different order.
+        order_id = results[client_id]["order_id"]
         result = self.lookup(client_id, order_id=order_id)
         if result.status == "cancelled":
             results[client_id] = {"status": "cancelled", "order_id": order_id}
@@ -1246,18 +1304,52 @@ class HyperliquidExchange:
         if market == "spot":
             if coin not in getattr(self, "spot_pairs", ()):
                 return OrderResult(None, "rejected", Decimal(0), None, "unknown spot pair")
-            balance = next((b.available for b in self.account().spot_balances
-                            if b.coin == self._spot_tokens[coin]), Decimal(0))
-            amount = balance if size is None else min(size, balance)
+            try:
+                state = self._info.spot_user_state(self._address)
+                row = next((b for b in state["balances"]
+                            if b["coin"] == self._spot_tokens[coin]), None)
+                total = Decimal(str(row["total"])) if row else Decimal(0)
+                hold = Decimal(str(row["hold"])) if row else Decimal(0)
+                if not total.is_finite() or not hold.is_finite() or not 0 <= hold <= total:
+                    raise ValueError("invalid spot balance")
+                balance = total - hold
+                amount = balance if size is None else min(size, balance)
+                if amount <= 0:
+                    return OrderResult(None, "rejected", Decimal(0), None, "no spot balance")
+                return self.place(Order(coin, False, amount, client_id=client_id, market="spot"))
+            except Exception as exc:
+                return OrderResult(None, "rejected", Decimal(0), None,
+                                   f"spot close preparation failed: {type(exc).__name__}")
+        return self._close_perp(coin, size, client_id or str(uuid4()))
+
+    def _close_perp(self, coin: str, size: Decimal | None, client_id: str,
+                    *, is_buy: bool | None = None) -> OrderResult:
+        """One fresh position determines size without reversing an explicitly requested side."""
+        try:
+            rounded = None if size is None else self._round_size(coin, size)
+            if rounded is not None:
+                self._wire_number(rounded)
+            dex = coin.split(":", 1)[0] if ":" in coin else ""
+            state = (self._info.user_state(self._address, dex) if dex
+                     else self._info.user_state(self._address))
+            position = next((Decimal(str(row["position"]["szi"]))
+                             for row in state["assetPositions"]
+                             if row["position"]["coin"] == coin), Decimal(0))
+            if not position.is_finite():
+                raise ValueError("invalid position size")
+            if not position:
+                return OrderResult(None, "rejected", Decimal(0), None, "no open position")
+            if is_buy is not None and (position > 0) == is_buy:
+                return OrderResult(None, "rejected", Decimal(0), None, "not reducing position")
+            amount = abs(position) if rounded is None else min(rounded, abs(position))
+            amount = self._round_size(coin, amount)
             if amount <= 0:
-                return OrderResult(None, "rejected", Decimal(0), None, "no spot balance")
-            return self.place(Order(coin, False, amount, client_id=client_id, market="spot"))
-        rounded = None if size is None else self._round_size(coin, size)
-        if rounded is not None and (not rounded.is_finite() or rounded <= 0):
-            return OrderResult(None, "rejected", Decimal(0), None, "size below venue precision")
+                return OrderResult(None, "rejected", Decimal(0), None, "size below venue precision")
+        except Exception as exc:
+            return OrderResult(None, "rejected", Decimal(0), None,
+                               f"close preparation failed: {type(exc).__name__}")
         client_id = client_id or str(uuid4())
-        return self._submit(client_id, lambda: self._exchange.market_close(
-            coin, sz=None if rounded is None else float(rounded), cloid=self.client_id(client_id)))
+        return self._market_order(coin, position < 0, amount, client_id, reduce_only=True)
 
     def set_leverage(self, coin: str, leverage: int, *, market: str = "perp") -> dict:
         """Return venue acknowledgement or a rejected result without propagating failures."""
@@ -1284,6 +1376,16 @@ class HyperliquidExchange:
                 or not str(value).isdecimal() or int(value) <= 0):
             raise ValueError("invalid venue order identity")
         return str(value)
+
+    @staticmethod
+    def _wire_number(value: Decimal | float) -> float:
+        """Only positive finite quantities representable by the SDK reach dispatch."""
+        from hyperliquid.utils.signing import float_to_wire
+
+        number = float(value)
+        if not isfinite(number) or number <= 0 or Decimal(float_to_wire(number)) <= 0:
+            raise ValueError("invalid SDK wire number")
+        return number
 
     def _round_size(self, coin: str, size: Decimal) -> Decimal:
         d = self._sz_decimals.get(coin, 4)
@@ -1323,16 +1425,41 @@ class HyperliquidExchange:
         return OrderResult(None, "uncertain", Decimal(0), None, "unknown response shape")
 
 
-def live_exchange(spec: Any, venue_class: Any = None) -> HyperliquidExchange:
+def live_exchange(spec: Any, venue_class: Any = None, *,
+                  launch_nonce: str | None = None) -> HyperliquidExchange:
     """The single place a manifest becomes a live venue, so no caller reads a partial world.
 
     The runtime and the wake both construct through here; a field added to
     ``ExchangeSpec`` reaches every call site at once. ``venue_class`` lets a
-    caller bind the class from its own module namespace.
+    caller bind the class from its own module namespace. ``launch_nonce`` is not
+    a manifest field: it is drawn once per launch and restored by resume, so the
+    adapter itself stays a deterministic function of the identity it is given.
     """
-    return (venue_class or HyperliquidExchange)(
+    exchange = (venue_class or HyperliquidExchange)(
         mainnet=spec.mainnet, coins=spec.coins, spot_pairs=spec.spot_pairs,
     )
+    if getattr(spec, "client_namespace", None) is not None:
+        exchange._client_namespace = spec.client_namespace
+    if launch_nonce is not None:
+        exchange._launch_nonce = launch_nonce
+    return exchange
+
+
+def bind_launch_nonce(exchange: Any, launch_nonce: str | None) -> None:
+    """Carry one launch's venue identity onto the adapter that derives client order IDs.
+
+    A checkpoint written before launch nonces existed restores ``None``, which
+    removes the attribute again so the resumed world reproduces exactly the
+    client order IDs it originally submitted. Adapters without venue identities
+    (the deterministic fake) are left untouched.
+    """
+    target = getattr(exchange, "target", exchange)
+    if not hasattr(target, "client_id"):
+        return
+    if launch_nonce is None:
+        target.__dict__.pop("_launch_nonce", None)
+    else:
+        target.__dict__["_launch_nonce"] = launch_nonce
 
 
 def stream_market(exchange: Exchange, clock: Iterator[WorldEvent]) -> Iterator[WorldEvent]:

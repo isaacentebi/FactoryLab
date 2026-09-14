@@ -1,0 +1,1555 @@
+{
+  "empty_at_launch": {
+    "result": {
+      "world": "compute-continuity-testnet",
+      "manifest_hash": "3b18ec6f4b316bc1b4da122cca073d8d76f5f3b1f99ebc69ca56de4fd0b15511",
+      "seed": 4,
+      "drip": false,
+      "terminated": false,
+      "termination_reason": null,
+      "seal_key_released": false,
+      "wallet_balance_micro": 89655361,
+      "wallet_conservation": true,
+      "ledger_verify": true,
+      "outstanding_decisions": 4,
+      "execution": {
+        "intents": 0,
+        "statuses": {
+          "filled": 0,
+          "resting": 0,
+          "cancelled": 0,
+          "rejected": 0,
+          "uncertain": 0
+        },
+        "polled_fills": 0,
+        "terminal_reconciliation": null,
+        "positions_closed_at_exit": false
+      },
+      "exchange_equity_usd": "89.715525",
+      "live": false,
+      "evaluation_boundary": "registered accepts \u2192 selected emits \u2192 return channel",
+      "charter_edition": 1,
+      "tools": [
+        "catalogue.search",
+        "connector.fetch",
+        "market.discover",
+        "note.get",
+        "note.put",
+        "treasury.transfer",
+        "venue.cancel",
+        "venue.candles",
+        "venue.close",
+        "venue.funding",
+        "venue.funding_history",
+        "venue.instruments",
+        "venue.mids",
+        "venue.open_orders",
+        "venue.order_book",
+        "venue.place_limit",
+        "venue.place_market",
+        "venue.positions",
+        "venue.set_leverage"
+      ],
+      "standing": {
+        "eval-a": {
+          "n": 24,
+          "sum_brier": 23.27999999999999,
+          "sum_baseline_brier": 23.75,
+          "settled": 24,
+          "requested": 24,
+          "verdict_n": 0,
+          "sum_verdict_brier": 0.0,
+          "sum_verdict_baseline_brier": 0.0,
+          "mean_brier": 0.9699999999999996,
+          "mean_baseline_brier": 0.9895833333333334,
+          "mean_verdict_brier": 0.0,
+          "mean_verdict_baseline_brier": 0.0,
+          "skill": -0.01958333333333373,
+          "payoff_skill": -0.01958333333333373,
+          "verdict_skill": 0.0,
+          "coverage": 1.0,
+          "weight": 0.48041666666666627
+        },
+        "eval-c": {
+          "n": 20,
+          "sum_brier": 19.639999999999997,
+          "sum_baseline_brier": 20.0,
+          "settled": 20,
+          "requested": 20,
+          "verdict_n": 0,
+          "sum_verdict_brier": 0.0,
+          "sum_verdict_baseline_brier": 0.0,
+          "mean_brier": 0.9819999999999999,
+          "mean_baseline_brier": 1.0,
+          "mean_verdict_brier": 0.0,
+          "mean_verdict_baseline_brier": 0.0,
+          "skill": -0.018000000000000127,
+          "payoff_skill": -0.018000000000000127,
+          "verdict_skill": 0.0,
+          "coverage": 1.0,
+          "weight": 0.4819999999999999
+        }
+      },
+      "prices": {
+        "parameters": {
+          "eta": 0.5,
+          "kappa": 0.5,
+          "decay": 0.1,
+          "lambda_max": 1.0,
+          "min_window_events": 1
+        },
+        "cards": {
+          "card-forecast-skill": {
+            "lambda": 0.5,
+            "effective_lambda": 0.5,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "card-consequence-paid-off": {
+            "lambda": 0.5,
+            "effective_lambda": 0.5,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "card-position-concentration": {
+            "lambda": 0.5,
+            "effective_lambda": 0.5,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "tool-discipline": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "noop-ceiling": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "well-formed-floor": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "cost-cap": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "revision-presence": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "censorship-bound": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "truthful_commitments_verdict_consistency": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "evaluator_disagreement_ceiling": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "turnover_ceiling": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "amendments_activated_floor": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          }
+        }
+      },
+      "routers": {
+        "router:Fill": {
+          "event_kind": "Fill",
+          "universe": [
+            "seed-decider",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        },
+        "router:Funding": {
+          "event_kind": "Funding",
+          "universe": [
+            "seed-observer",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        },
+        "router:MarketMid": {
+          "event_kind": "MarketMid",
+          "universe": [
+            "antagonist-a",
+            "seed-observer",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        },
+        "router:ProducerReturn": {
+          "event_kind": "ProducerReturn",
+          "universe": [
+            "eval-a",
+            "eval-b",
+            "eval-c",
+            "eval-d",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        },
+        "router:Tick": {
+          "event_kind": "Tick",
+          "universe": [
+            "antagonist-a",
+            "seed-decider",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        },
+        "router:Verdict": {
+          "event_kind": "Verdict",
+          "universe": [
+            "meta-a",
+            "meta-b",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        }
+      },
+      "stats": {
+        "resumes": 0,
+        "events": 302,
+        "decisions": 132,
+        "invocations": 63,
+        "noops": 69,
+        "orders_placed": 0,
+        "orders_rejected": 0,
+        "fills": 0,
+        "producer_returns": 60,
+        "verdicts": 40,
+        "meta_verdicts": {
+          "2": 6
+        },
+        "conformities": 15,
+        "censored": 37,
+        "fast_settlements": 6,
+        "forecasts_sealed": 132,
+        "forecasts_settled": 132,
+        "timeouts": 0,
+        "upward_releases": 38,
+        "reserve_windows": 1,
+        "exclusions": 168,
+        "registrations_accepted": 0,
+        "registrations_rejected": 0,
+        "epochs": 0,
+        "routers_replaced": 0,
+        "reconciliations": 0,
+        "tool_calls": 0,
+        "tool_call_failures": 0,
+        "population_tools_registered": 0,
+        "observations_registered": 0,
+        "assembly_learners_registered": 0,
+        "amendments_proposed": 0,
+        "amendments_passed": 0,
+        "amendments_activated": 0,
+        "clock_changes": 0,
+        "votes_cast": 0,
+        "transfer_intents": 0,
+        "exposures_settled": 8,
+        "exposures_won": 0,
+        "price_updates": 0,
+        "price_skipped": 0,
+        "penalized_settlements": 0,
+        "max_settlement_latency_events": 20,
+        "last_window_values": {},
+        "sample_propensity": {
+          "handle": "decision-1",
+          "action_ids": [
+            "antagonist-a",
+            "NOOP"
+          ],
+          "probs": [
+            0.15,
+            0.85
+          ],
+          "chosen": "antagonist-a",
+          "rng_seed": 30659525699793235590163067658161099433
+        },
+        "invocation_status": {
+          "failed": 13,
+          "ok": 50
+        },
+        "invocations_by_role": {
+          "producer": 13,
+          "evaluator": 44,
+          "meta": 6
+        },
+        "stop_reasons": {
+          "none": 13,
+          "end_turn": 50
+        },
+        "invocations_by_assembly": {
+          "antagonist-a": 8,
+          "eval-a": 24,
+          "eval-c": 20,
+          "meta-a": 4,
+          "seed-decider": 5,
+          "meta-b": 2
+        },
+        "consequences_by_assembly": {
+          "antagonist-a": 8,
+          "eval-a": 24,
+          "eval-c": 20,
+          "meta-a": 4,
+          "seed-decider": 5,
+          "meta-b": 2
+        },
+        "registered_window": {
+          "seed-observer": 0,
+          "seed-decider": 0,
+          "eval-a": 0,
+          "eval-b": 0,
+          "eval-c": 0,
+          "eval-d": 0,
+          "antagonist-a": 0,
+          "meta-a": 0,
+          "meta-b": 0
+        },
+        "immune_windows": [],
+        "pathologies": {
+          "stable_failure": false,
+          "thrash": false,
+          "learning_death": false
+        },
+        "paid_off": 0,
+        "not_paid_off": 132,
+        "marked": 0,
+        "consequences_pending": 0,
+        "lots_opened": 0,
+        "lots_closed": 0,
+        "closes_credited": 0
+      },
+      "aggregates": {
+        "action_frequencies": {
+          "counts": {
+            "0.1": 36,
+            "0.3": 52,
+            "0.7": 44,
+            "NOOP": 69,
+            "antagonist-a": 8,
+            "eval-a": 24,
+            "eval-c": 20,
+            "meta-a": 4,
+            "meta-b": 2,
+            "seed-decider": 5
+          }
+        },
+        "invocations_by_assembly": {
+          "counts": {
+            "antagonist-a": 8,
+            "eval-a": 24,
+            "eval-c": 20,
+            "meta-a": 4,
+            "meta-b": 2,
+            "seed-decider": 5
+          }
+        },
+        "spend_by_capability": {
+          "spend": {
+            "antagonist-a": 131309,
+            "eval-a": 24,
+            "eval-c": 20,
+            "meta-a": 4,
+            "meta-b": 2,
+            "seed-decider": 213280
+          }
+        },
+        "settlement_latency": {
+          "count": 260,
+          "total_ns": 400000000000,
+          "min_ns": 0,
+          "max_ns": 20000000000
+        }
+      }
+    },
+    "calls": [
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "meta-a"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "meta-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "seed-decider"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "meta-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "seed-decider"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "meta-b"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "meta-b"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "seed-decider"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "meta-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "seed-decider"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "seed-decider"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ]
+    ],
+    "ticks": 12
+  },
+  "mid_run_exhaustion": {
+    "result": {
+      "world": "compute-continuity-testnet",
+      "manifest_hash": "3b18ec6f4b316bc1b4da122cca073d8d76f5f3b1f99ebc69ca56de4fd0b15511",
+      "seed": 4,
+      "drip": false,
+      "terminated": false,
+      "termination_reason": null,
+      "seal_key_released": false,
+      "wallet_balance_micro": 89691901,
+      "wallet_conservation": true,
+      "ledger_verify": true,
+      "outstanding_decisions": 4,
+      "execution": {
+        "intents": 0,
+        "statuses": {
+          "filled": 0,
+          "resting": 0,
+          "cancelled": 0,
+          "rejected": 0,
+          "uncertain": 0
+        },
+        "polled_fills": 0,
+        "terminal_reconciliation": null,
+        "positions_closed_at_exit": false
+      },
+      "exchange_equity_usd": "89.751981",
+      "live": false,
+      "evaluation_boundary": "registered accepts \u2192 selected emits \u2192 return channel",
+      "charter_edition": 1,
+      "tools": [
+        "catalogue.search",
+        "connector.fetch",
+        "market.discover",
+        "note.get",
+        "note.put",
+        "treasury.transfer",
+        "venue.cancel",
+        "venue.candles",
+        "venue.close",
+        "venue.funding",
+        "venue.funding_history",
+        "venue.instruments",
+        "venue.mids",
+        "venue.open_orders",
+        "venue.order_book",
+        "venue.place_limit",
+        "venue.place_market",
+        "venue.positions",
+        "venue.set_leverage"
+      ],
+      "standing": {
+        "eval-d": {
+          "n": 2,
+          "sum_brier": 1.9,
+          "sum_baseline_brier": 1.75,
+          "settled": 2,
+          "requested": 2,
+          "verdict_n": 0,
+          "sum_verdict_brier": 0.0,
+          "sum_verdict_baseline_brier": 0.0,
+          "mean_brier": 0.95,
+          "mean_baseline_brier": 0.875,
+          "mean_verdict_brier": 0.0,
+          "mean_verdict_baseline_brier": 0.0,
+          "skill": 0.07499999999999996,
+          "payoff_skill": 0.07499999999999996,
+          "verdict_skill": 0.0,
+          "coverage": 1.0,
+          "weight": 0.575
+        },
+        "eval-a": {
+          "n": 23,
+          "sum_brier": 22.289999999999992,
+          "sum_baseline_brier": 23.0,
+          "settled": 23,
+          "requested": 23,
+          "verdict_n": 0,
+          "sum_verdict_brier": 0.0,
+          "sum_verdict_baseline_brier": 0.0,
+          "mean_brier": 0.9691304347826083,
+          "mean_baseline_brier": 1.0,
+          "mean_verdict_brier": 0.0,
+          "mean_verdict_baseline_brier": 0.0,
+          "skill": -0.030869565217391703,
+          "payoff_skill": -0.030869565217391703,
+          "verdict_skill": 0.0,
+          "coverage": 1.0,
+          "weight": 0.4691304347826083
+        },
+        "eval-c": {
+          "n": 20,
+          "sum_brier": 19.559999999999995,
+          "sum_baseline_brier": 20.0,
+          "settled": 20,
+          "requested": 20,
+          "verdict_n": 0,
+          "sum_verdict_brier": 0.0,
+          "sum_verdict_baseline_brier": 0.0,
+          "mean_brier": 0.9779999999999998,
+          "mean_baseline_brier": 1.0,
+          "mean_verdict_brier": 0.0,
+          "mean_verdict_baseline_brier": 0.0,
+          "skill": -0.02200000000000024,
+          "payoff_skill": -0.02200000000000024,
+          "verdict_skill": 0.0,
+          "coverage": 1.0,
+          "weight": 0.47799999999999976
+        }
+      },
+      "prices": {
+        "parameters": {
+          "eta": 0.5,
+          "kappa": 0.5,
+          "decay": 0.1,
+          "lambda_max": 1.0,
+          "min_window_events": 1
+        },
+        "cards": {
+          "card-forecast-skill": {
+            "lambda": 0.5,
+            "effective_lambda": 0.5,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "card-consequence-paid-off": {
+            "lambda": 0.5,
+            "effective_lambda": 0.5,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "card-position-concentration": {
+            "lambda": 0.5,
+            "effective_lambda": 0.5,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "tool-discipline": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "noop-ceiling": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "well-formed-floor": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "cost-cap": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "revision-presence": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "censorship-bound": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "truthful_commitments_verdict_consistency": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "evaluator_disagreement_ceiling": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "turnover_ceiling": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          },
+          "amendments_activated_floor": {
+            "lambda": 0.0,
+            "effective_lambda": 0.0,
+            "relief_window": null,
+            "updates": 0,
+            "saturations": 0,
+            "max_step": 0.0,
+            "last_window_end_event": null
+          }
+        }
+      },
+      "routers": {
+        "router:Fill": {
+          "event_kind": "Fill",
+          "universe": [
+            "seed-decider",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        },
+        "router:Funding": {
+          "event_kind": "Funding",
+          "universe": [
+            "seed-observer",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        },
+        "router:MarketMid": {
+          "event_kind": "MarketMid",
+          "universe": [
+            "antagonist-a",
+            "seed-observer",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        },
+        "router:ProducerReturn": {
+          "event_kind": "ProducerReturn",
+          "universe": [
+            "eval-a",
+            "eval-b",
+            "eval-c",
+            "eval-d",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        },
+        "router:Tick": {
+          "event_kind": "Tick",
+          "universe": [
+            "antagonist-a",
+            "seed-decider",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        },
+        "router:Verdict": {
+          "event_kind": "Verdict",
+          "universe": [
+            "meta-a",
+            "meta-b",
+            "NOOP"
+          ],
+          "epoch": 1,
+          "learner": "EXP3"
+        }
+      },
+      "stats": {
+        "resumes": 0,
+        "events": 306,
+        "decisions": 132,
+        "invocations": 65,
+        "noops": 67,
+        "orders_placed": 0,
+        "orders_rejected": 0,
+        "fills": 0,
+        "producer_returns": 60,
+        "verdicts": 41,
+        "meta_verdicts": {
+          "2": 6
+        },
+        "conformities": 19,
+        "censored": 33,
+        "fast_settlements": 6,
+        "forecasts_sealed": 135,
+        "forecasts_settled": 135,
+        "timeouts": 0,
+        "upward_releases": 38,
+        "reserve_windows": 1,
+        "exclusions": 142,
+        "registrations_accepted": 0,
+        "registrations_rejected": 0,
+        "epochs": 0,
+        "routers_replaced": 0,
+        "reconciliations": 0,
+        "tool_calls": 0,
+        "tool_call_failures": 0,
+        "population_tools_registered": 0,
+        "observations_registered": 0,
+        "assembly_learners_registered": 0,
+        "amendments_proposed": 0,
+        "amendments_passed": 0,
+        "amendments_activated": 0,
+        "clock_changes": 0,
+        "votes_cast": 0,
+        "transfer_intents": 0,
+        "exposures_settled": 8,
+        "exposures_won": 0,
+        "price_updates": 0,
+        "price_skipped": 0,
+        "penalized_settlements": 0,
+        "max_settlement_latency_events": 20,
+        "last_window_values": {},
+        "sample_propensity": {
+          "handle": "decision-1",
+          "action_ids": [
+            "antagonist-a",
+            "seed-observer",
+            "NOOP"
+          ],
+          "probs": [
+            0.15,
+            0.425,
+            0.425
+          ],
+          "chosen": "antagonist-a",
+          "rng_seed": 30659525699793235590163067658161099433
+        },
+        "invocation_status": {
+          "failed": 14,
+          "ok": 51
+        },
+        "invocations_by_role": {
+          "producer": 14,
+          "evaluator": 45,
+          "meta": 6
+        },
+        "stop_reasons": {
+          "none": 14,
+          "end_turn": 51
+        },
+        "invocations_by_assembly": {
+          "antagonist-a": 8,
+          "eval-d": 2,
+          "eval-a": 23,
+          "eval-c": 20,
+          "seed-observer": 3,
+          "meta-a": 4,
+          "seed-decider": 3,
+          "meta-b": 2
+        },
+        "consequences_by_assembly": {
+          "antagonist-a": 8,
+          "eval-d": 2,
+          "eval-a": 23,
+          "eval-c": 20,
+          "seed-observer": 3,
+          "meta-a": 4,
+          "seed-decider": 3,
+          "meta-b": 2
+        },
+        "registered_window": {
+          "seed-observer": 0,
+          "seed-decider": 0,
+          "eval-a": 0,
+          "eval-b": 0,
+          "eval-c": 0,
+          "eval-d": 0,
+          "antagonist-a": 0,
+          "meta-a": 0,
+          "meta-b": 0
+        },
+        "immune_windows": [],
+        "pathologies": {
+          "stable_failure": false,
+          "thrash": false,
+          "learning_death": false
+        },
+        "paid_off": 0,
+        "not_paid_off": 132,
+        "marked": 0,
+        "consequences_pending": 0,
+        "lots_opened": 0,
+        "lots_closed": 0,
+        "closes_credited": 0
+      },
+      "aggregates": {
+        "action_frequencies": {
+          "counts": {
+            "0.1": 35,
+            "0.3": 55,
+            "0.7": 45,
+            "NOOP": 67,
+            "antagonist-a": 8,
+            "eval-a": 23,
+            "eval-c": 20,
+            "eval-d": 2,
+            "meta-a": 4,
+            "meta-b": 2,
+            "seed-decider": 3,
+            "seed-observer": 3
+          }
+        },
+        "invocations_by_assembly": {
+          "counts": {
+            "antagonist-a": 8,
+            "eval-a": 23,
+            "eval-c": 20,
+            "eval-d": 2,
+            "meta-a": 4,
+            "meta-b": 2,
+            "seed-decider": 3,
+            "seed-observer": 3
+          }
+        },
+        "spend_by_capability": {
+          "spend": {
+            "antagonist-a": 131395,
+            "eval-a": 23,
+            "eval-c": 20,
+            "eval-d": 2,
+            "meta-a": 4,
+            "meta-b": 2,
+            "seed-decider": 127357,
+            "seed-observer": 49296
+          }
+        },
+        "settlement_latency": {
+          "count": 263,
+          "total_ns": 390000000000,
+          "min_ns": 0,
+          "max_ns": 20000000000
+        }
+      }
+    },
+    "calls": [
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "openrouter",
+        "openai/gpt-5.6-luna",
+        "eval-d"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "openrouter",
+        "z-ai/glm-5.3-flash",
+        "seed-observer"
+      ],
+      [
+        "openrouter",
+        "z-ai/glm-5.3-flash",
+        "seed-observer"
+      ],
+      [
+        "openrouter",
+        "z-ai/glm-5.3-flash",
+        "seed-observer"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "openrouter",
+        "openai/gpt-5.6-luna",
+        "eval-d"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "meta-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "seed-decider"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "meta-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "seed-decider"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "meta-b"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "meta-b"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "meta-a"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "meta-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "seed-decider"
+      ],
+      [
+        "venice",
+        "venice:qwen-3-8-flash",
+        "antagonist-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ],
+      [
+        "venice",
+        "venice:deepseek-v4-1-flash",
+        "eval-c"
+      ],
+      [
+        "venice",
+        "venice:z-ai-glm-5-3-flash",
+        "eval-a"
+      ]
+    ],
+    "ticks": 12
+  }
+}

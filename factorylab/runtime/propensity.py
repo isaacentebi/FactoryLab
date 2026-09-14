@@ -79,7 +79,7 @@ def size_band(size: Any) -> str | None:
 
 
 def _order_label(args: dict[str, Any]) -> str:
-    side = str(args.get("side", "")).strip().lower()
+    side = str(args.get("side", "buy")).strip().lower()
     coin = str(args.get("coin", "")).strip().upper()
     band = size_band(args.get("size"))
     if side not in ("buy", "sell") or not coin or band is None:
@@ -103,6 +103,22 @@ def effect_label(tool: str, args: Any) -> str | None:
     if kind == "transfer":
         return f"transfer:{str(args.get('direction', '')).strip().lower()}"[:64]
     return f"{kind}:{str(args.get('coin', '')).strip().upper()}"[:64]
+
+
+def canonical_label(label: str) -> str:
+    """Canonicalize only the published vocabulary; custom action ids remain exact."""
+    parts = label.split(":")
+    if len(parts) == 3 and parts[0].lower() in ("buy", "sell") and parts[2].lower() in (
+            "xs", "s", "m", "l", "xl"):
+        return f"{parts[0].lower()}:{parts[1].upper()}:{parts[2].lower()}"
+    if len(parts) == 2 and parts[0] in ("verdict", "conformity"):
+        try:
+            value = float(parts[1])
+            if math.isfinite(value) and 0 <= value <= 1:
+                return f"{parts[0]}:{round(value, 1):.1f}"
+        except ValueError:
+            pass
+    return label
 
 
 def action_label(role: str, outputs: dict[str, Any], status: str,
@@ -133,6 +149,9 @@ def action_label(role: str, outputs: dict[str, Any], status: str,
     action = str(outputs.get("action", "")).strip().lower()
     if action == "order":
         parts.append(_order_label(outputs))
+    elif action.startswith(("buy:", "sell:")):
+        # A propensity label is not an executable order or an observed trade.
+        parts.append(MALFORMED)
     elif action not in ("", "noop", HOLD):
         parts.append(action)
     if MALFORMED in parts:
@@ -152,7 +171,9 @@ def action_vocabulary() -> dict[str, str]:
     """The public shape of an action label, stated once for every role."""
     return {
         "producer": 'hold, or "<side>:<COIN>:<size band>" for an order, e.g. '
-        '"buy:BTC:xs"; the size band buckets the size you declared, in base units: '
+        '"buy:BTC:xs". Labels belong in propensity, not the action field: execute with '
+        '"action": "order" and explicit coin, side and numeric size. The size band '
+        'buckets the size you declared, in base units: '
         f'{size_band_vocabulary()}; "malformed" when the return did not parse or '
         "named no placeable size. What a return executes before its final answer is "
         "part of its action: a venue.place_market or venue.place_limit tool call is "
@@ -207,7 +228,11 @@ def declared_record(
     distribution: dict[str, float] | None = None
     if declared is not None:
         try:
-            distribution = validate_propensity(declared)
+            raw = validate_propensity(declared)
+            distribution = {}
+            for action, mass in raw.items():
+                action = canonical_label(action)
+                distribution[action] = distribution.get(action, 0.0) + mass
             if label not in distribution:
                 raise ValueError(f"propensity must include the action taken ({label})")
             if distribution[label] <= 0:

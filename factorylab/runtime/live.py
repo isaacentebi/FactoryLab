@@ -193,7 +193,7 @@ class LiveVenue:
             return None
         return frozenset(self.markets())
 
-    def on_tick(self, now_ns: int) -> list[WorldEvent]:
+    def on_tick(self, now_ns: int, *, include_fills: bool = True) -> list[WorldEvent]:
         traded = self._broadcast()
         out: list[WorldEvent] = []
         try:
@@ -232,7 +232,7 @@ class LiveVenue:
                 )
             )
         try:
-            fills = self.exchange.fills(self.last_fill_ns)
+            fills = self.exchange.fills(self.last_fill_ns) if include_fills else []
         except (RuntimeError, OSError, ValueError, ArithmeticError):  # no account: read-only venue
             fills = []
         for fl in fills:

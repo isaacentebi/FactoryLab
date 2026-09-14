@@ -54,7 +54,12 @@ def test_live_exchange_requires_explicit_charter(mainnet):
         # A testnet rehearsal may run on the seed charter before edition 1 is drafted.
         assert manifest_from_dict(raw).charter_explicit is False
     raw["charter"] = _with_charter()["charter"]
-    assert manifest_from_dict(raw).exchange.kind == "hyperliquid"
+    if mainnet:
+        # A funded world needs its own venue identity space as well as the charter.
+        with pytest.raises(ValueError, match="client_namespace"):
+            manifest_from_dict(raw)
+    else:
+        assert manifest_from_dict(raw).exchange.kind == "hyperliquid"
 
 
 def test_direct_manifest_validation_refuses_implicit_live_charter():

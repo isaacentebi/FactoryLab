@@ -73,7 +73,8 @@ def live():
     def send(*args, **kwargs):
         calls.append((args, kwargs))
         return ack
-    ex._exchange = SimpleNamespace(market_open=send, order=send)
+    ex._exchange = SimpleNamespace(market_open=send, order=send,
+                                   _slippage_price=lambda *_: 100.0)
     ex._info = SimpleNamespace(
         all_mids=lambda: {'BTC': '100', '@7': '101'},
         user_state=lambda _: {'marginSummary': {'accountValue': '50', 'totalMarginUsed': '0'},

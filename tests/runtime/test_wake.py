@@ -395,6 +395,9 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
         path = root / relative
         path.write_text("synthetic-fixture-only")
         path.chmod(0o600)
+    manifest = root / "repo/worlds/funded.toml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('name = "funded"\n# exact synthetic launch bytes\n')
     # These stand-ins validate orchestration, not age's cryptography or remote connectivity.
     age = bin_path / "age"
     age.write_text('#!/usr/bin/env python3\nimport sys\nfrom pathlib import Path\n'
@@ -418,6 +421,8 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
     })
     assert proc.returncode == 0, proc.stderr.decode()
     with tarfile.open(capture) as archive:
-        assert {m.name for m in archive if m.isfile()} == {"runs/funded.jsonl", *relatives}
+        assert {m.name for m in archive if m.isfile()} == {
+            "runs/funded.jsonl", "repo/worlds/funded.toml", *relatives}
         assert archive.extractfile("runs/funded.jsonl").read() == original
+        assert archive.extractfile("repo/worlds/funded.toml").read() == manifest.read_bytes()
     assert (root / "runs/funded.jsonl").read_bytes() == original + b'{"item":'

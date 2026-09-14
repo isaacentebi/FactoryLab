@@ -1,0 +1,20 @@
+{
+  "approved": true,
+  "yes": 5,
+  "no": 0,
+  "invalid": 0,
+  "charter_cards_unchanged": 13,
+  "paid_vote_cost_micro": 2889,
+  "full_gate": "======================= 2676 passed in 638.83s (0:10:38) =======================",
+  "mainnet_activated": false,
+  "deployed": false,
+  "files_sha256": {
+    "scripts/adopt_charter.py": "f776ca69223e9a538b74a1df4754b9215deaccfa86a9f14fbb8b0095f79de70d",
+    "tests/runtime/test_charter_adoption.py": "cb073e3ccc7daa83d92eb1112e5e88be11ed298cfbe2e5ffb28bdfa1128d7656",
+    "docs/charter/edition1-compute-continuity-ratified.toml": "748d1d716ba2565d001646c36b24d59d324d6500cf8ae5fb16e524c16da522e4",
+    "docs/charter/edition1-compute-continuity-adoption.json": "4ed98c4037e05746121dd8f77a279e20a9e87b1862875c2c6721d7564ab414dd",
+    "worlds/compute-continuity-testnet.toml": "b7fb67b582c370ba60eadbe9e5f4dbae59510e9f11d56e8abb79f5657461b58d",
+    "docs/audits/v3/charter-adoption.md": "e83df01dc74a8d89d131465a21813933922c5c9f9e2db6e9da32ce9745a70d1a",
+    "docs/audits/v3/compute-continuity.md": "531e3561e4fb4179f115fc4b21d61df4b542392455fedf48ca0286bb8d9d0158"
+  }
+}

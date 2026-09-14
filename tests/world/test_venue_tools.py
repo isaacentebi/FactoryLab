@@ -355,6 +355,11 @@ def live_stub():
     ex._address = "test-address"
     ex._info = Mock()
     ex._exchange = Mock()
+    ex._info.all_mids.return_value = {"BTC": "100", "ETH": "50"}
+    ex._info.user_state.return_value = {"assetPositions": [
+        {"position": {"coin": "BTC", "szi": "1"}}]}
+    ex._exchange._slippage_price.side_effect = (
+        lambda coin, buy, slippage, px: px * (1 + slippage if buy else 1 - slippage))
     ex._sz_decimals = {"BTC": 3}
     return ex
 
@@ -459,14 +464,15 @@ def test_live_write_sdk_arguments_and_reduce_only(live_stub):
     }
     ex._exchange.update_leverage.return_value = {"status": "ok", "response": {"type": "default"}}
     assert ex.place(Order("BTC", True, Decimal("1.0009"))).status == "filled"
-    ex._exchange.market_open.assert_called_once_with("BTC", True, 1.0, cloid=ANY)
+    ex._exchange.order.assert_called_once_with(
+        "BTC", True, 1.0, 105.0, {"limit": {"tif": "Ioc"}}, reduce_only=False, cloid=ANY)
     assert (
         ex.place(
             Order("BTC", False, Decimal(1), OrderKind.LIMIT, Decimal(110), reduce_only=True)
         ).status
         == "filled"
     )
-    ex._exchange.order.assert_called_once_with(
+    ex._exchange.order.assert_called_with(
         "BTC",
         False,
         1.0,
@@ -475,10 +481,13 @@ def test_live_write_sdk_arguments_and_reduce_only(live_stub):
         reduce_only=True,
         cloid=ANY,
     )
+    assert ex._exchange.order.call_count == 2
     assert ex.close("BTC").status == "filled"
-    ex._exchange.market_close.assert_called_with("BTC", sz=None, cloid=ANY)
+    ex._exchange.order.assert_called_with(
+        "BTC", False, 1.0, 95.0, {"limit": {"tif": "Ioc"}}, reduce_only=True, cloid=ANY)
     assert ex.close("BTC", Decimal("0.5009")).status == "filled"
-    ex._exchange.market_close.assert_called_with("BTC", sz=0.5, cloid=ANY)
+    ex._exchange.order.assert_called_with(
+        "BTC", False, 0.5, 95.0, {"limit": {"tif": "Ioc"}}, reduce_only=True, cloid=ANY)
     assert ex.cancel("7", coin="ETH")["status"] == "cancelled"
     ex._exchange.cancel.assert_called_once_with("ETH", 7)
     assert ex.set_leverage("BTC", 3)["status"] == "ok"
@@ -492,10 +501,11 @@ def test_live_write_sdk_arguments_and_reduce_only(live_stub):
         )
     )
     assert ex.place(Order("BTC", False, Decimal(2), reduce_only=True)).status == "filled"
-    ex._exchange.market_close.assert_called_with("BTC", sz=1.0, cloid=ANY)
-    calls = ex._exchange.market_close.call_count
+    ex._exchange.order.assert_called_with(
+        "BTC", False, 1.0, 95.0, {"limit": {"tif": "Ioc"}}, reduce_only=True, cloid=ANY)
+    calls = ex._exchange.order.call_count
     assert ex.place(Order("BTC", True, Decimal(1), reduce_only=True)).status == "rejected"
-    assert ex._exchange.market_close.call_count == calls
+    assert ex._exchange.order.call_count == calls
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("venue unavailable"), {"status": "err"}])
@@ -532,7 +542,7 @@ def test_live_tiny_close_is_rejected_instead_of_becoming_full_close(live_stub):
 
 
 def test_live_malformed_fill_requires_reconciliation(live_stub):
-    live_stub._exchange.market_open.return_value = {
+    live_stub._exchange.order.return_value = {
         "status": "ok",
         "response": {
             "data": {

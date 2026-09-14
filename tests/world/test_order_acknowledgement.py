@@ -32,8 +32,11 @@ def live_transport(*, operation='place', recover=True):
                           'coin': 'BTC'}}}
 
     ex._exchange = SimpleNamespace(market_open=submit, order=submit, market_close=submit,
-                                    cancel=submit)
-    ex._info = SimpleNamespace(query_order_by_cloid=query, query_order_by_oid=query)
+                                    cancel=submit, _slippage_price=lambda *_: 100.0)
+    ex._info = SimpleNamespace(query_order_by_cloid=query, query_order_by_oid=query,
+                              all_mids=lambda: {'BTC': '100'},
+                              user_state=lambda *_: {'assetPositions': [
+                                  {'position': {'coin': 'BTC', 'szi': '1'}}]})
     return ex, sent, queries
 
 
@@ -102,3 +105,11 @@ def test_acknowledgement_without_a_valid_order_identity_remains_uncertain(oid, s
         'oid': oid, 'totalSz': '1', 'avgPx': '100'}}]}}}
     result = HyperliquidExchange._parse_order_response(response)
     assert result.status == 'uncertain' and result.order_id is None
+
+
+def test_uncertain_cancel_reconciliation_cannot_change_its_original_target():
+    ex, sent, queries = live_transport(operation='cancel', recover=False)
+    assert ex.cancel('7', coin='BTC', client_id='stable-cancel')['status'] == 'uncertain'
+    assert ex.cancel('8', coin='BTC', client_id='stable-cancel')['status'] == 'uncertain'
+    assert len(sent) == 1
+    assert [query[-1] for query in queries] == [7, 7]

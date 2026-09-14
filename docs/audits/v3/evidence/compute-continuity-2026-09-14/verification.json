@@ -1,0 +1,23 @@
+{
+  "git_head": "31ca950964b36b0555c32b0d5b4515fe225fa382",
+  "working_tree": "dirty; prior changes preserved; no commit",
+  "checked_files_sha256": {
+    "factorylab/cortex/schematics.py": "c2892c073f3d4f618284449352740e78bd7547987765836c9b1982d118e4c6c2",
+    "worlds/compute-continuity-roster.toml": "2e72e1c64387980a5643e0087b8221fcfe79035b8ef423d982fd0a91cd49ba30",
+    "tests/runtime/test_compute_continuity.py": "76169304e8717e10cb9028e3e602c99ae030fa9a78e618d8d657ddd8ca336979",
+    "docs/audits/v3/compute-continuity.md": "be58ab5132c696091560be42dfa078281df5f4d7571ed4beceb0aa36975b79b3"
+  },
+  "full_gate": "======================= 2670 passed in 647.10s (0:10:47) =======================",
+  "focused_final": "42 passed in 2.42s",
+  "paid_final": {
+    "openrouter_calls": 1,
+    "venice_calls": 12,
+    "venice_calls_after_cut": 11,
+    "valid_invocations": 13,
+    "seconds": 119.1,
+    "recorded_cost_micro": 28031
+  },
+  "deployed": false,
+  "mainnet_activated": false,
+  "candidate_charter_ratified": false
+}

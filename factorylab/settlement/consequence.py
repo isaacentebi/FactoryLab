@@ -256,11 +256,13 @@ class FillCursor:
         self.since_ns = start_ns
         self.seen: dict[tuple, int] = {}
 
-    def poll(self, exchange) -> list[tuple[int, dict]]:
+    def poll(self, exchange, *, strict: bool = False) -> list[tuple[int, dict]]:
         """Return unseen executions in timestamp order, persisting the cursor before advance."""
         try:
             fills = exchange.fills(self.since_ns)
         except RuntimeError:  # read-only venue without an account
+            if strict:
+                raise
             return []
         counts = Counter()
         result = []

@@ -1,0 +1,349 @@
+{
+  "roster_sha256": "b46f6ef0e458b025ff64d8b8834d32aeccb29c0d92374bc6cae05e6d804b23a0",
+  "parent_charter_sha256": "11e2f2a6a8a9755a8b4cac507084c4b97068835037eef7939e1e4818f06b38e5",
+  "conflicts": [
+    {
+      "cards": [
+        "tool-discipline",
+        "tool-thrift"
+      ],
+      "preflight_refusal": "card tool-thrift observation: already named by live card tool-discipline for the same role"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "response_quality"
+      ],
+      "preflight_refusal": "card response_quality observation: already named by live card well-formed-floor for the same role"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "card-well-formed-rate"
+      ],
+      "preflight_refusal": "card card-well-formed-rate observation: already named by live card well-formed-floor for the same role"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "card response_quality-2 observation: already named by live card well-formed-floor for the same role"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "card producer_well_formed_lower_bound observation: already named by live card well-formed-floor for the same role"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "card-cost-per-return"
+      ],
+      "preflight_refusal": "card card-cost-per-return observation: already named by live card cost-cap for the same role"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "card scarce_resources_response_cost observation: already named by live card cost-cap for the same role"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "system_adaptability"
+      ],
+      "preflight_refusal": "card system_adaptability observation: already named by live card revision-presence for the same role"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "card-revision-rate"
+      ],
+      "preflight_refusal": "card card-revision-rate observation: already named by live card revision-presence for the same role"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "card adaptive_revision observation: already named by live card revision-presence for the same role"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "card card-censored-share observation: already named by live card censorship-bound for the same role"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "card censored_share_ceiling observation: already named by live card censorship-bound for the same role"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "card-well-formed-rate"
+      ],
+      "preflight_refusal": "card card-well-formed-rate observation: already named by live card response_quality for the same role"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "card response_quality-2 observation: already named by live card response_quality for the same role"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "card producer_well_formed_lower_bound observation: already named by live card response_quality for the same role"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "card-revision-rate"
+      ],
+      "preflight_refusal": "card card-revision-rate observation: already named by live card system_adaptability for the same role"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "card adaptive_revision observation: already named by live card system_adaptability for the same role"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "card response_quality-2 observation: already named by live card card-well-formed-rate for the same role"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "card producer_well_formed_lower_bound observation: already named by live card card-well-formed-rate for the same role"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "card scarce_resources_response_cost observation: already named by live card card-cost-per-return for the same role"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "card useful_inquiry_forecast_skill observation: already named by live card card-forecast-skill for the same role"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "card consequence_paid_off_floor observation: already named by live card card-consequence-paid-off for the same role"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "card adaptive_revision observation: already named by live card card-revision-rate for the same role"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "card censored_share_ceiling observation: already named by live card card-censored-share for the same role"
+    },
+    {
+      "cards": [
+        "response_quality-2",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "card producer_well_formed_lower_bound observation: already named by live card response_quality-2 for the same role"
+    }
+  ],
+  "calls": [
+    {
+      "seat": {
+        "alias": "seat-1",
+        "assembly_id": "meta-a",
+        "role": "meta"
+      },
+      "model": "deepseek/deepseek-v4.1-flash",
+      "text": "{\"selected\": [\"tool-discipline\", \"noop-ceiling\", \"well-formed-floor\", \"cost-cap\", \"revision-presence\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-position-concentration\", \"truthful_commitments_verdict_consistency\", \"evaluator_disagreement_ceiling\", \"turnover_ceiling\", \"amendments_activated_floor\"], \"reason\": \"This is the maximal preflight-clean subset: it keeps one canonical card per feedback-flagged observation-role pair (excluding duplicates like tool-thrift, response_quality, card-well-formed-rate, etc.) plus all unique cards, so each norm retains coverage without any live/live refusal.\"}",
+      "stop": "stop",
+      "cost_micro": 1405,
+      "input_tokens": 4047,
+      "output_tokens": 159,
+      "served_by": "deepseek/deepseek-v4.1-flash",
+      "valid": true,
+      "selected": [
+        "tool-discipline",
+        "noop-ceiling",
+        "well-formed-floor",
+        "cost-cap",
+        "revision-presence",
+        "censorship-bound",
+        "card-forecast-skill",
+        "card-consequence-paid-off",
+        "card-position-concentration",
+        "truthful_commitments_verdict_consistency",
+        "evaluator_disagreement_ceiling",
+        "turnover_ceiling",
+        "amendments_activated_floor"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-2",
+        "assembly_id": "seed-observer",
+        "role": "producer"
+      },
+      "model": "z-ai/glm-5.3-flash",
+      "text": "{\"selected\": [\"tool-discipline\", \"noop-ceiling\", \"well-formed-floor\", \"cost-cap\", \"revision-presence\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-position-concentration\", \"truthful_commitments_verdict_consistency\", \"evaluator_disagreement_ceiling\", \"turnover_ceiling\", \"amendments_activated_floor\"], \"reason\": \"Selected one card per observation so no preflight duplicate-observation refusal triggers, covering all four norms plus unique coverage of verdict consistency, disagreement, turnover, concentration, and amendment activity.\"}\n",
+      "stop": "stop",
+      "cost_micro": 551,
+      "input_tokens": 3903,
+      "output_tokens": 298,
+      "served_by": "z-ai/glm-5.3-flash",
+      "valid": true,
+      "selected": [
+        "tool-discipline",
+        "noop-ceiling",
+        "well-formed-floor",
+        "cost-cap",
+        "revision-presence",
+        "censorship-bound",
+        "card-forecast-skill",
+        "card-consequence-paid-off",
+        "card-position-concentration",
+        "truthful_commitments_verdict_consistency",
+        "evaluator_disagreement_ceiling",
+        "turnover_ceiling",
+        "amendments_activated_floor"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-3",
+        "assembly_id": "eval-c",
+        "role": "evaluator"
+      },
+      "model": "deepseek/deepseek-v4.1-flash",
+      "text": "{\"selected\": [\"tool-discipline\", \"noop-ceiling\", \"well-formed-floor\", \"cost-cap\", \"revision-presence\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-position-concentration\", \"truthful_commitments_verdict_consistency\", \"evaluator_disagreement_ceiling\", \"turnover_ceiling\", \"amendments_activated_floor\"], \"reason\": \"I picked one card per observation-and-role that passed the first survey, keeping the surviving card from every preflight conflict (e.g., tool-discipline over tool-thrift, cost-cap over its duplicates) plus the non-duplicated cards that add distinct norms, observations, roles, or windows.\"}",
+      "stop": "stop",
+      "cost_micro": 1058,
+      "input_tokens": 4062,
+      "output_tokens": 160,
+      "served_by": "deepseek/deepseek-v4.1-flash",
+      "valid": true,
+      "selected": [
+        "tool-discipline",
+        "noop-ceiling",
+        "well-formed-floor",
+        "cost-cap",
+        "revision-presence",
+        "censorship-bound",
+        "card-forecast-skill",
+        "card-consequence-paid-off",
+        "card-position-concentration",
+        "truthful_commitments_verdict_consistency",
+        "evaluator_disagreement_ceiling",
+        "turnover_ceiling",
+        "amendments_activated_floor"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-4",
+        "assembly_id": "eval-d",
+        "role": "evaluator"
+      },
+      "model": "openai/gpt-5.6-luna",
+      "text": "{\"selected\":[\"tool-discipline\",\"noop-ceiling\",\"well-formed-floor\",\"cost-cap\",\"revision-presence\",\"censorship-bound\",\"card-forecast-skill\",\"card-consequence-paid-off\",\"card-position-concentration\",\"truthful_commitments_verdict_consistency\",\"evaluator_disagreement_ceiling\",\"turnover_ceiling\",\"amendments_activated_floor\"],\"reason\":\"Selected complementary, non-duplicative cards while excluding every card rejected by preflight for naming an observation already covered by a live card.\"}",
+      "stop": "stop",
+      "cost_micro": 1487,
+      "input_tokens": 3893,
+      "output_tokens": 428,
+      "served_by": "openai/gpt-5.6-luna",
+      "valid": true,
+      "selected": [
+        "tool-discipline",
+        "noop-ceiling",
+        "well-formed-floor",
+        "cost-cap",
+        "revision-presence",
+        "censorship-bound",
+        "card-forecast-skill",
+        "card-consequence-paid-off",
+        "card-position-concentration",
+        "truthful_commitments_verdict_consistency",
+        "evaluator_disagreement_ceiling",
+        "turnover_ceiling",
+        "amendments_activated_floor"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-5",
+        "assembly_id": "seed-decider",
+        "role": "producer"
+      },
+      "model": "deepseek/deepseek-v4.1-flash",
+      "text": "{\"selected\": [\"tool-discipline\", \"noop-ceiling\", \"well-formed-floor\", \"cost-cap\", \"revision-presence\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-position-concentration\", \"truthful_commitments_verdict_consistency\", \"evaluator_disagreement_ceiling\", \"turnover_ceiling\", \"amendments_activated_floor\"], \"reason\": \"Selected a non-duplicative subset that covers all four norms, keeps every card definition unchanged, and drops cards whose observations preflight flagged as already named by a live card for the same role.\"}",
+      "stop": "stop",
+      "cost_micro": 1385,
+      "input_tokens": 4062,
+      "output_tokens": 138,
+      "served_by": "deepseek/deepseek-v4.1-flash",
+      "valid": true,
+      "selected": [
+        "tool-discipline",
+        "noop-ceiling",
+        "well-formed-floor",
+        "cost-cap",
+        "revision-presence",
+        "censorship-bound",
+        "card-forecast-skill",
+        "card-consequence-paid-off",
+        "card-position-concentration",
+        "truthful_commitments_verdict_consistency",
+        "evaluator_disagreement_ceiling",
+        "turnover_ceiling",
+        "amendments_activated_floor"
+      ]
+    }
+  ],
+  "accepted": [
+    "tool-discipline",
+    "noop-ceiling",
+    "well-formed-floor",
+    "cost-cap",
+    "revision-presence",
+    "censorship-bound",
+    "card-forecast-skill",
+    "card-consequence-paid-off",
+    "card-position-concentration",
+    "truthful_commitments_verdict_consistency",
+    "evaluator_disagreement_ceiling",
+    "turnover_ceiling",
+    "amendments_activated_floor"
+  ],
+  "charter_sha256": "9aaa4681cfad14a10c4417316ea12fcbb8b19a53129f27845557336d07afcc81"
+}

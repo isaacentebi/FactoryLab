@@ -108,7 +108,8 @@ def _load_dotenv() -> None:
     ):
         keyfile = Path.cwd() / filename
         if (keyfile.exists() or keyfile.is_symlink()) and var not in os.environ:
-            if filename in {"reserve.key", "hyperliquid.key"}:
+            # An inference credential is spendable money too: the same mode check.
+            if filename in {"reserve.key", "hyperliquid.key", "openrouter.key"}:
                 import stat
 
                 info = keyfile.lstat()
@@ -377,6 +378,25 @@ def _cmd_run(args: argparse.Namespace) -> int:
         clock_source=clock_source,
     )
     print(json.dumps(summary, indent=2, default=str))
+    return 0
+
+
+def _cmd_order_status(args: argparse.Namespace) -> int:
+    """Query original client identities without starting a world or submitting any order."""
+    from dataclasses import asdict
+
+    from factorylab.world.exchange import live_exchange
+
+    manifest = load_manifest(args.world)
+    if manifest.exchange.kind != "hyperliquid":
+        raise ValueError("order-status requires a live venue manifest")
+    # Client order IDs are launch-bound. A world that recorded a launch nonce in its
+    # Launch event needs that nonce here; worlds that predate them supply none.
+    exchange = live_exchange(manifest.exchange, launch_nonce=args.launch_nonce)
+    orders = {identity: asdict(exchange.lookup(identity)) for identity in args.client_id}
+    print(json.dumps({"world": manifest.name, "read_only": True,
+                      "launch_nonce": args.launch_nonce,
+                      "orders": orders}, indent=2, default=str))
     return 0
 
 
@@ -741,6 +761,16 @@ def build_parser() -> argparse.ArgumentParser:
     wake.add_argument("--ledger", required=True, help="the living world's ledger")
     wake.add_argument("--out", required=True, help="directory for wake.json and wake.html")
     wake.set_defaults(func=_cmd_wake)
+
+    order_status = sub.add_parser("order-status", help="read venue status for original client ids")
+    order_status.add_argument("--world", required=True,
+                              help="original manifest, including namespace")
+    order_status.add_argument("--client-id", action="append", required=True,
+                              help="original intent id, repeatable; never resubmitted")
+    order_status.add_argument("--launch-nonce", default=None,
+                              help="launch_nonce from that run's Launch event; omit for a "
+                                   "world that launched before launch-bound identities")
+    order_status.set_defaults(func=_cmd_order_status)
 
     rp = sub.add_parser("report", help="print a run summary readably",
                         description="Format a summary JSON file that run or resume printed.")

@@ -14,6 +14,13 @@ from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
 
 
+def _is_registration_feedback(item: dict) -> bool:
+    """Old checkpoints and new typed refusals retain their actual operation category."""
+    if "kind" in item:
+        return item["kind"] == "registration.rejected"
+    return not str(item.get("reason", "")).startswith(("propensity:", "judgement:", "order:"))
+
+
 class SchematicsMixin:
     """Preserve runtime state and behavior for schematics operations."""
 
@@ -123,7 +130,7 @@ class SchematicsMixin:
             "otherwise the delivered return); omit it to judge the delivered return. A value "
             "you cannot address here — prose, or a handle this judgement may not be about — "
             "is not used: the delivered return is judged instead and the reason appears in "
-            "registration_feedback"
+            "return_feedback"
         ),
         "propensity": (
             "optional on any return: your own distribution over the actions you were "
@@ -214,6 +221,16 @@ class SchematicsMixin:
         return {
             "wallet_balance_usd": str(money_to_usd(self.wallet.balance)),
             "pots": self.wallet.pots(),
+            "compute_supply": {
+                "openrouter": "Prepaid seed credit; no OpenRouter top-up tool is available.",
+                "venice": "Separate wallet-linked inference credit. Base USDC and Venice "
+                          "credit are different pots; treasury.transfer with direction "
+                          "to_venice buys a $5 credit tranche.",
+                "discovery": "catalogue.search with substring venice: lists Venice models. "
+                             "Model and assembly registration schemas are in proposal_shapes.",
+                "selection": "venice: model ids use Venice; bare model ids use OpenRouter. "
+                             "Both providers can be used while they have credit.",
+            },
             "charter_edition": self.charter.edition,
             "charter": self._charter_text(),
             "mechanics": mechanics,
@@ -317,7 +334,10 @@ class SchematicsMixin:
             },
             "governance": self.cadence.world_block(self.tick_clock),
             "tick_intervals": tick_intervals(self.tick_clock),
-            "registration_feedback": list(self.registration_feedback),
+            "registration_feedback": [dict(f) for f in self.registration_feedback
+                                      if _is_registration_feedback(f)],
+            "return_feedback": [dict(f) for f in self.registration_feedback
+                                if not _is_registration_feedback(f)],
             "reserved_return_fields": reserved_return_fields(
                 max_children=self.m.tools.max_children,
                 max_tool_calls=self.m.tools.max_tool_calls),

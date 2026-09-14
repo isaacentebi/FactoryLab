@@ -875,7 +875,8 @@ class ComputeMixin:
             floored = len(record.action_ids) > 1
             self.ledger.append({"kind": "propensity.floored" if floored else "propensity.refused",
                                 "handle": req.handle, "reason": reason, "ts": self.clock.now_ns})
-            self.registration_feedback.append({"reason": f"propensity: {reason}"})
+            self.registration_feedback.append({"kind": "propensity",
+                                               "reason": f"propensity: {reason}"})
         self._open_assembly_round(action_id, req.handle, record)
         return record
 

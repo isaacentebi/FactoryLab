@@ -20,11 +20,11 @@ ledger; it is a survey of the population, not a run of the world.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import random
 import sys
 import time
+import tomllib
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,6 +35,9 @@ from factorylab.charter.charter import Charter, MetricCard
 from factorylab.charter.committee import Ballot, Committee, Seat, draw
 from factorylab.charter.measurement import measurement_catalogue as catalogue
 from factorylab.charter.measurement import preflight_measurement
+
+# The load path enforces these digests; the script and the kernel must agree exactly.
+from factorylab.charter.provenance import charter_digest, roster_hash
 from factorylab.charter.windows import window_schema
 from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, _parse_json_object
 from factorylab.runtime.cards import parses
@@ -109,16 +112,6 @@ class Proposal:
 
 
 # ------------------------------------------------------------------- prompt rendering
-
-
-def roster_hash(manifest: WorldManifest) -> str:
-    """Bind the survey to the exact assemblies and the model configurations they used."""
-    model_ids = {a.model_id for a in manifest.assemblies}
-    roster = {"assemblies": [asdict(a) for a in manifest.assemblies],
-              "system_prompt": SEED_SYSTEM_PROMPT,
-              "models": [asdict(m) for m in manifest.models if m.id in model_ids]}
-    encoded = json.dumps(roster, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def survey_world(world: dict[str, Any]) -> dict[str, Any]:
@@ -228,6 +221,7 @@ def complete(
         messages=({"role": "user", "content": text},),
         max_tokens=max_tokens,
         effort=effort,
+        json_object=True,
     )
     started = time.monotonic()
     resp: ModelResponse | None = None
@@ -398,6 +392,34 @@ def render_toml(cards: list[tuple[MetricCard, float | None]], norms: tuple[str, 
     return "\n".join(out).rstrip() + "\n"
 
 
+def accepted_cards(passing: list[Proposal]) -> list[tuple[MetricCard, float | None]]:
+    """Export the voted measurement unchanged, disambiguating only colliding identifiers."""
+    used: set[str] = set()
+    rendered = []
+    for p in passing:
+        card = p.card
+        if card is None:
+            raise ValueError("a passing proposal needs an executable card")
+        cid, n = card.id, 2
+        while cid in used:
+            cid, n = f"{card.id}-{n}", n + 1
+        used.add(cid)
+        rendered.append((replace(card, id=cid), p.price))
+    return rendered
+
+
+def export_charter(manifest: WorldManifest, passing: list[Proposal], path: Path) -> None:
+    """A nonempty voted charter retains verifiable roster and content provenance."""
+    if not passing:
+        raise ValueError("no cards passed; refusing to export a seed fallback")
+    body = render_toml(accepted_cards(passing), manifest.charter.norms)
+    digest = charter_digest(tomllib.loads(body)["charter"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x") as stream:
+        stream.write(f"# roster_sha256 = {roster_hash(manifest)}\n")
+        stream.write(f"# charter_sha256 = {digest}\n" + body)
+
+
 def _usd(micro: int) -> str:
     return f"${micro / 1_000_000:.4f}"
 
@@ -501,19 +523,7 @@ def render_report(
     w("## Passing set")
     w("")
     if passing:
-        used: set[str] = set()
-        rendered: list[tuple[MetricCard, float | None]] = []
-        for p in passing:
-            card = p.card
-            cid = card.id
-            n = 2
-            while cid in used:
-                cid = f"{card.id}-{n}"
-                n += 1
-            used.add(cid)
-            if cid != card.id:
-                card = replace(card, id=cid)
-            rendered.append((card, p.price))
+        rendered = accepted_cards(passing)
         w("Rendered as an explicit manifest charter. Each card passed measurement preflight. "
           "Card ids that collided among passing cards were suffixed; measurement and role "
           "bindings are preserved. The launch manifest must validate before adoption.")
@@ -630,9 +640,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--world", default="testnet")
     ap.add_argument("--out", default=str(REPO / "docs" / "charter" / "edition1-draft.md"))
+    ap.add_argument("--charter-out", help="export passing charter with roster and content hashes")
     ap.add_argument("--seed", type=int, default=None, help="committee draw seed (manifest seed)")
     args = ap.parse_args(argv)
 
+    if args.charter_out and Path(args.charter_out).exists():
+        raise FileExistsError(args.charter_out)
+    if Path(args.out).exists():
+        raise FileExistsError(args.out)
     _load_dotenv()
     manifest = load_manifest(args.world)
     provider = build_provider(manifest)
@@ -681,6 +696,8 @@ def main(argv: list[str] | None = None) -> int:
     total = sum(c.cost_micro for c in calls)
     failed = [c for c in calls if c.error]
     passing = [p for p in voted if passed(p, committee)]
+    if args.charter_out:
+        export_charter(manifest, passing, Path(args.charter_out))
     print()
     print(f"wrote {out}")
     print(f"proposals {len(proposals)}, voted {len(voted)}, passed {len(passing)}: "

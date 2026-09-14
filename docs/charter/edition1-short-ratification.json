@@ -1,0 +1,2215 @@
+{
+  "roster_sha256": "b46f6ef0e458b025ff64d8b8834d32aeccb29c0d92374bc6cae05e6d804b23a0",
+  "parent_charter_sha256": "11e2f2a6a8a9755a8b4cac507084c4b97068835037eef7939e1e4818f06b38e5",
+  "conflicts": [
+    {
+      "cards": [
+        "tool-discipline",
+        "tool-thrift"
+      ],
+      "preflight_refusal": "card tool-thrift observation: already named by live card tool-discipline for the same role"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "revision-presence"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "censorship-bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "response_quality"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "system_adaptability"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-discipline",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "revision-presence"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "censorship-bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "response_quality"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "system_adaptability"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "noop-ceiling",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "revision-presence"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "censorship-bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "response_quality"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "system_adaptability"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "card-well-formed-rate"
+      ],
+      "preflight_refusal": "card card-well-formed-rate observation: already named by live card well-formed-floor for the same role"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "card producer_well_formed_lower_bound observation: already named by live card well-formed-floor for the same role"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "well-formed-floor",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "revision-presence"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "censorship-bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "response_quality"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "system_adaptability"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "card-cost-per-return"
+      ],
+      "preflight_refusal": "card card-cost-per-return observation: already named by live card cost-cap for the same role"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "cost-cap",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "revision-presence"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "censorship-bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "response_quality"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "system_adaptability"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "tool-thrift",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "censorship-bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "response_quality"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "system_adaptability"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "card-well-formed-rate"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "card-cost-per-return"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "card-forecast-skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "card-revision-rate"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "revision-presence",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "response_quality"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "system_adaptability"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "card-well-formed-rate"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "card-cost-per-return"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "card-forecast-skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "card-revision-rate"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "censorship-bound",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "system_adaptability"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "card-well-formed-rate"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "card-cost-per-return"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "card-forecast-skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "card-revision-rate"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "card-well-formed-rate"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "card-cost-per-return"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "card-forecast-skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "card-revision-rate"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "system_adaptability",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "card producer_well_formed_lower_bound observation: already named by live card card-well-formed-rate for the same role"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-well-formed-rate",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-cost-per-return",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "card-consequence-paid-off"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-forecast-skill",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "card-revision-rate"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-consequence-paid-off",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "card-censored-share"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-revision-rate",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "card-position-concentration"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-censored-share",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-position-concentration",
+        "truthful_commitments_verdict_consistency"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-position-concentration",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-position-concentration",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-position-concentration",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-position-concentration",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-position-concentration",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-position-concentration",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-position-concentration",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-position-concentration",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-position-concentration",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "card-position-concentration",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "truthful_commitments_verdict_consistency",
+        "scarce_resources_response_cost"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "truthful_commitments_verdict_consistency",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "truthful_commitments_verdict_consistency",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "truthful_commitments_verdict_consistency",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "truthful_commitments_verdict_consistency",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "truthful_commitments_verdict_consistency",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "truthful_commitments_verdict_consistency",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "truthful_commitments_verdict_consistency",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "truthful_commitments_verdict_consistency",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "truthful_commitments_verdict_consistency",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "scarce_resources_response_cost",
+        "useful_inquiry_forecast_skill"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "scarce_resources_response_cost",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "scarce_resources_response_cost",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "scarce_resources_response_cost",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "scarce_resources_response_cost",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "scarce_resources_response_cost",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "scarce_resources_response_cost",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "scarce_resources_response_cost",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "scarce_resources_response_cost",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "useful_inquiry_forecast_skill",
+        "response_quality-2"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "useful_inquiry_forecast_skill",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "useful_inquiry_forecast_skill",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "useful_inquiry_forecast_skill",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "useful_inquiry_forecast_skill",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "useful_inquiry_forecast_skill",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "useful_inquiry_forecast_skill",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "useful_inquiry_forecast_skill",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality-2",
+        "adaptive_revision"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality-2",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality-2",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality-2",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality-2",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality-2",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "response_quality-2",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "adaptive_revision",
+        "producer_well_formed_lower_bound"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "adaptive_revision",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "adaptive_revision",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "adaptive_revision",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "adaptive_revision",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "adaptive_revision",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "producer_well_formed_lower_bound",
+        "evaluator_disagreement_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "producer_well_formed_lower_bound",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "producer_well_formed_lower_bound",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "producer_well_formed_lower_bound",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "evaluator_disagreement_ceiling",
+        "turnover_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "evaluator_disagreement_ceiling",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "evaluator_disagreement_ceiling",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "evaluator_disagreement_ceiling",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "turnover_ceiling",
+        "consequence_paid_off_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "turnover_ceiling",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "turnover_ceiling",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "consequence_paid_off_floor",
+        "amendments_activated_floor"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "consequence_paid_off_floor",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    },
+    {
+      "cards": [
+        "amendments_activated_floor",
+        "censored_share_ceiling"
+      ],
+      "preflight_refusal": "window must be an object with kind, n and per"
+    }
+  ],
+  "calls": [
+    {
+      "seat": {
+        "alias": "seat-1",
+        "assembly_id": "meta-a",
+        "role": "meta"
+      },
+      "model": "deepseek/deepseek-v4.1-flash",
+      "text": "{\"selected\": [\"tool-discipline\", \"noop-ceiling\", \"well-formed-floor\", \"cost-cap\", \"revision-presence\", \"censorship-bound\", \"response_quality\", \"system_adaptability\", \"card-well-formed-rate\", \"card-cost-per-return\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-revision-rate\", \"card-censored-share\", \"card-position-concentration\", \"truthful_commitments_verdict_consistency\", \"scarce_resources_response_cost\", \"useful_inquiry_forecast_skill\", \"response_quality-2\", \"adaptive_revision\", \"producer_well_formed_lower_bound\", \"evaluator_disagreement_ceiling\", \"turnover_ceiling\", \"consequence_paid_off_floor\", \"amendments_activated_floor\", \"censored_share_ceiling\"], \"reason\": \"Select the exhaustive subset that excludes only the cards the preflight rejected as duplicates (tool-thrift, card-well-formed-rate's overlap with well-formed-floor's observation, card-cost-per-return's overlap with cost-cap), preserving every remaining high-majority definition unchanged.\"}",
+      "stop": "stop",
+      "cost_micro": 2253,
+      "input_tokens": 14009,
+      "output_tokens": 252,
+      "served_by": "deepseek/deepseek-v4.1-flash",
+      "valid": false,
+      "failure": "ValueError",
+      "http_status": null
+    },
+    {
+      "seat": {
+        "alias": "seat-2",
+        "assembly_id": "seed-observer",
+        "role": "producer"
+      },
+      "model": "z-ai/glm-5.3-flash",
+      "text": "{\"selected\": [\"tool-discipline\", \"noop-ceiling\", \"card-well-formed-rate\", \"card-cost-per-return\", \"card-forecast-skill\", \"card-revision-rate\"], \"reason\": \"These six cards avoid every preflight refusal: they have well-formed windows with per fields, no duplicate observation conflicts (choosing card-well-formed-rate over well-formed-floor/producer_well_formed_lower_bound and card-cost-per-return over cost-cap, tool-discipline over tool-thrift), cover all four norms, and no pair among them was refused.\"}\n",
+      "stop": "stop",
+      "cost_micro": 1707,
+      "input_tokens": 13381,
+      "output_tokens": 543,
+      "served_by": "z-ai/glm-5.3-flash",
+      "valid": true,
+      "selected": [
+        "tool-discipline",
+        "noop-ceiling",
+        "card-well-formed-rate",
+        "card-cost-per-return",
+        "card-forecast-skill",
+        "card-revision-rate"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-3",
+        "assembly_id": "eval-c",
+        "role": "evaluator"
+      },
+      "model": "deepseek/deepseek-v4.1-flash",
+      "text": "{\"selected\": [\"tool-discipline\", \"noop-ceiling\", \"well-formed-floor\", \"cost-cap\", \"revision-presence\", \"censorship-bound\", \"response_quality\", \"system_adaptability\", \"card-well-formed-rate\", \"card-cost-per-return\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-revision-rate\", \"card-censored-share\", \"card-position-concentration\", \"truthful_commitments_verdict_consistency\", \"scarce_resources_response_cost\", \"useful_inquiry_forecast_skill\", \"response_quality-2\", \"adaptive_revision\", \"producer_well_formed_lower_bound\", \"evaluator_disagreement_ceiling\", \"turnover_ceiling\", \"consequence_paid_off_floor\", \"amendments_activated_floor\", \"censored_share_ceiling\"], \"reason\": \"Selects the majority-approved cards while dropping only the duplicates that preflight flagged as reusing an already live observation for the same role (tool-thrift, and no others beyond the refused duplicate pairs), keeping every remaining definition unchanged.\"}",
+      "stop": "stop",
+      "cost_micro": 4496,
+      "input_tokens": 14009,
+      "output_tokens": 244,
+      "served_by": "deepseek/deepseek-v4.1-flash",
+      "valid": false,
+      "failure": "ValueError",
+      "http_status": null
+    },
+    {
+      "seat": {
+        "alias": "seat-4",
+        "assembly_id": "eval-d",
+        "role": "evaluator"
+      },
+      "model": "openai/gpt-5.6-luna",
+      "text": "{\"selected\":[\"tool-discipline\",\"noop-ceiling\",\"well-formed-floor\",\"cost-cap\",\"card-forecast-skill\",\"card-revision-rate\",\"consequence_paid_off_floor\"],\"reason\":\"This set covers all four norms while retaining only preflight-valid, non-duplicative observations and avoiding cards with missing window fields or conflicting live metrics.\"}",
+      "stop": "stop",
+      "cost_micro": 4383,
+      "input_tokens": 13369,
+      "output_tokens": 867,
+      "served_by": "openai/gpt-5.6-luna",
+      "valid": true,
+      "selected": [
+        "tool-discipline",
+        "noop-ceiling",
+        "well-formed-floor",
+        "cost-cap",
+        "card-forecast-skill",
+        "card-revision-rate",
+        "consequence_paid_off_floor"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-5",
+        "assembly_id": "seed-decider",
+        "role": "producer"
+      },
+      "model": "deepseek/deepseek-v4.1-flash",
+      "text": "{\"selected\": [\"tool-discipline\", \"noop-ceiling\", \"well-formed-floor\", \"cost-cap\", \"revision-presence\", \"censorship-bound\", \"response_quality\", \"system_adaptability\", \"card-well-formed-rate\", \"card-cost-per-return\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-revision-rate\", \"card-censored-share\", \"card-position-concentration\", \"truthful_commitments_verdict_consistency\", \"scarce_resources_response_cost\", \"useful_inquiry_forecast_skill\", \"response_quality-2\", \"adaptive_revision\", \"evaluator_disagreement_ceiling\", \"turnover_ceiling\", \"consequence_paid_off_floor\", \"amendments_activated_floor\", \"censored_share_ceiling\"], \"reason\": \"These majority-approved cards have no preflight refusals among themselves; the refused cards are excluded because they either duplicate an already-live observation for the same role or use an invalid window lacking the required per field.\"}",
+      "stop": "stop",
+      "cost_micro": 2936,
+      "input_tokens": 13987,
+      "output_tokens": 231,
+      "served_by": "deepseek/deepseek-v4.1-flash",
+      "valid": false,
+      "failure": "ValueError",
+      "http_status": null
+    }
+  ],
+  "accepted": [],
+  "charter_sha256": "395c20d4f34ad0b12db4ad27c52ef892234549855143929d6b59285ad45325f5"
+}

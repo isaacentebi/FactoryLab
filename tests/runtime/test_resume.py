@@ -28,6 +28,14 @@ from factorylab.world.scripted import ScriptedProvider
 pytestmark = pytest.mark.slow
 
 
+def child_timeout():
+    """Retain the CI watchdog unless a slow host explicitly supplies a positive duration."""
+    seconds = int(os.environ.get("FACTORYLAB_TEST_CHILD_TIMEOUT", "180"))
+    if seconds <= 0:
+        raise ValueError("FACTORYLAB_TEST_CHILD_TIMEOUT must be positive seconds")
+    return seconds
+
+
 def make_runtime(manifest, path, **kwargs):
     return Runtime(
         manifest,
@@ -73,7 +81,8 @@ rt.run()
 raise AssertionError('kill point was not reached')
 """
     child = subprocess.run(
-        [sys.executable, "-c", code, str(path), stop], capture_output=True, text=True, timeout=180
+        [sys.executable, "-c", code, str(path), stop],
+        capture_output=True, text=True, timeout=child_timeout()
     )
     assert child.returncode == -signal.SIGKILL, child.stderr
     assert os.stat(path).st_mode & 0o777 == 0o600
@@ -157,7 +166,8 @@ rt.run()
 raise AssertionError('clock amendment kill point was not reached')
 """
     child = subprocess.run(
-        [sys.executable, "-c", code, str(path), stop], capture_output=True, text=True, timeout=180
+        [sys.executable, "-c", code, str(path), stop],
+        capture_output=True, text=True, timeout=child_timeout()
     )
     assert child.returncode == -signal.SIGKILL, child.stderr
     m = clock_manifest()

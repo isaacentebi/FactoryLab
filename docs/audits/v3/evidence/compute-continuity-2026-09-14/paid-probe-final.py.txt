@@ -1,0 +1,63 @@
+import json
+import time
+from dataclasses import replace
+from pathlib import Path
+from factorylab.runtime.cli import _load_dotenv
+from factorylab.runtime.live import build_provider
+from factorylab.runtime.loop import Runtime
+from factorylab.runtime.worlds import load_manifest
+from factorylab.world.market import MultiProvider, X402Provider
+
+_load_dotenv()
+m = load_manifest('worlds/compute-continuity-roster.toml')
+m = replace(m, exchange=replace(m.exchange, kind='fake'))
+real = build_provider(m)
+calls = []
+class Observed:
+    def __init__(self, provider, name, cut_after=None):
+        self.provider, self.name, self.cut_after = provider, name, cut_after
+        self.completed = 0
+    def balance_micro(self):
+        if self.cut_after is not None and self.completed >= self.cut_after:
+            return 0
+        return self.provider.balance_micro()
+    def catalogue(self):
+        return self.provider.catalogue()
+    def complete(self, request):
+        assert self.cut_after is None or self.completed < self.cut_after
+        started = time.monotonic()
+        try:
+            response = self.provider.complete(request)
+        except Exception as exc:
+            row = dict(provider=self.name, model=request.model_id, error_type=type(exc).__name__)
+            calls.append(row)
+            print(json.dumps(row), flush=True)
+            raise
+        self.completed += 1
+        row = dict(provider=self.name, model=request.model_id, cost_micro=response.cost_micro,
+                   stop=response.stop_reason, seconds=round(time.monotonic()-started, 2),
+                   text=response.text, reasoning_tokens=response.raw.get('reasoning_tokens'),
+                   max_tokens=request.max_tokens)
+        calls.append(row)
+        print(json.dumps(row), flush=True)
+        return response
+
+def no_external_market(*args, **kwargs):
+    raise RuntimeError('External seller payments disabled in this isolated inference probe')
+market = X402Provider(transport=no_external_market)
+first = Observed(real.openrouter, 'openrouter', 1)
+second = Observed(real.venice, 'venice')
+provider = MultiProvider(first, second, market)
+rt = Runtime(m, events=4, seed=4, initial_balance_micro=None, ledger_path=None,
+             drip=False, router_gamma=.1, provider=provider, market=market)
+assert not rt.live
+started = time.monotonic()
+result = rt.run()
+last = max((i for i,c in enumerate(calls) if c['provider']=='openrouter'), default=-1)
+after = calls[last+1:]
+report = dict(scope='Real paid inference; fake exchange and treasury; synthetic OpenRouter exhaustion after one completed request; unratified candidate roster',
+              seconds=round(time.monotonic()-started, 2), calls=calls, result=result,
+              checks=dict(openrouter_completed=first.completed, venice_completed=second.completed,
+                          venice_only_after_cut=last>=0 and bool(after) and all(c['provider']=='venice' for c in after)))
+Path('/tmp/factorylab-paid-continuity-result.json').write_text(json.dumps(report, indent=2))
+print(json.dumps({k:v for k,v in report.items() if k!='calls'}), flush=True)

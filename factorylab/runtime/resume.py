@@ -23,6 +23,7 @@ from typing import Any
 
 from factorylab.kernel.ledger import Ledger, LedgerLock, canonical
 from factorylab.runtime.reasons import CredentialMissing, Reason
+from factorylab.world.exchange import bind_launch_nonce
 
 
 class ResumeError(RuntimeError):
@@ -427,6 +428,7 @@ class JournalProxy:
     def __init__(self, target, journal: RecoveryJournal, name: str, *, deterministic=False):
         self.target, self.journal, self._journal_name = target, journal, name
         self.deterministic = deterministic
+        self.call_metrics = {}
 
     def __getattr__(self, name):
         attr = getattr(self.target, name)
@@ -437,19 +439,26 @@ class JournalProxy:
             return attr
 
         def call(*args, **kwargs):
-            return self.journal.call(f"{self._journal_name}.{name}", attr, args, kwargs,
-                                     deterministic=self.deterministic)
+            started = time.monotonic_ns()
+            try:
+                return self.journal.call(f"{self._journal_name}.{name}", attr, args, kwargs,
+                                         deterministic=self.deterministic)
+            finally:
+                if not self.deterministic and not self.journal.recovering:
+                    metric = self.call_metrics.setdefault(name, {"calls": 0, "elapsed_ns": 0})
+                    metric["calls"] += 1
+                    metric["elapsed_ns"] += time.monotonic_ns() - started
 
         return call
 
     def __setattr__(self, name, value):
-        if name in ("target", "journal", "_journal_name", "deterministic"):
+        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics"):
             object.__setattr__(self, name, value)
         else:
             setattr(self.target, name, value)
 
     def __delattr__(self, name):
-        if name in ("target", "journal", "_journal_name", "deterministic"):
+        if name in ("target", "journal", "_journal_name", "deterministic", "call_metrics"):
             object.__delattr__(self, name)
         else:
             delattr(self.target, name)
@@ -480,6 +489,9 @@ _RUNTIME_FIELDS = (
     "registered_predicates", "kind_reward_shapes", "forecast_returns",
     "connector_calls", "connector_calls_day",
     "notes",
+    # The per-launch venue identity: a resumed world keeps the client order IDs
+    # it already submitted, and a fresh ledger can never reproduce them.
+    "launch_nonce",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
@@ -568,8 +580,13 @@ def restore_runtime(rt, state: dict) -> None:
     if (saved_venue.get("address") != _venue_address(rt.exchange.target)):
         raise ResumeError("venue account differs from the saved world",
                           code="venue_account_mismatch")
-    for name, value in decode(state["runtime"]).items():
+    saved_runtime = decode(state["runtime"])
+    for name, value in saved_runtime.items():
         setattr(rt, name, value)
+    # A checkpoint written before launch-bound venue identities keeps its historical
+    # client order IDs rather than adopting this process's fresh nonce. The adapter
+    # is rebound below, after a deterministic venue's own state has been restored.
+    rt.launch_nonce = saved_runtime.get("launch_nonce")
     rt.observer.predicates = rt.predicates
     if rt.window.index in rt.price_windows:
         rt.price_windows[rt.window.index] = rt.window
@@ -624,6 +641,7 @@ def restore_runtime(rt, state: dict) -> None:
                 raise ResumeError(f"{name} requires the original deterministic adapter")
             component.target.__dict__.clear()
             component.target.__dict__.update(decode(state[name]))
+    bind_launch_nonce(rt.exchange, rt.launch_nonce)
     for model_id in rt.sellers:
         rt.market.register(model_id, rt.prices.price(model_id).per_request_micro)
     if rt.venue_tools:
@@ -689,6 +707,9 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
             if item["kind"] == "runtime.input":
                 if not rt._process_event(rt._next_event(iter(()))):
                     return rt
+            elif item["kind"] == "runtime.finish_budget":
+                rt._finish_budget()
+                return rt
             elif item["kind"] == "resume.begin":
                 rt._resume_at(item["now_ns"])
             else:
