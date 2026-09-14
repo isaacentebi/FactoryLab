@@ -310,6 +310,15 @@ A mainnet Hyperliquid manifest requires an explicit `[charter]`; testnet may
 use the seed charter. `charter_explicit` records admission provenance and is
 excluded from the canonical manifest hash.
 
+A mainnet manifest is also refused at load unless `exchange.client_namespace` is
+set and its `[charter]` carries `ratified_sha256` and `roster_sha256`, the values
+`scripts/ratify_charter.py` wrote as the artifact's `charter_sha256` and
+`roster_sha256` comments: the loaded cards must hash to the first and
+the manifest's own assemblies and models to the second, so a funded launch cannot
+run an edited charter or a different roster. Both fields are admission provenance
+and, like `charter_explicit`, are excluded from the canonical manifest hash;
+testnet manifests omit them.
+
 Testnet `treasury.reserve_address` is the public checksummed address
 `0x1228e5620944a79D268Afc7522E00891526EdEBb`, not a placeholder.
 
@@ -896,9 +905,20 @@ and decision identity together. Independent preparations use fresh UUID namespac
 resume retains the original namespace. Absence preserves legacy client IDs and canonical
 manifest hashes. Never change it on a living or resumable world.
 
+Because decision handles restart at `decision-1` on a fresh ledger, the namespace alone
+cannot separate two runs of one manifest: each launch also draws a `launch_nonce`,
+records it in the `Launch` event and folds it into the client order ID, so a rerun can
+never reproduce a previous run's identities while a resumed world restores its nonce
+from its checkpoint and keeps the identities it already submitted. A venue status answer
+whose client order ID belongs to another launch is not this world's order: it is reported
+uncertain with that reason rather than booked. Checkpoints written before launch nonces
+existed restore none and keep their historical identities.
+
 `scripts/rehearsal.py prepare` creates this namespace and binds the exact voted charter
-to its roster hash. `live` requires that charter and a namespace, refuses mainnet and
-paid treasury routes, and marks a prepared manifest used before starting the CLI.
+to its roster hash. `live` requires that charter and a namespace, refuses mainnet, and
+marks a prepared manifest used, once its evidence directory is known to be creatable,
+before starting the CLI. It does not disable paid treasury routes or Venice; that
+prerequisite was removed with the economic caps.
 Repetition requires a new preparation, not reuse of old client order IDs.
 
 The public world exposes actual proposal refusals in `registration_feedback` and

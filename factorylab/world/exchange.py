@@ -1110,11 +1110,20 @@ class HyperliquidExchange:
     # ---- writes
 
     def client_id(self, handle: str):
-        """Namespaced worlds cannot reuse another world's venue decision identity."""
+        """Namespaced worlds cannot reuse another world's venue decision identity.
+
+        Decision handles restart at ``decision-1`` on a fresh ledger and the manifest
+        namespace is fixed, so a launch nonce is folded in as well: a rerun of one
+        manifest can never reproduce a previous launch's identities, while a resumed
+        world restores its nonce and so keeps the identities it already submitted.
+        Absent both, the historical bare-handle derivation is preserved exactly.
+        """
         from hyperliquid.utils.types import Cloid
 
-        namespace = getattr(self, "_client_namespace", None)
-        identity = f"{namespace}:{handle}" if namespace is not None else handle
+        parts = [str(part) for part in (getattr(self, "_client_namespace", None),
+                                        getattr(self, "_launch_nonce", None))
+                 if part is not None]
+        identity = ":".join([*parts, handle])
         return Cloid.from_str("0x" + hashlib.sha256(identity.encode()).hexdigest()[:32])
 
     def lookup(self, client_id: str, *, order_id: str | None = None) -> OrderResult:
@@ -1127,6 +1136,14 @@ class HyperliquidExchange:
                 return OrderResult(order_id, "uncertain", Decimal(0), None, "order not observed")
             detail = response["order"]
             order = detail["order"]
+            # A venue answer carrying another launch's identity is not ours to book.
+            # Nothing is claimed about it: this launch's identity stays uncertain.
+            expected = None if order_id is not None else self.client_id(client_id).to_raw()
+            observed = order.get("cloid")
+            if (expected is not None and isinstance(observed, str)
+                    and observed.lower() != expected.lower()):
+                return OrderResult(None, "uncertain", Decimal(0), None,
+                                   "order identity belongs to another launch")
             status, oid = detail["status"], self._order_id(order["oid"])
             size = Decimal(str(order["origSz"]))
             remaining = Decimal(str(order["sz"]))
@@ -1408,19 +1425,41 @@ class HyperliquidExchange:
         return OrderResult(None, "uncertain", Decimal(0), None, "unknown response shape")
 
 
-def live_exchange(spec: Any, venue_class: Any = None) -> HyperliquidExchange:
+def live_exchange(spec: Any, venue_class: Any = None, *,
+                  launch_nonce: str | None = None) -> HyperliquidExchange:
     """The single place a manifest becomes a live venue, so no caller reads a partial world.
 
     The runtime and the wake both construct through here; a field added to
     ``ExchangeSpec`` reaches every call site at once. ``venue_class`` lets a
-    caller bind the class from its own module namespace.
+    caller bind the class from its own module namespace. ``launch_nonce`` is not
+    a manifest field: it is drawn once per launch and restored by resume, so the
+    adapter itself stays a deterministic function of the identity it is given.
     """
     exchange = (venue_class or HyperliquidExchange)(
         mainnet=spec.mainnet, coins=spec.coins, spot_pairs=spec.spot_pairs,
     )
     if getattr(spec, "client_namespace", None) is not None:
         exchange._client_namespace = spec.client_namespace
+    if launch_nonce is not None:
+        exchange._launch_nonce = launch_nonce
     return exchange
+
+
+def bind_launch_nonce(exchange: Any, launch_nonce: str | None) -> None:
+    """Carry one launch's venue identity onto the adapter that derives client order IDs.
+
+    A checkpoint written before launch nonces existed restores ``None``, which
+    removes the attribute again so the resumed world reproduces exactly the
+    client order IDs it originally submitted. Adapters without venue identities
+    (the deterministic fake) are left untouched.
+    """
+    target = getattr(exchange, "target", exchange)
+    if not hasattr(target, "client_id"):
+        return
+    if launch_nonce is None:
+        target.__dict__.pop("_launch_nonce", None)
+    else:
+        target.__dict__["_launch_nonce"] = launch_nonce
 
 
 def stream_market(exchange: Exchange, clock: Iterator[WorldEvent]) -> Iterator[WorldEvent]:

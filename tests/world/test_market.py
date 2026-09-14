@@ -394,3 +394,20 @@ def test_untrusted_settlement_receipt_cannot_claim_success(receipt):
     with pytest.raises(PaymentOutcomeUnknown):
         provider(fake).complete(ModelRequest(MODEL, "", ()))
     assert len(fake.payments) == 1
+
+
+def test_json_output_contract_is_sent_only_for_object_requests():
+    plain = X402Provider(transport=SellerHTTP())._payload(ModelRequest(MODEL, "system", (), 16))[1]
+    asked = X402Provider(transport=SellerHTTP())._payload(
+        ModelRequest(MODEL, "system", (), 16, json_object=True))[1]
+    assert "response_format" not in plain
+    assert asked["response_format"] == {"type": "json_object"}
+
+
+def test_a_paid_json_request_carries_the_contract_on_the_wire():
+    fake = SellerHTTP()
+    provider(fake).complete(ModelRequest(MODEL, "system", (), 16, json_object=True))
+    bodies = [call[2] for call in fake.calls
+              if call[1].endswith("/v1/chat/completions")]
+    assert len(bodies) == 2  # the unpaid quote and the paid call
+    assert all(body["response_format"] == {"type": "json_object"} for body in bodies)

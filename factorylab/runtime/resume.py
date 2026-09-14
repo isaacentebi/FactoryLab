@@ -23,6 +23,7 @@ from typing import Any
 
 from factorylab.kernel.ledger import Ledger, LedgerLock, canonical
 from factorylab.runtime.reasons import CredentialMissing, Reason
+from factorylab.world.exchange import bind_launch_nonce
 
 
 class ResumeError(RuntimeError):
@@ -488,6 +489,9 @@ _RUNTIME_FIELDS = (
     "registered_predicates", "kind_reward_shapes", "forecast_returns",
     "connector_calls", "connector_calls_day",
     "notes",
+    # The per-launch venue identity: a resumed world keeps the client order IDs
+    # it already submitted, and a fresh ledger can never reproduce them.
+    "launch_nonce",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
@@ -576,8 +580,13 @@ def restore_runtime(rt, state: dict) -> None:
     if (saved_venue.get("address") != _venue_address(rt.exchange.target)):
         raise ResumeError("venue account differs from the saved world",
                           code="venue_account_mismatch")
-    for name, value in decode(state["runtime"]).items():
+    saved_runtime = decode(state["runtime"])
+    for name, value in saved_runtime.items():
         setattr(rt, name, value)
+    # A checkpoint written before launch-bound venue identities keeps its historical
+    # client order IDs rather than adopting this process's fresh nonce. The adapter
+    # is rebound below, after a deterministic venue's own state has been restored.
+    rt.launch_nonce = saved_runtime.get("launch_nonce")
     rt.observer.predicates = rt.predicates
     if rt.window.index in rt.price_windows:
         rt.price_windows[rt.window.index] = rt.window
@@ -632,6 +641,7 @@ def restore_runtime(rt, state: dict) -> None:
                 raise ResumeError(f"{name} requires the original deterministic adapter")
             component.target.__dict__.clear()
             component.target.__dict__.update(decode(state[name]))
+    bind_launch_nonce(rt.exchange, rt.launch_nonce)
     for model_id in rt.sellers:
         rt.market.register(model_id, rt.prices.price(model_id).per_request_micro)
     if rt.venue_tools:

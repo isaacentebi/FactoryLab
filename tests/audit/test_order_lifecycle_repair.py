@@ -198,11 +198,20 @@ def test_order_status_only_looks_up_original_identities(monkeypatch, capsys):
         calls.append(identity)
         return OrderResult(None, "uncertain", Decimal(0), None, "not observed")
 
-    monkeypatch.setattr(exchange, "live_exchange", lambda spec: SimpleNamespace(lookup=lookup))
-    _cmd_order_status(SimpleNamespace(world="testnet", client_id=["decision-172"]))
+    nonces = []
+
+    def live_exchange(spec, *, launch_nonce=None):
+        nonces.append(launch_nonce)
+        return SimpleNamespace(lookup=lookup)
+
+    monkeypatch.setattr(exchange, "live_exchange", live_exchange)
+    _cmd_order_status(SimpleNamespace(world="testnet", client_id=["decision-172"],
+                                      launch_nonce=None))
     report = json.loads(capsys.readouterr().out)
     assert calls == ["decision-172"] and report["read_only"]
     assert report["orders"]["decision-172"]["status"] == "uncertain"
+    # A world that launched before launch-bound identities keeps its original derivation.
+    assert nonces == [None] and report["launch_nonce"] is None
 
 
 def test_existing_order_identity_does_not_fetch_or_submit_again():

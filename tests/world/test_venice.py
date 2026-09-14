@@ -335,3 +335,12 @@ def test_missing_auth_and_unprefixed_id_cannot_call_completion(req):
     with pytest.raises(VeniceError):
         VeniceProvider(transport=fake).complete(replace(req, model_id="test-flash"))
     assert not fake.calls
+
+
+def test_json_output_contract_is_sent_only_for_object_requests(completion, req):
+    fake = FakeTransport([completion, completion])
+    provider = VeniceProvider(transport=fake)
+    provider.complete(req)
+    provider.complete(replace(req, json_object=True))
+    assert "response_format" not in fake.calls[0][2]
+    assert fake.calls[1][2]["response_format"] == {"type": "json_object"}

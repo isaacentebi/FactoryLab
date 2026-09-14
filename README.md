@@ -52,7 +52,9 @@ To end a persistent world, stop its running process to release the writer lock, 
 On live worlds, `run --duration 30m` uses a wall-clock deadline checked between ticks and an event ceiling; work already in progress may finish after the deadline. A budgeted live run finishes with one read-only order/fill reconciliation pass before sealing;
 its summary distinguishes acknowledged order statuses from ingested fills. Shutdown does not
 close venue positions. `order-status --world W --client-id ID` reads an original order identity
-using that manifest’s namespace, without starting or resuming a world.
+using that manifest’s namespace, without starting or resuming a world. Client order IDs are
+also bound to the run that made them, so add `--launch-nonce` with the `launch_nonce` from that
+run’s `Launch` event; worlds that launched before launch-bound identities omit it.
 
 `probe --max-tokens` sets the model probe budget, default `256`; a paid but empty x402 completion fails the probe. The wake reads only the world's configured live accounts and publishes no open positions.
 

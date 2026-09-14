@@ -346,9 +346,13 @@ class X402Provider:
 
     def _payload(self, req: ModelRequest) -> tuple[str, dict]:
         root, model = split_model_id(req.model_id)
+        # A seller on the OpenAI wire receives the same JSON-object contract as
+        # every other provider; the quote and the paid call carry identical bodies.
+        contract = {"response_format": {"type": "json_object"}} if req.json_object else {}
         return root + "/v1/chat/completions", {
             "model": model, "messages": [{"role": "system", "content": req.system}, *req.messages],
             "max_tokens": req.max_tokens,
+            **contract,
             **deepcopy(self._extra_body),
         }
 

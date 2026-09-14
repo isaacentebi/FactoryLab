@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import tomllib
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal
@@ -19,6 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from factorylab.charter.charter import Charter, MetricCard, seed_charter
+from factorylab.charter.provenance import (
+    PROVENANCE_FIELDS,
+    charter_content,
+    charter_digest,
+)
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.cards import parses
 from factorylab.runtime.notes import NotesSpec
@@ -243,6 +249,11 @@ class WorldManifest:
     charter: Charter = field(default_factory=seed_charter)
     charter_prices: tuple[tuple[str, float], ...] = ()
     charter_explicit: bool = False
+    # Admission provenance for a funded launch: the digest the ratification exported,
+    # the roster it was surveyed against, and the digest of the cards actually loaded.
+    charter_ratified_sha256: str | None = None
+    charter_roster_sha256: str | None = None
+    charter_content_sha256: str | None = None
 
     # ---- derived
 
@@ -280,6 +291,9 @@ class WorldManifest:
         payload = asdict(self)
         # Admission provenance does not change the world defined by identical cards.
         payload.pop("charter_explicit")
+        for name in ("charter_ratified_sha256", "charter_roster_sha256",
+                     "charter_content_sha256"):
+            payload.pop(name)
         # Preserve historical manifest identities when the opt-in namespace is absent.
         if payload["exchange"]["client_namespace"] is None:
             payload["exchange"].pop("client_namespace")
@@ -322,6 +336,32 @@ class WorldManifest:
         missing_pairs = sorted(set(self.exchange.spot_pairs) - pairs)
         return {"status": "invalid" if missing_coins or missing_pairs else "valid",
                 "missing_coins": missing_coins, "missing_spot_pairs": missing_pairs}
+
+    def _validate_funded_admission(self) -> None:
+        """Real money launches only on a fresh identity space and the ratified charter.
+
+        The namespace keeps a funded world's client order IDs out of every other
+        world's; the two digests bind the loaded cards and the roster that voted them
+        to the exact artifact ``scripts/ratify_charter.py`` exported. The same digest
+        functions serve both, so an existing ratified artifact verifies unchanged.
+        """
+        from factorylab.charter.provenance import roster_hash
+
+        if self.exchange.client_namespace is None:
+            raise ValueError(
+                "mainnet requires exchange.client_namespace: a funded world needs its own "
+                "venue identity space"
+            )
+        if self.charter_ratified_sha256 is None:
+            raise ValueError("mainnet requires charter.ratified_sha256 from the ratified export")
+        if self.charter_roster_sha256 is None:
+            raise ValueError("mainnet requires charter.roster_sha256 from the ratified export")
+        if self.charter_content_sha256 is None:
+            raise ValueError("mainnet charter provenance needs the loaded charter table")
+        if self.charter_content_sha256 != self.charter_ratified_sha256:
+            raise ValueError("mainnet charter differs from the ratified charter digest")
+        if roster_hash(self) != self.charter_roster_sha256:
+            raise ValueError("mainnet roster differs from the roster the charter was ratified on")
 
     def validate(self) -> None:
         namespace = self.exchange.client_namespace
@@ -436,6 +476,8 @@ class WorldManifest:
             raise ValueError("unknown exchange kind")
         if self.exchange.mainnet and self.name != "funded":
             raise ValueError("mainnet is only allowed in the world named 'funded'")
+        if self.exchange.mainnet and self.exchange.kind == "hyperliquid":
+            self._validate_funded_admission()
         if self.exchange.shocks and self.exchange.kind != "fake":
             raise ValueError("price shocks exist only on the fake venue")
         for sh in self.exchange.shocks:
@@ -492,6 +534,12 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
     """Explicit charter tables yield edition 1 and card-specific errors for invalid fields."""
     if not isinstance(raw, dict):
         raise ValueError("charter must be a table")
+    for name in PROVENANCE_FIELDS:
+        value = raw.get(name)
+        if value is not None and (not isinstance(value, str)
+                                  or not re.fullmatch(r"[0-9a-f]{64}", value)):
+            raise ValueError(f"charter.{name} must be 64 lowercase hex characters")
+    raw = charter_content(raw)
     norms = raw.get("norms")
     if (not isinstance(norms, list) or not norms
             or any(not isinstance(n, str) or not n.strip() for n in norms)):
@@ -547,6 +595,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     charter, charter_prices = (
         _manifest_charter(d["charter"]) if "charter" in d else (seed_charter(), ())
     )
+    # The cards as written, digested exactly as the ratification export digested them.
+    charter_content_sha256 = (charter_digest(charter_content(d["charter"]))
+                              if isinstance(d.get("charter"), dict) else None)
     clock = d.get("clock", {})
     if set(clock) - {"min_tick"}:
         raise ValueError("clock accepts only min_tick; max_tick is derived")
@@ -659,6 +710,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         charter=charter,
         charter_prices=charter_prices,
         charter_explicit="charter" in d,
+        charter_ratified_sha256=(d.get("charter") or {}).get("ratified_sha256"),
+        charter_roster_sha256=(d.get("charter") or {}).get("roster_sha256"),
+        charter_content_sha256=charter_content_sha256,
         evaluation=evaluation,
         connectors=connectors,
         notes=notes,
