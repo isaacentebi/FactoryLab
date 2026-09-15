@@ -346,6 +346,11 @@ def test_a1_a_free_form_role_label_never_moves_a_returns_measurement(monkeypatch
 def test_a1_custom_child_schema_cannot_be_weakened_to_execute_effects(monkeypatch):
     rt = make_runtime()
     req = parent_request(rt)
+    # C10: a child request is its parent's subcontracting and spends the parent's
+    # entitlement. The parent decision is seed-decider's, as a routed one would be:
+    # the trial moves from seed-decider to the child, and the child's call, whose
+    # ceiling exceeds the 0.10 USD trial, is covered by seed-decider's share.
+    rt.handle_to_assembly[req.handle] = 'seed-decider'
     assembly(rt, req.handle, 'custom-child', emits=('Finding',), schemas={'Finding': {
         'type': 'object', 'properties': {'answer': {'type': 'integer'}}, 'required': ['answer']}})
     monkeypatch.setattr(rt.provider.target, 'complete', lambda request: ModelResponse(

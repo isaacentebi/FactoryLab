@@ -205,6 +205,8 @@ CUSTOM_KINDS = {"tool": ("CalibrationListing", LISTING_SCHEMA),
                 "fail": ("CalibrationFill", FILL_SCHEMA),
                 "parent": ("CalibrationAnswer", ANSWER_SCHEMA),
                 "helper": ("CalibrationAnswer", ANSWER_SCHEMA)}
+#: The seats one candidate is given: one per manifest role, one per calibration kind.
+SEAT_KINDS = ("producer", "evaluator", "meta", *CUSTOM_KINDS)
 
 
 @dataclass(frozen=True)
@@ -246,8 +248,21 @@ def _seed_spec(rt: Runtime, role: str) -> AssemblySpec | None:
     return None
 
 
-def install_seats(rt: Runtime, candidate: str, guard: BudgetGuard | None) -> dict[str, str]:
-    """Register one seat per scenario for a candidate, cloned from the manifest's seats."""
+def seat_grant(rt: Runtime, candidates: int) -> int:
+    """The equal share of the unallocated pool each candidate seat is endowed with."""
+    return max(0, rt.budget.unallocated()) // max(1, candidates * len(SEAT_KINDS))
+
+
+def install_seats(rt: Runtime, candidate: str, guard: BudgetGuard | None, *,
+                  grant_micro: int | None = None) -> dict[str, str]:
+    """Register one seat per scenario for a candidate, cloned from the manifest's seats.
+
+    The seats are instantiated past registration, so no trial moves to them: each
+    is endowed with ``grant_micro`` from the unallocated pool (C10), the bound on
+    what it may spend over the whole calibration. Without a figure the candidate's
+    seats split the whole pool. The grant is ledgered like any other and reported
+    with the run, so a tree the grant stopped is read as such, not as the model's.
+    """
     seats: dict[str, str] = {}
     for role in ("producer", "evaluator", "meta"):
         base = _seed_spec(rt, role)
@@ -265,6 +280,9 @@ def install_seats(rt: Runtime, candidate: str, guard: BudgetGuard | None) -> dic
             schemas={event_kind: schema}, max_tokens=producer.max_tokens,
             effort=producer.effort, system_prompt=producer.system_prompt))
         seats[kind] = sid
+    grant = seat_grant(rt, 1) if grant_micro is None else grant_micro
+    for kind, sid in seats.items():
+        rt.budget.grant(sid, grant, f"calibration: {candidate} {kind} seat")
     if guard is not None:
         for sid in seats.values():
             asm = rt.assemblies[sid]
@@ -491,6 +509,10 @@ def run_tree(rt: Runtime, scenario: Scenario, guard: BudgetGuard | None) -> dict
         "well_formed": ret.status in ("ok", "refused"),
         "task_met": task_met,
         "budget_refused": reason.startswith("infeasible: budget"),
+        # The seat's grant, not the model, stopped this tree: its entitlement could
+        # not cover a call's ceiling (the request ceiling is narrowed to it, C10).
+        "entitlement_refused": ("entitlement" in reason
+                                or reason == "ceiling exceeds request cost_ceiling"),
         "reason": reason[:200] or None,
         "cost_micro": ret.cost, "wallet_delta_micro": wallet_spent,
         "latency_ms": round(latency_ms, 1),
@@ -514,7 +536,8 @@ def _percentile(values: list[int | float], q: float) -> float | None:
     return float(statistics.quantiles(ordered, n=100, method="inclusive")[int(q * 100) - 1])
 
 
-def summarise(candidate: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+def summarise(candidate: str, rows: list[dict[str, Any]], *,
+              grant_micro: int | None = None) -> dict[str, Any]:
     """Per-candidate rates and cost quantiles over every decision tree it ran."""
     ran = [r for r in rows if not r["budget_refused"]]
     costs = [r["cost_micro"] for r in ran if r["completed"]]
@@ -543,6 +566,8 @@ def summarise(candidate: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
         "candidate": candidate,
         "trees": len(ran),
         "budget_refused_trees": len(rows) - len(ran),
+        "seat_grant_micro": grant_micro,
+        "entitlement_refused_trees": sum(1 for r in ran if r["entitlement_refused"]),
         "completion": _rate(ran, "completed"),
         "well_formed": _rate(ran, "well_formed"),
         "task_met": _rate(ran, "task_met"),
@@ -605,7 +630,10 @@ def calibrate(manifest: WorldManifest, candidates: list[str], *, provider: Any,
     guard = BudgetGuard(budget_micro) if budget_micro is not None else None
     rt = build_runtime(manifest, provider, seed=seed)
     rows: dict[str, list[dict[str, Any]]] = {c: [] for c in candidates}
-    seats = {c: install_seats(rt, c, guard) for c in candidates}
+    # Every candidate seat is endowed alike from the unallocated pool (C10): the
+    # manifest's own seats keep their genesis shares and are never invoked here.
+    grant = seat_grant(rt, len(candidates))
+    seats = {c: install_seats(rt, c, guard, grant_micro=grant) for c in candidates}
     ceilings: dict[str, int] = {}
     stopped = None
     for sample in range(repeats):
@@ -623,8 +651,17 @@ def calibrate(manifest: WorldManifest, candidates: list[str], *, provider: Any,
                     log(json.dumps({"candidate": candidate, **{
                         k: row[k] for k in ("scenario", "status", "task_met", "cost_micro",
                                             "latency_ms", "calls", "reason")}}))
-    summaries = {c: summarise(c, rows[c]) for c in candidates}
+    summaries = {c: summarise(c, rows[c], grant_micro=grant) for c in candidates}
     return {
+        "seat_grants": {
+            "definition": "each candidate seat's endowment from the unallocated pool, the "
+                          "bound on what it may spend over the whole calibration; a tree "
+                          "refused by it is flagged entitlement_refused, not the model's",
+            "grant_micro": grant,
+            "seats": {c: {kind: {"seat": sid, "grant_micro": grant}
+                          for kind, sid in seats[c].items()} for c in candidates},
+            "unallocated_after_micro": rt.budget.unallocated(),
+        },
         "manifest": {"name": manifest.name, "manifest_sha256": manifest.manifest_hash(),
                      "roster_sha256": roster_hash(manifest),
                      "menu": sorted(menu)},
@@ -678,6 +715,10 @@ def markdown_table(report: dict[str, Any]) -> str:
     lines.append("")
     lines.append(f"Manifest roster tick: {_cell('tick_cost_micro', roster)} µ$ "
                  "(producer + evaluator + meta seats at their calibrated p50).")
+    grants = report["seat_grants"]
+    refused = sum(s["entitlement_refused_trees"] for s in report["candidates"].values())
+    lines.append(f"Seat grants: {grants['grant_micro']} µ$ per candidate seat from the "
+                 f"unallocated pool; {refused} tree(s) refused by a seat's entitlement.")
     budget = report["budget"]
     if budget is not None:
         lines.append(f"Budget: spent {budget['spent_micro']} of {budget['budget_micro']} µ$; "

@@ -241,6 +241,11 @@ def test_the_only_recursive_meta_is_terminal_on_the_tier_it_judges():
     rt = _consequence_runtime(provider=Judge(0.9))
     spec = next(a.spec for a in rt.assemblies.values() if a.spec.role == "meta")
     rt._instantiate(replace(spec, id="recursive-meta", accepts=frozenset({"MetaVerdict"})))
+    # C10: a seat instantiated past registration has no entitlement and is infeasible
+    # for routing until credited. It is endowed from the unallocated pool with the
+    # 2 USD trial the recursive-meta fixture in tests/runtime/test_loop.py uses, so
+    # its fake-opus ceiling is covered and the router can draw it.
+    rt.budget.grant("recursive-meta", 2_000_000, "fixture: the recursive tier's trial")
     rt._open_epoch("MetaVerdict")
     _, produced = _consequence_produce(rt, "NOOP")
     _consequence_judge(rt, produced, "eval-a")
