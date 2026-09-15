@@ -501,7 +501,10 @@ def test_edition2_testnet_manifest_carries_the_edition2_physics_and_hashes_stabl
     assert provenance == {
         "ratified_sha256": "929f1b04bee45155e74d196c80b1a6d764a75555fa4ecc5872beffc629578935",
         "roster_sha256": "3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb"}
-    assert m.charter_ratified_sha256 is None  # ratification stamps the hashes later
+    # Ratified 15 September: the loader carries the digests and they equal the loaded cards.
+    assert m.charter_ratified_sha256 == provenance["ratified_sha256"]
+    assert m.charter_roster_sha256 == provenance["roster_sha256"]
+    assert m.charter_content_sha256 == m.charter_ratified_sha256
     assert m.manifest_hash() == (
         "9eb460e4b3d4c974feefbc7cd6a5e182defda231f4f33a5d3cb4ac060fa9d224")
 
