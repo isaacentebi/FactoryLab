@@ -366,6 +366,12 @@ class _Observatory:
             self.dormant_periods = [*self.dormant_periods, {
                 "entered_ns": self.dormant_since, "exited_ns": ts}][-MAX_ROWS:]
             self.dormant_since = None
+        # The episode list W1 publishes beside the liveness view: a fact of the
+        # account, without any assembly id or position.
+        self.dormancy = [*self.dormancy, {
+            "state": phase, "ts_ns": ts,
+            "locked_micro": item.get("locked"), "next_release_ns": item.get("next_release_ns"),
+        }][-MAX_ROWS:]
 
     def _on_invocation(self, item: dict) -> None:
         role = item.get("role")
@@ -428,14 +434,6 @@ class _Observatory:
     def _on_immune_price_relief(self, item: dict) -> None:
         self._respond(item.get("window"), {"response": "price_relief",
                                            "card_id": item.get("card_id")})
-
-    def _on_dormant(self, item: dict) -> None:
-        # When the factory paused for its next release and when it woke: a fact of
-        # the account, published without any assembly id or position.
-        self.dormancy = [*self.dormancy, {
-            "state": item.get("state"), "ts_ns": item.get("ts"),
-            "locked_micro": item.get("locked"), "next_release_ns": item.get("next_release_ns"),
-        }][-MAX_ROWS:]
 
     def _on_novelty_grant(self, item: dict) -> None:
         self._respond(item.get("window"), {"response": "novelty_grant"})
