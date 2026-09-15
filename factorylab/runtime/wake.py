@@ -108,7 +108,11 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
         },
         "pots": {"venue": pots.get("venue"), "reserve": pots.get("reserve"),
                  "venice": pots.get("sellers", {}).get("venice"), "seed": pots.get("seed"),
-                 "complete": pots.get("complete")},
+                 "complete": pots.get("complete"),
+                 # The endowment (C1) and the pause between its releases (C2).
+                 "locked_micro": rt.wallet.locked, "unlocked_micro": rt.wallet.unlocked,
+                 "next_release_ns": rt.wallet.next_release_ns,
+                 "dormant": getattr(rt, "dormancy", None) is not None},
         "portfolio": {
             "equity_micro": pots.get("venue"),
             "realized_to_date_micro": rt.realized_to_date,
@@ -145,6 +149,7 @@ class _Observatory:
         self.invocations: dict[str, Counter] = {}
         self.transfers: list[dict] = []
         self.windows: dict[int, dict] = {}
+        self.dormancy: list[dict] = []
 
     def feed(self, item: dict) -> None:
         """Read one authenticated item; unknown and sealed kinds are simply not read."""
@@ -284,6 +289,14 @@ class _Observatory:
         self._respond(item.get("window"), {"response": "price_relief",
                                            "card_id": item.get("card_id")})
 
+    def _on_dormant(self, item: dict) -> None:
+        # When the factory paused for its next release and when it woke: a fact of
+        # the account, published without any assembly id or position.
+        self.dormancy = [*self.dormancy, {
+            "state": item.get("state"), "ts_ns": item.get("ts"),
+            "locked_micro": item.get("locked"), "next_release_ns": item.get("next_release_ns"),
+        }][-MAX_ROWS:]
+
     def _on_novelty_grant(self, item: dict) -> None:
         self._respond(item.get("window"), {"response": "novelty_grant"})
 
@@ -322,7 +335,8 @@ class _Observatory:
                                                 for day, counts in sorted(
                                                     self.invocations.items())[-MAX_ROWS:]},
             },
-            "pots": {"current": latest.get("pots") or {}, "transfers": self.transfers},
+            "pots": {"current": latest.get("pots") or {}, "transfers": self.transfers,
+                     "dormancy": self.dormancy},
             "immune": list(self.windows.values()),
             "portfolio": latest.get("portfolio") or {"equity_micro": UNAVAILABLE,
                                                      "realized_to_date_micro": UNAVAILABLE},

@@ -217,7 +217,9 @@ class PricingMixin:
             closed = self.window.index if self.reserve_window_start is not None else None
             if closed is not None:
                 self._close_price_window()
-            self.reserve.open_window(self.clock.now_ns, self.wallet.balance)
+            # The novelty share is a share of money the population can spend: locked
+            # backing is not, and a venue loss can carry the unlocked part below zero.
+            self.reserve.open_window(self.clock.now_ns, max(0, self.wallet.unlocked))
             self.reserve_window_start = self.clock.now_ns
             self.market_index = None
             self.stats.reserve_windows += 1

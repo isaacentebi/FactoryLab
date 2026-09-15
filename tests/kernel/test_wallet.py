@@ -4,8 +4,15 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 
 from factorylab.kernel.events import Bus
+from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.termination import Termination
-from factorylab.kernel.wallet import DripSchedule, Infeasible, Reservation, Wallet
+from factorylab.kernel.wallet import (
+    DripSchedule,
+    Infeasible,
+    ReleaseSchedule,
+    Reservation,
+    Wallet,
+)
 
 
 def test_reserve_commit_release_and_drip(ledger, clock):
@@ -202,3 +209,72 @@ def test_release_after_exhaustion_preserves_money_and_audit(ledger):
     wallet.settle(-10, "trade", "exchange_pnl")
     wallet.release(hold)
     assert wallet.balance == 0 and wallet.available == 0 and wallet.check_conservation()
+
+
+def test_locked_backing_releases_on_schedule_once_each_and_conserves(ledger, clock):
+    schedule = ReleaseSchedule(((10, 30), (20, 70)))
+    wallet = Wallet(200, ledger, clock_ns=clock, locked_micro=100, release_schedule=schedule)
+    assert (wallet.locked, wallet.unlocked, wallet.available) == (100, 100, 100)
+    assert wallet.unhistoried_available == 100 and wallet.balance == 200
+    # Nothing is due before the wallet is anchored to its Launch.
+    assert wallet.next_release_ns is None and wallet.release_due(10**9) == 0
+    with pytest.raises(Infeasible):
+        wallet.reserve(101, "h", "model")
+    wallet.launch(1000)
+    wallet.launch(1000)  # idempotent under replay
+    with pytest.raises(ValueError):
+        wallet.launch(1001)
+    assert wallet.next_release_ns == 1010 and wallet.release_due(1009) == 0
+    assert wallet.release(1010) == 30 and wallet.locked == 70 and wallet.available == 130
+    assert wallet.release_due(1010) == 0 and wallet.next_release_ns == 1020
+    hold = wallet.reserve(130, "h", "model")
+    wallet.release(hold)  # the hold release keeps its name and behaviour
+    assert wallet.release_due(5000) == 70 and wallet.locked == 0
+    assert wallet.next_release_ns is None and wallet.released_tranches == 2
+    assert wallet.balance == 200 and wallet.available == 200 and wallet.check_conservation()
+    releases = [item for item in ledger._recovery_items() if item["kind"] == "release"]
+    assert [(r["tranche"], r["amount"], r["due_ns"], r["locked_after"]) for r in releases] == [
+        (0, 30, 1010, 70), (1, 70, 1020, 0)]
+    assert ledger.verify()
+
+
+def test_locked_backing_is_validated_and_restores_with_its_released_tranches(ledger, clock):
+    for kwargs in ({"locked_micro": 10}, {"release_schedule": ReleaseSchedule(((0, 10),))},
+                   {"locked_micro": 10, "release_schedule": ReleaseSchedule(((0, 5),))},
+                   {"locked_micro": 300, "release_schedule": ReleaseSchedule(((0, 300),))}):
+        with pytest.raises(ValueError):
+            Wallet(200, Ledger(clock_ns=clock), clock_ns=clock, **kwargs)
+    for releases in ((), ((5, 1), (4, 1)), ((0, 0),), ((-1, 1),), (("0", 1),), ((0, 1.0),)):
+        with pytest.raises((ValueError, TypeError)):
+            ReleaseSchedule(releases)
+    schedule = ReleaseSchedule(((10, 30), (20, 70)))
+    wallet = Wallet(200, ledger, clock_ns=clock, locked_micro=100, release_schedule=schedule)
+    wallet.launch(1000)
+    wallet.release_due(1010)
+    wallet.commit(wallet.reserve(25, "h", "model"), 25)
+    state = wallet.state()
+    assert (state["locked"], state["released"], state["launch_ns"]) == (70, 1, 1000)
+    restored = Wallet(200, Ledger(clock_ns=clock), clock_ns=clock, locked_micro=100,
+                      release_schedule=schedule)
+    restored._restore_state(state)
+    assert (restored.locked, restored.unlocked, restored.next_release_ns) == (70, 105, 1020)
+    assert restored.release_due(1020) == 70 and restored.check_conservation()
+    other = Wallet(200, Ledger(clock_ns=clock), clock_ns=clock)
+    with pytest.raises(ValueError, match="endowment"):
+        other._restore_state(state)
+    forged = {**state, "locked": 0}
+    with pytest.raises(ValueError, match="released tranches"):
+        Wallet(200, Ledger(clock_ns=clock), clock_ns=clock, locked_micro=100,
+               release_schedule=schedule)._restore_state(forged)
+
+
+def test_a_venue_loss_is_absorbed_against_locked_backing_without_creating_money(ledger, clock):
+    wallet = Wallet(100, ledger, clock_ns=clock, locked_micro=90,
+                    release_schedule=ReleaseSchedule(((10, 90),)))
+    wallet.launch(0)
+    wallet.settle(-30, "trade", "exchange_pnl")
+    assert wallet.unlocked == -20 and wallet.available == -20 and not wallet.dead
+    with pytest.raises(Infeasible):
+        wallet.reserve(1, "h", "model")
+    assert wallet.release_due(10) == 90 and wallet.unlocked == 70 and wallet.locked == 0
+    assert wallet.balance == 70 and wallet.check_conservation()

@@ -39,6 +39,7 @@ from factorylab.cortex.schematics import SchematicsMixin
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.money import money_to_usd
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from factorylab.kernel.termination import DORMANT
 from factorylab.learners.router import Sample
 from factorylab.runtime.bootstrap import BootstrapMixin
 from factorylab.runtime.cadence import settle_forecasts
@@ -219,6 +220,8 @@ class Runtime(
                 "kernel",
             )
         )
+        # Release offsets count from the Launch just ledgered (C1).
+        self.wallet.launch(self.clock.now_ns)
         self.started = True
 
     def _process_event(self, ev: Event) -> bool:
@@ -236,6 +239,7 @@ class Runtime(
             dq.append({"t_s": ev.ts_ns // 1_000_000_000, "mid": str(ev.payload.get("mid"))})
 
         self.wallet.drip(self.clock.now_ns)
+        self.wallet.release_due(self.clock.now_ns)  # due tranches, mandatory even while dormant
         self._manage_reserve_window()
         self.treasury.open_window(self.stats.reserve_windows)  # reserve-window top-up cap
         if previous_window is not None and previous_window != self.reserve_window_start:
@@ -273,12 +277,15 @@ class Runtime(
         if self._check_termination():
             return False
 
-        self._compute_routed = False
-        self._compute_unaffordable = False
-        self._route(ev)
-        self._record_insolvency_event(ev)
-        if self._check_termination():
-            return False
+        if self.dormancy is None:
+            self._compute_routed = False
+            self._compute_unaffordable = False
+            self._route(ev)
+            self._record_insolvency_event(ev)
+            if self._check_termination():
+                return False
+        # Dormant (C2): no paid cognition is routed; the maintenance below still runs,
+        # the fills, treasury and releases above already did.
 
         self._settle_due_forecasts()
         self._censor_stale_judgements()
@@ -412,14 +419,72 @@ class Runtime(
             self.return_events[subject] = event
 
     def _check_termination(self) -> bool:
-        reason = self.termination.check(self.wallet, self.clock.now_ns)
+        """Kill on a terminal reason; pause and resume paid cognition on the budget (C2).
+
+        Dormancy is entered when the kernel reports ``budget_dormant`` or when the
+        compute insolvency streak reaches its limit while locked backing and a
+        scheduled release remain. It is left once the wallet can afford the
+        cheapest seat again and, for an insolvency entry, a release has landed
+        since, so a provider shortfall is not retried on the same money. Both
+        transitions are ledgered before the state changes.
+        """
+        now_ns = self.clock.now_ns
+        reason = self.termination.check(self.wallet, now_ns,
+                                        cheapest_seat_micro=self._cheapest_seat_micro())
+        if reason == DORMANT:
+            self._enter_dormancy(now_ns, trigger="wallet")
+            return False
+        if reason is None and self.dormancy is not None and (
+            self.dormancy["trigger"] == "wallet"
+            or self.wallet.released_tranches > self.dormancy["released"]
+        ):
+            self._exit_dormancy(now_ns)
         if reason is None and self.insolvency_count >= self.m.treasury.insolvency_events:
+            if self.wallet.locked > 0 and self.wallet.next_release_ns is not None:
+                self._enter_dormancy(now_ns, trigger="insolvency")
+                return False
             reason = "insolvency:compute"
         if reason is None:
             return False
         self._settle_due_forecasts()
         self.termination.kill(reason)
         return True
+
+    def _cheapest_seat_micro(self) -> int | None:
+        """The reserve ceiling of the cheapest live seat, as routing would probe it."""
+        from factorylab.world.models import ModelRequest
+
+        ceilings = []
+        for action_id, asm in self.assemblies.items():
+            if action_id in self.retired_assemblies:
+                continue
+            probe = ModelRequest(asm.spec.model_id, asm.spec.system_prompt,
+                                 ({"role": "user", "content": ""},), asm.spec.max_tokens)
+            try:
+                ceiling = asm.model.ceiling(probe)
+            except Exception:
+                continue
+            ceilings.append(ceiling * (1 if asm.spec.model_id.startswith("x402:") else 2))
+        return min(ceilings) if ceilings else None
+
+    def _enter_dormancy(self, now_ns: int, *, trigger: str) -> None:
+        if self.dormancy is not None:
+            return
+        record = {"since_ns": now_ns, "trigger": trigger,
+                  "released": self.wallet.released_tranches,
+                  "next_release_ns": self.wallet.next_release_ns}
+        self.ledger.append({"kind": "dormant", "state": "entered", "ts": now_ns,
+                            "trigger": trigger, "locked": self.wallet.locked,
+                            "unlocked": self.wallet.unlocked,
+                            "next_release_ns": self.wallet.next_release_ns, "n": self.n})
+        self.dormancy = record
+
+    def _exit_dormancy(self, now_ns: int) -> None:
+        self.ledger.append({"kind": "dormant", "state": "exited", "ts": now_ns,
+                            "since_ns": self.dormancy["since_ns"], "locked": self.wallet.locked,
+                            "unlocked": self.wallet.unlocked, "n": self.n})
+        self.dormancy = None
+        self.insolvency_count = 0
 
     def _start_return(self, handle: str) -> None:
         """Each decision has one consequence account before compute or effects."""

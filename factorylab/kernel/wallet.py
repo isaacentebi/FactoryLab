@@ -29,6 +29,39 @@ class DripSchedule:
 
 
 @dataclass(frozen=True)
+class ReleaseSchedule:
+    """Locked backing leaves escrow in ascending tranches timed from the ledgered Launch.
+
+    Each entry is ``(at_ns, amount_micro)``: ``at_ns`` is an offset from the
+    launch timestamp, never an absolute time, so the same manifest defines the
+    same schedule whenever the world happens to launch.
+    """
+
+    releases: tuple[tuple[int, Money], ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.releases, tuple) or not self.releases:
+            raise ValueError("a release schedule needs at least one tranche")
+        previous = -1
+        for item in self.releases:
+            if not isinstance(item, tuple) or len(item) != 2:
+                raise TypeError("each release is an (at_ns, amount_micro) pair")
+            at_ns, amount = item
+            if type(at_ns) is not int or at_ns < 0:
+                raise TypeError("release offsets must be nonnegative integer nanoseconds")
+            require_money(amount, nonnegative=True)
+            if amount == 0:
+                raise ValueError("release tranches must be positive")
+            if at_ns < previous:
+                raise ValueError("release offsets must be ascending")
+            previous = at_ns
+
+    @property
+    def total(self) -> Money:
+        return sum(amount for _, amount in self.releases)
+
+
+@dataclass(frozen=True)
 class Reservation:
     id: str
     amount: Money
@@ -52,19 +85,33 @@ class Wallet:
         clock_ns: Callable[[], int] = time_ns,
         reported_cost_multiple: int = 10,
         balance_floor_micro: Money = 0,
+        locked_micro: Money = 0,
+        release_schedule: ReleaseSchedule | None = None,
     ) -> None:
         if type(reported_cost_multiple) is not int or reported_cost_multiple < 1:
             raise ValueError("reported cost multiple must be a positive integer")
         self.__reported_cost_multiple = reported_cost_multiple
         require_money(initial, nonnegative=True)
         require_money(balance_floor_micro, nonnegative=True)
+        require_money(locked_micro, nonnegative=True)
         self.__balance_floor_micro = balance_floor_micro
         if drip_schedule is not None and not isinstance(drip_schedule, DripSchedule):
             raise TypeError("drip_schedule must be immutable DripSchedule")
+        if release_schedule is not None and not isinstance(release_schedule, ReleaseSchedule):
+            raise TypeError("release_schedule must be immutable ReleaseSchedule")
+        if locked_micro > initial:
+            raise ValueError("locked backing cannot exceed the initial balance")
+        if (release_schedule.total if release_schedule is not None else 0) != locked_micro:
+            raise ValueError("release tranches must sum to the locked backing")
         self.__ledger = ledger
         self.__initial = self.__balance = initial
         self.__exhausted = initial <= self.__balance_floor_micro
         self.__schedule = drip_schedule
+        self.__locked_micro = locked_micro
+        self.__locked = locked_micro
+        self.__release_schedule = release_schedule
+        self.__released = 0
+        self.__launch_ns: int | None = None
         self.__clock = clock_ns
         self.__reservations: dict[str, Reservation] = {}
         self.__next_reservation = 0
@@ -76,7 +123,8 @@ class Wallet:
         self.__novelty_holds: dict[str, tuple[int | None, Money]] = {}
         self.__uncertain_bills: dict[str, dict] = {}
         ledger._claim_wallet(self)
-        self._log("initial", initial, initial, "", "initial")
+        self._log("initial", initial, initial, "", "initial",
+                  **({"locked": locked_micro} if locked_micro else {}))
 
     @property
     def ledger(self) -> Ledger:
@@ -96,8 +144,96 @@ class Wallet:
 
     @property
     def unhistoried_available(self) -> Money:
-        """Unhistoried work can use either ordinary money or the protected share."""
-        return self.__balance - sum(item.amount for item in self.__reservations.values())
+        """Unhistoried work can use either ordinary money or the protected share, never escrow."""
+        return self.unlocked - sum(item.amount for item in self.__reservations.values())
+
+    @property
+    def locked(self) -> Money:
+        """Backing not yet released: booked in the balance, spendable by nobody."""
+        return self.__locked
+
+    @property
+    def unlocked(self) -> Money:
+        """Balance less locked backing; a venue loss can carry it below zero until a release."""
+        return self.__balance - self.__locked
+
+    @property
+    def release_schedule(self) -> ReleaseSchedule | None:
+        """The construction-time release schedule is immutable for this wallet's lifetime."""
+        return self.__release_schedule
+
+    @property
+    def launch_ns(self) -> int | None:
+        """The ledgered Launch timestamp every release offset counts from, once anchored."""
+        return self.__launch_ns
+
+    @property
+    def released_tranches(self) -> int:
+        """How many scheduled tranches have already moved from locked to unlocked."""
+        return self.__released
+
+    @property
+    def next_release_ns(self) -> int | None:
+        """Absolute time of the next unreleased tranche, or None when nothing remains."""
+        schedule = self.__release_schedule
+        if (schedule is None or self.__launch_ns is None
+                or self.__released >= len(schedule.releases)):
+            return None
+        return self.__launch_ns + schedule.releases[self.__released][0]
+
+    def launch(self, launch_ns: int) -> None:
+        """Anchor the release schedule to the ledgered Launch timestamp, exactly once."""
+        if type(launch_ns) is not int or launch_ns < 0:
+            raise ValueError("launch_ns must be nonnegative integer nanoseconds")
+        if self.__launch_ns is not None:
+            if self.__launch_ns != launch_ns:
+                raise ValueError("wallet is already anchored to a different launch")
+            return
+        if self.__release_schedule is not None:
+            self._log("anchor", 0, self.balance, "", "launch", launch_ns=launch_ns,
+                      locked=self.__locked)
+        self.__launch_ns = launch_ns
+
+    def release(self, target: "Reservation | int") -> Money | None:
+        """Release a hold (``Reservation``) or every due tranche (``now_ns``, C1).
+
+        The two releases share a name because both return something to the
+        spendable balance without moving money: a cancelled hold gives back its
+        ceiling, a due tranche gives back its backing.
+        """
+        if type(target) is int:
+            return self.release_due(target)
+        self.release_hold(target)
+        return None
+
+    def release_due(self, now_ns: int) -> Money:
+        """Move every due tranche from locked to unlocked, once each, ledgered as ``release``.
+
+        No money is created: the balance is unchanged and only its classification
+        moves, so conservation holds before and after. Nothing is due before the
+        wallet is anchored to its Launch, and a final ledger releases nothing.
+        """
+        if type(now_ns) is not int or now_ns < 0:
+            raise ValueError("now_ns must be nonnegative integer nanoseconds")
+        schedule = self.__release_schedule
+        if schedule is None or self.__launch_ns is None or self.__ledger.final:
+            return 0
+        released = 0
+        while self.__released < len(schedule.releases):
+            offset, amount = schedule.releases[self.__released]
+            due_ns = self.__launch_ns + offset
+            if due_ns > now_ns:
+                break
+            locked_after = self.__locked - amount
+            self.__ledger.append({
+                "kind": "release", "tranche": self.__released, "amount": amount,
+                "due_ns": due_ns, "locked_after": locked_after,
+                "balance_after": self.balance, "ts": self.__clock(),
+            })
+            self.__locked = locked_after
+            self.__released += 1
+            released += amount
+        return released
 
     def bind_novelty(self, reserve, unhistoried: Callable[[str, str], bool]) -> None:
         """Bind one kernel reserve and a trusted action classifier for this wallet's lifetime."""
@@ -255,7 +391,7 @@ class Wallet:
         self._commit(reservation, reservation.amount)
         self.__uncertain_bills[reservation.id] = bill
 
-    def release(self, reservation: Reservation) -> None:
+    def release_hold(self, reservation: Reservation) -> None:
         """Cancel one hold without moving money, including after balance exhaustion."""
         self._held(reservation)
         self._log(
@@ -335,6 +471,8 @@ class Wallet:
             "initial": self.__initial, "balance": self.__balance, "schedule": self.__schedule,
             "exhausted": self.__exhausted, "reported_cost_multiple": self.__reported_cost_multiple,
             "balance_floor_micro": self.__balance_floor_micro,
+            "locked_micro": self.__locked_micro, "release_schedule": self.__release_schedule,
+            "locked": self.__locked, "released": self.__released, "launch_ns": self.__launch_ns,
             "reservations": [replace(r, _issuer=None) for r in self.__reservations.values()],
             "next_reservation": self.__next_reservation, "drip_count": self.__drip_count,
             "drips": self.__drips, "settlements": self.__settlements, "commits": self.__commits,
@@ -352,6 +490,20 @@ class Wallet:
             raise ValueError("wallet reported-cost policy differs")
         if state.get("balance_floor_micro", 0) != self.__balance_floor_micro:
             raise ValueError("wallet balance floor differs")
+        if (state.get("locked_micro", 0) != self.__locked_micro
+                or state.get("release_schedule") != self.__release_schedule):
+            raise ValueError("wallet endowment configuration differs")
+        released = state.get("released", 0)
+        schedule = self.__release_schedule
+        tranches = schedule.releases if schedule is not None else ()
+        if type(released) is not int or not 0 <= released <= len(tranches):
+            raise ValueError("checkpoint released tranche count is invalid")
+        locked = self.__locked_micro - sum(amount for _, amount in tranches[:released])
+        if state.get("locked", locked) != locked:
+            raise ValueError("checkpoint locked backing disagrees with its released tranches")
+        launch_ns = state.get("launch_ns")
+        if launch_ns is not None and (type(launch_ns) is not int or launch_ns < 0):
+            raise ValueError("checkpoint launch anchor is invalid")
         for name in ("balance", "drips", "settlements", "commits"):
             require_money(state[name])
         if state["balance"] != (
@@ -367,6 +519,7 @@ class Wallet:
         ):
             setattr(self, f"_Wallet__{name}", state[name])
         self.__reservations = holds
+        self.__locked, self.__released, self.__launch_ns = locked, released, launch_ns
         self.__exhausted = exhausted or self.__balance <= self.__balance_floor_micro
         self.__novelty_holds = dict(state.get("novelty_holds", {}))
         self.__uncertain_bills = dict(state.get("uncertain_bills", {}))

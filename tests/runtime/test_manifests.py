@@ -70,6 +70,67 @@ def test_duration_strings() -> None:
     assert manifest_from_dict(d).novelty.window_ns == 36 * NS_PER_HOUR
 
 
+def test_endowment_section_parses_validates_and_keeps_the_identity_of_worlds_without_it():
+    from factorylab.runtime.worlds import NS_PER_DAY, EndowmentSpec
+
+    default = manifest_from_dict(_base())
+    assert default.endowment == EndowmentSpec() and "endowment" not in default.canonical_json()
+    raw = _base()
+    raw["endowment"] = {"locked_micro": 0, "releases": []}
+    assert manifest_from_dict(raw).manifest_hash() == default.manifest_hash()
+    raw["endowment"] = {"locked_micro": 6_000_000, "releases": [
+        {"at": "7d", "amount_micro": 2_000_000}, {"at": "14d", "amount_micro": 4_000_000}]}
+    m = manifest_from_dict(raw)
+    assert m.endowment == EndowmentSpec(6_000_000, ((7 * NS_PER_DAY, 2_000_000),
+                                                    (14 * NS_PER_DAY, 4_000_000)))
+    assert m.manifest_hash() != default.manifest_hash()
+    for bad, message in (
+        ({"locked_micro": 6_000_000, "releases": [{"at": "7d", "amount_micro": 1}]}, "sum"),
+        ({"locked_micro": 20_000_000, "releases": [{"at": "7d", "amount_micro": 20_000_000}]},
+         "exceed"),
+        ({"locked_micro": 2, "releases": [{"at": "7d", "amount_micro": 1},
+                                          {"at": "6d", "amount_micro": 1}]}, "ascending"),
+        ({"locked_micro": 1, "releases": [{"at": -1, "amount_micro": 1}]}, "nonnegative"),
+        ({"locked_micro": 0, "releases": [{"at": "1d", "amount_micro": 0}]}, "positive"),
+        ({"locked_micro": 1, "releases": [{"at": "1d", "amount_micro": 1.0}]}, "integer"),
+        ({"locked_micro": 1, "releases": [{"at": "1d", "amount_micro": 1, "x": 1}]}, "exactly"),
+        ({"locked_micro": "1", "releases": [{"at": "1d", "amount_micro": 1}]}, "integer"),
+        ({"locked_micro": 1, "releases": [{"at": "1d", "amount_micro": 1}], "extra": 1}, "only"),
+    ):
+        raw = _base()
+        raw["endowment"] = bad
+        with pytest.raises(ValueError, match=message):
+            manifest_from_dict(raw)
+
+
+def test_notes_rent_rate_defaults_keeps_the_legacy_key_readable_and_hashes_stably():
+    from factorylab.runtime.notes import NS_PER_DAY, NotesSpec, accrue
+
+    default = manifest_from_dict(_base())
+    assert default.notes.micro_per_byte_day == "0.04" and default.notes.byte_window_micro == 1
+    assert "micro_per_byte_day" not in default.canonical_json()
+    # The default rate makes the 256 KiB cap cost about one cent a day.
+    micro, carry = accrue({"bytes": 262144, "rent_ns": 0, "rent_carry": 0}, NS_PER_DAY,
+                          default.notes)
+    assert micro == 10485 and carry > 0
+    for section in ({"byte_window_micro": 1}, {"micro_per_byte_day": "0.04"},
+                    {"micro_per_byte_day": "0.040"}):
+        raw = _base()
+        raw["notes"] = section
+        assert manifest_from_dict(raw).manifest_hash() == default.manifest_hash()
+    raw = _base()
+    raw["notes"] = {"byte_window_micro": 3, "micro_per_byte_day": "1"}
+    m = manifest_from_dict(raw)
+    assert m.notes == NotesSpec(byte_window_micro=3, micro_per_byte_day="1")
+    assert m.manifest_hash() != default.manifest_hash()
+    assert NotesSpec(micro_per_byte_day=2).micro_per_byte_day == "2"
+    for value in (0, "0", "-1", 0.04, "abc", "NaN", "Infinity", None):
+        raw = _base()
+        raw["notes"] = {"micro_per_byte_day": value}
+        with pytest.raises(ValueError, match="notes"):
+            manifest_from_dict(raw)
+
+
 def test_cli_manifest_command(capsys) -> None:
     assert main(["manifest", "--world", "scripted"]) == 0
     out = capsys.readouterr().out
