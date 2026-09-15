@@ -79,6 +79,9 @@ def close_window(rt, values: dict[str, float]) -> None:
     # Activity is a separate observation even when the charter has no registration card.
     profile["registrations"] = values.get("registrations", 0.0)
     profile["revision"] = values.get("revision_rate", 0.0)
+    # Consequence outcomes: a rising paid-off rate or realized P&L is a live frontier.
+    profile["paid_off"] = values.get("consequence_paid_off_rate")
+    profile["realized_pnl"] = values.get("realized_pnl_usd")
     current = {
         "index": rt.window.index, "charter_edition": rt.charter.edition,
         "profile": profile,

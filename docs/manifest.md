@@ -112,12 +112,13 @@ settings".
 | `treasury.max_forward_fees_per_window` | Exact USD decimal string or integer, nonnegative | `"1"` | Per-reserve-window cap on forwarding fees quoted for submitted exits; a failed exit still counts |
 | `treasury.forward_wait_windows` | Positive integer | `2` | Reserve windows a forwarded mint may stay unobserved before the exit strands recoverably; absent or default keys leave the manifest hash unchanged |
 | `committee.seats` | Integer, at least 3 so the existing three core roles can be covered | `5` | Configured resource bound, fixed for a run |
+| `committee.promise_resolution` | Finite positive number | `0.01` | Fraction of the frozen region's scale a promised move must clear to count; absent or default, it leaves the manifest hash unchanged |
 | `charter.cards[].window.kind` | `"returns"`, `"forecasts"`, or `"windows"` | Required for explicit cards | Executable selector type; its value is population amendable |
 | `charter.cards[].window.n` | Positive integer, never a boolean or float | Required; seed cost and well-formedness cards use `100`, forecast skill uses `50` | Population amendable sample horizon |
 | `charter.cards[].window.per` | `"role"`, `"assembly"`, or null | Required in JSON; omitted in TOML means null. Seed cost and well-formedness use `"role"`; forecast skill uses `"assembly"` | Population amendable scope |
 | `charter.cards[].answers_for` | `producer`, `evaluator`, `meta`, `antagonist`, `all`, or any registered emitted kind | Required | Population amendable pricing responsibility |
 | Proposal `predicted_effect.card_id` | Current or proposed card id for amendments; current card id for connectors and retirements | Required; no default | Liability binds to a measurable card |
-| Proposal `predicted_effect.direction` | `increase` or `decrease` | Required; no default | Recorded prediction; grading uses frozen-region compliance |
+| Proposal `predicted_effect.direction` | `increase` or `decrease` | Required; no default | The promise graded against the baseline recorded at activation |
 | Proposal `predicted_effect.window` | Positive integer count of closed reserve windows after activation | Required; no default | Population-authored liability horizon |
 
 The existing `committee.min_settled`, `novelty.window`, `novelty.share`,
@@ -291,12 +292,18 @@ observation version and implementation, and acceptable region. An unavailable
 region is resolved at activation. Its baseline is measured at activation as
 evidence. If activation opens window `i`, horizon `k` settles at the close
 of `i+k-1`.
-The outcome is whether the measured value satisfies the frozen acceptable
-region. `direction` does not determine the outcome. Yes votes predict compliance;
-no votes predict its negation. The score is `1 - (vote - outcome)^2`, recorded
-as `policy-region-brier-v1`. Amendments, connectors and retirements use this
-same liability. Abstentions, failed proposals and missing measurement or region
-evidence are censored, with no fast reward.
+The outcome is whether the promise held against the recorded baseline, not
+whether the region is satisfied. A move counts once it clears
+`committee.promise_resolution` of the frozen region's scale. A card outside its
+region at the baseline kept the promise only by moving in the promised
+`direction` that far; a card already inside kept it by staying inside without
+moving against the promise. A vote that backed a change whose value went the
+wrong way is wrong even if the region still holds. Yes votes predict a kept
+promise; no votes predict its negation. The score is `1 - (vote - outcome)^2`,
+recorded as `policy-promise-brier-v2`; `policy.outcome` carries `baseline`,
+`direction`, `resolution`, `value` and `y`. Amendments, connectors and
+retirements use this same liability. Abstentions, failed proposals and missing
+baseline, measurement or region evidence are censored, with no fast reward.
 Subsequent ballots receive that assembly's private policy-return history.
 
 ## Venice transfer and first move
@@ -558,8 +565,18 @@ or later live regions. Raw reward channels remain available for retrospective an
 Adding a card starts its support history; removing one drops that dimension
 without clearing surviving evidence. Thrash requires k consecutive changes with
 no compliant window. Stable failure requires k same-cell windows with a common
-violated card. Learning death requires k same-cell windows with zero registrations
-and revisions. Learning death's only response is that flag: the reserve reads it
+violated card. Learning death is the frontier gone, not a count of edits (the
+essay: the surplus-generating frontier extinguished or quarantined). It requires
+k same-cell windows with zero registrations and revisions, no improvement in
+consequence outcomes over those windows (the least-squares slope of the
+paid-off rate and of realized P&L both flat or falling; an unmeasured series
+never improves) and a compliance the cards cannot vouch for (in some window of
+the tail a card is violated, unmeasured or without a region; a charter with no
+measured card cannot show compliance). A stable, compliant organisation is not
+learning-dead, nor is a stable one whose outcomes are improving. The window
+profile carries `paid_off` and `realized_pnl` for this, and each `immune.window`
+item publishes the `frontier` evidence (`quiet`, `improving`, `holding` and
+the two slopes). Learning death's only response is that flag: the reserve reads it
 at the next window boundary and grants one extra novelty trial per assembly for
 the window that opens. A grant is spent by the first consequence delivered to an
 assembly beyond `novelty.trials`, and whatever is unspent expires at the next
@@ -1027,12 +1044,19 @@ tranche, or null. The locked amount, the schedule, the anchor and the count of
 released tranches are checkpointed and checked on restore: a checkpoint whose
 locked backing disagrees with its released tranches is refused. The wake's
 `pots.current` carries `locked_micro`, `unlocked_micro`, `next_release_ns` and
-`dormant`. The wake's `money.in_by_class` has a `release` class, but on `main`
-it stays at zero: the tranche item's kind is `release`, and the wake's reader
-counts only a `wallet.release` item whose `reason` is `release`, which the
-wallet never writes (a finding, not a design). No per-seat split of a release
-(`base_share`) exists on `main`; a release goes to the wallet's unlocked pool
-as a whole.
+`dormant`. The wake's `money.in_by_class` counts every tranche under its
+`release` class: the wallet's own `release` item carries the tranche's amount
+(a cancelled hold is a `wallet.release` item and moves nothing). The loop then
+classifies each released tranche with `Budget.on_release` (C10): `base_share`
+of what the pool actually holds is split equally across the live seats and the
+remainder stays unallocated, ledgered as `budget {op: "release", amount,
+backed, grants, to_unallocated}`; a tranche the pool does not fully hold
+(shared spending ran it down) refills the pool before any seat is endowed.
+On `main` that split counts seat ids, so a lineage that registered more
+children takes more of every tranche (reviewer P2-07). The R2-B economy change
+(`docs/audits/v5/gpt6-second-reading-triage.md`) splits a release per lineage
+and pays each lineage's share to its root seat; landing in the R2-B economy PR,
+not merged at the time of writing.
 
 ### Dormancy
 
@@ -1255,8 +1279,16 @@ version, served_ns}` through `Treasury.earn`, which a paid call served
 in-process (tests, or a future loop hook) reaches directly. `earn` ledgers the
 item and adds to `earned_micro`; it does not credit the integer wallet
 balance. The USDC itself arrived at the reserve address and appears in the
-reserve pot when the rail is next observed. Crediting the earning seat's
-entitlement is contract C10's and is not on `main`.
+reserve pot when the rail is next observed. On `main` the loop books the same
+receipts through `_collect_income` and credits the seat that owns the
+service's program (`_book_income`, reason `income.earned:<service>`) as a
+pool-to-seat reclassification bounded by the pool, like a paid-off credit: the
+root wallet does not grow, and a service whose program has no live owner
+leaves the income in the pool (reviewer P2-05). The R2-B economy change
+(`docs/audits/v5/gpt6-second-reading-triage.md`) books earned income into the
+root wallet as new money, like venue P&L, credits the seller from that new
+money, and treats a settled receipt as a paid-off consequence; landing in the
+R2-B economy PR, not merged at the time of writing.
 
 ### The three income classes
 

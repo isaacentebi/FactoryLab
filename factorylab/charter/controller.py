@@ -80,6 +80,26 @@ def violation(region: CardRegion, value: float) -> float:
     return _number(distance / region.scale, "violation")
 
 
+def promise_kept(direction: str, baseline: float, value: float, region: CardRegion, *,
+                 resolution: float) -> bool:
+    """Grade a promise against its recorded baseline, never against compliance alone.
+
+    A move counts once it clears ``resolution`` of the region's scale. A card that
+    was outside its region kept the promise only by moving the promised way that
+    far. A card already inside kept it by staying inside without moving against
+    the promise; a move the wrong way is a broken promise even if the region holds.
+    """
+    if direction not in ("increase", "decrease"):
+        raise ValueError("direction must be increase or decrease")
+    if not isfinite(resolution) or resolution <= 0:
+        raise ValueError("resolution must be finite and positive")
+    step = resolution * region.scale
+    moved = (value - baseline) * (1 if direction == "increase" else -1)
+    if violation(region, baseline) == 0:
+        return violation(region, value) == 0 and moved > -step
+    return moved >= step
+
+
 @dataclass(frozen=True)
 class _CardState:
     region: CardRegion | None
