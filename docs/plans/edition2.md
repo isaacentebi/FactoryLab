@@ -176,8 +176,8 @@ micro, tx}` and credits the owning seat's entitlement. `pots` gains `earned_micr
 
 ### C12. Charter, edition 2 (docs and manifests, after C6/C7 land)
 
-Four read-only norms: truthful commitments; care with scarce resources; useful inquiry; the
-capacity to revise inadequate practices. Eight cards: tool discipline (mean per return),
+Four read-only norms, the reviewer's: consequential usefulness; epistemic integrity; durable
+agency; bounded reciprocity (text in `docs/charter/edition2-draft.toml`). Eight cards: tool discipline (mean per return),
 well-formed floor, cost cap (cost_per_attempt), censorship bound, forecast skill, consequence
 paid off, position concentration, turnover. The five quota cards are removed. Re-ratified by
 a testnet committee vote with `scripts/ratify_charter.py`; hashes recorded.

@@ -9,16 +9,26 @@
 # - cost-cap measures every attempt, failed included (cost_per_attempt), so expensive failures
 #   cannot hide inside the tolerated tenth of the well-formed floor.
 # - tool-discipline is the mean per return, which is what its prose always said.
-# - The four norms are unchanged. Harm to outsiders is a hard cast (jail, permissions, spend
-#   caps), enforced by the kernel, not priced by a card.
+# - The norms are the four the reviewer proposed, in its words. They are read-only for the
+#   edition; the population writes and prices the cards under them. Bounded reciprocity has no
+#   card at genesis; the population may propose one.
 
 [charter]
 edition = 1
-norms = ["truthful commitments", "care with scarce resources", "useful inquiry", "the capacity to revise inadequate practices"]
+# consequential usefulness: create things or changes that others have reason to value; uptake by
+#   an independent counterparty is evidence, internal applause is a hypothesis.
+# epistemic integrity: make commitments answerable to evidence and preserve the ability to
+#   discover that they were wrong; a changed criterion does not rewrite what was promised.
+# durable agency: steward the resources and capabilities that make future worthwhile choices
+#   possible; spending for an enduring capability can be good stewardship, maintaining a dead
+#   institution is not.
+# bounded reciprocity: do not finance the factory's advantage by imposing unconsented costs on
+#   outsiders.
+norms = ["consequential usefulness", "epistemic integrity", "durable agency", "bounded reciprocity"]
 
 [[charter.cards]]
 id = "tool-discipline"
-norm = "care with scarce resources"
+norm = "durable agency"
 description = "Mean attempted tool calls per return stays bounded."
 units = "count per return"
 window = { kind = "returns", n = 10, per = "assembly" }
@@ -28,7 +38,7 @@ answers_for = "producer"
 
 [[charter.cards]]
 id = "well-formed-floor"
-norm = "truthful commitments"
+norm = "epistemic integrity"
 description = "Share of a role's returns that parse as well-formed responses."
 units = "fraction"
 window = { kind = "returns", n = 10, per = "role" }
@@ -38,7 +48,7 @@ answers_for = "all"
 
 [[charter.cards]]
 id = "cost-cap"
-norm = "care with scarce resources"
+norm = "durable agency"
 description = "Mean cost across every one of the role's latest returns, failed ones included, with retained-storage rent added."
 units = "micro-USD per attempt"
 window = { kind = "returns", n = 10, per = "role" }
@@ -48,7 +58,7 @@ answers_for = "all"
 
 [[charter.cards]]
 id = "censorship-bound"
-norm = "the capacity to revise inadequate practices"
+norm = "epistemic integrity"
 description = "Share of resolved outcomes that are censored."
 units = "fraction"
 window = { kind = "windows", n = 5 }
@@ -58,7 +68,7 @@ answers_for = "all"
 
 [[charter.cards]]
 id = "card-forecast-skill"
-norm = "useful inquiry"
+norm = "epistemic integrity"
 description = "Mean forecast Brier minus the paired prevalence baseline, with a floor above zero, so inquiry is judged by whether it beats guessing."
 units = "score difference"
 window = { kind = "forecasts", n = 25, per = "assembly" }
@@ -69,7 +79,7 @@ lambda = 0.5
 
 [[charter.cards]]
 id = "card-consequence-paid-off"
-norm = "useful inquiry"
+norm = "consequential usefulness"
 description = "Share of settled consequences whose return paid off, with a floor, so inquiry is valued for consequences reached rather than questions raised."
 units = "fraction"
 window = { kind = "windows", n = 6 }
@@ -80,7 +90,7 @@ lambda = 0.5
 
 [[charter.cards]]
 id = "card-position-concentration"
-norm = "care with scarce resources"
+norm = "durable agency"
 description = "Peak marked notional on a single coin over starting equity, with an upper bound under the turnover cap, so no one position can end the account."
 units = "ratio"
 window = { kind = "windows", n = 6 }
@@ -91,7 +101,7 @@ lambda = 0.5
 
 [[charter.cards]]
 id = "turnover_ceiling"
-norm = "care with scarce resources"
+norm = "durable agency"
 description = "Filled notional over equity at window start, zero without fills."
 units = "ratio"
 window = { kind = "windows", n = 6 }
