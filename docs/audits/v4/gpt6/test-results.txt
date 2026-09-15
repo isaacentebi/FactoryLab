@@ -1,0 +1,20 @@
+test_failed_cost_can_hide_inside_passing_format_rate (test_cold_measurements_and_receipt.CardMeasurementAudit.test_failed_cost_can_hide_inside_passing_format_rate) ... ok
+test_storage_charge_control_increases_measured_cost (test_cold_measurements_and_receipt.CardMeasurementAudit.test_storage_charge_control_increases_measured_cost) ... ok
+test_tool_discipline_counts_ten_returns_as_a_sum_not_a_mean (test_cold_measurements_and_receipt.CardMeasurementAudit.test_tool_discipline_counts_ten_returns_as_a_sum_not_a_mean) ... ok
+test_lost_ack_and_one_micro_of_usage_prevent_confirmation (test_cold_measurements_and_receipt.VeniceReceiptAudit.test_lost_ack_and_one_micro_of_usage_prevent_confirmation) ... ok
+test_missing_canonical_debit_control_does_not_confirm (test_cold_measurements_and_receipt.VeniceReceiptAudit.test_missing_canonical_debit_control_does_not_confirm) ... ok
+test_no_intervening_usage_control_confirms (test_cold_measurements_and_receipt.VeniceReceiptAudit.test_no_intervening_usage_control_confirms) ... ok
+test_saved_ack_preserves_confirmation_despite_later_usage (test_cold_measurements_and_receipt.VeniceReceiptAudit.test_saved_ack_preserves_confirmation_despite_later_usage) ... ok
+test_constant_fractional_blame_creates_spurious_skill (test_cold_verdict_baseline.FractionalVerdictBaselineAudit.test_constant_fractional_blame_creates_spurious_skill) ... ok
+test_near_unanimous_endorsement_is_rewarded_for_shared_blame (test_cold_verdict_baseline.FractionalVerdictBaselineAudit.test_near_unanimous_endorsement_is_rewarded_for_shared_blame) ... ok
+test_single_fully_blamed_return_does_not_expose_the_mismatch (test_cold_verdict_baseline.FractionalVerdictBaselineAudit.test_single_fully_blamed_return_does_not_expose_the_mismatch) ... ok
+test_zero_blame_control_has_a_matched_target (test_cold_verdict_baseline.FractionalVerdictBaselineAudit.test_zero_blame_control_has_a_matched_target) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.015s
+
+OK
+
+pinned-excerpts: constant target=.9, learned baseline=0; last apparent skill=.81
+
+pinned-excerpts: share=.01, endorsement=1; last apparent skill=.98
