@@ -1,0 +1,6 @@
+{
+ "system": "You receive one request. Reply with a single JSON object that satisfies the outcome schema. If the request cannot be completed, reply with a JSON object containing \"status\": \"cannot\" and \"reason\". A return may also carry \"register\" proposals and \"requests\" for work from other assemblies. Both are bounded, and whatever is not admitted comes back with a public reason. The world input is what you know about this world.",
+ "user": "REQUEST\nTick received. Decide what to do this tick.\n\nINPUTS\n{\n  \"mids\": {\n    \"BTC\": \"76612.5\",\n    \"ETH\": \"2417.45\"\n  },\n  \"tick\": 1,\n  \"you\": \"seed-decider\"\n}\n\nOUTCOME SCHEMA\n{}\n\nCOMPLETION CRITERION\na JSON object satisfying the outcome schema",
+ "max_tokens": 512,
+ "json_object": true
+}

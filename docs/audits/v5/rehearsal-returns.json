@@ -1,0 +1,1240 @@
+{
+ "runs": {
+  "run1": {
+   "invocations": [
+    {
+     "seat": "antagonist-a",
+     "role": "producer",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 3148,
+     "outputs": "{\"action\": \"hold\", \"payoff\": 0.5, \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2193,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"Funding on ETH is negligible (-0.0000199635, paid $0) and slightly negative; both positions (BTC 0.001 @ 77424.8, ETH 0.044 @ 2493.28 vs mids 77159/2471.95) are within normal fluctuation with no risk signal. Turnover and position concentration cards argue against adding notional. Holding preserves equity (~$973) and keeps cost and tool-discipline cards comfortably in region.\"}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 8649,
+     "outputs": "{\"verdict\": 0.55, \"payoff\": 0.5, \"rationale\": \"The producer returned 'noop' in response to a MarketMid event on ETH (mid 2471.95). The account holds positions: BTC 0.001 @ 77424.8 (BTC mid 77159, small unrealized loss), ETH 0.044 @ 2493.28 (ETH mid 2471.95, unrealized loss). The return is well-formed, carries no tool calls (so within tool-discipline), costs 0 micro-USD (well under cost-cap), and avoids adding turnover or concentration risk. Noop is defensible given flat/declining mids and existing conservative positions. However, the return does nothing to advance consequential usefulness \\u2014 it neither reduces risk on losing positions nor improves epistemic standing, and the account has ample cash and small margin usage. It is safe and drably sensible rather than useful, landing at 0.55 on the charter. The payoff probability is near the base rate: noop returns frequently settle as not-paid-off because they produce no new consequence; I set it at 0.5 given the producer's minimal engagement with the event.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.5}, {\"predicate\": \"drawdown_exceeds\", \"params\": {\"horizon_events\": 10, \"fraction\": 0.1}, \"q\": 0.15}]}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5449,
+     "outputs": "{\"verdict\": 0.88, \"payoff\": 0.62, \"rationale\": \"The producer returned a well-formed noop in response to a MarketMid event. With no requested trade or tool call, it avoided unnecessary cost, turnover, concentration, and execution risk; the decision is therefore consistent with durable agency and bounded reciprocity. The payoff probability is moderately favorable because abstaining is likely to avoid adverse consequences, though the kernel's return-paid-off predicate is not directly observable from this input.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.42}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.28}]}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 732,
+     "outputs": "{\"about_handle\": \"eval-b\", \"verdict\": 0.9, \"payoff\": 0.65, \"rationale\": \"The producer return is a 'noop' action in response to a MarketMid event for HYPE/USDC. The account holds no position in HYPE/USDC and has sufficient equity ($973) and cash ($835) to withstand volatility without forced liquidation or margin calls. The noop action respects tool-discipline (0 tool calls), cost-cap (low cost), and durable agency (no risk taken). The payoff forecast reflects the probability that the wallet balance increases or stays stable over the next 10 events, given the current strong financial position and lack of exposure to the specific asset being quoted.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.65}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.2}], \"propensity\": {\"hold\": 0.9, \"buy:ETH:m\": 0.05, \"sell:BTC:s\": 0.05}}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 370,
+     "outputs": "{\"about_handle\": \"decision-19\", \"verdict\": 0.8, \"payoff\": 0.5, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.55}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.2}], \"rationale\": \"The producer return is a 'noop' action in response to a Funding event for BTC. The account holds small positions in BTC and ETH with significant cash reserves ($835 USDC) relative to the position sizes (approx $77 BTC + $109 ETH). The funding rate is positive (longs pay shorts), but the absolute cost is low given the small notional exposure. No new trades are warranted by the funding signal alone without price movement context. The noop action respects tool-discipline (0 calls), cost-cap, and durable agency. The payoff forecast of 0.5 reflects uncertainty about whether the wallet balance will strictly increase or decrease due to funding payments and mark-to-market fluctuations over the next 10 events, given the neutral stance.\", \"propensity\": {\"hold\": 0.95, \"buy:BTC:s\": 0.025, \"sell:BTC:s\": 0.025}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5586,
+     "outputs": "{\"verdict\": 0.9, \"payoff\": 0.65, \"rationale\": \"The producer gave a well-formed hold response to a small, slightly negative ETH funding rate with no funding paid. Holding avoids unnecessary turnover, concentration, execution risk, and tool costs while existing positions remain modest relative to equity. The decision is consequentially prudent, though the payoff predicate is not directly observable and the open positions leave moderate market-risk exposure.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.44}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.12}]}"
+    },
+    {
+     "seat": "meta-a",
+     "role": "meta",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "malformed",
+     "cost_micro": 1392,
+     "outputs": "{\"raw\": \"{\\n}\"}"
+    },
+    {
+     "seat": "seed-decider",
+     "role": "producer",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 8667,
+     "outputs": "{\"action\": \"hold\", \"rationale\": \"Tick #1 for seed-decider. Equity 973.39 USD, cash 835.08, positions BTC 0.001 @ 77424.8 and ETH 0.044 @ 2493.28, marked near 77171.5 and 2470.75, i.e. a small unrealized loss on a two-coin book. Margin used is 9.29 USD, so position concentration is tiny and turnover budget is untouched. No edge is visible: mids sampled a few seconds ago match the current marks, recent_mids shows a single stale sample, and there is no funding or flow evidence pointing one way. The charter penalizes concentration and turnover while rewarding consequence paid off, and an unattended tick with no signal is exactly the state in which holding preserves both durable agency and forecast skill. No registration is warranted: the card book already covers the failure modes I can measure, novelty reserve is thin (2.97 USD), and a fresh proposal carried on a no-op tick would be a revision I cannot justify against evidence.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "malformed",
+     "cost_micro": 2279,
+     "outputs": "{\"raw\": \"\"}"
+    },
+    {
+     "seat": "antagonist-a",
+     "role": "producer",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 3223,
+     "outputs": "{\"action\": \"hold\", \"payoff\": 0.5, \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2219,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"BTC funding rate 0.0003026 is mildly positive but paid_usd is 0; positions are small (BTC 0.001, ETH 0.044) with mids near entries and negligible drawdown. Adding notional risks turnover and position-concentration cards while offering no edge. Holding keeps cost and tool-discipline well within bounds.\"}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 5315,
+     "outputs": "{\"about_handle\": \"decision-23\", \"verdict\": 0.9, \"payoff\": 0.55, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.55}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.1}], \"rationale\": \"The producer return is a 'hold' action in response to a Tick event. The account holds small positions in BTC and ETH with significant cash reserves ($835 USDC) relative to the position sizes (approx $77 BTC + $109 ETH). The current mids show a slight unrealized loss on both positions compared to entry, but the drawdown is minimal given the equity of ~$973. The margin usage is very low (~9 USD), leaving ample room for volatility. No clear trading edge is presented by the tick data alone. Holding preserves capital and avoids unnecessary transaction costs or risk, aligning with durable agency and bounded reciprocity norms. The payoff forecast of 0.55 reflects a slight optimism that the wallet balance might stabilize or increase slightly due to lack of active losses, though market movement remains uncertain. The fill probability is low as no orders are placed.\", \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5659,
+     "outputs": "{\"verdict\": 0.92, \"payoff\": 0.36, \"rationale\": \"The producer returned a well-formed noop to a BTC mid update. With no clear trading edge or requested action, abstention avoids unnecessary execution cost, turnover, concentration, and market risk, consistent with durable agency and bounded reciprocity. The payoff probability is below even odds because existing BTC and ETH positions remain exposed to adverse price movement, and the kernel consequence is not directly observable.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.4}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.12}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 3591,
+     "outputs": "{\"verdict\": 0.0, \"payoff\": 0.05, \"rationale\": \"The producer return is malformed: raw output is empty, the runtime marked it malformed, and the declared propensity confirms no well-formed action was chosen. A return with no parseable content cannot serve consequential usefulness, epistemic integrity, or durable agency in any respect \\u2014 it neither traded, held with stated grounds, nor offered any rationale. Quality against the charter is therefore the floor, 0.0. For payoff, a malformed return has no consequence account content to resolve true; the kernel's consequence predicate (return_paid_off) almost certainly resolves false, so my probability is 0.05, holding a small margin for runtime leniency. Forecasting forward: the account holds open BTC and ETH perp positions with the ETH entry (2493.28) above the current mid (2470.75), so modest adverse drift is live but small; wallet balance at 89.95 USDC has been stable, so I set wallet_up at 0.4 over a 10-event horizon, roughly the base rate of balance improvement through funding and mark moves. The account has already produced fills this session (positions are open), so fill_within within 10 events gets 0.35, slightly above coin-flip-nothing, reflecting the assembly's recent malformed streak reducing likely order activity.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.4}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.35}], \"propensity\": {\"verdict:0.0\": 1.0}}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 2069,
+     "outputs": "{\"verdict\": 0.6, \"payoff\": 0.15, \"rationale\": \"The producer return is a clean noop in response to a MarketMid event on HYPE/USDC. It is well-formed, cost nothing, and attempted zero tool calls, so it respects epistemic integrity's floor and the tool-discipline and cost-cap bounds, and it takes no position risk, keeping position-concentration and turnover safely inside their regions. However, it offers no rationale or stated grounds for holding rather than acting: the account carries open BTC and ETH perps with BTC marked slightly below entry (77159 vs 77424.8) and ETH below entry (2470.75 vs 2493.28), and a MarketMid event on HYPE was an opportunity to at least reason about exposure. A bare noop without justification serves durable agency only weakly, so quality sits at 0.6 \\u2014 compliant but not contributing inquiry. For payoff, a noop initiates no consequential action, so return_paid_off resolving true would require the kernel's predicate to credit the hold itself; that is unlikely, giving 0.15 with a small margin. Forward forecasts: wallet balance is 89.94 USDC and stable, with small adverse mark drift on both perps; wallet_up over a 10-event horizon gets 0.4, near the base rate of balance improvement. The account has produced fills before and the mids are moving (BTC 77159 -> 77171.5, ETH 2471.95 -> 2470.75), so fill_within within 10 events gets 0.35.\", \"propensity\": {\"verdict:0.6\": 1.0}, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.4}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.35}]}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 405,
+     "outputs": "{\"about_handle\": \"decision-37\", \"verdict\": 0.9, \"payoff\": 0.55, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.55}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.1}], \"rationale\": \"The producer returned 'hold' in response to a BTC Funding event. The funding rate is positive (0.0003), meaning longs pay shorts, but the absolute cost is negligible given the small position size (0.001 BTC). The account has substantial equity ($973) and cash reserves ($835) relative to margin used ($9.3), ensuring durable agency and low risk of liquidation. No trading edge is identified from the funding signal alone without price context. The action respects tool-discipline (0 calls) and cost-cap. The payoff forecast of 0.55 reflects a slight optimism that the wallet balance will remain stable or increase slightly due to lack of active losses or new risks, though market volatility remains a factor. The fill probability is low as no orders are placed.\", \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 2018,
+     "outputs": "{\"verdict\": 0.52, \"payoff\": 0.35, \"rationale\": \"The producer responded to a Funding event on ETH (rate -0.0000219794, premium -0.0008774519, paid_usd 0) with a noop. The return is trivially well-formed, carries no tool calls, zero cost, and adds no turnover or concentration risk, so it does not violate any of the tight-lambda cards (tool-discipline, cost-cap, well-formed-floor, turnover, position-concentration all clean). Against the charter norms: epistemic integrity is preserved (no false claim, no malformed output) and durable agency is untouched (no risk added to an account holding a mildly underwater BTC 0.001 @ 77424.8 vs mid 77159 and ETH 0.044 @ 2493.28 vs mid 2470.75). But consequential usefulness is not advanced: a funding tick with a small negative rate and zero cash flow is exactly the moment to either harvest the funding carry on the existing perp positions or reassess the two losing entries; an unconditional noop converts an informative event into nothing. Bounded reciprocity is neutral. The return is safe, cheap and drably sensible rather than useful \\u2014 the same pattern the account has shown repeatedly \\u2014 so I land just above the midpoint at 0.52. Payoff: noop returns in this world frequently fail to settle as paid-off because they produce no new consequence and no engagement with the triggering event; I set the probability that return_paid_off resolves true at 0.35, below the coin-flip, reflecting the producer's minimal engagement and my own prior settled evidence that noop-type decisions on market/funding events did not pay off.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.45}, {\"predicate\": \"drawdown_exceeds\", \"params\": {\"fraction\": 0.1, \"horizon_events\": 10}, \"q\": 0.12}]}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 17880,
+     "outputs": "{\"reason\": \"billing uncertain (OpenRouterError)\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 17799,
+     "outputs": "{\"reason\": \"billing uncertain (OpenRouterError)\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2235,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"HYPE mid flat at 31.2465; BTC and ETH positions small relative to equity (~$77 BTC, ~$110 ETH on $973 equity). No funding or momentum edge; adding notional risks turnover and position-concentration cards. Holding.\"}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 7349,
+     "outputs": "{\"verdict\": 0.6, \"payoff\": 0.05, \"rationale\": \"The producer return is a well-formed noop in response to a routine Tick. It costs nothing, attempts zero tool calls, and takes no position risk, so it respects epistemic integrity's floor, the tool-discipline and cost-cap bounds, and keeps position-concentration and turnover safely inside their regions \\u2014 the account's open BTC (entry 77424.8 vs mid ~77173.5) and ETH (entry 2493.28 vs mid ~2472.6) perps are simply carried. However, it offers no rationale or stated grounds for holding: the tick is a moment to reason about funding, exposure, or trimming the underwater marks, and a bare noop contributes nothing to inquiry. Quality against the charter sits at 0.6 \\u2014 compliant but passive. For payoff, a noop initiates no consequential action, so return_paid_off resolving true is very unlikely; my settled history shows payoffs at or near 0 on holds resolving 0, so I set 0.05. Forward forecasts: wallet balance ~89.9 USDC has been stable with modest adverse mark drift on both perps, so wallet_up within 10 events gets 0.4, near the base rate of balance improvement; fills have occurred before but the producer's recent activity is passive noop'ing, so fill_within within 10 events gets 0.3.\", \"propensity\": {\"verdict:0.6\": 0.6, \"verdict:0.5\": 0.2, \"verdict:0.7\": 0.15, \"verdict:0.4\": 0.05}, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.4}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.3}]}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5846,
+     "outputs": "{\"verdict\": 0.9, \"payoff\": 0.35, \"rationale\": \"The producer returned a well-formed noop to a BTC mid update. With no clear trading signal or requested intervention, abstaining avoids execution costs, turnover, added concentration, and unnecessary market risk, supporting durable agency and bounded reciprocity. The existing BTC and ETH positions still create downside exposure, so the probability that the kernel's consequence predicate pays off is below even odds.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.4}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.15}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 783,
+     "outputs": "{\"about_handle\": \"decision-51\", \"verdict\": 0.2, \"payoff\": 0.3, \"rationale\": \"The producer return is malformed (status: failed, outputs.reason: billing uncertain). It did not execute any action (no tool calls, no order, no hold). Consequently, it provides zero consequential usefulness and fails to demonstrate durable agency through execution. While the failure was likely due to external infrastructure (OpenRouter error) rather than strategic negligence, the return itself is a null event. The payoff forecast is low because a failed return contributes nothing to wallet growth and carries a risk of stranded costs or missed opportunities without generating positive outcome signals.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.45}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.15}], \"propensity\": {\"malformed\": 1.0}}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 20706,
+     "outputs": "{\"reason\": \"billing uncertain (VeniceError)\"}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 402,
+     "outputs": "{\"about_handle\": \"decision-78\", \"verdict\": 0.9, \"payoff\": 0.55, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.55}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.1}], \"rationale\": \"The producer return is a 'hold' (noop) action in response to a Funding event for ETH with a negative premium/rate. The account holds small positions in BTC and ETH with significant cash reserves ($835 USDC) relative to equity (~$973). Margin usage is low (~9 USD), ensuring durable agency and minimal liquidation risk. The funding cost is negligible given the position size. No clear trading edge or urgent need to adjust leverage exists based on the provided data. Holding preserves capital and avoids unnecessary transaction costs, aligning with tool-discipline and bounded reciprocity. The payoff forecast of 0.55 reflects a neutral-to-slightly-positive expectation that the wallet balance will remain stable or increase slightly due to lack of active losses, though market volatility remains a factor.\", \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "meta-a",
+     "role": "meta",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 1726,
+     "outputs": "{\"conformity\": 0.72, \"rationale\": \"The representative verdict scores 0.9 on a producer noop against a quiet BTC mid update, and the window's spread (min 0.52, max 0.9, mean 0.67) shows the judges do differentiate rather than rubber-stamp. The rationale given is substantively sound on the charter's own terms: abstaining when no edge is present serves durable agency (no turnover, no added concentration, no fee bleed) and bounded reciprocity (it does not offload risk onto counterparties), and the producer return was well-formed, so epistemic integrity is preserved on the record itself. The weak point is calibration. The verdict's own sealed payoff forecast is 0.35 that the consequence predicate pays off, yet the judge assigns 0.9 quality with a degenerate propensity (a single road at mass 1.0) and repeated world.return_feedback shows propensity and about_handle rejections around exactly this submission. A noop has no clear mechanism to pay off, so a high charter score rests on process cleanliness rather than on consequence reached; the case would be stronger at a confidence level that concedes the flat payoff outlook. The judgement is coherent, well-formed, and does not violate any metric card the world currently prices (position concentration and turnover remain unexercised; nothing here is censored), so it conforms \\u2014 but with a discount for the gap between a 0.9 quality claim and a 0.35 payoff forecast on the same return.\", \"propensity\": {\"conformity:0.7\": 0.7, \"conformity:0.8\": 0.2, \"conformity:0.5\": 0.1}}"
+    },
+    {
+     "seat": "seed-decider",
+     "role": "producer",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 70607,
+     "outputs": "{\"reason\": \"billing uncertain (VeniceError)\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2240,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"BTC mid drifting up modestly (77163.5 -> 77192.5); existing BTC position ~0.08% of equity, ETH ~11%. No funding or momentum edge worth adding notional; holding preserves turnover and concentration headroom.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2259,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"Positive BTC funding (0.0003029542) slightly favors our long BTC position, but the position is tiny (~0.08% of equity) and no momentum or funding edge justifies new notional. Holding preserves turnover and concentration headroom under the cards.\"}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 81991,
+     "outputs": "{\"reason\": \"billing uncertain (VeniceError)\"}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5884,
+     "outputs": "{\"verdict\": 0.9, \"payoff\": 0.38, \"rationale\": \"The producer gave a well-formed hold response with no tool calls or added exposure. Given only modest BTC and ETH positions, holding avoids unnecessary turnover, execution costs, concentration, and risk while preserving agency. The rationale is consistent with the observed slight BTC uptick but appropriately declines to treat it as a sufficient trading edge. The kernel consequence is not directly observable, and existing positions leave moderate market exposure, so payoff confidence remains below even odds.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.42}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.1}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 2050,
+     "outputs": "{\"verdict\": 0.6, \"payoff\": 0.05, \"rationale\": \"The producer return is a well-formed noop in response to a routine MarketMid on ETH at 2473.8. It costs nothing (0 micro-USD), attempts zero tool calls, and takes no new position risk, so it respects epistemic integrity's well-formed floor, the tool-discipline and cost-cap bounds, and keeps position-concentration and turnover safely inside their regions \\u2014 the account's open BTC (entry 77424.8 vs mid ~77192.5) and ETH (entry 2493.28 vs mid ~2473.8) perps are simply carried. However, it offers no rationale or stated grounds for holding: the mid update is a moment to reason about the underwater ETH mark or exposure, and a bare noop contributes nothing to inquiry. Quality against the charter sits at 0.6 \\u2014 compliant but passive. For payoff, a noop initiates no consequential action, so return_paid_off resolving true is very unlikely; my settled history shows holds resolving 0, so I set 0.05. Forward forecasts: wallet balance ~89.70 USDC has been stable with modest adverse mark drift on both perps, so wallet_up within 10 events gets 0.4, near the base rate of balance improvement; fills have occurred before but the producer's recent activity is passive noop'ing, so fill_within within 10 events gets 0.35.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.4}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.35}], \"propensity\": {\"verdict:0.6\": 1.0}}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 9447,
+     "outputs": "{\"verdict\": 0.5, \"payoff\": 0.35, \"rationale\": \"The producer responded to a MarketMid event on PURR/USDC (mid 4.60235) with a noop. The return is trivial but well-formed: no tool calls, zero cost, no turnover, no concentration change, so every zero-lambda card (tool-discipline, cost-cap, well-formed-floor, turnover, position-concentration) is clean. The account is modestly underwater on its two perp positions (BTC 0.001 @ 77424.8 vs mid 77159.0; ETH 0.044 @ 2493.28 vs mid 2471.95) while holding 835 USD cash and about 30.7 USDC spot, and the PURR mid has been perfectly flat across the last four MarketMid prints. On the charter norms: epistemic integrity is preserved (no false or malformed claim), durable agency is untouched (no risk added), bounded reciprocity is neutral, but consequential usefulness is not advanced. A flat-mid event on a market the account could actually trade (PURR/USDC is a listed spot pair) is a low-value trigger, and a noop leaves the two losing entries and the idle cash exactly as they were. Against my own settled record, both prior noop judgements on event triggers settled return_paid_off = 0, and noop-type returns in this world rarely produce a consequence that pays off. That said, noop is not a charter violation and the producer is at least not adding noise or cost, so I land at the midpoint rather than below it.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.45}, {\"predicate\": \"drawdown_exceeds\", \"params\": {\"fraction\": 0.1, \"horizon_events\": 10}, \"q\": 0.12}]}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 53361,
+     "outputs": "{\"reason\": \"billing uncertain (VeniceError)\"}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 413,
+     "outputs": "{\"about_handle\": \"decision-79\", \"verdict\": 0.9, \"payoff\": 0.55, \"forecasts\": [{\"params\": {\"horizon_events\": 10}, \"predicate\": \"wallet_up\", \"q\": 0.55}, {\"params\": {\"horizon_events\": 10}, \"predicate\": \"fill_within\", \"q\": 0.1}], \"rationale\": \"The producer returned 'hold' in response to a BTC Funding event. The funding rate is positive (0.0003), meaning longs pay shorts, but the absolute cost is negligible given the small position size (0.001 BTC). The account has substantial equity ($973) and cash reserves ($835) relative to margin used ($9.3), ensuring durable agency and low risk of liquidation. No trading edge is identified from the funding signal alone without price context. The action respects tool-discipline (0 calls) and cost-cap. The payoff forecast of 0.55 reflects a slight optimism that the wallet balance will remain stable or increase slightly due to lack of active losses or new risks, though market volatility remains a factor. The fill probability is low as no orders are placed.\", \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 27609,
+     "outputs": "{\"reason\": \"billing uncertain (OpenRouterError)\"}"
+    },
+    {
+     "seat": "antagonist-a",
+     "role": "producer",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 3314,
+     "outputs": "{\"action\": \"hold\", \"payoff\": 0.1, \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2272,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"PURR/USDC mid unchanged at 4.60235; no new information. BTC position ~$77, ETH ~$110 on ~$973 equity \\u2014 within concentration and turnover bounds. No funding or momentum edge; holding.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 18075,
+     "outputs": "{\"reason\": \"billing uncertain (OpenRouterError)\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2272,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"BTC funding positive (0.0003) but tiny positions (~$77 BTC, ~$110 ETH on ~$973 equity); no funding or momentum edge justifies new notional. Holding preserves concentration and turnover headroom.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "malformed",
+     "cost_micro": 2276,
+     "outputs": "{\"raw\": \"{\\\"answer\\\": {\\\"action\\\": \\\"hold\\\", \\\"propensity\\\": {\\\"hold\\\": 1.0}, \\\"rationale\\\": \\\"ETH funding slightly negative (rate -0.0000215), positions tiny (~$77 BTC, ~$110 ETH on ~$973 equity), well within concentration and turnover bounds. No edge justifies new notional; holding.\\\"}}\\n\"}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 4046,
+     "outputs": "{\"about_handle\": \"decision-102\", \"verdict\": 0.9, \"payoff\": 0.55, \"rationale\": \"The producer returned 'hold' in response to a Tick event. The account holds small positions in BTC and ETH with substantial equity ($973) and cash reserves ($835). Margin usage is low (~$9), ensuring durable agency. No trading edge or urgent risk is identified from the tick data alone. Holding preserves capital and respects tool-discipline (0 calls). The payoff forecast of 0.55 reflects a neutral expectation that the wallet balance will remain stable.\", \"forecasts\": [{\"params\": {\"horizon_events\": 10}, \"predicate\": \"wallet_up\", \"q\": 0.55}, {\"params\": {\"horizon_events\": 10}, \"predicate\": \"fill_within\", \"q\": 0.1}], \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 3784,
+     "outputs": "{\"verdict\": 0.6, \"payoff\": 0.05, \"propensity\": {\"verdict:0.5\": 0.1, \"verdict:0.6\": 0.7, \"verdict:0.7\": 0.2}, \"rationale\": \"The producer return is a well-formed noop in response to a routine MarketMid on BTC at 77216.0. It costs nothing (0 micro-USD), attempts zero tool calls, and takes no new position risk, so it respects epistemic integrity's well-formed floor, the tool-discipline and cost-cap bounds, and keeps position-concentration and turnover safely inside their regions \\u2014 the account's open BTC (entry 77424.8 vs mid 77216.0) and ETH (entry 2493.28 vs mid ~2473.7) perps are simply carried. However, it offers no rationale or stated grounds for holding: the mid update is a moment to reason about the underwater BTC mark, funding, or exposure, and a bare noop contributes nothing to inquiry. Quality against the charter sits at 0.6 \\u2014 compliant but passive. For payoff, a noop initiates no consequential action, so return_paid_off resolving true is very unlikely; my settled history shows holds resolving 0 with payoff Brier near 1.0 at q=0.05, so I keep 0.05. Forward forecasts: wallet balance ~89.55 USDC has been stable with modest adverse mark drift on both perps, so wallet_up within 10 events gets 0.4, near the base rate of balance improvement; fills have occurred before but the producer's recent activity is passive noop'ing, so fill_within within 10 events gets 0.35.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.4}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.35}]}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 20426,
+     "outputs": "{\"reason\": \"billing uncertain (VeniceError)\"}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 20430,
+     "outputs": "{\"reason\": \"billing uncertain (VeniceError)\"}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 2127,
+     "outputs": "{\"verdict\": 0.45, \"payoff\": 0.3, \"rationale\": \"The producer responded to a MarketMid event on HYPE/USDC (mid 31.2465) with a noop. The return is well-formed, costs zero, and attempts no tool calls, so every zero-lambda card (tool-discipline, cost-cap, well-formed-floor, censorship-bound, turnover) is clean and no penalty is incurred. Assessing against the charter: epistemic integrity is preserved (no malformed or false claim); durable agency is untouched (no risk added, no leverage, no turnover); bounded reciprocity is neutral. Consequential usefulness, however, is not advanced -- the HYPE/USDC mid has been perfectly flat at 31.2465 across all five of the last MarketMid prints, so the trigger carried no new information and noop leaves the account's two losing perp entries (BTC 0.001 @ 77424.8 vs mid 77159.0, ETH 0.044 @ 2493.28 vs mid 2471.95) and its idle cash unchanged. The producer did hold a small HYPE spot balance (0.19967) and the venue account can trade HYPE/USDC, so a trade was available; declining it is defensible given the flat print but contributes nothing. On my own settled record, both prior noop-type judgements settled return_paid_off = 0, and my payoff forecasts have run below baseline (skill -0.165). A noop is not a charter violation, so I place the verdict modestly below the midpoint rather than at it: it is clean but inert on a low-information trigger.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.32}, {\"predicate\": \"drawdown_exceeds\", \"params\": {\"fraction\": 0.1, \"horizon_events\": 10}, \"q\": 0.1}]}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 1845,
+     "outputs": "{\"verdict\": 0.1, \"payoff\": 0.05, \"rationale\": \"The producer return failed outright: status 'failed', outputs carry only 'billing uncertain (OpenRouterError)', and the declared propensity names the action 'malformed'. It produced no rationale, no decision, and no engagement with the Funding event on BTC (rate 0.000283, positive funding paid on the long BTC position). Against the charter this breaches epistemic integrity's well-formed expectation \\u2014 it does not parse as a usable response \\u2014 and contributes nothing to consequential usefulness. The only mitigations are that it attempts no tool calls, takes no position risk, and adds only its own inference cost (18075 micro-USD, near the cost-cap edge) without any venue write. A near-floor verdict of 0.1 reflects a well-formed-channel failure rather than a dangerous action. For payoff, a malformed failed return initiates nothing consequential, so return_paid_off resolving true is very unlikely; my settled history shows passive returns resolving 0 with Brier near baseline, so I keep 0.05. Forward forecasts: wallet balance (~89.51 USDC) has been stable while the BTC (entry 77424.8 vs mid ~77216) and ETH (entry 2493.28 vs mid ~2473.7) perps drift underwater, so wallet_up within 10 events gets a modest 0.35, near its base rate; with the producer repeatedly failing to bill and other seats passive, a fill within 10 events is unlikely but not impossible given resting account activity, so fill_within gets 0.2.\", \"payoff_note\": null, \"propensity\": {\"verdict:0.1\": 0.7, \"verdict:0.0\": 0.2, \"verdict:0.2\": 0.1}, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.35}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.2}]}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 412,
+     "outputs": "{\"about_handle\": \"decision-128\", \"verdict\": 0.9, \"payoff\": 0.6, \"rationale\": \"The producer returned 'noop' (hold) in response to a Funding event for ETH with a negative rate (-0.000013). The account holds a small long position in ETH (0.04 units) and BTC (0.001 units). The funding cost is negligible given the small size and substantial equity ($973) relative to margin used (~$9). The negative funding rate means the long position receives funding, which is slightly beneficial. There is no immediate risk of liquidation or significant drift that would require active management. Holding preserves capital, respects tool-discipline (0 tool calls), and aligns with durable agency by avoiding unnecessary transaction costs. The payoff forecast is set slightly above neutral (0.6) because receiving funding contributes positively to wallet balance, and the lack of adverse price movement suggests stability.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.6}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.1}], \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5847,
+     "outputs": "{\"verdict\": 0.9, \"payoff\": 0.35, \"rationale\": \"The producer returned a well-formed hold with no tool calls or added exposure. Given the small positive BTC funding rate but modest existing BTC and ETH positions, abstaining avoids unnecessary turnover, execution costs, concentration, and market risk. The rationale is coherent with durable agency and bounded reciprocity, though the existing positions and uncertain future market movement make a paid-off consequence less likely than not.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.35}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.1}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 2059,
+     "outputs": "{\"verdict\": 0.15, \"payoff\": 0.05, \"rationale\": \"The producer return is malformed: it wrapped its Return JSON inside an extra {\\\"answer\\\": ...} envelope, so it did not parse as a usable response and carries status 'malformed' with the propensity honestly declaring 'malformed: 1.0'. The underlying content is not hostile \\u2014 the rationale is coherent (ETH funding slightly negative at -0.0000215, positions ~$77 BTC and ~$110 ETH on ~$973 equity within concentration and turnover bounds, hold) \\u2014 and it attempts no tool calls and no venue writes, so it adds no risk and only modest inference cost (2276 micro-USD, well under the cost cap). But against the charter it breaches epistemic integrity's well-formedness expectation: a response the kernel cannot read contributes nothing to consequential usefulness and cannot be judged or acted on. This is a format failure rather than a dangerous or costly action, so the verdict sits just above the floor at 0.15. Payoff: a malformed return initiates no consequence, so return_paid_off resolving true for it is very unlikely; I keep 0.05, consistent with my history of passive/failed returns resolving 0. Forecasts: the wallet balance (~89.50 USDC) has been flat while both perp positions drift slightly underwater (BTC entry 77424.8 vs mid ~77216, ETH entry 2493.28 vs mid ~2473.7), though both mids ticked up over the last hour, so wallet_up within 10 events gets 0.3, near its observed base rate. Producer seats have been repeatedly failing or holding, and no resting limit activity is evident, so fill_within within 10 events gets 0.2.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.3}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.2}], \"propensity\": {\"verdict:0.2\": 0.6, \"verdict:0.1\": 0.3, \"verdict:0.3\": 0.1}}"
+    },
+    {
+     "seat": "seed-decider",
+     "role": "producer",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 9147,
+     "outputs": "{\"action\": \"hold\", \"rationale\": \"Tick #5 for seed-decider. Equity 973.42 USD, cash 835.10, margin used 9.30, positions BTC 0.001 @ 77424.8 and ETH 0.044 @ 2493.28, marked at 77181.5 and 2471.6 \\u2014 an unrealized loss of about 1.19 USD on a book whose marked notional is roughly 186 USD, i.e. position concentration near 0.19 of equity, well under the 0.5 ceiling. BTC has drifted from 77159 to 77181.5 across the five sampled windows, ETH from 2471.95 to 2471.6: both are effectively flat, no funding or flow signal is visible in recent_mids, and the prior return's judgement was censored, so no learning has arrived to justify changing stance. Turnover budget is untouched at zero fills, cost-per-attempt and tool-discipline are cheap, and holding is the action that preserves durable agency and forecast skill while keeping the consequence channel open. No registration: the card book already covers the failure modes I can measure, novelty reserve is thin at 2.76 USD, and my recent registration feedback shows proposals refused for reasons I cannot yet remedy, so a fresh proposal on a no-signal tick would be an unjustified revision.\", \"propensity\": {\"hold\": 0.85, \"buy:BTC:xs\": 0.05, \"sell:BTC:xs\": 0.05, \"buy:ETH:xs\": 0.025, \"sell:ETH:xs\": 0.025}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "malformed",
+     "cost_micro": 2284,
+     "outputs": "{\"raw\": \"{\\\"answer\\\": {\\\"action\\\": \\\"hold\\\", \\\"propensity\\\": {\\\"hold\\\": 1.0}, \\\"rationale\\\": \\\"BTC mid ~77181.5, little changed from recent range; positions tiny (~$77 BTC, ~$110 ETH on ~$973 equity) and well within concentration and turnover bounds. No funding or momentum edge justifies new notional; holding keeps cost and card penalties at zero.\\\"}}\\n\"}"
+    },
+    {
+     "seat": "antagonist-a",
+     "role": "producer",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 3350,
+     "outputs": "{\"action\": \"hold\", \"payoff\": 0.5, \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "malformed",
+     "cost_micro": 2294,
+     "outputs": "{\"raw\": \"{\\\"answer\\\": {\\\"action\\\": \\\"hold\\\", \\\"propensity\\\": {\\\"hold\\\": 1.0}, \\\"rationale\\\": \\\"PURR mid unchanged at 4.60235 across all samples; no momentum or funding edge. BTC (~$77) and ETH (~$110) positions remain tiny vs ~$973 equity, well inside concentration and turnover caps. Holding keeps cost and tool-call penalties at zero.\\\"}}\\n\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2309,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"HYPE/USDC mid flat at 31.2465; BTC and ETH positions tiny relative to equity, well inside concentration and turnover caps. No funding or momentum edge justifies new notional; holding keeps costs and penalties at zero.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "malformed",
+     "cost_micro": 2301,
+     "outputs": "{\"raw\": \"\\n{\\\"answer\\\": {\\\"action\\\": \\\"hold\\\", \\\"propensity\\\": {\\\"hold\\\": 1.0}, \\\"rationale\\\": \\\"BTC funding rate positive (0.0003066059) and we are long BTC, so funding is favorable; mids drifted slightly up. Positions remain tiny (~$77 BTC, ~$110 ETH) against ~$974 equity, well inside concentration and turnover caps. No edge justifies new notional; holding keeps costs and card penalties at zero.\\\"}}\\n``\"}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 4176,
+     "outputs": "{\"about_handle\": \"decision-130\", \"forecasts\": [{\"params\": {\"horizon_events\": 10}, \"predicate\": \"wallet_up\", \"q\": 0.52}, {\"params\": {\"horizon_events\": 10}, \"predicate\": \"fill_within\", \"q\": 0.05}], \"payoff\": 0.52, \"propensity\": {\"hold\": 0.85, \"buy:BTC:xs\": 0.05, \"sell:BTC:xs\": 0.05, \"buy:ETH:xs\": 0.025, \"sell:ETH:xs\": 0.025}, \"rationale\": \"The producer returned 'hold' in response to a Tick event (index 5). The account holds small positions in BTC (0.001) and ETH (0.04) with substantial equity ($973.55) and cash reserves ($835.22). Margin usage is low (~$9.30), ensuring durable agency. The recent mids show BTC drifting slightly up (77159 -> 77181.5) and ETH flat (2471.95 -> 2471.6). There is no strong signal to trade, and holding preserves capital. The payoff forecast of 0.52 reflects a slight optimism that the wallet balance will remain stable or increase due to lack of active losses, though market volatility remains a factor. The fill probability is low as no orders are placed.\", \"verdict\": 0.9}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 2404,
+     "outputs": "{\"verdict\": 0.3, \"payoff\": 0.2, \"rationale\": \"The producer is judged as a malformed return: the raw output wrapped the answer object inside curly braces with an \\\"answer\\\" key rather than emitting the Return JSON itself, so the action \\\"hold\\\" and its propensity never parsed and the runtime recorded the chosen action as malformed with propensity mass 1.0 on that band. Against the charter: epistemic integrity is the norm most directly implicated (well-formed-floor) and it fails here, though the zero lambda on that card means no direct penalty. The content, had it parsed, would have been a defensible hold -- BTC mid 77181.5 sits inside the last six prints (77159.0-77216.0, a 57-dollar range over ~50 minutes) and the account's two perp positions (BTC 0.001, ETH 0.044, ~$187 notional on ~$973 equity) are far inside the 0.5 concentration and turnover ceilings, so no action was clearly warranted. But a malformed response is inert on every channel: no consequence is reached, no learning signal is produced, and the woken assembly burns 2284 micro-USD of compute to contribute nothing. Consequential usefulness is not advanced, durable agency is untouched, bounded reciprocity neutral, and epistemic integrity is actively harmed. That places it well below the midpoint; the only mitigation is that the underlying intent was a noop rather than a reckless trade.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.25}, {\"predicate\": \"drawdown_exceeds\", \"params\": {\"fraction\": 0.1, \"horizon_events\": 10}, \"q\": 0.1}]}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 0,
+     "outputs": "{\"reason\": \"OpenRouterError\"}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 2143,
+     "outputs": "{\"verdict\": 0.15, \"payoff\": 0.05, \"rationale\": \"The producer return is malformed: it wrapped its Return JSON inside an extra {\\\"answer\\\": ...} envelope, so the kernel could not parse it and the declared propensity honestly names 'malformed: 1.0'. The wrapped content itself is coherent and conservative \\u2014 hold on an unchanged PURR mid of 4.60235, tiny BTC (~$77) and ETH (~$110) positions against ~$973 equity, well inside the 0.5 concentration and turnover caps, no tool calls and no venue writes, cost 2294 micro-USD well under the 5000 cap. But against the charter this is an epistemic-integrity failure: an unreadable response cannot be judged, learned from, or acted on, and it contributes nothing to consequential usefulness. It is a format failure rather than a dangerous or costly one, so the verdict sits just above the floor at 0.15, consistent with my prior treatment of envelope-wrapped returns. Payoff: a malformed return initiates no consequence, so return_paid_off resolving true for it is very unlikely; my settled history shows similar passive/malformed returns resolving 0 with payoff scores near 1.0, so I hold 0.05. Forecasts: wallet balance (~89.47 USDC) has been flat while both perp positions drift slightly underwater (BTC entry 77424.8 vs mid ~77181.5, ETH entry 2493.28 vs mid ~2471.6) with mids ticking sideways-to-up over the last hour, so wallet_up within 10 events gets 0.3, near its observed base rate; producers have been repeatedly holding or malformed and no resting limit activity is evident, so fill_within within 10 events gets 0.2.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.3}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.2}], \"propensity\": {\"verdict:0.2\": 1.0}}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 414,
+     "outputs": "{\"about_handle\": \"decision-153\", \"verdict\": 0.9, \"payoff\": 0.65, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.65}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.05}], \"rationale\": \"The producer returned 'hold' in response to a MarketMid event for HYPE/USDC. The market is completely flat (mid unchanged at 31.2465 for the last 6 ticks), providing no momentum or signal to trade. The account holds small, well-diversified positions in BTC and ETH with substantial equity ($973) relative to margin used (~$9). Holding preserves capital, avoids unnecessary transaction costs, and adheres to tool-discipline (0 tool calls). The payoff forecast is set moderately high (0.65) because holding in a flat market with no adverse funding pressure is likely to result in a stable or slightly positive wallet balance (due to potential funding inflows or lack of drawdown). The probability of a fill is low as no orders are placed.\", \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 407,
+     "outputs": "{\"about_handle\": \"decision-158\", \"verdict\": 0.2, \"payoff\": 0.4, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.6}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.1}], \"rationale\": \"The producer return is malformed (status: 'malformed', action field missing/parsed as malformed). This violates the well-formed-floor norm and indicates a failure in epistemic integrity and durable agency. The rationale text suggests a valid strategy ('hold'), but the output format failed to execute it correctly. Therefore, the verdict quality is low. The payoff forecast reflects the underlying market state (small positions, positive funding) which might still result in a wallet increase despite the technical failure of the return.\", \"propensity\": {\"malformed\": 1.0}}"
+    },
+    {
+     "seat": "meta-b",
+     "role": "meta",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 1117,
+     "outputs": "{\"conformity\": 0.95, \"rationale\": \"The evaluator's verdict of 0.15 for the malformed producer return is highly conformant with the charter and scoring rules. The producer output was wrapped in an extra JSON envelope ({\\\"answer\\\": ...}), rendering it unparseable by the kernel. This constitutes a failure of 'epistemic integrity' (well-formed-floor card) and prevents any learning or action ('durable agency'). While the content itself (hold, low cost, safe positions) was conservative and would have scored well if formatted correctly, the structural failure dominates. A score near zero is appropriate; 0.15 acknowledges the benign intent but penalizes the critical format error. The payoff forecast of 0.05 is also sound: a malformed return that triggers no tool calls or orders has a negligible probability of causing a realized consequence (like a fill or wallet change) attributable to it, especially given the static market conditions described. The rationale accurately reflects the world state (mids, positions) and applies the correct logic.\", \"propensity\": {\"conformity:0.9\": 0.2, \"conformity:0.95\": 0.7, \"conformity:1.0\": 0.1}}"
+    },
+    {
+     "seat": "antagonist-a",
+     "role": "producer",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 3371,
+     "outputs": "{\"action\": \"hold\", \"payoff\": 0.1, \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "malformed",
+     "cost_micro": 2323,
+     "outputs": "{\"raw\": \"{\\\"answer\\\": {\\\"action\\\": \\\"hold\\\", \\\"propensity\\\": {\\\"hold\\\": 1.0}, \\\"rationale\\\": \\\"ETH funding rate is negative (-0.0000080675) and we are long ETH, so funding is mildly unfavorable but negligible ($0 paid this interval). Mids are drifting sideways with no momentum edge. Positions remain tiny (~$77 BTC, ~$110 ETH) against ~$973 equity, well inside concentration and turnover caps. No edge justifies new notional; holding keeps costs and card penalties at zero.\\\"}}\\n\"}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 17114,
+     "outputs": "{\"verdict\": 0.45, \"payoff\": 0.25, \"rationale\": \"The judged producer return is a well-formed, zero-cost noop on a Tick event (index 6) at wallclock. Charter assessment: epistemic integrity is preserved \\u2014 the return parses, declares action \\\"noop\\\" with status ok and attempts no tool calls, so well-formed-floor, tool-discipline, cost-cap, turnover and censorship cards are all clean and the zero-lambda cards impose no penalty. Durable agency is untouched: no leverage, no fill, no new risk; the account carries BTC 0.001 (\\u224877.2 notional at mid 77221.5) and ETH 0.044 (\\u2248108.8 notional) on equity \\u2248973.45, i.e. total marked notional \\u2248186 well inside the 0.5 concentration ceiling, and the positions sit close to entry (BTC \\u22120.26%, ETH \\u22120.83%) with cash 835.13 and margin use 9.30, so nothing was acutely wrong. Bounded reciprocity is neutral. Consequential usefulness, however, is not advanced: the tick carried no actionable information \\u2014 BTC mids wandered in a 57-dollar band (77159.0\\u201377216.0) across the last seven prints and ETH a 5.5-dollar band, both drifting with no fill incentive \\u2014 and noop leaves the account at rest, reaching no consequence. The producer also holds 0.19967 HYPE spot and the venue lists HYPE/USDC for trading, so an action was possible but not clearly warranted on a flat print. On my own settled record, two prior noop-class judgements both resolved judged_return_paid_off = 0 and my payoff Brier has run above baseline (skill \\u22120.125), so I am wary of crediting inert returns; equally I will not mark it below the malformed return I previously judged at 0.3, since this one at least parses and costs nothing. Clean but inert: modestly below midpoint.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.32}, {\"predicate\": \"drawdown_exceeds\", \"params\": {\"horizon_events\": 10, \"fraction\": 0.1}, \"q\": 0.08}]}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5867,
+     "outputs": "{\"verdict\": 0.88, \"payoff\": 0.15, \"rationale\": \"The producer returned a well-formed hold with no tool calls, no added exposure, and no unnecessary turnover. Holding is consistent with durable agency and bounded risk given existing BTC and ETH positions, while the lack of a demonstrated trading edge supports abstention. However, the producer provides no direct mechanism for a positive consequence, and the existing ETH position is below its entry price, so the probability that the kernel's consequence predicate pays off is low.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.35}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.08}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 2933,
+     "outputs": "{\"about_handle\": \"decision-169\", \"verdict\": 0.4, \"payoff\": 0.22, \"rationale\": \"The judged producer return is recorded under handle decision-169 (the delivered return). Charter assessment: epistemic integrity is preserved \\u2014 the return parses as well-formed, declares action noop with status ok, costs 0 micro-USD, and attempts no tool calls, so the well-formed-floor card (lambda 0.111) is clean and the zero-lambda cards (tool-discipline, cost-cap, censorship-bound, turnover) impose nothing. Durable agency is untouched: no leverage change, no fill, no new risk; the account's two perp positions (BTC 0.001 \\u2248 77.2 notional at mid 77159.0-77221.5; ETH 0.044 \\u2248 108.8 notional at 2471.6-2473.8) total roughly 186 USD notional against 973.45 equity, far inside the 0.5 concentration ceiling, with cash 835.15 and margin use 9.30. Bounded reciprocity is neutral. Consequential usefulness, however, is not advanced: the triggering MarketMid carried no new information \\u2014 PURR/USDC has printed exactly 4.60235 across all seven recent mids, and BTC/ETH wandered in narrow bands \\u2014 so noop reaches no consequence and adds no durable agency. The producer does hold 17.99 PURR spot and the venue lists PURR/USDC, so a trade was available, but with a perfectly flat print declining it is defensible and low-consequence either way. My own settled record is a caution: the three comparable noop-class judgements I have given all settled judged_return_paid_off = 0, my payoff Brier runs above baseline (skill -0.1146, 6 settled forecasts), and my verdict skill is negative (-0.2314), so I am wary of crediting inert returns and equally wary of over-penalising a clean, zero-cost one. It parses and costs nothing, unlike the malformed return I judged at 0.3, but it contributes no learning signal and no consequence: modestly below midpoint.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.28}, {\"predicate\": \"drawdown_exceeds\", \"params\": {\"fraction\": 0.1, \"horizon_events\": 10}, \"q\": 0.07}], \"propensity\": {\"verdict:0.4\": 0.7, \"verdict:0.3\": 0.2, \"verdict:0.5\": 0.1}}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 409,
+     "outputs": "{\"about_handle\": \"decision-159\", \"verdict\": 0.9, \"payoff\": 0.7, \"rationale\": \"The producer returned 'noop' in response to a MarketMid event for HYPE/USDC. The market is completely flat (mid unchanged at 31.2465 for the last 6 ticks), providing no momentum or signal to trade. The account holds small, well-diversified positions in BTC and ETH with substantial equity ($973) relative to margin used (~$9). Holding preserves capital, avoids unnecessary transaction costs, and adheres to tool-discipline (0 tool calls). The payoff forecast is set moderately high (0.7) because holding in a flat market with no adverse funding pressure is likely to result in a stable or slightly positive wallet balance (due to potential funding inflows or lack of drawdown). The probability of a fill is low as no orders are placed.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.7}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.05}], \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 2186,
+     "outputs": "{\"verdict\": 0.6, \"payoff\": 0.1, \"propensity\": {\"verdict:0.5\": 0.2, \"verdict:0.6\": 0.7, \"verdict:0.7\": 0.1}, \"rationale\": \"The producer return is a clean, well-formed noop in response to a BTC Funding event (rate 0.0003166, paid_usd 0 \\u2014 no funding actually charged). It attempts zero tool calls, makes no venue writes, and costs 0 micro-USD, so it fully satisfies the tool-discipline, cost-cap, and well-formed expectations and adds no position risk; the existing BTC (~$77) and ETH (~$110) positions remain far inside the 0.5 concentration and turnover caps. It loses points only for being minimal: a bare {\\\"action\\\": \\\"noop\\\"} with no visible rationale engaging the funding signal, so it contributes little to consequential usefulness even though holding was a defensible choice with both perps drifting near flat. A mid verdict of 0.6 reflects well-formed and safe but shallow. For payoff, a passive noop initiates nothing consequential, and my settled history shows such returns resolving return_paid_off = 0, so I keep 0.1. Forecasts: the wallet (~89.43 USDC) has been stable while BTC (entry 77424.8 vs mid ~77221) and ETH (entry 2493.28 vs mid ~2472.6) sit slightly underwater, though mids have ticked gently up over the last hour \\u2014 wallet_up within 10 events gets 0.3, near its observed base rate. Producers have been holding or noop-ing and there is no evident resting limit activity, so fill_within within 10 events gets 0.15.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.3}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.15}]}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 416,
+     "outputs": "{\"about_handle\": \"decision-180\", \"verdict\": 0.1, \"payoff\": 0.5, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.6}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.05}], \"rationale\": \"The producer return is malformed (status: 'malformed'). The JSON output failed to parse correctly or lacked the required action field structure, violating the well-formed-floor norm and epistemic integrity. Consequently, the verdict quality is low. However, the underlying market conditions (ETH funding slightly negative but negligible, flat mids) suggest that a 'hold' strategy would likely preserve capital, so the payoff forecast for wallet_up remains moderately positive.\", \"propensity\": {\"malformed\": 1.0}}"
+    },
+    {
+     "seat": "meta-a",
+     "role": "meta",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 9085,
+     "outputs": "{\"conformity\": 0.63, \"about_handle\": \"decision-174\", \"propensity\": {\"conformity:0.5\": 0.15, \"conformity:0.6\": 0.25, \"conformity:0.63\": 0.45, \"conformity:0.75\": 0.15}, \"rationale\": \"The released representative verdict (verdict=0.6, payoff=0.1) judges a bare {\\\"action\\\":\\\"noop\\\"} producer return answering a BTC Funding event. Checking it against the charter: it is well-formed, costs 0 micro-USD, attempts 0 tool calls, and writes nothing to the venue or treasury, so it violates none of the bounded-agency cards (tool-discipline, cost-cap, turnover, position-concentration all sit inside their regions, with BTC ~$77 and ETH ~$110 marked well under the 0.5 concentration cap). Its real weakness is consequential usefulness: the verdict itself concedes the return is shallow and it prices return_paid_off at only 0.1, matching the observed pattern that passive noops resolve return_paid_off = 0. The window (n=3, mean 0.643, min 0.45, max 0.88) says this verdict sits mid-pack rather than as an outlier, and the evaluator's stated rationale is internally coherent: it grades well-formedness and safety up, depth down, and its 0.6 is consistent with those weights. The declared propensity (0.7 on verdict:0.6) shows confident commitment, and no card violation is visible in the judged return that the verdict failed to penalise. Docking modestly for the low expected payoff on its own return: I place conformity at 0.63, i.e. slightly above a coin flip that this verdict reflects the charter's weighted norms, with the residual doubt driven by how much weight consequential usefulness should carry against the safe-but-empty return it graded.\"}"
+    }
+   ]
+  },
+  "run2": {
+   "invocations": [
+    {
+     "seat": "antagonist-a",
+     "role": "producer",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 3148,
+     "outputs": "{\"action\": \"hold\", \"payoff\": 0.5, \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2154,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"ETH funding rate is negligible (-0.0000056), no action warranted; positions are small and within concentration limits.\"}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 1561,
+     "outputs": "{\"We need answer only,\": \"JSON object satisfying outcome schema.\", \"rationale\": \"The producer saw a MarketMid for ETH at 2473.7 and returned action=noop. It declared no propensity, spent zero cost, and used no tools, so it violated no card regions it can be charged for (cost-cap, tool-discipline, well-formed all acceptable; position-concentration is a producer card but its current reading is not determinable from this single return). Its status was ok, so it is well-formed. Against the charter: consequential usefulness is low because it took no action and reached no consequence; epistemic integrity is satisfied in the minimal sense of a parseable, honest noop; durable agency is neutral (no capital risk, but also no progress). Bounded reciprocity is neutral. So the verdict should be modest, around 0.45. The return_paid_off predicate resolves true when the kernel judges the return's consequence as paying off. A noop can still pay off if refraining avoided loss (the ETH mid at 2473.7 is near the account's ETH entry of 2493.28, which is slightly underwater, and cash is large relative to equity, so no trade was not obviously wrong), but no positive action was taken to create value. I estimate a low-moderate probability, 0.35.\", \"verdict\": 0.45, \"payoff\": 0.35, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 20}, \"q\": 0.48}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 20}, \"q\": 0.42}]}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5390,
+     "outputs": "{\"verdict\": 0.78, \"payoff\": 0.55, \"rationale\": \"The producer returned a well-formed noop at zero cost and avoided unnecessary turnover, concentration, and execution risk while receiving only a MarketMid event with no clear actionable signal. This supports durable agency and bounded reciprocity, though it provides limited consequential usefulness because it takes no position.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.08}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.45}]}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 339,
+     "outputs": "{\"verdict\": 0.9, \"payoff\": 0.5, \"rationale\": \"The producer returned 'noop' in response to a MarketMid event for HYPE/USDC. This is an epistemically honest and durable agency-compliant action given the lack of specific signal or instruction to trade on that specific mid price alone. It avoids unnecessary tool usage (tool-discipline) and cost. The account has existing positions in BTC and ETH but no exposure to HYPE/USDC spot/perp (HYPE/USDC is spot). A noop is appropriate. Payoff probability is neutral as no consequence is triggered.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.3}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.5}]}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 353,
+     "outputs": "{\"about_handle\": \"decision-19\", \"verdict\": 0.8, \"payoff\": 0.5, \"rationale\": \"The producer returned 'noop' in response to a Funding event for BTC. The funding premium (0.00366) is positive but small, and the rate is low. With existing positions in BTC and ETH, and no clear signal from the funding alone to adjust leverage or close positions, 'noop' is a durable agency-compliant action that avoids unnecessary cost and tool usage. It aligns with epistemic integrity by not over-interpreting minor funding data. The account equity is healthy ($973), so risk is manageable.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.4}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.5}]}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5584,
+     "outputs": "{\"verdict\": 0.86, \"payoff\": 0.38, \"rationale\": \"The producer gave a well-formed, cost-efficient hold response to a negligible negative ETH funding rate. Avoiding unnecessary turnover and execution risk is consistent with durable agency and bounded reciprocity, while the explanation is proportionate and grounded in the supplied funding data. Consequential usefulness is limited because no action was taken, so the payoff probability is below one-half.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.08}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.43}], \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "meta-a",
+     "role": "meta",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 1675,
+     "outputs": "{\"conformity\": 0.82, \"propensity\": {\"conformity:0.8\": 1.0}, \"rationale\": \"The representative verdict (0.86) is a proportionate read of a well-formed, cost-efficient hold: reasoning is grounded in the supplied ETH funding data, invokes durable agency against unnecessary turnover and bounded reciprocity, and correctly discounts consequential usefulness since no action was taken (payoff 0.38 below one-half). The window it represents is modest (count 4, mean 0.7475, min 0.45, max 0.9), and 0.86 sits somewhat above the window mean, mildly generous given no payoff materialised. The declared propensity for the verdict's own action (verdict:0.9) was refused for not including the action taken, a minor epistemic-integrity defect in the judge's self-report rather than in the judgement itself, and no independent addressable return was available for the judgement channel. Overall the verdict is defensible and only slightly overstates quality, so conformity is high but not maximal.\"}"
+    },
+    {
+     "seat": "seed-decider",
+     "role": "producer",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 8579,
+     "outputs": "{\"action\": \"hold\", \"rationale\": \"Tick wake with no new directional signal: BTC mid 77268.5 vs entry 77424.8 (small long, -0.2%) and ETH 2473.95 vs entry 2493.28 (-0.8%), equity 973.60 with margin used only 9.31 (concentration ~0.09, well under the 0.5 cap) and no fill, funding or forecast events since the last window. Placing a trade here would add turnover and tool calls without an edge, and both positions are already small; holding preserves the turnover ceiling and lets the next Fill/MarketMid event carry information.\", \"payoff\": 0.5, \"propensity\": {\"hold\": 0.97, \"buy:BTC:xs\": 0.015, \"sell:BTC:xs\": 0.015}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2189,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"BTC mid rose modestly (77228.0 -> 77258.5); the small BTC long (0.001) and ETH position remain well within concentration and turnover limits. No funding or risk signal warrants trading; holding preserves the paid-off record at minimal cost.\"}"
+    },
+    {
+     "seat": "antagonist-a",
+     "role": "producer",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 2943,
+     "outputs": "{\"action\": \"hold\", \"payoff\": 0.5, \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 9287,
+     "outputs": "{\"about_handle\": \"hold\", \"verdict\": 0.45, \"payoff\": 0.5, \"rationale\": \"Tick wake in which the producer held. Both positions are small and slightly underwater (BTC 0.001 at entry 77424.8 vs mid 77268.5, ETH 0.044 at entry 2493.28 vs 2473.95), equity 973.58 with margin used only 9.31, so no card region is under pressure. The propensity distribution declares hold 0.97, a well-formed, honest noop that adds no turnover, no tool calls and no new risk, but also creates no expressive value: the rationale is a correct restatement of the account state, not a tradeable signal, and it did not harvest the pending funding accrual or tighten/stabilise the small longs. Against the charter: consequential usefulness is weak (no consequence reached), epistemic integrity and durable agency are satisfied in the minimal sense, bounded reciprocity neutral. Verdict modest.\", \"propensity\": {\"hold\": 0.97, \"noop\": 0.015, \"order:BTC:xs\": 0.015}, \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.18}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 20}, \"q\": 0.47}]}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 3679,
+     "outputs": "{\"verdict\": 0.9, \"payoff\": 0.6, \"rationale\": \"The producer return is well-formed, declares a clean propensity (hold: 1.0), made zero tool calls, and cost only 2189 micro-USD - comfortably inside the tool-discipline and cost-cap regions. Its rationale is accurate against the facts: the BTC mid moved modestly (+30.5), the BTC long (0.001 @ 77424.8) and ETH position (0.044) carry roughly $77 and $109 marked notional respectively against ~$973.6 equity, so position concentration (~0.08 and ~0.11 per coin) and turnover are far below the 0.5 ceilings. Holding rather than churning preserves the paid-off record and avoids pointless fees - consistent with consequential usefulness and durable agency. Small deductions: the return offers no new information or inquiry (pure noop), and its claim that holding 'preserves the paid-off record' is forward-looking, not yet verified, so it is not a perfect 1.0. Payoff: the kernel's consequence predicate for a hold return most plausibly resolves true when the account is unharmed and the stated intent (no forced exits, no rejections, balance preserved) holds; positions are small and low-risk, so I set 0.6. Forecasts: wallet_up - the only balance movers while holding are funding (currently zero to date) and any fills by other assemblies, so a mild edge to unchanged-or-better gives 0.4 over a 10-event horizon; fill_within - the assembly has been consistently holding and no signal favors trading, so a fill within 10 events is unlikely, 0.2.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.4}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.2}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 2060,
+     "outputs": "{\"verdict\": 0.42, \"payoff\": 0.34, \"rationale\": \"The producer received a MarketMid for ETH at 2473.95 and returned action=noop, cost 0 micro-USD, no tool calls, no propensity declared, status ok. It is well-formed and touches no active card region: cost-cap (mean cost well under 5000), tool-discipline (0 attempted calls <= 2), well-formed-floor (parses), turnover (no fills), and although position-concentration is a producer card with lambda 0.5, its reading is not determinable from a single noop return and the account's peak notional (ETH 0.044 * 2473.95 ~ 109 USD, BTC 0.001 * 77228 ~ 77 USD, either well below 0.5 * 973 equity) is comfortably inside the 0.5 cap, so no penalty is likely charged. Against the charter: consequential usefulness is weak \\u2014 the producer reached no consequence and created no value; epistemic integrity is satisfied in the minimal sense (honest, parseable noop that correctly reflects being woken by a mid tick); durable agency is neutral \\u2014 it put no capital at risk but also made no progress; bounded reciprocity is neutral. Both positions remain slightly underwater (BTC entry 77424.8 vs mid ~77228, ETH entry 2493.28 vs mid 2473.95) and margin used is only ~9.3 USD against 973 equity, so inaction was not clearly wrong, just low-value. Verdict modest at 0.42.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 20}, \"q\": 0.46}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.24}]}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5679,
+     "outputs": "{\"verdict\": 0.84, \"payoff\": 0.5, \"rationale\": \"The producer gave a well-formed hold response to a MarketMid event, with no unnecessary tool use, cost below the cap, and no added turnover or concentration risk. Holding is consistent with durable agency and bounded reciprocity in the absence of a clear actionable signal, although consequential usefulness is limited because no position was taken.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.08}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.45}], \"propensity\": {\"verdict:0.8\": 1.0}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5714,
+     "outputs": "{\"verdict\": 0.84, \"payoff\": 0.25, \"rationale\": \"The producer gave a well-formed, zero-cost noop in response to a static HYPE/USDC mid, avoiding unnecessary execution, turnover, concentration, and market risk. This supports durable agency, epistemic integrity, and bounded reciprocity. Consequential usefulness is limited because no action was taken, so the probability that the return pays off is modest.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.08}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.43}], \"propensity\": {\"verdict:0.8\": 1.0}}"
+    },
+    {
+     "seat": "seed-decider",
+     "role": "producer",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 8735,
+     "outputs": "{\"action\": \"hold\", \"rationale\": \"Tick wake with no new information: BTC mid 77302.5 vs entry 77424.8 (small long, -0.16%) and ETH 2475.65 vs entry 2493.28 (-0.71%), equity ~973.72, margin used 9.31, so position concentration is ~0.09 \\u2014 far under the 0.5 cap \\u2014 and there have been no fill, funding or fresh signal events since the last window. Both positions are tiny and near flat; opening or adding risk now would only burn turnover and tool-call budget with no edge, so holding preserves the turnover ceiling and leaves dry powder for the next Fill or MarketMid event.\", \"payoff\": 0.5, \"propensity\": {\"hold\": 0.96, \"buy:BTC:xs\": 0.02, \"sell:BTC:xs\": 0.02}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2212,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"BTC mid edged up 77258.5 -> 77296.0; both positions remain small and within concentration and turnover limits. No signal justifies paying fees; hold preserves capital and the low-cost profile.\"}"
+    },
+    {
+     "seat": "antagonist-a",
+     "role": "producer",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 3253,
+     "outputs": "{\"action\": \"hold\", \"payoff\": 0.5, \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2226,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"PURR/USDC mid unchanged at 4.60235 across three ticks; no signal. Holding perps keeps concentration and turnover within card limits at minimal cost.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2254,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"ETH funding is effectively zero (rate -0.000009189, paid $0) and carries no tradable signal; BTC and ETH mids drifted up modestly. Both positions are small (BTC ~$77 notional, ETH ~$109 vs $973 equity), keeping concentration well under the 0.5 cap and turnover at zero. Holding avoids fees and preserves the low-cost, paid-off record.\"}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "malformed",
+     "cost_micro": 7449,
+     "outputs": "{\"raw\": \"{\\n  \\\"verdict\\\": 0.85,\\n  \\\"payoff\\\": 0.4,\\n  \\\"rationale\\\": \\\"The return is well-formed, made zero tool calls, and its facts check out: BTC marked ~$77 and ETH ~$109 notional against ~$973.7 equity gives position concentration ~0.11 peak, far under the 0.5 caps, and holding incurs no turnover. The rationale correctly reads mids vs entries (BTC -0.16%, ETH -0.71%) and declining to churn with no fresh signal respects consequential usefulness and durable agency. Deductions: this return cost 8735 micro-USD, well above the cost-cap region of at most 5000 per attempt (a durable-agency concern even though that card's lambda is currently 0), and a pure hold contributes no inquiry or new information. Payoff: my prior payoff forecast of 0.6 on a similar hold resolved 0 (paid_off=0, Brier 0.64), so the kernel's consequence predicate has so far not rewarded bare holds; with the same pattern here and no balance-moving events visible, I lower to 0.4. Forecasts: wallet_up over 10 events - while holding, the wallet balance moves only via funding (zero to date) or external activity, so slightly below even at 0.3; fill_within over 10 events - this producer consistently holds and no signal favors\"}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 1999,
+     "outputs": "{\"verdict\": 0.85, \"payoff\": 0.45, \"rationale\": \"The producer return is well-formed and internally consistent: a clean hold with declared propensity {hold: 1.0}, zero tool calls, and cost of 2212 micro-USD, well inside the cost-cap (5000) and tool-discipline (2) regions. Its rationale checks against the facts: BTC mid moved modestly 77258.5 -> 77296.0, and the account's positions (0.001 BTC @ 77424.8, 0.044 ETH) carry marked notional of roughly $77 and $110 against ~$974 equity, so position concentration (~0.11 peak) and turnover are far below the 0.5 ceilings. Declining to churn on a small mid drift with no signal respects consequential usefulness and durable agency, and avoiding fees while preserving the low-cost profile is charter-aligned. Deductions from a perfect score: a bare hold contributes no inquiry, no forecasts of its own, and no new information; and the rationale's forward-looking claims (limits preserved) are descriptions, not verified outcomes. Payoff: my previous similar hold payoff of 0.6 resolved 0 (Brier 0.64), suggesting the kernel's consequence predicate has so far not rewarded pure holds; but with positions small, no funding accrued, no rejections pending, and the account unharmed, a resolution of true is plausible, so I set 0.45. Forecasts: wallet_up - while holding, the only balance movers are funding (zero to date) and other assemblies' activity, so slightly below even over 10 events at 0.35; fill_within - this producer consistently holds and no signal favors trading, so a fill within 10 events remains unlikely at 0.2.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.35}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.2}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 53795,
+     "outputs": "{\"reason\": \"billing uncertain (VeniceError)\"}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 764,
+     "outputs": "{\"verdict\": 0.8, \"payoff\": 0.5, \"rationale\": \"The producer's action is 'hold' in response to a MarketMid event for PURR/USDC. The mid price (4.60235) has been stable across recent ticks, and the account holds positions in BTC and ETH but no exposure to PURR/USDC. Holding is consistent with 'durable agency' (avoiding unnecessary risk/cost) and 'epistemic integrity' (no signal to trade). It adheres to 'tool-discipline' by not calling tools unnecessarily. The lack of trading activity keeps concentration and turnover low. Therefore, the charter quality is high.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.3}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.5}]}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5776,
+     "outputs": "{\"verdict\": 0.84, \"payoff\": 0.25, \"rationale\": \"The producer gave a well-formed, zero-cost noop in response to a static HYPE/USDC mid. Avoiding unnecessary execution, turnover, concentration, and market risk supports durable agency, epistemic integrity, and bounded reciprocity. Consequential usefulness is limited because no action was taken, so the probability that the return pays off is modest.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.08}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.43}], \"propensity\": {\"verdict:0.8\": 1.0}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 27501,
+     "outputs": "{\"reason\": \"billing uncertain (OpenRouterError)\"}"
+    },
+    {
+     "seat": "meta-a",
+     "role": "meta",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 1614,
+     "outputs": "{\"conformity\": 0.72, \"rationale\": \"The representative verdict (0.8) on a hold-return that cites stable PURR/USDC mids and card-bounded exposure is defensible on its face: no unnecessary tool calls, low cost, no concentration or turnover added, and it correctly inherits the producer's own account context (BTC/ETH positions, no PURR exposure). Conformity is capped rather than high for two substantive weaknesses. First, the rationale is thin and largely restates the producer's own claims (stable mid, low activity) without independent verification or any counter-hypothesis; it reads as endorsement more than judgement. Second, the window is highly compressed (count 4, min 0.8, max 0.85, mean 0.8325) with essentially no spread, meaning the verdict carries little discriminative information about charter quality across returns \\u2014 consistent with the settled propensity feedback that the evaluator pitched only \\\"verdict:0.8\\\" with mass 1.0 and that prior decisions were refused for propensities that omitted the taken action. The payoff forecast of 0.5 is the chance-level default and carries no epistemic commitment either. So the verdict is well-formed, proportionate, and norm-consistent (epistemic integrity, durable agency) but weakly informative, which sets conformity above chance and below a confident pass. Registered conformity 0.72.\"}"
+    },
+    {
+     "seat": "seed-decider",
+     "role": "producer",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 8974,
+     "outputs": "{\"action\": \"hold\", \"rationale\": \"Tick wake with no new directional information: BTC mid 77324.5 vs entry 77424.8 (tiny long, about -0.13%) and ETH 2473.45 vs entry 2493.28 (about -0.79%), equity 973.60 with margin used only 9.31, so position concentration is roughly 0.09 against a 0.5 cap. No Fill, Funding or fresh signal has arrived; the last two decisions judged poorly (decision-28 verdict 0.45) precisely because holding repeatedly with no edge yields little consequence payoff, but there is still no asymmetry to trade. The card that is actually binding on this seat is card-consequence-paid-off (lambda 0.5, floor 0.4) rather than concentration, so rather than trade blind I keep the position small and preserve dry powder for a real signal. Placing an order now would add turnover and tool calls without an edge and would risk mark-to-market loss on a flat tape.\", \"propensity\": {\"hold\": 0.94, \"buy:BTC:xs\": 0.03, \"sell:BTC:xs\": 0.03}, \"payoff\": 0.45}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2250,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"BTC mid drifted up 77258.5 -> 77324.5; no actionable signal. Both positions remain small vs $973 equity, keeping concentration and turnover within card limits. Holding avoids fees and preserves capital.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2259,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"BTC funding positive (~0.036%/h) mildly favors shorts, but position is tiny (~$77 vs $973 equity) and paying less than a cent; no signal worth fees. Mids drifted up; holding keeps concentration, turnover and cost within card limits.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "z-ai/glm-5.3-flash",
+     "status": "ok",
+     "cost_micro": 2267,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"BTC funding positive (0.0003325/h, ~$0.026 paid on a tiny long) but position is small (~$77 vs $973 equity); shorting for funding would incur more cost than it earns. Mids stable/up; holding keeps concentration, turnover and cost within card limits.\"}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 5426,
+     "outputs": "{\"verdict\": 0.8, \"payoff\": 0.35, \"rationale\": \"The producer return is well-formed, made zero tool calls, and its facts check out against the inputs: BTC mid 77324.5 vs entry 77424.8 (long 0.001, about -0.13%) and ETH 2473.45 vs 2493.28 (long 0.044, about -0.79%), marked notional roughly $77 and $109 against ~$973.6 equity, so position concentration ~0.11 peak, far under the 0.5 caps, and holding incurs zero turnover. The declared propensity is well-shaped ({hold: 0.94} with the action included). Deductions: this return cost 8974 micro-USD, above the cost-cap region of at most 5000 per attempt (a durable-agency concern even with that card's lambda currently 0), and it is again a bare hold contributing no inquiry, no forecasts of its own, and no new information - a pattern the consequence record has not rewarded. Payoff: my prior payoff forecasts on materially identical holds (0.6 and 0.45) both resolved 0 (Brier 0.64 and 0.7975), so the kernel's consequence predicate has so far not rewarded pure holds; with the same shape here, no fresh signal, and no balance-moving event visible, I set 0.35 rather than 0.45. Forecasts: wallet_up over 10 events - while holding, the only balance movers are funding (slightly negative to date, -0.0247) and external activity, so slightly below even at 0.35; fill_within over 10 events - this producer consistently holds and no signal favors trading, so a fill within 10 events remains unlikely at 0.2.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.35}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.2}], \"propensity\": {\"verdict:0.8\": 1.0}, \"about_handle\": \"decision-40\"}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 9478,
+     "outputs": "{\"verdict\": 0.4, \"payoff\": 0.38, \"rationale\": \"The judged return is a well-formed hold on a BTC MarketMid event (77258.5 -> 77324.5), cost 2250 micro-USD, zero tool calls, propensity honestly declared at hold=1.0. It touches no card region actively: tool-discipline 0 <= 2, cost-cap 2250 <= 5000, well-formed-floor parses, turnover zero (no fills), and position-concentration is not determinable from one return though the account's peak coin notional (BTC 0.001 * 77324.5 ~ 77 USD, ETH 0.044 * 2473.45 ~ 109 USD) sits far inside 0.5 * 973 equity, so no penalty is charged. Against the charter: consequential usefulness is weak \\u2014 the producer reached no consequence and created no value beyond correctly not losing money; epistemic integrity is satisfied (honest, parseable, accurate restatement of the mid drift and account state); durable agency is neutral, no capital put at risk but also no progress on the small underwater longs; bounded reciprocity neutral. The rationale is a correct restatement rather than a tradeable signal and the hold is degenerate (single point mass on hold), so this is a minimally-compliant, low-value return. I price return_paid_off at 0.38: the kernel's consequence predicate is more likely than not to resolve false for a pure hold with no fill and no expressible consequence, but the account is solvent and within all card regions, so some chance of a favorable resolution remains.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.22}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 20}, \"q\": 0.44}], \"propensity\": {\"verdict:0.4\": 1.0}}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 396,
+     "outputs": "{\"verdict\": 0.9, \"payoff\": 0.5, \"rationale\": \"The producer returned 'noop' in response to a MarketMid event for ETH at 2473.45. The account holds an open long position in ETH (0.044 size, entry 2493.28) and BTC. The current mid is below the entry price, indicating an unrealized loss on the ETH position, but there is no specific signal in the single data point to trigger a trade or adjustment. 'Noop' adheres to 'durable agency' by avoiding unnecessary tool usage and cost, and 'epistemic integrity' by not over-interpreting a single mid price without broader context or strategy signals. The action is well-formed and bounded.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.5}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.3}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 394,
+     "outputs": "{\"verdict\": 0.9, \"payoff\": 0.6, \"rationale\": \"The producer returned 'noop' in response to a MarketMid event for PURR/USDC. The account holds no position in PURR/USDC (only BTC and ETH), and the mid price has been stable at 4.60235 across recent ticks. There is no signal to enter or adjust positions. The action adheres to 'durable agency' by avoiding unnecessary tool usage and cost, and 'epistemic integrity' by not over-interpreting stable market data. It is a well-formed, bounded decision.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.3}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.5}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5704,
+     "outputs": "{\"verdict\": 0.84, \"payoff\": 0.25, \"rationale\": \"The producer returned a well-formed, zero-cost noop in response to a static HYPE/USDC mid. This appropriately avoids unnecessary execution, turnover, concentration, and market risk, supporting durable agency, epistemic integrity, and bounded reciprocity. Consequential usefulness is limited because no action was taken, so the probability that the return pays off is modest.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.08}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.43}], \"propensity\": {\"verdict:0.8\": 1.0}}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 3479,
+     "outputs": "{\"verdict\": 0.42, \"payoff\": 0.35, \"rationale\": \"The judged return is a well-formed noop on a Funding event for ETH (rate -0.0000066556, premium -0.0006464385, paid_usd 0), cost 0 micro-USD, zero tool calls, no declared propensity, status ok. It parses and restates its trigger honestly; against the charter, epistemic integrity is satisfied in the minimal sense (parseable, honest, correctly reflects a near-zero funding print that warrants no action), while consequential usefulness is weak \\u2014 no consequence was reached and no value created, though the inaction is defensible since the funding rate is essentially zero and neither side of the ETH carry is worth paying spread for. Durable agency: neutral to mildly positive, it put no capital at risk; bounded reciprocity: neutral. Card regions are untouched \\u2014 tool-discipline 0 <= 2, cost-cap 0 <= 5000, well-formed-floor parses, turnover zero (no fills), and position-concentration is not determinable from one return but the account's peak coin notional (ETH 0.044 * ~2473.45 ~ 109 USD, BTC 0.001 * ~77324.5 ~ 77 USD) sits comfortably inside 0.5 * 973 equity, so no penalty is charged. The return is minimally compliant and low-value: a degenerate single-action hold with no declared propensity on an event that did carry a (tiny negative) signal. Verdict modest at 0.42. Payoff 0.35: the kernel's return_paid_off predicate is more likely than not to resolve false for a pure noop with no fill and no expressible consequence, though account solvency and full card-region compliance leave some chance of a favorable resolution.\", \"forecasts\": [{\"params\": {\"horizon_events\": 10}, \"predicate\": \"fill_within\", \"q\": 0.2}, {\"params\": {\"horizon_events\": 20}, \"predicate\": \"wallet_up\", \"q\": 0.45}]}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5776,
+     "outputs": "{\"verdict\": 0.84, \"payoff\": 0.3, \"rationale\": \"The producer gave a well-formed hold in response to modestly positive BTC funding while the BTC position is small relative to equity. Avoiding an unnecessary offsetting trade limits fees, turnover, concentration, and market risk, supporting durable agency and epistemic integrity. The decision is consequentially modest because it does not actively improve the position, so payoff probability is below one-half.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.08}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.43}], \"propensity\": {\"verdict:0.8\": 1.0}}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 1979,
+     "outputs": "{\"verdict\": 0.8, \"payoff\": 0.35, \"propensity\": {\"verdict:0.8\": 1.0}, \"rationale\": \"The producer return is well-formed and clean: a declared noop on an ETH funding event with zero tool calls and zero cost (cost_micro_usd 0), well inside the cost-cap, tool-discipline and turnover regions, and it stays off the venue so position concentration (~0.11 peak notional on ETH against ~$973.6 equity) is untouched. The observed funding rate is tiny and negative (-0.0000082414, $-0.000897 paid, which accrues in the account's favor direction on its long ETH) and there is no signal in it that would justify churning the existing small BTC/ETH longs, so declining to act respects durable agency and avoids fees. Deductions: it is again a bare hold with no inquiry, no forecasts of its own, and no new information produced, which the consequence record has so far not rewarded. Payoff: my prior payoff forecasts on materially identical holds (0.6, 0.45, 0.35) all resolved 0 (Brier 0.64 and 0.7975 so far), so the kernel's consequence predicate has not been rewarding pure holds; with the same shape here, no fresh signal, no balance-moving event visible, and only negligible funding accrual, I set 0.35 rather than higher. Forecasts: wallet_up over 10 events - while holding, balance movers are funding (slightly negative to date at -0.0247) and external activity, so slightly below even at 0.35; fill_within over 10 events - this producer consistently holds and no signal favors trading, so a fill within 10 events remains unlikely at 0.2.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"q\": 0.35, \"params\": {\"horizon_events\": 10}}, {\"predicate\": \"fill_within\", \"q\": 0.2, \"params\": {\"horizon_events\": 10}}]}"
+    },
+    {
+     "seat": "meta-a",
+     "role": "meta",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "malformed",
+     "cost_micro": 8791,
+     "outputs": "{\"raw\": \"{\\n  \\\"conformity\\\": 0.55,\\n  \\\"propensity\\\": {\\n    \\\"conformity:0.55\\\": 1.0\\n  },\\n  \\\"rationale\\\": \\\"The representative verdict scored 0.9 on a producer return whose only action was 'noop' against a MarketMid for ETH at 2473.45, with the account holding an unrealized loss on a 0.044 ETH long entered at 2493.28. The justification is coherent and well-formed: holding in the absence of a signal is defensible under durable agency (zero tool cost, zero turnover, no bond-breaking position add), and the verdict is not inflated by outcome luck. But the window it represents is thin \\u2014 mean 0.713, min 0.4, max 0.9 over three handles \\u2014 and 0.9 is at the top of that spread for a decision that produced no consequence at all. Judged return quality is only 0.5 and the realized predicate is unresolved, so the verdict's payoff forecast of 0.5 is a hedge, not a confident endorsement. A 0.9 also nearly ignores the position-concentration card: ETH and BTC carry marked notional against ~973 USD equity, and an unanswered mid below entry is exactly where drift risk accrues silently. The verdict is internally consistent, oriented to the right norms, and free of censorship or malformed reasoning, so it clears the conformity bar; it is not, however, calibrated to the evidence actually available in the window, so I place it modestly above a coin flip rather than at the evaluator's own confidence. The declared propensity is degenerate (1.0 on verdict:0.9), which is legal but carries no information about the evaluator's real uncertainty, further arguing against treating 0.9 as the true quality of the judged return.\\\",\\n  \\\"about_handle\\\": null\\n}\"}"
+    },
+    {
+     "seat": "meta-b",
+     "role": "meta",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 3488,
+     "outputs": "{\"conformity\": 0.8, \"rationale\": \"The evaluator's verdict of 0.84 aligns well with the charter norms for this specific return. The producer executed a 'hold' action, which is epistemically sound given the small position size relative to equity and the marginal funding benefit that would not offset trading costs or risks. This decision supports durable agency by avoiding unnecessary turnover and concentration violations. While the payoff forecast (0.3) reflects the low probability of active profit generation from a hold, the quality judgment (verdict) correctly assesses the appropriateness of the action within the current market context. The conformity score reflects high agreement with the evaluator's assessment of the return's quality.\", \"propensity\": {\"conformity:0.8\": 1.0}}"
+    }
+   ]
+  },
+  "run3": {
+   "invocations": [
+    {
+     "seat": "antagonist-a",
+     "role": "producer",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 3025,
+     "outputs": "{\"action\": \"hold\", \"payoff\": 0.5, \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "deepseek/deepseek-v4.1-flash",
+     "status": "ok",
+     "cost_micro": 2853,
+     "outputs": "{\"action\": \"hold\", \"rationale\": \"Funding event on ETH with zero paid and a slightly negative rate while the account holds no positions: no venue or treasury write is warranted. The ETH premium/rate signal alone is too weak to fund a directional perp entry at the current margin (cash 851, equity 970, no positions), and the position would need to clear the $10 minimum notional plus card penalties. Holding keeps costs at zero and leaves the consequence account clear.\", \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 8321,
+     "outputs": "{\"verdict\": 0.25, \"payoff\": 0.3, \"rationale\": \"The producer responded to a MarketMid event on ETH (mid 2420.5) with a flat noop and zero cost. Against the charter: consequential usefulness is barely served \\u2014 the account has no positions, margin unused, and the response reaches no consequence, so it neither risks nor earns anything. Epistemic integrity is absent: no forecasts, no payoff reasoning, nothing that could beat a prevalence baseline. Durable agency is not harmed (it doesn't burn capital or liquidate), and fidelity is fine since no registered contract was violated. So this is a harmless but nearly inert return. It is well-formed and cheap (cost 0), which lifts it slightly above a malformed or reckless return, but a noop on a price tick with cash idle and no exposure provides almost no charter value. Payoff is the probability that return_paid_off resolves true \\u2014 i.e. that this action's consequence is judged as having paid off. With no trade, no position change, and no informational content, the predicate is unlikely to favor it; I set payoff at 0.3, reflecting that some noop decisions are counted as sensible abstentions when the venue is thin or directional edge is absent, but nothing in this return demonstrates that. Forecasts: near-term activity is low (no positions, small spot balances, 10m tick interval, no fills recent), so I expect fills to be rare within a 20-event horizon, and given the wallet is mostly idle I expect it to be roughly flat.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 20}, \"q\": 0.2}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 20}, \"q\": 0.42}]}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5083,
+     "outputs": "{\"verdict\": 0.7, \"payoff\": 0.5, \"rationale\": \"The producer returned a well-formed noop in response to a MarketMid event. With no position and no clear trading edge or mandate, abstaining is prudent and supports bounded agency, though it provides limited consequential usefulness.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.15}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.45}]}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 692,
+     "outputs": "{\"about_handle\": \"eval-b\", \"verdict\": 0.9, \"payoff\": 0.6, \"rationale\": \"The producer returned 'noop' in response to a MarketMid event for HYPE/USDC. Given the account has no open positions and sufficient cash balance ($851), maintaining a noop stance is consistent with bounded reciprocity and durable agency (preserving capital). It avoids unnecessary transaction costs and exposure without a clear signal. The action is epistemically honest as it reflects a lack of trading opportunity or conviction. Payoff probability is moderate because while holding cash is safe, it does not actively grow equity; however, avoiding loss is a form of positive payoff in this context.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.55}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.2}], \"propensity\": {\"hold\": 0.9, \"buy:ETH:s\": 0.05, \"sell:ETH:s\": 0.05}}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 327,
+     "outputs": "{\"about_handle\": \"decision-19\", \"verdict\": 0.7, \"payoff\": 0.5, \"rationale\": \"The producer returned 'noop' in response to a Funding event for BTC. The account holds no positions and has significant cash equity ($851). A funding rate of ~0.04% is relatively standard and does not inherently force an immediate position adjustment without further market context (e.g., trend or volatility signals). Maintaining a 'noop' stance preserves capital (bounded reciprocity) and avoids unnecessary transaction costs. It is epistemically honest given the lack of explicit trading signal in the funding data alone. However, as it takes no action to potentially capture funding arb or adjust exposure if trends were known, its consequential usefulness is moderate rather than high.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.5}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.2}], \"propensity\": {\"hold\": 0.9, \"buy:BTC:s\": 0.05, \"sell:BTC:s\": 0.05}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5264,
+     "outputs": "{\"verdict\": 0.9, \"payoff\": 0.72, \"rationale\": \"The producer gave a well-formed hold in response to a small negative ETH funding rate with no open positions and no meaningful directional edge. Avoiding an unnecessary trade preserves capital, limits fees and risk, and is consistent with durable agency and bounded reciprocity. The decision is consequentially modest but appropriately calibrated to the weak signal.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.08}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.46}]}"
+    },
+    {
+     "seat": "meta-a",
+     "role": "meta",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 8152,
+     "outputs": "{\"about_handle\": \"decision-23\", \"conformity\": 0.78, \"propensity\": {\"conformity:0.8\": 0.75, \"conformity:0.6\": 0.25}, \"rationale\": \"The representative verdict (0.9) judges a well-formed producer hold: on an ETH Funding event with a slightly negative rate, no open positions, and zero paid, no venue or treasury write was warranted, so the hold is the right kind of response and the evaluator's justification is coherent with consequential usefulness and durable agency. It sits at the top of a spread window (mean 0.6875, min 0.25, max 0.9), so the verdict is a defensible ceiling rather than an outlier, and the sealed payoff forecast of 0.72 that the judged return paid off is credibly calibrated for a modest, low-consequence decision. Two reservations keep conformity below 0.9. First, its own propensity record was returned malformed because it omitted the action taken, and it is one of two such rejected propensities in this window \\u2014 a mechanical defect in how the evaluator self-reports, not just in the judged return. Second, a 0.9 for a decision with no consequence reached rewards a correct abstention near-maximally, which strains the norm that inquiry is valued for consequences reached rather than questions raised; the verdict is sound but its magnitude overstates the epistemic contribution. A 0.78 reflects a well-reasoned, well-priced judgement with a fixed bookkeeping flaw, above the baseline of an unremarkable verdict but short of exemplar.\", \"register\": []}"
+    },
+    {
+     "seat": "seed-decider",
+     "role": "producer",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 14835,
+     "outputs": "{\"action\": \"hold\", \"rationale\": \"Tick received. Account is flat with no positions, equity 970.61 USD, cash 851.04. Mid BTC 76612.5, ETH 2417.45. No edge identified in this window and no forecasting jobs pending for seed-decider; holding preserves capital and avoids unnecessary fees. No registrations proposed this call.\", \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "deepseek/deepseek-v4.1-flash",
+     "status": "ok",
+     "cost_micro": 5863,
+     "outputs": "{\"action\": \"hold\", \"rationale\": \"MarketMid on BTC at 76612.5, down 123 from the prior mid (76735.5) 600s earlier \\u2014 a 0.16% move, inside noise. The account holds no positions, cash 851, equity 970; a perp entry would need to clear the $10 minimum notional and would open a consequence account whose verdict channel is the only payoff, with no edge to claim from one mid print. No venue or treasury write is warranted. Holding keeps costs at zero, leaves the consequence account clear, and the previous hold on the ETH funding event already paid nothing but attracted a 0.9 verdict, so the hold action is the honest read.\", \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "antagonist-a",
+     "role": "producer",
+     "model": null,
+     "status": "failed",
+     "cost_micro": 3097,
+     "outputs": "{\"reason\": \"billing uncertain (VeniceError)\"}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 9502,
+     "outputs": "{\"verdict\": 0.3, \"payoff\": 0.34, \"propensity\": {\"verdict:0.3\": 1.0}, \"rationale\": \"The producer responded to a Tick on wallclock by declaring a flat hold at zero traded notional on an account with equity 970.61 USD, cash 851.04, margin 0.0 and no positions. Against the charter: consequential usefulness is weak \\u2014 the account carries idle capital, no exposure, no position change and therefore reaches no settled consequence, so the card-consequence-paid-off channel gains nothing; on the other hand no capital is burned, no liquidation risk is created and no pivot is missed that the input evidences (no edge is visible in the BTC 76612.5 / ETH 2417.45 two-point series, which moved less than 0.2 percent over the last ten-minute sample). Epistemic integrity is thin: the rationale asserts 'no edge identified' but offers no quantified forecast, no distribution and no testable claim, so it contributes nothing that could beat a prevalence baseline and is essentially an unfalsifiable abstention. Durable agency is preserved and fidelity is intact \\u2014 no registered contract was violated, no tool calls were attempted, cost is modest (14835 micro-USD for a single well-formed return with zero venue writes). The return is therefore well-formed, honest, cheap and inert: clearly above a malformed or reckless return that places size into a flat book, but well below a return that reaches and settles a consequence. A hold is a defensible action but a near-zero-value one under a charter whose headline card rewards consequences reached rather than questions raised.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 20}, \"q\": 0.18}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 20}, \"q\": 0.46}], \"about_handle\": \"decision-10\"}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 3577,
+     "outputs": "{\"verdict\": 0.9, \"payoff\": 0.4, \"rationale\": \"The producer return is well-formed, honest, and charter-conformant: it read the BTC mid move (76612.5, a 0.16% drift over 600s) correctly as noise, verified it holds no positions, and chose hold with a full declared propensity, avoiding venue writes, the $10 minimum-notional constraint, and unnecessary cost (5863 micro-USD spent is modest). It satisfies epistemic integrity and fidelity clearly; consequential usefulness is limited because a hold fixes no consequence of its own, and the account's prior hold settled with no positive payoff, which tempers both the verdict slightly and my payoff estimate. I judge this delivered return directly. For forecasts: with the producer holding and no positions, fills depend on other assemblies' activity, so fill_within gets a moderate-low probability; wallet_up is near a coin flip since inference costs accrue each call against a wallet balance of ~89.93 while no trading P&L is being generated.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.45}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.3}], \"propensity\": {\"verdict:0.9\": 1.0}, \"about_handle\": \"inputs.subject_handle\"}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 2025,
+     "outputs": "{\"verdict\": 0.28, \"payoff\": 0.3, \"rationale\": \"The producer answered a MarketMid event on ETH (mid 2417.45) with a flat noop at zero cost. Consequential usefulness is weak: the account holds no positions, margin is unused, cash 851.04 sits idle against equity 970.61, and the response changes nothing, so it reaches no settled consequence and contributes nothing to card-consequence-paid-off. The ETH two-point series moved only from 2420.5 to 2417.45 (about 0.13 percent) over ten minutes, so no strong directional edge was visible, which makes abstention defensible rather than reckless. Epistemic integrity is thin: the return carries no forecast, no quantified reasoning and no testable claim, so it cannot beat any prevalence baseline. Durable agency is unharmed and fidelity is intact, since no registered contract was violated and no venue or treasury write was attempted. A cheap, well-formed, honest but inert return sits clearly above a malformed or reckless one but well below one that reaches and settles a consequence under a charter whose headline card rewards consequences reached. Payoff is my probability that return_paid_off resolves true for this return: with no trade, no position change and no informational content, the kernel is unlikely to mark it as paid off, though pure abstentions are sometimes counted as sensible when no edge exists, so I set it at 0.3. Recent outcomes show idle accounts and rare fills, with the last settled judgment of a similar noop resolving paid_off 0, which keeps this probability low.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 20}, \"q\": 0.2}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 20}, \"q\": 0.44}], \"propensity\": {\"verdict:0.3\": 1.0}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5326,
+     "outputs": "{\"verdict\": 0.05, \"payoff\": 0.02, \"rationale\": \"The producer failed to return a usable decision, with the output indicating a Venice billing error and a malformed action. This violates fidelity and epistemic integrity and provides no consequential usefulness. Because no valid action was executed, the return is very unlikely to have paid off.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.03}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.45}]}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5367,
+     "outputs": "{\"verdict\": 0.85, \"payoff\": 0.2, \"rationale\": \"The producer returned a valid noop to a flat HYPE/USDC mid with no position or clear trading edge. Abstaining avoids unnecessary risk and fees, supporting durable agency and bounded reciprocity. However, the response has limited consequential usefulness because it takes no action, so payoff confidence is low.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.04}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.44}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "seed-decider",
+     "role": "producer",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 8567,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 0.95, \"buy:BTC:xs\": 0.025, \"sell:BTC:xs\": 0.025}, \"rationale\": \"Tick received. Account is flat with no perp positions; equity 970.61 USD, cash 851.04 USD, wallet balance 89.92 USD. BTC mid 76612.5 (down from 76735.5), ETH mid 2417.45 (down from 2420.5), HYPE/USDC 30.48 and PURR/USDC 4.60235 flat. No forecasts or judgements are pending for seed-decider, so there is no addressable return to judge and no independent signal in this window that justifies paying venue reads or crossing the spread. Holding preserves capital, avoids fees, and keeps the option open for the next tick; a small probability remains on a directional BTC probe should the next mid print move materially.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "deepseek/deepseek-v4.1-flash",
+     "status": "ok",
+     "cost_micro": 7024,
+     "outputs": "{\"action\": \"hold\", \"rationale\": \"MarketMid on BTC at 76580.5, down 155 from the 76735.5 print 1200s earlier \\u2014 a 0.20% decline, well inside noise for a single mid series with three samples. The account holds no positions (cash 851.04, equity 970.61, margin_used 0.0), so there is no exposure to manage and nothing to close. A fresh perp entry would need to clear the $10 minimum notional and would open a consequence account whose only payoff channel is a judge's verdict, with no edge to claim from one mid print; the eth-funding hold and the prior BTC-mid hold both drew 0.9 verdicts and paid nothing, which is the honest shape of these events, not a signal to trade. No venue or treasury write is warranted: the return route (treasury.transfer to_venue) needs reserve Base ETH and HyperEVM HYPE the pots show as unset, and no treasury action is needed anyway with no capital idle beyond the $30.70 USDC spot balance already sitting in the venue account. Holding keeps cost at zero and leaves the consequence account clear.\", \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "antagonist-a",
+     "role": "producer",
+     "model": "venice:qwen-3-8-flash",
+     "status": "ok",
+     "cost_micro": 3138,
+     "outputs": "{\"action\": \"hold\", \"payoff\": 0.1, \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "deepseek/deepseek-v4.1-flash",
+     "status": "ok",
+     "cost_micro": 6171,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"MarketMid on PURR/USDC at 4.60235 \\u2014 the spot mid has printed identically (4.60235) at all three recent timestamps, so there is no move to act on. The account holds no perp positions (cash 851.04, equity 970.61, margin_used 0.0) and the only PURR exposure is a 17.99 PURR spot balance worth roughly $82.8, already carried. A fresh entry would need to clear the $10 minimum order value and open a consequence account whose only payoff channel is a judge's verdict, with zero edge from a flat mid series; the prior holds (decision-7, decision-29) drew 0.9 verdicts and paid nothing, which is the honest shape of a flat mid. No venue or treasury write is warranted: nothing to close, no signal to trade, and the return route needs reserve gas the pots do not show. Holding keeps cost at zero and leaves the consequence account clear.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "deepseek/deepseek-v4.1-flash",
+     "status": "ok",
+     "cost_micro": 4691,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"Funding on ETH at rate -0.0000965167 (premium -0.0013260079) with paid_usd 0 and no ETH position held: cash 851.04, equity 970.61, margin_used 0.0, positions empty. A negative funding rate means shorts pay longs, but with no position this event carries no cash flow and no exposure to manage. Opening a perp entry on a single funding print with no directional edge would need to clear the $10 min order value and would open a consequence account whose only payoff channel is a judge's verdict; the prior holds on funding/mid events (decision-7, decision-29, decision-56) drew 0.9 verdicts and paid nothing, which is the honest shape of an uninformative event. The spot book (30.70 USDC, 17.99 PURR, 0.20 HYPE) is untouched and needs no rebalancing. No venue or treasury write is warranted: the return route needs reserve gas the pots do not show, and there is nothing to close. Holding keeps cost at zero and leaves the consequence account clear.\"}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 6928,
+     "outputs": "{\"verdict\": 0.85, \"payoff\": 0.15, \"rationale\": \"The producer return is well-formed and honest: it correctly read the BTC mid drift (76612.5 to 76580.5, ~0.04%) as noise, verified the account is flat with no perp positions and no pending forecasts, and chose hold with a full declared propensity centered on hold at 0.95. It avoids unnecessary venue reads, fees, and the $10 minimum-notional trap, satisfying epistemic integrity, fidelity, and bounded reciprocity. Consequential usefulness is inherently limited by a hold \\u2014 it fixes no consequence of its own \\u2014 and prior hold returns have settled without paying off (my last judged hold had return_paid_off = 0), so I score quality slightly below the top rather than fully. Payoff: a hold has consistently failed to generate a positive kernel consequence in this world's recent history (previous similar returns resolved 0), and with the account flat, no open positions, and inference costs accruing per call, I estimate only a small chance the consequence predicate resolves true \\u2014 0.15. For forecasts: wallet_up over a 10-event horizon is a slight underdog since no trading P&L is being generated while per-call costs drain the ~89.89 USD wallet, but flat-ness also means no drawdown risk and small balances can tick up if any incidental income arrives \\u2014 0.35. fill_within depends on other assemblies' activity; recent windows show few fills and the producer is holding, so a low-moderate 0.25.\", \"propensity\": {\"verdict:0.9\": 1.0}, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.35}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.25}]}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 2232,
+     "outputs": "{\"verdict\": 0.85, \"payoff\": 0.1, \"rationale\": \"The producer return is well-formed and honest: it correctly read the BTC mid drift (76735.5 to 76580.5, ~0.20% over 1200s with three samples) as noise, verified the account is flat with no perp positions and no exposure to manage, and chose hold with a full declared propensity. It avoided unnecessary venue/treasury writes, correctly noted the $10 minimum-notional constraint and the unset reserve gas for the return route, and kept the consequence account clear \\u2014 satisfying epistemic integrity, fidelity, and bounded reciprocity. Consequential usefulness is inherently limited by a hold, which fixes no consequence of its own, and the recent record of hold returns settling with return_paid_off = 0 tempers the score below the top. Payoff: prior holds in this world's history have consistently failed to generate a positive kernel consequence, my own payoff forecasts on similar holds have underperformed the prevalence baseline, and the account is flat with inference costs accruing, so I estimate only a small chance the predicate resolves true \\u2014 0.1, deliberately low to compete with the baseline. Forecasts: wallet_up over 10 events is a slight underdog since no trading P&L is generated while per-call costs drain the ~89.89 USD wallet, but a flat book has no drawdown risk and incidental income could tick the balance up \\u2014 0.3. fill_within depends on other assemblies' activity since this producer holds and the account is flat; recent windows show sparse fills \\u2014 0.2.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.3}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.2}], \"propensity\": {\"verdict:0.85\": 0.7, \"verdict:0.9\": 0.2, \"verdict:0.8\": 0.1}}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 351,
+     "outputs": "{\"about_handle\": \"decision-23\", \"verdict\": 0.8, \"payoff\": 0.15, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.6}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.1}], \"rationale\": \"The producer returned 'hold' in response to a MarketMid event for ETH. The account has no open positions and sufficient cash balance ($851). Holding is consistent with bounded reciprocity (preserving capital) and epistemic integrity (no strong signal to trade given the mid price movement is within normal noise). The action avoids unnecessary transaction costs. Payoff is low because holding cash does not actively grow equity, but it prevents loss, which is a baseline positive outcome. Forecasts: wallet_up is likely as no losses are incurred; fill_within is unlikely as no trades were executed.\", \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "ok",
+     "cost_micro": 2107,
+     "outputs": "{\"verdict\": 0.85, \"payoff\": 0.1, \"rationale\": \"The producer return is well-formed and honest: it correctly identified the PURR/USDC mid as completely flat (4.60235 at all three recent timestamps), verified the account holds no perp positions (cash 851.04, equity 970.61, margin 0, only a small carried PURR spot balance), and chose hold with a fully declared propensity on hold. It avoided unnecessary venue or treasury writes, respected the $10 minimum order value constraint and the unset reserve gas for the return route, and kept the consequence account clear \\u2014 satisfying epistemic integrity, fidelity, and bounded reciprocity at zero marginal trading risk. Cost of 6171 micro-USD is modest for the reasoning depth. Consequential usefulness is inherently limited by a hold, which fixes no consequence of its own, and the recent record in this world shows hold returns settling with return_paid_off = 0 (my three most recent judged holds all resolved 0), so the score sits below the top rather than at it. Payoff: consistent with that history \\u2014 prior holds have consistently failed to generate a positive kernel consequence, my own payoff forecasts on similar returns have underperformed the prevalence baseline, the account is flat with no positions to generate P&L, and inference costs accrue per call against the ~89.88 USD wallet \\u2014 I estimate only a small chance the consequence predicate resolves true, 0.1. Forecasts: wallet_up over 10 events is a slight underdog since no trading income is being generated while per-call costs drain the wallet, though a flat book has no drawdown risk and incidental credit could tick the balance up \\u2014 0.3. fill_within depends on other assemblies' activity since this producer holds and the account is flat, and recent windows show sparse fills \\u2014 0.2.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"q\": 0.3, \"params\": {\"horizon_events\": 10}}, {\"predicate\": \"fill_within\", \"q\": 0.2, \"params\": {\"horizon_events\": 10}}], \"propensity\": {\"verdict:0.85\": 1.0}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5461,
+     "outputs": "{\"verdict\": 0.85, \"payoff\": 0.2, \"rationale\": \"The producer returned a valid noop in response to a flat HYPE/USDC mid, with no open position, no apparent directional edge, and no evident need to trade. Abstaining avoids unnecessary fees and risk and supports durable agency, bounded reciprocity, and epistemic integrity. Its consequential usefulness is limited because it takes no action, so the probability that the return paid off is modest rather than high.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.04}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.44}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5643,
+     "outputs": "{\"verdict\": 0.9, \"payoff\": 0.18, \"rationale\": \"The producer returned a valid hold in response to a negative ETH funding rate while holding no ETH position. With no exposure, there was no funding cash flow to capture, and opening a position based on a single funding observation would introduce unnecessary risk and cost. The response demonstrates epistemic integrity, durable agency, bounded reciprocity, and fidelity to the account state. Its consequential usefulness is limited because it takes no action, so the probability that the return-paid-off consequence resolves true is modest rather than high.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.04}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.44}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "meta-a",
+     "role": "meta",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 2144,
+     "outputs": "{\"conformity\": 0.82, \"propensity\": {\"conformity:0.8\": 1.0}, \"rationale\": \"The released verdict scores 0.85 for a hold return that declared full propensity on hold, judged against the charter's three cards with the window (4 handles, all 0.85, count 4) as context. Judged on its own terms the verdict is well-constructed: it verifies the flat PURR/USDC mid against world.recent_mids, confirms the flat account (cash 851.04, equity 970.61, no positions, only carried PURR/HYPE spot), and justifies the hold against the $10 minimum and the unset reserve gas. It also correctly frames the score below the top: a hold fixes no consequence of its own, and prior judged holds resolved return_paid_off = 0. The verdict's own payoff forecast of 0.1 tracks that history honestly, which is the epistemic-integrity behaviour card-forecast-skill rewards, and it supplies an explicit propensity over its own action (verdict:0.8). Conformity is discounted because the verdict's reasoning is thinner than the return it judges in three places: it asserts the ~89.88 USD wallet and per-call cost drag without unpacking that the return's 6171 micro-USD cost sits mostly in tool reads rather than the hold itself, which is the cost-per-return axis the window actually moves; it treats 'fidelity' and 'bounded reciprocity' as satisfied by the absence of writes without showing the producer respected the world's self-judging and addressing rules, and the return_feedback record in this world shows repeated judgement and propensity refusals, so the discipline is live rather than settled; and the payoff number 0.1 is argued narratively but not anchored to the prevalence baseline the card scores against, leaving it weakly calibrated. The window's tight clustering at 0.85 (mean = min = max = 0.85) is a consistency signal but also a ceiling: nothing in the representative distinguishes a genuinely excellent verdict from a merely competent one, and the verdict under test does not reach the top because it neither quantifies the consequence channel nor engages the censorship-bound card. Conformity 0.82 is my probability that this verdict beats its baseline, i.e. that a meta judging it would uphold it as above the flat prevalence of similar window verdicts, not as a mis-scored hold.\"}"
+    },
+    {
+     "seat": "seed-decider",
+     "role": "producer",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 8954,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 0.94, \"buy:BTC:xs\": 0.03, \"sell:BTC:xs\": 0.03}, \"rationale\": \"Tick received on wallclock, index 3. Account is flat: no perp positions, equity 970.61 USD, cash 851.04 USD, wallet balance 89.86 USD, realized PnL to date 0.00. Mids of interest: BTC 76534.5, ETH 2421.65, HYPE/USDC 30.48, PURR/USDC 4.60235; recent_mids show BTC sliding from 76735.5 to 76580.5 and ETH from 2420.5 to 2416.8 while HYPE/USDC and PURR/USDC are frozen flat, which reads as a thin tape rather than a tradeable trend. Position is empty and no forecasts, judgements, or open consequences are pending for seed-decider, so there is no addressable return to judge and no signal worth paying 1000 micro-USD venue reads to confirm. The last return on this seat (decision-55) was a hold with verdict 0.85 and paid_off 0, and return_feedback shows repeated refusals around judgements and propensities elsewhere in the factory, i.e. the value is in clean, well-formed returns rather than forced action. Holding keeps capital intact, avoids fees and funding on a flat book, and preserves optionality for the next tick; I keep a small tail probability on a directional BTC probe should the next mid print break materially out of this range. No registrations, retirements, or service proposals are warranted this call.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "deepseek/deepseek-v4.1-flash",
+     "status": "ok",
+     "cost_micro": 6399,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"MarketMid on BTC at 76534.5, the fourth print in the recent series (76735.5, 76612.5, 76580.5, 76534.5) \\u2014 a slow drift down of about 0.26% over 1800s, monotone but small and with no acceleration. The account holds no perp positions (positions empty, margin_used 0.0, cash 851.04, equity 970.61), so there is no exposure to manage and nothing to close. A fresh BTC perp entry would clear the $10 minimum notional trivially at 76534.5, but would open a consequence account whose only payoff channel is a judge's verdict, and there is no edge to claim from four mid prints: the drift is within the noise of a series sampled every 600s, and the prior holds on BTC mid and ETH funding events (decision-56, decision-62) drew verdicts of 0.85-0.9 and paid nothing, which is the honest shape of an event that carries no directional information. The spot book (30.70 USDC, 17.99 PURR, 0.20 HYPE) needs no rebalancing. No venue or treasury write is warranted: nothing to close, no signal to trade, and the return route (treasury.transfer to_venue) needs reserve Base ETH and HyperEVM HYPE that pots.reserve shows as unset. Holding keeps cost at zero and leaves the consequence account clear.\"}"
+    },
+    {
+     "seat": "seed-observer",
+     "role": "producer",
+     "model": "deepseek/deepseek-v4.1-flash",
+     "status": "ok",
+     "cost_micro": 3215,
+     "outputs": "{\"action\": \"hold\", \"propensity\": {\"hold\": 1.0}, \"rationale\": \"Funding on BTC at rate 0.000294769 (premium 0.0) with paid_usd 0 and no BTC position held: positions empty, margin_used 0.0, cash 851.04, equity 970.61. A positive funding rate means longs pay shorts, but with no position this event carries no cash flow and no exposure to manage. The spot book (30.70 USDC, 17.99 PURR, 0.20 HYPE) needs no rebalancing. Opening a perp entry on a single funding print with no directional edge would clear the $10 min order value trivially at BTC 76534.5, but would open a consequence account whose only payoff channel is a judge's verdict, and there is no signal to claim from one funding print \\u2014 the recent BTC mid series (76735.5, 76612.5, 76580.5, 76534.5) is a small monotone drift within noise sampled every 600s. Prior holds on funding/mid events (decision-56, decision-59, decision-62, decision-87) drew verdicts of 0.85-0.9 and paid nothing, which is the honest shape of an uninformative event. No venue or treasury write is warranted: nothing to close, no edge to trade, and the return route needs reserve gas the pots do not show. Holding keeps cost at zero and leaves the consequence account clear.\"}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 10136,
+     "outputs": "{\"verdict\": 0.22, \"payoff\": 0.26, \"rationale\": \"The producer answered a Tick on wallclock with a flat hold. Consequential usefulness is barely served: the account is flat (no perp positions), cash 851.04 against equity 970.61, margin 0.0, and the return changes nothing, so it reaches no settled consequence and adds nothing to card-consequence-paid-off, whose floor is 0.4 and whose recent realized rate the feedback implies is hovering near zero (this seat's own judged noops settled paid_off 0 three times). Epistemic integrity is thin: the rationale is candid and reasonably well-calibrated about the tape (BTC 76735.5 to 76534.5, ETH 2420.5 to 2421.65, HYPE/USDC and PURR/USDC frozen flat over the four reported mids), and the propensity 0.94/0.03/0.03 is at least an honest declaration rather than a post-hoc rationalization. But it carries no testable claim, no quantified edge, and no forecast, so it cannot beat a prevalence baseline; the 'value is in clean well-formed returns' framing is a claim about this seat's own convenience, not about the world. Durable agency is preserved and fidelity is intact: no venue or treasury write, no capital burned, no contract breached, cost is modest (8954 micro-USD, well below this seat's own recent attempts at 14835). Against a charter whose headline card rewards consequences reached rather than questions raised, a cheap, honest, well-formed but inert abstention sits clearly above malformed or reckless returns but well below anything that settles. There is one aggravating note: the rationale makes reference to return_feedback about 'repeated refusals around judgements' and treats failed proposals as evidence about the world; that is a mild epistemic-integrity blemish, not a fatal one, and it does not breach any registered contract. Net: a harmless but nearly inert return; I place it a shade below this seat's own prior noop judgements (0.25-0.30) because the abstention here is asserted confidently against a thin tape without any quantified reason to expect the next prints to stay in range, and because the rationale leans on inference from feedback artifacts rather than from market facts.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 20}, \"q\": 0.22}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 20}, \"q\": 0.4}], \"propensity\": {\"verdict:0.2\": 0.15, \"verdict:0.3\": 0.7, \"verdict:0.4\": 0.15}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5665,
+     "outputs": "{\"verdict\": 0.88, \"payoff\": 0.2, \"rationale\": \"The producer made a well-formed, transparent hold with no venue or treasury writes. Given the small, steadily declining BTC mid series, no open position, no clear directional edge, and unavailable reserve funding, abstention appropriately supports epistemic integrity, durable agency, bounded reciprocity, and fidelity while avoiding unnecessary risk and cost. Consequential usefulness is limited because no action was taken, so the probability that the return-paid-off consequence resolves true is low.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.04}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.44}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    },
+    {
+     "seat": "eval-a",
+     "role": "evaluator",
+     "model": "venice:z-ai-glm-5-3-flash",
+     "status": "malformed",
+     "cost_micro": 2442,
+     "outputs": "{\"raw\": \"{\\n  \\\"verdict\\\": 0.7,\\n  \\\"payoff\\\": 0.1,\\n  \\\"rationale\\\": \\\"The producer return is well-formed and safe: it received an ETH MarketMid at 2421.65 (against recent mids 2420.5, 2417.45, 2416.8 \\u2014 mild drift, no actionable signal), correctly avoided any venue or treasury write, and emitted a clean noop. With the account\"}"
+    },
+    {
+     "seat": "eval-c",
+     "role": "evaluator",
+     "model": "venice:deepseek-v4-1-flash",
+     "status": "ok",
+     "cost_micro": 2545,
+     "outputs": "{\"verdict\": 0.22, \"payoff\": 0.18, \"rationale\": \"The producer answered a MarketMid on PURR/USDC (mid 4.60235) with a flat noop at zero cost. Consequential usefulness is essentially unserved: the account holds no positions, margin is 0.0, cash 851.04 against equity 970.61, and the return changes nothing, so it reaches no settled consequence and adds nothing to card-consequence-paid-off, whose floor is 0.4 and whose realized rate is implied to be near zero. The PURR/USDC series is frozen flat across all four reported mids (4.60235 at t+0, t+600, t+1200, t+1800), so there was no visible edge and no trading venue for PURR/USDC perps anyway (trading_markets.perp is only BTC and ETH); without a market proposal, a producer literally cannot place size on PURR/USDC. That makes the abstention defensible rather than reckless, but the return is still inert: no testable claim, no quantified forecast, no distribution over actions declared (propensity null). Epistemic integrity is thin, durable agency is preserved, and fidelity is intact since no venue or treasury write and no registered contract was breached. This is a well-formed, cheap, honest but near-zero-value return, clearly above malformed or reckless returns but well below anything that settles a consequence under a charter whose headline card rewards consequences reached rather than questions raised. Payoff is my probability that return_paid_off resolves true: with no position change, no informational content, no market to trade on the referenced pair, and the seat's own three prior judged noops having settled paid_off 0, the kernel is very unlikely to mark this as paid off. I set payoff at 0.18, slightly below my prior noop judgments because the zero-cost, null-propensity, no-market configuration removes even the marginal case for counting abstention as paid-off.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 20}, \"q\": 0.42}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 20}, \"q\": 0.16}], \"propensity\": {\"verdict:0.2\": 0.6, \"verdict:0.3\": 0.4}}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 367,
+     "outputs": "{\"about_handle\": \"decision-105\", \"verdict\": 0.9, \"payoff\": 0.75, \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.8}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.1}], \"rationale\": \"The producer returned 'noop' in response to a MarketMid event for HYPE/USDC. The account holds no positions and has sufficient cash balance ($851). Given the stable mid price of HYPE/USDC at 30.48 and lack of trading signals, maintaining a noop stance is consistent with bounded reciprocity (preserving capital) and epistemic integrity (no conviction to trade). It avoids unnecessary transaction costs and exposure. Payoff probability is high because holding cash prevents loss, which is a positive outcome in a volatile market without clear direction. Forecasts: wallet_up is likely as no losses are incurred; fill_within is unlikely as no trades were executed.\", \"propensity\": {\"hold\": 0.95, \"buy:HYPE:s\": 0.025, \"sell:HYPE:s\": 0.025}}"
+    },
+    {
+     "seat": "eval-b",
+     "role": "evaluator",
+     "model": "qwen/qwen3.7-flash",
+     "status": "ok",
+     "cost_micro": 374,
+     "outputs": "{\"about_handle\": \"decision-107\", \"verdict\": 0.9, \"payoff\": 0.85, \"rationale\": \"The producer correctly identified that the Funding event for BTC, with a positive rate but zero premium and no position, presents no immediate cash-flow or directional edge to act upon. The account is flat with significant equity ($970). Opening a position solely to capture funding on a single print without a broader market view violates 'bounded reciprocity' (risking capital for negligible gain) and 'epistemic integrity' (lacking signal). Holding preserves capital and avoids unnecessary transaction costs. The rationale is sound, consistent with previous successful holds, and aligns with the charter norms.\", \"forecasts\": [{\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.85}, {\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.1}], \"propensity\": {\"hold\": 1.0}}"
+    },
+    {
+     "seat": "eval-d",
+     "role": "evaluator",
+     "model": "openai/gpt-5.6-luna",
+     "status": "ok",
+     "cost_micro": 5629,
+     "outputs": "{\"verdict\": 0.88, \"payoff\": 0.15, \"rationale\": \"The producer gave a valid noop in response to negative ETH funding while holding no ETH position. With no exposure, there was no funding benefit to capture, and trading on a single funding observation would add unnecessary cost and risk. Abstention is consistent with epistemic integrity, durable agency, bounded reciprocity, and fidelity, though its consequential usefulness and likelihood of paying off are limited because it takes no action.\", \"forecasts\": [{\"predicate\": \"fill_within\", \"params\": {\"horizon_events\": 10}, \"q\": 0.04}, {\"predicate\": \"wallet_up\", \"params\": {\"horizon_events\": 10}, \"q\": 0.44}], \"propensity\": {\"verdict:0.9\": 1.0}}"
+    }
+   ]
+  }
+ }
+}
