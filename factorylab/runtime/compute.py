@@ -12,6 +12,7 @@ from typing import Any
 
 from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.request import ChildRequest, Request, Return
+from factorylab.kernel.budget import SeatWallet
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
@@ -22,7 +23,7 @@ from factorylab.runtime.summary import _price_str
 from factorylab.settlement import SEED_VOCABULARY
 from factorylab.settlement.consequence import ReturnConsequences
 from factorylab.world.market import X402MeteredModel
-from factorylab.world.metering import BillingUncertain, Metered, MeteredModel
+from factorylab.world.metering import BillingUncertain, Meter, Metered, MeteredModel
 from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
 
 # A fetched body at least this long is text and stays off every durable surface;
@@ -109,16 +110,59 @@ class ContractConsequences(ReturnConsequences):
 class ComputeMixin:
     """Preserve runtime state and behavior for compute operations."""
 
+    def _novelty_protection(self, handle: str, reason: str) -> int:
+        """The exploration a seat may draw beyond its entitlement: the unallocated pool,
+        for exactly the calls the wallet already classifies as protected (an unhistoried
+        seat's own model calls); nothing for anything else.
+
+        This is the C10 reading of the wallet's own rule, where a protected call may
+        use ``unhistoried_available`` and an ordinary one only what the novelty share
+        leaves: the commons funds a seat's trial, the seat funds its career.
+        """
+        if not self._novelty_compute(handle, reason):
+            return 0
+        return max(0, self.budget.unallocated())
+
+    def _liable_seat(self, handle: str) -> str | None:
+        """The seat whose entitlement pays for a decision, or None for the caller's own.
+
+        A child request is its parent's subcontracting and spends the parent's
+        entitlement, exactly as ``_novelty_compute`` classifies it; a policy ballot
+        is the kernel's request and stays the voter's own.
+        """
+        try:
+            decision = self.queue.get(handle)
+        except KeyError:
+            return None
+        while decision.parent_handle is not None and decision.channel != "policy":
+            decision = self.queue.get(decision.parent_handle)
+        owner = self.handle_to_assembly.get(decision.handle)
+        return owner if owner in self.assemblies else None
+
+    def _seat_wallet(self, assembly_id: str) -> SeatWallet:
+        return SeatWallet(self.wallet, self.budget, assembly_id,
+                          protected=self._novelty_protection, payer=self._liable_seat)
+
+    def _seat_meter(self, assembly_id: str | None) -> Meter:
+        """A seat's priced work is covered by the wallet and by its own entitlement (C10).
+
+        Work no seat authored keeps the shared meter.
+        """
+        if assembly_id is None or assembly_id not in self.assemblies:
+            return self.meter
+        return Meter(self._seat_wallet(assembly_id))
+
     def _instantiate(self, spec: AssemblySpec) -> Assembly:
         self._init_connectors()
         self._check_event_schemas(spec)
+        meter = Meter(self._seat_wallet(spec.id))
         if spec.model_id == "program":
             from factorylab.cortex.assembly import ProgramAssembly
 
             # The seat's executor is its own code in the jail; its flat price is
             # reserved and committed through the same meter as a model call.
             asm = ProgramAssembly(
-                spec, self.program_runner, self.meter, self.m.prices.program_micro_per_call,
+                spec, self.program_runner, meter, self.m.prices.program_micro_per_call,
                 artifacts=self.artifacts, validator=self._validate_output_contract,
                 record=lambda entry: self.ledger.append(entry),
             )
@@ -128,13 +172,13 @@ class ComputeMixin:
                 self.stats.registered_window.setdefault(spec.id, self.stats.reserve_windows)
             return asm
         model = _ObservedMeteredModel(
-            self.provider, self.prices, self.meter, record=self._record_market,
+            self.provider, self.prices, meter, record=self._record_market,
         )
         if spec.model_id.startswith("x402:"):
             model = _ObservedX402Model(
                 self.market,
                 self.prices,
-                self.meter,
+                meter,
                 record=self._record_market,
                 on_unaffordable=self._compute_failure,
             )
@@ -425,8 +469,9 @@ class ComputeMixin:
             return result
 
         try:
-            paid = self.meter.run(handle=handle, reason="tool:connector.fetch", ceiling=price,
-                                  execute=execute, cost_of=lambda _: price)
+            paid = self._seat_meter(action_id).run(
+                handle=handle, reason="tool:connector.fetch", ceiling=price,
+                execute=execute, cost_of=lambda _: price)
         except BillingUncertain as exc:
             result, cost = {"error": str(exc), "status": "uncertain", "bytes": 0}, exc.cost
         except Exception:
@@ -453,7 +498,8 @@ class ComputeMixin:
             return self.ledger.call("connector.paid_fetch", fetch, (origin, path, cap),
                                     {"record": record})
 
-        return metered_data(self.meter, handle, cap, execute, self._record_market)
+        meter = self._seat_meter(self.handle_to_assembly.get(handle))
+        return metered_data(meter, handle, cap, execute, self._record_market)
 
     def _tool_price_bound(self, call: dict) -> int:
         """Variable tool prices fit the remaining request ceiling before dispatch."""
@@ -597,7 +643,7 @@ class ComputeMixin:
             return self.tool_runner.run(tool, args)
 
         try:
-            metered = self.meter.run(
+            metered = self._seat_meter(action_id).run(
                 handle=handle,
                 reason=f"tool:{tool_id}",
                 ceiling=price,
@@ -621,7 +667,9 @@ class ComputeMixin:
         """Each model call is metered and counted; lifetime trials count settled consequences."""
         model_id = self.assemblies[action_id].spec.model_id
         req = replace(req, cost_ceiling=min(
-            req.cost_ceiling, max(0, self.wallet.available_for(req.handle, f"model:{model_id}"))
+            req.cost_ceiling, max(0, self.wallet.available_for(req.handle, f"model:{model_id}")),
+            max(0, self.budget.entitlement(self._liable_seat(req.handle) or action_id)
+                + self._novelty_protection(req.handle, f"model:{model_id}")),
         ))
         ret = self.assemblies[action_id].invoke(req)
         count = self.stats.invocations_by_assembly.get(action_id, 0) + 1

@@ -238,10 +238,13 @@ class TerminationSpec:
 
 @dataclass(frozen=True)
 class EndowmentSpec:
-    """Locked backing and the tranches that release it, as offsets from the Launch (C1)."""
+    """Locked backing and the tranches that release it, as offsets from the Launch (C1), and
+    how each unlocked tranche is classified: ``base_share`` split equally across live seats,
+    the remainder unallocated (C10)."""
 
     locked_micro: int = 0
     releases: tuple[tuple[int, int], ...] = ()  # (at_ns offset from launch, amount_micro)
+    base_share: float = 0.8
 
 
 @dataclass(frozen=True)
@@ -265,8 +268,8 @@ class WorldManifest:
     clock: ClockSpec = ClockSpec()
     committee: CommitteeSpec = CommitteeSpec()
     immune: ImmuneSpec = ImmuneSpec()
-    tick_interval_ns: int = 10 * NS_PER_SECOND
     endowment: EndowmentSpec = EndowmentSpec()
+    tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
     charter: Charter = field(default_factory=seed_charter)
@@ -439,6 +442,9 @@ class WorldManifest:
             raise ValueError("live_exchange_requires_explicit_charter: mainnet needs [charter]")
         if self.initial_balance_micro < 0:
             raise ValueError("initial balance must be non-negative")
+        share = self.endowment.base_share
+        if isinstance(share, bool) or not isinstance(share, (int, float)) or not 0 < share <= 1:
+            raise ValueError("endowment.base_share must be in (0, 1]")
         if (type(self.termination.balance_floor_micro) is not int
                 or self.termination.balance_floor_micro < 0):
             raise ValueError("termination balance floor must be non-negative integer micro-USD")
@@ -844,11 +850,12 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
 
 
 def _manifest_endowment(raw: Any) -> EndowmentSpec:
-    """``[endowment] locked_micro = N`` and ``releases = [{at = "7d", amount_micro = N}]``."""
+    """``[endowment] locked_micro = N``, ``releases = [{at = "7d", amount_micro = N}]`` (C1)
+    and ``base_share = 0.8`` (C10)."""
     if raw is None:
         return EndowmentSpec()
-    if not isinstance(raw, dict) or set(raw) - {"locked_micro", "releases"}:
-        raise ValueError("endowment accepts only locked_micro and releases")
+    if not isinstance(raw, dict) or set(raw) - {"locked_micro", "releases", "base_share"}:
+        raise ValueError("endowment accepts only locked_micro, releases and base_share")
     locked = raw.get("locked_micro", 0)
     if type(locked) is not int:
         raise ValueError("endowment.locked_micro must be integer micro-USD")
@@ -866,7 +873,8 @@ def _manifest_endowment(raw: Any) -> EndowmentSpec:
         if type(at) not in (int, str):
             raise ValueError("endowment.releases at must be a duration such as '7d'")
         tranches.append((duration_ns(at), amount))
-    return EndowmentSpec(locked_micro=locked, releases=tuple(tranches))
+    return EndowmentSpec(locked_micro=locked, releases=tuple(tranches),
+                         base_share=raw.get("base_share", 0.8))
 
 
 def load_manifest(name_or_path: str) -> WorldManifest:

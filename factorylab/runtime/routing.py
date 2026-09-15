@@ -448,6 +448,17 @@ class RoutingMixin:
                      else self.wallet.available)
         if ceiling > available:
             return False, f"compute: ceiling {ceiling} exceeds wallet {available}"
+        # An exhausted entitlement is the seat's own state, not the factory's: it is
+        # infeasible for this request until credited, and never counts as insolvency.
+        # The seat's last model hold is the ceiling one of its calls really needs; the
+        # empty probe above only bounds it from below. An unhistoried seat's trial is
+        # funded by the unallocated pool as well, exactly as the wallet's own check
+        # lets a protected call use everything the novelty share does not withhold.
+        entitlement = self.budget.entitlement(action_id)
+        protected = max(0, self.budget.unallocated()) if self._unhistoried(action_id) else 0
+        need = max(ceiling, self.budget.last_hold(action_id))
+        if need > entitlement + protected:
+            return False, f"entitlement: ceiling {need} exceeds seat entitlement {entitlement}"
         try:
             if is_market:
                 return self.market.affordable(asm.spec.model_id, ceiling)
@@ -679,5 +690,6 @@ class RoutingMixin:
                             "proposal_id": proposal_id,
                             "version": self.assemblies[assembly_id].spec.version})
         self.retired_assemblies.add(assembly_id)
+        self.budget.retire(assembly_id, f"retire:{proposal_id}")
         for kind in sorted(self.routers):
             self._open_epoch(kind)

@@ -216,8 +216,14 @@ class RecursiveMetaProvider(ScriptedProvider):
 
 
 def _recursive_runtime(*, events=100, provider=None):
+    # C10: a registered child lives on the trial its proposer moves to it. The
+    # recursive meta judges on fake-opus, whose call ceiling exceeds the scripted
+    # 0.10 USD trial, so these tiers are exercised with a trial the seat can keep
+    # working on once its protected trial calls are spent.
+    base = load_manifest("scripted")
+    manifest = replace(base, evaluation=replace(base.evaluation, trial_amount_micro=2_000_000))
     return Runtime(
-        load_manifest("scripted"),
+        manifest,
         events=events,
         seed=1,
         initial_balance_micro=None,
@@ -975,6 +981,9 @@ def _register_test_seller(runtime):
 def test_x402_feasibility_uses_one_fixed_request_and_on_chain_reserve(market_http):
     runtime = _market_runtime(market_http)
     _register_test_seller(runtime)
+    # C10: the buyer's own entitlement must cover the fixed request as well as the
+    # wallet; its trial endowment is below one request, so a seed endows it.
+    runtime.budget.transfer(runtime.m.assemblies[0].id, "market-buyer", 1734, "test")
     runtime.wallet.settle(1734 - runtime.wallet.balance, "test", "exchange_pnl")
     market_http.balance = 1734
     assert runtime._is_feasible("market-buyer") == (True, "")

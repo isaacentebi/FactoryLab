@@ -427,8 +427,24 @@ class FeedbackMixin:
         self.stats.fast_settlements += 1
         self._count_consequence(self.handle_to_assembly.get(meta_handle))
 
+    def _credit_consequence(self, payoff: Any) -> None:
+        """A settled return's net proceeds credit its owner's entitlement (C10).
+
+        The credit is bounded by the unallocated pool, so it classifies money the
+        wallet has already booked and never mints. A loss is already the wallet's
+        and the seat's standing's; the seat's own compute stays its own cost. A
+        marked outcome is an estimate at the backstop, not settled money, and
+        moves nothing.
+        """
+        owner = self.handle_to_assembly.get(payoff.handle)
+        if payoff.marked or owner is None or owner not in self.assemblies:
+            return
+        if payoff.net_micro > 0:
+            self.budget.credit(owner, payoff.net_micro, "return_paid_off")
+
     def _settle_due_forecasts(self) -> None:
         for payoff in self.consequences.resolve(self.n):
+            self._credit_consequence(payoff)
             try:
                 top_level = self.queue.get(payoff.handle).parent_handle is None
             except KeyError:

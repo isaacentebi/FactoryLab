@@ -306,7 +306,9 @@ class GovernanceMixin:
             permissions=frozenset(),
             resource_bounds=ResourceBounds(),
         )
+        self._require_trial(handle, self.ev.trial_amount_micro)
         self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        self._move_trial(handle, self.ev.trial_amount_micro, to=None, reason="trial:learner")
         lid = self._assembly_learner_id(prop.assembly_id)
         if prop.learner == "blum_mansour":
             from factorylab.learners.blum_mansour import BlumMansour
@@ -496,6 +498,35 @@ class GovernanceMixin:
             committee = self.charter_book.seat(am.id, eligible, self.rng,
                                                size=self.m.committee.seats)
             self._hold_vote(am, committee)
+    def _trial_proposer(self, handle: str) -> str | None:
+        """The seat whose entitlement pays a registration's trial, when the handle has one."""
+        owner = self.handle_to_assembly.get(handle)
+        return owner if owner in self.assemblies else None
+
+    def _require_trial(self, handle: str, amount: int) -> None:
+        """A proposer must be able to pay the trial from its own entitlement (C10)."""
+        proposer = self._trial_proposer(handle)
+        if proposer is not None and self.budget.entitlement(proposer) < amount:
+            raise Infeasible("proposer's entitlement is below the trial amount")
+
+    def _move_trial(self, handle: str, amount: int, *, to: str | None, reason: str) -> None:
+        """Move an admitted trial from the proposer to the child seat, or to the pool.
+
+        A child registered without a known proposer is endowed from the pool when the
+        pool can cover it; otherwise it starts empty and infeasible until credited.
+        """
+        proposer = self._trial_proposer(handle)
+        if proposer is None:
+            if to is not None:
+                try:
+                    self.budget.grant(to, amount, reason)
+                except Infeasible:
+                    pass
+            return
+        if to is None:
+            self.budget.debit(proposer, amount, reason)
+        elif to != proposer:
+            self.budget.transfer(proposer, to, amount, reason)
 
     def _register(self, handle: str, prop: Any, *,
                   predicted_effect: PredictedEffect | None = None) -> None:
@@ -538,7 +569,9 @@ class GovernanceMixin:
                 permissions=frozenset({"sandbox.run"}),
                 resource_bounds=ResourceBounds(max_duration_ns=prop.timeout_s * 1_000_000_000),
             )
+            self._require_trial(handle, amount)
             self._register_with_trial(contract, handle, amount)
+            self._move_trial(handle, amount, to=None, reason="trial:tool")
             tool = PopulationTool(
                 prop.id, prop.description, prop.args_schema, prop.code, prop.timeout_s, handle
             )
@@ -628,11 +661,13 @@ class GovernanceMixin:
             self._check_event_schemas(spec)
             contract = _assembly_contract(prop.id, prop.role, prop.accepts, prop.max_tokens,
                                          emits=spec.emits, schemas=spec.schemas, version=version)
+            self._require_trial(handle, amount)
             self._register_with_trial(
                 contract, handle, amount,
                 refuse=("id already registered: a live assembly is retired by vote before "
                         "its id takes a next version") if live else "")
             self._instantiate(spec)
+            self._move_trial(handle, amount, to=prop.id, reason="trial:assembly")
             if custom:
                 self.kind_reward_shapes.update(shapes)
             self.retired_assemblies.discard(prop.id)
