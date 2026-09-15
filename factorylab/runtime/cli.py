@@ -554,7 +554,7 @@ def _cmd_wake(args: argparse.Namespace) -> int:
     """Publish only the sealed wake; failed verification replaces stale data with unavailable."""
     from factorylab.runtime.wake import UNAVAILABLE, write_wake
 
-    data = write_wake(args.ledger, args.out)
+    data = write_wake(args.ledger, args.out, returns=args.returns)
     if data["wallet_series"] == UNAVAILABLE:
         refuse("wake", Reason.WAKE_UNAVAILABLE)
         return 1
@@ -764,12 +764,17 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--ledger", required=True, help="ledger with an adjacent .key file")
     resume.set_defaults(func=_cmd_resume)
 
-    wake = sub.add_parser("wake", help="publish sealed aggregates and account balances",
+    wake = sub.add_parser("wake", help="publish sealed aggregates, balances and every return",
                           description="Write the one public page a living world has. "
-                                      "Reads the diary; publishes only role totals and the "
-                                      "world block the population already sees.")
+                                      "Reads the diary; publishes role totals, the world "
+                                      "block the population already sees, and every "
+                                      "return live and unredacted.")
     wake.add_argument("--ledger", required=True, help="the living world's ledger")
-    wake.add_argument("--out", required=True, help="directory for wake.json and wake.html")
+    wake.add_argument("--out", required=True,
+                      help="directory for wake.json, wake.html and returns-<window>.json")
+    wake.add_argument("--returns", type=int, default=500,
+                      help="latest returns carried on the page itself (default 500); every "
+                           "older return stays in its window's returns-<window>.json")
     wake.set_defaults(func=_cmd_wake)
 
     order_status = sub.add_parser("order-status", help="read venue status for original client ids")

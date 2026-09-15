@@ -1,9 +1,12 @@
 """A17: the wake is a read-only observatory of everything already public.
 
 Essay I.III: the control tower reads the outcomes the factory produces, and
-nothing else. Whatever the population can see is public to the experimenter;
-learner state, router weights and propensities, private memories, raw request
-and return text and per-decision scores stay sealed until death.
+nothing else. Whatever the population can see is public to the experimenter,
+and so is everything the population wrote: the ``returns`` view publishes every
+answer live and unredacted, because darkness is not secrecy. Learner state,
+router weights and sampling propensities, private memories, prompts and
+per-decision scores stay sealed until death, and every section other than
+``returns`` still folds to role totals without an id or a handle.
 """
 
 import json
@@ -183,8 +186,10 @@ def test_a17_five_aggregates_and_uptime_are_unchanged(scripted, wake):
     for view in VIEWS:
         assert wake[view] == ledger.public_aggregates(manifest)[view]
     assert wake["world"] == "scripted" and wake["uptime_ns"] == wake["last_event_time_ns"] > 0
-    text = json.dumps(wake)
+    # Seat ids name the author of each return and appear nowhere else.
+    text = json.dumps({k: v for k, v in wake.items() if k != "returns"})
     assert all(assembly.id not in text for assembly in manifest.assemblies)
+    assert {row["seat"] for row in wake["returns"]["rows"]} <= {a.id for a in manifest.assemblies}
 
 
 def test_a17_five_aggregates_publish_role_totals_without_assembly_names():
@@ -200,14 +205,20 @@ def test_a17_five_aggregates_publish_role_totals_without_assembly_names():
 
 
 def test_a17_no_sealed_field_appears_anywhere_in_the_output(scripted, tmp_path):
-    """Private items exist in the diary; none of them, and no sealed key, is published."""
+    """Private items exist in the diary; none of them, and no sealed key, is published.
+
+    A return's outputs are the one exception, by the experimenter's decision: they
+    are published in ``returns`` and nowhere else. The router's sampling
+    propensity, learner state, memories and prompts stay sealed.
+    """
     directory = tmp_path / "private-world"
     shutil.copytree(scripted.parent, directory)
     scripted = directory / scripted.name
     manifest = load_manifest("scripted")
     writer = Ledger.reopen(scripted, manifest=json.loads(manifest.canonical_json()))
+    written = "WHAT_THE_SEAT_WROTE"
     writer.append({"kind": "invocation", "assembly_id": "eval-a", "role": "evaluator",
-                   "handle": "decision-1", "outputs": MARKER, "cost": 1, "status": "ok"})
+                   "handle": "decision-1", "outputs": written, "cost": 1, "status": "ok"})
     writer.append({"kind": "decision.open", "handle": "decision-1", "score": 0.9,
                    "propensity": {"chosen": MARKER, "weights": [MARKER], "p": 0.5}})
     writer.append({"kind": "router.state", "learner_id": MARKER, "weights": [1.0, 2.0],
@@ -216,7 +227,13 @@ def test_a17_no_sealed_field_appears_anywhere_in_the_output(scripted, tmp_path):
     page = render_wake(data)
     document = json.dumps(data)
     assert MARKER not in document and MARKER not in page
-    assert not _keys(data) & SEALED_KEYS
+    folded = {k: v for k, v in data.items() if k != "returns"}
+    assert not _keys(folded) & SEALED_KEYS
+    assert written not in json.dumps(folded)
+    assert data["returns"]["rows"][-1]["outputs"] == {"truncated_text": written}
+    assert not _keys(data["returns"]) & {"propensities", "chosen", "weights", "gamma",
+                                         "learner", "learner_id", "memory", "memories",
+                                         "prompt", "system_prompt", "prompt_text"}
 
 
 def test_a17_window_close_item_is_public_and_carries_no_prompt_or_size(scripted):
