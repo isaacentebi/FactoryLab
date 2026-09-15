@@ -6,21 +6,42 @@ open, a trading return can resolve `return_paid_off = 1` on a margin its own
 storage already consumed.
 """
 
+from dataclasses import replace
+
 import pytest
 
 from factorylab.charter.charter import MetricCard
 from factorylab.charter.measurement import CardSamples, measure_card
 from factorylab.cortex.request import Return
+from factorylab.runtime.notes import NotesSpec
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.settlement.lots import LotTable
-from tests.audit.test_r3_d_card_evidence import cost_runtime, returned
-from tests.conftest import make_runtime
+from tests.audit.test_r3_d_card_evidence import cost_runtime as _cost_runtime
+from tests.audit.test_r3_d_card_evidence import returned
+from tests.conftest import make_runtime as _make_runtime
 from tests.runtime.test_connectors import decision, ledger_items
 
+#: Rent is by byte-time (C3); this byte-day rate makes one two-minute scripted window
+#: cost exactly one micro-USD per byte, so every figure below is one window's rent.
+PER_WINDOW_RATE = "720"
 RENT = 15  # "fact" + "public fact" = 15 UTF-8 bytes at one micro-USD per byte-window
 COST = 10  # the return's own metered compute
 GROSS = 20  # marked profit: more than the compute cost, less than compute plus rent
 NOTE_BYTES = 5_000  # key plus text bytes, at one micro-USD per byte-window
+
+
+def rated(rt):
+    """The scripted world at the per-window rate; the rate is read when rent falls due."""
+    rt.m = replace(rt.m, notes=NotesSpec(micro_per_byte_day=PER_WINDOW_RATE))
+    return rt
+
+
+def make_runtime():
+    return rated(_make_runtime())
+
+
+def cost_runtime(*args, **kwargs):
+    return rated(_cost_runtime(*args, **kwargs))
 
 
 def writer(rt):
