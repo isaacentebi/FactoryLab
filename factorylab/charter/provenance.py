@@ -41,6 +41,13 @@ def norms_raw(norms: Any) -> list:
     """
     out = []
     for norm in norms:
+        if isinstance(norm, dict):
+            # Already the TOML form (a charter read back from disk, as the ratification
+            # script reads its candidate): pass it through unchanged.
+            definition = norm.get("definition") or ""
+            out.append({"id": str(norm.get("id")), "definition": definition}
+                       if definition else str(norm.get("id")))
+            continue
         definition = getattr(norm, "definition", "")
         out.append({"id": str(norm), "definition": definition} if definition else str(norm))
     return out

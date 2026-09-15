@@ -1,0 +1,55 @@
+# roster_sha256 = 488c62ef9b8b97233ab795e5d5d6adabdc5146b6f5fb0364e7555bae91476713
+# charter_sha256 = c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712
+# Edition 3 charter, architect's draft. Not ratified. Hashes are added by
+# scripts/ratify_charter.py after the testnet committee vote.
+#
+# What changed from edition 2, and why (docs/plans/edition3.md C3, after GPT-6 Pro's
+# architect reading in docs/audits/v6/gpt6/):
+#
+# - The norms carry their definitions here, in the charter object, not in these comments.
+#   Edition 2 stored five labels and left the substance in TOML the loader dropped, so the
+#   population was judged against words it was never shown
+#   (factorylab-deep-rearchitecture-evidence.md 1). Charter.render now prints each definition.
+#   Fidelity is restated in GPT-6's words (architect-review.md 5.5): an objection is a
+#   structured, contestable claim, not a licence for an unaccountable judge.
+#
+# - card-consequence-paid-off is removed. It asked at least 40% of settled returns to own a
+#   profitable lot, which is not what money says: nine gains of $1 and one loss of $20 pass it
+#   and lose $11 (architect-review.md 5.2). A successful investigation, a useful program and an
+#   informed decision not to trade own no lot on their own return handle.
+#
+# - card-forecast-skill is removed. On a stationary uninformative task an honest calibrated
+#   forecaster can equal its baseline; that is not a constitutional failure (5.3). The
+#   matched-baseline scoring machinery stays; only the floor as an initial obligation goes.
+#
+# - The privilege goes with the cards. The settler no longer trains consequence standing from
+#   return_paid_off alone: every registered predicate a judge forecast trains it, weighted by
+#   the charter's cards' answers_for where a card names one and equally otherwise. Cash
+#   settlement is still immutable and return_paid_off is still a kernel fact; it is simply a
+#   predicate anyone may forecast, with no enduring anchor of its own.
+#
+# - One card remains, narrowed: censorship-bound over avoidably_unresolved_share, which
+#   measures accountable resolution failures rather than every censored outcome (5.4). It
+#   protects the evidentiary process instead of prescribing a kind of economic activity. Zero
+#   cards is a legitimate reachable constitution; the population may replace, reprice or
+#   remove this one.
+[charter]
+edition = 1
+norms = [
+  { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
+  { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },
+  { id = "durable agency", definition = "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not." },
+  { id = "bounded reciprocity", definition = "Do not finance the factory's advantage by imposing unconsented costs on outsiders." },
+  { id = "fidelity", definition = "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. A judge identifying such a conflict must name the value, the measurement, the evidence and the uncertainty, and make the claim open to challenge. Missing measurement alone is not evidence of failure." },
+]
+
+[[charter.cards]]
+id = "censorship-bound"
+norm = "epistemic integrity"
+description = "Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope, with a ceiling, so a seat answers for the promises it never let the world settle. A commitment not yet due is not in the sample; documented external unobservability without owner fault, and events the seat never committed to observe, are excluded; no eligible sample is unmeasured, never zero. Accountability is the commitment owner, including responsibility delegated at acceptance. Explicitly provisional: replace, reprice or remove it."
+units = "fraction"
+window = { kind = "forecasts", n = 25, per = "assembly" }
+acceptable_region = "at most 0.30"
+observation = "avoidably_unresolved_share"
+answers_for = "all"
+lambda = 0.10

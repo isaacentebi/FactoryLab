@@ -1,0 +1,95 @@
+{
+  "roster_sha256": "488c62ef9b8b97233ab795e5d5d6adabdc5146b6f5fb0364e7555bae91476713",
+  "parent_charter_sha256": "c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712",
+  "conflicts": [],
+  "calls": [
+    {
+      "seat": {
+        "alias": "seat-1",
+        "assembly_id": "meta-calibration",
+        "role": "meta"
+      },
+      "model": "deepseek/deepseek-v4.1-flash",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"It is the only card, received majority approval, and its wording already excludes non-due, externally unobservable, and never-committed events, so it can stand unchanged for edition 1.\"}",
+      "stop": "stop",
+      "cost_micro": 148,
+      "input_tokens": 573,
+      "output_tokens": 55,
+      "served_by": "deepseek/deepseek-v4.1-flash",
+      "valid": true,
+      "selected": [
+        "censorship-bound"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-2",
+        "assembly_id": "empirical",
+        "role": "producer"
+      },
+      "model": "venice:z-ai-glm-5-3-flash",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"The card cleanly operationalizes epistemic integrity by measuring attributable, avoidably unresolved commitments with proper exclusions (not-yet-due, unobservable-without-fault, never-committed), preserves the norm's defeasible spirit via its explicit provisionality clause, and with empty preflight feedback there is no basis to withhold approval.\"}",
+      "stop": "stop",
+      "cost_micro": 272,
+      "input_tokens": 1454,
+      "output_tokens": 107,
+      "served_by": "venice:z-ai-glm-5-3-flash",
+      "valid": true,
+      "selected": [
+        "censorship-bound"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-3",
+        "assembly_id": "meta-countercase",
+        "role": "meta"
+      },
+      "model": "venice:qwen-3-8-flash",
+      "valid": false,
+      "failure": "VeniceError",
+      "http_status": 429
+    },
+    {
+      "seat": {
+        "alias": "seat-4",
+        "assembly_id": "judge-consequence",
+        "role": "evaluator"
+      },
+      "model": "deepseek/deepseek-v4.1-flash",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"Only one card was proposed and it received majority support in the first survey; selecting it preserves every definition unchanged, and its explicit provisional status and narrow accountable scope make it suitable for edition 1 without preflight objections.\"}",
+      "stop": "stop",
+      "cost_micro": 169,
+      "input_tokens": 594,
+      "output_tokens": 57,
+      "served_by": "deepseek/deepseek-v4.1-flash",
+      "valid": true,
+      "selected": [
+        "censorship-bound"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-5",
+        "assembly_id": "mechanism",
+        "role": "producer"
+      },
+      "model": "deepseek/deepseek-v4.1-flash",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"The sole candidate received a first-survey majority, the preflight feedback is empty, and its definition already matches the charter's norm on epistemic integrity, so it can be adopted unchanged.\"}",
+      "stop": "stop",
+      "cost_micro": 120,
+      "input_tokens": 595,
+      "output_tokens": 50,
+      "served_by": "deepseek/deepseek-v4.1-flash",
+      "valid": true,
+      "selected": [
+        "censorship-bound"
+      ]
+    }
+  ],
+  "accepted": [
+    "censorship-bound"
+  ],
+  "charter_sha256": "c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712",
+  "rendering_note": "Artifact re-rendered after the vote: the first export stringified the norm tables (scripts/draft_edition1.render_toml via norms_raw on raw TOML rows); the cards and ballots are unchanged, the norms are the draft's verbatim. Previous charter_sha256: b73d40b51fb90cb3c1884f1f63be0a406a28c4be0a6c99c0a1abe753189d919b"
+}

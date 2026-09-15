@@ -26,7 +26,7 @@ from factorylab.runtime.venue import wind_down
 from factorylab.runtime.worlds import NS_PER_DAY, KillSpec, load_manifest
 from factorylab.world.exchange import Order
 
-EDITION3_HASH = "805ada83f08a4a051ad5491ec021900f6704042c01777c4fc29cc1ec3c53ff94"
+EDITION3_HASH = "781584ce44b746ea660d24944d057140e771882f955550a8312f807986260426"
 
 
 @pytest.fixture(autouse=True)
@@ -144,45 +144,36 @@ def test_edition3_keys_leave_every_earlier_world_identical():
                and "system_prompt" not in a for a in payload["assemblies"])
 
 
-def test_edition3_preflight_passes_every_gate_except_the_unratified_roster():
-    """The one thing standing between this manifest and preflight is a vote, as it should be.
+def test_edition3_preflight_passes_every_gate_up_to_the_namespace():
+    """The ratified edition 3 charter binds to this roster; only a fresh namespace is missing.
 
     `scripts/rehearsal.py preflight` binds a rehearsal to the exact charter a roster voted.
-    The edition 3 roster has voted nothing yet, so the edition 2 ratified artifact's roster
-    digest is the edition 2 roster's and refuses this one. Everything else preflight checks
-    already holds: the cards loaded are the voted cards verbatim, the digest matches, the
-    world is testnet, and the manifest validates. This test is the standing record of that
-    boundary; when W3's edition 3 charter is ratified on this roster it becomes a pass.
+    The edition 3 roster ratified `docs/charter/edition3-ratified.toml` on 15 September
+    (docs/charter/edition3-ratification.json): its roster digest is this roster's and its
+    cards are what the manifest loads verbatim. The base manifest deliberately carries no
+    exchange client namespace (a rehearsal copy supplies one), so preflight on the base
+    stops exactly there and nowhere earlier.
     """
     import tomllib
 
-    from scripts.draft_edition1 import charter_digest
+    from scripts.draft_edition1 import charter_digest, roster_hash
     from scripts.rehearsal import preflight, voted_charter
 
     world = Path("worlds/edition3-testnet.toml")
-    charter_path = Path("docs/charter/edition2-ratified.toml")
+    charter_path = Path("docs/charter/edition3-ratified.toml")
     m = load_manifest(str(world))
 
-    with pytest.raises(ValueError, match="roster differs"):
-        voted_charter(charter_path, m)
-    with pytest.raises(ValueError, match="roster differs"):
-        preflight(world, charter_path)
-
+    voted = voted_charter(charter_path, m)
     raw = tomllib.loads(world.read_text())
-    voted = tomllib.loads(charter_path.read_text())["charter"]
     loaded = {k: v for k, v in raw["charter"].items()
               if k not in ("ratified_sha256", "roster_sha256")}
-    assert m.charter_explicit and loaded == voted
-    assert charter_digest(voted) == m.charter_ratified_sha256
-    assert m.charter_content_sha256 == m.charter_ratified_sha256
-    # No roster digest is claimed: the edition 2 digest names the edition 2 roster.
-    assert m.charter_roster_sha256 is None
-    assert m.exchange.kind == "hyperliquid" and not m.exchange.mainnet
-    m.validate()
-
-
-# --- the kill contract --------------------------------------------------------------------
-
+    assert loaded == voted
+    assert raw["charter"]["ratified_sha256"] == charter_digest(voted)
+    assert raw["charter"]["roster_sha256"] == roster_hash(m)
+    assert [c["id"] for c in voted["cards"]] == ["censorship-bound"]
+    assert all(isinstance(n, dict) and n["definition"] for n in voted["norms"])
+    with pytest.raises(ValueError, match="fresh exchange client namespace"):
+        preflight(world, charter_path)
 
 def _exposed_runtime(*, wind: bool, ledger_path=None) -> Runtime:
     """A scripted world holding one resting order, one perp position and one spot balance."""
