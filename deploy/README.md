@@ -270,11 +270,22 @@ caller. `start.sh` emits `launch` after the first `run` succeeds, `kill` when
 `resume` reports finality (exit 3: the operator's kill or the world's own death)
 and `failed_resume` with the reason code when `resume` exits 1. The kill runbook
 below adds one line so an operator's kill is witnessed at once rather than at
-the next service start. `dormant` is the entry into budget dormancy (C2); it is
-ledgered by the runtime and shown in the wake, and the wake publisher is the
-intended caller of `witness.sh dormant` once that field lands. Nothing in a
-witness line is read from the diary: the digest is computed from the checkout
-and the head is the hash of the ledger file's bytes.
+the next service start. `dormant` is budget dormancy (C2): the runtime ledgers
+each entry and exit, the wake publishes them as `liveness.status` and
+`pots.dormancy`, and the wake unit witnesses the transitions. After every
+publish, `factorylab-wake.service` runs `deploy/witness_liveness.py` as
+`ExecStartPost`; it reads `liveness.status` from `www/wake.json`, compares it
+with the status it last witnessed (`runs/funded.liveness`, one word, 0600) and
+emits `witness.sh dormant entered` on the way into dormancy and
+`witness.sh dormant exited` on the way back to `alive`. Republishing an unchanged
+status emits nothing; the state file is rewritten only after the line was
+appended, so a failed append is retried at the next hourly publish. A dormant
+world that is killed gets its `kill` line from `start.sh` or the runbook and no
+`exited` line. An unreadable wake, or a status outside `alive`, `dormant` and
+`terminated`, changes nothing. The unit therefore also loads `ops.env` (for
+`FACTORYLAB_WITNESS_URL`) and may write under `runs/`. Nothing in a witness
+line is read from the diary: the digest is computed from the checkout and the
+head is the hash of the ledger file's bytes.
 ### Selling a service (edition 2, contract C11)
 
 A population program registered as a tool can be put up for sale with a

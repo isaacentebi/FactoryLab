@@ -249,3 +249,108 @@ def test_a_challenge_survives_a_checkpoint_with_its_series_and_status(monkeypatc
     committee(restored, monkeypatch)
     _close(restored, 3, (1_000, True))
     assert twin["status"] == "due" and len(_items(restored, "challenge.window")) == 1
+
+
+def _capture_ballots(rt, monkeypatch):
+    """Vote yes on everything and keep every ballot request the committee received."""
+    requests = []
+
+    def invoke(assembly, request):
+        requests.append(request)
+        return Return(request.handle, {"vote": True, "reason": "fixture"}, 0, "ok")
+
+    monkeypatch.setattr(rt, "_invoke_compute", invoke)
+    return requests
+
+
+def test_a_challenge_ballot_carries_the_evidence_and_both_series_side_by_side(monkeypatch):
+    rt = runtime()
+    _admit(rt, monkeypatch)
+    (cid, challenge), = rt.challenges.items()
+    _close(rt, 2, (1_000, True), (100_000, False))
+    _close(rt, 3, (1_000, True))
+    requests = _capture_ballots(rt, monkeypatch)
+    boundary(rt, 4)
+    ballots = [r for r in requests if r.inputs.get("amendment", {}).get("id") == cid]
+    assert len(ballots) == 3  # one request per committee seat
+    for req in ballots:
+        shown = req.inputs["challenge"]
+        assert shown["id"] == cid and shown["card_id"] == "cost_per_return"
+        assert shown["evidence"] == challenge["evidence"]
+        assert shown["evidence_truncated"] is False
+        assert shown["incumbent"]["observation"] == "cost_per_return"
+        assert shown["replacement"]["observation"] == "cost_per_attempt"
+        assert shown["trial_windows"] == 2
+        assert shown["windows_measured"] == shown["windows_shown"] == 2
+        # Both series, one row per trial window, the two sides beside each other.
+        assert [row["window"] for row in shown["series"]] == [2, 3]
+        assert [row["incumbent"]["value"] for row in shown["series"]] == [
+            pytest.approx(1_000), pytest.approx(1_000)]
+        assert [row["replacement"]["value"] for row in shown["series"]] == [
+            pytest.approx(50_500), pytest.approx(1_000)]
+        assert all(set(row) == {"window", "incumbent", "replacement"}
+                   for row in shown["series"])
+        assert all(set(row[side]) == {"observation", "value", "scopes"}
+                   for row in shown["series"] for side in ("incumbent", "replacement"))
+        # The ordinary amendment inputs are still there, unchanged in shape.
+        assert [c["observation"] for c in req.inputs["amendment"]["replace"]] == [
+            "cost_per_attempt"]
+        assert {"charter", "world", "your_policy_returns"} <= set(req.inputs)
+        # The voter reads it: the rendered request names the challenge and its evidence.
+        text = req.prompt_text()
+        assert "metric challenge" in req.description and "inputs.challenge" in req.description
+        assert "nine cheap successes" in text and "cost_per_attempt" in text
+    assert rt.stats.amendments_passed == 1
+
+
+def test_a_challenge_ballot_is_bounded_in_evidence_and_series_length(monkeypatch):
+    from factorylab.runtime.governance import (
+        BALLOT_EVIDENCE_CHARS,
+        BALLOT_SERIES_SCOPES,
+        BALLOT_SERIES_WINDOWS,
+    )
+
+    rt = runtime()
+    _admit(rt, monkeypatch, evidence="e" * 4000)
+    (cid, challenge), = rt.challenges.items()
+    _close(rt, 2, (1_000, True))
+    _close(rt, 3, (1_000, True))
+    # Pad the in-memory series beyond the bound; the ballot shows only the tail.
+    padding = [{"window": 100 + i,
+                "incumbent": {"card_id": "cost_per_return", "observation": "cost_per_return",
+                              "value": 1.0, "scopes": {f"s{j}": 1.0 for j in range(20)}},
+                "replacement": {"card_id": "cost_per_return", "observation": "cost_per_attempt",
+                                "value": 2.0, "scopes": {}}}
+               for i in range(BALLOT_SERIES_WINDOWS + 5)]
+    challenge["series"] = challenge["series"] + padding
+    requests = _capture_ballots(rt, monkeypatch)
+    boundary(rt, 4)
+    shown = next(r for r in requests
+                 if r.inputs.get("amendment", {}).get("id") == cid).inputs["challenge"]
+    assert len(shown["evidence"]) == BALLOT_EVIDENCE_CHARS and shown["evidence_truncated"]
+    assert shown["windows_measured"] == 2 + BALLOT_SERIES_WINDOWS + 5
+    assert shown["windows_shown"] == len(shown["series"]) == BALLOT_SERIES_WINDOWS
+    assert shown["series"][-1]["window"] == padding[-1]["window"]
+    assert all(len(row["incumbent"]["scopes"]) <= BALLOT_SERIES_SCOPES
+               for row in shown["series"])
+
+
+def test_an_ordinary_amendment_ballot_is_unchanged(monkeypatch):
+    from dataclasses import asdict, replace
+
+    rt = runtime()
+    rt._manage_reserve_window()
+    committee(rt, monkeypatch)
+    rt.window = MeasureWindow(1, rt.wallet.balance, costs=[100], invocations=1, ok=1)
+    rt._close_price_window()
+    requests = _capture_ballots(rt, monkeypatch)
+    card = replace(rt.charter.cards[0], acceptable_region="at most 500")
+    rt._propose_amendment("author", {
+        "id": "plain-rise", "replace": [asdict(card)],
+        "predicted_effect": {"card_id": card.id, "direction": "increase", "window": 2}})
+    ballots = [r for r in requests if r.inputs.get("amendment", {}).get("id") == "plain-rise"]
+    assert len(ballots) == 3
+    for req in ballots:
+        assert "challenge" not in req.inputs
+        assert set(req.inputs) == {"amendment", "charter", "world", "your_policy_returns"}
+        assert req.description == "Vote on an amendment to the charter's metric cards."

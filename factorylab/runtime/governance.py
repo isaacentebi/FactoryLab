@@ -46,6 +46,14 @@ from factorylab.runtime.shared import PredicateRunner, _to_plain, assembly_rewar
 from factorylab.runtime.summary import _assembly_contract, _model_contract
 from factorylab.world.x402 import X402Error
 
+#: What a challenge ballot shows its voter beside the amendment: the evidence the
+#: challenger gave, cut to this many characters, and the last this many trial
+#: windows of the two series, each scope list cut to this many entries. The
+#: ledger keeps the whole of all three; the ballot is a bounded view of it.
+BALLOT_EVIDENCE_CHARS = 2000
+BALLOT_SERIES_WINDOWS = 24
+BALLOT_SERIES_SCOPES = 8
+
 
 @dataclass(frozen=True)
 class WorkAssemblySpec(AssemblySpec):
@@ -496,6 +504,49 @@ class GovernanceMixin:
             committee = self.charter_book.seat(am.id, eligible, self.rng,
                                                size=self.m.committee.seats)
             self._hold_vote(am, committee)
+
+    def _challenge_ballot_inputs(self, amendment_id: str) -> dict | None:
+        """The evidence a challenge ballot shows its voter, or None for an ordinary amendment.
+
+        A challenge-originated amendment carries the challenger's evidence and
+        the two measured series side by side, one row per trial window with the
+        incumbent's and the replacement's value and scopes, so a voter judges
+        the trial rather than the prose. Bounded: the evidence is cut to
+        ``BALLOT_EVIDENCE_CHARS``, the series to their last
+        ``BALLOT_SERIES_WINDOWS`` rows and each scope list to
+        ``BALLOT_SERIES_SCOPES`` entries; the ledger's ``challenge.window``
+        items keep the whole series.
+        """
+        challenge = self.challenges.get(amendment_id)
+        if challenge is None or challenge.get("amendment_id") != amendment_id:
+            return None
+
+        def side(row: dict, name: str) -> dict:
+            measured = row.get(name) or {}
+            scopes = measured.get("scopes") or {}
+            return {"observation": measured.get("observation"),
+                    "value": measured.get("value"),
+                    "scopes": {str(k): v for k, v in sorted(scopes.items(),
+                                                           key=lambda kv: str(kv[0]))
+                               [:BALLOT_SERIES_SCOPES]}}
+
+        series = list(challenge.get("series") or [])
+        rows = series[-BALLOT_SERIES_WINDOWS:]
+        evidence = str(challenge.get("evidence") or "")
+        return {
+            "id": challenge["id"],
+            "card_id": challenge["card_id"],
+            "evidence": evidence[:BALLOT_EVIDENCE_CHARS],
+            "evidence_truncated": len(evidence) > BALLOT_EVIDENCE_CHARS,
+            "incumbent": asdict(challenge["incumbent"]),
+            "replacement": asdict(challenge["replacement"]),
+            "trial_windows": challenge["trial_windows"],
+            "windows_measured": len(series),
+            "windows_shown": len(rows),
+            "series": [{"window": row.get("window"),
+                        "incumbent": side(row, "incumbent"),
+                        "replacement": side(row, "replacement")} for row in rows],
+        }
 
     def _register(self, handle: str, prop: Any, *,
                   predicted_effect: PredictedEffect | None = None) -> None:
@@ -1059,6 +1110,10 @@ class GovernanceMixin:
             return
         retiring = isinstance(am, Retirement)
         prices = {} if retiring or connector is not None else dict(am.proposed_prices)
+        # A challenge-originated amendment shows its voters the trial (C7); an
+        # ordinary amendment's ballot is unchanged.
+        challenge_inputs = (None if retiring or connector is not None
+                            else self._challenge_ballot_inputs(am.id))
         connector_yes = 0
         for seat in committee.seats:
             if self.wallet.dead:
@@ -1116,6 +1171,7 @@ class GovernanceMixin:
                         **({"tick_interval": am.tick_interval}
                            if am.tick_interval is not None else {}),
                     }),
+                    **({"challenge": challenge_inputs} if challenge_inputs else {}),
                     "charter": self._charter_text(),
                     "world": self._world_block(),
                     "your_policy_returns": [asdict(lr) for lr in self.queue.returns_for(lid)
@@ -1132,6 +1188,10 @@ class GovernanceMixin:
                 handle,
                 ("Vote on a connector registration." if connector is not None else
                  "Vote on retiring the named assembly version." if retiring else
+                 "Vote on an amendment to the charter's metric cards proposed by a metric "
+                 "challenge: inputs.challenge carries the challenger's evidence and both "
+                 "measured series, incumbent and replacement per trial window."
+                 if challenge_inputs else
                  "Vote on an amendment to the charter's metric cards."),
                 inputs,
                 schema,
