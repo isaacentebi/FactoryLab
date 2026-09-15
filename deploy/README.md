@@ -161,9 +161,15 @@ FACTORY_WEBHOOK_URL=https://REPLACE_WITH_RECEIVER
 FACTORYLAB_WITNESS_URL=https://REPLACE_WITH_WITNESS_RECEIVER
 ```
 
-`FACTORYLAB_WITNESS_URL` is optional; without it the witness lines stay in
-`.witness/funded.jsonl` beside `runs/` only, and a kill is final only as far as
-that one file survives (see "Witness" below: the receiver is the real guarantee).
+`FACTORYLAB_WITNESS_URL` is optional, and the choice is a choice of guarantee.
+With it set, a resume needs the receiver's verdict: a receiver that is down, or
+answers without one, refuses the resume (`witness_unavailable`, exit 1) and the
+unit retries later. Without it the witness lines stay in `.witness/funded.jsonl`
+beside `runs/` only, the local file alone decides, and a kill is final only as
+far as that one file survives: **this is the weaker guarantee** (see "Witness"
+below). `FACTORYLAB_FACILITATOR_URL` is read once, at launch, and ledgered in
+the `Launch` event; changing it afterwards refuses the resume
+(`facilitator_mismatch`), see "Selling a service".
 
 The receiver accepts precisely one JSON line such as
 `{"world":"funded","event":"terminated"}` or
@@ -291,12 +297,32 @@ both know it, the same `diary`) refuses the resume with the reason code
 `identity_killed` (exit 1, a `failed_resume` item in that copy's diary naming
 the witness that answered, `failed_resume` webhook and witness line). When the
 URL is set, resume also asks the receiver (a `query` line with the same
-`launch_nonce` and `diary`, five-second timeout): a receiver that answers
-`{"killed": true}` is final; a receiver that is unreachable or gives no
-verdict is logged and does not count either way. A checkpoint restored into a
-runtime that is already final, or one whose identity this process or the local
-witness records as killed, is refused the same way (`restore_runtime`,
-`identity_killed`); `Termination.kill` stays irreversible on the object.
+`launch_nonce` and `diary`, five-second timeout) and needs its verdict: a
+receiver that answers `{"killed": true}` is final, `{"killed": false}` clears
+it, and a receiver that is unreachable, unusable (a plain-HTTP URL off the
+loopback) or answers without a verdict **refuses the resume** with the reason
+code `witness_unavailable` (exit 1, a `failed_resume` item in the diary, the
+`failed_resume` webhook and witness line). Exit 1 is the retried code: the unit
+restarts with backoff and asks again, so a receiver outage pauses the world
+rather than reviving a copy while the one record that could name its death is
+out of reach. A checkpoint restored into a runtime that is already final, or
+one whose identity this process or the local witness records as killed, is
+refused the same way (`restore_runtime`, `identity_killed`);
+`Termination.kill` stays irreversible on the object.
+
+The two guarantees, plainly: with `FACTORYLAB_WITNESS_URL` set, a kill is final
+wherever the diary is copied, as long as the receiver keeps its lines; the host,
+its `.witness/` directory and its memory can all be lost. Without it, a kill is
+final only as far as `.witness/funded.jsonl` on this host survives: an operator
+who deletes it, or a host lost with it, leaves an earlier copy of the diary
+with nothing to refuse it. That is the weaker guarantee, and the funded host
+should not run under it.
+
+Both units bind `.witness/` writable (`ReadWritePaths` in `factorylab.service`
+and `factorylab-wake.service`, beside `runs/` and `www/`): under
+`ProtectSystem=strict` the runtime's kill line, `start.sh`'s launch and
+`failed_resume` lines and the wake unit's `dormant` lines could not be appended
+otherwise. The provisioner creates the directory as `factory`, mode 0700.
 
 **Never restore `.witness/` from a backup, and never delete it.** The witness
 directory is the one thing on the host that must be *newer* than the diary:
@@ -335,17 +361,28 @@ an unpaid request gets the v2 quote (exact canonical Base USDC, the manifest's
 `treasury.reserve_address` as `payTo`, the price as the amount); a paid request
 carries the buyer's signed EIP-3009 authorization, which `runtime/seller.py`
 verifies by rebuilding exactly the typed data `world/x402.py`'s buyer signs and
-recovering its signer, then hands to the facilitator (`FACTORYLAB_FACILITATOR_URL`,
-default `https://x402.org/facilitator`) for settlement. Only an explicit,
-matching settlement runs the program, in the same jail population tools use, and
-returns its output with a `PAYMENT-RESPONSE` header. `GET /services` lists the
-catalogue (id, description, price, version, argument schema; never source).
+recovering its signer, then hands to the facilitator for settlement. Only an
+explicit, matching settlement runs the program, in the same jail population
+tools use, and returns its output with a `PAYMENT-RESPONSE` header.
+`GET /services` lists the catalogue (id, description, price, version, argument
+schema; never source).
+
+The facilitator is pinned at launch. The runtime reads
+`FACTORYLAB_FACILITATOR_URL` (default `https://x402.org/facilitator`) once, when
+the world is constructed, and ledgers it in the `Launch` event beside the
+release digest and in every checkpoint; `resume` refuses a checkpoint whose
+facilitator differs from the running environment's with the reason code
+`facilitator_mismatch` (exit 1, a `failed_resume` item naming both). The server
+below reads the facilitator from the ledger's `Launch` event and never from the
+environment, and refuses to serve a diary launched before the pin
+(`facilitator_unpinned`). So the party that settles every paid call is a fact
+of the world's own record, not a lever the host's environment can pull after
+launch.
 
 The runtime holds the ledger's only writer lock, so the server runs beside it as
 the `factory` user and reads the sealed ledger the way the wake does:
 
 ```sh
-FACTORYLAB_FACILITATOR_URL=https://x402.org/facilitator \
 /srv/factorylab/repo/.venv/bin/python /srv/factorylab/repo/deploy/serve.py \
     --ledger /srv/factorylab/runs/funded.jsonl \
     --spool /srv/factorylab/runs/funded.income.jsonl --bind 127.0.0.1 --port 8402
@@ -402,7 +439,7 @@ Every code the CLI can return, and what a supervisor does with it.
 | Exit | Path | Supervisor behavior |
 | --- | --- | --- |
 | 0 | Resume returns a live summary; any command succeeded | Restart with the same saved budget |
-| 1 | Resume fails authentication, replay, credentials or provider setup | Failed-resume webhook; restart with backoff |
+| 1 | Resume fails authentication, replay, credentials or provider setup; the witness receiver gave no verdict; an archived artifact's bytes are missing; the facilitator differs | Failed-resume webhook; restart with backoff |
 | 2 | A refusal: an unsafe key file mode, a changed tick, a top-up after launch, a missing argument | Do not restart; the operator must act |
 | 3 | Resume finds an authenticated Terminated event, the world terminates while running, or `kill` ends it | Final success; no restart; termination webhook |
 | 4 | Another process already holds the ledger's writer lock | Do not start a second writer; investigate |
@@ -417,7 +454,10 @@ Every failing command prints exactly one line, `factorylab <command>: <code>`,
 where the code comes from the closed vocabulary in `factorylab/runtime/reasons.py`
 (`ledger_integrity`, `manifest_mismatch`, `release_mismatch` for a checkout whose
 release digest is not the one that launched the world, `identity_killed` for a
-diary whose launch identity the witness records as killed, `credential_missing` for a
+diary whose launch identity the witness records as killed, `witness_unavailable`
+for a configured receiver that gave no verdict, `artifact_missing` for an archive
+index naming bytes that are not beside the ledger, `facilitator_mismatch` for an
+x402 facilitator other than the one the world launched under, `credential_missing` for a
 key the environment lacks, `credential_unsafe` for a key file whose mode or owner is
 wrong, `venue_unreachable`, `jail_unavailable`, and the rest). No exception
 text, no interpolation and no provider response body is ever printed, so nothing
@@ -544,10 +584,19 @@ CSP prohibits scripts, embedding and network resources.
 
 At 03:00 UTC nightly (up to ten minutes jitter; missed runs catch up), `backup.sh`
 captures the ledger's byte length and copies only complete newline-terminated
-records from that prefix. The factory continues appending. Keys are immutable;
-the process copies the three root keys plus `runs/funded.jsonl.key` into a private
-root-only temporary directory. It pipes tar directly into age; no plaintext tar
-is written. It uploads a dated `.tar.age` through
+records from that prefix. The factory continues appending. It also copies the
+artifact archive, `runs/funded.artifacts/` (edition 2, C9: every program seat's
+private state and every note the population kept, one hash-named file each,
+verified against its name; an in-progress temporary is skipped), and records
+the count and size in `runs/funded.release.json`. The archive is part of the
+world's memory: the diary's checkpoint names each artifact by hash, and a
+restore of the diary without the bytes is refused by `resume` with the reason
+code `artifact_missing` (a `failed_resume` item naming the sha and its owner),
+never continued with a program that has lost its state. A restore therefore
+extracts `runs/` whole, ledger, key and `funded.artifacts/` together. Keys are
+immutable; the process copies the three root keys plus `runs/funded.jsonl.key`
+into a private root-only temporary directory. It pipes tar directly into age;
+no plaintext tar is written. It uploads a dated `.tar.age` through
 [rclone copyto](https://rclone.org/commands/rclone_copyto/) and removes local staging
 on exit. A failed upload fails the backup unit; the next nightly timer runs again.
 Only ciphertext goes to the remote. Keep the SHA/manifest and operations config

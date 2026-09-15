@@ -16,6 +16,7 @@ import os
 import shutil
 import socket
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from threading import Thread
 
 import pytest
@@ -193,7 +194,7 @@ def test_the_cli_refuses_the_copy_with_the_reason_code_and_exit_1(tmp_path, caps
     assert (tmp_path / "run" / "reason").read_text() == "identity_killed\n"
 
 
-def test_a_remote_kill_is_final_and_an_unreachable_remote_is_not_a_verdict(
+def test_a_remote_kill_is_final_and_a_configured_remote_without_a_verdict_refuses(
         tmp_path, receiver, monkeypatch):
     m, path = _world(tmp_path)
     shutil.copytree(path.parent, tmp_path / "earlier")
@@ -213,15 +214,87 @@ def test_a_remote_kill_is_final_and_an_unreachable_remote_is_not_a_verdict(
     assert query["diary"] == kill["diary"]
     failed = [i for i in rows(earlier, m) if i["kind"] == "failed_resume"]
     assert failed[-1]["witness"] == "remote"
-    # A receiver that cannot be reached is logged and does not stand in for a verdict:
-    # the copy resumes, because nothing this process can read says it died.
+    # A receiver is configured and cannot be reached: no verdict is a refusal, not a
+    # resume on the local file alone (P1-01). The refusal is ledgered like the others.
+    before = earlier.read_bytes()
     monkeypatch.setenv(witness.URL_ENV, _closed_port_url())
-    summary = resume_world(m, str(earlier))
-    assert summary["ledger_verify"]
-    # A plain-HTTP receiver off the loopback is never contacted at all.
+    with pytest.raises(ResumeError) as unreachable:
+        resume_runtime(m, str(earlier))
+    assert unreachable.value.code == "witness_unavailable"
+    assert earlier.read_bytes().startswith(before)
+    failed = [i for i in rows(earlier, m) if i["kind"] == "failed_resume"]
+    assert failed[-1]["reason"] == "witness_unavailable"
+    assert failed[-1]["launch_nonce"] == kill["launch_nonce"]
+    # A plain-HTTP receiver off the loopback is never contacted, and a configured
+    # receiver that cannot be used is no verdict either.
     monkeypatch.setenv(witness.URL_ENV, "http://example.invalid/witness")
+    with pytest.raises(witness.WitnessUnavailable):
+        witness.killed(world="scripted", launch_nonce=kill["launch_nonce"],
+                       diary=kill["diary"], ledger_path=earlier)
+    # A receiver that answers without a verdict is no verdict.
+    monkeypatch.setattr(witness, "_post", lambda *a, **k: {"status": "ok"})
+    monkeypatch.setenv(witness.URL_ENV, receiver)
+    with pytest.raises(witness.WitnessUnavailable):
+        witness.killed(world="scripted", launch_nonce=kill["launch_nonce"],
+                       diary=kill["diary"], ledger_path=earlier)
+    # An explicit "not killed" clears it.
+    monkeypatch.setattr(witness, "_post", lambda *a, **k: {"killed": False})
     assert witness.killed(world="scripted", launch_nonce=kill["launch_nonce"],
                           diary=kill["diary"], ledger_path=earlier) is None
+
+
+def test_without_a_receiver_the_local_file_alone_decides(tmp_path, monkeypatch):
+    """The weaker guarantee, stated in deploy/README.md: no receiver, no remote verdict."""
+    m, path = _world(tmp_path)
+    shutil.copytree(path.parent, tmp_path / "earlier")
+    earlier = tmp_path / "earlier" / path.name
+    _kill_from_outside(m, path)
+    monkeypatch.setattr(witness, "_killed_here", set())
+    with pytest.raises(ResumeError) as refused:
+        resume_runtime(m, str(earlier))
+    assert refused.value.code == "identity_killed"
+    # The local file is all there is: once it is gone, nothing refuses the copy.
+    shutil.rmtree(tmp_path / ".witness")
+    assert resume_world(m, str(earlier))["ledger_verify"]
+
+
+def test_the_cli_reports_witness_unavailable_with_the_retried_exit_code(tmp_path, capsys,
+                                                                        monkeypatch):
+    from factorylab.runtime.cli import TERMINATED_EXIT, _cmd_resume, build_parser
+
+    m, path = _world(tmp_path)
+    monkeypatch.setenv(witness.URL_ENV, _closed_port_url())
+    monkeypatch.setenv("RUNTIME_DIRECTORY", str(tmp_path / "run"))
+    (tmp_path / "run").mkdir()
+    args = build_parser().parse_args(["resume", "--world", "scripted", "--ledger", str(path)])
+    code = _cmd_resume(args)
+    assert code == 1 and code != TERMINATED_EXIT  # exit 1: the unit restarts with backoff
+    assert capsys.readouterr().err == "factorylab resume: witness_unavailable\n"
+    assert (tmp_path / "run" / "reason").read_text() == "witness_unavailable\n"
+    unit = (Path(__file__).resolve().parents[2] / "deploy" / "factorylab.service").read_text()
+    assert "RestartPreventExitStatus=3\n" in unit and "Restart=always\n" in unit
+
+
+def test_the_units_may_write_the_witness_directory():
+    """The droplet's units bind .witness/ writable: the runtime's kill line, start.sh's
+    launch and failed_resume lines and the wake unit's dormant lines land there, and
+    ProtectSystem=strict would otherwise refuse every one of them silently."""
+    deploy = Path(__file__).resolve().parents[2] / "deploy"
+    world = (deploy / "factorylab.service").read_text()
+    wake = (deploy / "factorylab-wake.service").read_text()
+    for unit in (world, wake):
+        assert "ProtectSystem=strict\n" in unit
+        line = next(ln for ln in unit.splitlines() if ln.startswith("ReadWritePaths="))
+        paths = line.removeprefix("ReadWritePaths=").split()
+        assert "/srv/factorylab/runs" in paths and "/srv/factorylab/.witness" in paths
+    assert "/srv/factorylab/www" in wake
+    # Where the runtime and the scripts write, resolved from the funded ledger path.
+    assert witness.witness_path("/srv/factorylab/runs/funded.jsonl") == Path(
+        "/srv/factorylab/.witness/funded.jsonl")
+    assert '$root/.witness/$world.jsonl' in (deploy / "witness.sh").read_text()
+    # The directory exists before the units bind it, owned by the service user.
+    provision = (deploy / "cloud-init.yaml").read_text()
+    assert "install -d -o factory -g factory -m 0700 /srv/factorylab/.witness" in provision
 
 
 def test_a_checkpoint_cannot_revive_a_killed_runtime():

@@ -22,6 +22,10 @@ write_files:
       install -d -o root -g root -m 0755 /srv/factorylab
       install -d -o factory -g factory -m 0700 /srv/factorylab/runs
       install -d -o factory -g factory -m 0755 /srv/factorylab/www
+      # The witness directory beside runs/: the units bind it writable
+      # (ReadWritePaths) and ProtectSystem=strict refuses a unit whose bound
+      # path does not exist, so it is created here, before any world.
+      install -d -o factory -g factory -m 0700 /srv/factorylab/.witness
       # Private repos: use an operator-prepared read-only bundle URL without credentials.
       git clone --no-checkout "$repo_url" /srv/factorylab/repo
       git -C /srv/factorylab/repo checkout --detach "$revision"

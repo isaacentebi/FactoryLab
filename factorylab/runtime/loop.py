@@ -220,6 +220,10 @@ class Runtime(
                  # historical Launch, which carried no digest.
                  **({"release_digest": self.release_digest}
                     if self.release_digest is not None else {}),
+                 # The facilitator every paid service call settles through; a
+                 # checkpoint from before the pin replays its historical Launch.
+                 **({"facilitator_url": self.facilitator_url}
+                    if getattr(self, "facilitator_url", None) is not None else {}),
                  "manifest": json.loads(self.m.canonical_json())},
                 "kernel",
             )
@@ -251,6 +255,10 @@ class Runtime(
             self.budget.on_release(released)
         self._manage_reserve_window()
         self.treasury.open_window(self.stats.reserve_windows)  # reserve-window top-up cap
+        # At each window boundary: when no live seat can act from its entitlement,
+        # release the commons to the seats, or, with nothing left to release, let
+        # the termination rule below see the starvation (P1-04).
+        starved = (previous_window != self.reserve_window_start) and self._commons_check()
         if previous_window is not None and previous_window != self.reserve_window_start:
             self._sampling_actuator()
         self._observe_delivered_event(ev)
@@ -284,7 +292,7 @@ class Runtime(
                     self._emit(EventKind.RECONCILED, snap, source="kernel")
             else:
                 self._settle_exchange_effects(self.exchange.advance(self.clock.now_ns))
-        if self._check_termination():
+        if self._check_termination(starved=starved):
             return False
 
         if self.dormancy is None:
@@ -429,7 +437,7 @@ class Runtime(
         if subject is not None and source == "runtime":
             self.return_events[subject] = event
 
-    def _check_termination(self) -> bool:
+    def _check_termination(self, *, starved: bool = False) -> bool:
         """Kill on a terminal reason; pause and resume paid cognition on the budget (C2).
 
         Dormancy is entered when the kernel reports ``budget_dormant`` or when the
@@ -438,6 +446,12 @@ class Runtime(
         cheapest seat again and, for an insolvency entry, a release has landed
         since, so a provider shortfall is not retried on the same money. Both
         transitions are ledgered before the state changes.
+
+        ``starved`` is the window boundary's finding that no live seat can act
+        from its entitlement and the commons has nothing left to release (P1-04):
+        it counts as unaffordability, so the same rule applies, ``budget_dormant``
+        (trigger ``entitlement``, left when a tranche lands) while a release is
+        still due and terminal ``insolvency:entitlement`` otherwise.
         """
         now_ns = self.clock.now_ns
         reason = self.termination.check(self.wallet, now_ns,
@@ -450,6 +464,11 @@ class Runtime(
             or self.wallet.released_tranches > self.dormancy["released"]
         ):
             self._exit_dormancy(now_ns)
+        if reason is None and starved and self.dormancy is None:
+            if self.wallet.locked > 0 and self.wallet.next_release_ns is not None:
+                self._enter_dormancy(now_ns, trigger="entitlement")
+                return False
+            reason = "insolvency:entitlement"
         if reason is None and self.insolvency_count >= self.m.treasury.insolvency_events:
             if self.wallet.locked > 0 and self.wallet.next_release_ns is not None:
                 self._enter_dormancy(now_ns, trigger="insolvency")
@@ -459,6 +478,41 @@ class Runtime(
             return False
         self._settle_due_forecasts()
         self.termination.kill(reason)
+        return True
+
+    def _commons_check(self) -> bool:
+        """At a reserve-window boundary: can anybody act, and if not, is there commons to give?
+
+        Routing skips a seat whose entitlement cannot cover its call, and that is the
+        seat's own state, never the factory's, for as long as some seat can still
+        act. When *every* live seat is skipped and at least one of them for its
+        entitlement, nobody can think, and the unallocated pool is money nobody may
+        spend. Then, once per boundary, the pool is released the way a tranche is,
+        one equal share per live lineage to its head (``budget
+        op="commons_release"``), and returns False: the heads act again on the
+        next event. With the pool empty too, returns True, and the
+        termination rule treats it as unaffordability. Nothing here weakens the
+        per-seat rule while any seat can act. Dormant worlds route nothing and are
+        not examined.
+        """
+        if self.dormancy is not None or self.termination.final:
+            return False
+        live = [a for a in self.assemblies if a not in self.retired_assemblies]
+        if not live:
+            return False
+        entitlement_blocked = False
+        for action_id in live:
+            try:
+                feasible, why = self._is_feasible(action_id)
+            except Exception:  # noqa: BLE001 - a seat that cannot be probed cannot act
+                continue
+            if feasible:
+                return False
+            entitlement_blocked |= why.startswith("entitlement:")
+        if not entitlement_blocked:
+            return False  # a provider or wallet shortfall: the insolvency streak's business
+        if self.budget.unallocated() > 0 and self.budget.commons_release("nobody can act"):
+            return False
         return True
 
     def _cheapest_seat_micro(self) -> int | None:

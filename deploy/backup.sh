@@ -50,6 +50,28 @@ with source.open('rb') as stream, (stage / 'runs/funded.jsonl').open('wb') as ou
         remaining -= len(line)
         if line.endswith(b'\n'):
             out.write(line)
+# The artifact archive (edition 2, C9): the diary's checkpoint carries the index
+# and each program seat's state hash, the bytes live beside it under
+# runs/funded.artifacts/<sha>. A restore without them names memory the world
+# no longer has and resume refuses (artifact_missing), so every complete,
+# hash-true file is archived; an in-progress temporary (.<prefix>-*) is not.
+archive = root / 'runs/funded.artifacts'
+count = size = 0
+if archive.is_dir():
+    (stage / 'runs/funded.artifacts').mkdir()
+    for entry in sorted(archive.iterdir()):
+        name = entry.name
+        if len(name) != 64 or any(c not in '0123456789abcdef' for c in name):
+            continue
+        if not stat.S_ISREG(entry.lstat().st_mode):
+            continue
+        data = entry.read_bytes()
+        if hashlib.sha256(data).hexdigest() != name:
+            raise RuntimeError('artifact bytes do not match their hash')
+        (stage / 'runs/funded.artifacts' / name).write_bytes(data)
+        (stage / 'runs/funded.artifacts' / name).chmod(0o600)
+        count += 1
+        size += len(data)
 for relative in ('runs/funded.jsonl.key', 'openrouter.key', 'hyperliquid.key', 'reserve.key'):
     source = root / relative
     mode = source.lstat().st_mode
@@ -74,6 +96,7 @@ copied = stage / 'runs/funded.jsonl'
 record = json.loads((stage / 'runs/funded.release.json').read_text())
 record['ledger'] = {'bytes': copied.stat().st_size,
                     'sha256': hashlib.sha256(copied.read_bytes()).hexdigest()}
+record['artifacts'] = {'count': count, 'bytes': size}
 (stage / 'runs/funded.release.json').write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
 PY
 # No unencrypted tar is ever created. The stage is root-only in systemd's PrivateTmp.

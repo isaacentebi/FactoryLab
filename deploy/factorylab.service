@@ -31,7 +31,11 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/srv/factorylab/runs
+# runs/ holds the diary, its key, the artifact archive and the income spool;
+# .witness/ is where the runtime appends the kill line and start.sh appends
+# launch and failed_resume lines (it is deliberately outside runs/, see
+# deploy/README.md "Witness"). The provisioner creates both as factory.
+ReadWritePaths=/srv/factorylab/runs /srv/factorylab/.witness
 
 [Install]
 WantedBy=multi-user.target

@@ -37,6 +37,7 @@ from factorylab.runtime.observations import seed_book
 from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.resume import JournalProxy, RecoveryJournal
 from factorylab.runtime.routing import RouterState
+from factorylab.runtime.seller import configured_facilitator
 from factorylab.runtime.shared import SimClock, _to_plain
 from factorylab.runtime.summary import RunStats, _assembly_contract, _model_contract
 from factorylab.runtime.worlds import WorldManifest
@@ -152,6 +153,11 @@ class BootstrapMixin:
         # it; restore compares the saved digest with the running one and refuses a
         # different release under the old identity (C4).
         self.release_digest = release.release_digest()
+        # One launch, one x402 facilitator. The seller settles every paid call
+        # through it, so it is read from the environment here, once, ledgered in
+        # the Launch event and every checkpoint, compared on restore
+        # (``facilitator_mismatch``) and read back from the ledger by the seller.
+        self.facilitator_url = configured_facilitator()
         # The diary this state descends from (the hash of its first sealed record).
         # None until the ledger has one; restore sets it from the checkpoint so a
         # twin restored in memory still names the diary it came from.
