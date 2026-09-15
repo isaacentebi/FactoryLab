@@ -1,6 +1,6 @@
 # Edition 2 testnet rehearsals at the ten-minute tick
 
-Two live Hyperliquid-testnet runs of the edition 2 world on 15 September 2026, both from
+Three live Hyperliquid-testnet runs of the edition 2 world on 15 September 2026, both from
 `worlds/edition2-testnet.toml` (ratified charter, endowment schedule, one-hour windows) with a
 fresh client namespace each, killed at the end. Code at `af103a0` (the reviewer zip) plus the
 rehearsal-preflight fix `4afa4cb`. No mainnet, no fund movement. Ledgers are sealed; every number
@@ -87,6 +87,40 @@ lasts four days and a weekly $10 tranche about a day and a third, so the populat
 most of each week dormant. Either the schedule or the roster's cadence should change before the
 funded manifest; both are manifest edits.
 
+## Run 3: the ratified edition, flat account, quiet machine
+
+After the decisions of the morning (`docs/launch-decisions.md`, "Edition 2"): three cards and
+five norms ratified, observer on DeepSeek 4.1 flash, bills settled from the provider's balance,
+OpenRouter pinned to hosts that honour JSON mode, the wake publishing every answer, and the
+inherited testnet positions closed at market beforehand.
+
+| | |
+|---|---|
+| Manifest | `worlds/edition2-rehearsal-3.toml`, namespace `b2ee65d7…`; code `9c4dcb8` |
+| Wall clock | launch 10:25 local, 30 min to kill |
+| Ledger | `runs/e2-rehearsal-3.jsonl`, verify true, conservation true |
+| Tick gaps (s) | 600.010, 600.009, 600.010 |
+| Events / decisions / invocations | 124 / 60 / 38 (22 noops) |
+| Invocation status | 36 ok, 1 malformed, 1 failed (well-formed 0.947) |
+| Spend | successful calls 177,953 µUSD (4,943 per call); the one uncertain bill settled at 3,097 |
+| Orders / tool calls / registrations | 0 / 0 / 0 |
+
+**The bill fix works live.** The one provider error (`antagonist-a`, Venice) was charged at its
+ceiling and then settled from the provider's balance read to 3,097 µUSD, ledgered as
+`wallet.settle_uncertain`. In runs 1 and 2 the same event cost 17,000 to 82,000 each.
+
+**The rationales changed character.** Thirteen producer wakes, thirteen holds, as before, but no
+rationale quotes a card any more. They read the market: "a 0.16% move, inside noise", "the fourth
+print in the series, a slow drift of 0.26% over 1800 s with no acceleration", "a perp entry
+would need to clear the $10 minimum notional", "no edge identified in this window". The decider
+carries small buy and sell probabilities on BTC instead of a flat hold. On a flat account with
+prices drifting a quarter of a percent in half an hour, that is judgement, not compliance.
+Still no tool calls: nobody paid to look at candles or the book. Whether that changes over days
+is the experiment's question, not a rehearsal's.
+
+**Cost per successful call rose to 4,943** from 3,700: the observer's new model is dearer per
+token than GLM and the rationales are longer. About $7 a day at this cadence.
+
 ## Seat calibration under the edition 2 prompt
 
 `scripts/calibrate_seats.py --world worlds/edition2-testnet.toml --all-menu --paid --budget-usd 3
@@ -132,7 +166,6 @@ ballot, a third of a cent).
 Execution and feedback at the declared tick, with the edition 2 kernel live on a real venue and
 two real providers: the endowment split, per-seat metering, both cost observations, the release
 schedule, the ratified eight-card charter. It is not a profitability, convergence or survival
-claim; no orders were placed in either run. Three things to decide from it before the funded
-manifest: the `seed-observer` model (calibration table), the endowment schedule against the
-measured burn, and whether the 180 s timeout has removed the uncertain bills (one more short
-rehearsal after any roster change, which also needs its re-ratification).
+claim; no orders were placed in any run. The three decisions the first runs raised were taken
+and run 3 rehearses them; what remains before the funded manifest is the outside reviewer's
+second reading and the operator steps in `docs/handoff.md`.

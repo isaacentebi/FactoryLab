@@ -72,18 +72,19 @@ Only the experimenter runs the gate; agents run targeted files. Pull requests #5
 
 ## What remains, in order
 
-1. The experimenter reads `docs/audits/v5/rehearsal.md` and decides the roster from the
-   calibration table (GLM 5.3 flash wraps its reply under the edition 2 prompt), the endowment
-   schedule in `worlds/edition2-testnet.toml` (at the measured burn a weekly $10 tranche buys
-   about three days awake), and whether to run the GPT-6 second reading first.
-2. If the roster or the schedule changes, re-ratify (`scripts/ratify_charter.py` against the new
-   manifest; the roster hash binds seats, models and the seed prompt) and pin the new manifest
-   hash in `tests/runtime/test_manifests.py`.
-3. Fresh read-only balance read; `worlds/funded.toml` from `worlds/edition2-testnet.toml` with
+The morning's decisions are taken and rehearsed (`docs/audits/v5/rehearsal.md`, run 3;
+`docs/launch-decisions.md`, "Edition 2"): three cards and five norms ratified, observer on
+DeepSeek 4.1 flash, 40 USD at genesis then 10 a week, bills settled from the provider's balance,
+the wake publishing every answer live.
+
+1. The outside reviewer's second reading (`~/Downloads/FactoryLab-edition2-*.zip` with
+   `BRIEF.md`; rebuild with `scripts/package_review.sh` after any commit) and its triage into
+   `docs/audits/v5/`.
+2. Fresh read-only balance read; `worlds/funded.toml` from `worlds/edition2-testnet.toml` with
    `name = "funded"`, `mainnet = true`, a client namespace, the ratified digests it already
    carries, and the fresh starting accounting; hash recorded.
-4. The first-move review: prompts, roster, charter, tick, pots, schedule.
-5. Droplet: `deploy/install.sh` records the release; the experimenter places the three keys and
+3. The first-move review: prompts, roster, charter, tick, pots, schedule.
+4. Droplet: `deploy/install.sh` records the release; the experimenter places the three keys and
    sets `FACTORYLAB_WITNESS_URL` (the remote witness is the real kill guarantee) and, if a
    service is to be sold, `FACTORYLAB_INCOME_SPOOL` and `deploy/serve.py`.
-6. Launch. Then nothing changes but the one control: kill.
+5. Launch. Then nothing changes but the one control: kill.
