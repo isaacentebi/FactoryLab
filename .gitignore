@@ -30,3 +30,6 @@ reserve.key
 
 # The essay is the experimenter's document; copied into audit worktrees, never committed.
 docs/essay.md
+
+# Kill witness beside runs/: local death record, never restored from backup, never committed.
+.witness/

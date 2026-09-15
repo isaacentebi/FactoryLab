@@ -53,7 +53,39 @@ under `/srv/factorylab/runs/` and the witness lands beside it as designed.
 
 ## Run 2: 40 minutes, quiet machine
 
-_Pending: filled from `runs/e2-rehearsal-2.jsonl` when the run ends._
+| | |
+|---|---|
+| Manifest | `worlds/edition2-rehearsal-2.toml`, namespace `f98a5239…`, hash `18c9e98c…` |
+| Wall clock | launch 03:31 local, 30.1 min to kill (`--duration 40m` ends at the cascade boundary) |
+| Ledger | `runs/e2-rehearsal-2.jsonl`, verify true, wallet conservation true, 0 outstanding decisions |
+| Termination | `explicit_kill:budget`, seal key released; witness line written to `.witness/e2-rehearsal-2.jsonl` |
+| Events / decisions / invocations | 142 / 65 / 42 (23 noops) |
+| Tick gaps (s) | 600.006, 600.000, 600.003 |
+| Invocation status | 38 ok, 2 malformed, 2 failed (well-formed 0.905) |
+| Spend | 238,573 µUSD; successful calls 141,037 (3,712 per call); the two uncertain bills 81,296 |
+| Wallet after | 89,736,725 µUSD; locked 60,000,000 untouched |
+| Orders | none placed; exchange equity 973.54 USD (testnet) |
+
+Nothing else on the machine: the gate had ended and only the paid calibration ran beside it,
+network-bound. Tick timing is load-bearing here, and it is the declared tick to the
+millisecond. The successful-call cost is edition 1's. The two malformed replies are an
+evaluator reply truncated at its length limit (`eval-a`, Venice GLM) and a meta reply whose
+propensity named `conformity:0.55` instead of the declared key (`meta-a`, Venice DeepSeek); no
+`"answer"` wrapper appeared because `seed-observer` was routed less in a shorter run. The two
+provider errors with no HTTP status (`eval-c` Venice, `eval-d` OpenRouter) recurred without
+load, billed at the ceiling and 34% of the run's spend, so run 1's excess was partly load and
+partly a transport timeout of 60 s that a long reply can exceed; after both runs the model HTTP
+timeout was raised to 180 s (`e6bb48b`), which the ten-minute tick absorbs. The next rehearsal
+measures its effect.
+
+Burn from the clean run: 42 calls in 30 minutes is about 2,000 calls a day; at 3,712 per
+successful call that is roughly $7.5 a day before uncertain bills, against edition 1's $3.47 at
+144 ticks a day. The difference is calls per tick (14 here against about 9), not price per
+call: the judges and meta seats were woken more. The endowment schedule in
+`worlds/edition2-testnet.toml` was sized to $3.47 a day; at $7.5 a day the $30 genesis tranche
+lasts four days and a weekly $10 tranche about a day and a third, so the population would spend
+most of each week dormant. Either the schedule or the roster's cadence should change before the
+funded manifest; both are manifest edits.
 
 ## Seat calibration under the edition 2 prompt
 
@@ -100,4 +132,7 @@ ballot, a third of a cent).
 Execution and feedback at the declared tick, with the edition 2 kernel live on a real venue and
 two real providers: the endowment split, per-seat metering, both cost observations, the release
 schedule, the ratified eight-card charter. It is not a profitability, convergence or survival
-claim; no orders were placed in either run.
+claim; no orders were placed in either run. Three things to decide from it before the funded
+manifest: the `seed-observer` model (calibration table), the endowment schedule against the
+measured burn, and whether the 180 s timeout has removed the uncertain bills (one more short
+rehearsal after any roster change, which also needs its re-ratification).
