@@ -452,8 +452,8 @@ def test_edition2_views_are_additive_and_read_only_public_items(tmp_path, script
     manifest = load_manifest("scripted")
     data = collect_wake(world)
     assert SAMPLE_KEYS < set(data)
-    assert set(data) - SAMPLE_KEYS == {"entitlements", "money", "deliveries", "commitments", "cells",
-                                        "liveness"}
+    assert set(data) - SAMPLE_KEYS == {"entitlements", "money", "deliveries", "commitments",
+                                        "cells", "liveness"}
     # Existing keys keep their shape: the five pots the site reads are all present,
     # beside the endowment keys W1 added (C1, C2).
     assert {"venue", "reserve", "venice", "seed", "complete"} <= set(data["pots"]["current"])
@@ -510,6 +510,11 @@ def test_edition2_views_are_additive_and_read_only_public_items(tmp_path, script
     writer.append({"kind": "income.earned", "service": "doubler", "micro": 3000, "tx": "0x1",
                    "payer": "0x" + "12" * 20, "ts": 2 * 10**12})
     writer.append({"kind": "treasury.subsidy", "micro": 5_000_000, "ts": 2 * 10**12})
+    # The wallet's own tranche item (C1), not a cancelled hold, is the release class.
+    writer.append({"kind": "release", "tranche": 0, "amount": 7_000_000, "due_ns": 2 * 10**12,
+                   "locked_after": 0, "balance_after": 90_000_000, "ts": 2 * 10**12})
+    writer.append({"kind": "wallet.release", "reason": "hold", "amount": 1_000_000,
+                   "ts": 2 * 10**12})
     writer.append({"kind": "treasury.confirmed", "ts": 2 * 10**12, "state": {
         "direction": "to_venice", "amount_micro": 5_000_000, "received_micro": 5_000_000,
         "fees_micro": 0}})
@@ -519,6 +524,7 @@ def test_edition2_views_are_additive_and_read_only_public_items(tmp_path, script
                                                     "exited_ns": 2 * 10**12}]
     assert data["money"]["in_by_class"]["earned"] == 3000
     assert data["money"]["in_by_class"]["subsidy"] == 5_000_000
+    assert data["money"]["in_by_class"]["release"] == 7_000_000
     assert data["money"]["in_by_class"]["converted_from_principal"] == 5_000_000
     assert "0x" not in json.dumps(data["money"])
     writer.append({"kind": "event", "event": {"kind": "Terminated", "ts_ns": 3 * 10**12}})

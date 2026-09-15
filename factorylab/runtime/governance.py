@@ -469,6 +469,10 @@ class GovernanceMixin:
         as it would for any amendment. The challenge's own promise is the
         replacement holding inside its region one window after activation.
         """
+        if getattr(self, "dormancy", None) is not None:
+            # Dormant (C2): no paid cognition, so a completed trial waits for the
+            # first window boundary after the world wakes; its status stays due.
+            return
         for challenge in self.challenges.values():
             if challenge["status"] != "due":
                 continue

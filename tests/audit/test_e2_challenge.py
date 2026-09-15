@@ -354,3 +354,23 @@ def test_an_ordinary_amendment_ballot_is_unchanged(monkeypatch):
         assert "challenge" not in req.inputs
         assert set(req.inputs) == {"amendment", "charter", "world", "your_policy_returns"}
         assert req.description == "Vote on an amendment to the charter's metric cards."
+
+
+def test_a_due_trial_waits_while_the_world_is_dormant_and_ballots_after_it_wakes(monkeypatch):
+    """Dormancy (C2) pauses paid cognition; a ballot is paid cognition, so a completed
+    trial keeps its ``due`` status across every boundary spent dormant and is
+    balloted at the first boundary after the world wakes."""
+    rt = runtime()
+    _admit(rt, monkeypatch)
+    (cid, challenge), = rt.challenges.items()
+    _close(rt, 2, (1_000, True), (100_000, False))
+    _close(rt, 3, (1_000, True))
+    assert challenge["status"] == "due"
+    rt.dormancy = {"since_ns": rt.clock.now_ns, "trigger": "wallet", "released": 0}
+    boundary(rt, 4)
+    assert challenge["status"] == "due" and not _items(rt, "challenge.balloted")
+    assert rt.stats.amendments_proposed == 0
+    rt.dormancy = None
+    boundary(rt, 5)
+    balloted, = _items(rt, "challenge.balloted")
+    assert balloted["challenge_id"] == cid and challenge["status"] == "balloted"

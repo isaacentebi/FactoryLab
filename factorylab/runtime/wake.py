@@ -317,11 +317,11 @@ class _Observatory:
         else:
             self.money_out[reason] += -amount
 
-    def _on_wallet_release(self, item: dict) -> None:
-        # A hold cancelled moves nothing; an endowment tranche released (edition 2)
-        # does. The tranche says so with its reason; a reservation names its handle.
-        if str(item.get("reason", "")) == "release":
-            self._money_in("release", item.get("amount"))
+    def _on_release(self, item: dict) -> None:
+        # An endowment tranche released (edition 2, C1): the wallet ledgers it as its
+        # own ``release`` item with the tranche's amount. A cancelled hold is a
+        # ``wallet.release`` item and moves nothing.
+        self._money_in("release", item.get("amount"))
 
     def _on_income_earned(self, item: dict) -> None:
         self._money_in("earned", item.get("micro"))
