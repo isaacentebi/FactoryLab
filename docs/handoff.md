@@ -1,5 +1,32 @@
 # State on main and what remains before launch
 
+## 14 September, end of day
+
+Main is at the merge of pull request #68. Since the last handoff: #67 (order lifecycle, the
+population-ratified charter, Venice compute continuity, droplet verification) was cold-reviewed
+by Opus, fixed (launch-bound order identities, mainnet requires a client namespace and the
+ratified charter and roster hashes, JSON mode on Venice and x402), reviewed twice by Codex,
+gated at 2,700 and merged as f82d852. #68 (self-serve gas: forward-on-empty exit route
+through Circle's forwarding service, `docs/audits/v4/gas-design.md`) was cold-reviewed by
+Opus, its P1 and P2 findings fixed (bounded forward wait with recoverable strands, minimum
+re-applied at signing, fee cap headroom, total-fee validation, fallback-versus-forwarder race,
+`HYPE/USDC` seeded, gas view fresh while pending, stalled polls ledgered as `treasury.pending`,
+Base log scan from a journaled cursor), gated at 2,743 and merged as 1bede05, with two
+forwarded-branch acceptances on testnet (the second confirmed by the code alone in 22 minutes:
+2,800,000 received, 200,509 fees). The public page is one plain page on branch `site/public`,
+unpublished. The cold audit brief for the outside reviewer is `docs/audits/v4/brief-gpt6.md`;
+it should be run against 1bede05 with the essay and arXiv:2609.10817 attached, and its report
+triaged into `docs/audits/v4/` before the funded manifest is written.
+
+What remains, in order: the outside review and its triage; the OpenRouter key allowance
+raised in the OpenRouter dashboard (operator); a fresh read-only balance read; the funded
+manifest from `worlds/edition1-example.toml` with `name = "funded"`, `mainnet = true`, the
+ratified charter with its recorded hashes, a client namespace, and the fresh starting
+accounting, validated and its hash recorded; the first-move read; the merged release and the
+three keys placed on the droplet by the operator; launch; then only kill. Self-serve gas is
+built, so no architect gas seed is needed; the population buys HYPE on the seeded
+`HYPE/USDC` pair and Circle forwards the Base mint for the quoted fee.
+
 ## What is merged
 
 Everything from three audit rounds. Round three (`docs/audits/v3/`) closed 57 of its 60 triage rows across twenty pull requests (#47 to #66), four found by the live rehearsal (`docs/audits/v3/rehearsal.md`) and four by the cold review of the unreviewed pull requests (`docs/audits/v3/review-58-64.md`) and built the six decisions in `docs/audits/v3/fix-plan.md`: a kill command; a two-minute tick with a 60-event consequence horizon; judges answer for their verdicts against the charter's own blame; every proposal names the card it promises to improve and its voters are liable for it; the population may register new kinds of work, its own forecast predicates and one of four reward shapes; the population may read the venue's public data for any listed coin, register markets, pay for data through x402, and keep a metered public notebook. Two rows are known by decision (testnet rehearses on the seed charter; the crash world's overshoot is its demonstration) and one is open: T47, the launch roster's well-formed rate. The first live re-check (`docs/audits/v3/recheck.md`) measured it at 0.87 against the charter's 0.9 floor, with 160k input tokens and $0.025 per call because the whole venue listing was in every prompt. PR #66 took the listing out (reachable through `venue.instruments`) and opened every prompt with a byte-stable block so provider prefix caching hits per assembly; `tencent/hy3` left the roster and eval-c sits on DeepSeek 4.1 flash. The second re-check (`docs/audits/v3/recheck2.md`) measured 21,825 input tokens and $0.0035 per call (7.2 times cheaper, about $21 a day at the declared tick), a well-formed rate of 0.94 over 63 calls, cache hits on 30% of calls (DeepSeek and Qwen 3.8 hit; GLM rarely; GPT 5.6 luna and Qwen 3.7 never), zero length stops and zero provider faults; no price window closed in 14 minutes so T47's card value is still unmeasured, and tick timing was contaminated by the concurrent gate. The well-formed and cost cards use a 100-returns-per-role window, so they price roughly three hours behind the observation. `docs/audits/v3/closure.md` is the cold closure review; `docs/manifest.md` describes the code as it is.
