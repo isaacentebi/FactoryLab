@@ -235,7 +235,8 @@ def test_state_round_trips_exactly(ledger, clock):
     state = book.state()
     assert state == {"base_share": "0.6", "entitlements": {"a": 300, "b": 0},
                      "holds": {reservation.id: ["a", 50]}, "retired": ["b"],
-                     "last_holds": {"a": 50}, "uncertain": {}}
+                     "last_holds": {"a": 50}, "uncertain": {},
+                     "lineages": {"a": "a", "b": "b"}}
     other = BudgetBook(wallet, ledger, clock_ns=clock, base_share="0.6")
     other._restore_state(state)
     assert other.state() == state and other.entitlement("a") == 250 and other.seats() == ("a",)
@@ -282,3 +283,108 @@ def test_settling_an_uncertain_bill_refunds_the_seat_what_it_paid(ledger, clock)
     assert other._refund_uncertain(reservation.id, 10, "settle_uncertain") == 10
     # A bill the book never saw refunds no seat.
     assert book._refund_uncertain("wallet-99", 10, "settle_uncertain") == 0
+
+
+# --- lineages (GPT-6 second reading, P2-07): replication never buys subsidy ---------
+
+
+def test_a_release_is_split_per_lineage_so_nine_children_take_no_larger_share(ledger, clock):
+    """The reviewer's case: a founder registers nine children; before, the next tranche
+    was split per seat id and the founder's lineage took ten of eleven shares."""
+    wallet = Wallet(1_000, ledger, clock_ns=clock)
+    book = BudgetBook(wallet, ledger, clock_ns=clock, base_share="1")
+    book.genesis(["founder", "other"])
+    assert book.lineages() == {"founder": {"head": "founder", "seats": ["founder"]},
+                               "other": {"head": "other", "seats": ["other"]}}
+    for i in range(9):
+        book.adopt(f"child-{i}", "founder", "trial:assembly")
+        book.transfer("founder", f"child-{i}", 10, "trial:assembly")
+    assert book.lineage("child-3") == "founder" and book.heads() == ("founder", "other")
+    assert len(book.lineages()["founder"]["seats"]) == 10
+    wallet.settle(200, "tranche", "funding")
+    grants = book.on_release(200)
+    # the same share the founder took before it had children; the children are
+    # funded by the founder, not by the tranche
+    assert grants == {"founder": 100, "other": 100}
+    assert all(book.entitlement(f"child-{i}") == 10 for i in range(9))
+    release = [i for i in budget_items(ledger) if i["op"] == "release"][0]
+    assert release["lineages"] == {"founder": "founder", "other": "other"}
+    adopted = [i for i in budget_items(ledger) if i["op"] == "lineage"]
+    assert [(i["assembly_id"], i["lineage"], i["proposer"]) for i in adopted][:2] == [
+        ("child-0", "founder", "founder"), ("child-1", "founder", "founder")]
+    # a grandchild registered by a child belongs to the founder's lineage too
+    book.adopt("grandchild", "child-0", "trial:assembly")
+    assert book.lineage("grandchild") == "founder"
+    # a seat this book never placed roots its own lineage; adopting it twice is a no-op
+    assert book.adopt("stray", None, "trial:assembly") == "stray"
+    assert book.adopt("stray", "founder", "again") == "stray"
+    assert invariant(book, wallet) and ledger.verify()
+
+
+def test_retiring_a_root_hands_the_lineage_to_its_oldest_live_child_or_the_pool(ledger, clock):
+    wallet = Wallet(1_000, ledger, clock_ns=clock)
+    book = BudgetBook(wallet, ledger, clock_ns=clock, base_share="1")
+    book.genesis(["founder", "other"])
+    book.adopt("elder", "founder", "trial:assembly")
+    book.transfer("founder", "elder", 10, "trial:assembly")
+    book.adopt("younger", "founder", "trial:assembly")
+    book.transfer("founder", "younger", 10, "trial:assembly")
+    book.retire("founder", "vote")
+    assert book.lineages()["founder"] == {"head": "elder", "seats": ["elder", "younger"]}
+    handoff = [i for i in budget_items(ledger) if i["op"] == "lineage_handoff"]
+    assert handoff == [{**handoff[0], "lineage": "founder", "retired": "founder",
+                        "head": "elder", "reason": "vote"}]
+    wallet.settle(100, "tranche", "funding")
+    assert book.on_release(100) == {"elder": 50, "other": 50}
+    # a member that is not the head retires without a handoff
+    book.retire("younger", "vote")
+    assert len([i for i in budget_items(ledger) if i["op"] == "lineage_handoff"]) == 1
+    # the last member retires: the lineage's future share stays in the pool
+    book.retire("elder", "vote")
+    assert "founder" not in book.lineages() and book.heads() == ("other",)
+    assert [i for i in budget_items(ledger) if i["op"] == "lineage_handoff"][-1]["head"] is None
+    wallet.settle(100, "tranche", "funding")
+    assert book.on_release(100) == {"other": 100}
+    # the retired root re-registered as a next version is live in its own lineage again
+    book.transfer("other", "founder", 5, "trial:assembly")
+    assert book.lineages()["founder"] == {"head": "founder", "seats": ["founder"]}
+    state = book.state()
+    assert state["lineages"] == {"founder": "founder", "other": "other", "elder": "founder",
+                                 "younger": "founder"}
+    restored = BudgetBook(wallet, ledger, clock_ns=clock, base_share="1")
+    restored._restore_state(state)
+    assert restored.lineages() == book.lineages() and restored.state() == state
+    # a checkpoint from before lineages roots every seat on its own
+    legacy = BudgetBook(wallet, ledger, clock_ns=clock, base_share="1")
+    legacy._restore_state({k: v for k, v in state.items() if k != "lineages"})
+    assert legacy.lineage("elder") == "elder" and set(legacy.lineages()) == {"founder", "other"}
+    assert invariant(book, wallet) and ledger.verify()
+
+
+# --- income (GPT-6 second reading, P2-05): service income is new money -------------
+
+
+def test_earned_income_is_new_money_credited_whatever_the_pool_holds(ledger, clock):
+    wallet = Wallet(100, ledger, clock_ns=clock)
+    book = BudgetBook(wallet, ledger, clock_ns=clock, base_share="1")
+    book.genesis(["seller"])
+    assert book.entitlement("seller") == 100 and book.unallocated() == 0
+    # the wallet books the receipt like venue P&L, then the seat is credited from it
+    wallet.settle(40, "income:svc:0xtx", "income")
+    book.earn("seller", 40, "income.earned:svc")
+    assert wallet.balance == 140 and book.entitlement("seller") == 140
+    assert book.unallocated() == 0 and invariant(book, wallet)
+    # with a negative pool (shared spending overran it) the seller still gets it all
+    wallet.settle(-30, "trade", "exchange_pnl")
+    assert book.unallocated() == -30
+    wallet.settle(25, "income:svc:0xtx2", "income")
+    book.earn("seller", 25, "income.earned:svc")
+    assert book.entitlement("seller") == 165 and book.unallocated() == -30
+    assert invariant(book, wallet)
+    item = [i for i in budget_items(ledger) if i["op"] == "income"][-1]
+    assert item["amount"] == 25 and item["entitlement_after"] == {"seller": 165}
+    with pytest.raises(ValueError):
+        wallet.settle(-1, "income:svc:bad", "income")
+    with pytest.raises(ValueError):
+        wallet.settle(1, "h", "gift")
+    assert wallet.check_conservation() and ledger.verify()

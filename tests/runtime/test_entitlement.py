@@ -113,6 +113,9 @@ def test_entitlements_restore_exactly_after_a_crash(tmp_path):
     assert invariant(rt)
     restored = resume_runtime(m, str(path))
     assert restored.budget.state() == before and invariant(restored)
+    # every seeded seat roots its own lineage, and the lineages come back with the book
+    assert before["lineages"] == {seat: seat for seat in [a.id for a in m.assemblies]}
+    assert restored.budget.lineages() == rt.budget.lineages()
     restored.stats.resumes = 0
     assert runtime_state(restored)["budget"] == runtime_state(rt)["budget"]
     assert restored.run()["ledger_verify"]
@@ -224,3 +227,26 @@ def test_snapshot_codec_carries_the_book_and_older_snapshots_keep_genesis():
     older = make_runtime()
     restore_runtime(older, without)
     assert older.budget.entitlement("eval-a") == 8_888_888  # genesis stands
+
+
+def test_a_program_seat_needs_its_flat_fee_however_the_world_grows():
+    """GPT-6 second reading, P1-03: ``program`` has no token price; a world block one
+    character larger than at the seat's last call raised KeyError in routing."""
+    from factorylab.cortex.assembly import ProgramAssemblySpec
+
+    rt = make_runtime()
+    seat = "prog-a"
+    rt._instantiate(ProgramAssemblySpec(id=seat, version=1, model_id="program",
+                                        code="print('{}')", timeout_s=2, accepts=("Tick",)))
+    rt.budget.grant(seat, 1_000_000, "test")
+    price = rt.m.prices.program_micro_per_call
+    assert rt._seat_need(seat) == 0
+    rt.seat_ceilings[seat] = {"ceiling": price, "world_chars": 100}
+    rt._world_chars_cache = (rt.n, 101)  # the world grew by one character
+    assert rt._seat_need(seat) == price
+    rt._world_chars_cache = (rt.n, 100_100)
+    assert rt._seat_need(seat) == price  # by any amount
+    rt._unhistoried = lambda action_id: False
+    assert rt._is_feasible(seat)[0]
+    rt.budget.debit(seat, rt.budget.entitlement(seat) - price + 1, "test")
+    assert not rt._is_feasible(seat)[0]

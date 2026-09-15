@@ -9,6 +9,7 @@ from typing import Any
 
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import LearningReturn, SettleStatus
+from factorylab.kernel.wallet import Infeasible
 from factorylab.learners.base import BanditFeedback
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_threshold
 from factorylab.runtime.routing import _KeyedLearner
@@ -434,28 +435,62 @@ class FeedbackMixin:
         classifies money the wallet has already booked and never mints. A loss
         debits the owner down to a floor of zero; what the seat cannot cover lands
         on the pool and is ledgered as such. A marked outcome is an estimate at the
-        backstop, not settled money, and moves nothing.
+        backstop, not settled money, and moves nothing here: what its lots realise
+        later is booked to the owner as a late consequence (``_settle_late``).
         """
         owner = self.handle_to_assembly.get(payoff.handle)
         if payoff.marked or owner is None or owner not in self.assemblies:
             return
-        if payoff.net_micro > 0:
-            self.budget.credit(owner, payoff.net_micro, "return_paid_off")
-        elif payoff.net_micro < 0:
-            self.budget.charge(owner, -payoff.net_micro, "return_paid_off")
+        self._book_consequence(owner, payoff.net_micro, "return_paid_off")
+
+    def _book_consequence(self, owner: str, micro: int, reason: str) -> None:
+        if micro > 0:
+            self.budget.credit(owner, micro, reason)
+        elif micro < 0:
+            self.budget.charge(owner, -micro, reason)
+
+    def _settle_late(self) -> None:
+        """Money realised after an outcome was fixed still belongs to the return's owner.
+
+        A position marked at the backstop and closed later is booked to the wallet
+        by the venue; the opener's entitlement is charged (or credited) by the
+        realised result, ledgered as a late consequence. The learning score of the
+        marked outcome stays as it was; only the money moves.
+        """
+        for handle, micro in self.consequences.settle_late(self.n).items():
+            owner = self.handle_to_assembly.get(handle)
+            if owner is None or owner not in self.assemblies:
+                continue
+            self._book_consequence(owner, micro, "late_consequence")
 
     def _book_income(self, item: dict) -> None:
-        """Earned x402 income credits the seat that owns the service's program (C11, C10).
+        """Earned x402 income is new money: it enters the root wallet and is the
+        owning seat's (C11, C10).
 
-        The money sits in the reserve, so this is a pool-to-seat reclassification
-        like a paid-off credit, bounded by the pool. A service whose program has no
-        live owner (retired, or seeded without one) leaves the income in the pool.
+        A paid call settled USDC to the reserve, so the wallet books the receipt
+        like venue P&L (``income``) and ``unlocked`` rises by it; the seat that owns
+        the service's program is credited from that new money, never from the
+        pool, so an empty pool still pays the seller. A service whose program has
+        no live owner (retired, or seeded without one) leaves the receipt in the
+        pool. The receipt is also the economic consequence of the return that
+        registered the service, while that outcome is open.
         """
         program = item.get("program") or item.get("service")
+        service = item.get("service")
         owner = self.tool_owner.get(program)
         micro = item.get("micro")
-        if owner in self.assemblies and type(micro) is int and micro > 0:
-            self.budget.credit(owner, micro, f"income.earned:{item.get('service')}")
+        if type(micro) is not int or micro <= 0:
+            return
+        try:
+            self.wallet.settle(micro, f"income:{service}:{item.get('tx')}", "income")
+        except Infeasible:
+            # A dead wallet books nothing; the receipt stays counted by the treasury.
+            self.ledger.append({"kind": "income.unbooked", "service": service, "micro": micro,
+                                "tx": item.get("tx"), "reason": "wallet is dead"})
+            return
+        if owner in self.assemblies:
+            self.budget.earn(owner, micro, f"income.earned:{service}")
+        self.consequences.income(service, micro, self.n)
 
     def _collect_income(self) -> None:
         """Book the seller's spooled receipts and credit each to its owning seat.
@@ -467,6 +502,7 @@ class FeedbackMixin:
             self._book_income(item)
 
     def _settle_due_forecasts(self) -> None:
+        self._settle_late()
         for payoff in self.consequences.resolve(self.n):
             self._credit_consequence(payoff)
             try:

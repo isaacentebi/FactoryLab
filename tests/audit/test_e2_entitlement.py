@@ -184,22 +184,216 @@ def test_x402_income_credits_the_seat_that_owns_the_service(tmp_path):
                   "payer": "0x" + "cd" * 20, "program": "orphan", "version": 1, "ts": 8})
     before = rt.budget.entitlement("seed-decider")
     pool = rt.budget.unallocated()
+    root = rt.wallet.unlocked
     rt._collect_income()
+    # GPT-6 second reading, P2-05: a receipt is new money. The root wallet grows by
+    # it, the seller is credited from it, and the pool only sees the orphan's part.
+    assert rt.wallet.unlocked == root + 3_400 and rt.wallet.check_conservation()
     assert rt.budget.entitlement("seed-decider") == before + 2_500
-    assert rt.budget.unallocated() == pool - 2_500  # the pool backs the reclassification
+    assert rt.budget.unallocated() == pool + 900
     items = [i for i in rt.ledger.ledger._recovery_items()
-             if i["kind"] in ("income.earned", "budget")]
+             if i["kind"] in ("income.earned", "budget", "wallet.settle")]
     earned = [i for i in items if i["kind"] == "income.earned"]
-    credits = [i for i in items if i["kind"] == "budget" and i["op"] == "credit"]
+    settled = [i for i in items if i["kind"] == "wallet.settle"]
+    credits = [i for i in items if i["kind"] == "budget" and i["op"] == "income"]
     assert [e["service"] for e in earned] == ["doubler", "orphan"]
+    assert [(s["reason"], s["amount"]) for s in settled] == [("income", 2_500), ("income", 900)]
+    assert settled[0]["handle"] == "income:doubler:0x" + "ab" * 32
     assert len(credits) == 1 and credits[0]["assembly_id"] == "seed-decider"
     assert credits[0]["reason"] == "income.earned:doubler" and credits[0]["amount"] == 2_500
-    assert items.index(earned[0]) < items.index(credits[0])
+    assert items.index(earned[0]) < items.index(settled[0]) < items.index(credits[0])
+    assert not any(i["kind"] == "budget" and i["op"] == "credit" for i in items)
     # the tick collects the same spool and books nothing twice
     rt.treasury.tick(rt.clock.now_ns)
     rt._collect_income()
     assert rt.budget.entitlement("seed-decider") == before + 2_500
+    assert rt.wallet.unlocked == root + 3_400
     assert rt.treasury.pots()["earned_micro"] == 3_400 and invariant(rt)
+
+
+def decision(rt, action, channel="verdict"):
+    """Open a kernel decision for ``action`` so its handle is a real return."""
+    from factorylab.kernel.queue import PropensityRecord
+
+    handle = rt.queue.open(
+        actor="test-router", event_id=f"test-{rt.n}-{action}", channel=channel,
+        propensity=PropensityRecord((action,), (1.0,), action, 0, "test-router", "state"),
+        deadline_ns=rt.clock.now_ns + 100_000_000_000, parent_handle=None,
+        cost_ceiling=rt.wallet.available)
+    rt.handle_to_assembly[handle] = action
+    rt.consequences.start(handle, rt.n)
+    rt.consequences.finish(handle, 1_000)
+    return handle
+
+
+def receipt(rt, tmp_path, service, micro, *, tx="0x" + "ab" * 32, owner="seed-decider"):
+    from factorylab.world.income import IncomeSpool
+
+    rt.tool_owner[service] = owner
+    rt.treasury.income_spool = tmp_path / "income.jsonl"
+    IncomeSpool(rt.treasury.income_spool).append({
+        "service": service, "micro": micro, "tx": tx, "payer": "0x" + "cd" * 20,
+        "program": service, "version": 1, "ts": 7})
+
+
+def test_an_empty_pool_still_pays_the_seller_the_whole_receipt(tmp_path):
+    from tests.conftest import make_runtime
+
+    rt = make_runtime(balance=90_000_000)
+    rt.budget.grant("seed-decider", rt.budget.unallocated(), "drain the pool")
+    assert rt.budget.unallocated() == 0
+    rt.wallet.settle(-1_000, "trade", "exchange_pnl")  # a shared loss: the pool is negative
+    assert rt.budget.unallocated() == -1_000
+    before, root = rt.budget.entitlement("seed-decider"), rt.wallet.unlocked
+    receipt(rt, tmp_path, "doubler", 2_500)
+    rt._collect_income()
+    assert rt.budget.entitlement("seed-decider") == before + 2_500
+    assert rt.wallet.unlocked == root + 2_500 and rt.budget.unallocated() == -1_000
+    assert invariant(rt)
+
+
+def test_a_settled_receipt_pays_off_the_return_that_registered_the_service(tmp_path):
+    from tests.conftest import make_runtime
+
+    rt = make_runtime(balance=90_000_000)
+    handle = decision(rt, "seed-decider")
+    assert rt.consequences.bind_service("doubler", handle, rt.n)
+    receipt(rt, tmp_path, "doubler", 2_500)
+    entitlement = rt.budget.entitlement("seed-decider")
+    rt._collect_income()
+    assert rt.budget.entitlement("seed-decider") == entitlement + 2_500
+    rt.n += rt.ev.consequence_backstop_events
+    rt._settle_due_forecasts()
+    payoff = rt.consequences.payoff(handle)
+    # 2 500 earned against 1 000 of cost, without a trade: a paid-off, unmarked outcome
+    assert (payoff.y, payoff.net_micro, payoff.earned_micro, payoff.marked) == (1, 0, 2_500, 0)
+    assert rt.consequences.counts()["paid_off"] == 1
+    # the receipt was credited once, at receipt: the outcome credits nothing more
+    assert rt.budget.entitlement("seed-decider") == entitlement + 2_500
+    items = rt.ledger.ledger._recovery_items()
+    kinds = [i["kind"] for i in items]
+    assert kinds.index("consequence.service") < kinds.index("consequence.income")
+    assert kinds.index("consequence.income") < kinds.index("consequence.outcome")
+    income = next(i for i in items if i["kind"] == "consequence.income")
+    assert (income["service"], income["handle"], income["micro"]) == ("doubler", handle, 2_500)
+    assert invariant(rt)
+
+
+def test_a_loss_realised_after_a_marked_outcome_is_charged_to_the_opener(tmp_path):
+    """GPT-6 second reading, P2-06: a position marked at the backstop and closed later
+    at a loss was booked to the root wallet but never to the opener's entitlement."""
+    from fractions import Fraction
+
+    from tests.conftest import make_runtime
+
+    rt = make_runtime(balance=90_000_000)
+    opener = "seed-decider"
+    first = decision(rt, opener)
+    rt.consequences.order_result(first, {"status": "filled", "order_id": "o1",
+                                          "filled_size": "1"}, {}, rt.n)
+    rt.consequences.observe("Fill", {"order_id": "o1", "coin": "BTC", "is_buy": True,
+                                     "size": "1", "px": "100", "fee_usd": "0"}, rt.n)
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "100"}, rt.n)
+    rt.n += rt.ev.consequence_backstop_events
+    rt._settle_due_forecasts()
+    payoff = rt.consequences.payoff(first)
+    assert payoff.marked and payoff.net_micro == 0 and payoff.y == 0
+    # the opener holds exactly $2; the mark moved nothing
+    rt.budget.debit(opener, rt.budget.entitlement(opener) - 2_000_000, "test")
+    assert rt.budget.entitlement(opener) == 2_000_000
+    # liquidated at 98: the venue books the $2 loss to the wallet
+    rt.wallet.settle(-2_000_000, "fill:liq", "exchange_pnl")
+    rt.consequences.observe("Fill", {"order_id": "liq", "coin": "BTC", "is_buy": False,
+                                     "size": "1", "px": "98", "fee_usd": "0",
+                                     "liquidation": True}, rt.n)
+    rt.n += 1
+    rt._settle_due_forecasts()
+    assert rt.budget.entitlement(opener) == 0  # charged, floored at zero
+    assert rt.consequences.payoff(first) == payoff  # the score stays frozen
+    items = rt.ledger.ledger._recovery_items()
+    late = [i for i in items if i["kind"] == "consequence.late"]
+    charges = [i for i in items if i["kind"] == "budget" and i["op"] == "charge"]
+    assert late == [{**late[0], "handle": first, "micro": -2_000_000}]
+    assert len(charges) == 1 and charges[0]["reason"] == "late_consequence"
+    assert (charges[0]["amount"], charges[0]["own"], charges[0]["commons"]) == (
+        2_000_000, 2_000_000, 0)
+    assert items.index(late[0]) < items.index(charges[0])
+    # booked once: another settlement pass charges nothing more
+    rt.n += 1
+    rt._settle_due_forecasts()
+    assert len([i for i in rt.ledger.ledger._recovery_items()
+                if i["kind"] == "consequence.late"]) == 1
+    assert invariant(rt)
+
+    # symmetric: a gain realised later by a distinct closer credits the opener its part
+    second = decision(rt, opener)
+    rt.consequences.order_result(second, {"status": "filled", "order_id": "o2",
+                                           "filled_size": "1"}, {}, rt.n)
+    rt.consequences.observe("Fill", {"order_id": "o2", "coin": "BTC", "is_buy": True,
+                                     "size": "1", "px": "100", "fee_usd": "0"}, rt.n)
+    rt.n += rt.ev.consequence_backstop_events
+    rt._settle_due_forecasts()
+    assert rt.consequences.payoff(second).marked
+    closer = decision(rt, "seed-observer")
+    rt.consequences.order_result(closer, {"status": "filled", "order_id": "c1",
+                                            "filled_size": "1"}, {}, rt.n)
+    rt.wallet.settle(20_000_000, "fill:c1", "exchange_pnl")
+    rt.consequences.observe("Fill", {"order_id": "c1", "coin": "BTC", "is_buy": False,
+                                     "size": "1", "px": "120", "fee_usd": "0"}, rt.n)
+    rt.n += 1
+    rt._settle_due_forecasts()
+    opener_part = Fraction(20_000_000) * 100 / 220
+    assert rt.budget.entitlement(opener) == opener_part.numerator // opener_part.denominator
+    credits = [i for i in rt.ledger.ledger._recovery_items()
+               if i["kind"] == "budget" and i["op"] == "credit" and i["assembly_id"] == opener]
+    assert [(c["reason"], c["amount"]) for c in credits] == [
+        ("late_consequence", opener_part.numerator // opener_part.denominator)]
+    # a loss the opener cannot cover lands on the commons, ledgered as such
+    rt.budget.debit(opener, rt.budget.entitlement(opener) - 500_000, "test")
+    rt.wallet.settle(-2_000_000, "fill:liq2", "exchange_pnl")
+    third = decision(rt, opener)
+    rt.consequences.order_result(third, {"status": "filled", "order_id": "o3",
+                                           "filled_size": "1"}, {}, rt.n)
+    rt.consequences.observe("Fill", {"order_id": "o3", "coin": "ETH", "is_buy": True,
+                                     "size": "1", "px": "100", "fee_usd": "0"}, rt.n)
+    rt.consequences.observe("MarketMid", {"coin": "ETH", "mid": "100"}, rt.n)
+    rt.n += rt.ev.consequence_backstop_events
+    rt._settle_due_forecasts()
+    rt.consequences.observe("Fill", {"order_id": "liq2", "coin": "ETH", "is_buy": False,
+                                     "size": "1", "px": "98", "fee_usd": "0",
+                                     "liquidation": True}, rt.n)
+    rt.n += 1
+    rt._settle_due_forecasts()
+    charge = [i for i in rt.ledger.ledger._recovery_items()
+              if i["kind"] == "budget" and i["op"] == "charge"][-1]
+    assert (charge["amount"], charge["own"], charge["commons"]) == (2_000_000, 500_000, 1_500_000)
+    assert rt.budget.entitlement(opener) == 0 and invariant(rt)
+
+
+def test_children_join_their_proposers_lineage_in_the_scripted_world(world):
+    """GPT-6 second reading, P2-07: releases are split per lineage, not per seat id.
+
+    ``rt`` is restored from the run's checkpoint, so the lineages read here survived
+    a resume."""
+    rt, entries = world
+    adopted = {i["assembly_id"]: i for i in budget(entries, "lineage")}
+    assert "funding-watcher" in adopted and "composition-helper" in adopted
+    seeds = {a.id for a in rt.m.assemblies}
+    for child, item in adopted.items():
+        assert item["proposer"] in seeds and item["lineage"] == item["proposer"]
+        assert rt.budget.lineage(child) == item["proposer"]
+    lineages = rt.budget.lineages()
+    assert set(lineages) <= seeds
+    assert all(row["head"] == lineage for lineage, row in lineages.items()
+               if lineage not in rt.retired_assemblies)
+    assert sum(len(row["seats"]) for row in lineages.values()) == len(rt.budget.seats())
+    # the wake shows the lineages beside the seats
+    from factorylab.runtime.wake import public_window_item
+
+    view = public_window_item(rt, window=rt.stats.reserve_windows, event=rt.n)["entitlements"]
+    assert {row["id"] for row in view["lineages"]} == set(lineages)
+    assert sum(row["micro"] for row in view["lineages"]) == sum(
+        rt.budget.entitlements().values())
 
 
 def test_the_invariant_holds_at_every_ledgered_movement_and_at_the_end(world):

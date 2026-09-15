@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
+from factorylab.cortex.assembly import PROGRAM_MODEL_ID
 from factorylab.cortex.registration import reward_contracts
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
@@ -437,7 +438,9 @@ class RoutingMixin:
     def _seat_need(self, action_id: str) -> int:
         """The ceiling one call of this seat needs now: its last rendered ceiling plus the
         input price of every character the world block has grown by since (at the
-        meter's own slack). Before its first call, the ceiling of its last hold."""
+        meter's own slack). Before its first call, the ceiling of its last hold.
+        A flat-fee seat (a program) needs its fee: the world block's growth costs
+        it nothing, so there is no growth term and no token price to look up."""
         record = self.seat_ceilings.get(action_id)
         if record is None:
             return self.budget.last_hold(action_id)
@@ -446,10 +449,12 @@ class RoutingMixin:
             # size is not what that call grew with, and a routed call that turns
             # out dearer is bridged rather than failed.
             return record["ceiling"]
+        asm = self.assemblies[action_id]
+        if asm.spec.model_id == PROGRAM_MODEL_ID:
+            return record["ceiling"]
         growth = max(0, self._current_world_chars() - record["world_chars"])
         if not growth:
             return record["ceiling"]
-        asm = self.assemblies[action_id]
         price = self.prices.price(asm.spec.model_id)
         slack = getattr(asm.model, "input_slack", 1.5)
         return record["ceiling"] + price.cost(int(growth * slack), 0) - price.cost(0, 0)
