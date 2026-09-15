@@ -36,6 +36,7 @@ Rebroadcasting those exact nonce-ordered transactions survives a provisional reo
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from copy import deepcopy
 from decimal import ROUND_CEILING, Decimal
 from typing import Any
@@ -631,8 +632,21 @@ class LiveRail(ClassTransferRail):
             raise RailError("Venice payer differs from the reserve")
         return client
 
+    # Bound by the runtime: metered Venice spend since a purchase started, or None
+    # when no diary is available (the rail alone cannot see the population's calls).
+    metered_usage_since: Callable[[int], int | None] | None = None
+
     def _venice_receipt(self, state: dict) -> dict | None:
-        """Release principal only on the exact canonical debit and observed Venice credit."""
+        """Release principal on the exact canonical debit; the credit balance is advisory.
+
+        The debit is the unique successful AuthorizationUsed for the journal's nonce
+        whose receipt transfers exactly the tranche from the reserve to Venice's
+        payee. A balance is a stock, not a flow: usage between purchase and
+        confirmation lowers it without contradicting the purchase (cold audit F2),
+        so the observed credit, the credit before, the amount and the diary's own
+        metered usage since the purchase started are recorded beside the receipt
+        and never decide it.
+        """
         ref = state["reference"]
         auth = ref["authorization"]
         topics = [event_topic("AuthorizationUsed(address,bytes32)"),
@@ -653,17 +667,38 @@ class LiveRail(ClassTransferRail):
             if not self.base.transferred(receipt, self.base.chain.usdc, self.reserve_address,
                                          auth["to"], state["amount_micro"]):
                 continue
-            observed = state["route_data"].get("submission", {}).get("credit_after_micro")
+            submission = (state.get("route_data") or {}).get("submission") or {}
+            observed, balance_source = submission.get("credit_after_micro"), "acknowledgment"
             if observed is None:
-                observed = self._venice_client().venice_balance()
-            if observed < ref["credit_before_micro"] + state["amount_micro"]:
-                return None
-            return {"confirmed": True, "received_micro": state["amount_micro"],
+                # The acknowledgment was lost: read the balance now, as advice only.
+                balance_source = "balance_read"
+                try:
+                    observed = self._venice_client().venice_balance()
+                except Exception:
+                    observed, balance_source = None, "unavailable"
+            credit_before, amount = ref.get("credit_before_micro"), state["amount_micro"]
+            metered = None
+            if self.metered_usage_since is not None:
+                try:
+                    metered = self.metered_usage_since(int(state.get("started_ns") or 0))
+                except Exception:
+                    metered = None
+            shortfall = None
+            if observed is not None and credit_before is not None:
+                shortfall = max(0, credit_before + amount - observed)
+            return {"confirmed": True, "received_micro": amount,
                     "fee_micro": 0, "principal_moved": True,
                     "evidence": {"network": ref["network"], "tx_hash": log["transactionHash"],
                                  "block_hash": receipt["blockHash"], "nonce": auth["nonce"],
-                                 "venice_credit_micro": state["amount_micro"],
-                                 "credit_after_micro": observed}}
+                                 "venice_credit_micro": amount,
+                                 "proof": "canonical AuthorizationUsed debit of the tranche",
+                                 "credit_before_micro": credit_before,
+                                 "amount_micro": amount,
+                                 "observed_micro": observed,
+                                 "credit_after_micro": observed,
+                                 "balance_source": balance_source,
+                                 "balance_shortfall_micro": shortfall,
+                                 "metered_usage_since_micro": metered}}
         return None
 
     def _withdrawal(self, ref: dict, amount: int) -> dict | None:

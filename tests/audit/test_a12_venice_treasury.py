@@ -90,6 +90,12 @@ def test_a12_retries_use_the_journaled_unsigned_authorization():
 
 @pytest.mark.parametrize("missing", ["debit", "credit", "canonical", "authorization", None])
 def test_a12_confirmation_requires_exact_canonical_debit_and_venice_credit(missing):
+    """Confirmation follows the canonical debit; a short credit balance is recorded, not refused.
+
+    Edition 2 (C5, cold audit F2): the balance is a stock and cannot prove the flow.
+    A missing credit therefore confirms with the shortfall in the evidence, while
+    every missing piece of the on-chain debit still refuses.
+    """
     rail = rail_setup()
     rail.testnet = False
     rail.base.chain = BASE
@@ -112,9 +118,13 @@ def test_a12_confirmation_requires_exact_canonical_debit_and_venice_credit(missi
                                      else 5_000_001}},
     }
     result = rail._venice_receipt(state)
-    assert (result is None) == (missing is not None)
+    assert (result is None) == (missing not in (None, "credit"))
     if result:
         assert result["fee_micro"] == 0 and result["received_micro"] == 5_000_000
+        evidence = result["evidence"]
+        assert evidence["credit_before_micro"] == 1 and evidence["amount_micro"] == 5_000_000
+        assert evidence["observed_micro"] == (1 if missing == "credit" else 5_000_001)
+        assert evidence["balance_shortfall_micro"] == (5_000_000 if missing == "credit" else 0)
 
 
 @pytest.mark.parametrize("value", [True, 10.0, -1, "-1", "0.0000001"])

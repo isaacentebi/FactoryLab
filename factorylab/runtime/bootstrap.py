@@ -25,6 +25,7 @@ from factorylab.kernel.reserve import NoveltyReserve
 from factorylab.kernel.termination import Termination
 from factorylab.kernel.timing import TimingRegistry, UpwardBuffer
 from factorylab.kernel.wallet import DripSchedule, Wallet
+from factorylab.runtime import release
 from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cascade import CascadeGate
 from factorylab.runtime.compute import ContractConsequences
@@ -145,6 +146,11 @@ class BootstrapMixin:
             self.launch_nonce = hashlib.sha256(
                 f"{manifest.manifest_hash}:{self.seed}".encode()).hexdigest()[:32]
         bind_launch_nonce(self.exchange, self.launch_nonce)
+        # One launch, one release. The digest of the executing code is drawn beside
+        # the nonce so the pre-launch snapshot carries it and the Launch event ledgers
+        # it; restore compares the saved digest with the running one and refuses a
+        # different release under the old identity (C4).
+        self.release_digest = release.release_digest()
         if provider is None:
             provider = build_provider(manifest)
         self.provider = provider if provider is not None else ScriptedProvider()
@@ -169,6 +175,10 @@ class BootstrapMixin:
                 from factorylab.world.treasury_rails import LiveRail
 
                 rail = LiveRail(self.exchange, manifest.treasury)
+                # A Venice purchase is confirmed on the chain's debit; the diary's own
+                # metered spend since the purchase started is recorded beside the
+                # advisory balance so a lost acknowledgment stays explainable (C5).
+                rail.metered_usage_since = self._venice_usage_since
             else:
                 rail = UnconfiguredRail(self.exchange)
 
@@ -525,6 +535,20 @@ class BootstrapMixin:
         self.ticks_consumed = 0
         self.drips_consumed = 0
         self.started = False
+
+    def _venice_usage_since(self, since_ns: int) -> int:
+        """Metered Venice spend since ``since_ns``, summed from the diary's invocation records.
+
+        Read only at confirmation time, once per purchase, so the walk over the
+        diary is paid rarely. The value is evidence in the confirmation event, not a
+        condition of it.
+        """
+        total = 0
+        for item in self.ledger._iter_items():
+            if (item.get("kind") == "invocation" and item.get("ts", 0) >= since_ns
+                    and str(item.get("served_by") or "").startswith("venice:")):
+                total += int(item.get("cost") or 0)
+        return total
 
     def _register_seed_contracts(self) -> None:
         for tier in self.m.models:

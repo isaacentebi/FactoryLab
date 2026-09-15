@@ -33,6 +33,7 @@ class Reason(StrEnum):
     # The committed first move.
     MANIFEST_UNAVAILABLE = "manifest_unavailable"
     MANIFEST_MISMATCH = "manifest_mismatch"
+    RELEASE_MISMATCH = "release_mismatch"  # The executing release differs from the launched one.
     TICK_OVERRIDE_REFUSED = "tick_override_refused"
     NO_LIVE_VENUE = "no_live_venue"
 

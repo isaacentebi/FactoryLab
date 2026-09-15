@@ -9,9 +9,25 @@ root=/srv/factorylab
 stage=$(mktemp -d)
 trap 'rm -rf -- "$stage"' EXIT
 mkdir "$stage/runs"
+# The release that is running beside this ledger: its digest and the three
+# inputs that make it. A restored ledger resumes only under this digest, so
+# the backup names the release it needs (deploy/README.md, "Release identity").
+python="$root/repo/.venv/bin/python"
+[[ -x "$python" ]] || python=/usr/bin/python3  # the module needs only the standard library
+if ! (cd "$root/repo" && PYTHONPATH="$root/repo" "$python" -m factorylab.runtime.release) \
+        > "$stage/runs/funded.release.json" 2> /dev/null; then
+    # A rehearsal root without the package still archives, and says the digest is missing.
+    printf '{"release_digest": "unavailable"}\n' > "$stage/runs/funded.release.json"
+fi
+# The witness file (launch, kill, failed_resume lines) travels with the ledger.
+if [[ -f "$root/runs/funded.witness.jsonl" ]]; then
+    cp "$root/runs/funded.witness.jsonl" "$stage/runs/funded.witness.jsonl"
+fi
 # Fix the byte limit before copying. Discard only an unfinished final record.
 # Keys are copied by the unattended process, never displayed or embedded in the image.
 /usr/bin/python3 - "$root" "$stage" <<'PY'
+import hashlib
+import json
 import os
 import shutil
 import stat
@@ -47,6 +63,13 @@ if not stat.S_ISREG(source.lstat().st_mode):
 (stage / 'repo/worlds').chmod(0o755)
 shutil.copyfile(source, stage / relative)
 (stage / relative).chmod(0o644)
+# The ledger bytes the archive holds, so the release record can be checked
+# against a restore without decrypting anything.
+copied = stage / 'runs/funded.jsonl'
+record = json.loads((stage / 'runs/funded.release.json').read_text())
+record['ledger'] = {'bytes': copied.stat().st_size,
+                    'sha256': hashlib.sha256(copied.read_bytes()).hexdigest()}
+(stage / 'runs/funded.release.json').write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
 PY
 # No unencrypted tar is ever created. The stage is root-only in systemd's PrivateTmp.
 tar -C "$stage" -cf - runs repo openrouter.key hyperliquid.key reserve.key |
