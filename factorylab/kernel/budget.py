@@ -63,6 +63,9 @@ class BudgetBook:
         self.__holds: dict[str, tuple[str, Money]] = {}  # reservation id -> (seat, amount)
         self.__retired: set[str] = set()
         self.__last_holds: dict[str, Money] = {}  # seat -> ceiling of its last model call
+        # reservation id -> (seat, what the seat itself paid) for bills booked at the
+        # ceiling with their true cost unknown; settled through ``_refund_uncertain``.
+        self.__uncertain: dict[str, tuple[str, Money]] = {}
 
     # ---- reads
 
@@ -323,13 +326,14 @@ class BudgetBook:
         if str(reservation.reason).startswith("model:"):
             self.__last_holds[seat] = reservation.amount
 
-    def _settle_hold(self, reservation: Any, actual: Money) -> None:
+    def _settle_hold(self, reservation: Any, actual: Money) -> Money:
         """Debit the booked cost from the seat as far as its entitlement reaches.
 
         The wallet has already paid ``actual``. The seat pays first; whatever its
         entitlement cannot cover (protected exploration admitted at reserve time,
         or a reported overrun beyond the hold) stays with the pool and is ledgered
         as ``commons`` so the commons-funded part of every call is visible.
+        Returns what the seat itself paid.
         """
         require_money(actual, nonnegative=True)
         seat, held = self._held(reservation)
@@ -343,6 +347,34 @@ class BudgetBook:
                   unallocated_after=self.unallocated() + own)
         del self.__holds[reservation.id]
         self.__gross[seat] = after
+        return own
+
+    def _settle_uncertain_hold(self, reservation: Any) -> None:
+        """Book an uncertain bill at its ceiling and remember which seat paid what."""
+        seat, _held = self._held(reservation)
+        own = self._settle_hold(reservation, reservation.amount)
+        self.__uncertain[reservation.id] = (seat, own)
+
+    def _refund_uncertain(self, reservation_id: str, released: Money, reason: str) -> Money:
+        """Return an over-charged ceiling to the seat that paid it, as far as it paid.
+
+        The wallet has already taken ``released`` back into its balance, so the
+        pool holds it; this classifies the seat's own part of it as the seat's
+        again. What the commons paid stays with the pool. A bill this book never
+        saw (booked through the shared meter) refunds nothing to any seat.
+        """
+        require_money(released, nonnegative=True)
+        seat, own = self.__uncertain.pop(reservation_id, (None, 0))
+        if seat is None:
+            return 0
+        refund = max(0, min(released, own, self.unallocated()))
+        after = self.__gross.get(seat, 0) + refund
+        self._log("settle_uncertain", assembly_id=seat, amount=refund, released=released,
+                  own=own, reason=reason, reservation_id=reservation_id,
+                  entitlement_after={seat: after - self.held_by(seat)},
+                  unallocated_after=self.unallocated() - refund)
+        self.__gross[seat] = after
+        return refund
 
     def _held(self, reservation: Any) -> tuple[str, Money]:
         """Return the seat and amount behind a reservation this book holds."""
@@ -370,6 +402,7 @@ class BudgetBook:
             "holds": {rid: [seat, amount] for rid, (seat, amount) in self.__holds.items()},
             "retired": sorted(self.__retired),
             "last_holds": dict(self.__last_holds),
+            "uncertain": {rid: [seat, own] for rid, (seat, own) in self.__uncertain.items()},
         }
 
     def _restore_state(self, state: dict) -> None:
@@ -383,6 +416,8 @@ class BudgetBook:
         self.__retired = {str(seat) for seat in state.get("retired", ())}
         self.__last_holds = {str(seat): require_money(amount, nonnegative=True)
                              for seat, amount in state.get("last_holds", {}).items()}
+        self.__uncertain = {str(rid): (str(seat), require_money(own, nonnegative=True))
+                            for rid, (seat, own) in state.get("uncertain", {}).items()}
 
 
 class SeatWallet:
@@ -435,7 +470,13 @@ class SeatWallet:
 
     def commit_uncertain(self, reservation: Any) -> None:
         self.wallet.commit_uncertain(reservation)
-        self.book._settle_hold(reservation, reservation.amount)
+        self.book._settle_uncertain_hold(reservation)
+
+    def settle_uncertain(self, reservation_id: str, actual_micro: Money, **reads: Any) -> Money:
+        """Settle the wallet's bill, then hand the seat back what it over-paid (C10)."""
+        released = self.wallet.settle_uncertain(reservation_id, actual_micro, **reads)
+        self.book._refund_uncertain(reservation_id, released, "settle_uncertain")
+        return released
 
     def release(self, reservation: Any) -> None:
         self.wallet.release(reservation)

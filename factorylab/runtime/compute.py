@@ -23,7 +23,13 @@ from factorylab.runtime.summary import _price_str
 from factorylab.settlement import SEED_VOCABULARY
 from factorylab.settlement.consequence import ReturnConsequences
 from factorylab.world.market import X402MeteredModel
-from factorylab.world.metering import BillingUncertain, Meter, Metered, MeteredModel
+from factorylab.world.metering import (
+    BillingUncertain,
+    Meter,
+    Metered,
+    MeteredModel,
+    provider_namespace,
+)
 from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
 
 # A fetched body at least this long is text and stays off every durable surface;
@@ -164,6 +170,24 @@ class ComputeMixin:
         return SeatWallet(self.wallet, self.budget, assembly_id,
                           protected=self._novelty_protection, payer=self._liable_seat)
 
+    def _provider_balance(self, model_id: str) -> int | None:
+        """The balance of the provider that pays for ``model_id``, journaled as a read."""
+        if not hasattr(self.provider, "balance_of"):
+            raise LookupError("provider exposes no balance")
+        return self.provider.balance_of(model_id)
+
+    def _refresh_settlement_references(self) -> None:
+        """Read each live provider's balance once so the next uncertain bill can settle."""
+        seen = set()
+        for tier in self.m.models:
+            if tier.provider not in ("openrouter", "venice"):
+                continue
+            namespace = provider_namespace(tier.id)
+            if namespace in seen or not hasattr(self.provider, "balance_of"):
+                continue
+            seen.add(namespace)
+            self.bill_settlement.refresh(tier.id)
+
     def _seat_meter(self, assembly_id: str | None) -> Meter:
         """A seat's priced work is covered by the wallet and by its own entitlement (C10).
 
@@ -194,6 +218,7 @@ class ComputeMixin:
             return asm
         model = _ObservedMeteredModel(
             self.provider, self.prices, meter, record=self._record_market,
+            settlement=self.bill_settlement,
         )
         if spec.model_id.startswith("x402:"):
             model = _ObservedX402Model(

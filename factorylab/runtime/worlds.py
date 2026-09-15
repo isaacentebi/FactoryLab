@@ -77,6 +77,9 @@ class ModelTier:
     reasoning: tuple[tuple[str, Any], ...] = ()  # OpenRouter `reasoning` object, e.g. effort=low
     # web purchasable: engine, mode, max_results, usd_per_request
     web: tuple[tuple[str, Any], ...] = ()
+    # Provider request keys sent verbatim per model (an OpenRouter ``provider`` routing
+    # block, say); the request's own keys and its JSON contract are applied after it.
+    extra_body: tuple[tuple[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -313,10 +316,18 @@ class WorldManifest:
                 out[f"{m.id}:online"] = web
         return out
 
+    def extra_body_config(self) -> dict[str, dict[str, Any]]:
+        """Each model's verbatim provider request keys, by model id; absent when empty."""
+        return {m.id: dict(m.extra_body) for m in self.models if m.extra_body}
+
     def canonical_json(self) -> str:
         payload = asdict(self)
         # Admission provenance does not change the world defined by identical cards.
         payload.pop("charter_explicit")
+        # Preserve historical manifest identities for models without an extra body.
+        for model in payload["models"]:
+            if not model.get("extra_body"):
+                model.pop("extra_body", None)
         for name in ("charter_ratified_sha256", "charter_roster_sha256",
                      "charter_content_sha256"):
             payload.pop(name)
@@ -728,6 +739,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             output_usd_per_mtok=str(m["output_usd_per_mtok"]),
             reasoning=tuple(sorted((m.get("reasoning") or {}).items())),
             web=tuple(sorted((m.get("web") or {}).items())),
+            extra_body=tuple(sorted((m.get("extra_body") or {}).items())),
         )
         for m in d.get("models", [])
     )

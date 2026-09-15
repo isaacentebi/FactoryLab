@@ -344,7 +344,8 @@ class Ledger:
     @staticmethod
     def _index_item(index: dict, item: dict) -> None:
         kind = item.get("kind")
-        if kind in ("wallet.initial", "wallet.commit", "wallet.drip", "wallet.settle"):
+        if kind in ("wallet.initial", "wallet.commit", "wallet.drip", "wallet.settle",
+                    "wallet.settle_uncertain"):
             index["wallet_series"].append({"ts": item["ts"], "balance": item["balance_after"]})
         if kind == "decision.open":
             choice = item["propensity"]["chosen"]
@@ -828,7 +829,8 @@ class Ledger:
                     {"ts": item["ts"], "balance": item["balance_after"]}
                     for item in selected
                     if item.get("kind")
-                    in ("wallet.initial", "wallet.commit", "wallet.drip", "wallet.settle")
+                    in ("wallet.initial", "wallet.commit", "wallet.drip", "wallet.settle",
+                        "wallet.settle_uncertain")
                 ]
             }
         if view == "spend_by_capability":

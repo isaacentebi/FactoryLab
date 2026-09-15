@@ -47,3 +47,30 @@ def test_invalid_usage_at_invocation_never_leaks_reservation(usage):
     assert wallet.state()['reservations'] == []
     assert wallet.available == wallet.balance < 10000
     assert ret.cost == 10000 - wallet.balance
+
+
+def test_an_uncertain_bill_settles_through_the_meter_hook_to_its_true_cost():
+    """``on_uncertain`` runs after the ceiling is booked; what it settles is what the
+    failure reports as its cost, and the wallet keeps the difference."""
+    wallet = Wallet(100, Ledger())
+    seen = []
+
+    def settle(reservation):
+        seen.append(reservation.id)
+        return 20 - wallet.settle_uncertain(reservation.id, 5)
+
+    def bad():
+        raise ValueError('no bill')
+
+    with pytest.raises(BillingUncertain) as info:
+        Meter(wallet).run(handle='caller', reason='model:vendor', ceiling=20, execute=bad,
+                          cost_of=lambda _: 0, on_uncertain=settle)
+    assert info.value.cost == 5 and seen == ['wallet-0']
+    assert wallet.balance == wallet.available == 95 and wallet.uncertain_bills == {}
+    assert wallet.check_conservation() and wallet.state()['reservations'] == []
+    # A hook that measures nothing leaves the ceiling charged and the bill open.
+    with pytest.raises(BillingUncertain) as info:
+        Meter(wallet).run(handle='caller', reason='model:vendor', ceiling=20, execute=bad,
+                          cost_of=lambda _: 0, on_uncertain=lambda _r: None)
+    assert info.value.cost == 20 and wallet.balance == 75
+    assert list(wallet.uncertain_bills) == ['wallet-1']

@@ -398,7 +398,8 @@ def _read_only(name: str) -> bool:
         return True
     return name.rsplit(".", 1)[-1] in (
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
-        "open_orders", "balance_micro", "affordable", "catalogue", "discover", "quote", "fetch",
+        "open_orders", "balance_micro", "balance_of", "affordable", "catalogue", "discover",
+        "quote", "fetch",
         "registration_price", "seller_models", "funding_payments", "lookup",
         "reserve_balance", "discover_index", "instruments",
     )
@@ -532,6 +533,9 @@ _COMPONENT_FIELDS = (
     # The artifact archive's index (C9): hash -> owner, kind, size, time. The bytes
     # stay beside the ledger and are found again by hash.
     ("artifacts", "", ("index",)),
+    # The bill settlement's reference: the last provider balance read per namespace and
+    # what was booked through it since, so a resumed world settles against the same read.
+    ("bill_settlement", "", ("reference",)),
 )
 
 
@@ -688,6 +692,9 @@ def restore_runtime(rt, state: dict) -> None:
                 continue
             if name == "artifacts" and name not in components:
                 # Older checkpoints predate the artifact archive; it starts empty.
+                continue
+            if name == "bill_settlement" and name not in components:
+                # Older checkpoints predate bill settlement; the next read takes a reference.
                 continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
     rt.prices.prices = decode(state["prices"])

@@ -328,6 +328,10 @@ class VeniceProvider:
             return None
         return X402Client(base_url=self._base_url).venice_balance()
 
+    def balance_of(self, model_id: str) -> int | None:
+        """The balance that pays for a Venice model is the wallet's Venice credit."""
+        return self.balance_micro()
+
 
 class VeniceAndOpenRouter:
     """Namespaced model ids dispatch to Venice; all other ids dispatch to OpenRouter."""
@@ -346,3 +350,17 @@ class VeniceAndOpenRouter:
     def catalogue(self) -> list[CatalogueEntry]:
         """Both catalogues coexist with disjoint Venice-prefixed identities."""
         return [*self._openrouter.catalogue(), *self._venice.catalogue()]
+
+    def balance_of(self, model_id: str) -> int | None:
+        """The balance of the one provider that pays for ``model_id``; None when unbounded.
+
+        Read lazily by the bill settlement: before it settles an uncertain bill and
+        at launch. An x402 seller is paid per request from the reserve and has no
+        balance to settle against.
+        """
+        if model_id.startswith("x402:"):
+            return None
+        provider = self._venice if model_id.startswith("venice:") else self._openrouter
+        if provider is None or not hasattr(provider, "balance_micro"):
+            return None
+        return provider.balance_micro()

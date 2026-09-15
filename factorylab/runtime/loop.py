@@ -226,6 +226,7 @@ class Runtime(
         )
         # Release offsets count from the Launch just ledgered (C1).
         self.wallet.launch(self.clock.now_ns)
+        self._refresh_settlement_references()
         self.started = True
 
     def _process_event(self, ev: Event) -> bool:

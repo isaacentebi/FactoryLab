@@ -419,3 +419,72 @@ def test_live_catalogue_has_seed_flash_models():
         assert model_id in catalogue
         price = catalogue[model_id].price()
         assert price.input_micro > 0 and price.output_micro > 0
+
+
+def test_a_json_request_routes_only_to_hosts_that_honour_its_parameters(completion, req):
+    """A host that ignores ``response_format`` wraps the reply in a stray key; the
+    routing preference keeps such hosts off the request (docs/audits/v5/rehearsal.md)."""
+    transport = FakeTransport([completion])
+    OpenRouterProvider(transport=transport).complete(replace(req, json_object=True))
+    body = transport.calls[0][2]
+    assert body["response_format"] == {"type": "json_object"}
+    assert body["provider"] == {"require_parameters": True}
+
+
+def test_a_non_json_request_carries_no_routing_preference(completion, req):
+    transport = FakeTransport([completion])
+    OpenRouterProvider(transport=transport).complete(req)
+    body = transport.calls[0][2]
+    assert "response_format" not in body and "provider" not in body
+
+
+def test_a_manifest_provider_block_survives_the_merge_and_its_own_keys_win(completion, req):
+    extra = {req.model_id: {"provider": {"order": ["Venice", "DeepInfra"],
+                                         "require_parameters": False},
+                            "temperature": 0}}
+    transport = FakeTransport([completion, dict(completion)])
+    provider = OpenRouterProvider(transport=transport, extra_body=extra)
+    provider.complete(replace(req, json_object=True))
+    asked = transport.calls[0][2]
+    assert asked["provider"] == {"order": ["Venice", "DeepInfra"], "require_parameters": False}
+    assert asked["temperature"] == 0 and asked["response_format"] == {"type": "json_object"}
+    # The manifest's own body never overrode the request: ``model`` and ``max_tokens``
+    # are the request's, and a plain call carries the block untouched.
+    provider.complete(req)
+    plain = transport.calls[1][2]
+    assert plain["provider"] == {"order": ["Venice", "DeepInfra"], "require_parameters": False}
+    assert "response_format" not in plain and plain["max_tokens"] == 100
+    assert extra[req.model_id]["provider"] == {"order": ["Venice", "DeepInfra"],
+                                               "require_parameters": False}
+    with pytest.raises(OpenRouterError):
+        OpenRouterProvider(transport=transport, extra_body={req.model_id: {"model": "other"}})
+
+
+def test_an_extra_body_cannot_turn_a_json_request_into_text(completion, req):
+    transport = FakeTransport([completion])
+    provider = OpenRouterProvider(
+        transport=transport, extra_body={req.model_id: {"response_format": {"type": "text"}}})
+    provider.complete(replace(req, json_object=True))
+    body = transport.calls[0][2]
+    assert body["response_format"] == {"type": "json_object"}
+    assert body["provider"] == {"require_parameters": True}
+
+
+def test_manifest_extra_body_reaches_the_openrouter_payload_and_keeps_identities():
+    import tomllib
+
+    from factorylab.runtime.worlds import WORLDS_DIR, load_manifest, manifest_from_dict
+
+    base = load_manifest("scripted")
+    with open(WORLDS_DIR / "scripted.toml", "rb") as f:
+        raw = tomllib.load(f)
+    assert manifest_from_dict(raw).manifest_hash() == base.manifest_hash()
+    assert "extra_body" not in json.loads(base.canonical_json())["models"][0]
+    assert base.extra_body_config() == {}  # a model without one hashes as it always did
+    tier = raw["models"][0]
+    raw["models"][0] = {**tier, "extra_body": {"provider": {"order": ["Venice"]}}}
+    changed = manifest_from_dict(raw)
+    assert changed.extra_body_config() == {tier["id"]: {"provider": {"order": ["Venice"]}}}
+    assert changed.manifest_hash() != base.manifest_hash()
+    assert json.loads(changed.canonical_json())["models"][0]["extra_body"] == [
+        ["provider", {"order": ["Venice"]}]]

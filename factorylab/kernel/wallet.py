@@ -391,6 +391,50 @@ class Wallet:
         self._commit(reservation, reservation.amount)
         self.__uncertain_bills[reservation.id] = bill
 
+    @property
+    def uncertain_bills(self) -> dict[str, dict]:
+        """Bills booked at their ceiling whose true cost is still unknown, by reservation id."""
+        return {k: dict(v) for k, v in self.__uncertain_bills.items()}
+
+    def settle_uncertain(self, reservation_id: str, actual_micro: Money, *,
+                         balance_before: Money | None = None,
+                         balance_after: Money | None = None,
+                         spent_since_before: Money = 0) -> Money:
+        """Settle one uncertain bill at its true cost; return what the ceiling over-charged.
+
+        The true cost is what the provider's own balance dropped by across the call:
+        ``balance_before`` (the last read before the call, less ``spent_since_before``
+        booked through that provider since it) minus ``balance_after``. The caller
+        measured it; this method only books it. The released difference returns to
+        the balance and ``commits`` so conservation holds, and the bill leaves
+        ``uncertain_bills``. A cost above the provisional ceiling is refused: the
+        ceiling is the most this bill can ever have been.
+        """
+        require_money(actual_micro, nonnegative=True)
+        require_money(spent_since_before, nonnegative=True)
+        for read in (balance_before, balance_after):
+            if read is not None:
+                require_money(read)
+        self._live()
+        bill = self.__uncertain_bills.get(reservation_id)
+        if bill is None:
+            raise Infeasible("no uncertain bill for this reservation")
+        provisional = bill["provisional_micro"]
+        if actual_micro > provisional:
+            raise Infeasible("settled cost exceeds the provisional ceiling")
+        released = provisional - actual_micro
+        balance = self.balance + released
+        self._log(
+            "settle_uncertain", released, balance, bill["handle"], bill["reason"],
+            reservation_id=reservation_id, provisional_micro=provisional,
+            actual_micro=actual_micro, provider_balance_before=balance_before,
+            spent_since_before=spent_since_before, provider_balance_after=balance_after,
+        )
+        self.__balance = balance
+        self.__commits -= released
+        del self.__uncertain_bills[reservation_id]
+        return released
+
     def release_hold(self, reservation: Reservation) -> None:
         """Cancel one hold without moving money, including after balance exhaustion."""
         self._held(reservation)

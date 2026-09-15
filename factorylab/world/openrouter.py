@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable, Iterable, Mapping
+from copy import deepcopy
 from typing import Any
 from urllib import error, request
 
@@ -53,6 +54,7 @@ class OpenRouterProvider:
         reasoning_models: Iterable[str] = (),
         reasoning_config: Mapping[str, Mapping[str, Any]] | None = None,
         web_config: Mapping[str, Mapping[str, Any]] | None = None,
+        extra_body: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self._key_env = key_env
         self._base_url = base_url.rstrip("/")
@@ -60,6 +62,14 @@ class OpenRouterProvider:
         self._reasoning_models = frozenset(reasoning_models)
         self._reasoning_config = {k: dict(v) for k, v in (reasoning_config or {}).items()}
         self._web_config = {k: dict(v) for k, v in (web_config or {}).items()}
+        # A manifest's own request keys per model id (a ``provider`` routing block, say),
+        # applied before the JSON contract, exactly as a seller's extra body is.
+        self._extra_body = {k: deepcopy(dict(v)) for k, v in (extra_body or {}).items()}
+        for body in self._extra_body.values():
+            if body.keys() & {"model", "messages", "max_tokens", "stream"}:
+                raise OpenRouterError(
+                    None, "Extra body cannot override the bounded completion request",
+                    sent=False)
         self._transport = transport if transport is not None else self._default_transport
 
     def _redact(self, body: str) -> str:
@@ -122,14 +132,26 @@ class OpenRouterProvider:
             "messages": [{"role": "system", "content": req.system}, *req.messages],
             "max_tokens": req.max_tokens,
         }
-        if req.json_object:
-            payload["response_format"] = {"type": "json_object"}
         # "<id>@<effort>" selects a reasoning level as its own capability; ":online" adds web.
         wire_id, effort_override = req.model_id, None
         if "@" in wire_id:
             wire_id, effort_override = wire_id.rsplit("@", 1)
         payload["model"] = wire_id
         base_id = wire_id[:-7] if wire_id.endswith(":online") else wire_id
+        extra = next((self._extra_body[k] for k in (req.model_id, wire_id, base_id)
+                      if k in self._extra_body), None)
+        if extra is not None:
+            payload.update(deepcopy(extra))
+        if req.json_object:
+            # The contract is applied after the manifest's extra body, so an extra body
+            # can never turn a structured request into free text. A response_format is
+            # only honoured by hosts that support it: route to those alone, keeping the
+            # manifest's own routing preferences (``provider.order``, say) and letting
+            # its own keys win on conflict.
+            payload["response_format"] = {"type": "json_object"}
+            routing = dict(payload.get("provider") or {})
+            routing.setdefault("require_parameters", True)
+            payload["provider"] = routing
         if req.model_id in self._web_config or wire_id in self._web_config:
             payload["plugins"] = [
                 {
@@ -194,3 +216,7 @@ class OpenRouterProvider:
         if remaining is None:
             return None
         return usd_to_micro(remaining, rounding="floor")
+
+    def balance_of(self, model_id: str) -> int | None:
+        """The balance that pays for an OpenRouter model is the key's remaining allowance."""
+        return self.balance_micro()

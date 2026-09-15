@@ -348,7 +348,8 @@ def build_provider(manifest: Any) -> Any:
             raise RuntimeError("x402 model ids must start with x402:")
         config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
         return MultiProvider(
-            OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config()),
+            OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config(),
+                               extra_body=manifest.extra_body_config()),
             VeniceProvider(reasoning_config=config, web_config=manifest.web_config()), market,
         )
     if "venice" in providers:
@@ -370,6 +371,7 @@ def build_provider(manifest: Any) -> Any:
 
         return MultiProvider(OpenRouterProvider(
             reasoning_config=config, web_config=manifest.web_config(),
+            extra_body=manifest.extra_body_config(),
         ), venice, market)
     if "openrouter" in providers:
         if not os.environ.get("OPENROUTER_API_KEY"):
@@ -379,7 +381,8 @@ def build_provider(manifest: Any) -> Any:
 
         config = {t.id: dict(t.reasoning) for t in manifest.models if t.reasoning}
         return MultiProvider(
-            OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config()),
+            OpenRouterProvider(reasoning_config=config, web_config=manifest.web_config(),
+                               extra_body=manifest.extra_body_config()),
             VeniceProvider(reasoning_config=config, web_config=manifest.web_config()), market,
         )
     raise RuntimeError(f"unsupported provider set {sorted(providers)}")

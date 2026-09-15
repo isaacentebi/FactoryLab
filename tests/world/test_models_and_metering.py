@@ -6,6 +6,7 @@ from factorylab.world.metering import Infeasible, Meter, MeteredModel, UnbilledF
 from factorylab.world.models import (
     FakeModel,
     ModelRequest,
+    ModelResponse,
     PriceTable,
     TokenPrice,
     anthropic_first_party_prices,
@@ -145,3 +146,133 @@ def test_metered_model_prices_the_serving_model() -> None:
     assert out.cost == 100 * 5 + 10 * 25
     assert out.reserved == mm.ceiling(req) >= out.cost
     assert w.balance == 10_000_000 - out.cost
+
+
+class _Provider:
+    """A provider whose balance drops by what each call really cost, whether or not
+    the call returned a bill: the settlement measures the drop."""
+
+    def __init__(self, balance, script):
+        self.balance, self.script, self.reads, self.calls = balance, list(script), 0, 0
+
+    def complete(self, req):
+        self.calls += 1
+        true_cost, bill = self.script.pop(0)
+        self.balance -= true_cost
+        if bill == "drop":
+            raise ConnectionError("the reply never arrived")
+        return ModelResponse(req.model_id, "{}", 10, 5, "end_turn", cost_micro=bill)
+
+    def balance_of(self, model_id):
+        self.reads += 1
+        if self.balance is None:
+            raise OSError("balance endpoint unavailable")
+        return self.balance
+
+
+def _settled_model(provider, settlement, wallet):
+    prices = PriceTable({"vendor": TokenPrice(1, 1)})
+    return MeteredModel(provider, prices, Meter(wallet), settlement=settlement)
+
+
+REQ = ModelRequest("vendor", "s", ({"role": "user", "content": "x" * 40},), max_tokens=100)
+
+
+def test_uncertain_bill_is_charged_at_the_ceiling_then_settled_to_the_true_cost() -> None:
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.kernel.wallet import Wallet
+    from factorylab.world.metering import BillingUncertain, BillSettlement
+
+    provider = _Provider(1_000_000, [(15, 15), (9, "drop"), (15, 15), (7, "drop")])
+    notes = []
+    settlement = BillSettlement(provider.balance_of, record=notes.append)
+    wallet = Wallet(10_000, Ledger())
+    model = _settled_model(provider, settlement, wallet)
+    ceiling = model.ceiling(REQ)
+    # The reference is taken lazily: a launch-time refresh reads the balance once.
+    assert settlement.refresh("vendor") == 1_000_000 and provider.reads == 1
+    assert model.complete(REQ, handle="d1").cost == 15
+    assert settlement.reference == {"openrouter": {"balance": 1_000_000, "spent": 15}}
+    assert provider.reads == 1  # a settled bill reads nothing
+    with pytest.raises(BillingUncertain) as info:
+        model.complete(REQ, handle="d2")
+    # Booked at the ceiling, then settled to the drop in the provider's balance.
+    assert info.value.cost == 9 and provider.reads == 2
+    assert wallet.balance == 10_000 - 15 - 9 and wallet.uncertain_bills == {}
+    kinds = [i["kind"] for i in wallet.ledger._recovery_items()]
+    assert kinds[-3:] == ["metering.uncertain", "wallet.commit", "wallet.settle_uncertain"]
+    settled = wallet.ledger._recovery_items()[-1]
+    assert settled["amount"] == ceiling - 9 and settled["actual_micro"] == 9
+    assert settled["provisional_micro"] == ceiling
+    assert (settled["provider_balance_before"], settled["spent_since_before"],
+            settled["provider_balance_after"]) == (1_000_000, 15, 1_000_000 - 24)
+    assert notes[-1] == {**notes[-1], "kind": "metering.settlement", "status": "settled",
+                         "actual_micro": 9, "released_micro": ceiling - 9}
+    # The read after a settlement is the next reference; ordinary calls accrue on it.
+    assert settlement.reference == {"openrouter": {"balance": 1_000_000 - 24, "spent": 0}}
+    model.complete(REQ, handle="d3")
+    with pytest.raises(BillingUncertain) as info:
+        model.complete(REQ, handle="d4")
+    assert info.value.cost == 7 and wallet.balance == 10_000 - 15 - 9 - 15 - 7
+    assert wallet.check_conservation() and wallet.uncertain_bills == {}
+
+
+def test_without_a_reference_the_first_uncertain_bill_keeps_its_ceiling() -> None:
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.kernel.wallet import Wallet
+    from factorylab.world.metering import BillingUncertain, BillSettlement
+
+    provider = _Provider(1_000_000, [(9, "drop"), (7, "drop")])
+    notes = []
+    settlement = BillSettlement(provider.balance_of, record=notes.append)
+    wallet = Wallet(10_000, Ledger())
+    model = _settled_model(provider, settlement, wallet)
+    ceiling = model.ceiling(REQ)
+    with pytest.raises(BillingUncertain) as info:
+        model.complete(REQ, handle="d1")
+    assert info.value.cost == ceiling and wallet.balance == 10_000 - ceiling
+    assert list(wallet.uncertain_bills) == ["wallet-0"]
+    assert notes[-1]["status"] == "reference_taken"
+    assert settlement.reference == {"openrouter": {"balance": 1_000_000 - 9, "spent": 0}}
+    with pytest.raises(BillingUncertain) as info:
+        model.complete(REQ, handle="d2")
+    assert info.value.cost == 7 and wallet.balance == 10_000 - ceiling - 7
+    assert list(wallet.uncertain_bills) == ["wallet-0"]  # the first stays at its ceiling
+
+
+def test_a_failed_or_implausible_balance_read_keeps_the_ceiling_and_never_guesses() -> None:
+    from factorylab.kernel.ledger import Ledger
+    from factorylab.kernel.wallet import Wallet
+    from factorylab.world.metering import BillingUncertain, BillSettlement
+
+    provider = _Provider(1_000_000, [(9, "drop"), (7, "drop"), (0, "drop"), (0, "drop")])
+    notes = []
+    settlement = BillSettlement(provider.balance_of, record=notes.append)
+    wallet = Wallet(100_000, Ledger())
+    model = _settled_model(provider, settlement, wallet)
+    ceiling = model.ceiling(REQ)
+    settlement.refresh("vendor")
+    provider.balance = None  # the read fails
+    with pytest.raises(BillingUncertain) as info:
+        model.complete(REQ, handle="d1")
+    assert info.value.cost == ceiling and wallet.balance == 100_000 - ceiling
+    assert notes[-1]["status"] == "balance_unavailable" and notes[-1]["error"] == "OSError"
+    assert settlement.reference == {}  # a reference the failed call spent from is untrusted
+    provider.balance = 1_000_000 - 9 - 7
+    with pytest.raises(BillingUncertain) as info:
+        model.complete(REQ, handle="d2")  # takes a fresh reference, keeps its ceiling
+    assert info.value.cost == ceiling and notes[-1]["status"] == "reference_taken"
+    provider.balance += 5  # a top-up between calls: the drop is negative
+    with pytest.raises(BillingUncertain) as info:
+        model.complete(REQ, handle="d3")
+    assert info.value.cost == ceiling and notes[-1]["status"] == "outside_ceiling"
+    assert notes[-1]["measured_micro"] == -5
+    provider.balance -= ceiling + 1  # more than the ceiling: not this call's alone
+    with pytest.raises(BillingUncertain) as info:
+        model.complete(REQ, handle="d4")
+    assert info.value.cost == ceiling and notes[-1]["status"] == "outside_ceiling"
+    assert wallet.balance == 100_000 - 4 * ceiling and len(wallet.uncertain_bills) == 4
+    assert wallet.check_conservation()
+    # A provider with no bounded balance (None) settles nothing either.
+    settlement = BillSettlement(lambda _m: None, record=notes.append)
+    assert settlement.refresh("vendor") is None and settlement.reference == {}

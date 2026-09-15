@@ -235,7 +235,7 @@ def test_state_round_trips_exactly(ledger, clock):
     state = book.state()
     assert state == {"base_share": "0.6", "entitlements": {"a": 300, "b": 0},
                      "holds": {reservation.id: ["a", 50]}, "retired": ["b"],
-                     "last_holds": {"a": 50}}
+                     "last_holds": {"a": 50}, "uncertain": {}}
     other = BudgetBook(wallet, ledger, clock_ns=clock, base_share="0.6")
     other._restore_state(state)
     assert other.state() == state and other.entitlement("a") == 250 and other.seats() == ("a",)
@@ -243,3 +243,42 @@ def test_state_round_trips_exactly(ledger, clock):
         BudgetBook(wallet, ledger, clock_ns=clock, base_share="0.5")._restore_state(state)
     with pytest.raises(ValueError):
         BudgetBook(wallet, ledger, base_share=0)
+
+
+def test_settling_an_uncertain_bill_refunds_the_seat_what_it_paid(ledger, clock):
+    """C10: the ceiling an uncertain bill charged comes back to the seat that paid it, as
+    far as the seat paid; what the commons bridged stays with the pool."""
+    wallet = Wallet(1_000, ledger, clock_ns=clock)
+    book = BudgetBook(wallet, ledger, clock_ns=clock, base_share="0.6")
+    book.genesis(["a", "b"])  # 300 each, 400 unallocated
+    seat = SeatWallet(wallet, book, "a")
+    reservation = seat.reserve(200, "h", "model:m")
+    seat.commit_uncertain(reservation)
+    assert book.entitlement("a") == 100 and wallet.balance == 800
+    assert book.state()["uncertain"] == {reservation.id: ["a", 200]}
+    assert seat.settle_uncertain(reservation.id, 30, balance_before=5_000, balance_after=4_970,
+                                 spent_since_before=0) == 170
+    assert wallet.balance == 970 and book.entitlement("a") == 270
+    assert book.unallocated() == 400 and invariant(book, wallet)
+    assert book.state()["uncertain"] == {} and wallet.uncertain_bills == {}
+    item = next(i for i in budget_items(ledger) if i["op"] == "settle_uncertain")
+    assert item["assembly_id"] == "a" and item["amount"] == 170 and item["own"] == 200
+    assert item["released"] == 170 and item["reservation_id"] == reservation.id
+    # A seat that only partly paid (protected exploration beyond its entitlement) is
+    # refunded only its own part; the commons keeps the rest.
+    explorer = SeatWallet(wallet, book, "b", protected=lambda _h, _r: 200)
+    reservation = explorer.reserve(400, "h2", "model:m")
+    explorer.commit_uncertain(reservation)
+    assert book.entitlement("b") == 0
+    assert book.state()["uncertain"] == {reservation.id: ["b", 300]}
+    assert explorer.settle_uncertain(reservation.id, 50) == 350
+    assert book.entitlement("b") == 300 and invariant(book, wallet) and ledger.verify()
+    # The book's memory of who paid survives a checkpoint.
+    reservation = seat.reserve(10, "h3", "model:m")
+    seat.commit_uncertain(reservation)
+    other = BudgetBook(wallet, ledger, clock_ns=clock, base_share="0.6")
+    other._restore_state(book.state())
+    assert other.state() == book.state()
+    assert other._refund_uncertain(reservation.id, 10, "settle_uncertain") == 10
+    # A bill the book never saw refunds no seat.
+    assert book._refund_uncertain("wallet-99", 10, "settle_uncertain") == 0

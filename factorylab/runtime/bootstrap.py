@@ -56,7 +56,7 @@ from factorylab.world.exchange import (
     live_exchange,
 )
 from factorylab.world.market import MultiProvider, X402Provider
-from factorylab.world.metering import Meter
+from factorylab.world.metering import BillSettlement, Meter
 from factorylab.world.models import FakeModel, TokenPrice
 from factorylab.world.scripted import ScriptedProvider
 from factorylab.world.venue_tools import VenueTools
@@ -307,6 +307,9 @@ class BootstrapMixin:
             deterministic=isinstance(self.provider, (ScriptedProvider, FakeModel)),
         )
         self.market = JournalProxy(self.market, self.ledger, "market")
+        # Uncertain bills settle from the provider's own balance, read through the
+        # journal like every other provider read so replay reproduces it.
+        self.bill_settlement = BillSettlement(self._provider_balance, record=self._record_market)
         self.sellers: dict[str, dict] = {}
         self.market_index: list[dict] | None = None
         self.unresolved_x402: dict[str, dict] = {}

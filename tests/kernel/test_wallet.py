@@ -278,3 +278,52 @@ def test_a_venue_loss_is_absorbed_against_locked_backing_without_creating_money(
         wallet.reserve(1, "h", "model")
     assert wallet.release_due(10) == 90 and wallet.unlocked == 70 and wallet.locked == 0
     assert wallet.balance == 70 and wallet.check_conservation()
+
+
+def test_settle_uncertain_releases_the_ceiling_over_the_true_cost_and_conserves(ledger, clock):
+    wallet = Wallet(1_000, ledger, clock_ns=clock)
+    reservation = wallet.reserve(300, "h", "model:m")
+    wallet.commit_uncertain(reservation)
+    assert wallet.balance == 700 and wallet.uncertain_bills == {reservation.id: {
+        "handle": "h", "reason": "model:m", "reservation_id": reservation.id,
+        "provisional_micro": 300}}
+    with pytest.raises(Infeasible):  # never more than the ceiling
+        wallet.settle_uncertain(reservation.id, 301)
+    with pytest.raises(Infeasible):  # never a bill the wallet does not hold
+        wallet.settle_uncertain("wallet-7", 1)
+    with pytest.raises((TypeError, ValueError)):
+        wallet.settle_uncertain(reservation.id, 1.5)
+    released = wallet.settle_uncertain(reservation.id, 40, balance_before=9_000,
+                                       balance_after=8_950, spent_since_before=10)
+    assert released == 260 and wallet.balance == wallet.available == 960
+    assert wallet.uncertain_bills == {} and wallet.check_conservation() and ledger.verify()
+    with pytest.raises(Infeasible):  # settled exactly once
+        wallet.settle_uncertain(reservation.id, 40)
+    item = next(i for i in ledger._recovery_items() if i["kind"] == "wallet.settle_uncertain")
+    assert item == {**item, "amount": 260, "balance_after": 960, "handle": "h",
+                    "reason": "model:m", "reservation_id": reservation.id,
+                    "provisional_micro": 300, "actual_micro": 40,
+                    "provider_balance_before": 9_000, "spent_since_before": 10,
+                    "provider_balance_after": 8_950}
+    # A settlement at the full ceiling releases nothing but closes the bill.
+    reservation = wallet.reserve(50, "h2", "model:m")
+    wallet.commit_uncertain(reservation)
+    assert wallet.settle_uncertain(reservation.id, 50) == 0
+    assert wallet.balance == 910 and wallet.uncertain_bills == {} and wallet.check_conservation()
+    # The open bill survives a checkpoint and settles on the restored wallet.
+    reservation = wallet.reserve(100, "h3", "model:m")
+    wallet.commit_uncertain(reservation)
+    restored = Wallet(1_000, Ledger(), clock_ns=clock)
+    restored._restore_state(wallet.state())
+    assert restored.settle_uncertain(reservation.id, 25) == 75
+    assert restored.balance == 885 and restored.check_conservation()
+
+
+def test_settle_uncertain_never_revives_a_dead_wallet(ledger, clock):
+    wallet = Wallet(100, ledger, clock_ns=clock, balance_floor_micro=10)
+    reservation = wallet.reserve(95, "h", "model:m")
+    wallet.commit_uncertain(reservation)
+    assert wallet.dead
+    with pytest.raises(Infeasible):
+        wallet.settle_uncertain(reservation.id, 1)
+    assert wallet.balance == 5 and wallet.check_conservation()
