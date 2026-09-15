@@ -322,17 +322,13 @@ class FeedbackMixin:
             return
         event_id = self.queue.get(s.handle).event_id
         prefix = "verdict-" if event_id.startswith("verdict-") else "self-"
-        forecaster_handle = event_id[len(prefix):] if event_id.startswith(prefix) else None
-        producer = (self.handle_to_assembly.get(s.about_handle)
-                    or self.outcomes.seat_of(s.about_handle))
-        # The producer's own payoff arrives with its money in ``_credit_consequence``.
-        # Here it is delivered only when the forecast was somebody else's, so a seat is
-        # never told the same settlement twice.
-        if producer is not None and s.about_handle != forecaster_handle:
-            self.outcomes.append(producer, handle=s.about_handle, evidence=s.handle,
-                                 outcome={"return_paid_off": s.y})
-        if forecaster_handle is None:
+        # The producer's own payoff is not delivered here: it arrives with its money
+        # in ``_credit_consequence``, which knows the net, the cost and whether the
+        # outcome was marked. Delivering it twice would tell one seat one settlement
+        # twice, which is exactly the confusion an addressed inbox exists to end.
+        if not event_id.startswith(prefix):
             return
+        forecaster_handle = event_id[len(prefix):]
         forecaster = (self.handle_to_assembly.get(forecaster_handle)
                       or self.outcomes.seat_of(forecaster_handle))
         if forecaster is None:
