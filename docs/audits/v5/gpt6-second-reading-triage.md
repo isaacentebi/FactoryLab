@@ -1,6 +1,6 @@
 # GPT-6 Pro second reading: triage
 
-Reviewed zip: `FactoryLab-edition2-dbc0c2e`. Triaged against main `e5a8f70`. Verdict: do not
+Reviewed zip: `FactoryLab-edition2-dbc0c2e`. Triaged against main `e5a8f70`; every fix row below is merged on main (#86, #87, #88). Its verdict on the zip: do not
 launch unchanged. Its full report is `docs/audits/v5/gpt6-second-reading.md`.
 
 The four decisions of 15 September (three cards and five norms; observer on DeepSeek 4.1 flash;
@@ -12,18 +12,18 @@ the entitlement economy, the witness and recovery still applies, verified below.
 
 | Finding | Verified on e5a8f70 | Disposition |
 |---|---|---|
-| P1-01 death evidence optional at restore: unreachable receiver resumes; witness path unwritable by the service | Yes: `runtime/witness.py:222`; `deploy/factorylab.service:34` | Fix, R2-A: a configured receiver with no verdict refuses; service may write `.witness/`; local-only is documented as the weaker guarantee |
-| P1-02 backup omits the artifact directory; program runs with no state and reports ok | Yes: `deploy/backup.sh`; `kernel/artifacts.py`; `cortex/assembly.py` | Fix, R2-A: backup includes artifacts; resume refuses a missing referenced sha |
-| P1-03 program seat pricing KeyError on world growth | Yes: `runtime/routing.py:453` | Fix, R2-B: flat-fee seats have no growth term |
-| P1-04 all seats exhausted, pool positive, router NOOPs forever, no death signal | Yes: `runtime/routing.py:480`, `loop.py::_check_termination` | Fix, R2-A: commons release when nobody can act; then dormancy or `insolvency:entitlement` |
-| P2-05 service income is a pool reclassification, root wallet never grows | Yes: `runtime/feedback.py:447–458` | Fix, R2-B: income books into the root wallet like venue P&L; seller credited from new money; a settled receipt is a paid-off consequence |
-| P2-06 marked payoff freezes later loss attribution | Yes: `runtime/feedback.py:440` | Fix, R2-B: late realization charges the opener |
-| P2-07 releases split per seat id: nine children take five times the share | Yes: `kernel/budget.py:293` | Fix, R2-B: releases split per lineage, paid to the root |
-| P2-08 profitable compliant stability labelled learning death | Yes: `versioning/versions.py:127–130` | Fix, R2-C: requires a gone frontier, not zero edits |
-| P2-09 amendment vote scored on region compliance, not the promise vs baseline | Yes: `runtime/governance.py` vote scoring | Fix, R2-C |
+| P1-01 death evidence optional at restore: unreachable receiver resumes; witness path unwritable by the service | Yes: `runtime/witness.py:222`; `deploy/factorylab.service:34` | Fixed, #88: a configured receiver with no verdict refuses; service may write `.witness/`; local-only is documented as the weaker guarantee |
+| P1-02 backup omits the artifact directory; program runs with no state and reports ok | Yes: `deploy/backup.sh`; `kernel/artifacts.py`; `cortex/assembly.py` | Fixed, #88: backup includes artifacts; resume refuses a missing referenced sha |
+| P1-03 program seat pricing KeyError on world growth | Yes: `runtime/routing.py:453` | Fixed, #86: flat-fee seats have no growth term |
+| P1-04 all seats exhausted, pool positive, router NOOPs forever, no death signal | Yes: `runtime/routing.py:480`, `loop.py::_check_termination` | Fixed, #88: commons release when nobody can act; then dormancy or `insolvency:entitlement` |
+| P2-05 service income is a pool reclassification, root wallet never grows | Yes: `runtime/feedback.py:447–458` | Fixed, #86: income books into the root wallet like venue P&L; seller credited from new money; a settled receipt is a paid-off consequence |
+| P2-06 marked payoff freezes later loss attribution | Yes: `runtime/feedback.py:440` | Fixed, #86: late realization charges the opener |
+| P2-07 releases split per seat id: nine children take five times the share | Yes: `kernel/budget.py:293` | Fixed, #86: releases split per lineage, paid to the root |
+| P2-08 profitable compliant stability labelled learning death | Yes: `versioning/versions.py:127–130` | Fixed, #87: requires a gone frontier, not zero edits |
+| P2-09 amendment vote scored on region compliance, not the promise vs baseline | Yes: `runtime/governance.py` vote scoring | Fixed, #87 |
 | P2-10 agent-reported propensity is a self-report | Known since round one; floored at 0.05 | Leave; documented |
-| P2-11 `docs/manifest.md` and the manifest comment out of sync | Yes | Fix, R2-C |
-| Facilitator URL read from the environment after launch | Yes: `runtime/seller.py:273` | Fix, R2-A: ledgered at Launch, resume refuses a change |
+| P2-11 `docs/manifest.md` and the manifest comment out of sync | Yes | Fixed, #87 |
+| Facilitator URL read from the environment after launch | Yes: `runtime/seller.py:273` | Fixed, #88: ledgered at Launch, resume refuses a change |
 
 Not taken: its request for a full every-file certification (out of scope for one more pass);
 its "paid demand as steering" point is a covenant, not code.

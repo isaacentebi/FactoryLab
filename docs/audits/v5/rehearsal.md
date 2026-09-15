@@ -121,6 +121,49 @@ is the experiment's question, not a rehearsal's.
 **Cost per successful call rose to 4,943** from 3,700: the observer's new model is dearer per
 token than GLM and the rationales are longer. About $7 a day at this cadence.
 
+## Run 4: after the second reading's repairs, 20 minutes
+
+With the three repair pull requests merged (#86 economy, #87 diagnostics, #88 identity and
+lifecycle) on top of run 3's edition. Same charter, same roster, same schedule; only the code
+under them changed. `--duration 30m` buys three ticks at the ten-minute interval, so the run
+ends after the third (the CLI's documented rule), twenty minutes after launch.
+
+| | |
+|---|---|
+| Manifest | `worlds/edition2-rehearsal-4.toml`, namespace `f86b4da2…`; code `4d5ae0e` |
+| Wall clock | launch 13:07 local, killed 13:28 (`explicit_kill:budget`, the duration) |
+| Ledger | `runs/edition2-rehearsal-4.jsonl`, verify true, conservation true, 2,258 items |
+| Tick gaps (s) | 600.010, 600.002 |
+| Events / decisions / invocations | 115 / 100 / 31 |
+| Invocation status | 30 ok, 1 failed (`antagonist-a`, Venice provider error, charged 0) |
+| Spend | successful calls 117,745 µUSD (3,924 per call); OpenRouter 60,826, Venice 56,919 |
+| Producer wakes | 11: observer 7, antagonist 3, decider 1; 10 holds, 1 failed |
+| Orders / tool calls / registrations | 0 / 0 / 0 |
+| Witness | `.witness/edition2-rehearsal-4.jsonl`, one kill line naming the diary, nonce, head and release digest |
+
+**Nothing regressed.** Ticks exact, accounting conserved, the diary verifies, the kill line
+written. The Venice failure cost nothing this time (the error came before any charge, so there
+was no uncertain bill to settle). Rationales still read the market: "a single mid drift of
+18 bp on a 10-minute tick", "identical to the prior print, zero drift", "positive rate plus
+positive premium". One decider rationale still names a card ("keeps the card penalty…"), the
+only one of eleven.
+
+**Two things the run showed that are not regressions but matter for launch.**
+
+1. *The diary is mostly the venue's listing.* 21 of 29 MB are 80 recorded reads of
+   `exchange.instruments`, about 260 KB each: the prompt builder reads the venue's full listing
+   every time it builds a request and the recorded-I/O layer keeps every copy. Run 3 had the
+   same (105 reads, 27 MB). At the funded cadence that is one to two gigabytes of diary a day,
+   all one listing, and the backup copies it. Fix in flight: one read per tick for prompt
+   building (the population's own paid `venue.instruments` call is untouched).
+2. *The wake's pots and entitlements views are empty in a short run.* They come from the public
+   snapshot the runtime writes at each price-window close, and the window is one hour. Runs 2
+   and 3 had the same. In the funded world they fill hourly.
+
+The commons release, the entitlement dormancy and the artifact and facilitator checks from #88
+did not fire: no seat ran out of entitlement, no restore happened. They are exercised by
+`tests/audit/test_r2a_lifecycle.py` and the slice test, both green on this commit.
+
 ## Seat calibration under the edition 2 prompt
 
 `scripts/calibrate_seats.py --world worlds/edition2-testnet.toml --all-menu --paid --budget-usd 3

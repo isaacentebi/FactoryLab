@@ -77,9 +77,13 @@ The morning's decisions are taken and rehearsed (`docs/audits/v5/rehearsal.md`, 
 DeepSeek 4.1 flash, 40 USD at genesis then 10 a week, bills settled from the provider's balance,
 the wake publishing every answer live.
 
-1. The outside reviewer's second reading (`~/Downloads/FactoryLab-edition2-*.zip` with
-   `BRIEF.md`; rebuild with `scripts/package_review.sh` after any commit) and its triage into
-   `docs/audits/v5/`.
+1. The outside reviewer's second reading is triaged and every fix merged (#86, #87, #88;
+   `docs/audits/v5/gpt6-second-reading-triage.md`), rehearsed as run 4 in
+   `docs/audits/v5/rehearsal.md`. Open with the reviewer: the architect brief
+   (`docs/audits/v5/brief-gpt6-architect.md`, zip `~/Downloads/FactoryLab-architect-*.zip`):
+   seeded producer diversity, legible runway in the world block, roster, the $500 split. Any
+   change to roster or prompt text means re-ratification on testnet and one short rehearsal.
+   Rebuild zips with `scripts/package_review.sh` after any commit.
 2. Fresh read-only balance read; `worlds/funded.toml` from `worlds/edition2-testnet.toml` with
    `name = "funded"`, `mainnet = true`, a client namespace, the ratified digests it already
    carries, and the fresh starting accounting; hash recorded.
