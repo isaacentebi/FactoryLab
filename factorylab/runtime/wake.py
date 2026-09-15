@@ -201,6 +201,9 @@ class _Observatory:
         self.transfers: list[dict] = []
         self.windows: dict[int, dict] = {}
         self.dormancy: list[dict] = []
+        # Each time the commons was released because nobody could act (P1-04): when,
+        # how much, across how many lineages. No seat id, no position.
+        self.commons_releases: list[dict] = []
         # Edition 2 views. Money by class; deliveries per closed window; open
         # decisions and sealed forecasts still waiting (ages only: a handle is a
         # sealed key); the immune organ's own window profiles (for cells);
@@ -366,6 +369,20 @@ class _Observatory:
 
     def _on_income_earned(self, item: dict) -> None:
         self._money_in("earned", item.get("micro"))
+
+    def _on_budget(self, item: dict) -> None:
+        # Only the commons release is a fact of the account worth a row here: the
+        # pool went to the seats because none of them could act (P1-04). Every other
+        # budget op is a seat's own movement and stays with the entitlements view.
+        if item.get("op") != "commons_release":
+            return
+        grants = item.get("grants") or {}
+        self.commons_releases = [*self.commons_releases, {
+            "ts_ns": item.get("ts"), "amount_micro": item.get("amount"),
+            "lineages": len(grants) if isinstance(grants, dict) else None,
+            "per_seat_micro": (next(iter(grants.values()), None)
+                               if isinstance(grants, dict) else None),
+        }][-MAX_ROWS:]
 
     def _on_treasury_subsidy(self, item: dict) -> None:
         self._money_in("subsidy", item.get("micro"))
@@ -649,7 +666,7 @@ class _Observatory:
                                                     self.invocations.items())[-MAX_ROWS:]},
             },
             "pots": {"current": latest.get("pots") or {}, "transfers": self.transfers,
-                     "dormancy": self.dormancy,
+                     "dormancy": self.dormancy, "commons_releases": self.commons_releases,
                      "income": latest.get("income") or dict.fromkeys(INCOME_CLASSES)},
             "immune": list(self.windows.values()),
             "portfolio": latest.get("portfolio") or {"equity_micro": UNAVAILABLE,

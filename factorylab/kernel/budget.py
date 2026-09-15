@@ -374,6 +374,35 @@ class BudgetBook:
         heads = {row["head"]: lineage for lineage, row in self.lineages().items()}
         return self._split("release", amount, heads, reason, lineages=heads)
 
+    def commons_release(self, reason: str) -> dict[str, Money]:
+        """Split the whole unallocated pool equally across the live lineages, once.
+
+        The runtime calls this at a reserve-window boundary when no live seat can
+        cover a call from its own entitlement while the pool still holds money
+        (second reading, P1-04): the commons is released so somebody can act,
+        rather than the world idling with money nobody may spend. It goes where a
+        tranche goes, one equal share per live lineage to that lineage's head, so
+        replication buys no larger share of the commons either; the head funds its
+        children through transfers. Unlike a tranche release nothing is held back
+        and ``base_share`` does not apply; an integer remainder below one micro per
+        lineage stays unallocated. Ledgered as ``budget op="commons_release"`` with
+        the grants and the lineage of each head. Returns the grants; an empty pool
+        or no live seat moves nothing and ledgers nothing.
+        """
+        heads = {row["head"]: lineage for lineage, row in self.lineages().items()}
+        pool = self.unallocated()
+        per_head = pool // len(heads) if heads and pool > 0 else 0
+        if per_head <= 0:
+            return {}
+        grants = {head: per_head for head in heads}
+        granted = per_head * len(heads)
+        self._log("commons_release", amount=pool, reason=reason, grants=grants,
+                  lineages=heads, to_unallocated=pool - granted,
+                  unallocated_after=pool - granted)
+        for head, share in grants.items():
+            self.__gross[head] = self.__gross.get(head, 0) + share
+        return grants
+
     # ---- holds, used only by SeatWallet
 
     def _cover(self, assembly_id: str, amount: Money, handle: str, reason: str, *,

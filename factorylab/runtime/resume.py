@@ -19,6 +19,7 @@ from dataclasses import fields, is_dataclass
 from decimal import Decimal
 from enum import Enum
 from fractions import Fraction
+from pathlib import Path
 from typing import Any
 
 from factorylab.kernel.ledger import Ledger, LedgerLock, canonical
@@ -29,9 +30,12 @@ from factorylab.world.exchange import bind_launch_nonce
 class ResumeError(RuntimeError):
     """Recovery refuses invalid evidence or an ambiguous external side effect."""
 
-    def __init__(self, message: str, *, code: str = "invalid_snapshot") -> None:
+    def __init__(self, message: str, *, code: str = "invalid_snapshot", **details: Any) -> None:
         super().__init__(message)
         self.code = code
+        # Bounded facts the refusal ledgers beside its reason (a sha, an owner): never
+        # free text, never anything read from outside the world's own records.
+        self.details = details
 
 
 def resume_reason(exc: Exception) -> Reason:
@@ -499,6 +503,9 @@ _RUNTIME_FIELDS = (
     "return_events",
     # The population's registered measurements and its open assembly-learner rounds.
     "registered_observations", "assembly_rounds",
+    # The x402 facilitator the world launched under (second reading, facilitator pin):
+    # ledgered in Launch, compared on restore, read by the seller from the ledger.
+    "facilitator_url",
     "registered_predicates", "kind_reward_shapes", "forecast_returns",
     "connector_calls", "connector_calls_day",
     "notes",
@@ -552,9 +559,14 @@ class Checkpoint(dict):
     (``Ledger.diary_id``) is therefore an attribute, not a key: an in-memory
     checkpoint restored in this process still names the diary it came from, and
     a ledgered one, read back as a plain mapping, is bound by the file it is in.
+    ``origin`` rides beside it the same way: where that diary lives on disk (or
+    None for a memory-only ledger), so a restore into a runtime that has no path
+    of its own still reads the witness file beside the diary the checkpoint came
+    from, rather than depending on this process remembering the kill.
     """
 
     diary: str | None = None
+    origin: Path | None = None
 
 
 def runtime_state(rt) -> Checkpoint:
@@ -605,6 +617,7 @@ def runtime_state(rt) -> Checkpoint:
     })
     # The diary this state descends from, beside the mapping and never in it.
     state.diary = rt.diary_id or rt.ledger.diary_id
+    state.origin = rt.ledger.path
     return state
 
 
@@ -628,6 +641,7 @@ def restore_runtime(rt, state: dict) -> None:
                           code="venue_account_mismatch")
     saved_runtime = decode(state["runtime"])
     running_digest = getattr(rt, "release_digest", None)  # read before the saved fields land
+    running_facilitator = getattr(rt, "facilitator_url", None)
     # A checkpoint cannot revive a killed runtime. The runtime restored into may
     # already be final (its own Termination, or a Terminated event in its ledger),
     # or the identity the checkpoint names may be recorded as killed in this
@@ -638,12 +652,17 @@ def restore_runtime(rt, state: dict) -> None:
                           code="identity_killed")
     from factorylab.runtime.witness import killed
 
-    # An in-memory checkpoint names its diary (Checkpoint.diary); a ledgered one,
-    # read back as a plain mapping, is bound by the file this runtime resumes.
+    # An in-memory checkpoint names its diary (Checkpoint.diary) and where that
+    # diary lives (Checkpoint.origin); a ledgered one, read back as a plain
+    # mapping, is bound by the file this runtime resumes. The kill record is read
+    # from the witness file beside that diary, whichever of the two named it, and
+    # from this runtime's own diary; process memory is the third source, not the
+    # one relied on (a twin restored in memory has no diary path of its own).
     diary = getattr(state, "diary", None) or (
         rt.ledger.diary_id if rt.ledger.path is not None else None)
+    witnessed = rt.ledger.path if rt.ledger.path is not None else getattr(state, "origin", None)
     if killed(world=rt.m.name, launch_nonce=saved_runtime.get("launch_nonce"),
-              diary=diary, ledger_path=rt.ledger.path, remote=False) is not None:
+              diary=diary, ledger_path=witnessed, remote=False) is not None:
         raise ResumeError("the checkpoint names a killed identity", code="identity_killed")
     for name, value in saved_runtime.items():
         setattr(rt, name, value)
@@ -663,6 +682,16 @@ def restore_runtime(rt, state: dict) -> None:
                           code="release_mismatch")
     rt.release_digest = saved_digest if saved_digest is not None or not rt.started else (
         running_digest)
+    # The saved world names the x402 facilitator it launched under. The seller
+    # settles every paid call through it, so a different one after launch is a
+    # steering lever outside the diary; a checkpoint written before the pin keeps
+    # its historical Launch and adopts the running value once launched.
+    saved_facilitator = saved_runtime.get("facilitator_url")
+    if saved_facilitator is not None and saved_facilitator != running_facilitator:
+        raise ResumeError("x402 facilitator differs from the saved world",
+                          code="facilitator_mismatch")
+    rt.facilitator_url = (saved_facilitator if saved_facilitator is not None or not rt.started
+                          else running_facilitator)
     rt.observer.predicates = rt.predicates
     if rt.window.index in rt.price_windows:
         rt.price_windows[rt.window.index] = rt.window
@@ -704,6 +733,7 @@ def restore_runtime(rt, state: dict) -> None:
         restored.memory = assembly["memory"]
         if "state_sha" in assembly:
             restored.state_sha = assembly["state_sha"]
+    _verify_artifacts(rt)
     rt.routers.clear()
     for saved in state["routers"]:
         router = RouterState.restore(saved)
@@ -746,6 +776,36 @@ def restore_runtime(rt, state: dict) -> None:
             rt._admit_market(contract.input_schema["coin"], contract.input_schema["market"])
 
 
+def _verify_artifacts(rt) -> None:
+    """Every sha the restored archive names must have its bytes beside the ledger (P1-02).
+
+    The checkpoint carries the index and each program seat's ``state_sha``; the
+    bytes live under ``runs/<world>.artifacts/``. A backup that archived the diary
+    without that directory, or a directory lost with the host, restores an index
+    that names memory the world no longer has. Continuing would let a program run
+    with no state and report ok, so the resume refuses, naming the sha and its
+    owner. A memory-only twin (no ledger path) keeps no bytes to check.
+    """
+    store = rt.artifacts
+    if store.root is None:
+        return
+    from factorylab.kernel.artifacts import ArtifactError
+
+    referenced = dict(store.index)
+    for assembly in rt.assemblies.values():
+        sha = getattr(assembly, "state_sha", None)
+        if sha is not None and sha not in referenced:
+            raise ResumeError("a program seat names state the archive index does not hold",
+                              code="artifact_missing", sha=sha, owner=assembly.spec.id)
+    for sha, record in referenced.items():
+        try:
+            store.get(sha)
+        except ArtifactError:
+            raise ResumeError("the archive index names bytes that are missing or corrupt",
+                              code="artifact_missing", sha=sha,
+                              owner=record.get("owner")) from None
+
+
 def resume_runtime(manifest, ledger_path: str, *, provider=None, market=None, exchange=None,
                    clock_source=None, now_ns=None, _lock=None):
     """Hold exclusive ownership before reading recovery evidence or contacting a provider."""
@@ -783,11 +843,24 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     # that record lives outside the diary's directory and, when a receiver is
     # configured, outside the host. Asked before any state is restored or any
     # adapter is contacted; the refusal is ledgered like a release mismatch.
-    from factorylab.runtime.witness import killed
+    from factorylab.runtime.witness import WitnessUnavailable, killed
 
     launch_nonce = decode(state["runtime"]).get("launch_nonce")
-    seen = killed(world=manifest.name, launch_nonce=launch_nonce, diary=ledger.diary_id,
-                  ledger_path=ledger_path)
+    try:
+        seen = killed(world=manifest.name, launch_nonce=launch_nonce, diary=ledger.diary_id,
+                      ledger_path=ledger_path)
+    except WitnessUnavailable:
+        # A receiver is configured and gave no verdict. The local file said nothing,
+        # but the receiver is the record that survives a lost host or a deleted
+        # file, and it was asked for exactly this case: no verdict is a refusal,
+        # ledgered like the others, and the supervisor tries again later.
+        ledger.append({
+            "kind": "failed_resume", "reason": "witness_unavailable",
+            "launch_nonce": launch_nonce, "snapshot_seq": snapshot["seq"],
+            "ts": state["clock_ns"],
+        })
+        raise ResumeError("the witness receiver gave no verdict",
+                          code="witness_unavailable") from None
     if seen is not None:
         ledger.append({
             "kind": "failed_resume", "reason": "identity_killed", "witness": seen,
@@ -804,6 +877,7 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
 
     rt.artifacts.root = artifact_root(ledger_path)
     running_digest = getattr(rt, "release_digest", None)
+    running_facilitator = getattr(rt, "facilitator_url", None)
     try:
         restore_runtime(rt, state)
     except ResumeError as exc:
@@ -821,6 +895,21 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
                 "kind": "failed_resume", "reason": "identity_killed", "witness": "restore",
                 "launch_nonce": launch_nonce, "snapshot_seq": snapshot["seq"],
                 "ts": state["clock_ns"],
+            })
+        elif exc.code == "facilitator_mismatch":
+            ledger.append({
+                "kind": "failed_resume", "reason": "facilitator_mismatch",
+                "ledgered_facilitator_url": decode(state["runtime"]).get("facilitator_url"),
+                "running_facilitator_url": running_facilitator,
+                "snapshot_seq": snapshot["seq"], "ts": state["clock_ns"],
+            })
+        elif exc.code == "artifact_missing":
+            # The sha and its owner: what memory is gone and whose. The world is not
+            # continued with different memory; the operator restores the bytes.
+            ledger.append({
+                "kind": "failed_resume", "reason": "artifact_missing",
+                "sha": exc.details.get("sha"), "owner": exc.details.get("owner"),
+                "snapshot_seq": snapshot["seq"], "ts": state["clock_ns"],
             })
         raise
     journal.bootstrap = False

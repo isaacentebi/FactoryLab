@@ -53,8 +53,27 @@ from factorylab.world.x402 import (
     http_request,
 )
 
-#: Coinbase's public x402 facilitator; ``FACTORYLAB_FACILITATOR_URL`` overrides it.
+#: Coinbase's public x402 facilitator; ``FACTORYLAB_FACILITATOR_URL`` overrides it at
+#: launch only (``configured_facilitator``), after which the ledgered value binds.
 FACILITATOR_URL = "https://x402.org/facilitator"
+FACILITATOR_ENV = "FACTORYLAB_FACILITATOR_URL"
+
+
+def configured_facilitator() -> str:
+    """The facilitator this launch binds: the environment's URL, or the public default.
+
+    Read once, by the runtime at construction, and ledgered in the ``Launch``
+    event beside the release digest. Nothing else reads the variable: the seller
+    settles through the ledgered value (``deploy/serve.py``) and a resume under a
+    different one is refused (``facilitator_mismatch``), so the facilitator is
+    not a lever the environment can pull on a running world.
+    """
+    url = os.environ.get(FACILITATOR_ENV, "").strip()
+    if not url:
+        return FACILITATOR_URL
+    if not re.match(r"^https?://[^\s\"'\\]+$", url):
+        raise ValueError("facilitator URL must be a plain http(s) URL")
+    return url
 #: A buyer's authorization is valid for at most this long; the buyer clamps to 600.
 QUOTE_TIMEOUT_S = 300
 MAX_BODY_BYTES = 65_536
@@ -241,6 +260,19 @@ def services_from_items(items) -> dict[str, Service]:
     return services
 
 
+def facilitator_from_items(items) -> str | None:
+    """The facilitator the ``Launch`` event ledgered, or None for a world launched before
+    the pin. The host serves through this value and never through the environment."""
+    for item in items:
+        if item.get("kind") != "event":
+            continue
+        event = item.get("event") or {}
+        if event.get("kind") == "Launch":
+            url = (event.get("payload") or {}).get("facilitator_url")
+            return url if isinstance(url, str) and url else None
+    return None
+
+
 def services_from_runtime(rt) -> dict[str, Service]:
     """The registry's current service contracts, bound to the programs the runtime holds."""
     services = {}
@@ -270,8 +302,8 @@ class Seller:
         self.pay_to = _address(pay_to)
         self.runner = runner
         self.earn = earn
-        self.facilitator = facilitator or os.environ.get("FACTORYLAB_FACILITATOR_URL") \
-            or FACILITATOR_URL
+        # Never the environment: the host passes the value the Launch event ledgered.
+        self.facilitator = facilitator or FACILITATOR_URL
         self.transport = transport
         self.clock_ns = clock_ns
         self._seen: OrderedDict[str, None] = OrderedDict()

@@ -33,6 +33,7 @@ from factorylab.runtime.seller import (  # noqa: E402
     IncomeSpool,
     Seller,
     default_runner,
+    facilitator_from_items,
     serve,
     services_from_items,
     spool_earn,
@@ -40,11 +41,14 @@ from factorylab.runtime.seller import (  # noqa: E402
 
 
 def load_catalogue(ledger_path: Path):
-    """The current services and the manifest's reserve address, from one frozen read."""
+    """The current services, the manifest's reserve address and the facilitator the
+    Launch event ledgered, from one frozen read."""
     from factorylab.runtime.wake import _open_snapshot
 
     ledger, manifest = _open_snapshot(ledger_path)
-    return services_from_items(ledger.items()), manifest.treasury.reserve_address
+    items = list(ledger.items())
+    return (services_from_items(items), manifest.treasury.reserve_address,
+            facilitator_from_items(items))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,22 +58,26 @@ def main(argv: list[str] | None = None) -> int:
                         help="receipt spool the runtime reads (FACTORYLAB_INCOME_SPOOL)")
     parser.add_argument("--bind", default="127.0.0.1", help="listen address")
     parser.add_argument("--port", type=int, default=8402, help="listen port")
-    parser.add_argument("--facilitator", default=None,
-                        help="x402 facilitator base URL (default: FACTORYLAB_FACILITATOR_URL)")
     parser.add_argument("--refresh", type=float, default=60.0,
                         help="seconds between catalogue re-reads of the ledger")
     args = parser.parse_args(argv)
     ledger_path = Path(args.ledger)
     try:
-        services, pay_to = load_catalogue(ledger_path)
+        services, pay_to, facilitator = load_catalogue(ledger_path)
     except Exception:
         print("factorylab serve: ledger_unavailable", file=sys.stderr)
         return 1
     if pay_to is None:
         print("factorylab serve: reserve_unconfigured", file=sys.stderr)
         return 2
+    if facilitator is None:
+        # The Launch event names the facilitator every paid call settles through.
+        # A diary without that record predates the pin; nothing is sold under a
+        # facilitator the world never bound, and the environment is not consulted.
+        print("factorylab serve: facilitator_unpinned", file=sys.stderr)
+        return 2
     seller = Seller(services, pay_to=pay_to, runner=default_runner(),
-                    earn=spool_earn(IncomeSpool(args.spool)), facilitator=args.facilitator)
+                    earn=spool_earn(IncomeSpool(args.spool)), facilitator=facilitator)
     server = serve(seller, host=args.bind, port=args.port)
 
     def refresh() -> None:

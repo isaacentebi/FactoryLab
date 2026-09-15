@@ -320,7 +320,7 @@ class Ledger:
                 "actions": {}, "latency_count": 0, "latency_total": 0,
                 "latency_min": None, "latency_max": None,
                 "first_tick": None, "last_event": None, "launch": False, "terminated": False,
-                "launch_nonce": None, "release_digest": None}
+                "launch_nonce": None, "release_digest": None, "facilitator_url": None}
 
     @staticmethod
     def _copy_index(index: dict) -> dict:
@@ -378,6 +378,7 @@ class Ledger:
                 payload = event.get("payload") or {}
                 index["launch_nonce"] = payload.get("launch_nonce")
                 index["release_digest"] = payload.get("release_digest")
+                index["facilitator_url"] = payload.get("facilitator_url")
 
     def _load_head(self, size: int) -> dict | None:
         try:
@@ -589,14 +590,15 @@ class Ledger:
     def identity(self) -> dict:
         """What names this world outside its diary: the launch identity and whether it ended.
 
-        The nonce and the release digest come from the indexed ``Launch`` event, so
-        a reopened ledger knows them without decrypting its history. ``terminated``
-        is true once a ``Terminated`` event is in the diary, whether appended by
-        this process or found on disk.
+        The nonce, the release digest and the x402 facilitator come from the indexed
+        ``Launch`` event, so a reopened ledger knows them without decrypting its
+        history. ``terminated`` is true once a ``Terminated`` event is in the diary,
+        whether appended by this process or found on disk.
         """
         return {"world": self.__world,
                 "launch_nonce": self.__index.get("launch_nonce"),
                 "release_digest": self.__index.get("release_digest"),
+                "facilitator_url": self.__index.get("facilitator_url"),
                 "terminated": bool(self.__final or self.__index.get("terminated"))}
 
     @property

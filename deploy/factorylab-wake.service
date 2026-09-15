@@ -22,4 +22,6 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/srv/factorylab/www /srv/factorylab/runs
+# www/ is the published wake (its pages included), runs/ the liveness state file,
+# .witness/ where witness_liveness.py's dormant lines are appended.
+ReadWritePaths=/srv/factorylab/www /srv/factorylab/runs /srv/factorylab/.witness

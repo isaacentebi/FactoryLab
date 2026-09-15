@@ -35,6 +35,9 @@ class Reason(StrEnum):
     MANIFEST_MISMATCH = "manifest_mismatch"
     RELEASE_MISMATCH = "release_mismatch"  # The executing release differs from the launched one.
     IDENTITY_KILLED = "identity_killed"  # The witness records this identity's kill: it stays dead.
+    WITNESS_UNAVAILABLE = "witness_unavailable"  # A receiver is configured and gave no verdict.
+    ARTIFACT_MISSING = "artifact_missing"  # The archive index names bytes that are not there.
+    FACILITATOR_MISMATCH = "facilitator_mismatch"  # The x402 facilitator is not the launched one.
     TICK_OVERRIDE_REFUSED = "tick_override_refused"
     NO_LIVE_VENUE = "no_live_venue"
 

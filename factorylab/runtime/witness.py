@@ -14,7 +14,12 @@ kill: it remembers the killed identity for the life of this process, it appends
 one JSON line to the local witness file, and, when ``FACTORYLAB_WITNESS_URL``
 is set, POSTs the same line. ``killed`` is what resume asks before it restores
 anything: the process record, the local file, and (when the URL is set) the
-remote receiver.
+remote receiver. With a receiver configured, the receiver's verdict is part of
+the evidence: a receiver that cannot be reached, or answers without a verdict,
+makes ``killed`` raise ``WitnessUnavailable`` and resume refuses rather than
+proceeding on the local file alone (second reading, P1-01). Without a receiver
+the local file decides; that is the weaker guarantee and ``deploy/README.md``
+says so.
 
 The local file lives in a ``.witness`` directory that is a *sibling of the
 diary's directory*, named from the ledger path: ``runs/funded.jsonl`` is
@@ -59,6 +64,15 @@ _WORLD = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 log = logging.getLogger("factorylab.witness")
 
+
+class WitnessUnavailable(RuntimeError):
+    """A receiver is configured and gave no verdict: unreachable, unusable or silent.
+
+    Raised only by ``killed`` when asked to consult the remote. Resume treats it
+    as a refusal (``witness_unavailable``) so an earlier copy of a diary is never
+    revived while the one record that could name its death is out of reach.
+    """
+
 #: Identities killed in this process: ``(launch_nonce, diary_id)``. A checkpoint
 #: restored into a fresh runtime in the same process cannot revive one of these.
 _killed_here: set[tuple[str, str | None]] = set()
@@ -72,6 +86,11 @@ def witness_path(ledger_path: str | os.PathLike[str]) -> Path:
 
 def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _configured() -> bool:
+    """Whether the operator named a receiver at all, usable or not."""
+    return bool(os.environ.get(URL_ENV, "").strip())
 
 
 def _receiver_url() -> str | None:
@@ -196,8 +215,11 @@ def killed(*, world: str | None, launch_nonce: str | None, diary: str | None,
     """Where, if anywhere, this identity is recorded as killed: process, local or remote.
 
     ``None`` is not proof of life: it says only that no record was found where
-    this process could look. A remote that cannot be reached, or that answers
-    without a verdict, is logged and does not count either way.
+    this process could look. With ``remote`` and a receiver configured, the
+    receiver's answer is required: ``{"killed": true}`` is final, ``{"killed":
+    false}`` clears it, and anything else (unreachable, an unusable URL, an
+    answer without a verdict) raises ``WitnessUnavailable`` rather than letting
+    the local file stand in for the record the receiver was configured to keep.
     """
     if launch_nonce is None:
         return None
@@ -208,24 +230,26 @@ def killed(*, world: str | None, launch_nonce: str | None, diary: str | None,
         for line in _local_lines(witness_path(ledger_path)):
             if _matches(line, launch_nonce, diary):
                 return "local"
-    if not remote:
+    if not remote or not _configured():
         return None
     url = _receiver_url()
     if url is None:
-        return None
+        log.warning("witness: the configured receiver URL is not usable; no verdict")
+        raise WitnessUnavailable("the configured witness receiver URL is not usable")
     query = {"world": world if isinstance(world, str) and _WORLD.match(world) else "unknown",
              "event": QUERY, "ts": _now(), "launch_nonce": launch_nonce}
     if diary is not None:
         query["diary"] = diary
     answer = _post(url, query, timeout=QUERY_TIMEOUT)
     if answer is None:
-        log.warning("witness: the receiver was unreachable; resuming without its verdict")
-        return None
+        log.warning("witness: the receiver was unreachable; no verdict")
+        raise WitnessUnavailable("the witness receiver was unreachable")
     if answer.get("killed") is True:
         return "remote"
-    if answer.get("killed") is not False:
-        log.warning("witness: the receiver gave no verdict; resuming without it")
-    return None
+    if answer.get("killed") is False:
+        return None
+    log.warning("witness: the receiver gave no verdict")
+    raise WitnessUnavailable("the witness receiver gave no verdict")
 
 
 # Installed when the runtime package loads (``factorylab/runtime/__init__.py``), so

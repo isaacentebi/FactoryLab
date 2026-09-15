@@ -816,5 +816,6 @@ def test_wake_unit_witnesses_liveness_after_each_publish():
     assert "ExecStartPost=-" in unit and "deploy/witness_liveness.py" in unit
     assert "--wake /srv/factorylab/www/wake.json" in unit
     assert "--state /srv/factorylab/runs/funded.liveness" in unit
-    assert "ReadWritePaths=/srv/factorylab/www /srv/factorylab/runs" in unit
+    assert ("ReadWritePaths=/srv/factorylab/www /srv/factorylab/runs /srv/factorylab/.witness"
+            in unit)
     assert "EnvironmentFile=-/srv/factorylab/ops.env" in unit

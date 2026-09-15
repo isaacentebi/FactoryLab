@@ -338,6 +338,19 @@ class ProgramAssembly:
             return Return(req.handle, {"reason": "ceiling exceeds request cost_ceiling"}, 0,
                           "failed")
         state, state_error = self._load_state()
+        if state_error is not None:
+            # The seat has state and it cannot be read: the call does not run with
+            # different memory (an empty one) and report ok. Nothing is billed; the
+            # failure names why, and the last good state hash is kept for the
+            # operator who restores the bytes (second reading, P1-02).
+            if self.record is not None:
+                self.record({
+                    "kind": "program.call", "assembly_id": self.spec.id, "handle": req.handle,
+                    "status": "failed", "cost": 0, "state_in": self.state_sha,
+                    "state_out": self.state_sha, "state_error": state_error,
+                })
+            return Return(req.handle, {"reason": f"state unavailable: {state_error}"}, 0,
+                          "failed")
         try:
             stdin = self.build_stdin(req, state)
         except (TypeError, ValueError) as exc:
