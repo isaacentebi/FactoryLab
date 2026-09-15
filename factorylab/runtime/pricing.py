@@ -225,9 +225,11 @@ class PricingMixin:
             self.stats.reserve_windows += 1
             self._issue_novelty_grant()
             self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro())
+            from factorylab.runtime.continuity import charge_window as charge_state_window
             from factorylab.runtime.notes import charge_window
 
             charge_window(self)
+            charge_state_window(self)  # a seat's working state pays the same byte-time rent
             self.price_windows[self.window.index] = self.window
             self._observe_positions()
             self._activate_charter_if_due()

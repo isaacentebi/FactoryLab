@@ -1166,10 +1166,48 @@ restores it empty.
 to every seat: it returns `sha`, `owner`, `kind`, `bytes` and the content as
 `text` (or `base64` for bytes that are not UTF-8) up to 65,536 bytes, an
 `error` above that or for an unknown or malformed hash, and ledgers
-`artifact.get {sha, handle, assembly_id, found, ts}`. There is no
-`artifact.put` tool: the only writer on `main` is a private-state program seat.
-The archive charges no rent on `main`; byte-time rent (C3) applies to the
-notebook. `owner_for(sha)` exists for whoever charges it.
+`artifact.get {sha, handle, assembly_id, found, ts}`. The read is **scoped**
+(edition 3, C1): a seat reads what it owns and anything put with `public: true`;
+a program's `program.state` is readable within the program's own lineage
+(`BudgetBook.lineage`); anything else answers `{sha, error: "artifact_private"}`
+and nothing about the bytes, and the ledger row carries `reason`. `entries()`
+returns `(sha, owner, public, bytes, created_ns)` rows for the directory W4
+builds. There is no `artifact.put` tool: the writers are a private-state program
+seat and a seat's own working state. `owner_for(sha)` names who pays rent.
+
+### Continuity: working state and the outcome inbox
+
+`runtime/continuity.py` (contract C1) replaces the three-entry `memory` deque,
+which evicted a decision before its consequence could settle on it.
+
+`WorkingState` keeps one head pointer per seat over the archive. A seat
+advances its own head by returning `working_state` (a JSON object): the kernel
+canonicalises it, puts it as `working.state` owned by that seat, ledgers
+`state.put {assembly_id, sha, bytes, handle, over_soft, ts}`, and the seat's
+next request carries `your_state: {sha, bytes, state}` verbatim. The soft
+allowance is 8,192 bytes (accepted, and the rent is what it is); above 65,536
+the field is refused, the head is unchanged and `state.refused {assembly_id,
+handle, reason}` is ledgered. A manifest may seed a head with an assembly's
+`initial_state`; without one the head is None. Rent is byte-time at
+`notes.micro_per_byte_day` collected at each reserve-window boundary through the
+seat's own meter (`state.rent`, or `state.rent_due` when unaffordable), on the
+same accrual arithmetic the notebook uses; there is no transfer toll.
+
+`OutcomeInbox` addresses every settled consequence to the seat that decided it:
+`{handle, said: {rationale, payoff, forecasts}, outcome, observed_at_ns,
+delta_micro, evidence}`, the body an artifact owned by that seat, ledgered as
+`outcome.addressed {assembly_id, handle, sha, item, delta_micro, evidence}`.
+Items arrive from the verdict on a return, its payoff (with the money), a
+forecast's Brier, a judge's verdict consequence, and a late realisation. The
+next request carries `unread_outcomes: {count, items}` — every unread item
+counted, the newest eight inline, newest first. `outcome.get {handle}` is a seed
+tool, version 1, priced at zero: a kernel read of the seat's own inbox, never
+another seat's, ledgered as `outcome.get`. An answer's `ack_through: <handle>`
+advances that seat's cursor to that item and is ledgered as `outcome.ack`;
+everything after it stays unread. Heads, item indexes, cursors and the bounded
+record of what each handle said are checkpointed; the bodies are artifacts, and
+`_verify_artifacts` refuses to continue a world whose head or inbox body is
+missing.
 
 ### The metric challenge
 

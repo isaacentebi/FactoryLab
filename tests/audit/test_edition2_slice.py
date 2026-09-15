@@ -307,18 +307,23 @@ class Story:
                     "invariant": invariant(restored),
                     "artifact_index": dict(restored.artifacts.index)}}
 
-    # -- stage 2: the artifact is readable by another seat; the service is paid ------------
+    # -- stage 2: the artifact is readable inside its lineage; the service is paid ---------
 
     def _stage_2(self):
         rt = self.rt
         sha = rt.assemblies[PROGRAM_ID].state_sha
-        reader = decision(rt, "eval-a")
-        before = rt.wallet.balance
-        read, cost = rt._run_tool("eval-a", reader, {"tool": "artifact.get", "args": {"sha": sha}})
-        artifact_read = {"result": read, "cost": cost,
-                         "balance_unchanged": rt.wallet.balance == before}
         transfers = budget_ops(items(rt, "budget"), "transfer")
         author = next(t["src"] for t in transfers if t["dst"] == PROGRAM_ID)
+        # Edition 3 C1 scopes the archive: the seat that registered the program reads
+        # its state; a stranger is refused artifact_private.
+        before = rt.wallet.balance
+        read, cost = rt._run_tool(author, decision(rt, author),
+                                  {"tool": "artifact.get", "args": {"sha": sha}})
+        stranger, stranger_cost = rt._run_tool(
+            "eval-a", decision(rt, "eval-a"), {"tool": "artifact.get", "args": {"sha": sha}})
+        artifact_read = {"result": read, "cost": cost, "reader": author,
+                         "stranger": stranger, "stranger_cost": stranger_cost,
+                         "balance_unchanged": rt.wallet.balance == before}
         # Step 5. The live return that carried the service proposal was malformed (see
         # test_step_5_seam_...): the author registers it here by the registration path
         # the seller's own acceptance test uses, on a decision of its own.
@@ -485,11 +490,16 @@ class Story:
         held = rt.budget.entitlement(author)
         rt._retire_assembly(author, "retire-author")
         retire = budget_ops(items(rt, "budget"), "retire")[-1]
-        reader = decision(rt, "eval-b")
-        read, cost = rt._run_tool("eval-b", reader, {"tool": "artifact.get", "args": {"sha": sha}})
+        # Retirement never takes the bytes away, and never widens who may read them:
+        # the program's own lineage still reads its state, a stranger still cannot.
+        read, cost = rt._run_tool(PROGRAM_ID, decision(rt, PROGRAM_ID),
+                                  {"tool": "artifact.get", "args": {"sha": sha}})
+        stranger, _ = rt._run_tool("eval-b", decision(rt, "eval-b"),
+                                   {"tool": "artifact.get", "args": {"sha": sha}})
         return {"author": author, "sha": sha, "pool_before": pool_before, "held": held,
                 "retire": retire, "pool_after": rt.budget.unallocated(),
                 "entitlement_after": rt.budget.entitlement(author), "read": read, "cost": cost,
+                "stranger": stranger,
                 "owner": rt.artifacts.owner_for(sha), "bytes": rt.artifacts.get(sha),
                 "retired": set(rt.retired_assemblies), "invariant": invariant(rt)}
 
@@ -593,11 +603,12 @@ def test_step_3_the_program_is_routed_returns_well_formed_output_is_judged_and_p
 
 # ---- step 4 ----------------------------------------------------------------------------
 
-def test_step_4_private_state_persists_by_hash_and_any_seat_reads_the_artifact(story):
+def test_step_4_private_state_persists_by_hash_and_its_lineage_reads_the_artifact(story):
     s = story.stage(1)
     rows = s["crashed"]
     calls = [i for i in rows if i.get("kind") == "program.call" and i["assembly_id"] == PROGRAM_ID]
-    puts = [i for i in rows if i.get("kind") == "artifact.put"]
+    puts = [i for i in rows if i.get("kind") == "artifact.put"
+            and i["artifact_kind"] == "program.state"]
     assert [c["state_in"] for c in calls] == [None, *(c["state_out"] for c in calls[:-1])]
     assert [p["sha"] for p in puts] == [c["state_out"] for c in calls]
     assert all(p["owner"] == PROGRAM_ID and p["artifact_kind"] == "program.state" for p in puts)
@@ -607,12 +618,15 @@ def test_step_4_private_state_persists_by_hash_and_any_seat_reads_the_artifact(s
     assert state["n"] == len(calls) and state["lo"] <= state["hi"]
     assert (story.path.with_suffix(".artifacts") / last).exists()
     read = story.stage(2)["artifact_read"]
-    assert read["cost"] == 0 and read["balance_unchanged"]
+    assert read["cost"] == 0 and read["stranger_cost"] == 0 and read["balance_unchanged"]
     assert read["result"] == {"sha": last, "owner": PROGRAM_ID, "kind": "program.state",
                               "bytes": len(story.rt.artifacts.get(last)),
                               "text": story.rt.artifacts.get(last).decode()}
+    # A seat outside the program's lineage is told it is private and nothing else (C1).
+    assert read["stranger"] == {"sha": last, "error": "artifact_private"}
     gets = items(story.rt, "artifact.get")
-    assert gets and gets[-1]["assembly_id"] == "eval-a" and gets[-1]["found"]
+    assert gets[-2]["assembly_id"] == read["reader"] and gets[-2]["found"]
+    assert gets[-1]["assembly_id"] == "eval-a" and gets[-1]["found"] is False
 
 
 # ---- step 5 ----------------------------------------------------------------------------
@@ -857,6 +871,7 @@ def test_step_11_the_author_retires_the_artifact_stays_readable_and_its_entitlem
     assert s["pool_after"] == s["pool_before"] + s["held"] and s["entitlement_after"] == 0
     assert s["author"] not in rt.budget.seats()
     assert s["cost"] == 0 and s["read"]["sha"] == s["sha"] and s["read"]["owner"] == PROGRAM_ID
+    assert s["stranger"] == {"sha": s["sha"], "error": "artifact_private"}
     assert json.loads(s["bytes"])["n"] >= 3 and s["owner"] == PROGRAM_ID
     assert PROGRAM_ID not in rt.retired_assemblies
     assert s["invariant"]

@@ -20,7 +20,7 @@ def test_all_finite_numbers_roundtrip_exactly(value):
                                    Decimal('Infinity')])
 def test_nonfinite_snapshot_is_refused_without_crashing(value):
     rt = make_runtime()
-    rt.memory['bad'] = [{'value': value}]
+    rt.spot_inventory['bad'] = [{'value': value}]
     rt._snapshot('test')
     item = rt.ledger._recovery_items()[-1]
     assert item['kind'] == 'snapshot.refused'

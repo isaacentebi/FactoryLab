@@ -37,6 +37,7 @@ class Reason(StrEnum):
     IDENTITY_KILLED = "identity_killed"  # The witness records this identity's kill: it stays dead.
     WITNESS_UNAVAILABLE = "witness_unavailable"  # A receiver is configured and gave no verdict.
     ARTIFACT_MISSING = "artifact_missing"  # The archive index names bytes that are not there.
+    ARTIFACT_PRIVATE = "artifact_private"  # The archive holds it; this reader is not scoped to it.
     FACILITATOR_MISMATCH = "facilitator_mismatch"  # The x402 facilitator is not the launched one.
     TICK_OVERRIDE_REFUSED = "tick_override_refused"
     NO_LIVE_VENUE = "no_live_venue"

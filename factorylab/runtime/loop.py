@@ -776,7 +776,8 @@ class Runtime(
             "kind": str(ev.kind),
             "payload": payload,
             "world": self._world_block(),
-            "your_recent_returns": list(self.memory.get(sample.chosen, ())),
+            "your_state": self.working_state.render(sample.chosen),
+            "unread_outcomes": self.outcomes.unread(sample.chosen),
             "your_action_policy": self._action_policy(sample.chosen),  # private
         }
         if sample.chosen == NOOP:
@@ -835,9 +836,6 @@ class Runtime(
             self._apply_registrations(handle, ret)
             self._apply_thinking(handle, sample.chosen, ret)
             self.handle_to_assembly[handle] = sample.chosen
-            self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
-                {"handle": handle, "outputs": ret.outputs, "verdict": None}
-            )
             payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
             if adversarial and payoff is not None:
                 self.consequences.seal_self_forecast(
@@ -872,8 +870,8 @@ class Runtime(
         payload = {
                 "about_handle": handle,
                 "description": description,
-                # Judges see the event the producer answered, never the producer's private
-                # memory or its copy of the world block, and never its name.
+                # Judges see the event the producer answered, never the producer's own
+                # state, its inbox or its copy of the world block, and never its name.
                 "inputs": {"kind": inputs["kind"], "payload": inputs["payload"]},
                 "outputs": ret.outputs,
                 "cost": ret.cost,
@@ -892,8 +890,6 @@ class Runtime(
         """Population forecast work is rewarded only by its future public facts."""
         self.consequences.finish(handle, ret.cost)
         self._apply_registrations(handle, ret)
-        self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
-            {"handle": handle, "outputs": ret.outputs, "verdict": None})
         forecasts = self._open_forecasts(
             handle, sample.chosen, self._event_subject(ev) or handle,
             ret.outputs.get("forecasts") if ret.status == "ok" else None)
@@ -986,7 +982,8 @@ class Runtime(
                 "q": 0.4,
             },
             "world": self._world_block(),
-            "your_recent_returns": list(self.memory.get(sample.chosen, ())),
+            "your_state": self.working_state.render(sample.chosen),
+            "unread_outcomes": self.outcomes.unread(sample.chosen),
             "your_consequence_standing": self._standing_for(sample.chosen),
             "your_action_policy": self._action_policy(sample.chosen),  # private
         }
@@ -1028,9 +1025,6 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self._apply_registrations(handle, ret)
         self.handle_to_assembly[handle] = sample.chosen
-        self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
-            {"handle": handle, "outputs": ret.outputs, "verdict": None}
-        )
         verdict = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
         payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
         target = (self._judged_event(ev, handle, ret, seals_payoff=True)
@@ -1056,11 +1050,7 @@ class Runtime(
         pend = self.pending.pop(about, None)
         about_decision = self.queue.get(about)
         if about_decision.channel == CH_EXPOSURE:
-            owner = self.handle_to_assembly.get(about)
-            if owner is not None:
-                for entry in self.memory.get(owner, ()):
-                    if entry["handle"] == about:
-                        entry["verdict"] = verdict
+            self._deliver_verdict_to_inbox(about, verdict, judge_handle=handle)
         if (
             pend is not None
             and about_decision.channel in (CH_VERDICT, CH_CONFORMITY)
@@ -1079,11 +1069,7 @@ class Runtime(
             self.stats.max_settlement_latency_events = max(
                 self.stats.max_settlement_latency_events, self.n - pend.opened_at_event
             )
-            owner = self.handle_to_assembly.get(about)
-            if owner is not None:
-                for entry in self.memory.get(owner, ()):
-                    if entry["handle"] == about:
-                        entry["verdict"] = verdict
+            self._deliver_verdict_to_inbox(about, verdict, judge_handle=handle)
         forecast = self.consequences.seal_verdict(
             self.book,
             self.queue,
@@ -1182,9 +1168,6 @@ class Runtime(
         ret = (returned if returned is not None else self._invoke(sample.chosen, req, "meta"))
         self.consequences.finish(handle, ret.cost)
         self.handle_to_assembly[handle] = sample.chosen
-        self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
-            {"handle": handle, "outputs": ret.outputs, "verdict": None}
-        )
         self._apply_registrations(handle, ret)
         conformity = _as_unit(ret.outputs.get("conformity")) if ret.status == "ok" else None
         target = self._judged_event(ev, handle, ret) if conformity is not None else None
