@@ -494,7 +494,7 @@ class Runtime(
         if reason is None:
             return False
         self._settle_due_forecasts()
-        self.termination.kill(reason)
+        self.kill(reason)  # edition 3, C5: every runtime death winds the venue down
         return True
 
     def _commons_check(self) -> bool:
