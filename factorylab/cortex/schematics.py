@@ -445,10 +445,26 @@ class SchematicsMixin:
         lot size, tick size and order floor of the markets it may actually send an
         order to, which is ``trading_markets``. The listing itself stays one
         ``venue.instruments`` call away, and ``world.venue_listing`` says so.
+
+        The listing is read once a tick, not once a request. A venue's listing is
+        about 260 KB and every read of it is recorded in the diary in full; a tick
+        that builds a dozen prompts for producers, judges and meta judges recorded
+        it a dozen times, which is how a twenty-minute rehearsal wrote 21 MB of
+        the same listing. The memo sits here, above the recorded-I/O layer, so a
+        replayed diary sees exactly the calls that were recorded; it is never
+        saved, so the first request after a resume reads afresh and records it.
+        Lot sizes and order floors do not move within one tick, and a market
+        registered mid-tick still finds its record here because the raw listing,
+        not the filtered block, is what is held.
         """
+        tick = self.ticks_consumed
+        memo = getattr(self, "_instruments_memo", None)
+        if memo is None or memo[0] != tick:
+            memo = (tick, self.exchange.instruments())
+            self._instruments_memo = memo
         traded = {"perp": set(self.venue_tools.coins), "spot": set(self.venue_tools.spot_pairs)}
         return {market: [row for row in rows if row.get("coin") in traded.get(market, ())]
-                for market, rows in self.exchange.instruments().items()}
+                for market, rows in memo[1].items()}
 
     def _published_tool_specs(self) -> list[dict[str, Any]]:
         """Every registered tool's contract, with the venue's listing named rather than spelled.
