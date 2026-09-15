@@ -443,6 +443,63 @@ def test_manifest_card_scope_must_name_a_kind_a_seed_assembly_emits():
     assert manifest_from_dict(raw).charter.cards[0].answers_for == "WeatherForecast"
 
 
+def test_edition2_testnet_manifest_carries_the_edition2_physics_and_hashes_stably():
+    """Edition 2 (W7): the draft the funded manifest is derived from after ratification.
+
+    30 USD unlocked at genesis, 60 USD released as six weekly 10 USD tranches (C1), the
+    one-hour novelty window (never the two-minute rent trap of the compute-continuity
+    rehearsal), the eight draft cards verbatim, and a pinned identity so a silent edit
+    to the physics is a test failure, not a surprise at ratification.
+    """
+    import tomllib
+
+    from factorylab.runtime.worlds import NS_PER_DAY, WORLDS_DIR
+
+    m = load_manifest("edition2-testnet")
+    assert m.exchange.kind == "hyperliquid" and m.exchange.mainnet is False
+    assert m.exchange.coins == ("BTC", "ETH")
+    assert m.exchange.spot_pairs == ("PURR/USDC", "HYPE/USDC")
+    assert m.exchange.client_namespace is None  # drawn by `scripts/rehearsal.py prepare`
+    assert m.tick_interval_ns == 600_000_000_000
+    # C1: the endowment sums. 90 USD in, 30 unlocked at genesis, the rest on days 7..42.
+    assert m.initial_balance_micro == 90_000_000
+    assert m.endowment.locked_micro == 60_000_000
+    assert m.initial_balance_micro - m.endowment.locked_micro == 30_000_000
+    assert m.endowment.releases == tuple(
+        (day * NS_PER_DAY, 10_000_000) for day in (7, 14, 21, 28, 35, 42))
+    assert sum(amount for _, amount in m.endowment.releases) == m.endowment.locked_micro
+    assert m.endowment.base_share == 0.8
+    # The one-hour window, and the rent, blame and program prices at their stated values.
+    assert m.novelty.window_ns == NS_PER_HOUR
+    assert m.notes.micro_per_byte_day == "0.04"
+    assert m.prices.min_blame_share == 0.1 and m.prices.program_micro_per_call == 50
+    # The trial: three calls of the cheapest seat (eval-b, qwen/qwen3.7-flash at 3000
+    # tokens) at the meter's ceiling for the largest measured request, 3 * 5,811 = 17,433.
+    assert m.evaluation.trial_amount_micro == 50_000
+    cheapest = next(a for a in m.assemblies if a.id == "eval-b")
+    assert cheapest.model_id == "qwen/qwen3.7-flash" and cheapest.max_tokens == 3000
+    ceiling = m.price_table().cost(cheapest.model_id, int((419 + 120_000) * 1.5) + 64, 3000)
+    assert ceiling == 5_811 and 3 * ceiling <= m.evaluation.trial_amount_micro
+    # The same nine seats and ten models as the compute-continuity roster.
+    continuity = load_manifest("compute-continuity-testnet")
+    assert m.assemblies == continuity.assemblies and m.models == continuity.models
+    assert m.treasury.reserve_address == continuity.treasury.reserve_address
+    # The eight draft cards and four norms, verbatim.
+    assert [c.id for c in m.charter.cards] == [
+        "tool-discipline", "well-formed-floor", "cost-cap", "censorship-bound",
+        "card-forecast-skill", "card-consequence-paid-off", "card-position-concentration",
+        "turnover_ceiling",
+    ]
+    assert m.charter.norms == ("consequential usefulness", "epistemic integrity",
+                               "durable agency", "bounded reciprocity")
+    draft = tomllib.loads((WORLDS_DIR.parent / "docs/charter/edition2-draft.toml").read_text())
+    raw = tomllib.loads((WORLDS_DIR / "edition2-testnet.toml").read_text())
+    assert raw["charter"] == draft["charter"]
+    assert m.charter_ratified_sha256 is None  # ratification stamps the hashes later
+    assert m.manifest_hash() == (
+        "9eb460e4b3d4c974feefbc7cd6a5e182defda231f4f33a5d3cb4ac060fa9d224")
+
+
 def test_prices_min_blame_share_is_optional_bounded_and_absent_from_the_hash_at_default():
     """Edition 2 (C6): the generic blame floor is a manifest price with a default of 0.1."""
     import json
