@@ -113,7 +113,8 @@ The edition 2 testnet manifest is `worlds/edition2-testnet.toml` (hash
   fourteen holds). The concentration card was removed because a card prices a bet after it is
   on; ruin is bounded by the kernel's leverage wall, a hard cast. Ratified by the seeded committee
   of this roster, all three cards carried, `docs/charter/edition2-ratification.json`; the earlier
-  eight-card ratification is kept under `docs/charter/history/`.
+  ballots (eight cards; three cards on a roster hash polluted by an empty new field) are kept
+  under `docs/charter/history/`.
 - Observer: GLM 5.3 flash via OpenRouter wrapped one reply in five under the edition 2 prompt with
   and without the host pin; DeepSeek 4.1 flash scored 100% on every calibration column.
 - The wake publishes every agent's answer live and unredacted (`returns`). Sealing the diary was

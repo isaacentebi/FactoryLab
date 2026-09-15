@@ -1,5 +1,5 @@
 {
-  "roster_sha256": "e0d1d9fbb937952845a967b8fa5d1978e6882b940f685ad4b0016085cbb90f2a",
+  "roster_sha256": "b68be19c7bedf5b31daafa4e85d3d32ded6540ab4996d7a7eec50a5b4fca4dbb",
   "parent_charter_sha256": "a7f105eefd65ac70904b04b3389840841e6751b18bde3c5cc2262622b2b6be39",
   "conflicts": [],
   "calls": [
@@ -10,11 +10,11 @@
         "role": "meta"
       },
       "model": "venice:deepseek-v4-1-flash",
-      "text": "{\"selected\": [\"card-consequence-paid-off\", \"card-forecast-skill\", \"censorship-bound\"], \"reason\": \"All three cards passed the preflight check with no feedback, so they are mutually compatible and each anchors a distinct norm with an unchanged definition, making the full set the safe and coherent choice for edition 1.\"}",
+      "text": "{\"selected\": [\"card-consequence-paid-off\", \"card-forecast-skill\", \"censorship-bound\"], \"reason\": \"All three cards passed the first survey and have empty preflight feedback, so they can be jointly approved for edition 1 without any definition changes.\"}",
       "stop": "stop",
-      "cost_micro": 641,
+      "cost_micro": 621,
       "input_tokens": 1423,
-      "output_tokens": 71,
+      "output_tokens": 58,
       "served_by": "venice:deepseek-v4-1-flash",
       "valid": true,
       "selected": [
@@ -30,11 +30,11 @@
         "role": "producer"
       },
       "model": "deepseek/deepseek-v4.1-flash",
-      "text": "{\"selected\":[\"card-consequence-paid-off\",\"card-forecast-skill\",\"censorship-bound\"],\"reason\":\"All three passed the first survey with no preflight objections, and together they balance consequence-based usefulness, forecast skill, and a censorship bound under epistemic integrity.\"}",
+      "text": "{\"selected\": [\"card-consequence-paid-off\", \"card-forecast-skill\", \"censorship-bound\"], \"reason\": \"All three majority-approved cards are mutually compatible, have no preflight conflicts, and together cover consequential usefulness and epistemic integrity with unchanged definitions.\"}",
       "stop": "stop",
-      "cost_micro": 151,
-      "input_tokens": 515,
-      "output_tokens": 57,
+      "cost_micro": 216,
+      "input_tokens": 494,
+      "output_tokens": 56,
       "served_by": "deepseek/deepseek-v4.1-flash",
       "valid": true,
       "selected": [
@@ -50,11 +50,11 @@
         "role": "evaluator"
       },
       "model": "venice:deepseek-v4-1-flash",
-      "text": "{\"selected\": [\"card-consequence-paid-off\", \"card-forecast-skill\", \"censorship-bound\"], \"reason\": \"With no preflight feedback flagging any issues, all three cards are internally coherent, cover distinct norms (consequential usefulness, epistemic integrity), and their windows and acceptable regions are well-specified, so the full set should be approved together for edition 1.\"}",
+      "text": "{\"selected\": [\"card-consequence-paid-off\", \"card-forecast-skill\", \"censorship-bound\"], \"reason\": \"With no preflight feedback flagging any card, all three majority-approved cards form a coherent set: two floors that reward real consequences and beating guessing, plus a ceiling that keeps censorship from hollowing out that evidence.\"}",
       "stop": "stop",
-      "cost_micro": 180,
+      "cost_micro": 167,
       "input_tokens": 1423,
-      "output_tokens": 81,
+      "output_tokens": 72,
       "served_by": "venice:deepseek-v4-1-flash",
       "valid": true,
       "selected": [
@@ -70,16 +70,15 @@
         "role": "evaluator"
       },
       "model": "openai/gpt-5.6-luna",
-      "text": "{\"selected\":[\"card-consequence-paid-off\",\"card-forecast-skill\",\"censorship-bound\"],\"reason\":\"No preflight feedback identified a blocking issue, so I approve all majority-supported cards together.\"}",
+      "text": "{\"selected\":[\"card-consequence-paid-off\",\"censorship-bound\"],\"reason\":\"These definitions are operationally coherent as written; the forecast-skill card reverses the direction of Brier improvement because better forecasts score below the baseline, not above it.\"}",
       "stop": "stop",
-      "cost_micro": 301,
+      "cost_micro": 305,
       "input_tokens": 487,
-      "output_tokens": 169,
+      "output_tokens": 173,
       "served_by": "openai/gpt-5.6-luna",
       "valid": true,
       "selected": [
         "card-consequence-paid-off",
-        "card-forecast-skill",
         "censorship-bound"
       ]
     },
@@ -90,11 +89,11 @@
         "role": "producer"
       },
       "model": "venice:deepseek-v4-1-flash",
-      "text": "{\"selected\": [\"card-consequence-paid-off\", \"card-forecast-skill\", \"censorship-bound\"], \"reason\": \"All three cards passed the preflight with no outstanding feedback, so they aren't in conflict and together cover the charter's core concerns: that inquiry produced real consequences, that it beat guessing, and that outcomes aren't being suppressed.\"}",
+      "text": "{\"selected\": [\"card-consequence-paid-off\", \"card-forecast-skill\", \"censorship-bound\"], \"reason\": \"All three cards passed the first survey with a majority and form a coherent set: two norm-anchored performance metrics (consequences paid off for producers, forecast skill for evaluators) plus a cross-cutting censorship bound that protects both norms from being gamed by attrition.\"}",
       "stop": "stop",
-      "cost_micro": 171,
+      "cost_micro": 183,
       "input_tokens": 1423,
-      "output_tokens": 75,
+      "output_tokens": 83,
       "served_by": "venice:deepseek-v4-1-flash",
       "valid": true,
       "selected": [

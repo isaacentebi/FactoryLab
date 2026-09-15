@@ -38,6 +38,9 @@ def roster_hash(manifest: Any) -> str:
     model_ids = {a.model_id for a in manifest.assemblies}
     roster = {"assemblies": [asdict(a) for a in manifest.assemblies],
               "system_prompt": SEED_SYSTEM_PROMPT,
-              "models": [asdict(m) for m in manifest.models if m.id in model_ids]}
+              # A model tier's optional extra request body (edition 2, W10) is dropped when
+              # empty so every roster surveyed before it existed keeps its recorded hash.
+              "models": [{k: v for k, v in asdict(m).items() if not (k == "extra_body" and not v)}
+                         for m in manifest.models if m.id in model_ids]}
     encoded = json.dumps(roster, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()

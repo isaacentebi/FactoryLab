@@ -504,7 +504,7 @@ def test_edition2_testnet_manifest_carries_the_edition2_physics_and_hashes_stabl
     assert raw["charter"] == draft["charter"]
     assert provenance == {
         "ratified_sha256": "a7f105eefd65ac70904b04b3389840841e6751b18bde3c5cc2262622b2b6be39",
-        "roster_sha256": "b68be19c7bedf5b31daafa4e85d3d32ded6540ab4996d7a7eec50a5b4fca4dbb"}
+        "roster_sha256": "e0d1d9fbb937952845a967b8fa5d1978e6882b940f685ad4b0016085cbb90f2a"}
     # Ratified 15 September: the loader carries the digests and they equal the loaded cards.
     assert m.charter_ratified_sha256 == provenance["ratified_sha256"]
     assert m.charter_roster_sha256 == provenance["roster_sha256"]

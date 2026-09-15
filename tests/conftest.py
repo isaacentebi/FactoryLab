@@ -192,3 +192,20 @@ def make_runtime(*, balance=100_000_000, live=False, clock_source=None):
                    ledger_path=None, drip=False, router_gamma=.1,
                    exchange=FakeExchange(), provider=ScriptedProvider(),
                    clock_source=clock_source)
+
+
+@pytest.fixture(autouse=True)
+def _forget_in_process_kills():
+    """Every test starts with no kill remembered in this process.
+
+    The witness (edition 2, C4) remembers, in process memory, each identity it saw killed
+    so a resume in the same process refuses it. Scripted fixtures are copies of one diary,
+    so two tests in one worker share an identity; without this reset a kill in one test
+    refuses a legitimate resume in the next. The local witness file is per tmp directory
+    and needs no reset.
+    """
+    from factorylab.runtime import witness
+
+    witness._killed_here.clear()
+    yield
+    witness._killed_here.clear()
