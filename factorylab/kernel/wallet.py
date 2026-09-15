@@ -455,15 +455,17 @@ class Wallet:
             self.__novelty._refund_compute(allocation, spent)
 
     def settle(self, delta: Money, handle: str, reason: str) -> None:
-        """Book signed exchange P&L or funding only while the world remains alive."""
+        """Book signed exchange P&L, funding or earned income only while the world remains alive."""
         self.settle_batch([(delta, handle, reason)])
 
     def settle_batch(self, settlements: list[tuple[Money, str, str]]) -> None:
-        """Book every observed exchange effect; reaching the floor is final even if cash recovers.
+        """Book every observed external effect; reaching the floor is final even if cash recovers.
 
         Validate the whole batch before writing. Preserve one ordinary settlement
         item per effect, then publish the new state only after all appends succeed.
         A retry belongs to authenticated recovery, never to a second live submission.
+        ``income`` is a paid service call settled to the reserve (edition 2, C11):
+        new money arriving from outside, booked like venue P&L, never negative.
         """
         self._live()
         balance = self.balance
@@ -471,8 +473,10 @@ class Wallet:
         exhausted = self.__exhausted
         for delta, handle, reason in settlements:
             require_money(delta)
-            if reason not in ("exchange_pnl", "funding"):
-                raise ValueError("settlement source must be exchange_pnl or funding")
+            if reason not in ("exchange_pnl", "funding", "income"):
+                raise ValueError("settlement source must be exchange_pnl, funding or income")
+            if reason == "income" and delta <= 0:
+                raise ValueError("income must be positive")
             if not isinstance(handle, str) or not handle:
                 raise ValueError("settlement handle is required")
             balance += delta

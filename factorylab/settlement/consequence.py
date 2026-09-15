@@ -71,6 +71,45 @@ class ReturnConsequences:
         self._apply("carried", {"handle": handle, "cost_micro": cost_micro}, table)
         return True
 
+    def bind_service(self, service: str, handle: str, event: int) -> bool:
+        """Bind a registered service to the return that registered it (C11); report
+        whether the return has an account to bind to."""
+        try:
+            table = self.table.bind_service(service, handle)
+        except ValueError:
+            return False
+        self._apply("service", {"service": service, "handle": handle, "event": event}, table)
+        return True
+
+    def income(self, service: str, micro: int, event: int) -> str | None:
+        """Credit a settled service receipt to the registering return's open outcome.
+
+        Returns the handle credited, or None when the service is unbound or its
+        return's outcome is already fixed: the receipt is still the seller's
+        money, it just no longer changes a score that was published.
+        """
+        handle = self.table.service_return(service)
+        if handle is None or not self.account_open(handle):
+            return None
+        self._apply("income", {"service": service, "handle": handle, "micro": micro,
+                               "event": event}, self.table.income(service, micro))
+        return handle
+
+    def settle_late(self, event: int) -> dict[str, int]:
+        """Ledger and hand back realised P&L that arrived after an outcome was fixed.
+
+        The score of a fixed outcome never changes; the money does. Each handle's
+        signed amount is ledgered as ``consequence.late`` before the table moves on.
+        """
+        table, late = self.table.late_realizations()
+        if not late:
+            return {}
+        for handle, micro in late.items():
+            self.ledger.append({"kind": "consequence.late", "handle": handle, "micro": micro,
+                                "event": event})
+        self.table = table
+        return late
+
     def account_open(self, handle: str) -> bool:
         """Only a return admitted here and not yet resolved may create venue exposure."""
         try:

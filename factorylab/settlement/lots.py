@@ -30,7 +30,12 @@ def exact(value: str | int | Decimal | Fraction) -> Fraction:
 
 @dataclass(frozen=True)
 class Payoff:
-    """One immutable outcome binds its net proceeds, full compute cost and mark status."""
+    """One immutable outcome binds its net proceeds, full compute cost and mark status.
+
+    ``net_micro`` is the return's trading result; ``earned_micro`` is what the
+    service it registered was paid before the outcome was fixed (edition 2, C11).
+    A return pays off when the two together exceed its cost.
+    """
 
     handle: str
     y: int
@@ -39,6 +44,7 @@ class Payoff:
     at_event: int
     marked: bool = False
     liquidated: bool = False
+    earned_micro: int = 0
 
 
 @dataclass(frozen=True)
@@ -74,6 +80,9 @@ class ReturnAccount:
     liquidated: bool = False
     payoff: Payoff | None = None
     closes: int = 0  # lots this return closed, in whole or in part, as the closer
+    earned_micro: int = 0  # paid calls of the service this return registered, while open
+    earnings: int = 0  # how many such receipts
+    late_micro: int = 0  # realised P&L already booked to the owner after the outcome was fixed
 
 
 @dataclass(frozen=True)
@@ -92,6 +101,7 @@ class LotTable:
     lots: tuple[Lot, ...] = ()
     returns: tuple[ReturnAccount, ...] = ()
     orders: tuple[LotOrder, ...] = ()
+    services: tuple[tuple[str, str], ...] = ()  # (service id, registering return)
 
     def seed_spot(self, coin: str, size: str, px: str) -> "LotTable":
         """Launch inventory has an exact basis and no decision receives opening credit."""
@@ -133,6 +143,54 @@ class LotTable:
             raise ValueError("return outcome already final")
         return self._accounts({handle: replace(
             account, carried_micro=account.carried_micro + cost_micro)})
+
+    def bind_service(self, service: str, handle: str) -> "LotTable":
+        """Bind a registered service to the return that registered it, so the service's
+        paid calls are that return's economic consequence. A later version of the
+        same service rebinds it to the return that registered the version."""
+        _require_id(service)
+        _require_id(handle)
+        if not any(r.handle == handle for r in self.returns):
+            raise ValueError("service requires an open consequence account")
+        others = tuple((s, h) for s, h in self.services if s != service)
+        return replace(self, services=(*others, (service, handle)))
+
+    def service_return(self, service: str) -> str | None:
+        """Return the handle a service is bound to, or None for an unbound service."""
+        return next((h for s, h in self.services if s == service), None)
+
+    def income(self, service: str, micro: int) -> "LotTable":
+        """Credit one settled service receipt to the registering return while its
+        outcome is open. A fixed outcome is never reopened: the money is the
+        seller's either way (credited at receipt), only the score stays as it was."""
+        require_money(micro, nonnegative=True)
+        handle = self.service_return(service)
+        if handle is None:
+            return self
+        account = self.account(handle)
+        if account.payoff is not None:
+            return self
+        return self._accounts({handle: replace(
+            account, earned_micro=account.earned_micro + micro, earnings=account.earnings + 1)})
+
+    def late_realizations(self) -> tuple["LotTable", dict[str, int]]:
+        """Book realised P&L that arrived after a return's outcome was fixed.
+
+        A marked outcome estimated open lots at the mid; the lots closed later,
+        and the wallet booked the real result. Each fixed account's realised
+        total, less what was booked late before, is the owner's to bear or keep.
+        Returns the successor table and the signed amount per handle.
+        """
+        updates, late = {}, {}
+        for account in self.returns:
+            if account.payoff is None:
+                continue
+            realized = account.realized_micro.numerator // account.realized_micro.denominator
+            delta = realized - account.late_micro
+            if delta:
+                late[account.handle] = delta
+                updates[account.handle] = replace(account, late_micro=realized)
+        return self._accounts(updates), late
 
     def account(self, handle: str) -> ReturnAccount:
         """Return the original account or fail for an unknown return."""
@@ -326,16 +384,23 @@ class LotTable:
             # Everything the return cost: its own compute and tools, plus every
             # liability it was still carrying when the outcome was fixed.
             cost = account.cost_micro + account.carried_micro
+            acted = account.opened_lots > 0 or account.closes > 0 or account.earnings > 0
             outcome = Payoff(
                 account.handle,
-                int((account.opened_lots > 0 or account.closes > 0) and micro > cost),
+                int(acted and micro + account.earned_micro > cost),
                 micro,
                 cost,
                 event,
                 bool(lots),
                 account.liquidated,
+                account.earned_micro,
             )
-            updates[account.handle] = replace(account, payoff=outcome)
+            # An unmarked outcome is settled money, booked to the owner when it is
+            # fixed: the late baseline starts there. A marked outcome books nothing
+            # at the mark, so everything its account realises, before or after the
+            # mark, is booked late once it is real.
+            updates[account.handle] = replace(account, payoff=outcome,
+                                              late_micro=0 if lots else micro)
         return self._accounts(updates)
 
     def _accounts(self, updates: dict[str, ReturnAccount]) -> "LotTable":

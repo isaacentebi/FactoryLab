@@ -15,6 +15,12 @@ entitlement is reported net of its own holds, so a reservation moves the held
 amount out of the entitlement and a commit settles it against the wallet.
 
 Every movement is ledgered first as ``kind: "budget"`` with an ``op`` naming it.
+
+Lineages: each genesis seat is a lineage root; a child registered by a seat belongs
+to its proposer's lineage. A released tranche's ``base_share`` is split equally
+across the live lineages, each lineage's share going to its head (the root while
+it lives, then its oldest live member), so replication never buys a larger share
+of the next tranche: the root funds its children through trial transfers.
 """
 
 from __future__ import annotations
@@ -66,6 +72,9 @@ class BudgetBook:
         # reservation id -> (seat, what the seat itself paid) for bills booked at the
         # ceiling with their true cost unknown; settled through ``_refund_uncertain``.
         self.__uncertain: dict[str, tuple[str, Money]] = {}
+        # seat -> lineage id (the genesis root's id), in registration order, so the
+        # oldest live member of a lineage is its first entry that is still live.
+        self.__lineage: dict[str, str] = {}
 
     # ---- reads
 
@@ -106,6 +115,27 @@ class BudgetBook:
     def entitlements(self) -> dict[str, Money]:
         """Return each live seat's net entitlement, in id order."""
         return {seat: self.entitlement(seat) for seat in self.seats()}
+
+    def lineage(self, assembly_id: str) -> str:
+        """Return the lineage a seat belongs to; a seat never adopted is its own root."""
+        return self.__lineage.get(assembly_id, assembly_id)
+
+    def lineages(self) -> dict[str, dict[str, Any]]:
+        """Return every lineage with live seats: its head and its live members, in
+        registration order. A lineage whose members have all retired is not live and
+        takes no share of a release."""
+        members: dict[str, list[str]] = {}
+        for seat in self.__lineage:
+            if seat not in self.__retired and seat in self.__gross:
+                members.setdefault(self.__lineage[seat], []).append(seat)
+        for seat in self.seats():
+            if seat not in self.__lineage:
+                members.setdefault(seat, []).append(seat)
+        return {lineage: {"head": seats[0], "seats": seats} for lineage, seats in members.items()}
+
+    def heads(self) -> tuple[str, ...]:
+        """Return the seat that receives each live lineage's release share, in lineage order."""
+        return tuple(row["head"] for row in self.lineages().values())
 
     def unallocated(self) -> Money:
         """Return the unlocked money no seat is entitled to: ``unlocked - entitlements - holds``.
@@ -155,6 +185,37 @@ class BudgetBook:
                   unallocated_after=self.unallocated() - amount)
         self.__gross[seat] = after
         self.__retired.discard(seat)
+
+    def earn(self, assembly_id: str, amount: Money, reason: str) -> None:
+        """Classify new money the wallet has just received from outside as the seat's.
+
+        Earned service income (C11) is settled into the wallet before this is
+        called, so ``unlocked`` has already risen by ``amount``: the seat's
+        entitlement rises by the same amount and the pool is untouched, whatever
+        it holds. Unlike ``credit`` this is never bounded by the pool, because it
+        classifies money that arrived, not money the pool held.
+        """
+        seat = self._seat(assembly_id)
+        require_money(amount, nonnegative=True)
+        after = self.__gross.get(seat, 0) + amount
+        self._log("income", assembly_id=seat, amount=amount, reason=reason,
+                  entitlement_after={seat: after - self.held_by(seat)},
+                  unallocated_after=self.unallocated() - amount)
+        self.__gross[seat] = after
+        self.__retired.discard(seat)
+
+    def adopt(self, assembly_id: str, proposer: str | None, reason: str) -> str:
+        """Place a registered seat in its proposer's lineage; without a proposer, or
+        with one this book never placed, the seat roots a lineage of its own.
+        Returns the lineage id. A seat already placed keeps its lineage: a next
+        version of a retired id stays where the id was."""
+        seat = self._seat(assembly_id)
+        if seat in self.__lineage:
+            return self.__lineage[seat]
+        lineage = seat if proposer is None else self.lineage(self._seat(proposer))
+        self._log("lineage", assembly_id=seat, lineage=lineage, proposer=proposer, reason=reason)
+        self.__lineage[seat] = lineage
+        return lineage
 
     def credit(self, assembly_id: str, amount: Money, reason: str) -> Money:
         """Classify money the wallet has already received as the seat's; never new money.
@@ -248,18 +309,28 @@ class BudgetBook:
         if self.held_by(seat):
             raise Infeasible("a seat with open holds cannot retire")
         returned = self.__gross.get(seat, 0)
+        lineage = self.lineage(seat)
+        was_head = self.lineages().get(lineage, {}).get("head") == seat
         self._log("retire", assembly_id=seat, amount=returned, reason=reason,
                   entitlement_after={seat: 0}, unallocated_after=self.unallocated() + returned)
         self.__gross[seat] = 0
         self.__retired.add(seat)
+        if was_head:
+            # Headship passes to the lineage's oldest live member; with none left the
+            # lineage's future release share stays in the pool.
+            successor = self.lineages().get(lineage, {}).get("head")
+            self._log("lineage_handoff", lineage=lineage, retired=seat, head=successor,
+                      reason=reason)
         return returned
 
-    def _split(self, op: str, amount: Money, seats: Iterable[str], reason: str) -> dict[str, Money]:
+    def _split(self, op: str, amount: Money, seats: Iterable[str], reason: str, *,
+               lineages: dict[str, str] | None = None) -> dict[str, Money]:
         """Classify ``amount`` of the pool: ``base_share`` of it equally across ``seats``.
 
         Only what the pool actually holds is split: shared spending can have left
         the pool below the tranche, and that hole is refilled before any seat is
         endowed, so entitlements never exceed the wallet through a release.
+        ``lineages`` names, for a release, the lineage each recipient is the head of.
         """
         require_money(amount, nonnegative=True)
         ordered = sorted({self._seat(seat) for seat in seats})
@@ -271,7 +342,8 @@ class BudgetBook:
         granted = per_seat * len(grants)
         self._log(op, amount=amount, backed=backed, reason=reason, base_share=str(self.__share),
                   grants=grants, to_unallocated=amount - granted,
-                  unallocated_after=self.unallocated() - granted)
+                  unallocated_after=self.unallocated() - granted,
+                  **({"lineages": lineages} if lineages is not None else {}))
         for seat, share in grants.items():
             self.__gross[seat] = self.__gross.get(seat, 0) + share
             self.__retired.discard(seat)
@@ -280,20 +352,27 @@ class BudgetBook:
         return grants
 
     def genesis(self, seats: Iterable[str]) -> dict[str, Money]:
-        """Split the launch pool once: ``base_share`` equally across the seeded seats."""
+        """Split the launch pool once: ``base_share`` equally across the seeded seats,
+        each the root of its own lineage."""
         if self.__gross or self.__holds:
             raise Infeasible("genesis runs once, on an empty book")
-        return self._split("genesis", max(0, self.unallocated()), seats, "genesis")
+        seeded = sorted({self._seat(seat) for seat in seats})
+        for seat in seeded:
+            self.__lineage[seat] = seat
+        return self._split("genesis", max(0, self.unallocated()), seeded, "genesis",
+                           lineages={seat: seat for seat in seeded})
 
     def on_release(self, amount: Money, reason: str = "release") -> dict[str, Money]:
         """Classify one released endowment tranche already booked unlocked in the wallet.
 
         Contract C1's release path calls this with the amount ``Wallet.release`` moved
         from locked to unlocked: ``base_share`` of it is split equally across the live
-        seats and the remainder stays unallocated. Never raises: a tranche the pool
-        does not fully hold (shared spending ran it down) refills the pool first.
+        lineages, each share to the lineage's head, and the remainder stays
+        unallocated. Never raises: a tranche the pool does not fully hold (shared
+        spending ran it down) refills the pool first.
         """
-        return self._split("release", amount, self.seats(), reason)
+        heads = {row["head"]: lineage for lineage, row in self.lineages().items()}
+        return self._split("release", amount, heads, reason, lineages=heads)
 
     # ---- holds, used only by SeatWallet
 
@@ -403,6 +482,7 @@ class BudgetBook:
             "retired": sorted(self.__retired),
             "last_holds": dict(self.__last_holds),
             "uncertain": {rid: [seat, own] for rid, (seat, own) in self.__uncertain.items()},
+            "lineages": dict(self.__lineage),
         }
 
     def _restore_state(self, state: dict) -> None:
@@ -418,6 +498,11 @@ class BudgetBook:
                              for seat, amount in state.get("last_holds", {}).items()}
         self.__uncertain = {str(rid): (str(seat), require_money(own, nonnegative=True))
                             for rid, (seat, own) in state.get("uncertain", {}).items()}
+        # A checkpoint from before lineages knew only seats: each is its own root.
+        self.__lineage = {str(seat): str(lineage)
+                          for seat, lineage in state.get("lineages", {}).items()}
+        if not self.__lineage:
+            self.__lineage = {seat: seat for seat in gross}
 
 
 class SeatWallet:

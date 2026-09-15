@@ -246,3 +246,66 @@ def test_order_owner_and_return_cost_cannot_be_replaced():
         table.start("owner", 2)
     with pytest.raises(TypeError):
         LotTable().start("other", 1).finish("other", 1.0)
+
+
+# --- GPT-6 second reading: P2-06 (late realisation) and P2-05 (service income) -----
+
+
+def test_a_marked_outcome_books_what_its_lots_realise_later_as_a_late_amount():
+    """A position marked at the backstop and closed later: the score is fixed at the
+    mark, the money is booked when it is realised, once, relative to what was
+    booked before."""
+    table = LotTable().start("opener", 1).finish("opener", 100_000)
+    table = fill(table, "opener", "1", size="1", px="100")
+    table = table.resolve(21, 20, {"BTC": "100"})
+    payoff = table.account("opener").payoff
+    assert payoff.marked and payoff.net_micro == 0 and payoff.y == 0
+    table, late = table.late_realizations()
+    assert late == {}  # nothing realised yet
+    # liquidated at 98: the opener keeps the whole loss
+    table = table.fill(order_id="liq", coin="BTC", is_buy=False, size="1", px="98",
+                       fee_usd="0", liquidation=True)
+    table, late = table.late_realizations()
+    assert late == {"opener": -2_000_000}
+    assert table.account("opener").late_micro == -2_000_000
+    assert table.account("opener").payoff == payoff  # the score never moves
+    table, late = table.late_realizations()
+    assert late == {}  # booked once
+    # an open account realises nothing late: its outcome is not fixed yet
+    table = table.start("later", 2).finish("later", 1)
+    table = fill(table, "later", "2", size="1", px="100")
+    table = table.fill(order_id="liq2", coin="BTC", is_buy=False, size="1", px="103",
+                       fee_usd="0", liquidation=True)
+    assert table.late_realizations()[1] == {}
+    assert table.account("later").realized_micro == 3_000_000
+
+
+def test_a_service_receipt_is_the_registering_returns_consequence_while_it_is_open():
+    table = LotTable().start("registrar", 1).finish("registrar", 1_000)
+    with pytest.raises(ValueError):
+        table.bind_service("svc", "nobody")
+    table = table.bind_service("svc", "registrar")
+    assert table.service_return("svc") == "registrar" and table.service_return("x") is None
+    assert table.income("unbound", 5) == table
+    table = table.income("svc", 600).income("svc", 600)
+    account = table.account("registrar")
+    assert (account.earned_micro, account.earnings, account.realized_micro) == (1_200, 2, 0)
+    table = table.resolve(21, 20, {})
+    payoff = table.account("registrar").payoff
+    # 1 200 earned against 1 000 of cost: paid off, without a trade, unmarked
+    assert (payoff.y, payoff.net_micro, payoff.earned_micro, payoff.marked) == (1, 0, 1_200, 0)
+    # a receipt after the outcome is fixed changes nothing here: the money is the
+    # seller's at receipt, the score is published
+    assert table.income("svc", 9_000) == table
+    # a later version of the service rebinds it to the return that registered it
+    table = table.start("registrar-2", 2).finish("registrar-2", 5_000)
+    table = table.bind_service("svc", "registrar-2")
+    assert table.services == (("svc", "registrar-2"),)
+    table = table.income("svc", 100).resolve(42, 20, {})
+    assert table.account("registrar-2").payoff.y == 0  # earned, but below its cost
+
+
+def test_a_return_that_neither_traded_nor_earned_does_not_pay_off():
+    table = LotTable().start("idle", 1).finish("idle", 0).resolve(21, 20, {})
+    payoff = table.account("idle").payoff
+    assert payoff.y == 0 and payoff.earned_micro == 0 and not payoff.marked

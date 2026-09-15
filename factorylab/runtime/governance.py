@@ -528,6 +528,10 @@ class GovernanceMixin:
         pool can cover it; otherwise it starts empty and infeasible until credited.
         """
         proposer = self._trial_proposer(handle)
+        if to is not None:
+            # A child belongs to its proposer's lineage: releases are split per
+            # lineage, so registering children never buys a larger share (C10).
+            self.budget.adopt(to, proposer, reason)
         if proposer is None:
             if to is not None:
                 try:
@@ -861,6 +865,8 @@ class GovernanceMixin:
         contract = service_contract(prop, version, timeout_s=tool.timeout_s)
         self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
         owner = self.handle_to_assembly.get(handle)
+        # The service's paid calls are this return's economic consequence (C11).
+        self.consequences.bind_service(prop.program_id, handle, self.n)
         self.ledger.append({
             "kind": "service.registered", "id": prop.program_id, "version": version,
             "program_id": prop.program_id, "price_micro": prop.price_micro,

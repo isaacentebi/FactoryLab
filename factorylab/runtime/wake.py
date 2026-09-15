@@ -148,6 +148,11 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
                        if seat in rt.assemblies else "other", "micro": micro}
                       for seat, micro in rt.budget.entitlements().items()],
             "unallocated_micro": rt.budget.unallocated(),
+            # Releases are split per lineage (a genesis root and the seats it
+            # registered, transitively), each share to the lineage's head.
+            "lineages": [{"id": lineage, "head": row["head"], "seats": list(row["seats"]),
+                          "micro": sum(rt.budget.entitlement(s) for s in row["seats"])}
+                         for lineage, row in rt.budget.lineages().items()],
         },
     }
 
@@ -162,6 +167,7 @@ def _fold_entitlements(item: dict | None) -> dict:
         kind = row.get("kind")
         totals[kind if kind in ROLES else "other"] += row.get("micro", 0)
     return {"by_kind": dict(sorted(totals.items())), "seats": len(seats),
+            "lineages": len(item.get("lineages") or []),
             "unallocated_micro": item.get("unallocated_micro", UNAVAILABLE)}
 
 
@@ -342,6 +348,8 @@ class _Observatory:
 
     def _on_wallet_settle(self, item: dict) -> None:
         # Signed venue effects: a gain is money in, a loss is money out, by source.
+        # Earned income enters the wallet the same way and is already counted as
+        # money in by its ``income.earned`` item.
         reason, amount = str(item.get("reason", "")), item.get("amount")
         if reason not in ("exchange_pnl", "funding") or type(amount) is not int:
             return

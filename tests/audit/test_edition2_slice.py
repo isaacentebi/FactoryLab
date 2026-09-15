@@ -333,6 +333,7 @@ class Story:
         seller = seller_from_runtime(rt, transport=transport, facilitator="https://facilitator.test")
         entitlement_before = rt.budget.entitlement(author)
         pool_before = rt.budget.unallocated()
+        unlocked_before = rt.wallet.unlocked
         status, _headers, output = seller.handle(
             TOOL_ID, json.dumps({"values": [1, 2, 3]}).encode(),
             {"X-PAYMENT": paid_header(service)}, f"http://localhost/service/{TOOL_ID}")
@@ -345,6 +346,8 @@ class Story:
                 "entitlement_before": entitlement_before, "pool_before": pool_before,
                 "entitlement_after": rt.budget.entitlement(author),
                 "pool_after": rt.budget.unallocated(), "pots": pots, "income": income,
+                "unlocked_before": unlocked_before, "unlocked_after": rt.wallet.unlocked,
+                "conserved": rt.wallet.check_conservation(),
                 "invariant": invariant(rt)}
 
     # -- stage 3: the metric challenge, admitted, trialled, balloted, adopted (step 7) -----
@@ -438,9 +441,12 @@ class Story:
                 "closer": rt.consequences.payoff(loser_close)}
         charges = [c for c in budget_ops(items(rt, "budget"), "charge")
                    if c["reason"] == "return_paid_off"]
+        # Lots left open by earlier returns whose outcomes were marked are closed FIFO
+        # by these sales; what they realise is booked late to their owners (P2-06).
+        late = [b for b in items(rt, "budget") if b.get("reason") == "late_consequence"]
         return {"opener_seat": opener_seat, "closer_seat": closer_seat, "before": before,
                 "gain": gain, "credits": credits, "after_gain": after_gain, "loss": loss,
-                "charges": charges,
+                "charges": charges, "late": late,
                 "after_loss": {seat: rt.budget.entitlement(seat)
                                for seat in (opener_seat, closer_seat)},
                 "unlocked": rt.wallet.unlocked, "unallocated": rt.budget.unallocated(),
@@ -464,6 +470,8 @@ class Story:
         return {"dormant_entry": dormant_entry, "rows": rows, "dormancy_after": rt.dormancy,
                 "clock_at_entry": clock_at_entry,
                 "locked_after": rt.wallet.locked, "seats": rt.budget.seats(),
+                "lineages": rt.budget.lineages(),
+                "program_lineage": rt.budget.lineage(PROGRAM_ID),
                 "status_b": rt.challenges[self.results[3]["cid_b"]]["status"],
                 "invariant": invariant(rt)}
 
@@ -622,12 +630,19 @@ def test_step_5_a_paid_service_call_runs_the_tool_ledgers_income_and_credits_its
     assert (earned[0]["service"], earned[0]["micro"], earned[0]["program"]) == (
         TOOL_ID, SERVICE_PRICE, TOOL_ID)
     assert earned[0]["tx"] == settlement().body["transaction"]
-    credit = [c for c in budget_ops(items(rt, "budget"), "credit")
+    # GPT-6 second reading, P2-05: the receipt is new money. The root wallet grows by
+    # it, the author is credited from it, and the pool is untouched.
+    credit = [c for c in budget_ops(items(rt, "budget"), "income")
               if c["reason"] == f"income.earned:{TOOL_ID}"]
     assert len(credit) == 1 and credit[0]["assembly_id"] == s["author"]
     assert credit[0]["amount"] == SERVICE_PRICE
+    assert not [c for c in budget_ops(items(rt, "budget"), "credit")
+                if c["reason"].startswith("income.earned")]
+    settled = [i for i in items(rt, "wallet.settle") if i["reason"] == "income"]
+    assert [i["amount"] for i in settled] == [SERVICE_PRICE]
+    assert s["unlocked_after"] == s["unlocked_before"] + SERVICE_PRICE and s["conserved"]
     assert s["entitlement_after"] == s["entitlement_before"] + SERVICE_PRICE
-    assert s["pool_after"] == s["pool_before"] - SERVICE_PRICE
+    assert s["pool_after"] == s["pool_before"]
     assert s["pots"]["earned_micro"] == SERVICE_PRICE and s["pots"]["subsidy_micro"] == 0
     assert s["pots"]["converted_from_principal_micro"] == 0
     assert s["income"] == {"earned_micro": SERVICE_PRICE, "subsidy_micro": 0,
@@ -711,7 +726,11 @@ def test_step_6_a_loss_debits_its_maker_to_a_floor_of_zero_and_the_commons_bears
     for seat, payoff in ((s["opener_seat"], opener), (s["closer_seat"], closer)):
         charge = charges[seat]
         assert charge["amount"] == -payoff.net_micro == charge["own"] + charge["commons"]
-        assert 0 < charge["own"] <= s["after_gain"][seat] and charge["commons"] > 0
+        # the seat paid what it held: what it had after the gain, plus whatever older
+        # marked lots closed by these sales realised late for it (P2-06)
+        late = sum((b["amount"] if b["op"] == "credit" else -b["own"])
+                   for b in s["late"] if b["assembly_id"] == seat)
+        assert 0 < charge["own"] <= s["after_gain"][seat] + late and charge["commons"] > 0
         assert charge["entitlement_after"][seat] == 0 and s["after_loss"][seat] == 0
     assert s["unlocked"] < 0 and s["unallocated"] < 0
     assert s["invariant"]
@@ -754,9 +773,20 @@ def test_step_8_the_release_lands_once_on_schedule_and_the_tranche_is_split_by_t
     assert split["amount"] == LOCKED and 0 < split["backed"] <= LOCKED
     seats = s["seats"]
     assert PROGRAM_ID in seats and len(seats) == len(BASE.assemblies) + 1
-    per_seat = int(split["backed"] * Decimal("0.8")) // len(seats)
-    assert split["grants"] == {seat: per_seat for seat in seats}
-    assert split["to_unallocated"] == LOCKED - per_seat * len(seats)
+    # GPT-6 second reading, P2-07: the tranche is split per lineage, to each lineage's
+    # head. The program seat is in its author's lineage, so the nine seeded lineages
+    # share the tranche and the author funds the program from its own share.
+    lineages = s["lineages"]
+    author = s["program_lineage"]
+    assert author in {a.id for a in BASE.assemblies}
+    assert set(lineages) == {a.id for a in BASE.assemblies}
+    assert lineages[author]["seats"] == [author, PROGRAM_ID] and PROGRAM_ID not in lineages
+    heads = {row["head"]: lineage for lineage, row in lineages.items()}
+    assert set(heads) == set(lineages) and len(heads) == len(BASE.assemblies)
+    per_lineage = int(split["backed"] * Decimal("0.8")) // len(heads)
+    assert split["grants"] == {head: per_lineage for head in heads}
+    assert split["lineages"] == heads
+    assert split["to_unallocated"] == LOCKED - per_lineage * len(heads)
     exited = next(r for r in rows if r.get("kind") == "dormant" and r["state"] == "exited")
     assert rows.index(released) < rows.index(split) < rows.index(exited)
     assert s["dormancy_after"] is None and s["locked_after"] == 0
