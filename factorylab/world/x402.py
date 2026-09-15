@@ -24,6 +24,11 @@ from eth_account.messages import encode_defunct, encode_typed_data
 
 from factorylab.kernel.money import nonnegative_usd_micro
 
+#: A completion may legitimately take minutes (long context, 3,000-token replies);
+#: a transport timeout is billed as uncertain at the ceiling, so it must be rarer than
+#: a slow reply. The ten-minute tick absorbs it.
+MODEL_HTTP_TIMEOUT_S = 180
+
 BASE_RPC = "https://mainnet.base.org"
 VENICE_URL = "https://api.venice.ai/api/v1"
 BASE_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
@@ -66,7 +71,7 @@ def http_request(method: str, url: str, payload: dict | None, headers: dict) -> 
         method=method,
     )
     try:
-        response = request.build_opener(_NoRedirect()).open(req, timeout=60)
+        response = request.build_opener(_NoRedirect()).open(req, timeout=MODEL_HTTP_TIMEOUT_S)
     except error.HTTPError as exc:
         response = exc
     with response:

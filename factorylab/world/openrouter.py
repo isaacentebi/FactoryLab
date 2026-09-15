@@ -12,6 +12,11 @@ from factorylab.kernel.money import nonnegative_usd_micro, usd_to_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
 from factorylab.world.openai_wire import dispatched, parse_completion
 
+#: A completion may legitimately take minutes (long context, 3,000-token replies);
+#: a transport timeout is billed as uncertain at the ceiling, so it must be rarer than
+#: a slow reply. The ten-minute tick absorbs it.
+MODEL_HTTP_TIMEOUT_S = 180
+
 
 class OpenRouterError(Exception):
     """Provider failures carry an HTTP status, a sanitized body, and whether it was sent.
@@ -76,7 +81,8 @@ class OpenRouterProvider:
             },
             method=method,
         )
-        with request.build_opener(_NoRedirect()).open(req, timeout=60) as response:
+        opener = request.build_opener(_NoRedirect())
+        with opener.open(req, timeout=MODEL_HTTP_TIMEOUT_S) as response:
             body = response.read().decode("utf-8", errors="replace")
             if not 200 <= response.status < 300:
                 raise OpenRouterError(response.status, self._redact(body))

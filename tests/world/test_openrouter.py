@@ -265,7 +265,7 @@ def test_default_transport_url_headers_payload_timeout_and_get_retry(monkeypatch
     assert provider.complete(req).cost_micro == 13
     assert provider.balance_micro() == 1_000_000
     wire, timeout = calls[0]
-    assert timeout == 60 and wire.full_url == "https://example.com/api/v1/chat/completions"
+    assert timeout == 180 and wire.full_url == "https://example.com/api/v1/chat/completions"
     assert wire.get_method() == "POST"
     assert dict((k.lower(), v) for k, v in wire.header_items()) == {
         "authorization": "Bearer test-wire-key", "http-referer": "lab-test",
@@ -277,7 +277,7 @@ def test_default_transport_url_headers_payload_timeout_and_get_retry(monkeypatch
     }
     assert len(calls) == 3
     for wire, timeout in calls[1:]:
-        assert wire.get_method() == "GET" and wire.data is None and timeout == 60
+        assert wire.get_method() == "GET" and wire.data is None and timeout == 180
         assert wire.full_url == "https://example.com/api/v1/key"
 
 

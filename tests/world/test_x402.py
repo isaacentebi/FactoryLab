@@ -407,7 +407,7 @@ def test_real_transport_retains_402_headers_and_decimal_json(monkeypatch, quote)
     assert parse_quote(response).accepted == quote["accepts"][0]
     response = http_request("GET", "https://fake.test", None, {})
     assert str(response.body["cost"]["usd"]) == "1.23456789E-16"
-    assert calls[0][0].data == b"{}" and calls[0][1] == 60
+    assert calls[0][0].data == b"{}" and calls[0][1] == 180
 
 
 def test_redirect_handler_refuses_replaying_authentication():
