@@ -12,3 +12,5 @@ Out of scope: mainnet, fund transfers, a manifest named `funded`, publishing the
 - [ ] 7. W7 charter/manifests/calibration/slice — implementer: fable + advisor — acceptance: ratification hashes; slice test; rehearsal report
 ## Log
 - 2026-09-14 plan written; wave 1 dispatched (W1–W5) in worktrees.
+- W1 #69 reviewed, gate 2745/10 → pins restated, green. W2 #70, W3 #71, W4 #73, W5 #74, W7-calibration #72 reviewed and merged onto e2/integration with hand-resolved conflicts (bootstrap imports, worlds fields, wake handlers, schematics string, README). Targeted e2 set 143 passed. Full gate running on e2/integration. W6 still building.
+- Follow-up for integration pass: challenge ballots should show voters the evidence and both trial series (W3 caveat); x402 income must credit the seat entitlement once W6 lands (W4 caveat); witness.sh dormant needs a caller (W2 caveat).
