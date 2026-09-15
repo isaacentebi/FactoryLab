@@ -62,6 +62,7 @@ from factorylab.runtime.shared import (
     _to_plain,
     assembly_rewards,
 )
+from factorylab.runtime.subscriptions import SubscriptionBook, ThinkingMixin
 from factorylab.runtime.summary import SummaryMixin, _as_unit
 from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
@@ -72,6 +73,7 @@ from factorylab.world.market import X402Provider
 
 class Runtime(
     SchematicsMixin,
+    ThinkingMixin,
     RoutingMixin,
     GovernanceMixin,
     VenueMixin,
@@ -86,6 +88,9 @@ class Runtime(
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.queue = ContractQueue(self.queue, self)
+        # Edition 3, C2: who is awake, what each seat has not read yet, and the
+        # watcher predicates the kernel settles without a model call.
+        self.subscription_book = SubscriptionBook()
         self._init_fidelity()
 
     def _invoke(self, action_id, req, role, *, child=False):
@@ -242,6 +247,7 @@ class Runtime(
         self.cadence.advance(self.n)
         self.stats.events += 1
         self.events_log.append({"kind": str(ev.kind), "payload": _to_plain(ev.payload)})
+        self._fold_world_event(ev)
         if ev.kind is EventKind.MARKET_MID:
             coin = str(ev.payload.get("coin"))
             dq = self.recent_mids.setdefault(coin, deque(maxlen=20))
@@ -292,6 +298,11 @@ class Runtime(
                     self._emit(EventKind.RECONCILED, snap, source="kernel")
             else:
                 self._settle_exchange_effects(self.exchange.advance(self.clock.now_ns))
+            # C2: the kernel settles every registered watcher from world state at the
+            # program price, then offers one coalesced update to the seats that asked
+            # for one. Both are queued behind this tick's own routing.
+            self._evaluate_watchers()
+            self._emit_world_update()
         if self._check_termination(starved=starved):
             return False
 
@@ -746,6 +757,12 @@ class Runtime(
                     "positions": [],
                 }
             payload["mids"] = {c: str(m) for c, m in self.exchange.mids().items()}
+        if ev.kind is EventKind.WORLD_UPDATE and sample.chosen != NOOP:
+            # C2: the event carries the world every subscriber could have read; the
+            # seat that was drawn reads its own fold, which reaches back to the last
+            # time it woke rather than to the last tick.
+            payload["since_you_last_woke"] = self.subscription_book.take(
+                sample.chosen, now=self.tick_index)
         description = f"Respond to event {ev.kind} on {ev.source}."
         adversarial = (sample.chosen != NOOP
                        and self.assemblies[sample.chosen].spec.emits == ("Exposure",))
@@ -766,11 +783,21 @@ class Runtime(
             self.stats.noops += 1
             ret = Return(handle, {"action": "noop"}, 0, "ok")
         else:
+            description += (
+                " Your action is one of hold, investigate (tool calls, no order), build "
+                "(a registration), govern (a proposal or a challenge), defer (sleep through "
+                "routine ticks) or order (place or close); your propensity is declared over "
+                "those. You own what wakes you: subscribe {kinds, coins, cadence_floor} "
+                "changes it, defer: <n ticks> sleeps through routine ticks, and a fill or a "
+                "safety event wakes you anyway."
+            )
             schema = {
                 "type": "object",
                 "properties": {
                     "action": {"type": "string"},
                     "propensity": {"type": "object"},
+                    "subscribe": {"type": "object"},
+                    "defer": {"type": "integer", "minimum": 0},
                     "register": self._register_schema(),
                     **({"payoff": {"type": "number", "minimum": 0, "maximum": 1}}
                        if adversarial else {}),
@@ -806,6 +833,7 @@ class Runtime(
             if self._may_write(handle):
                 self._execute_outputs(ret)
             self._apply_registrations(handle, ret)
+            self._apply_thinking(handle, sample.chosen, ret)
             self.handle_to_assembly[handle] = sample.chosen
             self.memory.setdefault(sample.chosen, deque(maxlen=3)).append(
                 {"handle": handle, "outputs": ret.outputs, "verdict": None}

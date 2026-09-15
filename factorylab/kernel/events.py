@@ -15,6 +15,10 @@ class EventKind(StrEnum):
     DRIP = "Drip"
     MARKET_MID = "MarketMid"
     FUNDING = "Funding"
+    # Edition 3, C2: one coalesced world update per seat per tick, and the
+    # kernel's own answer to a seat's registered watcher predicate.
+    WORLD_UPDATE = "WorldUpdate"
+    WATCHER_FIRED = "WatcherFired"
     FILL = "Fill"
     ORDER_REJECTED = "OrderRejected"
     VERDICT = "Verdict"

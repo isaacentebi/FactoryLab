@@ -242,5 +242,9 @@ def test_malformed_program_proposals_are_refused_with_a_reason(changes, reason):
 def test_model_seats_cannot_carry_program_fields():
     item = {"kind": "assembly", "id": "seat", "model_id": "fake-haiku", "accepts": ["Tick"],
             "system_prompt": "Reply with JSON.", "code": "print(1)"}
-    assert parse(item) == ([], [Rejected(0, "code, timeout_s and state_policy belong to a "
-                                            "program seat")])
+    assert parse(item) == ([], [Rejected(0, "code, timeout_s, state_policy and trigger "
+                                            "belong to a program seat")])
+    watcher = {k: v for k, v in item.items() if k != "code"}
+    watcher["trigger"] = {"kind": "funding_sign", "coin": "BTC"}
+    assert parse(watcher) == ([], [Rejected(0, "code, timeout_s, state_policy and trigger "
+                                               "belong to a program seat")])

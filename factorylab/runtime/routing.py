@@ -21,6 +21,7 @@ from factorylab.runtime.shared import (
     assembly_rewards,
     return_channel,
 )
+from factorylab.runtime.subscriptions import is_routine
 from factorylab.world.models import ModelRequest
 
 
@@ -556,6 +557,56 @@ class RoutingMixin:
                 break
             self._route_with(state, ev)
 
+    def _addressed_seat(self, ev: Event) -> str | None:
+        """The one seat an event is addressed to, or None when the draw is open.
+
+        Edition 3, C2: a watcher's firing is its owner's news. It is not work
+        the router hands to whoever accepts the kind — it answers a predicate
+        that seat registered and paid for.
+        """
+        if str(ev.kind) != str(EventKind.WATCHER_FIRED):
+            return None
+        owner = ev.payload.get("owner")
+        return owner if isinstance(owner, str) else None
+
+    def _asleep(self, action_id: str, ev: Event) -> str:
+        """Why this seat is not in the draw for this event, or "" when it is awake.
+
+        Edition 3, C2: a seat owns its subscription and its sleep. A deferred or
+        unsubscribed seat is absent from the draw — not woken, not paid, and not
+        recorded as having abstained.
+        """
+        book = getattr(self, "subscription_book", None)
+        if book is None:
+            return ""
+        addressed = self._addressed_seat(ev)
+        if addressed is not None and action_id != addressed:
+            return "asleep: this event is addressed to another seat"
+        return book.absent(action_id, str(ev.kind), now=self.tick_index,
+                           coins=book.fold_coins(action_id))
+
+    def _quiet_tick(self, ev: Event, candidates: list[str],
+                    excluded: dict[str, str]) -> bool:
+        """True when this draw reached nobody because the seats were asleep.
+
+        A tick that routes to nobody is not an abstention; it is nothing. It is
+        ledgered once, with how many seats were absent and why, and no decision
+        is opened. Unaffordability is left exactly as it was: a draw where any
+        seat was excluded for compute keeps the old path, because that exclusion
+        is what the insolvency streak is made of.
+        """
+        if not candidates or any(a not in excluded for a in candidates):
+            return False
+        reasons = {a: excluded[a] for a in candidates}
+        if any(r.startswith("compute:") for r in reasons.values()):
+            return False
+        if not any(r.startswith("asleep:") for r in reasons.values()):
+            return False
+        self.ledger.append({"kind": "tick.quiet", "n": self.n, "event_id": ev.id,
+                            "event_kind": str(ev.kind), "absent": len(reasons),
+                            "why": dict(sorted(reasons.items())), "ts": self.clock.now_ns})
+        return True
+
     def _route_with(self, state: RouterState, ev: Event) -> None:
         kind = str(ev.kind)
         def mix(dist):
@@ -569,11 +620,16 @@ class RoutingMixin:
         def feasible(action_id: str) -> tuple[bool, str]:
             if action_id not in universe:
                 return False, "self-judgement"
+            asleep = self._asleep(action_id, ev)
+            if asleep:
+                return False, asleep
             return self._is_feasible(action_id)
 
         sample = state.router.route(kind, feasible, self.rng, mix=mix)
         candidates = [a for a in universe if a != NOOP]
         excluded = dict(sample.excluded)
+        if self._quiet_tick(ev, candidates, excluded):
+            return
         unaffordable = bool(candidates) and all(
             excluded.get(a, "").startswith("compute:") for a in candidates
         )
@@ -631,6 +687,11 @@ class RoutingMixin:
                 "chosen": sample.chosen,
                 "rng_seed": sample.rng_seed,
             }
+        book = getattr(self, "subscription_book", None)
+        if book is not None and sample.chosen != NOOP and is_routine(kind):
+            # A routine paid wake is what a cadence floor counts the ticks between,
+            # and it ends whatever sleep the seat had bought itself.
+            book.woke(sample.chosen, now=self.tick_index)
         self._assembly_step(ev, handle, sample, deadline)
 
     @staticmethod
@@ -697,8 +758,15 @@ class RoutingMixin:
                 lid = self._fresh_router_id(state.learner.id)
                 if isinstance(state.learner, EXP3):
                     saved = state.learner.state()
+                    # A universe may lose one action and gain another in the same
+                    # epoch (a seat's accepts change while another registers). The
+                    # survivors keep their weights and an action this learner never
+                    # held starts at their mean, exactly as ``EXP3.expand`` admits a
+                    # new one, rather than raising on a weight that was never there.
+                    retained = {a: w for a, w in saved["log_weights"].items() if a in universe}
+                    mean = sum(retained.values()) / len(retained) if retained else 0.0
                     saved.update(id=lid, actions=list(universe), log_weights={
-                        a: saved["log_weights"][a] for a in universe})
+                        a: retained.get(a, mean) for a in universe})
                     fresh = EXP3.restore(saved)
                 else:
                     fresh = self._make_learner(
@@ -724,6 +792,10 @@ class RoutingMixin:
                             "proposal_id": proposal_id,
                             "version": self.assemblies[assembly_id].spec.version})
         self.retired_assemblies.add(assembly_id)
+        book = getattr(self, "subscription_book", None)
+        if book is not None:
+            # A retired watcher stops being evaluated, and stops being charged for it.
+            book.forget(assembly_id)
         self.budget.retire(assembly_id, f"retire:{proposal_id}")
         for kind in sorted(self.routers):
             self._open_epoch(kind)

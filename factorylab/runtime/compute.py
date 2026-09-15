@@ -992,7 +992,7 @@ class ComputeMixin:
         because a refusal nobody can read is repeated.
         """
         from factorylab.learners.base import state_bytes
-        from factorylab.runtime.propensity import action_label, declared_record
+        from factorylab.runtime.propensity import action_class, action_label, declared_record
 
         try:
             self.queue.get(req.handle)
@@ -1000,6 +1000,13 @@ class ComputeMixin:
             return None
         label = action_label("producer" if role == "child" else role,
                              ret.outputs, ret.status, effects)
+        # Edition 3, C2: the coarse verb beside the finer label, so investigation,
+        # construction, governance and sleep are not all learned as "hold".
+        taken_class = action_class(label, ret.outputs, tool_calls=len(ret.tool_calls))
+        if taken_class != label:
+            self.ledger.append({"kind": "action.classified", "handle": req.handle,
+                                "assembly_id": action_id, "label": label,
+                                "action": taken_class, "ts": self.clock.now_ns})
         learner = self.assembly_learners.get(action_id)
         state_hash = (
             hashlib.sha256(state_bytes(learner.state())).hexdigest()
@@ -1008,6 +1015,7 @@ class ComputeMixin:
         record, reason = declared_record(
             label, ret.outputs.get("propensity") if isinstance(ret.outputs, dict) else None,
             learner_id=self._assembly_learner_id(action_id), state_hash=state_hash,
+            taken_class=taken_class,
         )
         try:
             self.queue.record_propensity(req.handle, record)
