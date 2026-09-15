@@ -441,6 +441,11 @@ class RoutingMixin:
         record = self.seat_ceilings.get(action_id)
         if record is None:
             return self.budget.last_hold(action_id)
+        if not record["world_chars"]:
+            # Priced without a world block (a ballot, a bare request): the world's
+            # size is not what that call grew with, and a routed call that turns
+            # out dearer is bridged rather than failed.
+            return record["ceiling"]
         growth = max(0, self._current_world_chars() - record["world_chars"])
         if not growth:
             return record["ceiling"]
@@ -479,9 +484,9 @@ class RoutingMixin:
         # pool as well, exactly as the wallet's own check lets a protected call use
         # everything the novelty share does not withhold.
         entitlement = self.budget.entitlement(action_id)
-        protected = max(0, self.budget.unallocated()) if self._unhistoried(action_id) else 0
+        cover = self.budget.cover(action_id, self._protected_share(action_id))
         need = max(ceiling, self._seat_need(action_id))
-        if need > entitlement + protected:
+        if need > cover:
             return False, f"entitlement: ceiling {need} exceeds seat entitlement {entitlement}"
         try:
             if is_market:

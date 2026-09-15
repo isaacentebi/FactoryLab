@@ -110,19 +110,31 @@ class ContractConsequences(ReturnConsequences):
 class ComputeMixin:
     """Preserve runtime state and behavior for compute operations."""
 
-    def _novelty_protection(self, handle: str, reason: str) -> int:
-        """The exploration a seat may draw beyond its entitlement: the unallocated pool,
-        for exactly the calls the wallet already classifies as protected (an unhistoried
-        seat's own model calls); nothing for anything else.
+    def _protected_share(self, assembly_id: str) -> int:
+        """The exploration an unhistoried seat may draw beyond its entitlement, and
+        nothing for a historied one: the larger of the unallocated pool and this
+        window's remaining novelty share.
 
         This is the C10 reading of the wallet's own rule, where a protected call may
         use ``unhistoried_available`` and an ordinary one only what the novelty share
-        leaves: the commons funds a seat's trial, the seat funds its career.
+        leaves: the commons funds a seat's trial, the seat funds its career. The
+        novelty share is money the wallet withholds from ordinary calls whatever the
+        book's classification says, so it counts even when shared spending has run
+        the pool negative. Routing reads this through ``BudgetBook.cover`` and the
+        reservation enforces the same figure, so the two never disagree.
         """
+        if not self._unhistoried(assembly_id):
+            return 0
+        return max(0, self.budget.unallocated(), self.reserve.remaining())
+
+    def _novelty_protection(self, handle: str, reason: str) -> int:
+        """The protected share for one reservation: the seat's, for exactly the calls
+        the wallet already classifies as protected (an unhistoried seat's own model
+        calls), plus any pool bridge routing granted this call; nothing otherwise."""
         bridged = self.entitlement_bridges.get(handle, 0)
         if not self._novelty_compute(handle, reason):
             return bridged
-        return max(0, self.budget.unallocated()) + bridged
+        return self._protected_share(self.queue.get(handle).propensity.chosen) + bridged
 
     @staticmethod
     def _world_chars(world: Any) -> int:
@@ -691,7 +703,7 @@ class ComputeMixin:
             ceiling = asm.model.ceiling(asm.build_model_request(req))
         except Exception:  # an unrenderable request fails inside invoke, as before
             ceiling = None
-        cover = max(0, self.budget.entitlement(seat) + self._novelty_protection(req.handle, reason))
+        cover = self.budget.cover(seat, self._novelty_protection(req.handle, reason))
         if ceiling is not None and cover > 0 and ceiling > cover:
             backed = self.budget.bridge(seat, req.handle, ceiling - cover, "routing estimate")
             if backed:

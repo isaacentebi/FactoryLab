@@ -75,6 +75,14 @@ class BudgetBook:
         """Return what the seat may still commit: its entitlement net of its open holds."""
         return self.__gross.get(assembly_id, 0) - self.held_by(assembly_id)
 
+    def cover(self, assembly_id: str, protected: Money = 0) -> Money:
+        """What one call of the seat may reserve: its entitlement plus the protected share
+        it may draw. The one rule routing reads and ``SeatWallet.reserve`` enforces."""
+        require_money(protected, nonnegative=True)
+        if assembly_id in self.__retired:
+            return 0
+        return max(0, self.entitlement(assembly_id) + protected)
+
     def held_by(self, assembly_id: str) -> Money:
         """Return the seat's outstanding reservations."""
         return sum(amount for seat, amount in self.__holds.values() if seat == assembly_id)
@@ -298,7 +306,7 @@ class BudgetBook:
             self._log("infeasible", assembly_id=seat, amount=amount, handle=handle,
                       reason=reason, entitlement=0, protected=extra, unknown_seat=True)
             raise Infeasible(f"seat {seat!r} has no entitlement: this book never endowed it")
-        if seat in self.__retired or amount > self.entitlement(seat) + extra:
+        if amount > self.cover(seat, extra):
             self._log("infeasible", assembly_id=seat, amount=amount, handle=handle, reason=reason,
                       entitlement=self.entitlement(seat), protected=extra)
             raise Infeasible("reservation exceeds the seat's entitlement")

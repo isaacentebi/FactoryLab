@@ -174,6 +174,45 @@ def test_a_stale_routing_estimate_is_bridged_by_the_pool_never_a_failed_return()
     assert rt.budget.holds() == 0 and invariant(rt)
 
 
+def test_an_unhistoried_seat_with_nothing_is_fed_by_the_protected_share_until_it_is_spent():
+    from factorylab.kernel.wallet import Infeasible
+    from tests.runtime.test_fidelity import decision
+
+    rt = make_runtime()
+    seat = "seed-observer"  # a seed is unhistoried until its first settled record
+    rt.budget.debit(seat, rt.budget.entitlement(seat), "test")
+    rt.budget.grant("seed-decider", rt.budget.unallocated(), "test")  # the pool is spent
+    assert rt.budget.cover(seat, rt._protected_share(seat)) == 0
+    assert not rt._is_feasible(seat)[0]
+    # this window's novelty share is money the wallet withholds from ordinary calls:
+    # it feeds the seat's trial whatever the pool holds
+    rt.reserve.open_window(rt.clock.now_ns, rt.wallet.balance)
+    share = rt.reserve.remaining()
+    assert share > 0 and rt._protected_share(seat) == share
+    assert rt.budget.cover(seat, rt._protected_share(seat)) == share
+    assert rt._is_feasible(seat)[0]
+    # the reservation enforces the same figure routing read
+    handle = decision(rt, seat)
+    wallet = rt._seat_wallet(seat)
+    reason = f"model:{rt.assemblies[seat].spec.model_id}"
+    with pytest.raises(Infeasible):
+        wallet.reserve(share + 1, handle, reason)
+    hold = wallet.reserve(share, handle, reason)
+    assert rt._protected_share(seat) == 0 and rt.budget.holds() == share
+    wallet.release(hold)
+    assert rt._protected_share(seat) == share and rt.budget.holds() == 0
+    # once the share is spent the seat is infeasible, for routing and for the meter alike
+    rt.reserve._NoveltyReserve__remaining = 0
+    assert rt._protected_share(seat) == 0 and not rt._is_feasible(seat)[0]
+    with pytest.raises(Infeasible):
+        wallet.reserve(1, handle, reason)
+    # a historied seat never draws on it
+    rt.reserve.open_window(rt.clock.now_ns + rt.m.novelty.window_ns, rt.wallet.balance)
+    rt._unhistoried = lambda action_id: False
+    assert rt._protected_share(seat) == 0 and not rt._is_feasible(seat)[0]
+    assert invariant(rt)
+
+
 def test_snapshot_codec_carries_the_book_and_older_snapshots_keep_genesis():
     rt = make_runtime()
     rt.budget.transfer("seed-decider", "eval-a", 1_000, "test")
