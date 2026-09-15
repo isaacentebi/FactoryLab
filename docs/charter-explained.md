@@ -1,13 +1,23 @@
 # The charter, explained: what the essay says, what our cards do, and how they can be gamed
 
-This is written against the edition 2 charter as ratified on 15 September,
-`docs/charter/edition2-ratified.toml`: five norms, three cards, hashes added by
-`scripts/ratify_charter.py` after the seeded committee's second ballot
-(`docs/charter/edition2-ratification.json`). The reasoning is recorded in
-`docs/launch-decisions.md` under "Edition 2 (15 September)" and in the header comments of
-`docs/charter/edition2-draft.toml`; the earlier eight-card ratification is kept under
-`docs/charter/history/`. Where this document says what the code does, it means the code on
-`main`.
+This is written against the edition 3 charter, `docs/charter/edition3-draft.toml`: five
+norms **with their definitions in the charter object**, and one card. It is a draft; the
+hashes are added by `scripts/ratify_charter.py` after the committee's ballot on testnet.
+Edition 2 (`docs/charter/edition2-ratified.toml`, five norms, three cards) is kept for
+comparison, and the earlier eight-card ratification under `docs/charter/history/`. The
+reasoning for edition 3 is in `docs/plans/edition3.md` (C3) and in GPT-6 Pro's architect
+reading, `docs/audits/v6/gpt6/architect-review.md` sections 5 and 13. Where this document
+says what the code does, it means the code on `main`.
+
+**What changed from edition 2, in one paragraph.** The norms now carry their definitions
+where the population can read them, instead of in TOML comments the loader dropped. Two of
+the three cards are gone: `card-consequence-paid-off`, which asked returns to own profitable
+lots, and `card-forecast-skill`, which required strictly positive excess skill. The third,
+`censorship-bound`, is narrowed from every censored outcome to accountable resolution
+failures. And the privilege that survived the last round of card removals is gone with them:
+the settler no longer trains judge standing from `return_paid_off` alone. A judge may also
+now file a **fidelity objection**, a structured claim that a favourable measurement is not
+serving its value.
 
 ## What a charter is, in the essay's words
 
@@ -50,6 +60,13 @@ Four of the norms are the reviewer's, in its words. The fifth was added on 15 Se
 the first rehearsals showed that a population can satisfy a measurement while defeating the
 value it stands for, and that judges need a stated basis for saying so.
 
+In edition 3 the definitions below are **in the charter**, not in this document and not in the
+manifest's comments. `Charter.norms` is a list of `{id, definition}`; `Charter.render` prints
+each definition under its norm, so every seat that is shown the charter is shown the words it
+is judged against. A charter written before this field existed loads unchanged, with empty
+definitions, and its content digest is untouched: the bare-string form is still valid TOML for
+the loader and is still what gets written back out where no definition exists.
+
 **Consequential usefulness.** Create things or changes that others have reason to value. The
 test is uptake: an independent counterparty that pays, fills, or keeps using what was made is
 evidence; internal applause is a hypothesis. A population that congratulates itself has proved
@@ -70,12 +87,15 @@ outsiders. There is no card under this norm at genesis. The population may propo
 it does, the norm is a standard judges can hold a return to and the connector and service
 rules are its only machinery.
 
-**Fidelity.** A measurement stands for a value; satisfying the measurement without serving the
-value is failure, and saying so is a judge's duty. This is the norm that keeps the other four
-honest. With only three cards, most of what a seat does is never measured by a card at all, and
-what is measured can be met in letter and missed in spirit. Fidelity tells the judges that
-meeting a card is not the same as serving its norm, and that a verdict which says so is the
-correct verdict, not an unkind one.
+**Fidelity**, in edition 3 restated in the architect's words: *"Measurements are defeasible
+evidence of the values, not substitutes for them. A favorable measurement is insufficient when
+supported consequences contradict the value it represents. A judge identifying such a conflict
+must name the value, the measurement, the evidence and the uncertainty, and make the claim open
+to challenge. Missing measurement alone is not evidence of failure."* This is the norm that
+keeps the other four honest. With one card, most of what a seat does is never measured by a
+card at all, and what is measured can be met in letter and missed in spirit. The last two
+sentences are the load-bearing ones: fidelity is the basis of an appeal, not a truth oracle,
+and the absence of a measurement is not a finding against anybody.
 
 They are read-only for the edition. The essay says norm-setting is where the factory "hits some
 kind of a wall", either read-only or shared governance, because a factory that writes its own
@@ -90,8 +110,8 @@ an acceptable region, a role that answers for it, and a price (`lambda`).
 **What a violated card costs an agent.** At every closed window the runtime measures each card
 over its sample and asks whether the value sits inside the region. When it does not, the card's
 price times how far outside the region the value sits is charged as a penalty against the score
-of every decision that contributed to the violation, in proportion to its share. For the three
-cards below the share is generic, one part per decision that responded in the window, and never
+of every decision that contributed to the violation, in proportion to its share. For the card
+below the share is generic, one part per decision that responded in the window, and never
 smaller than `prices.min_blame_share`, so spreading participation across many decisions cannot
 dilute what each one carries. The penalty is capped at `prices.penalty_cap` before it is split
 and the final score is clipped to the unit interval. A lower score moves standing, and standing
@@ -118,7 +138,7 @@ pricing the live charter throughout. At the end the same committee votes with th
 both series in front of it. During the trial a proposal may name the challenge itself as the
 card it promises to move, and is then graded on the replacement, not on the incumbent.
 
-## The three cards, and how each can be gamed
+## The one card, and how it can be gamed
 
 Every proxy can be gamed. The essay calls this overfitting and says the answer is not a cleverer
 proxy but the machinery around it: judges that answer for their verdicts, forecasts settled
@@ -126,86 +146,104 @@ against the real world, an antagonist paid to fool the judges, an immune organ t
 distribution of behaviour for collapse, a fidelity norm that makes letter-without-spirit a
 failure, and a wallet that only the world refills.
 
-### `card-consequence-paid-off` (consequential usefulness)
-
-*What it measures.* The share of settled consequences whose return paid off: a producer's
-decision is a consequence once it has been carried into the venue and settled, and it paid off
-if the realised P&L it is credited with, net of fees, funding and the storage rent the decision
-owed, is positive.
-
-*Over what sample.* The last six windows, one hour each on the testnet manifest.
-
-*What is acceptable.* At least 0.4: two settled consequences in five must pay off.
-
-*Who answers.* Producers. Price 0.5.
-
-*The obvious hack.* Many tiny trades that each net a cent; or open and close the same lot so
-the gain is counted twice; or hold at every wake so nothing ever settles at a loss.
-
-*What catches it.* A closed lot's P&L is credited once and split by notional between the
-decision that opened it and the one that closed it, so a round trip cannot be credited twice.
-Rent the decision owed is carried into its outcome, so a return cannot pay off on a margin its
-notes consumed. Every trade pays real fees to a real venue out of the seat's own slice, so a
-churn of tiny trades is paid for before it is scored. Holding forever is inside the region only
-until the first loss settles; meanwhile the seat is paying for every wake and earning nothing,
-and judges reading its returns under fidelity can mark a producer that has stopped producing.
-
-### `card-forecast-skill` (epistemic integrity)
-
-*What it measures.* Whether a judge's forecasts beat guessing: the mean Brier score of its
-forecasts minus a paired prevalence baseline, where the baseline is the base rate as it stood
-before each outcome was known and learns the same fractional target the judge is scored on.
-
-*Over what sample.* An evaluator's last 25 forecasts, per assembly. Until it has 25, the card
-is unsupported for that seat and contributes nothing.
-
-*What is acceptable.* Above zero: the judge must show excess skill over the base rate.
-
-*Who answers.* Evaluators. Price 0.5.
-
-*The obvious hack.* Forecast only the obvious; or repeat the blame share every return already
-carries, so the forecast is a copy of the prior; or agree with the other judges so that nobody
-stands out.
-
-*What catches it.* The baseline is paired, so a judge that only restates the prior shows no
-excess skill and sits on the wrong side of zero. Forecasts settle against the real world, not
-against a colleague: a verdict is graded on what the venue and the ledger later record, and the
-judge's standing rises and falls with that settlement. The antagonist is paid a bounded share of
-the router's mass to produce returns that look good and are not, and a judge that waves them
-through is settled against the truth. A judge that never commits has no forecasts to sample and
-earns no payoff standing, which the router weights.
-
 ### `censorship-bound` (epistemic integrity)
 
-*What it measures.* The share of resolved outcomes that were censored: commitments that reached
-their horizon without being settled by evidence, so the world never got to say whether they
-were right.
+*What it measures.* `avoidably_unresolved_share`: attributable, avoidably unresolved accepted
+commitments over the eligible commitments that came due in the responsible scope. A commitment
+is unresolved when it reached its horizon and no evidence settled it, so the world never got to
+say whether it was right.
 
-*Over what sample.* The last five windows.
+*What is not in the sample.* A promise that is not yet due is not measured — its horizon has
+not arrived, and nothing about it is anybody's failure yet. A commitment whose fact the owner
+documented as externally unobservable, without fault of its own, is excluded and recorded with
+its reason (`external_unobservable` in the settlement, carried into the sample). An event the
+seat never committed to observe is not in the sample at all, because there is no commitment.
+And **no eligible sample means unmeasured, never zero**: a scope with nothing due is not
+thereby compliant, it is simply not measured, and the card contributes nothing for it.
 
-*What is acceptable.* At most 0.3.
+*Over what sample.* The last 25 eligible due commitments, per assembly — the responsible
+scope. An excluded commitment never occupies one of the 25 slots, so documented unobservability
+cannot push an accountable commitment out of the window that answers for it.
 
-*Who answers.* Everyone. The charter gives it no starting price, so it begins at zero and
-acquires one only by being violated; the controller raises it from there, bounded by
-`prices.lambda_max`.
+*What is acceptable.* At most 0.30, explicitly provisional.
 
-*The obvious hack.* Make no commitment that could be left unresolved; forecast nothing; write
-returns that promise nothing checkable.
+*Who answers.* The commitment owner, including responsibility delegated at acceptance. Price
+`lambda` 0.10, population-adjustable.
 
-*What catches it.* Nothing to censor means nothing to settle: forecast skill needs 25 settled
-forecasts to be measured at all, payoff standing is built only from settled consequences, and a
-seat with neither is woken less and less. The judges, under fidelity, are asked to mark a return
-that has been made unfalsifiable on purpose. And the immune organ reads the cells, which cards
-are violated and how many registrations and revisions there were, and flags thrash, stable
-failure and learning death when the population settles into a quiet, compliant, useless state.
+*The obvious hack.* Commit to nothing that could be left unresolved; promise nothing checkable;
+or claim external unobservability for everything.
 
-A "cannot" answer is still a well-formed return. That is intended: refusing honestly is
-epistemic integrity; pretending is not. What edition 2 no longer does is score the form of the
-answer with a card; the seat pays for a malformed one out of its slice and gets nothing back.
+*What catches it.* Nothing to settle is nothing to be scored on: standing is built from settled
+commitments, and a seat with none is woken less and less. The exclusion is a documented reason
+in the ledger, not a flag a seat can assert on its own answer: the runtime records it where the
+fact was sought and not found. And the judges, under fidelity, are asked to mark a return made
+unfalsifiable on purpose — which is exactly the kind of claim a fidelity objection is for.
 
-None of these catches is airtight, and they are not meant to be. What they do is make the
-cheap hack cost more than the honest move under the cards that remain and under the wallet,
-and make the residue show up in the ledger, where the immune organ and the judges can see it.
+*Why this card and not the others.* It protects the evidentiary process rather than prescribing
+a kind of economic activity. Zero cards is a legitimate reachable constitution; this is the one
+card worth starting with, and the population may replace, reprice or remove it.
+
+## The fidelity objection
+
+A verdict may carry one structured extra field:
+
+```
+fidelity_objection: { value, measurement, evidence, uncertainty }
+```
+
+The `value` must be one of the charter's norms and the `measurement` must name something the
+charter actually measures — a live card or a named observation — so the claim is about a real
+proxy and can be answered. `evidence` is the judge's reason; `uncertainty` is how unsure it is,
+in [0, 1].
+
+Four things are true of it, and they are the point:
+
+- **It is validated.** A malformed or unplaceable objection is refused, and the refusal is
+  ledgered with its reason. It cannot be a gesture.
+- **It is ledgered** (`fidelity.objection`) with the judge, the return it judged, and its four
+  fields, before anything scores it.
+- **It is scored like any verdict.** Its stated confidence (`1 - uncertainty`) is a claim that
+  the charter's blame will land on that return, scored by the same proper score, against the
+  same realised blame share, into the same judge standing. A judge that cries foul on returns
+  the charter does not blame loses standing for it.
+- **It is never a kernel verdict on its own.** It settles no decision, moves no money and
+  blames no card. The measurement it names is contestable through the existing challenge
+  route: a challenge names a live card, gives evidence, offers a replacement, and buys a trial
+  in which both are measured side by side before the committee votes.
+
+## Why the paid-off card and the forecast floor went
+
+`card-consequence-paid-off` asked at least 40% of settled consequences to pay off, where paying
+off means the return's own handle owns a lot with positive net proceeds. That is not what money
+says. Nine gains of a dollar and one loss of twenty is a 90% hit rate and an eleven-dollar loss;
+three gains of ten and seven losses of one is a 30% hit rate and a twenty-three dollar profit.
+The card approves the first and rejects the second, and nothing in accounting requires that
+preference. Worse, the unit of credit is one return handle: a successful investigation, a useful
+program, and an informed decision not to trade own no lot at all, and scored zero for it. It was
+a substantive model of usefulness wearing a measurement's clothes.
+
+`card-forecast-skill` required strictly positive excess skill over a matched baseline. On a
+stationary uninformative task an honest, well-calibrated forecaster can only equal its baseline,
+and that should not be a constitutional failure. The scoring machinery stays — forecasts are
+still settled against the world and still trained against paired baselines — but beating the
+base rate is no longer an obligation the charter imposes from the start.
+
+**And the privilege went with them.** Removing a card from a TOML file did not, in edition 2,
+remove the thing the card was about: `Settler` trained consequence standing from the kernel's
+`return_paid_off` commitment and from nothing else, so whatever else a judge forecast settled to
+its handle and to the prevalence baseline but never reached its selection weight. That is an
+architectural choice about what a judge is *for*, made in code rather than by the population.
+In edition 3 every registered predicate a judge forecast trains its standing, weighted by the
+charter's cards: a card's `answers_for` names the scope the population holds accountable, a
+claim about a return in that scope carries that card's share of the weight, and a charter whose
+cards name no particular scope weights every claim equally. Remove a card and its effect on
+standing goes with it, entirely — which is pinned by a test that flips a card in and out and
+diffs the standing updates. Coverage is now every forecast a judge was asked for, not one
+predicate's.
+
+`return_paid_off` is untouched as a fact: cash settlement is immutable, the venue still says
+what a lot realised, and anyone may forecast it. It is simply no longer the unique enduring
+anchor of judge quality.
 
 ## Why the frugality and concentration cards were removed
 
@@ -233,9 +271,10 @@ above it before the call reaches the exchange, so cross-margin can never be stre
 wall. That is a hard cast, not a card; no amendment reaches it, and it does not need a
 committee to hold.
 
-What is left is three cards, all about consequences in the world: did the trade pay, did the
-judge know, was the commitment ever settled. Durable agency has no card because the wallet and
-the wall are its whole enforcement, and a card that tried to say it again would say it worse.
+What is left, after edition 3, is one card, about whether a commitment was ever settled.
+Durable agency has no card because the wallet and the wall are its whole enforcement, and a card
+that tried to say it again would say it worse; consequential usefulness has none because the
+money already says it better than a hit rate can.
 
 ## What is not gameable
 
@@ -266,6 +305,17 @@ listing.
 **Real P&L.** Every consequence the cards score is a settlement the venue made, in a market the
 population does not control. A judge can be fooled and a card can be met in letter; the account
 balance on the exchange is neither.
+
+**Learning death is a lost access, not a quiet week.** The immune organ's diagnosis of
+"learning death" is loss of affordable, usable access to investigation and revision, never
+unchanged behaviour. The gone-frontier rule is unchanged — stable cells, no registrations or
+revisions, no improvement in consequence outcomes, and a compliance the cards cannot vouch for
+— and the record now says which access is gone and why: no affordable seat (with the cheapest
+seat's price against the richest seat's entitlement), no route to registration (the novelty
+reserve is empty, or no seat is affordable), or no route to revision (no committee can be
+drawn, or registration itself is gone). Each rides in the organ's own window profile as
+`access:<name>`. A population that can still afford to look and chooses not to has lost
+nothing: protected exploration buys an option, it does not require its exercise.
 
 **The code.** The diary carries the digest of the release that launched it (commit, lock
 file, package tree), and a resume under a different release is refused. A witness file

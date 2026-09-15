@@ -73,7 +73,10 @@ def test_three_forecasts_two_evaluators_settle_at_due_events_with_ledger_first(
         )
     ]
     assert baseline.baseline_q("wallet_up") == 1.0
-    assert standing.snapshot() == {}  # public predicates never train standing (A16)
+    # Edition 3 (C3): every registered predicate trains standing, equally while no
+    # card names a scope. A16's privilege for return_paid_off is gone.
+    assert standing.snapshot()["judge-a"]["settled"] == 1
+    assert standing.snapshot()["judge-a"]["mean_brier"] == pytest.approx(0.96)
     assert book.outstanding() == 2
     clock.now = 103
     assert settler.settle_due(3, facts_for) == []
@@ -85,8 +88,14 @@ def test_three_forecasts_two_evaluators_settle_at_due_events_with_ledger_first(
     assert [result.brier for result in remaining] == pytest.approx([0.96, 0.19])
     assert seen == [first, second, third]
     assert baseline.baseline_q("wallet_up") == pytest.approx(1 / 3)
-    assert standing.snapshot() == {}
-    assert standing.weight("judge-a") == standing.weight("judge-b") == 0.5
+    assert [standing.snapshot()[j]["settled"] for j in ("judge-a", "judge-b")] == [2, 1]
+    # Coverage is every forecast this judge was asked for, not one privileged predicate.
+    assert standing.coverage("judge-a") == 1.0 and standing.coverage("judge-b") == 1.0
+    # The judge whose public-predicate claims beat their baseline is weighted up and the
+    # one whose claims lost is weighted down: standing now follows every claim.
+    assert standing.skill("judge-a") == pytest.approx(-0.175)
+    assert standing.weight("judge-a") == pytest.approx(0.325)
+    assert standing.weight("judge-b") == 1.0
     assert book.outstanding() == 0
     assert book.requested("judge-a") == 2 and book.requested("judge-b") == 1
     for result in first_results + remaining:
@@ -132,6 +141,7 @@ def test_censored_forecast_has_no_outcome_or_score_and_does_not_train(
     )
     assert not queue.has_history(queue.get(forecast.handle).propensity.chosen)
     assert baseline.baseline_q("wallet_up") == 0.5
+    # A censored commitment is no fact, so it trains nothing and only costs coverage.
     assert standing.snapshot() == {}
     assert standing.weight(forecast.evaluator_id) == 0.5
     assert book.outstanding() == 0
@@ -149,7 +159,8 @@ def test_censored_windows_leave_existing_history_unchanged_and_reduce_coverage(
     )
     assert [result.status for result in results] == [SettleStatus.SETTLED, SettleStatus.CENSORED]
     assert baseline.baseline_q("wallet_up") == 1.0
-    assert standing.snapshot() == {}
+    assert standing.snapshot()["judge-a"]["settled"] == 1
+    assert standing.coverage("judge-a") == 0.5
     assert standing.weight("judge-a") == 0.5
 
 
@@ -198,13 +209,14 @@ def test_failed_queue_write_leaves_baseline_and_standing_retryable(
         with pytest.raises(OSError, match="injected settlement write failure"):
             settler.settle_due(10, lambda forecast: WindowFacts(1, 2, 1, ()))
     assert baseline.baseline_q("wallet_up") == 0.5
+    # The failed write left nothing behind: no baseline, no standing, retryable.
     assert standing.snapshot() == {}
     assert book.outstanding() == 1
     assert queue.history(forecast.handle) == ()
     (result,) = settler.settle_due(10, lambda forecast: WindowFacts(1, 2, 1, ()))
     assert result.baseline_brier == 0.75
     assert baseline.baseline_q("wallet_up") == 1.0
-    assert standing.snapshot() == {}
+    assert standing.snapshot()["judge-a"]["settled"] == 1
 
 
 def test_facts_callback_error_does_not_manufacture_censoring(seal_forecast, settler, book, queue):
@@ -243,7 +255,7 @@ def test_retired_evaluator_keeps_attribution_and_historical_feedback(
     assert result.status == SettleStatus.SETTLED
     assert queue.history(forecast.handle)[0].status == SettleStatus.HISTORICAL
     assert queue.history(forecast.handle)[0].score == result.brier
-    assert standing.snapshot() == {}
+    assert standing.snapshot()[forecast.evaluator_id]["settled"] == 1
 
 
 def test_replaced_population_definition_starts_its_own_prevalence_baseline(

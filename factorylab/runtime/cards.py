@@ -94,3 +94,34 @@ def region_for(
             return None
     scale = observation.scale
     return CardRegion(card.id, bounds.kind, lo, hi, scale)  # type: ignore[arg-type]
+
+
+def accountable_scopes(kind: str | None) -> frozenset[str]:
+    """The scopes a return of this emitted kind is answered for: the kind and its role.
+
+    A card's ``answers_for`` is either a role alias (``producer``, ``evaluator``,
+    …) or a population-registered emitted kind, so a claim about a return
+    answers for both spellings of the same seat's work.
+    """
+    from factorylab.cortex.registration import measured_role
+
+    if kind is None:
+        return frozenset()
+    scopes = {str(kind)}
+    try:
+        scopes.add(measured_role(str(kind)))
+    except (ValueError, KeyError):  # an unmeasured kind answers for itself alone
+        pass
+    return frozenset(scopes)
+
+
+def forecast_weight(charter, kind: str | None) -> float:
+    """The charter's weight on one settled claim about a return of this emitted kind.
+
+    This is the whole of what replaces ``return_paid_off``'s old privilege: the
+    cards say which claims the population holds anyone accountable for, and a
+    charter whose cards name no particular scope weights every claim equally.
+    """
+    from factorylab.settlement.weights import scope_weight
+
+    return scope_weight(charter, accountable_scopes(kind))

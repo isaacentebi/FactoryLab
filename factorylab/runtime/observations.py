@@ -1,6 +1,6 @@
 """Supported observations; absent evidence never becomes a score.
 
-The twenty-three seed observations below are the factory's starting measurement
+The twenty-four seed observations below are the factory's starting measurement
 vocabulary. They are not the whole of it: the population may also register
 its own observation — a pure ``observe(facts) -> float`` over the public
 per-window facts, run in the tool jail — and a card may then name it. Seed and
@@ -263,6 +263,18 @@ CATALOGUE: tuple[Observation, ...] = (
         "Mean raw meta verdict delivered, across all tiers.",
         "score",
         lambda w: _mean(w.meta_verdicts),
+        (0.0, 1.0),
+    ),
+    Observation(
+        "avoidably_unresolved_share",
+        "Attributable, avoidably unresolved accepted commitments over the eligible "
+        "commitments due in the responsible scope. Excludes commitments not yet due, "
+        "documented external unobservability without owner fault, and events the seat "
+        "never committed to observe; no eligible sample is unmeasured, never zero. It "
+        "is measured over a scope's due commitments, so a raw window count cannot "
+        "stand in for it.",
+        "fraction",
+        lambda w: None,
         (0.0, 1.0),
     ),
     Observation(

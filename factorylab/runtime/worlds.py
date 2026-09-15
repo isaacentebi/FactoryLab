@@ -19,7 +19,7 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
-from factorylab.charter.charter import Charter, MetricCard, seed_charter
+from factorylab.charter.charter import Charter, MetricCard, Norm, seed_charter
 from factorylab.charter.provenance import (
     PROVENANCE_FIELDS,
     charter_content,
@@ -699,9 +699,15 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
             raise ValueError(f"charter.{name} must be 64 lowercase hex characters")
     raw = charter_content(raw)
     norms = raw.get("norms")
-    if (not isinstance(norms, list) or not norms
-            or any(not isinstance(n, str) or not n.strip() for n in norms)):
+    # Edition 3 carries each norm's definition in the charter object. The historical
+    # bare-string form loads unchanged, with an empty definition, so every charter
+    # written before this field existed keeps its content digest.
+    if not isinstance(norms, list) or not norms:
         raise ValueError("charter.norms must be a nonempty list of nonempty strings")
+    try:
+        norms = [Norm.parse(n) for n in norms]
+    except ValueError as exc:
+        raise ValueError(f"charter.norms: {exc}") from None
     if "edition" in raw and (type(raw["edition"]) is not int or raw["edition"] != 1):
         raise ValueError("charter.edition must be 1")
     rows = raw.get("cards", [])

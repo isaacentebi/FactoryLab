@@ -12,6 +12,7 @@ from factorylab.charter.charter import Charter, MetricCard
 from factorylab.charter.windows import MetricWindow
 from factorylab.kernel.events import EventKind
 from factorylab.kernel.queue import SettleStatus
+from factorylab.runtime.cards import forecast_weight
 from factorylab.runtime.loop import Runtime, run_world
 from factorylab.runtime.resume import resume_world, runtime_state
 from factorylab.runtime.shared import CH_FAST
@@ -101,13 +102,17 @@ def test_seat_2_strategy_costs_the_evaluator_standing_once_the_window_blames_the
     assert item["brier"] == 0.0 and item["baseline_brier"] == 0.75
     assert item["window"] == 1 and item["window_closed"] is True
     assert item["terms"][0]["card_id"] == "no-inaction"
-    # The endorsement now costs standing: payoff skill +0.25, verdict skill -0.75, pooled.
+    # The endorsement now costs standing: payoff skill +0.25, verdict skill -0.75, pooled
+    # at the charter's weight on each claim (edition 3 C3), which is what the payoff
+    # forecast now enters on rather than on a privilege of its own.
     standing = runtime.standing.snapshot()["eval-a"]
     assert standing["n"] == 1 and standing["verdict_n"] == 1
     assert standing["payoff_skill"] == pytest.approx(0.25)
     assert standing["verdict_skill"] == pytest.approx(-0.75)
-    assert runtime.standing.skill("eval-a") == pytest.approx(-0.25)
-    assert runtime.standing.weight("eval-a") == pytest.approx(0.25)
+    weight = forecast_weight(runtime.charter, runtime.return_kinds.get(about))
+    pooled = (weight * 0.25 - 0.75) / (weight + 1)
+    assert runtime.standing.skill("eval-a") == pytest.approx(pooled)
+    assert runtime.standing.weight("eval-a") == pytest.approx(max(0.0, 0.5 + pooled))
     # The producer's own reward is still the verdict, unchanged.
     assert runtime.queue.history(about)[0].score == 1.0
     # The judge is told, privately.

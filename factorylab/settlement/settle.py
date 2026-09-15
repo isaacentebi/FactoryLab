@@ -5,12 +5,14 @@ from dataclasses import asdict, dataclass
 
 from factorylab.kernel.queue import DecisionQueue, SettleStatus
 from factorylab.kernel.registry import _freeze
+from factorylab.settlement.fidelity import FidelityObjection, parse_objection
 from factorylab.settlement.forecast import Forecast, ForecastBook
 from factorylab.settlement.lots import Payoff
 from factorylab.settlement.scoring import PrevalenceBaseline, _require_probability, brier
 from factorylab.settlement.standing import ConsequenceStanding
 from factorylab.settlement.vocabulary import (
     RETURN_PAID_OFF,
+    UNOBSERVABLE,
     Observer,
     Predicate,
     WindowFacts,
@@ -60,6 +62,9 @@ class Settled:
     baseline_brier: float | None
     status: SettleStatus
     marked: bool = False
+    # The documented reason this due commitment is not an eligible sample for
+    # ``avoidably_unresolved_share``: never a silent zero, always a reason.
+    excluded: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,11 @@ class SettledVerdict:
     outcome: float
     brier: float
     baseline_brier: float
+    # A fidelity objection the same return carried, scored the same way against
+    # the same fact. It settles nothing on its own.
+    objection: FidelityObjection | None = None
+    objection_brier: float | None = None
+    objection_baseline_brier: float | None = None
 
 
 def baseline_key(forecast: Forecast) -> str:
@@ -98,9 +108,12 @@ def normative_brier(q: float, outcome: float) -> float:
 class Settler:
     """Each due forecast is scored at most once and missing facts never become performance.
 
-    Only the kernel payoff commitment (``return_paid_off``) trains consequence
-    standing; optional public-predicate forecasts settle to their handles and the
-    prevalence baseline but never enter a judge's selection weight.
+    Every registered predicate a judge forecast trains consequence standing, at
+    the weight the charter's cards give a claim about that return's scope
+    (``settlement.weights``). ``return_paid_off`` is still a kernel fact — cash
+    settlement is immutable — and is now an ordinary forecastable predicate with
+    no standing privilege of its own: with no card naming a scope every claim
+    counts equally, and removing a card removes its effect on standing entirely.
     """
 
     def __init__(
@@ -110,12 +123,21 @@ class Settler:
         standing: ConsequenceStanding,
         baseline: PrevalenceBaseline,
         observer: Observer,
+        weight_for: Callable[[Forecast], float] | None = None,
     ) -> None:
         self.__book = book
         self.__queue = queue
         self.__standing = standing
         self.__baseline = baseline
         self.__observer = observer
+        # The charter's weight on one settled claim; without one every claim
+        # counts equally, which is what a charter with no scoped card means.
+        self.__weight_for = weight_for
+        # judge return handle -> the fidelity objection that return carried
+        self.__objections: dict[str, FidelityObjection] = {}
+        # forecast handle -> the documented reason its settlement is an excluded
+        # sample, read once by the measurement pass that records the sample row.
+        self.__excluded: dict[str, str] = {}
         # about_handle -> baseline q before that return's outcome entered the base rate
         self.__snapshots: dict[str, float] = {}
         # about_handle -> the outcome already counted in the base rate, once per return
@@ -131,6 +153,12 @@ class Settler:
             if forecast.predicate_id == RETURN_PAID_OFF.id:
                 continue
             facts = facts_for(forecast)
+            excluded = None
+            if facts is UNOBSERVABLE:
+                # The owner documented that the world never offered the fact and
+                # is not at fault for it. The commitment still settles censored;
+                # it is simply not an eligible sample for accountable resolution.
+                facts, excluded = None, "external_unobservable"
             y = score = baseline_score = None
             status = SettleStatus.CENSORED
             if facts is not None:
@@ -154,6 +182,12 @@ class Settler:
             )
             if y is not None:
                 self.__baseline.record(baseline_key(forecast), y)
+                # No predicate is privileged: this claim trains the judge's
+                # standing at the charter's weight, like any other.
+                self.__standing.record(forecast.evaluator_id, score, baseline_score,
+                                       self.__weight(forecast))
+                self.__standing.set_requested(
+                    forecast.evaluator_id, self.__book.requested(forecast.evaluator_id))
             self.__book.mark_settled(forecast.handle)
             results.append(
                 Settled(
@@ -165,9 +199,25 @@ class Settler:
                     score,
                     baseline_score,
                     status,
+                    excluded=excluded,
                 )
             )
+            if excluded is not None:
+                self.__excluded[forecast.handle] = excluded
         return results
+
+    def excluded(self, handle: str) -> str | None:
+        """Take the documented exclusion recorded for one settlement, once.
+
+        ``charter.measurement`` reads it when it writes that settlement's sample
+        row, in the same pass that settled it; nothing else needs it afterwards,
+        so it is not retained and cannot grow without bound.
+        """
+        return self.__excluded.pop(handle, None)
+
+    def __weight(self, forecast: Forecast) -> float:
+        """The charter's weight on this claim, or an equal 1.0 without a charter."""
+        return 1.0 if self.__weight_for is None else float(self.__weight_for(forecast))
 
     def settle_consequences(
         self, payoff_for: Callable[[str], Payoff | None]
@@ -208,11 +258,11 @@ class Settler:
                 )
                 if payoff.handle not in self.__recorded:
                     outcomes[payoff.handle] = payoff.y
-                self.__standing.record(forecast.evaluator_id, score, baseline)
+                self.__standing.record(forecast.evaluator_id, score, baseline,
+                                       self.__weight(forecast))
                 self.__book.mark_settled(forecast.handle)
                 self.__standing.set_requested(
-                    forecast.evaluator_id,
-                    self.__book.requested(forecast.evaluator_id, RETURN_PAID_OFF.id),
+                    forecast.evaluator_id, self.__book.requested(forecast.evaluator_id),
                 )
                 results.append(
                     Settled(forecast.handle, forecast.evaluator_id, forecast.about_handle,
@@ -227,8 +277,48 @@ class Settler:
                 self.__baseline.record(RETURN_PAID_OFF.id, y)
         return results
 
+    def record_objection(self, judge_handle: str, entries, charter=None, *,
+                         evaluator_id: str | None = None,
+                         about_handle: str | None = None) -> FidelityObjection | None:
+        """Validate and ledger the fidelity objection one judged return carried, if any.
+
+        ``entries`` is any sequence of the judge's own answers as
+        ``{"handle", "outputs"}`` mappings; the objection is read from the entry
+        whose handle is this judge's return. A malformed or unplaceable objection
+        is refused, and the refusal is ledgered with its reason: the verdict
+        itself is untouched and nothing is scored from a claim the charter
+        cannot place. Recording is idempotent per judge handle.
+        """
+        if judge_handle in self.__objections:
+            return self.__objections[judge_handle]
+        raw = None
+        for entry in entries or ():
+            if not isinstance(entry, Mapping) or entry.get("handle") != judge_handle:
+                continue
+            outputs = entry.get("outputs")
+            if isinstance(outputs, Mapping):
+                raw = outputs.get("fidelity_objection")
+            break
+        if raw is None:
+            return None
+        common = {"handle": judge_handle, "evaluator_id": evaluator_id,
+                  "about_handle": about_handle}
+        try:
+            objection = parse_objection(raw, charter=charter)
+        except ValueError as exc:
+            self.__book.record_objection({**common, "accepted": False, "reason": str(exc)})
+            return None
+        self.__book.record_objection({**common, "accepted": True, **objection.as_dict()})
+        self.__objections[judge_handle] = objection
+        return objection
+
+    def objection(self, judge_handle: str) -> FidelityObjection | None:
+        """The accepted objection this judge's return carried, if it carried one."""
+        return self.__objections.get(judge_handle)
+
     def settle_verdict(
-        self, *, evaluator_id: str, about_handle: str, q: float, share: float
+        self, *, evaluator_id: str, about_handle: str, q: float, share: float,
+        judge_handle: str | None = None
     ) -> SettledVerdict:
         """Score one verdict against the charter's realised blame on the return it judged.
 
@@ -250,11 +340,21 @@ class Settler:
         score = normative_brier(q, outcome)
         baseline_score = normative_brier(baseline_q, outcome)
         self.__standing.record_verdict(evaluator_id, score, baseline_score)
+        # A fidelity objection is scored like the verdict it rode in on: its
+        # stated confidence is a claim that the charter's blame will land on
+        # this return, scored by the same proper score against the same fact,
+        # into the same standing. It settles no decision and blames no card.
+        objection = self.__objections.pop(judge_handle, None) if judge_handle else None
+        objection_score = objection_baseline = None
+        if objection is not None:
+            objection_score = normative_brier(objection.confidence, share)
+            objection_baseline = normative_brier(1.0 - baseline_q, share)
+            self.__standing.record_verdict(evaluator_id, objection_score, objection_baseline)
         if key not in self.__recorded:
             self.__recorded[key] = outcome
             self.__baseline.record_fraction(VERDICT_NOT_BLAMED, outcome)
         return SettledVerdict(evaluator_id, about_handle, q, share, outcome, score,
-                              baseline_score)
+                              baseline_score, objection, objection_score, objection_baseline)
 
     def __baseline_before(self, about_handle: str) -> float:
         """The payoff base rate as it stood before this return's outcome was first scored,

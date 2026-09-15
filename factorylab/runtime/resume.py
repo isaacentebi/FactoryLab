@@ -126,7 +126,13 @@ def encode(value: Any) -> Any:
         return {"$enum": type(value).__name__, "value": value.value}
     if type(value) is int and value.bit_length() > 12000:
         return {"$int": hex(value)}
-    if value is None or type(value) in (str, int, bool):
+    if isinstance(value, str):
+        # A charter norm is its name and carries the definition its edition ratified
+        # (C3). Without a definition it checkpoints as the plain text it always was,
+        # so every checkpoint written before definitions existed is byte-identical.
+        definition = getattr(value, "definition", "")
+        return {"$norm": [str(value), definition]} if definition else str(value)
+    if value is None or type(value) in (int, bool):
         return value
     if type(value) is float:
         if not math.isfinite(value):
@@ -198,6 +204,11 @@ def decode(value: Any) -> Any:
         return {decode(v) for v in value["$set"]}
     if "$frozen" in value:
         return frozenset(decode(v) for v in value["$frozen"])
+    if "$norm" in value:
+        from factorylab.charter.charter import Norm
+
+        name, definition = value["$norm"]
+        return Norm(name, definition)
     if "$random" in value:
         rng = random.Random()
         rng.setstate(decode(value["$random"]))

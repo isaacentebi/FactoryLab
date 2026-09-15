@@ -60,6 +60,9 @@ def test_profitable_compliant_stability_is_not_learning_death(diary):
     flags = summary(diary(rows))["pathologies"]
     assert [f["kind"] for f in flags] == ["learning_death"]
     frontier = flags[0]["evidence"]["windows"][-1]["frontier"]
+    # Edition 3 adds the causal half: which access is lost. These windows carry no
+    # access facts at all, so nothing is reported lost — unknown is never a loss.
+    assert frontier.pop("lost_access") == []
     assert frontier == {"quiet": True, "improving": False, "holding": False,
                         "paid_off_slope": None, "realized_pnl_slope": None}
 

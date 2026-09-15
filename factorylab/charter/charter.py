@@ -2,10 +2,59 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from factorylab.charter.windows import MetricWindow
 from factorylab.cortex.registration import CONTRACT_ROLES, ROLES, event_name
+
+
+class Norm(str):
+    """A norm is its own name and carries the definition the edition ratified.
+
+    Edition 3 moves the substantive clauses out of TOML comments and into the
+    charter object. A norm is still exactly its name for every consumer that
+    compares, renders or serialises one (a card's ``norm`` field, the world
+    block, the roster survey), so a charter that never carried definitions is
+    byte-identical wherever it is written back out; the definition rides along
+    for :meth:`Charter.render` and anything that asks for it.
+    """
+
+    __slots__ = ("definition",)
+
+    def __new__(cls, name: str, definition: str = "") -> Norm:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("a norm needs a nonempty name")
+        if not isinstance(definition, str):
+            raise ValueError(f"norm {name} definition: must be a string")
+        norm = super().__new__(cls, name)
+        object.__setattr__(norm, "definition", definition.strip())
+        return norm
+
+    @classmethod
+    def parse(cls, raw: object) -> Norm:
+        """Accept a bare name (historical charters) or an ``{id, definition}`` table."""
+        if isinstance(raw, Norm):
+            return raw
+        if isinstance(raw, str):
+            return cls(raw)
+        if isinstance(raw, Mapping):
+            unknown = set(raw) - {"id", "definition"}
+            if unknown:
+                raise ValueError(f"norm fields: unknown {sorted(unknown)}")
+            if "id" not in raw:
+                raise ValueError("norm table needs an id")
+            return cls(raw["id"], raw.get("definition", ""))
+        raise ValueError("a norm is a name or a table of id and definition")
+
+    @property
+    def id(self) -> str:
+        """The norm's name, the identity a card's ``norm`` field names."""
+        return str(self)
+
+    def as_dict(self) -> dict:
+        """The table form: always the id, the definition only when there is one."""
+        return {"id": str(self), **({"definition": self.definition} if self.definition else {})}
 
 
 @dataclass(frozen=True)
@@ -50,7 +99,7 @@ class Charter:
     """Each edition retains its exact norms and checked cards."""
 
     edition: int
-    norms: tuple[str, ...]
+    norms: tuple[Norm, ...]
     cards: tuple[MetricCard, ...]
 
     def __post_init__(self) -> None:
@@ -58,6 +107,14 @@ class Charter:
             raise ValueError("charter edition starts at 1")
         if not self.norms:
             raise ValueError("a charter needs at least one norm")
+        # A bare name is the historical form and keeps an empty definition; an
+        # ``{id, definition}`` table is edition 3's. Either way a norm is its name.
+        norms = tuple(Norm.parse(n) for n in self.norms)
+        names = [str(n) for n in norms]
+        if len(set(names)) != len(names):
+            duplicate = next(name for name in names if names.count(name) > 1)
+            raise ValueError(f"norm {duplicate}: charter norms must be unique")
+        object.__setattr__(self, "norms", norms)
         ids = [c.id for c in self.cards]
         if len(set(ids)) != len(ids):
             duplicate = next(card_id for card_id in ids if ids.count(card_id) > 1)
@@ -70,20 +127,23 @@ class Charter:
                price_label: str | None = None) -> str:
         """Expose the full charter: the edition, every norm, and every card in order.
 
-        Guarantees each card renders its id, norm, description, units, window,
-        acceptable region, observation and accountability scope identically in
-        every case, and that the four cases differ in the ``lambda:`` line
-        alone. With ``prices``, it is that card's price, and ``0.0`` for a card
-        the mapping does not name. With ``price_label``, it is that label
-        verbatim, for every card. With both, ``price_label`` wins and ``prices``
-        is not read: a rendering that names where the prices are cannot also
-        inline numbers the controller moves at every closed window, which is the
-        whole reason the label exists — a disclosure that must hold still
-        between calls names ``world.card_prices`` and lets the moving numbers
-        travel there. With neither, it is ``unassigned``.
+        Guarantees each card renders its id, norm, description, units, window, acceptable
+        region, observation and accountability scope identically in every case, and that the
+        four cases differ in the ``lambda:`` line alone. A norm that carries a definition
+        renders it on the line under its name, so the clauses the edition ratified travel with
+        the charter rather than living in the manifest's comments. With ``prices``, it is that
+        card's price, and ``0.0`` for a card the mapping does not name. With ``price_label``, it
+        is that label verbatim, for every card. With both, ``price_label`` wins and ``prices``
+        is not read: a rendering that names where the prices are cannot also inline numbers the
+        controller moves at every closed window, which is the whole reason the label exists — a
+        disclosure that must hold still between calls names ``world.card_prices`` and lets the
+        moving numbers travel there. With neither, it is ``unassigned``.
         """
         lines = [f"CHARTER (edition {self.edition})", "", "NORMS"]
-        lines += [f"- {n}" for n in self.norms]
+        for n in self.norms:
+            lines.append(f"- {n.id}")
+            if n.definition:
+                lines.append(f"  {n.definition}")
         lines += ["", "METRIC CARDS"]
         for c in self.cards:
             lines += [
@@ -95,6 +155,43 @@ class Charter:
                     prices.get(c.id, 0.0) if prices is not None else "unassigned")),
             ]
         return "\n".join(lines)
+
+
+# The five norms of edition 3, with the definitions the edition carries in the
+# charter object rather than in the manifest's comments. The first four are the
+# architect's words as edition 2 wrote them; fidelity is GPT-6's elaboration
+# (docs/audits/v6/gpt6/architect-review.md, 5.5), which makes the objection a
+# structured, contestable claim rather than a judge's feeling.
+EDITION3_NORMS: tuple[Norm, ...] = (
+    Norm(
+        "consequential usefulness",
+        "Create things or changes that others have reason to value; uptake by an independent "
+        "counterparty is evidence, internal applause is a hypothesis.",
+    ),
+    Norm(
+        "epistemic integrity",
+        "Make commitments answerable to evidence and preserve the ability to discover that "
+        "they were wrong; a changed criterion does not rewrite what was promised.",
+    ),
+    Norm(
+        "durable agency",
+        "Steward the resources and capabilities that make future worthwhile choices possible; "
+        "spending for an enduring capability can be good stewardship, maintaining a dead "
+        "institution is not.",
+    ),
+    Norm(
+        "bounded reciprocity",
+        "Do not finance the factory's advantage by imposing unconsented costs on outsiders.",
+    ),
+    Norm(
+        "fidelity",
+        "Measurements are defeasible evidence of the values, not substitutes for them. A "
+        "favorable measurement is insufficient when supported consequences contradict the "
+        "value it represents. A judge identifying such a conflict must name the value, the "
+        "measurement, the evidence and the uncertainty, and make the claim open to challenge. "
+        "Missing measurement alone is not evidence of failure.",
+    ),
+)
 
 
 SEED_NORMS = (

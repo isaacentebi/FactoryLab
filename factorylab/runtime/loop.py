@@ -66,6 +66,7 @@ from factorylab.runtime.subscriptions import SubscriptionBook, ThinkingMixin
 from factorylab.runtime.summary import SummaryMixin, _as_unit
 from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
+from factorylab.settlement.vocabulary import evaluator_answer_schema
 from factorylab.world.clock import ClockSource, DripSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.market import X402Provider
@@ -994,19 +995,7 @@ class Runtime(
         if generic:
             inputs["event"] = {"kind": str(ev.kind), "payload": payload}
             inputs["subject_handle"] = about
-        schema = {
-            "type": "object",
-            "properties": {
-                "verdict": {"type": "number", "minimum": 0, "maximum": 1},
-                "payoff": {"type": "number", "minimum": 0, "maximum": 1},
-                "rationale": {"type": "string"},
-                "propensity": {"type": "object"},
-                "forecasts": self._forecast_schema(),
-                "register": self._register_schema(),
-                "about_handle": {"type": "string"},
-            },
-            "required": ["verdict", "payoff", "rationale", "forecasts"],
-        }
+        schema = evaluator_answer_schema(self._forecast_schema(), self._register_schema())
         req = self._request(
             handle,
             ("Evaluate the public return addressed by about_handle. The input's subject_handle "
