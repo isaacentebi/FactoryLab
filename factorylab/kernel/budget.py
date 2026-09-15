@@ -177,6 +177,23 @@ class BudgetBook:
                   unallocated_after=self.unallocated() + amount)
         self.__gross[seat] = after
 
+    def charge(self, assembly_id: str, amount: Money, reason: str) -> Money:
+        """Debit a loss from its maker down to a floor of zero; the rest lands on the pool.
+
+        Returns what the seat paid. The wallet has already booked the loss, so the
+        uncovered remainder is not new spending: it is the commons bearing what
+        the seat could not, and it is ledgered as ``commons`` on the same item.
+        """
+        seat = self._seat(assembly_id)
+        require_money(amount, nonnegative=True)
+        own = max(0, min(amount, self.entitlement(seat)))
+        after = self.__gross.get(seat, 0) - own
+        self._log("charge", assembly_id=seat, amount=amount, own=own, commons=amount - own,
+                  reason=reason, entitlement_after={seat: after - self.held_by(seat)},
+                  unallocated_after=self.unallocated() + own)
+        self.__gross[seat] = after
+        return own
+
     def transfer(self, src: str, dst: str, amount: Money, reason: str) -> None:
         """Move ``amount`` from one seat to another; refuses beyond the source's entitlement."""
         source, target = self._seat(src), self._seat(dst)

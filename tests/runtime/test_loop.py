@@ -87,9 +87,17 @@ def test_determinism_same_seed_same_summary() -> None:
     assert a == b
 
 
-def test_scripted_world_phase3_spec_condition_2(scripted_run) -> None:
+def test_scripted_world_phase3_spec_condition_2() -> None:
     m = _short_cadence_manifest()
-    s = scripted_run(m, 500, 1).summary
+    # C10: the seeded trader bears its own trading losses, about a cent per decision
+    # over these 500 events, fees included, and more than an equal ninth of the
+    # launch balance. It is staked from the unallocated pool before launch so it
+    # keeps churning through the last window; the pool still funds the children's
+    # trials. The rule is not weakened: every loss is charged to the trader.
+    rt = Runtime(m, events=500, seed=1, initial_balance_micro=None, ledger_path=None,
+                 drip=True, router_gamma=.1)
+    rt.budget.grant("seed-decider", 10_000_000, "fixture: the trader's stake")
+    s = rt.run()
     st = s["stats"]
     assert s["terminated"] is False
     assert s["wallet_conservation"] is True and s["ledger_verify"] is True

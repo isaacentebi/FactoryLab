@@ -124,12 +124,82 @@ def test_an_exhausted_seat_is_skipped_by_routing_while_others_keep_running(world
     rt.reserve._NoveltyReserve__remaining = 0
     feasible, reason = rt._is_feasible("funding-watcher")
     assert not feasible and reason.startswith("entitlement:")
-    assert rt._is_feasible("seed-decider")[0]
+    # a judge that only pays for its own thinking is still routed; the seeded trader,
+    # charged for every loss it made, may well be exhausted too by now
+    assert rt._is_feasible("meta-a")[0] and rt._is_feasible("eval-b")[0]
     assert not any(e["kind"] == "invocation" and e.get("status") == "failed"
                    and e.get("assembly_id") == "funding-watcher" for e in entries)
     # an exhausted entitlement is not insolvency: the world is alive and well formed
     assert not rt.termination.final and rt.insolvency_count == 0
     assert rt.stats.last_window_values["well_formed_rate"] == 1.0
+
+
+def test_a_settled_loss_debits_its_maker_to_a_floor_of_zero(world):
+    rt, entries = world
+    charges = [c for c in budget(entries, "charge") if c["reason"] == "return_paid_off"]
+    assert charges and all(c["assembly_id"] in rt.assemblies for c in charges)
+    assert all(c["amount"] == c["own"] + c["commons"] and c["own"] >= 0 for c in charges)
+    assert sum(c["own"] for c in charges) > 0
+    # the maker paid everything it could: commons appear only once its entitlement is empty
+    for charge in charges:
+        if charge["commons"]:
+            assert charge["entitlement_after"][charge["assembly_id"]] == 0
+    assert all(rt.budget.entitlement(seat) >= 0 for seat in rt.budget.seats())
+
+
+def test_a_released_tranche_is_split_across_live_seats_through_the_hook():
+    from tests.audit.test_e2_endowment import INITIAL, TICK, endowed, kinds
+
+    offset = 3 * TICK + TICK // 2
+    rt = endowed(INITIAL, ((offset, INITIAL),), events=8)
+    # everything locked at launch: genesis had nothing unlocked to classify
+    genesis = kinds(rt, "budget")[0]
+    assert genesis["op"] == "genesis" and genesis["backed"] == 0 and genesis["grants"] == {}
+    assert set(rt.budget.entitlements().values()) == {0}
+    rt.run()
+    releases = [i for i in kinds(rt, "budget") if i["op"] == "release"]
+    seats = [a.id for a in rt.m.assemblies]
+    share = 80_000_000 // len(seats)
+    assert len(releases) == 1 and releases[0]["amount"] == INITIAL
+    assert releases[0]["grants"] == {seat: share for seat in seats}
+    assert releases[0]["to_unallocated"] == INITIAL - share * len(seats)
+    items = kinds(rt, "release", "budget")
+    assert items.index(next(i for i in items if i["kind"] == "release")) < items.index(releases[0])
+    assert all(rt.budget.entitlement(seat) <= share for seat in seats)
+    assert any(rt.budget.entitlement(seat) < share for seat in seats)  # spent after waking
+    assert invariant(rt)
+
+
+def test_x402_income_credits_the_seat_that_owns_the_service(tmp_path):
+    from factorylab.world.income import IncomeSpool
+    from tests.conftest import make_runtime
+
+    rt = make_runtime(balance=90_000_000)
+    rt.tool_owner["doubler"] = "seed-decider"
+    rt.treasury.income_spool = tmp_path / "income.jsonl"
+    spool = IncomeSpool(rt.treasury.income_spool)
+    spool.append({"service": "doubler", "micro": 2_500, "tx": "0x" + "ab" * 32,
+                  "payer": "0x" + "cd" * 20, "program": "doubler", "version": 1, "ts": 7})
+    spool.append({"service": "orphan", "micro": 900, "tx": "0x" + "ef" * 32,
+                  "payer": "0x" + "cd" * 20, "program": "orphan", "version": 1, "ts": 8})
+    before = rt.budget.entitlement("seed-decider")
+    pool = rt.budget.unallocated()
+    rt._collect_income()
+    assert rt.budget.entitlement("seed-decider") == before + 2_500
+    assert rt.budget.unallocated() == pool - 2_500  # the pool backs the reclassification
+    items = [i for i in rt.ledger.ledger._recovery_items()
+             if i["kind"] in ("income.earned", "budget")]
+    earned = [i for i in items if i["kind"] == "income.earned"]
+    credits = [i for i in items if i["kind"] == "budget" and i["op"] == "credit"]
+    assert [e["service"] for e in earned] == ["doubler", "orphan"]
+    assert len(credits) == 1 and credits[0]["assembly_id"] == "seed-decider"
+    assert credits[0]["reason"] == "income.earned:doubler" and credits[0]["amount"] == 2_500
+    assert items.index(earned[0]) < items.index(credits[0])
+    # the tick collects the same spool and books nothing twice
+    rt.treasury.tick(rt.clock.now_ns)
+    rt._collect_income()
+    assert rt.budget.entitlement("seed-decider") == before + 2_500
+    assert rt.treasury.pots()["earned_micro"] == 3_400 and invariant(rt)
 
 
 def test_the_invariant_holds_at_every_ledgered_movement_and_at_the_end(world):

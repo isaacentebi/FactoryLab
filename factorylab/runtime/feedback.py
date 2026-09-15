@@ -428,19 +428,43 @@ class FeedbackMixin:
         self._count_consequence(self.handle_to_assembly.get(meta_handle))
 
     def _credit_consequence(self, payoff: Any) -> None:
-        """A settled return's net proceeds credit its owner's entitlement (C10).
+        """A settled return's net proceeds are its owner's, in both directions (C10).
 
-        The credit is bounded by the unallocated pool, so it classifies money the
-        wallet has already booked and never mints. A loss is already the wallet's
-        and the seat's standing's; the seat's own compute stays its own cost. A
-        marked outcome is an estimate at the backstop, not settled money, and
-        moves nothing.
+        Profit credits the owning seat's entitlement, bounded by the pool so it
+        classifies money the wallet has already booked and never mints. A loss
+        debits the owner down to a floor of zero; what the seat cannot cover lands
+        on the pool and is ledgered as such. A marked outcome is an estimate at the
+        backstop, not settled money, and moves nothing.
         """
         owner = self.handle_to_assembly.get(payoff.handle)
         if payoff.marked or owner is None or owner not in self.assemblies:
             return
         if payoff.net_micro > 0:
             self.budget.credit(owner, payoff.net_micro, "return_paid_off")
+        elif payoff.net_micro < 0:
+            self.budget.charge(owner, -payoff.net_micro, "return_paid_off")
+
+    def _book_income(self, item: dict) -> None:
+        """Earned x402 income credits the seat that owns the service's program (C11, C10).
+
+        The money sits in the reserve, so this is a pool-to-seat reclassification
+        like a paid-off credit, bounded by the pool. A service whose program has no
+        live owner (retired, or seeded without one) leaves the income in the pool.
+        """
+        program = item.get("program") or item.get("service")
+        owner = self.tool_owner.get(program)
+        micro = item.get("micro")
+        if owner in self.assemblies and type(micro) is int and micro > 0:
+            self.budget.credit(owner, micro, f"income.earned:{item.get('service')}")
+
+    def _collect_income(self) -> None:
+        """Book the seller's spooled receipts and credit each to its owning seat.
+
+        ``Treasury.tick`` collects the same spool and would book nothing new after
+        this: the consumed offset is part of the treasury snapshot.
+        """
+        for item in self.treasury.collect_income():
+            self._book_income(item)
 
     def _settle_due_forecasts(self) -> None:
         for payoff in self.consequences.resolve(self.n):

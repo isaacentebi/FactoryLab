@@ -65,6 +65,20 @@ def test_genesis_grant_debit_credit_transfer_and_unallocated(ledger, clock):
     assert ledger.verify()
 
 
+def test_charge_debits_a_loss_to_a_floor_of_zero_and_ledgers_the_rest_as_commons(ledger, clock):
+    wallet = Wallet(100_000, ledger, clock_ns=clock)
+    book = BudgetBook(wallet, ledger, clock_ns=clock)
+    book.genesis(["a", "b"])  # 40 000 each, 20 000 unallocated
+    wallet.settle(-50_000, "trade", "exchange_pnl")  # the loss is already the wallet's
+    assert book.charge("a", 30_000, "return_paid_off") == 30_000
+    assert book.entitlement("a") == 10_000 and book.unallocated() == 0
+    assert book.charge("a", 25_000, "return_paid_off") == 10_000
+    assert book.entitlement("a") == 0 and book.unallocated() == 10_000
+    charges = [i for i in budget_items(ledger) if i["op"] == "charge"]
+    assert [(c["own"], c["commons"]) for c in charges] == [(30_000, 0), (10_000, 15_000)]
+    assert invariant(book, wallet) and ledger.verify()
+
+
 def test_shared_wallet_spending_lands_on_the_pool_and_the_pool_is_signed(ledger, clock):
     wallet = Wallet(100_000, ledger, clock_ns=clock)
     book = BudgetBook(wallet, ledger, clock_ns=clock)
