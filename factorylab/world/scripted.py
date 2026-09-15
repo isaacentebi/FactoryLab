@@ -76,7 +76,10 @@ class ScriptedProvider:
         if "event Tick" in desc:
             try:
                 payload = inputs["payload"]
-                equity = Decimal(str(inputs["world"]["wallet_balance_usd"]))
+                # Edition 3 (C4) removed the root-wallet-only impression: what a
+                # seat reads to size a position is the trading equity in its own
+                # YOU block, which is the money the venue actually holds.
+                equity = Decimal(str(inputs["seat"]["world_resources"]["trading_equity_usd"]))
                 mid = Decimal(str(payload["mids"]["BTC"]))
                 phase = int(payload["index"]) % 4
             except (KeyError, ValueError, ArithmeticError, TypeError):
@@ -348,4 +351,43 @@ def _inputs_from_prompt(text: str) -> dict[str, Any]:
     if stable:
         moving = inputs.get("world")
         inputs["world"] = {**stable, **moving} if isinstance(moving, dict) else stable
+    return _with_seat_block(text, inputs)
+
+
+def _seat_block_from_prompt(text: str) -> dict[str, Any]:
+    """The rendered ``YOU`` block, as an object again."""
+    marker = "\nYOU\n"
+    start = text.find(marker)
+    if start < 0:
+        return {}
+    start = text.index("{", start + len(marker))
+    try:
+        block, _ = json.JSONDecoder().raw_decode(text[start:])
+    except (ValueError, json.JSONDecodeError):
+        return {}
+    return block if isinstance(block, dict) else {}
+
+
+def _with_seat_block(text: str, inputs: dict[str, Any]) -> dict[str, Any]:
+    """Reassemble the inputs a seat was actually shown, across the prompt's sections.
+
+    The rendered prompt splits one set of inputs across three blocks so that the
+    cacheable part can hold still and nothing is carried twice: the stable world
+    facts head the prompt, the seat's own account of itself follows in ``YOU``,
+    and the rest arrives in ``INPUTS``. A reader of the prompt is shown all of it
+    and should see all of it, so the continuity fields the ``YOU`` block carries
+    are put back under the names they were rendered from, exactly as the world
+    block above is put back together.
+    """
+    block = _seat_block_from_prompt(text)
+    continuity = block.get("continuity") if isinstance(block.get("continuity"), dict) else {}
+    if not continuity:
+        return inputs
+    inputs["seat"] = block
+    for name in ("your_state", "unread_outcomes"):
+        if name in continuity:
+            inputs[name] = continuity[name]
+    fold = continuity.get("since_you_last_woke")
+    if fold is not None and isinstance(inputs.get("payload"), dict):
+        inputs["payload"] = {**inputs["payload"], "since_you_last_woke": fold}
     return inputs

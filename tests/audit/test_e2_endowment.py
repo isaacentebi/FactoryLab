@@ -136,7 +136,9 @@ def test_rent_is_collected_at_window_boundaries_by_elapsed_time_not_by_window_co
     rt._manage_reserve_window()
     handle = decision(rt)
     text = "x" * (262144 - 4)
-    assert put(rt, handle, text=text)[1] == 262144  # the per-byte transfer price
+    # The flat call price: the transfer toll is gone (C4) and rent is what follows.
+    assert put(rt, handle, text=text)[1] == 1
+    assert rt.notes["fact"]["bytes"] == 262144
     before = rt.wallet.balance
     rt.clock.now_ns += NS_PER_DAY
     rt._manage_reserve_window()
@@ -149,5 +151,5 @@ def test_rent_is_collected_at_window_boundaries_by_elapsed_time_not_by_window_co
     # An overwrite inherits the open interval: rewriting forgives nothing.
     rt.clock.now_ns += NS_PER_DAY // 2
     result, cost = put(rt, handle, text="short")
-    assert "error" not in result and cost == 4 + 5
+    assert "error" not in result and cost == 1
     assert rt.notes["fact"]["rent_ns"] == rt.clock.now_ns - NS_PER_DAY // 2

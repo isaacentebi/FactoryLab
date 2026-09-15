@@ -71,6 +71,13 @@ class RunStats:
     invocations_by_role: dict[str, int] = field(default_factory=dict)
     stop_reasons: dict[str, int] = field(default_factory=dict)
     invocations_by_assembly: dict[str, int] = field(default_factory=dict)
+    # Metered spend per seat in half-day buckets, keyed by the bucket index as text,
+    # at most the latest two per seat: the burn a seat is shown in its own world
+    # block (edition 3, C4). Two numbers a seat rather than a log, so it costs the
+    # snapshot almost nothing and resumes with the rest of the stats — a restored
+    # runtime reports the burn its diary actually recorded.
+    spend_buckets: dict[str, dict[str, int]] = field(default_factory=dict)
+    spend_observed_from_ns: int | None = None
     # settled consequences delivered per assembly (the novelty reserve's trials)
     consequences_by_assembly: dict[str, int] = field(default_factory=dict)
     registered_window: dict[str, int] = field(default_factory=dict)  # assembly -> window index

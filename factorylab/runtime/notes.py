@@ -9,8 +9,17 @@ often can never round it up and collecting it rarely can never round it down.
 Rent is a liability of the decision that holds the note, resumable with the
 notebook itself: an unpaid accrual stays outstanding until it is paid, and a
 paid one is attributed to that decision's cost, not merely subtracted from the
-wallet. ``byte_window_micro`` remains the exact per-byte price of moving text
-in a put or a get; it no longer prices storage.
+wallet.
+
+There is no longer a transfer toll (edition 3, C4). ``byte_window_micro`` used to
+price every byte moved in a put or a get, which made a 4 KiB read cost about
+$0.0041 before the model had consumed one character of it — more than a cheap
+model call, and a charge with no resource behind it, since moving bytes inside
+one process costs the factory nothing. Byte-time rent stays: storage is a real
+resource and a note nobody will pay to keep should go. What remains of
+``byte_window_micro`` is the flat per-call price of a notebook tool, so a world's
+manifest still bounds how often the notebook is touched. Remembering must not be
+made more expensive than producing another unsupported paragraph.
 """
 
 from copy import deepcopy
@@ -19,13 +28,15 @@ from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 
 NS_PER_DAY = 24 * 3_600 * 1_000_000_000
+#: Rows one ``note.list`` page returns before a cursor is needed.
+PAGE = 50
 #: 262144 bytes at 0.04 micro-USD per byte-day is 10485.76 micro-USD, about a cent a day.
 DEFAULT_MICRO_PER_BYTE_DAY = "0.04"
 
 
 @dataclass(frozen=True)
 class NotesSpec:
-    """The world's notebook capacity, per-byte call price and byte-day rent are fixed at launch."""
+    """The world's notebook capacity, flat call price and byte-day rent are fixed at launch."""
 
     max_keys: int = 128
     max_bytes: int = 262144
@@ -55,7 +66,7 @@ class NotesSpec:
 
 
 def specs(bounds: NotesSpec) -> dict:
-    """Both population tools expose bounded keys and a price determined before dispatch."""
+    """The notebook's paying tools expose bounded keys and a flat price before dispatch."""
     key = {"type": "string", "minLength": 1, "maxLength": 128}
     return {f"note.{name}": {
         "id": f"note.{name}", "kind": "note", "description": description,
@@ -64,10 +75,60 @@ def specs(bounds: NotesSpec) -> dict:
         "price_micro_per_call": bounds.byte_window_micro,
     } for name, properties, description in (
         ("put", {"key": key, "text": {"type": "string", "maxLength": bounds.max_bytes}},
-         "Register or overwrite public text under a key; UTF-8 bytes are charged per byte "
-         "and the retained text pays rent by byte-time."),
+         "Register or overwrite public text under a key; the retained text pays rent by "
+         "byte-time and no per-byte transfer charge applies."),
         ("get", {"key": key},
-         "Read public text, paying returned bytes and any outstanding storage rent."))}
+         "Read public text, paying any outstanding storage rent on the key."))}
+
+
+def list_spec() -> dict:
+    """The notebook's index tool, free like ``artifact.get``.
+
+    A directory nobody can afford to read is not a directory, and the index
+    carries no text — only what a reader needs to decide which key is worth
+    paying that key's rent for. It is registered beside ``artifact.list`` rather
+    than with the paying notebook tools, so a world that predates the shared
+    directory grows it on resume without a manifest change.
+    """
+    return {
+        "id": "note.list", "kind": "note",
+        "description": f"Index the notebook: up to {PAGE} rows of key, bytes, version, "
+        "owner seat and the window last written, newest first, with a cursor for the next "
+        "page. Notes are public by construction; the index carries no text, so a reader "
+        "need not already know a key.",
+        "args_schema": {"type": "object",
+                        "properties": {"cursor": {"type": "string", "maxLength": 128}},
+                        "additionalProperties": False,
+                        # Every published tool carries examples its own schema accepts (B1).
+                        "examples": [{}, {"cursor": "shared-plan"}]},
+        "price_micro_per_call": 0,
+    }
+
+
+def index(entries: dict, cursor: str | None = None) -> dict:
+    """One page of the notebook's index: keys and metadata, never text.
+
+    Guarantees the paging is total and stable: rows are ordered by the window
+    last written and then by key, a cursor names the row to resume after, and the
+    page that ends the listing returns ``next_cursor`` of ``None``. An unknown
+    cursor yields an empty final page rather than the first one again, so a
+    caller can never loop. Nothing here discloses a note's contents: a reader who
+    wants the text calls ``note.get`` and pays that key's outstanding rent.
+    """
+    rows = sorted(
+        ({"key": key, "title": key, "type": "note", "bytes": entry["bytes"],
+          "version": entry["version"], "owner": entry.get("owner"),
+          "updated_window": entry.get("window"), "public": True}
+         for key, entry in entries.items()),
+        key=lambda row: (-(row["updated_window"] or 0), row["key"]))
+    start = 0
+    if cursor:
+        keys = [row["key"] for row in rows]
+        start = keys.index(cursor) + 1 if cursor in keys else len(rows)
+    page = rows[start:start + PAGE]
+    following = start + len(page)
+    return {"items": page, "count": len(rows),
+            "next_cursor": page[-1]["key"] if page and following < len(rows) else None}
 
 
 def counts(entries: dict) -> dict:
@@ -79,9 +140,11 @@ def prepare(entries: dict, bounds: NotesSpec, tool: str, args: dict,
             window: int) -> tuple[dict, int]:
     """A detached successor and exact price are validated before any debit or overwrite.
 
-    The price is the per-byte transfer of the text moved plus whatever rent the
-    key already owes; it depends on nothing but the notebook and the request, so
-    the dispatcher's ceiling check and the paid call agree exactly.
+    The price is the notebook tool's flat call price plus whatever rent the key
+    already owes; it depends on nothing but the notebook and the request, so the
+    dispatcher's ceiling check and the paid call agree exactly. Nothing is
+    charged per byte moved: the bytes cost the factory nothing to move, and rent
+    already prices the bytes that stay.
     """
     if tool not in ("note.put", "note.get"):
         raise ValueError("unknown note tool")
@@ -104,14 +167,17 @@ def prepare(entries: dict, bounds: NotesSpec, tool: str, args: dict,
     if counts(entries)["bytes"] - (previous["bytes"] if previous else 0) + size > bounds.max_bytes:
         raise ValueError("notes.max_bytes exceeded")
     owed = previous.get("rent_due", 0) if previous else 0
-    cost = size * bounds.byte_window_micro + owed
+    cost = bounds.byte_window_micro + owed
     entry = {"text": text, "bytes": size, "window": window,
              "version": (previous["version"] if previous else 0) + (tool == "note.put"),
              # Accrual continues from the last boundary the key was accounted to: an
              # overwrite inherits the open interval, so no rent is forgiven by rewriting.
              "rent_ns": previous.get("rent_ns") if previous else None,
              "rent_carry": previous.get("rent_carry", 0) if previous else 0,
-             "rent_due": 0}
+             "rent_due": 0,
+             # The seat that wrote the key, so the directory can say who owns a row.
+             # An overwrite by another seat takes ownership with the liability.
+             "owner": previous.get("owner") if previous else None}
     return deepcopy(entry), cost
 
 
@@ -172,6 +238,8 @@ def run(rt, action_id: str, handle: str, tool: str, args: dict, *, ceiling: int 
         if price > available or ceiling is not None and price > ceiling:
             raise ValueError("note exceeds caller available compute")
         entry["handle"] = handle if tool == "note.put" else entries[args["key"]]["handle"]
+        if tool == "note.put":
+            entry["owner"] = action_id
         if entry["rent_ns"] is None:
             entry["rent_ns"] = rt.clock.now_ns  # a new key accrues from the moment it is written
         def read():

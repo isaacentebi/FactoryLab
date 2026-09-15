@@ -293,7 +293,9 @@ def test_a1_public_seed_contracts_and_manifest_bounds_are_truthful():
     assert world['mechanics']['tools'] == {
         'max_depth': 4, 'max_children': 3, 'max_tool_calls': 4, 'continuations_per_request': 1}
     assert world['reserved_return_fields']['requests']['maxItems'] == 3
-    assert world['proposal_shapes']['retire']['kind'] == 'retire'
+    # The block indexes each kind in one line; catalogue.search returns the shape.
+    assert 'assembly' in world['proposal_shapes']['retire']
+    assert rt.PROPOSAL_SHAPES['retire']['kind'] == 'retire'
     # The prompt composes; the mechanics it used to announce are published as data only.
     assert 'cannot request further' not in SEED_SYSTEM_PROMPT
     for announced in ('depth', 'fan-out', 'children', 'continuation', 'cost', 'ceiling',

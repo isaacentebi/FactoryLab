@@ -138,9 +138,19 @@ def test_state_is_the_programs_and_never_the_returns():
     assert "state" not in asm.invoke(req()).outputs
 
 
+#: A program that never stops is stopped by whichever bound trips first. The jail
+#: sets the CPU rlimit to the same number of seconds as the wall timeout
+#: (``sandbox.run_python``, ``cpu_s=timeout_s``), so a busy loop races them: the
+#: wall clock reports ``timeout`` and SIGXCPU reports ``exit -24``, and how long
+#: the program spent blocked reading its stdin decides which. Both are the same
+#: contract — a billed malformed return, never an exception — and the runtime
+#: never promised which limit would name it.
+OVERRAN = ("timeout", "exit -24")
+
+
 @pytest.mark.parametrize("code, reason", [
-    ("raise SystemExit(3)", "exit 3"),
-    ("import sys\nsys.stdin.read()\nwhile True:\n    pass\n", "timeout"),
+    ("raise SystemExit(3)", ("exit 3",)),
+    ("import sys\nsys.stdin.read()\nwhile True:\n    pass\n", OVERRAN),
     ("print('not json')", None),
     ("import json\nprint(json.dumps({'status': 7}))", None),
 ])
@@ -151,7 +161,7 @@ def test_failure_is_a_billed_malformed_return_never_an_exception(code, reason):
     assert ret.status == "malformed" and ret.cost == PRICE
     assert wallet.log == [("reserve", PRICE), ("commit", PRICE)]
     if reason:
-        assert ret.outputs["reason"] == reason
+        assert ret.outputs["reason"] in reason
     else:
         assert "raw" in ret.outputs
     assert asm.state_sha is None and recorded[0]["status"] == "malformed"

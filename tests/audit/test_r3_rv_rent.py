@@ -50,7 +50,9 @@ def writer(rt):
     rt._start_return(handle)
     result, cost = rt._run_tool("seed-decider", handle, {
         "tool": "note.put", "args": {"key": "fact", "text": "public fact"}})
-    assert "error" not in result and cost == RENT
+    # The put pays the flat call price; the 15 bytes it retains are what accrue RENT.
+    assert "error" not in result and cost == rt.m.notes.byte_window_micro
+    assert rt.notes["fact"]["bytes"] == RENT
     rt.consequences.order_result(
         handle, {"status": "filled", "order_id": "1", "filled_size": "1"}, {"size": "1"}, 0)
     rt.consequences.observe("Fill", {
@@ -129,11 +131,18 @@ def test_a_carried_liability_is_money_and_cannot_reopen_a_fixed_outcome():
 
 
 def stored_writer(rt, *, own_cost, note_bytes, status="ok"):
-    """One producer return that both answers and retains a public note."""
+    """One producer return that both answers and retains a public note.
+
+    The put costs the notebook's flat call price and nothing per byte: edition 3
+    removed the transfer toll and left byte-time rent, which is what every test
+    below measures. The retained size is still ``note_bytes``, so the rent these
+    tests move is unchanged.
+    """
     handle = returned(rt, "seed-decider", "producer", own_cost, status=status)
     result, cost = rt._run_tool("seed-decider", handle, {
         "tool": "note.put", "args": {"key": "fact", "text": "x" * (note_bytes - 4)}})
-    assert "error" not in result and cost == note_bytes
+    assert "error" not in result and cost == rt.m.notes.byte_window_micro
+    assert rt.notes["fact"]["bytes"] == note_bytes
     return handle
 
 

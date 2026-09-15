@@ -270,7 +270,9 @@ def test_observatory_contains_connector_versions_and_daily_counts(monkeypatch):
     connectors = json.dumps(block["connectors"])
     assert not any(word in connectors for word in
                    ("admission", "preflight", "sortition", "vote", "majority", "committee"))
-    assert block["proposal_shapes"]["connector"] == {
+    # The block indexes the kind; the shape itself is one catalogue.search away.
+    assert "outside GET source" in block["proposal_shapes"]["connector"]
+    assert rt._proposal_shape_search("connector")["connector"] == {
         "kind": "connector", "id": "public-source", "description": "Public information",
         "origin": "https://example.org",
         "preflight_path": "/data", "pay": "x402", "max_call_usd": "0.003",
