@@ -1,0 +1,5354 @@
+{
+  "seat_grants": {
+    "definition": "each candidate seat's endowment from the unallocated pool, the bound on what it may spend over the whole calibration; a tree refused by it is flagged entitlement_refused, not the model's",
+    "grant_micro": 85714,
+    "seats": {
+      "z-ai/glm-5.3-flash": {
+        "producer": {
+          "seat": "cal:z-ai/glm-5.3-flash:producer",
+          "grant_micro": 85714
+        },
+        "evaluator": {
+          "seat": "cal:z-ai/glm-5.3-flash:evaluator",
+          "grant_micro": 85714
+        },
+        "meta": {
+          "seat": "cal:z-ai/glm-5.3-flash:meta",
+          "grant_micro": 85714
+        },
+        "tool": {
+          "seat": "cal:z-ai/glm-5.3-flash:tool",
+          "grant_micro": 85714
+        },
+        "fail": {
+          "seat": "cal:z-ai/glm-5.3-flash:fail",
+          "grant_micro": 85714
+        },
+        "parent": {
+          "seat": "cal:z-ai/glm-5.3-flash:parent",
+          "grant_micro": 85714
+        },
+        "helper": {
+          "seat": "cal:z-ai/glm-5.3-flash:helper",
+          "grant_micro": 85714
+        }
+      },
+      "deepseek/deepseek-v4.1-flash": {
+        "producer": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:producer",
+          "grant_micro": 85714
+        },
+        "evaluator": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:evaluator",
+          "grant_micro": 85714
+        },
+        "meta": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:meta",
+          "grant_micro": 85714
+        },
+        "tool": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:tool",
+          "grant_micro": 85714
+        },
+        "fail": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:fail",
+          "grant_micro": 85714
+        },
+        "parent": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:parent",
+          "grant_micro": 85714
+        },
+        "helper": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:helper",
+          "grant_micro": 85714
+        }
+      },
+      "deepseek/deepseek-v4-flash-0731": {
+        "producer": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:producer",
+          "grant_micro": 85714
+        },
+        "evaluator": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:evaluator",
+          "grant_micro": 85714
+        },
+        "meta": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:meta",
+          "grant_micro": 85714
+        },
+        "tool": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:tool",
+          "grant_micro": 85714
+        },
+        "fail": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:fail",
+          "grant_micro": 85714
+        },
+        "parent": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:parent",
+          "grant_micro": 85714
+        },
+        "helper": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:helper",
+          "grant_micro": 85714
+        }
+      },
+      "qwen/qwen3.8-flash": {
+        "producer": {
+          "seat": "cal:qwen/qwen3.8-flash:producer",
+          "grant_micro": 85714
+        },
+        "evaluator": {
+          "seat": "cal:qwen/qwen3.8-flash:evaluator",
+          "grant_micro": 85714
+        },
+        "meta": {
+          "seat": "cal:qwen/qwen3.8-flash:meta",
+          "grant_micro": 85714
+        },
+        "tool": {
+          "seat": "cal:qwen/qwen3.8-flash:tool",
+          "grant_micro": 85714
+        },
+        "fail": {
+          "seat": "cal:qwen/qwen3.8-flash:fail",
+          "grant_micro": 85714
+        },
+        "parent": {
+          "seat": "cal:qwen/qwen3.8-flash:parent",
+          "grant_micro": 85714
+        },
+        "helper": {
+          "seat": "cal:qwen/qwen3.8-flash:helper",
+          "grant_micro": 85714
+        }
+      },
+      "qwen/qwen3.7-flash": {
+        "producer": {
+          "seat": "cal:qwen/qwen3.7-flash:producer",
+          "grant_micro": 85714
+        },
+        "evaluator": {
+          "seat": "cal:qwen/qwen3.7-flash:evaluator",
+          "grant_micro": 85714
+        },
+        "meta": {
+          "seat": "cal:qwen/qwen3.7-flash:meta",
+          "grant_micro": 85714
+        },
+        "tool": {
+          "seat": "cal:qwen/qwen3.7-flash:tool",
+          "grant_micro": 85714
+        },
+        "fail": {
+          "seat": "cal:qwen/qwen3.7-flash:fail",
+          "grant_micro": 85714
+        },
+        "parent": {
+          "seat": "cal:qwen/qwen3.7-flash:parent",
+          "grant_micro": 85714
+        },
+        "helper": {
+          "seat": "cal:qwen/qwen3.7-flash:helper",
+          "grant_micro": 85714
+        }
+      },
+      "openai/gpt-5.6-luna": {
+        "producer": {
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "grant_micro": 85714
+        },
+        "evaluator": {
+          "seat": "cal:openai/gpt-5.6-luna:evaluator",
+          "grant_micro": 85714
+        },
+        "meta": {
+          "seat": "cal:openai/gpt-5.6-luna:meta",
+          "grant_micro": 85714
+        },
+        "tool": {
+          "seat": "cal:openai/gpt-5.6-luna:tool",
+          "grant_micro": 85714
+        },
+        "fail": {
+          "seat": "cal:openai/gpt-5.6-luna:fail",
+          "grant_micro": 85714
+        },
+        "parent": {
+          "seat": "cal:openai/gpt-5.6-luna:parent",
+          "grant_micro": 85714
+        },
+        "helper": {
+          "seat": "cal:openai/gpt-5.6-luna:helper",
+          "grant_micro": 85714
+        }
+      },
+      "meta/muse-spark-1.3": {
+        "producer": {
+          "seat": "cal:meta/muse-spark-1.3:producer",
+          "grant_micro": 85714
+        },
+        "evaluator": {
+          "seat": "cal:meta/muse-spark-1.3:evaluator",
+          "grant_micro": 85714
+        },
+        "meta": {
+          "seat": "cal:meta/muse-spark-1.3:meta",
+          "grant_micro": 85714
+        },
+        "tool": {
+          "seat": "cal:meta/muse-spark-1.3:tool",
+          "grant_micro": 85714
+        },
+        "fail": {
+          "seat": "cal:meta/muse-spark-1.3:fail",
+          "grant_micro": 85714
+        },
+        "parent": {
+          "seat": "cal:meta/muse-spark-1.3:parent",
+          "grant_micro": 85714
+        },
+        "helper": {
+          "seat": "cal:meta/muse-spark-1.3:helper",
+          "grant_micro": 85714
+        }
+      },
+      "venice:z-ai-glm-5-3-flash": {
+        "producer": {
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "grant_micro": 85714
+        },
+        "evaluator": {
+          "seat": "cal:venice:z-ai-glm-5-3-flash:evaluator",
+          "grant_micro": 85714
+        },
+        "meta": {
+          "seat": "cal:venice:z-ai-glm-5-3-flash:meta",
+          "grant_micro": 85714
+        },
+        "tool": {
+          "seat": "cal:venice:z-ai-glm-5-3-flash:tool",
+          "grant_micro": 85714
+        },
+        "fail": {
+          "seat": "cal:venice:z-ai-glm-5-3-flash:fail",
+          "grant_micro": 85714
+        },
+        "parent": {
+          "seat": "cal:venice:z-ai-glm-5-3-flash:parent",
+          "grant_micro": 85714
+        },
+        "helper": {
+          "seat": "cal:venice:z-ai-glm-5-3-flash:helper",
+          "grant_micro": 85714
+        }
+      },
+      "venice:deepseek-v4-1-flash": {
+        "producer": {
+          "seat": "cal:venice:deepseek-v4-1-flash:producer",
+          "grant_micro": 85714
+        },
+        "evaluator": {
+          "seat": "cal:venice:deepseek-v4-1-flash:evaluator",
+          "grant_micro": 85714
+        },
+        "meta": {
+          "seat": "cal:venice:deepseek-v4-1-flash:meta",
+          "grant_micro": 85714
+        },
+        "tool": {
+          "seat": "cal:venice:deepseek-v4-1-flash:tool",
+          "grant_micro": 85714
+        },
+        "fail": {
+          "seat": "cal:venice:deepseek-v4-1-flash:fail",
+          "grant_micro": 85714
+        },
+        "parent": {
+          "seat": "cal:venice:deepseek-v4-1-flash:parent",
+          "grant_micro": 85714
+        },
+        "helper": {
+          "seat": "cal:venice:deepseek-v4-1-flash:helper",
+          "grant_micro": 85714
+        }
+      },
+      "venice:qwen-3-8-flash": {
+        "producer": {
+          "seat": "cal:venice:qwen-3-8-flash:producer",
+          "grant_micro": 85714
+        },
+        "evaluator": {
+          "seat": "cal:venice:qwen-3-8-flash:evaluator",
+          "grant_micro": 85714
+        },
+        "meta": {
+          "seat": "cal:venice:qwen-3-8-flash:meta",
+          "grant_micro": 85714
+        },
+        "tool": {
+          "seat": "cal:venice:qwen-3-8-flash:tool",
+          "grant_micro": 85714
+        },
+        "fail": {
+          "seat": "cal:venice:qwen-3-8-flash:fail",
+          "grant_micro": 85714
+        },
+        "parent": {
+          "seat": "cal:venice:qwen-3-8-flash:parent",
+          "grant_micro": 85714
+        },
+        "helper": {
+          "seat": "cal:venice:qwen-3-8-flash:helper",
+          "grant_micro": 85714
+        }
+      }
+    },
+    "unallocated_after_micro": 26
+  },
+  "manifest": {
+    "name": "edition2-testnet",
+    "manifest_sha256": "9eb460e4b3d4c974feefbc7cd6a5e182defda231f4f33a5d3cb4ac060fa9d224",
+    "roster_sha256": "3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb",
+    "menu": [
+      "deepseek/deepseek-v4-flash-0731",
+      "deepseek/deepseek-v4.1-flash",
+      "meta/muse-spark-1.3",
+      "openai/gpt-5.6-luna",
+      "qwen/qwen3.7-flash",
+      "qwen/qwen3.8-flash",
+      "venice:deepseek-v4-1-flash",
+      "venice:qwen-3-8-flash",
+      "venice:z-ai-glm-5-3-flash",
+      "z-ai/glm-5.3-flash"
+    ]
+  },
+  "provider": "market",
+  "offline": false,
+  "scripted_exchange": true,
+  "production_effects": false,
+  "repeats": 2,
+  "seed": 7,
+  "long_context_bytes": 160000,
+  "budget": {
+    "budget_micro": 3000000,
+    "spent_micro": 667183,
+    "remaining_micro": 2332817,
+    "refused_calls": 0,
+    "stopped": null
+  },
+  "planned_first_call_ceiling_micro": {
+    "z-ai/glm-5.3-flash": 166904,
+    "deepseek/deepseek-v4.1-flash": 222285,
+    "deepseek/deepseek-v4-flash-0731": 72120,
+    "qwen/qwen3.8-flash": 166865,
+    "qwen/qwen3.7-flash": 33693,
+    "openai/gpt-5.6-luna": 227435,
+    "meta/muse-spark-1.3": 1395628,
+    "venice:z-ai-glm-5-3-flash": 167405,
+    "venice:deepseek-v4-1-flash": 421255,
+    "venice:qwen-3-8-flash": 156667
+  },
+  "wallet_spent_micro": 667183,
+  "tick_cost": {
+    "definition": "one producer decision on a Tick, one evaluator verdict on it, one meta assessment of that verdict; each at the p50 metered cost of its whole decision tree",
+    "manifest_roster": {
+      "parts": {
+        "producer": {
+          "seat": "seed-observer",
+          "model": "z-ai/glm-5.3-flash",
+          "cost_p50_micro": 2768.5
+        },
+        "evaluator": {
+          "seat": "eval-a",
+          "model": "venice:z-ai-glm-5-3-flash",
+          "cost_p50_micro": 1853.0
+        },
+        "meta": {
+          "seat": "meta-a",
+          "model": "venice:deepseek-v4-1-flash",
+          "cost_p50_micro": 1500.0
+        }
+      },
+      "tick_cost_micro": 6121
+    },
+    "per_candidate": {
+      "z-ai/glm-5.3-flash": 8637,
+      "deepseek/deepseek-v4.1-flash": 11397,
+      "deepseek/deepseek-v4-flash-0731": 1135,
+      "qwen/qwen3.8-flash": 4537,
+      "qwen/qwen3.7-flash": 1220,
+      "openai/gpt-5.6-luna": 19307,
+      "meta/muse-spark-1.3": null,
+      "venice:z-ai-glm-5-3-flash": 7847,
+      "venice:deepseek-v4-1-flash": 8024,
+      "venice:qwen-3-8-flash": 5864
+    }
+  },
+  "columns": [
+    "candidate",
+    "trees",
+    "completion",
+    "well_formed",
+    "task_met",
+    "refusal_correct",
+    "cost_p50_micro",
+    "cost_p95_micro",
+    "latency_p50_ms",
+    "cached_share",
+    "tick_cost_micro"
+  ],
+  "candidates": {
+    "z-ai/glm-5.3-flash": {
+      "candidate": "z-ai/glm-5.3-flash",
+      "trees": 14,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 85714,
+      "entitlement_refused_trees": 0,
+      "completion": 1.0,
+      "well_formed": 0.7857,
+      "task_met": 0.7857,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 2951.0,
+      "cost_p95_micro": 7120.55,
+      "latency_p50_ms": 5100.55,
+      "cached_share": 0.0021,
+      "cached_reported_trees": 14,
+      "tick_cost_micro": 8637,
+      "served_by": [
+        "z-ai/glm-5.3-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2768.5,
+          "cost_p95_micro": 2795.05,
+          "latency_p50_ms": 4785.15,
+          "prompt_bytes_max": 91984
+        },
+        "judge": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2967.0,
+          "cost_p95_micro": 2968.8,
+          "latency_p50_ms": 5271.35,
+          "prompt_bytes_max": 98007
+        },
+        "meta": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2902.0,
+          "cost_p95_micro": 2933.5,
+          "latency_p50_ms": 15271.85,
+          "prompt_bytes_max": 95342
+        },
+        "tool": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 6508.5,
+          "cost_p95_micro": 6519.75,
+          "latency_p50_ms": 7666.95,
+          "prompt_bytes_max": 91285
+        },
+        "fail": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2727.5,
+          "cost_p95_micro": 2736.95,
+          "latency_p50_ms": 3127.05,
+          "prompt_bytes_max": 91243
+        },
+        "continuation": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 0.5,
+          "task_met": 0.5,
+          "cost_p50_micro": 5497.5,
+          "cost_p95_micro": 7960.35,
+          "latency_p50_ms": 6553.45,
+          "prompt_bytes_max": 91282
+        },
+        "long_context": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 4528.5,
+          "cost_p95_micro": 4528.95,
+          "latency_p50_ms": 3671.15,
+          "prompt_bytes_max": 160613
+        }
+      }
+    },
+    "deepseek/deepseek-v4.1-flash": {
+      "candidate": "deepseek/deepseek-v4.1-flash",
+      "trees": 14,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 85714,
+      "entitlement_refused_trees": 0,
+      "completion": 1.0,
+      "well_formed": 1.0,
+      "task_met": 1.0,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 2182.0,
+      "cost_p95_micro": 12116.6,
+      "latency_p50_ms": 5721.45,
+      "cached_share": 0.6226,
+      "cached_reported_trees": 14,
+      "tick_cost_micro": 11397,
+      "served_by": [
+        "deepseek/deepseek-v4.1-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 4194.0,
+          "cost_p95_micro": 7186.5,
+          "latency_p50_ms": 4952.35,
+          "prompt_bytes_max": 92131
+        },
+        "judge": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 3762.0,
+          "cost_p95_micro": 5560.2,
+          "latency_p50_ms": 8793.65,
+          "prompt_bytes_max": 98154
+        },
+        "meta": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 3441.0,
+          "cost_p95_micro": 5330.1,
+          "latency_p50_ms": 13309.75,
+          "prompt_bytes_max": 95489
+        },
+        "tool": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 12944.0,
+          "cost_p95_micro": 15426.2,
+          "latency_p50_ms": 7453.7,
+          "prompt_bytes_max": 91432
+        },
+        "fail": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 726.0,
+          "cost_p95_micro": 736.8,
+          "latency_p50_ms": 3942.6,
+          "prompt_bytes_max": 91390
+        },
+        "continuation": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2182.0,
+          "cost_p95_micro": 2216.2,
+          "latency_p50_ms": 12187.95,
+          "prompt_bytes_max": 91449
+        },
+        "long_context": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 4094.5,
+          "cost_p95_micro": 6532.15,
+          "latency_p50_ms": 3888.05,
+          "prompt_bytes_max": 160693
+        }
+      }
+    },
+    "deepseek/deepseek-v4-flash-0731": {
+      "candidate": "deepseek/deepseek-v4-flash-0731",
+      "trees": 14,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 85714,
+      "entitlement_refused_trees": 0,
+      "completion": 0.8571,
+      "well_formed": 0.5714,
+      "task_met": 0.1429,
+      "refusal_correct": 0.5,
+      "cost_p50_micro": 372.5,
+      "cost_p95_micro": 529.9,
+      "latency_p50_ms": 4196.25,
+      "cached_share": 0.8568,
+      "cached_reported_trees": 12,
+      "tick_cost_micro": 1135,
+      "served_by": [
+        "deepseek/deepseek-v4-flash-0731"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 371.0,
+          "cost_p95_micro": 372.8,
+          "latency_p50_ms": 4110.15,
+          "prompt_bytes_max": 92134
+        },
+        "judge": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 386.0,
+          "cost_p95_micro": 386.9,
+          "latency_p50_ms": 5992.0,
+          "prompt_bytes_max": 98157
+        },
+        "meta": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 378.0,
+          "cost_p95_micro": 378.0,
+          "latency_p50_ms": 3618.3,
+          "prompt_bytes_max": 95492
+        },
+        "tool": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 369.5,
+          "cost_p95_micro": 370.85,
+          "latency_p50_ms": 4548.25,
+          "prompt_bytes_max": 91435
+        },
+        "fail": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 0.5,
+          "task_met": 0.5,
+          "cost_p50_micro": 371.5,
+          "cost_p95_micro": 371.95,
+          "latency_p50_ms": 4066.8,
+          "prompt_bytes_max": 91393
+        },
+        "continuation": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.5,
+          "task_met": 0.0,
+          "cost_p50_micro": 371.0,
+          "cost_p95_micro": 371.0,
+          "latency_p50_ms": 4122.0,
+          "prompt_bytes_max": 91458
+        },
+        "long_context": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 0.5,
+          "cost_p50_micro": 530.0,
+          "cost_p95_micro": 530.9,
+          "latency_p50_ms": 3378.7,
+          "prompt_bytes_max": 160696
+        }
+      }
+    },
+    "qwen/qwen3.8-flash": {
+      "candidate": "qwen/qwen3.8-flash",
+      "trees": 14,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 85714,
+      "entitlement_refused_trees": 0,
+      "completion": 0.9286,
+      "well_formed": 0.8571,
+      "task_met": 0.7857,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 935.0,
+      "cost_p95_micro": 3995.4,
+      "latency_p50_ms": 10838.0,
+      "cached_share": 0.8284,
+      "cached_reported_trees": 13,
+      "tick_cost_micro": 4537,
+      "served_by": [
+        "qwen/qwen3.8-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2522.0,
+          "cost_p95_micro": 4070.0,
+          "latency_p50_ms": 12316.65,
+          "prompt_bytes_max": 92121
+        },
+        "judge": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1066.5,
+          "cost_p95_micro": 1184.85,
+          "latency_p50_ms": 12280.4,
+          "prompt_bytes_max": 98144
+        },
+        "meta": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 948.5,
+          "cost_p95_micro": 978.65,
+          "latency_p50_ms": 11602.3,
+          "prompt_bytes_max": 95479
+        },
+        "tool": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 673.0,
+          "cost_p95_micro": 673.0,
+          "latency_p50_ms": 4276.6,
+          "prompt_bytes_max": 91422
+        },
+        "fail": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 769.0,
+          "cost_p95_micro": 773.5,
+          "latency_p50_ms": 7198.65,
+          "prompt_bytes_max": 91380
+        },
+        "continuation": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 0.5,
+          "cost_p50_micro": 1485.5,
+          "cost_p95_micro": 2190.65,
+          "latency_p50_ms": 12958.45,
+          "prompt_bytes_max": 91419
+        },
+        "long_context": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2604.0,
+          "cost_p95_micro": 3708.3,
+          "latency_p50_ms": 10801.95,
+          "prompt_bytes_max": 160683
+        }
+      }
+    },
+    "qwen/qwen3.7-flash": {
+      "candidate": "qwen/qwen3.7-flash",
+      "trees": 14,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 85714,
+      "entitlement_refused_trees": 0,
+      "completion": 0.8571,
+      "well_formed": 0.7143,
+      "task_met": 0.6429,
+      "refusal_correct": 0.0,
+      "cost_p50_micro": 339.0,
+      "cost_p95_micro": 4658.9,
+      "latency_p50_ms": 4631.35,
+      "cached_share": 0.6155,
+      "cached_reported_trees": 12,
+      "tick_cost_micro": 1220,
+      "served_by": [
+        "qwen/qwen3.7-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 550.0,
+          "cost_p95_micro": 806.5,
+          "latency_p50_ms": 2437.05,
+          "prompt_bytes_max": 92241
+        },
+        "judge": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.5,
+          "task_met": 0.5,
+          "cost_p50_micro": 340.0,
+          "cost_p95_micro": 340.0,
+          "latency_p50_ms": 5165.8,
+          "prompt_bytes_max": 98264
+        },
+        "meta": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 330.0,
+          "cost_p95_micro": 337.2,
+          "latency_p50_ms": 6577.85,
+          "prompt_bytes_max": 95599
+        },
+        "tool": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.5,
+          "task_met": 0.0,
+          "cost_p50_micro": 254.0,
+          "cost_p95_micro": 254.0,
+          "latency_p50_ms": 2127.1,
+          "prompt_bytes_max": 91542
+        },
+        "fail": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 254.0,
+          "cost_p95_micro": 255.8,
+          "latency_p50_ms": 2237.8,
+          "prompt_bytes_max": 91500
+        },
+        "continuation": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1063.0,
+          "cost_p95_micro": 1327.6,
+          "latency_p50_ms": 9743.8,
+          "prompt_bytes_max": 91539
+        },
+        "long_context": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 4659.0,
+          "cost_p95_micro": 4659.9,
+          "latency_p50_ms": 5572.6,
+          "prompt_bytes_max": 160282
+        }
+      }
+    },
+    "openai/gpt-5.6-luna": {
+      "candidate": "openai/gpt-5.6-luna",
+      "trees": 14,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 85714,
+      "entitlement_refused_trees": 1,
+      "completion": 0.7857,
+      "well_formed": 0.7857,
+      "task_met": 0.7857,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 6729.0,
+      "cost_p95_micro": 27037.5,
+      "latency_p50_ms": 4451.2,
+      "cached_share": 0.0,
+      "cached_reported_trees": 12,
+      "tick_cost_micro": 19307,
+      "served_by": [
+        "openai/gpt-5.6-luna"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.5,
+          "task_met": 0.5,
+          "cost_p50_micro": 6089.0,
+          "cost_p95_micro": 6089.0,
+          "latency_p50_ms": 2742.4,
+          "prompt_bytes_max": 92242
+        },
+        "judge": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 6731.5,
+          "cost_p95_micro": 6733.75,
+          "latency_p50_ms": 4873.75,
+          "prompt_bytes_max": 98265
+        },
+        "meta": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 6486.5,
+          "cost_p95_micro": 6550.85,
+          "latency_p50_ms": 4072.3,
+          "prompt_bytes_max": 95600
+        },
+        "tool": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 13187.5,
+          "cost_p95_micro": 13227.55,
+          "latency_p50_ms": 6567.65,
+          "prompt_bytes_max": 91543
+        },
+        "fail": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 6054.0,
+          "cost_p95_micro": 6069.3,
+          "latency_p50_ms": 2305.45,
+          "prompt_bytes_max": 91501
+        },
+        "continuation": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.5,
+          "task_met": 0.5,
+          "cost_p50_micro": 40843.0,
+          "cost_p95_micro": 40843.0,
+          "latency_p50_ms": 67841.5,
+          "prompt_bytes_max": 91542
+        },
+        "long_context": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.5,
+          "task_met": 0.5,
+          "cost_p50_micro": 10035.0,
+          "cost_p95_micro": 10035.0,
+          "latency_p50_ms": 3875.5,
+          "prompt_bytes_max": 160283
+        }
+      }
+    },
+    "meta/muse-spark-1.3": {
+      "candidate": "meta/muse-spark-1.3",
+      "trees": 14,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 85714,
+      "entitlement_refused_trees": 14,
+      "completion": 0.0,
+      "well_formed": 0.0,
+      "task_met": 0.0,
+      "refusal_correct": 0.0,
+      "cost_p50_micro": null,
+      "cost_p95_micro": null,
+      "latency_p50_ms": null,
+      "cached_share": null,
+      "cached_reported_trees": 0,
+      "tick_cost_micro": null,
+      "served_by": [],
+      "scenarios": {
+        "produce": {
+          "trees": 2,
+          "completion": 0.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": null,
+          "cost_p95_micro": null,
+          "latency_p50_ms": null,
+          "prompt_bytes_max": 92379
+        },
+        "judge": {
+          "trees": 2,
+          "completion": 0.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": null,
+          "cost_p95_micro": null,
+          "latency_p50_ms": null,
+          "prompt_bytes_max": 98402
+        },
+        "meta": {
+          "trees": 2,
+          "completion": 0.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": null,
+          "cost_p95_micro": null,
+          "latency_p50_ms": null,
+          "prompt_bytes_max": 95737
+        },
+        "tool": {
+          "trees": 2,
+          "completion": 0.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": null,
+          "cost_p95_micro": null,
+          "latency_p50_ms": null,
+          "prompt_bytes_max": 91680
+        },
+        "fail": {
+          "trees": 2,
+          "completion": 0.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": null,
+          "cost_p95_micro": null,
+          "latency_p50_ms": null,
+          "prompt_bytes_max": 91638
+        },
+        "continuation": {
+          "trees": 2,
+          "completion": 0.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": null,
+          "cost_p95_micro": null,
+          "latency_p50_ms": null,
+          "prompt_bytes_max": 91679
+        },
+        "long_context": {
+          "trees": 2,
+          "completion": 0.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": null,
+          "cost_p95_micro": null,
+          "latency_p50_ms": null,
+          "prompt_bytes_max": 160349
+        }
+      }
+    },
+    "venice:z-ai-glm-5-3-flash": {
+      "candidate": "venice:z-ai-glm-5-3-flash",
+      "trees": 14,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 85714,
+      "entitlement_refused_trees": 0,
+      "completion": 0.9286,
+      "well_formed": 0.9286,
+      "task_met": 0.9286,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 3669.0,
+      "cost_p95_micro": 5560.4,
+      "latency_p50_ms": 8225.8,
+      "cached_share": 0.6689,
+      "cached_reported_trees": 13,
+      "tick_cost_micro": 7847,
+      "served_by": [
+        "venice:z-ai-glm-5-3-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 4061.5,
+          "cost_p95_micro": 4061.95,
+          "latency_p50_ms": 9082.4,
+          "prompt_bytes_max": 92385
+        },
+        "judge": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1853.0,
+          "cost_p95_micro": 1899.8,
+          "latency_p50_ms": 7970.8,
+          "prompt_bytes_max": 98408
+        },
+        "meta": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1932.5,
+          "cost_p95_micro": 2005.85,
+          "latency_p50_ms": 18410.95,
+          "prompt_bytes_max": 95743
+        },
+        "tool": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 3673.5,
+          "cost_p95_micro": 3677.55,
+          "latency_p50_ms": 8538.85,
+          "prompt_bytes_max": 91686
+        },
+        "fail": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1371.5,
+          "cost_p95_micro": 1399.85,
+          "latency_p50_ms": 3477.15,
+          "prompt_bytes_max": 91644
+        },
+        "continuation": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.5,
+          "task_met": 0.5,
+          "cost_p50_micro": 4282.0,
+          "cost_p95_micro": 4282.0,
+          "latency_p50_ms": 17772.1,
+          "prompt_bytes_max": 91697
+        },
+        "long_context": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 5773.5,
+          "cost_p95_micro": 6732.45,
+          "latency_p50_ms": 19198.2,
+          "prompt_bytes_max": 160355
+        }
+      }
+    },
+    "venice:deepseek-v4-1-flash": {
+      "candidate": "venice:deepseek-v4-1-flash",
+      "trees": 14,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 85714,
+      "entitlement_refused_trees": 2,
+      "completion": 0.7143,
+      "well_formed": 0.7143,
+      "task_met": 0.7143,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 1614.0,
+      "cost_p95_micro": 5992.5,
+      "latency_p50_ms": 4159.8,
+      "cached_share": 0.8577,
+      "cached_reported_trees": 10,
+      "tick_cost_micro": 8024,
+      "served_by": [
+        "venice:deepseek-v4-1-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 4910.5,
+          "cost_p95_micro": 8383.15,
+          "latency_p50_ms": 2718.6,
+          "prompt_bytes_max": 92543
+        },
+        "judge": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1614.0,
+          "cost_p95_micro": 1692.3,
+          "latency_p50_ms": 4007.65,
+          "prompt_bytes_max": 98566
+        },
+        "meta": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.5,
+          "task_met": 0.5,
+          "cost_p50_micro": 1500.0,
+          "cost_p95_micro": 1500.0,
+          "latency_p50_ms": 4919.6,
+          "prompt_bytes_max": 95901
+        },
+        "tool": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2571.5,
+          "cost_p95_micro": 2596.25,
+          "latency_p50_ms": 7284.4,
+          "prompt_bytes_max": 91844
+        },
+        "fail": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 846.5,
+          "cost_p95_micro": 854.15,
+          "latency_p50_ms": 2990.35,
+          "prompt_bytes_max": 91802
+        },
+        "continuation": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.5,
+          "task_met": 0.5,
+          "cost_p50_micro": 2313.0,
+          "cost_p95_micro": 2313.0,
+          "latency_p50_ms": 6609.5,
+          "prompt_bytes_max": 91857
+        },
+        "long_context": {
+          "trees": 2,
+          "completion": 0.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": null,
+          "cost_p95_micro": null,
+          "latency_p50_ms": null,
+          "prompt_bytes_max": 160513
+        }
+      }
+    },
+    "venice:qwen-3-8-flash": {
+      "candidate": "venice:qwen-3-8-flash",
+      "trees": 14,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 85714,
+      "entitlement_refused_trees": 0,
+      "completion": 0.8571,
+      "well_formed": 0.8571,
+      "task_met": 0.8571,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 1561.5,
+      "cost_p95_micro": 3901.7,
+      "latency_p50_ms": 6257.95,
+      "cached_share": 0.7143,
+      "cached_reported_trees": 13,
+      "tick_cost_micro": 5864,
+      "served_by": [
+        "venice:qwen-3-8-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 3913.0,
+          "cost_p95_micro": 4014.7,
+          "latency_p50_ms": 6634.7,
+          "prompt_bytes_max": 92538
+        },
+        "judge": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1060.0,
+          "cost_p95_micro": 1088.8,
+          "latency_p50_ms": 12938.45,
+          "prompt_bytes_max": 98561
+        },
+        "meta": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 891.0,
+          "cost_p95_micro": 919.8,
+          "latency_p50_ms": 6257.95,
+          "prompt_bytes_max": 95896
+        },
+        "tool": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.5,
+          "task_met": 0.5,
+          "cost_p50_micro": 2358.0,
+          "cost_p95_micro": 2358.0,
+          "latency_p50_ms": 7669.4,
+          "prompt_bytes_max": 91839
+        },
+        "fail": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 661.5,
+          "cost_p95_micro": 674.55,
+          "latency_p50_ms": 3953.5,
+          "prompt_bytes_max": 91797
+        },
+        "continuation": {
+          "trees": 2,
+          "completion": 0.5,
+          "well_formed": 0.5,
+          "task_met": 0.5,
+          "cost_p50_micro": 2031.0,
+          "cost_p95_micro": 2031.0,
+          "latency_p50_ms": 10322.0,
+          "prompt_bytes_max": 91842
+        },
+        "long_context": {
+          "trees": 2,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 3565.5,
+          "cost_p95_micro": 3569.55,
+          "latency_p50_ms": 5216.85,
+          "prompt_bytes_max": 160508
+        }
+      }
+    }
+  },
+  "trees": {
+    "z-ai/glm-5.3-flash": [
+      {
+        "scenario": "produce",
+        "seat": "cal:z-ai/glm-5.3-flash:producer",
+        "handle": "decision-0",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2798,
+        "wallet_delta_micro": 2798,
+        "latency_ms": 5915.7,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24180,
+        "output_tokens": 232,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91459
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:z-ai/glm-5.3-flash:evaluator",
+        "handle": "decision-1",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2969,
+        "wallet_delta_micro": 2969,
+        "latency_ms": 6257.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25665,
+        "output_tokens": 243,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 97482
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:z-ai/glm-5.3-flash:meta",
+        "handle": "decision-2",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2867,
+        "wallet_delta_micro": 2867,
+        "latency_ms": 23959.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25069,
+        "output_tokens": 149,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 94817
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:z-ai/glm-5.3-flash:tool",
+        "handle": "decision-3",
+        "status": "malformed",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 6496,
+        "wallet_delta_micro": 6496,
+        "latency_ms": 6946.5,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 24493,
+        "output_tokens": 27,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90760
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:z-ai/glm-5.3-flash:fail",
+        "handle": "decision-4",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The named order's client_id 'calibration-unplaced' was never sent to the venue, so no venue fill id or settlement time exists for it. The account shows no fills or positions.",
+        "cost_micro": 2717,
+        "wallet_delta_micro": 2717,
+        "latency_ms": 2595.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 23996,
+        "output_tokens": 69,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90718
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:z-ai/glm-5.3-flash:parent",
+        "handle": "decision-5",
+        "status": "malformed",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2761,
+        "wallet_delta_micro": 2761,
+        "latency_ms": 3672.9,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24008,
+        "output_tokens": 183,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90757
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:z-ai/glm-5.3-flash:producer",
+        "handle": "decision-6",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 4529,
+        "wallet_delta_micro": 4529,
+        "latency_ms": 3673.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 40159,
+        "output_tokens": 59,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160613
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:z-ai/glm-5.3-flash:producer",
+        "handle": "decision-76",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2739,
+        "wallet_delta_micro": 2739,
+        "latency_ms": 3654.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24316,
+        "output_tokens": 32,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91984
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:z-ai/glm-5.3-flash:evaluator",
+        "handle": "decision-77",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2965,
+        "wallet_delta_micro": 2965,
+        "latency_ms": 4285.4,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25800,
+        "output_tokens": 191,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 98007
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:z-ai/glm-5.3-flash:meta",
+        "handle": "decision-78",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2937,
+        "wallet_delta_micro": 2937,
+        "latency_ms": 6584.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25204,
+        "output_tokens": 281,
+        "cached_tokens": 0,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95342
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:z-ai/glm-5.3-flash:tool",
+        "handle": "decision-79",
+        "status": "malformed",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 6521,
+        "wallet_delta_micro": 6521,
+        "latency_ms": 8387.4,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 24628,
+        "output_tokens": 28,
+        "cached_tokens": 0,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91285
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:z-ai/glm-5.3-flash:fail",
+        "handle": "decision-80",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The order's client_id 'calibration-unplaced' was never sent to the venue, so no fill exists; the account shows zero positions and no fills to report.",
+        "cost_micro": 2738,
+        "wallet_delta_micro": 2738,
+        "latency_ms": 3658.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24131,
+        "output_tokens": 87,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91243
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:z-ai/glm-5.3-flash:parent",
+        "handle": "decision-81",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 8234,
+        "wallet_delta_micro": 8234,
+        "latency_ms": 9434.0,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 48560,
+        "output_tokens": 24,
+        "cached_tokens": 128,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91282
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:z-ai/glm-5.3-flash:producer",
+        "handle": "decision-82",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 4528,
+        "wallet_delta_micro": 4528,
+        "latency_ms": 3668.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 40158,
+        "output_tokens": 57,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160546
+      }
+    ],
+    "deepseek/deepseek-v4.1-flash": [
+      {
+        "scenario": "produce",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:producer",
+        "handle": "decision-7",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 7519,
+        "wallet_delta_micro": 7519,
+        "latency_ms": 6273.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24654,
+        "output_tokens": 102,
+        "cached_tokens": 0,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91469
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:evaluator",
+        "handle": "decision-8",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 5760,
+        "wallet_delta_micro": 5760,
+        "latency_ms": 12417.4,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 26200,
+        "output_tokens": 307,
+        "cached_tokens": 0,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 97492
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:meta",
+        "handle": "decision-9",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 5540,
+        "wallet_delta_micro": 5540,
+        "latency_ms": 22161.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25578,
+        "output_tokens": 200,
+        "cached_tokens": 0,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 94827
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:tool",
+        "handle": "decision-10",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 15702,
+        "wallet_delta_micro": 15702,
+        "latency_ms": 8291.8,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 24984,
+        "output_tokens": 17,
+        "cached_tokens": 640,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90770
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:fail",
+        "handle": "decision-11",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The named client_id 'calibration-unplaced' was never sent to the venue, so it maps to no order and no fill. The account shows no positions, no fills and no order history, and no venue read can return ",
+        "cost_micro": 714,
+        "wallet_delta_micro": 714,
+        "latency_ms": 4292.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24488,
+        "output_tokens": 71,
+        "cached_tokens": 23168,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90728
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:parent",
+        "handle": "decision-12",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2144,
+        "wallet_delta_micro": 2144,
+        "latency_ms": 8462.3,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 49282,
+        "output_tokens": 12,
+        "cached_tokens": 46336,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90787
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:producer",
+        "handle": "decision-13",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 6803,
+        "wallet_delta_micro": 6803,
+        "latency_ms": 4818.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 40939,
+        "output_tokens": 57,
+        "cached_tokens": 21888,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160623
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:producer",
+        "handle": "decision-84",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 869,
+        "wallet_delta_micro": 869,
+        "latency_ms": 3631.7,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24839,
+        "output_tokens": 96,
+        "cached_tokens": 23168,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 92131
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:evaluator",
+        "handle": "decision-85",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1764,
+        "wallet_delta_micro": 1764,
+        "latency_ms": 5169.9,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 26363,
+        "output_tokens": 363,
+        "cached_tokens": 23168,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 98154
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:meta",
+        "handle": "decision-86",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1342,
+        "wallet_delta_micro": 1342,
+        "latency_ms": 4458.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25741,
+        "output_tokens": 213,
+        "cached_tokens": 23168,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95489
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:tool",
+        "handle": "decision-87",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 10186,
+        "wallet_delta_micro": 10186,
+        "latency_ms": 6615.6,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 25147,
+        "output_tokens": 17,
+        "cached_tokens": 640,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91432
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:fail",
+        "handle": "decision-88",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The named order (client_id 'calibration-unplaced') was never sent to the venue, so no venue fill id or settlement time exists for it. The request cannot be completed.",
+        "cost_micro": 738,
+        "wallet_delta_micro": 738,
+        "latency_ms": 3592.7,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24651,
+        "output_tokens": 48,
+        "cached_tokens": 23168,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91390
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:parent",
+        "handle": "decision-89",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2220,
+        "wallet_delta_micro": 2220,
+        "latency_ms": 15913.6,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 49576,
+        "output_tokens": 12,
+        "cached_tokens": 46464,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91449
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:deepseek/deepseek-v4.1-flash:producer",
+        "handle": "decision-90",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1386,
+        "wallet_delta_micro": 1386,
+        "latency_ms": 2958.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 40963,
+        "output_tokens": 77,
+        "cached_tokens": 38016,
+        "served_by": [
+          "deepseek/deepseek-v4.1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160693
+      }
+    ],
+    "deepseek/deepseek-v4-flash-0731": [
+      {
+        "scenario": "produce",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:producer",
+        "handle": "decision-15",
+        "status": "refused",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "No request content was provided, so there is nothing to judge or act on.",
+        "cost_micro": 369,
+        "wallet_delta_micro": 369,
+        "latency_ms": 2644.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24676,
+        "output_tokens": 31,
+        "cached_tokens": 20709,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91472
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:evaluator",
+        "handle": "decision-16",
+        "status": "malformed",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 385,
+        "wallet_delta_micro": 385,
+        "latency_ms": 4973.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 26200,
+        "output_tokens": 38,
+        "cached_tokens": 22235,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 97495
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:meta",
+        "handle": "decision-17",
+        "status": "malformed",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 378,
+        "wallet_delta_micro": 378,
+        "latency_ms": 3618.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25578,
+        "output_tokens": 29,
+        "cached_tokens": 21611,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 94830
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:tool",
+        "handle": "decision-18",
+        "status": "refused",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "I do not have the venue.instruments data or the list of perp markets in the provided world input to count or name them.",
+        "cost_micro": 368,
+        "wallet_delta_micro": 368,
+        "latency_ms": 4270.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24497,
+        "output_tokens": 39,
+        "cached_tokens": 20530,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90773
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:fail",
+        "handle": "decision-19",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "Required fields 'inputs' with 'id' or 'order_id' for the venue fill, and 'venue.mids' settlement information are not provided in the available data. The request requires specific order identifier and ",
+        "cost_micro": 371,
+        "wallet_delta_micro": 371,
+        "latency_ms": 4725.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24488,
+        "output_tokens": 63,
+        "cached_tokens": 20521,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90731
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:parent",
+        "handle": "decision-20",
+        "status": "refused",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "No tool_results embedded in this request; the request asks to issue a child request to a target, but the outcome schema and available tools do not include a mechanism to place such a child request dir",
+        "cost_micro": 371,
+        "wallet_delta_micro": 371,
+        "latency_ms": 4122.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24503,
+        "output_tokens": 67,
+        "cached_tokens": 20536,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90796
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:producer",
+        "handle": "decision-21",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 529,
+        "wallet_delta_micro": 529,
+        "latency_ms": 3385.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 40939,
+        "output_tokens": 6,
+        "cached_tokens": 36974,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160626
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:producer",
+        "handle": "decision-92",
+        "status": "refused",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The request does not contain any evaluator or producer instructions; it only provides world context and a list of prior rejection reasons. There is no specific task or action for me to perform.",
+        "cost_micro": 373,
+        "wallet_delta_micro": 373,
+        "latency_ms": 5576.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24839,
+        "output_tokens": 52,
+        "cached_tokens": 20875,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 92134
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:evaluator",
+        "handle": "decision-93",
+        "status": "malformed",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 387,
+        "wallet_delta_micro": 387,
+        "latency_ms": 7010.4,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 26363,
+        "output_tokens": 35,
+        "cached_tokens": 22397,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 98157
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:meta",
+        "handle": "decision-94",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (OpenRouterError)",
+        "cost_micro": 9716,
+        "wallet_delta_micro": 9716,
+        "latency_ms": 60042.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 95492
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:tool",
+        "handle": "decision-95",
+        "status": "refused",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The request is incomplete and lacks the required inputs (e.g., account, venue instruments, specific prompt) needed to call venue.instruments and report perp markets.",
+        "cost_micro": 371,
+        "wallet_delta_micro": 371,
+        "latency_ms": 4826.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24660,
+        "output_tokens": 45,
+        "cached_tokens": 20696,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91435
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:fail",
+        "handle": "decision-96",
+        "status": "malformed",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 372,
+        "wallet_delta_micro": 372,
+        "latency_ms": 3408.4,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24651,
+        "output_tokens": 56,
+        "cached_tokens": 20683,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91393
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:parent",
+        "handle": "decision-97",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (OpenRouterError)",
+        "cost_micro": 18694,
+        "wallet_delta_micro": 18694,
+        "latency_ms": 127303.2,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91458
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:deepseek/deepseek-v4-flash-0731:producer",
+        "handle": "decision-98",
+        "status": "refused",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "No request content provided to act upon.",
+        "cost_micro": 531,
+        "wallet_delta_micro": 531,
+        "latency_ms": 3372.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 40963,
+        "output_tokens": 17,
+        "cached_tokens": 36999,
+        "served_by": [
+          "deepseek/deepseek-v4-flash-0731"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160696
+      }
+    ],
+    "qwen/qwen3.8-flash": [
+      {
+        "scenario": "produce",
+        "seat": "cal:qwen/qwen3.8-flash:producer",
+        "handle": "decision-22",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 4242,
+        "wallet_delta_micro": 4242,
+        "latency_ms": 16165.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27628,
+        "output_tokens": 208,
+        "cached_tokens": 0,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91459
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:qwen/qwen3.8-flash:evaluator",
+        "handle": "decision-23",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1198,
+        "wallet_delta_micro": 1198,
+        "latency_ms": 13514.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 29224,
+        "output_tokens": 592,
+        "cached_tokens": 25856,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 97482
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:qwen/qwen3.8-flash:meta",
+        "handle": "decision-24",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 982,
+        "wallet_delta_micro": 982,
+        "latency_ms": 10838.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 28515,
+        "output_tokens": 360,
+        "cached_tokens": 25856,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 94817
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:qwen/qwen3.8-flash:tool",
+        "handle": "decision-25",
+        "status": "malformed",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 673,
+        "wallet_delta_micro": 673,
+        "latency_ms": 4276.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27399,
+        "output_tokens": 59,
+        "cached_tokens": 25856,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90760
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:qwen/qwen3.8-flash:fail",
+        "handle": "decision-26",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The named order (client_id 'calibration-unplaced') was never sent to the venue, so there is no fill id and no settlement time to report. The account also carries no positions, no fills, and zero spot ",
+        "cost_micro": 764,
+        "wallet_delta_micro": 764,
+        "latency_ms": 6485.9,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27385,
+        "output_tokens": 256,
+        "cached_tokens": 25856,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90718
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:qwen/qwen3.8-flash:parent",
+        "handle": "decision-27",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2269,
+        "wallet_delta_micro": 2269,
+        "latency_ms": 19998.0,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 55147,
+        "output_tokens": 349,
+        "cached_tokens": 51968,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90757
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:qwen/qwen3.8-flash:producer",
+        "handle": "decision-28",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 3831,
+        "wallet_delta_micro": 3831,
+        "latency_ms": 9411.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 46589,
+        "output_tokens": 289,
+        "cached_tokens": 24576,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160613
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:qwen/qwen3.8-flash:producer",
+        "handle": "decision-100",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 802,
+        "wallet_delta_micro": 802,
+        "latency_ms": 8468.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27812,
+        "output_tokens": 274,
+        "cached_tokens": 26112,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 92121
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:qwen/qwen3.8-flash:evaluator",
+        "handle": "decision-101",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 935,
+        "wallet_delta_micro": 935,
+        "latency_ms": 11046.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 29408,
+        "output_tokens": 412,
+        "cached_tokens": 27392,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 98144
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:qwen/qwen3.8-flash:meta",
+        "handle": "decision-102",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 915,
+        "wallet_delta_micro": 915,
+        "latency_ms": 12366.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 28699,
+        "output_tokens": 450,
+        "cached_tokens": 26880,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95479
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:qwen/qwen3.8-flash:tool",
+        "handle": "decision-103",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (OpenRouterError)",
+        "cost_micro": 21143,
+        "wallet_delta_micro": 21143,
+        "latency_ms": 60046.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91422
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:qwen/qwen3.8-flash:fail",
+        "handle": "decision-104",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The order named in inputs has client_id \"calibration-unplaced\" and its note states this client id was never sent to the venue, so it was never placed, filled, or settled. The account carries no positi",
+        "cost_micro": 774,
+        "wallet_delta_micro": 774,
+        "latency_ms": 7911.4,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27569,
+        "output_tokens": 292,
+        "cached_tokens": 26112,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91380
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:qwen/qwen3.8-flash:parent",
+        "handle": "decision-105",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 702,
+        "wallet_delta_micro": 702,
+        "latency_ms": 5918.9,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27570,
+        "output_tokens": 139,
+        "cached_tokens": 26112,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91419
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:qwen/qwen3.8-flash:producer",
+        "handle": "decision-106",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1377,
+        "wallet_delta_micro": 1377,
+        "latency_ms": 12192.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 46610,
+        "output_tokens": 388,
+        "cached_tokens": 43264,
+        "served_by": [
+          "qwen/qwen3.8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160683
+      }
+    ],
+    "qwen/qwen3.7-flash": [
+      {
+        "scenario": "produce",
+        "seat": "cal:qwen/qwen3.7-flash:producer",
+        "handle": "decision-30",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 835,
+        "wallet_delta_micro": 835,
+        "latency_ms": 2863.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27677,
+        "output_tokens": 30,
+        "cached_tokens": 0,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91720
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:qwen/qwen3.7-flash:evaluator",
+        "handle": "decision-31",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 340,
+        "wallet_delta_micro": 340,
+        "latency_ms": 5165.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 29273,
+        "output_tokens": 272,
+        "cached_tokens": 23936,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 97743
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:qwen/qwen3.7-flash:meta",
+        "handle": "decision-32",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 338,
+        "wallet_delta_micro": 338,
+        "latency_ms": 7789.7,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 28564,
+        "output_tokens": 420,
+        "cached_tokens": 23936,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95078
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:qwen/qwen3.7-flash:tool",
+        "handle": "decision-33",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 254,
+        "wallet_delta_micro": 254,
+        "latency_ms": 2127.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27448,
+        "output_tokens": 32,
+        "cached_tokens": 23936,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91021
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:qwen/qwen3.7-flash:fail",
+        "handle": "decision-34",
+        "status": "malformed",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 252,
+        "wallet_delta_micro": 252,
+        "latency_ms": 2093.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27434,
+        "output_tokens": 20,
+        "cached_tokens": 23936,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90979
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:qwen/qwen3.7-flash:parent",
+        "handle": "decision-35",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 769,
+        "wallet_delta_micro": 769,
+        "latency_ms": 7344.5,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 55020,
+        "output_tokens": 20,
+        "cached_tokens": 47872,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91018
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:qwen/qwen3.7-flash:producer",
+        "handle": "decision-36",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 4660,
+        "wallet_delta_micro": 4660,
+        "latency_ms": 4096.9,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 46475,
+        "output_tokens": 30,
+        "cached_tokens": 0,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160282
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:qwen/qwen3.7-flash:producer",
+        "handle": "decision-107",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 265,
+        "wallet_delta_micro": 265,
+        "latency_ms": 2011.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27819,
+        "output_tokens": 30,
+        "cached_tokens": 23936,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 92241
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:qwen/qwen3.7-flash:evaluator",
+        "handle": "decision-108",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "OpenRouterError",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 4674.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 98264
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:qwen/qwen3.7-flash:meta",
+        "handle": "decision-109",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 322,
+        "wallet_delta_micro": 322,
+        "latency_ms": 5366.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 28706,
+        "output_tokens": 271,
+        "cached_tokens": 23936,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95599
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:qwen/qwen3.7-flash:tool",
+        "handle": "decision-110",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (OpenRouterError)",
+        "cost_micro": 5609,
+        "wallet_delta_micro": 5609,
+        "latency_ms": 61944.8,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91542
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:qwen/qwen3.7-flash:fail",
+        "handle": "decision-111",
+        "status": "malformed",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 256,
+        "wallet_delta_micro": 256,
+        "latency_ms": 2382.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27576,
+        "output_tokens": 20,
+        "cached_tokens": 23936,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91500
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:qwen/qwen3.7-flash:parent",
+        "handle": "decision-112",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1357,
+        "wallet_delta_micro": 1357,
+        "latency_ms": 12143.1,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 55306,
+        "output_tokens": 20,
+        "cached_tokens": 47872,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91539
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:qwen/qwen3.7-flash:producer",
+        "handle": "decision-113",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 4658,
+        "wallet_delta_micro": 4658,
+        "latency_ms": 7048.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 46454,
+        "output_tokens": 30,
+        "cached_tokens": 0,
+        "served_by": [
+          "qwen/qwen3.7-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160211
+      }
+    ],
+    "openai/gpt-5.6-luna": [
+      {
+        "scenario": "produce",
+        "seat": "cal:openai/gpt-5.6-luna:producer",
+        "handle": "decision-38",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 6089,
+        "wallet_delta_micro": 6089,
+        "latency_ms": 2742.4,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24032,
+        "output_tokens": 67,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91721
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:openai/gpt-5.6-luna:evaluator",
+        "handle": "decision-39",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 6734,
+        "wallet_delta_micro": 6734,
+        "latency_ms": 4451.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25520,
+        "output_tokens": 295,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 97744
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:openai/gpt-5.6-luna:meta",
+        "handle": "decision-40",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 6558,
+        "wallet_delta_micro": 6558,
+        "latency_ms": 4993.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24917,
+        "output_tokens": 274,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95079
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:openai/gpt-5.6-luna:tool",
+        "handle": "decision-41",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 13143,
+        "wallet_delta_micro": 13143,
+        "latency_ms": 7173.5,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 24341,
+        "output_tokens": 21,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91022
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:openai/gpt-5.6-luna:fail",
+        "handle": "decision-42",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The order with client_id \"calibration-unplaced\" was never sent to the venue, so no fill_id or settlement time exists.",
+        "cost_micro": 6037,
+        "wallet_delta_micro": 6037,
+        "latency_ms": 2454.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 23845,
+        "output_tokens": 63,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90980
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:openai/gpt-5.6-luna:parent",
+        "handle": "decision-43",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 40843,
+        "wallet_delta_micro": 40843,
+        "latency_ms": 67841.5,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 24162,
+        "output_tokens": 54,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "None",
+          "stop"
+        ],
+        "prompt_bytes": 91021
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:openai/gpt-5.6-luna:producer",
+        "handle": "decision-44",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 10035,
+        "wallet_delta_micro": 10035,
+        "latency_ms": 3875.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 39808,
+        "output_tokens": 69,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160283
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:openai/gpt-5.6-luna:producer",
+        "handle": "decision-115",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (OpenRouterError)",
+        "cost_micro": 29010,
+        "wallet_delta_micro": 29010,
+        "latency_ms": 61811.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 92242
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:openai/gpt-5.6-luna:evaluator",
+        "handle": "decision-116",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 6729,
+        "wallet_delta_micro": 6729,
+        "latency_ms": 5296.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25646,
+        "output_tokens": 264,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 98265
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:openai/gpt-5.6-luna:meta",
+        "handle": "decision-117",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 6415,
+        "wallet_delta_micro": 6415,
+        "latency_ms": 3150.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25043,
+        "output_tokens": 128,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95600
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:openai/gpt-5.6-luna:tool",
+        "handle": "decision-118",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 13232,
+        "wallet_delta_micro": 13232,
+        "latency_ms": 5961.8,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 24467,
+        "output_tokens": 21,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91543
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:openai/gpt-5.6-luna:fail",
+        "handle": "decision-119",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The order has client_id \"calibration-unplaced\" and was never sent to the venue, so no fill id or settlement time exists.",
+        "cost_micro": 6071,
+        "wallet_delta_micro": 6071,
+        "latency_ms": 2156.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 23971,
+        "output_tokens": 65,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91501
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:openai/gpt-5.6-luna:parent",
+        "handle": "decision-120",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (OpenRouterError)",
+        "cost_micro": 41438,
+        "wallet_delta_micro": 41438,
+        "latency_ms": 67979.8,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 23949,
+        "output_tokens": 12,
+        "cached_tokens": 0,
+        "served_by": [
+          "openai/gpt-5.6-luna"
+        ],
+        "finish_reasons": [
+          "None",
+          "stop"
+        ],
+        "prompt_bytes": 91542
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:openai/gpt-5.6-luna:producer",
+        "handle": "decision-121",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 4.4,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 160212
+      }
+    ],
+    "meta/muse-spark-1.3": [
+      {
+        "scenario": "produce",
+        "seat": "cal:meta/muse-spark-1.3:producer",
+        "handle": "decision-46",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 2.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91721
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:meta/muse-spark-1.3:evaluator",
+        "handle": "decision-47",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 2.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 97744
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:meta/muse-spark-1.3:meta",
+        "handle": "decision-48",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 2.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 95079
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:meta/muse-spark-1.3:tool",
+        "handle": "decision-49",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 2.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91022
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:meta/muse-spark-1.3:fail",
+        "handle": "decision-50",
+        "status": "failed",
+        "expected": "refused",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 1.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 90980
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:meta/muse-spark-1.3:parent",
+        "handle": "decision-51",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 1.7,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91021
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:meta/muse-spark-1.3:producer",
+        "handle": "decision-52",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 2.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 160283
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:meta/muse-spark-1.3:producer",
+        "handle": "decision-123",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 1.9,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 92379
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:meta/muse-spark-1.3:evaluator",
+        "handle": "decision-124",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 1.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 98402
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:meta/muse-spark-1.3:meta",
+        "handle": "decision-125",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 1.7,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 95737
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:meta/muse-spark-1.3:tool",
+        "handle": "decision-126",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 2.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91680
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:meta/muse-spark-1.3:fail",
+        "handle": "decision-127",
+        "status": "failed",
+        "expected": "refused",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 1.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91638
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:meta/muse-spark-1.3:parent",
+        "handle": "decision-128",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 1.7,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91679
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:meta/muse-spark-1.3:producer",
+        "handle": "decision-129",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 2.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 160349
+      }
+    ],
+    "venice:z-ai-glm-5-3-flash": [
+      {
+        "scenario": "produce",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+        "handle": "decision-53",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 4062,
+        "wallet_delta_micro": 4062,
+        "latency_ms": 8225.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25086,
+        "output_tokens": 597,
+        "cached_tokens": 0,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91727
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:evaluator",
+        "handle": "decision-54",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1801,
+        "wallet_delta_micro": 1801,
+        "latency_ms": 7813.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 26569,
+        "output_tokens": 606,
+        "cached_tokens": 20736,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 97750
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:meta",
+        "handle": "decision-55",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1851,
+        "wallet_delta_micro": 1851,
+        "latency_ms": 29678.7,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25973,
+        "output_tokens": 886,
+        "cached_tokens": 20736,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95085
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:tool",
+        "handle": "decision-56",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 3669,
+        "wallet_delta_micro": 3669,
+        "latency_ms": 9953.9,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 25397,
+        "output_tokens": 116,
+        "cached_tokens": 20736,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91028
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:fail",
+        "handle": "decision-57",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The order named in inputs carries client_id 'calibration-unplaced' with the note that this client id was never sent to the venue. No such order exists on the venue, so there is no fill id or settlemen",
+        "cost_micro": 1340,
+        "wallet_delta_micro": 1340,
+        "latency_ms": 4147.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 24900,
+        "output_tokens": 186,
+        "cached_tokens": 20736,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90986
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:parent",
+        "handle": "decision-58",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (VeniceError)",
+        "cost_micro": 21087,
+        "wallet_delta_micro": 21087,
+        "latency_ms": 60048.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91039
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+        "handle": "decision-59",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 6839,
+        "wallet_delta_micro": 6839,
+        "latency_ms": 27024.3,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 41144,
+        "output_tokens": 900,
+        "cached_tokens": 36864,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160289
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+        "handle": "decision-130",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 4061,
+        "wallet_delta_micro": 4061,
+        "latency_ms": 9939.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25250,
+        "output_tokens": 547,
+        "cached_tokens": 0,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 92385
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:evaluator",
+        "handle": "decision-131",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1905,
+        "wallet_delta_micro": 1905,
+        "latency_ms": 8128.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 26733,
+        "output_tokens": 765,
+        "cached_tokens": 20736,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 98408
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:meta",
+        "handle": "decision-132",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2014,
+        "wallet_delta_micro": 2014,
+        "latency_ms": 7143.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 26137,
+        "output_tokens": 1162,
+        "cached_tokens": 20736,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95743
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:tool",
+        "handle": "decision-133",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 3678,
+        "wallet_delta_micro": 3678,
+        "latency_ms": 7123.8,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 25561,
+        "output_tokens": 48,
+        "cached_tokens": 20736,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91686
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:fail",
+        "handle": "decision-134",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The order in inputs has client_id 'calibration-unplaced' and is explicitly noted as never having been sent to the venue. The account confirms this: no positions, no fills, zero fees, and no pending or",
+        "cost_micro": 1403,
+        "wallet_delta_micro": 1403,
+        "latency_ms": 2806.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25064,
+        "output_tokens": 263,
+        "cached_tokens": 20736,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91644
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:parent",
+        "handle": "decision-135",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 4282,
+        "wallet_delta_micro": 4282,
+        "latency_ms": 17772.1,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 50466,
+        "output_tokens": 386,
+        "cached_tokens": 41472,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91697
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+        "handle": "decision-136",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 4708,
+        "wallet_delta_micro": 4708,
+        "latency_ms": 11372.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 40955,
+        "output_tokens": 999,
+        "cached_tokens": 16128,
+        "served_by": [
+          "venice:z-ai-glm-5-3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160355
+      }
+    ],
+    "venice:deepseek-v4-1-flash": [
+      {
+        "scenario": "produce",
+        "seat": "cal:venice:deepseek-v4-1-flash:producer",
+        "handle": "decision-60",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 8769,
+        "wallet_delta_micro": 8769,
+        "latency_ms": 2340.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25647,
+        "output_tokens": 126,
+        "cached_tokens": 2824,
+        "served_by": [
+          "venice:deepseek-v4-1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91728
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:venice:deepseek-v4-1-flash:evaluator",
+        "handle": "decision-61",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1701,
+        "wallet_delta_micro": 1701,
+        "latency_ms": 3089.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27171,
+        "output_tokens": 252,
+        "cached_tokens": 24128,
+        "served_by": [
+          "venice:deepseek-v4-1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 97751
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:venice:deepseek-v4-1-flash:meta",
+        "handle": "decision-62",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1500,
+        "wallet_delta_micro": 1500,
+        "latency_ms": 4919.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 26549,
+        "output_tokens": 274,
+        "cached_tokens": 24128,
+        "served_by": [
+          "venice:deepseek-v4-1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95086
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:venice:deepseek-v4-1-flash:tool",
+        "handle": "decision-63",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2599,
+        "wallet_delta_micro": 2599,
+        "latency_ms": 7025.0,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 25955,
+        "output_tokens": 18,
+        "cached_tokens": 24162,
+        "served_by": [
+          "venice:deepseek-v4-1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91029
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:venice:deepseek-v4-1-flash:fail",
+        "handle": "decision-64",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The order named in inputs carries client_id \"calibration-unplaced\" and was never sent to the venue, so no Fill or CalibrationFill event exists for it. There is no fill id or settlement time to report.",
+        "cost_micro": 838,
+        "wallet_delta_micro": 838,
+        "latency_ms": 2580.7,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25459,
+        "output_tokens": 105,
+        "cached_tokens": 24128,
+        "served_by": [
+          "venice:deepseek-v4-1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90987
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:venice:deepseek-v4-1-flash:parent",
+        "handle": "decision-65",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2313,
+        "wallet_delta_micro": 2313,
+        "latency_ms": 6609.5,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 51179,
+        "output_tokens": 14,
+        "cached_tokens": 48324,
+        "served_by": [
+          "venice:deepseek-v4-1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91042
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:venice:deepseek-v4-1-flash:producer",
+        "handle": "decision-66",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 4.7,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 160290
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:venice:deepseek-v4-1-flash:producer",
+        "handle": "decision-138",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1052,
+        "wallet_delta_micro": 1052,
+        "latency_ms": 3096.9,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25850,
+        "output_tokens": 159,
+        "cached_tokens": 24166,
+        "served_by": [
+          "venice:deepseek-v4-1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 92543
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:venice:deepseek-v4-1-flash:evaluator",
+        "handle": "decision-139",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1527,
+        "wallet_delta_micro": 1527,
+        "latency_ms": 4925.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 27374,
+        "output_tokens": 408,
+        "cached_tokens": 25444,
+        "served_by": [
+          "venice:deepseek-v4-1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 98566
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:venice:deepseek-v4-1-flash:meta",
+        "handle": "decision-140",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (VeniceError)",
+        "cost_micro": 57202,
+        "wallet_delta_micro": 57202,
+        "latency_ms": 60046.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 95901
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:venice:deepseek-v4-1-flash:tool",
+        "handle": "decision-141",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2544,
+        "wallet_delta_micro": 2544,
+        "latency_ms": 7543.8,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 26158,
+        "output_tokens": 18,
+        "cached_tokens": 24666,
+        "served_by": [
+          "venice:deepseek-v4-1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91844
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:venice:deepseek-v4-1-flash:fail",
+        "handle": "decision-142",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The order named in inputs carries client_id \"calibration-unplaced\" and is explicitly noted as never having been sent to the venue. No such order exists on the venue, so it has no fill id and no settle",
+        "cost_micro": 855,
+        "wallet_delta_micro": 855,
+        "latency_ms": 3400.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 25662,
+        "output_tokens": 83,
+        "cached_tokens": 24200,
+        "served_by": [
+          "venice:deepseek-v4-1-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91802
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:venice:deepseek-v4-1-flash:parent",
+        "handle": "decision-143",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (VeniceError)",
+        "cost_micro": 53427,
+        "wallet_delta_micro": 53427,
+        "latency_ms": 60130.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91857
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:venice:deepseek-v4-1-flash:producer",
+        "handle": "decision-144",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": true,
+        "reason": "ceiling exceeds request cost_ceiling",
+        "cost_micro": 0,
+        "wallet_delta_micro": 0,
+        "latency_ms": 4.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 160513
+      }
+    ],
+    "venice:qwen-3-8-flash": [
+      {
+        "scenario": "produce",
+        "seat": "cal:venice:qwen-3-8-flash:producer",
+        "handle": "decision-68",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 4026,
+        "wallet_delta_micro": 4026,
+        "latency_ms": 5312.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 28650,
+        "output_tokens": 30,
+        "cached_tokens": 0,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91723
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:venice:qwen-3-8-flash:evaluator",
+        "handle": "decision-69",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1028,
+        "wallet_delta_micro": 1028,
+        "latency_ms": 8386.9,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 30246,
+        "output_tokens": 301,
+        "cached_tokens": 26624,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 97746
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:venice:qwen-3-8-flash:meta",
+        "handle": "decision-70",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 859,
+        "wallet_delta_micro": 859,
+        "latency_ms": 5807.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 29537,
+        "output_tokens": 159,
+        "cached_tokens": 26624,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95081
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:venice:qwen-3-8-flash:tool",
+        "handle": "decision-71",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2358,
+        "wallet_delta_micro": 2358,
+        "latency_ms": 7669.4,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 29018,
+        "output_tokens": 32,
+        "cached_tokens": 26624,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91024
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:venice:qwen-3-8-flash:fail",
+        "handle": "decision-72",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The input order has client_id 'calibration-unplaced' and explicitly notes it was never sent to the venue. Therefore, no fill exists for this order.",
+        "cost_micro": 647,
+        "wallet_delta_micro": 647,
+        "latency_ms": 4033.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 28407,
+        "output_tokens": 49,
+        "cached_tokens": 26624,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 90982
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:venice:qwen-3-8-flash:parent",
+        "handle": "decision-73",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (VeniceError)",
+        "cost_micro": 21155,
+        "wallet_delta_micro": 21155,
+        "latency_ms": 67676.8,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 28407,
+        "output_tokens": 6,
+        "cached_tokens": 26624,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "None",
+          "stop"
+        ],
+        "prompt_bytes": 91027
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:venice:qwen-3-8-flash:producer",
+        "handle": "decision-74",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 3561,
+        "wallet_delta_micro": 3561,
+        "latency_ms": 5470.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 47448,
+        "output_tokens": 30,
+        "cached_tokens": 24576,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160285
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:venice:qwen-3-8-flash:producer",
+        "handle": "decision-145",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 3800,
+        "wallet_delta_micro": 3800,
+        "latency_ms": 7957.2,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 28876,
+        "output_tokens": 30,
+        "cached_tokens": 2048,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 92538
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:venice:qwen-3-8-flash:evaluator",
+        "handle": "decision-146",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1092,
+        "wallet_delta_micro": 1092,
+        "latency_ms": 17490.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 30472,
+        "output_tokens": 367,
+        "cached_tokens": 26624,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 98561
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:venice:qwen-3-8-flash:meta",
+        "handle": "decision-147",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 923,
+        "wallet_delta_micro": 923,
+        "latency_ms": 6708.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 29763,
+        "output_tokens": 226,
+        "cached_tokens": 26624,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 95896
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:venice:qwen-3-8-flash:tool",
+        "handle": "decision-148",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (VeniceError)",
+        "cost_micro": 19873,
+        "wallet_delta_micro": 19873,
+        "latency_ms": 60045.4,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_tokens": null,
+        "served_by": [],
+        "finish_reasons": [
+          "None"
+        ],
+        "prompt_bytes": 91839
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:venice:qwen-3-8-flash:fail",
+        "handle": "decision-149",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The order with client_id 'calibration-unplaced' was never sent to the venue and therefore has no fill id or settlement time.",
+        "cost_micro": 676,
+        "wallet_delta_micro": 676,
+        "latency_ms": 3873.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 28633,
+        "output_tokens": 44,
+        "cached_tokens": 26624,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91797
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:venice:qwen-3-8-flash:parent",
+        "handle": "decision-150",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2031,
+        "wallet_delta_micro": 2031,
+        "latency_ms": 10322.0,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 57426,
+        "output_tokens": 20,
+        "cached_tokens": 53248,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 91842
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:venice:qwen-3-8-flash:producer",
+        "handle": "decision-151",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 3570,
+        "wallet_delta_micro": 3570,
+        "latency_ms": 4963.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 47511,
+        "output_tokens": 30,
+        "cached_tokens": 24576,
+        "served_by": [
+          "venice:qwen-3-8-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160508
+      }
+    ]
+  },
+  "mode": "paid",
+  "world": "worlds/edition2-testnet.toml"
+}

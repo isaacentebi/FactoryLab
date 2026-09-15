@@ -57,7 +57,43 @@ _Pending: filled from `runs/e2-rehearsal-2.jsonl` when the run ends._
 
 ## Seat calibration under the edition 2 prompt
 
-_Pending: `docs/audits/v5/calibration/edition2-menu.json`, paid, $3 cap._
+`scripts/calibrate_seats.py --world worlds/edition2-testnet.toml --all-menu --paid --budget-usd 3
+--repeats 2`, run at 03:30 on a quiet machine: every model on the menu through the seven
+scenarios twice (produce, judge, meta, tool use, a task that must be refused, a continuation,
+a long context), each a real rendered request through `Runtime._invoke` with the scripted
+exchange, costs from the meter. Spent 667,183 µUSD of the 3,000,000 cap; no call refused by
+the cap. Full rows in `docs/audits/v5/calibration/edition2-menu.json`.
+
+| Candidate | Seats using it | Well-formed | Task met | Refusal ok | Cost p50 µ$ | p95 | Cached |
+|---|---|---|---|---|---|---|---|
+| deepseek/deepseek-v4.1-flash | none | 100% | 100% | 100% | 2,182 | 12,117 | 62% |
+| venice:z-ai-glm-5-3-flash | eval-a | 93% | 93% | 100% | 3,669 | 5,560 | 67% |
+| qwen/qwen3.8-flash | eval-b | 86% | 79% | 100% | 935 | 3,995 | 83% |
+| venice:qwen-3-8-flash | antagonist-a, meta-b | 86% | 86% | 100% | 1,562 | 3,902 | 71% |
+| z-ai/glm-5.3-flash | seed-observer | 79% | 79% | 100% | 2,951 | 7,121 | 0% |
+| openai/gpt-5.6-luna | eval-d | 79% | 79% | 100% | 6,729 | 27,038 | 0% |
+| venice:deepseek-v4-1-flash | seed-decider, eval-c, meta-a | 71% | 71% | 100% | 1,614 | 5,992 | 86% |
+| qwen/qwen3.7-flash | none | 71% | 64% | 0% | 339 | 4,659 | 62% |
+| deepseek/deepseek-v4-flash-0731 | none | 57% | 14% | 50% | 372 | 530 | 86% |
+| meta/muse-spark-1.3 | none | not measured | | | | | |
+
+Reading the failures, not the percentages: every "refused" row is the deliberate failing task
+answered correctly (the order named does not exist), so "refusal ok" is the column that carries
+it. The well-formed losses are of three kinds. Malformed replies: GLM 5.3 flash on OpenRouter 3,
+DeepSeek 0731 4, Qwen 3.7 2, Qwen 3.8 1 (Venice's GLM had none). Provider errors with no HTTP
+status, billed at the ceiling as `billing uncertain`: eleven across OpenRouter and Venice, on a
+quiet machine, so they are not only the load that confounded run 1. And harness refusals: the
+harness endows each candidate seat with 85,714 µUSD, below the long-context ceiling of the
+dearest models, so 17 trees were refused by the seat's own entitlement before any call (all 14
+of Muse Spark's, which is why it is unmeasured, plus one GPT 5.6 and two Venice DeepSeek); a
+rerun with a larger per-seat grant would measure those.
+
+What it says about the roster: `seed-observer` on GLM 5.3 flash through OpenRouter is the worst
+seat on the roster for shape (79%, and the wrapper failure seen in run 1); the same model through
+Venice is at 93% with a cache hit, and DeepSeek 4.1 flash on OpenRouter is the only candidate at
+100% on every column. The three Venice DeepSeek seats are at 71% mostly from provider errors, not
+malformed text. Changing a seat's model changes the roster hash and needs a re-ratification (one
+ballot, a third of a cent).
 
 ## What this does and does not show
 
