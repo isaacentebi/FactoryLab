@@ -708,6 +708,8 @@ class GovernanceMixin:
                 spec_class, extra = ProgramAssemblySpec, {
                     "code": prop.code, "timeout_s": prop.timeout_s,
                     "state_policy": prop.state_policy,
+                    # A watcher's predicate (edition 3, C2) is part of its spec.
+                    **({"trigger": dict(prop.trigger)} if prop.trigger else {}),
                     **({"reward_shapes": shapes} if custom else {})}
             else:
                 spec_class = WorkAssemblySpec if custom else AssemblySpec
@@ -726,6 +728,12 @@ class GovernanceMixin:
                 refuse=("id already registered: a live assembly is retired by vote before "
                         "its id takes a next version") if live else "")
             self._instantiate(spec)
+            if getattr(spec, "trigger", None):
+                # A watcher answers to the seat that registered it: the kernel wakes
+                # that seat with the trigger fact, whatever it deferred (C2).
+                self.subscription_book.watch(
+                    prop.id, owner=self.handle_to_assembly.get(handle),
+                    trigger=dict(spec.trigger))
             self._move_trial(handle, amount, to=prop.id, reason="trial:assembly")
             if custom:
                 self.kind_reward_shapes.update(shapes)

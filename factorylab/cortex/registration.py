@@ -146,6 +146,9 @@ class AssemblyProposal:
     code: str = ""
     timeout_s: int = 10
     state_policy: str = "none"
+    # A watcher (edition 3, C2): the predicate over world state the kernel settles
+    # each tick without a model call. Empty for every seat that is not one.
+    trigger: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """``reward_shapes`` holds the resolved contract for the kinds this proposal emits.
@@ -487,6 +490,7 @@ def _assembly(
     if not isinstance(model_id, str) or (model_id not in known_models and not program):
         raise ValueError("model_id must name a registered model")
     code, timeout_s, state_policy = "", 10, "none"
+    trigger: dict[str, Any] = {}
     if program:
         code = item.get("code")
         if not isinstance(code, str) or not code.strip():
@@ -499,10 +503,17 @@ def _assembly(
         state_policy = item.get("state_policy", "none")
         if state_policy not in ("none", "private"):
             raise ValueError("state_policy must be none or private")
+        if "trigger" in item:
+            from factorylab.runtime.subscriptions import validate_trigger
+
+            # A watcher is a program seat with a predicate the kernel can settle from
+            # world state; the trigger is part of the spec, registered by this route.
+            trigger = validate_trigger(item["trigger"])
         if not (jail_available() if jail is None else jail):
             raise ValueError("no jail on this host")
-    elif any(k in item for k in ("code", "timeout_s", "state_policy")):
-        raise ValueError("code, timeout_s and state_policy belong to a program seat")
+    elif any(k in item for k in ("code", "timeout_s", "state_policy", "trigger")):
+        raise ValueError(
+            "code, timeout_s, state_policy and trigger belong to a program seat")
     # A program has no system role; the prompt field is kept only as its label.
     prompt = item.get("system_prompt", "program" if program else None)
     if not isinstance(prompt, str) or not prompt.strip():
@@ -526,7 +537,7 @@ def _assembly(
     return AssemblyProposal(
         aid, role, model_id, prompt, accepts, max_tokens, effort, emits, schemas,
         reward_contracts(emits, item.get("reward_shapes", {}), registered=known_reward_shapes),
-        code, timeout_s, state_policy,
+        code, timeout_s, state_policy, trigger,
     )
 
 

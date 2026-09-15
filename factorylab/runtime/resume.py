@@ -518,6 +518,11 @@ _RUNTIME_FIELDS = (
     "launch_nonce",
     # The release that launched the world; restore refuses a different one (C4).
     "release_digest",
+    # edition 3, C2
+    # Thinking control: every seat's subscription, its sleep, the world it has not
+    # read yet and each watcher's last observation, as one block of plain data
+    # (``ThinkingMixin.subscriptions``; assignment restores the book in place).
+    "subscriptions",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (

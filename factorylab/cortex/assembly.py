@@ -251,6 +251,10 @@ class ProgramAssemblySpec(AssemblySpec):
     timeout_s: int = 10
     state_policy: str = "none"
     reward_shapes: dict[str, str] = field(default_factory=dict)
+    # A watcher (edition 3, C2): the predicate the kernel settles from world state
+    # each tick, at the program price and without a model call. Empty for a program
+    # seat that is not a watcher.
+    trigger: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -264,6 +268,10 @@ class ProgramAssemblySpec(AssemblySpec):
             raise ValueError(f"timeout_s must be an int in [1, {MAX_PROGRAM_TIMEOUT_S}]")
         if self.state_policy not in PROGRAM_STATE_POLICIES:
             raise ValueError("state_policy must be none or private")
+        if self.trigger:
+            from factorylab.runtime.subscriptions import validate_trigger
+
+            object.__setattr__(self, "trigger", validate_trigger(dict(self.trigger)))
         object.__setattr__(self, "reward_shapes", reward_contracts(self.emits, self.reward_shapes))
 
 
@@ -634,6 +642,7 @@ def validate_proposal(proposal: dict) -> None:
                    "accepts": {"type": "array", "items": {"type": "string"}},
                    "emits": {"type": "array", "items": {"type": "string"}},
                    "schemas": {"type": "object"},
+                   "trigger": {"type": "object"},
                    "range": {"type": "array", "items": {"type": "number"}},
                    "actions": {"type": "array", "items": {"type": "string"}},
                    "args_schema": {"type": "object"}})

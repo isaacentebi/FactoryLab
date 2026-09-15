@@ -36,6 +36,15 @@ from factorylab.kernel.queue import PropensityRecord
 
 MALFORMED = "malformed"
 HOLD = "hold"
+#: The action vocabulary of edition 3, C2. A seat's alternatives are not "hold or
+#: trade": deciding to look, to build, to legislate or to sleep are the choices
+#: this experiment wants to select over, and naming every one of them ``hold``
+#: erases exactly that variation. The kernel classifies each answer into one of
+#: these six and ledgers it beside the finer label, so a declaration may be made
+#: over the verbs or over the exact labels.
+ACTION_CLASSES = ("hold", "investigate", "build", "govern", "defer", "order")
+#: Registration kinds that are a move in the factory's politics rather than a build.
+GOVERNING_KINDS = frozenset({"amendment", "challenge", "retire"})
 # The least mass the action taken may carry before it weights a reward. A declared
 # probability is unverifiable, so it is clipped before it becomes an importance
 # weight: one reward can move a learner by at most 1 / MIN_DECLARED_MASS times the
@@ -161,6 +170,39 @@ def action_label(role: str, outputs: dict[str, Any], status: str,
     return "+".join(parts)[:64]
 
 
+def action_class(label: str, outputs: Any, *, tool_calls: int = 0) -> str:
+    """Name which of the six actions an answer actually took (edition 3, C2).
+
+    The finer label stays what it was — a learner still holds an arm for
+    ``buy:BTC:xs`` — and this is the coarse verb beside it, so a seat may
+    declare its propensity over the verbs without having to guess the exact
+    order it would end up placing. A judgement (``verdict:``, ``conformity:``)
+    is that seat's product, not a producer's choice among these six, and keeps
+    its own label as its class.
+    """
+    if label == MALFORMED:
+        return MALFORMED
+    if label.startswith(("verdict:", "conformity:")):
+        return label
+    outputs = outputs if isinstance(outputs, dict) else {}
+    parts = label.split("+")
+    if any(p.startswith(("buy:", "sell:", "close:", "cancel:", "leverage:", "transfer:"))
+           for p in parts):
+        return "order"
+    register = outputs.get("register")
+    kinds = {str(item.get("kind")) for item in register
+             if isinstance(item, dict)} if isinstance(register, list) else set()
+    if kinds & GOVERNING_KINDS:
+        return "govern"
+    if kinds:
+        return "build"
+    if tool_calls or any(p.startswith("request:") for p in parts):
+        return "investigate"
+    if outputs.get("defer") or str(outputs.get("action", "")).strip().lower() == "defer":
+        return "defer"
+    return HOLD
+
+
 def size_band_vocabulary() -> str:
     """The bands, spelled out, so a declaration can name the sizes it weighed."""
     edges = ", ".join(f'"{name}" (< {edge} base units)' for edge, name in SIZE_BANDS)
@@ -170,7 +212,12 @@ def size_band_vocabulary() -> str:
 def action_vocabulary() -> dict[str, str]:
     """The public shape of an action label, stated once for every role."""
     return {
-        "producer": 'hold, or "<side>:<COIN>:<size band>" for an order, e.g. '
+        "producer": 'hold, investigate (tool calls and no order), build (a '
+        "registration), govern (a proposal or a challenge), defer (sleep through "
+        "routine ticks), order — the six actions a propensity may be declared over; "
+        'the kernel classifies your answer into one of them and ledgers it beside the '
+        "finer label below. The finer label is hold, or "
+        '"<side>:<COIN>:<size band>" for an order, e.g. '
         '"buy:BTC:xs". Labels belong in propensity, not the action field: execute with '
         '"action": "order" and explicit coin, side and numeric size. The size band '
         'buckets the size you declared, in base units: '
@@ -211,6 +258,7 @@ def declared_record(
     *,
     learner_id: str,
     state_hash: str,
+    taken_class: str | None = None,
 ) -> tuple[PropensityRecord, str | None]:
     """Build the second propensity on a handle; degenerate when none was declared.
 
@@ -233,8 +281,16 @@ def declared_record(
             for action, mass in raw.items():
                 action = canonical_label(action)
                 distribution[action] = distribution.get(action, 0.0) + mass
+            if label not in distribution and taken_class in distribution:
+                # Edition 3, C2: a declaration over the six actions names the verb,
+                # not the exact order it would have been. The action taken is then
+                # that verb, and the weight it carries is the mass declared on it.
+                label = taken_class
             if label not in distribution:
-                raise ValueError(f"propensity must include the action taken ({label})")
+                raise ValueError(
+                    f"propensity must include the action taken ({label})"
+                    + (f" or its action class ({taken_class})"
+                       if taken_class and taken_class != label else ""))
             if distribution[label] <= 0:
                 raise ValueError(f"the action taken ({label}) needs positive mass")
             if distribution[label] < MIN_DECLARED_MASS:
