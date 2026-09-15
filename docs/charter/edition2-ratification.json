@@ -1,0 +1,140 @@
+{
+  "roster_sha256": "3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb",
+  "parent_charter_sha256": "929f1b04bee45155e74d196c80b1a6d764a75555fa4ecc5872beffc629578935",
+  "conflicts": [],
+  "calls": [
+    {
+      "seat": {
+        "alias": "seat-1",
+        "assembly_id": "meta-a",
+        "role": "meta"
+      },
+      "model": "venice:deepseek-v4-1-flash",
+      "text": "{\"selected\": [\"tool-discipline\", \"well-formed-floor\", \"cost-cap\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-position-concentration\", \"turnover_ceiling\"], \"reason\": \"All eight cards passed the first survey with majority support and the preflight feedback is empty, so nothing requires revision; keeping each definition unchanged and selecting them together preserves the full, internally consistent set of norms (producer, evaluator, and all-role coverage) for edition 1.\"}",
+      "stop": "stop",
+      "cost_micro": 883,
+      "input_tokens": 1898,
+      "output_tokens": 114,
+      "served_by": "venice:deepseek-v4-1-flash",
+      "valid": true,
+      "selected": [
+        "tool-discipline",
+        "well-formed-floor",
+        "cost-cap",
+        "censorship-bound",
+        "card-forecast-skill",
+        "card-consequence-paid-off",
+        "card-position-concentration",
+        "turnover_ceiling"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-2",
+        "assembly_id": "seed-observer",
+        "role": "producer"
+      },
+      "model": "z-ai/glm-5.3-flash",
+      "text": "{\"selected\": [\"tool-discipline\", \"well-formed-floor\", \"cost-cap\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-position-concentration\", \"turnover_ceiling\"], \"reason\": \"Preflight feedback is empty, so no card raised issues; approving all majority-backed definitions unchanged for edition 1.\"}\n",
+      "stop": "stop",
+      "cost_micro": 193,
+      "input_tokens": 1024,
+      "output_tokens": 94,
+      "served_by": "z-ai/glm-5.3-flash",
+      "valid": true,
+      "selected": [
+        "tool-discipline",
+        "well-formed-floor",
+        "cost-cap",
+        "censorship-bound",
+        "card-forecast-skill",
+        "card-consequence-paid-off",
+        "card-position-concentration",
+        "turnover_ceiling"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-3",
+        "assembly_id": "eval-c",
+        "role": "evaluator"
+      },
+      "model": "venice:deepseek-v4-1-flash",
+      "text": "{\"selected\": [\"tool-discipline\", \"well-formed-floor\", \"cost-cap\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-position-concentration\", \"turnover_ceiling\"], \"reason\": \"With no preflight feedback flagging any card, all eight majority-approved cards have distinct norms, units, windows, and observation keys, so they can ship together in edition 1 without overlap or unresolved conflicts.\"}",
+      "stop": "stop",
+      "cost_micro": 859,
+      "input_tokens": 1898,
+      "output_tokens": 98,
+      "served_by": "venice:deepseek-v4-1-flash",
+      "valid": true,
+      "selected": [
+        "tool-discipline",
+        "well-formed-floor",
+        "cost-cap",
+        "censorship-bound",
+        "card-forecast-skill",
+        "card-consequence-paid-off",
+        "card-position-concentration",
+        "turnover_ceiling"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-4",
+        "assembly_id": "eval-d",
+        "role": "evaluator"
+      },
+      "model": "openai/gpt-5.6-luna",
+      "text": "{\"selected\":[\"tool-discipline\",\"well-formed-floor\",\"cost-cap\",\"censorship-bound\",\"card-forecast-skill\",\"card-consequence-paid-off\",\"card-position-concentration\",\"turnover_ceiling\"],\"reason\":\"No preflight feedback identified any issue, so I approve the complete majority-supported set for edition 1.\"}",
+      "stop": "stop",
+      "cost_micro": 469,
+      "input_tokens": 974,
+      "output_tokens": 228,
+      "served_by": "openai/gpt-5.6-luna",
+      "valid": true,
+      "selected": [
+        "tool-discipline",
+        "well-formed-floor",
+        "cost-cap",
+        "censorship-bound",
+        "card-forecast-skill",
+        "card-consequence-paid-off",
+        "card-position-concentration",
+        "turnover_ceiling"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-5",
+        "assembly_id": "seed-decider",
+        "role": "producer"
+      },
+      "model": "venice:deepseek-v4-1-flash",
+      "text": "{\"selected\": [\"well-formed-floor\", \"cost-cap\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\"], \"reason\": \"This subset keeps the integrity, cost, and truth-tracking measures that answer for all roles or the evaluator and lack redundant overlap, while omitting the producer-specific trading and tool cards whose definitions and preflight feedback are absent, so every included card is coherent and genuinely approved.\"}",
+      "stop": "stop",
+      "cost_micro": 853,
+      "input_tokens": 1898,
+      "output_tokens": 94,
+      "served_by": "venice:deepseek-v4-1-flash",
+      "valid": true,
+      "selected": [
+        "well-formed-floor",
+        "cost-cap",
+        "censorship-bound",
+        "card-forecast-skill",
+        "card-consequence-paid-off"
+      ]
+    }
+  ],
+  "accepted": [
+    "tool-discipline",
+    "well-formed-floor",
+    "cost-cap",
+    "censorship-bound",
+    "card-forecast-skill",
+    "card-consequence-paid-off",
+    "card-position-concentration",
+    "turnover_ceiling"
+  ],
+  "charter_sha256": "929f1b04bee45155e74d196c80b1a6d764a75555fa4ecc5872beffc629578935"
+}

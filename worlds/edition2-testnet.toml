@@ -309,6 +309,10 @@ spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 #   card at genesis; the population may propose one.
 [charter]
 edition = 1
+# Ratified 15 September 2026 by the seeded five-seat committee of this roster
+# (docs/charter/edition2-ratification.json, docs/audits/v5/charter-ratification.md).
+ratified_sha256 = "929f1b04bee45155e74d196c80b1a6d764a75555fa4ecc5872beffc629578935"
+roster_sha256 = "3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb"
 # consequential usefulness: create things or changes that others have reason to value; uptake by
 #   an independent counterparty is evidence, internal applause is a hypothesis.
 # epistemic integrity: make commitments answerable to evidence and preserve the ability to
