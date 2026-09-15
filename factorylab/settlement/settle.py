@@ -119,7 +119,8 @@ class Settler:
         # about_handle -> baseline q before that return's outcome entered the base rate
         self.__snapshots: dict[str, float] = {}
         # about_handle -> the outcome already counted in the base rate, once per return
-        self.__recorded: dict[str, int] = {}
+        # (a binary payoff, or a verdict key's fractional unblamed target)
+        self.__recorded: dict[str, float] = {}
 
     def settle_due(
         self, n: int, facts_for: Callable[[Forecast], WindowFacts | None]
@@ -234,9 +235,11 @@ class Settler:
         The realised normative outcome is 1 minus the return's attributed share
         of its window's charter blame (1 when nothing was attributed). Every
         verdict about one return is scored against the same pre-outcome base
-        rate of unblamed returns, whether it settles in this call or a later
-        one, and the return's blame enters that base rate once. The score trains
-        the judge's verdict skill; coverage is untouched.
+        rate, whether it settles in this call or a later one, and the return's
+        fractional outcome enters that base rate once: the baseline learns the
+        same quantity the judge is scored on, so a judge that only repeats the
+        constant share of blame every return carries has no excess skill. The
+        score trains the judge's verdict skill; coverage is untouched.
         """
         _require_probability(share, "share")
         outcome = 1.0 - share
@@ -248,9 +251,8 @@ class Settler:
         baseline_score = normative_brier(baseline_q, outcome)
         self.__standing.record_verdict(evaluator_id, score, baseline_score)
         if key not in self.__recorded:
-            unblamed = int(share == 0)
-            self.__recorded[key] = unblamed
-            self.__baseline.record(VERDICT_NOT_BLAMED, unblamed)
+            self.__recorded[key] = outcome
+            self.__baseline.record_fraction(VERDICT_NOT_BLAMED, outcome)
         return SettledVerdict(evaluator_id, about_handle, q, share, outcome, score,
                               baseline_score)
 

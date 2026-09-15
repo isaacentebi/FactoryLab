@@ -47,3 +47,16 @@ class PrevalenceBaseline:
         _require_outcome(y)
         count, positives = self.__counts.get(predicate_id, (0, 0))
         self.__counts[predicate_id] = (count + 1, positives + y)
+
+    def record_fraction(self, predicate_id: str, target: float) -> None:
+        """Include one unit-interval target in this predicate's future base rate.
+
+        A normative outcome is a fraction, not a binary event: a return that
+        carries a tenth of its window's blame has the target 0.9, and the base
+        rate a verdict about it is scored against must learn that same 0.9,
+        not whether the blame was exactly zero.
+        """
+        _require_id(predicate_id)
+        _require_probability(target, "target")
+        count, positives = self.__counts.get(predicate_id, (0, 0))
+        self.__counts[predicate_id] = (count + 1, positives + target)

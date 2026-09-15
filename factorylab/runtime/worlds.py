@@ -166,6 +166,9 @@ class PricesSpec:
     min_window_events: int = 1
     kappa: float = 0.5
     penalty_cap: float = 0.5
+    # Floor on a decision's share of a generic (non-attributable) violation, so
+    # splitting participation across many decisions cannot dilute it away.
+    min_blame_share: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -313,6 +316,9 @@ class WorldManifest:
                              ("forward_wait_windows", 2)):
             if payload["treasury"].get(key) == default:
                 payload["treasury"].pop(key)
+        # Preserve historical manifest identities while the blame floor keeps its default.
+        if payload["prices"].get("min_blame_share") == 0.1:
+            payload["prices"].pop("min_blame_share")
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -536,6 +542,9 @@ class WorldManifest:
             raise ValueError("prices.penalty_cap must be finite and in (0, 1)")
         if type(p.kappa) not in (int, float) or not isfinite(p.kappa) or p.kappa < 0:
             raise ValueError("prices.kappa must be finite and nonnegative")
+        if (type(p.min_blame_share) not in (int, float) or not isfinite(p.min_blame_share)
+                or not 0 <= p.min_blame_share <= 1):
+            raise ValueError("prices.min_blame_share must be finite and in [0, 1]")
         if min(p.eta, p.decay, p.lambda_max) <= 0 or p.min_window_events < 1:
             raise ValueError("prices: eta, decay, lambda_max > 0 and min_window_events >= 1")
 
@@ -704,6 +713,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         lambda_max=float(pr.get("lambda_max", 1.0)),
         min_window_events=int(pr.get("min_window_events", 1)),
         penalty_cap=pr.get("penalty_cap", 0.5),
+        min_blame_share=pr.get("min_blame_share", 0.1),
     )
     # Scripted providers run in virtual time, including live-shaped test fixtures.
     default_min_tick = "1s" if all(m.provider == "fake" for m in models) else "10s"

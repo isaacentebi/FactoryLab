@@ -27,7 +27,7 @@ def window():
     ("amendments_activated", 1.0), ("verdict_mean", 0.5), ("verdict_std", (1 / 6) ** 0.5),
     ("evaluator_disagreement", 0.5), ("consequence_paid_off_rate", 0.75), ("fills", 6.0),
     ("realized_pnl_usd", -1.25), ("position_concentration", 0.5), ("exposure_win_rate", 0.25),
-    ("meta_verdict_mean", 0.5), ("censored_share", 0.25), ("tool_calls", 7.0),
+    ("meta_verdict_mean", 0.5), ("censored_share", 0.25), ("tool_calls", 7 / 4),
     ("market_purchases", 2.0),
 ])
 def test_each_observation_is_pure_and_has_declared_units(name, expected):
@@ -42,9 +42,10 @@ def test_each_observation_is_pure_and_has_declared_units(name, expected):
 
 @pytest.mark.parametrize("observation", CATALOGUE, ids=lambda o: o.id)
 def test_empty_window_distinguishes_zero_activity_from_missing_support(observation):
+    # tool_calls is a mean per invocation (edition 2, C6): no invocation, no support.
     zero = {
         "registrations", "registration_rejections", "amendments_proposed", "amendments_activated",
-        "fills", "realized_pnl_usd", "tool_calls", "market_purchases", "turnover",
+        "fills", "realized_pnl_usd", "market_purchases", "turnover",
     }
     assert observation.measure(MeasureWindow(1, 0)) == (0.0 if observation.id in zero else None)
 
@@ -68,7 +69,7 @@ def test_disagreement_requires_distinct_judges_and_weights_returns_equally():
 
 def test_catalogue_is_exact_and_public_metadata_cannot_mutate_it():
     public = catalogue()
-    assert len(public) == len({o.id for o in CATALOGUE}) == 22
+    assert len(public) == len({o.id for o in CATALOGUE}) == 23  # + cost_per_attempt (C6)
     # A11: the public row now also names where the observation came from and which
     # version of it this is, because the population can register its own.
     assert all(set(item) == {"id", "description", "units", "unit_range", "scale",

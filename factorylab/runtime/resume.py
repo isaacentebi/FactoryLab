@@ -491,6 +491,8 @@ _RUNTIME_FIELDS = (
     "card_samples", "price_windows", "price_origins",
     "retired_assemblies", "retirement_proposals", "return_kinds", "decision_subjects",
     "event_schemas",
+    # Metric challenges: frozen incumbent and replacement cards, their trial series and status.
+    "challenges",
     "return_bindings",
     "return_events",
     # The population's registered measurements and its open assembly-learner rounds.

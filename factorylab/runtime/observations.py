@@ -87,6 +87,23 @@ def _cost_per_return(w: MeasureWindow) -> float | None:
     return (sum(costs) + getattr(w, "storage_cost_micro", 0)) / len(costs)
 
 
+def _cost_per_attempt(w: MeasureWindow) -> float | None:
+    """Mean cost of every invocation the window made, failed ones and rent included.
+
+    A tolerated failure is compute the window spent: nine cheap successes and
+    one expensive failure cost what all ten cost, not what the nine did. The
+    live window's per-decision costs already carry retained-storage rent, so
+    it is in the numerator and never a divisor. A closed record keeps no
+    attribution, so it is measured from the window's return samples instead
+    (``charter.measurement``), and a window with no invocation has no cost
+    per attempt.
+    """
+    decisions = getattr(w, "decisions", None)
+    if not decisions or not w.invocations:
+        return None
+    return sum(d["cost"] for d in decisions.values()) / w.invocations
+
+
 def _disagreement(w: MeasureWindow) -> float | None:
     groups = [
         pstdev([fmean(scores) for scores in judges.values()])
@@ -110,6 +127,13 @@ CATALOGUE: tuple[Observation, ...] = (
         "Mean cost of well-formed producer returns, including retained-storage rent.",
         "micro-USD per return",
         _cost_per_return,
+        (0.0, 1_000_000.0),
+    ),
+    Observation(
+        "cost_per_attempt",
+        "Mean cost of every selected return, failed ones included, plus retained-storage rent.",
+        "micro-USD per attempt",
+        _cost_per_attempt,
         (0.0, 1_000_000.0),
     ),
     Observation(
@@ -251,9 +275,9 @@ CATALOGUE: tuple[Observation, ...] = (
     ),
     Observation(
         "tool_calls",
-        "Attempted tool calls, including failures; excludes ignored calls.",
-        "count",
-        lambda w: float(w.tool_calls),
+        "Mean attempted tool calls per return, including failures; excludes ignored calls.",
+        "count per return",
+        lambda w: _ratio(w.tool_calls, w.invocations),
         (0.0, 1.0),
     ),
     Observation(

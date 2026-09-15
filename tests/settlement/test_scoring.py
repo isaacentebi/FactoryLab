@@ -59,3 +59,16 @@ def test_prevalence_uses_only_prior_outcomes_and_is_per_predicate():
     assert baseline.baseline_q("fill_within") == 0.0
     assert baseline.baseline_q("wallet_up") == pytest.approx(2 / 3)
     assert PrevalenceBaseline().baseline_q("wallet_up") == 0.5
+
+
+def test_a_fractional_target_enters_the_base_rate_as_its_value():
+    baseline = PrevalenceBaseline()
+    baseline.record_fraction("verdict_not_blamed", 0.9)
+    assert baseline.baseline_q("verdict_not_blamed") == pytest.approx(0.9)
+    baseline.record_fraction("verdict_not_blamed", 0.0)
+    baseline.record("verdict_not_blamed", 1)
+    assert baseline.baseline_q("verdict_not_blamed") == pytest.approx(1.9 / 3)
+    for bad in (-0.1, 1.5, float("nan"), "0.5", None):
+        with pytest.raises(ValueError):
+            baseline.record_fraction("verdict_not_blamed", bad)
+    assert baseline.baseline_q("verdict_not_blamed") == pytest.approx(1.9 / 3)

@@ -11,8 +11,13 @@ from types import SimpleNamespace
 from factorylab.charter.charter import MetricCard
 
 RETURN_OBSERVATIONS = frozenset({
-    "cost_per_return", "well_formed_rate", "noop_share", "revision_rate", "tool_calls",
+    "cost_per_return", "cost_per_attempt", "well_formed_rate", "noop_share", "revision_rate",
+    "tool_calls",
 })
+# The two cost selections: per successful response, and per attempt (failed
+# responses included). Both add retained-storage rent to what the selected
+# responses cost and never count a charge as one of them.
+COST_OBSERVATIONS = frozenset({"cost_per_return", "cost_per_attempt"})
 # The runtime keeps per-decision attribution on the same window object;
 # measurement never observes it.
 ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_cards",
@@ -34,8 +39,13 @@ def measurement_catalogue(observations=None) -> list[dict]:
         "cost_per_return": "Mean successful response cost in the selected rows; global closed "
         "windows use successful producer returns. A retained-storage charge adds to what those "
         "responses cost and is never counted as one of them.",
+        "cost_per_attempt": "Mean cost over every selected response, failed ones included; "
+        "global closed windows use every return the window made. A retained-storage charge "
+        "adds to what those responses cost and is never counted as one of them.",
         "well_formed_rate": "Successful responses over selected invocation responses, "
         "including ballots.",
+        "tool_calls": "Mean attempted tool calls per selected response, failures included; "
+        "global closed windows divide the window's attempted calls by its invocations.",
         "forecast_skill": "Mean selected forecast Brier minus its paired pre-outcome "
         "prevalence-baseline Brier.",
         "noop_share": "Share of selected responses declaring noop or hold; global closed "
@@ -273,7 +283,7 @@ def _selected(observation: str, rows: list[dict]) -> list[dict]:
     loses it here, before any grouping or horizon; a cost selection keeps it for
     `_horizon`, which admits it as mass and never as a slot.
     """
-    if observation.strip().lower() == "cost_per_return":
+    if observation.strip().lower() in COST_OBSERVATIONS:
         return rows
     return [row for row in rows if not row.get("storage")]
 
@@ -297,7 +307,7 @@ def _horizon(observation: str, group: list[dict], n: int, *,
         return None
     responses = responses[-n:]
     keep = {id(row) for row in responses}
-    if responses and observation.strip().lower() == "cost_per_return":
+    if responses and observation.strip().lower() in COST_OBSERVATIONS:
         first, last = responses[0]["window"], responses[-1]["window"]
         keep.update(id(row) for row in group
                     if row.get("storage") and first <= row["window"] <= last)
@@ -322,14 +332,22 @@ def _groups(card: MetricCard, rows: list[dict]) -> dict[str, list[dict]]:
     return dict(groups)
 
 
+def _cost_responses(observation: str, rows: list[dict]) -> list[dict]:
+    """The responses a cost selection divides over: successful ones per return, all per attempt."""
+    if observation == "cost_per_return":
+        return [row for row in rows if row["ok"] and not row.get("storage")]
+    return [row for row in rows if not row.get("storage")]
+
+
 def _measure_rows(observation: str, rows: list[dict]) -> float | None:
     if not rows:
         return None
-    if observation == "cost_per_return":
+    if observation in COST_OBSERVATIONS:
         # A retained-storage charge is cost without a response: it is added to
         # what the selected responses cost and never divided into as one of
-        # them, so paying rent can only raise a cost per response.
-        values = [row["cost"] for row in rows if row["ok"] and not row.get("storage")]
+        # them, so paying rent can only raise a cost per response. Per attempt,
+        # a failed response is one of the responses and its cost is spent.
+        values = [row["cost"] for row in _cost_responses(observation, rows)]
         rent = sum(row["cost"] for row in rows if row["ok"] and row.get("storage"))
         return (sum(values) + rent) / len(values) if values else None
     if observation in ("well_formed_rate", "noop_share", "revision_rate"):
@@ -338,7 +356,9 @@ def _measure_rows(observation: str, rows: list[dict]) -> float | None:
         ]
         return fmean(row[key] for row in rows)
     if observation == "tool_calls":
-        return float(sum(row["tool_calls"] for row in rows))
+        # The card's unit is calls per return: ten responses of one call each
+        # measure one, not ten.
+        return fmean(row["tool_calls"] for row in rows)
     if observation == "censored_share":
         return fmean(row["status"] == "censored" for row in rows)
     if observation == "consequence_paid_off_rate":
@@ -387,8 +407,12 @@ def measure_card(card: MetricCard, samples: CardSamples, observations=None) -> d
                         merged[key].update(value)
                     elif isinstance(value, int | float):
                         merged[key] += value
-            if observation.id == "forecast_skill":
-                rows = [r for r in samples.forecasts if selected[0]["index"] <= r["window"]
+            if observation.id in ("forecast_skill", "cost_per_attempt"):
+                # A closed record keeps no per-response attribution, so these
+                # are measured from the samples the selected windows retained.
+                source = samples.forecasts if observation.id == "forecast_skill" else (
+                    _selected(observation.id, samples.returns))
+                rows = [r for r in source if selected[0]["index"] <= r["window"]
                         <= selected[-1]["index"]]
                 value = _measure_rows(observation.id, rows)
             else:
@@ -429,8 +453,10 @@ def measure_cards(cards, samples: CardSamples, window, observations=None) -> dic
     for card in cards:
         if card.id not in samples.values:
             continue
-        if card.observation.strip().lower() == "cost_per_return" and (
+        observation = card.observation.strip().lower()
+        if observation in COST_OBSERVATIONS and (
             card.window.kind == "returns" or card.window.per is not None
+            or observation == "cost_per_attempt"
         ):
             rows = samples.returns
             if card.window.kind == "windows":
@@ -440,15 +466,15 @@ def measure_cards(cards, samples: CardSamples, window, observations=None) -> dic
             scope_medians = []
             for group in _groups(card, rows).values():
                 if card.window.kind == "returns":
-                    group = _horizon("cost_per_return", group, card.window.n)
+                    group = _horizon(observation, group, card.window.n)
                     if group is None:
                         continue
-                costs = [r["cost"] for r in group if r["ok"] and not r.get("storage")]
+                costs = [r["cost"] for r in _cost_responses(observation, group)]
                 if costs:
                     scope_medians.append(median(costs))
             if scope_medians:
                 samples.medians[card.id] = fmean(scope_medians)
-        elif card.observation.strip().lower() == "cost_per_return":
+        elif observation == "cost_per_return":
             costs = [value for w in samples.windows[-card.window.n:] for value in w["costs"]]
             if costs:
                 samples.medians[card.id] = median(costs)
