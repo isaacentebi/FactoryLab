@@ -119,9 +119,18 @@ class ComputeMixin:
         use ``unhistoried_available`` and an ordinary one only what the novelty share
         leaves: the commons funds a seat's trial, the seat funds its career.
         """
+        bridged = self.entitlement_bridges.get(handle, 0)
         if not self._novelty_compute(handle, reason):
+            return bridged
+        return max(0, self.budget.unallocated()) + bridged
+
+    @staticmethod
+    def _world_chars(world: Any) -> int:
+        """The rendered size of a request's world block, the part of every prompt that
+        grows with the factory (registrations, notes, artifacts, charter)."""
+        if not isinstance(world, dict):
             return 0
-        return max(0, self.budget.unallocated())
+        return len(json.dumps(world, sort_keys=True, indent=2, default=str))
 
     def _liable_seat(self, handle: str) -> str | None:
         """The seat whose entitlement pays for a decision, or None for the caller's own.
@@ -664,14 +673,41 @@ class ComputeMixin:
         return metered.result, metered.cost
 
     def _invoke_compute(self, action_id: str, req: Request) -> Return:
-        """Each model call is metered and counted; lifetime trials count settled consequences."""
-        model_id = self.assemblies[action_id].spec.model_id
+        """Each model call is metered and counted; lifetime trials count settled consequences.
+
+        The request is priced here, on its rendered prompt, before the seat's meter
+        sees it. Routing admitted the seat on the ceiling it could see (its last
+        recorded one plus the world block's growth since); when the rendered
+        request is dearer than the seat's cover, the pool bridges the gap for this
+        one call, ledgered, so a stale estimate never surfaces as a failed return.
+        The seat's real ceiling and the world size it was priced at are recorded
+        for the next routing decision.
+        """
+        asm = self.assemblies[action_id]
+        model_id = asm.spec.model_id
+        reason = f"model:{model_id}"
+        seat = self._liable_seat(req.handle) or action_id
+        try:
+            ceiling = asm.model.ceiling(asm.build_model_request(req))
+        except Exception:  # an unrenderable request fails inside invoke, as before
+            ceiling = None
+        cover = max(0, self.budget.entitlement(seat) + self._novelty_protection(req.handle, reason))
+        if ceiling is not None and cover > 0 and ceiling > cover:
+            backed = self.budget.bridge(seat, req.handle, ceiling - cover, "routing estimate")
+            if backed:
+                self.entitlement_bridges[req.handle] = backed
+                cover += backed
         req = replace(req, cost_ceiling=min(
-            req.cost_ceiling, max(0, self.wallet.available_for(req.handle, f"model:{model_id}")),
-            max(0, self.budget.entitlement(self._liable_seat(req.handle) or action_id)
-                + self._novelty_protection(req.handle, f"model:{model_id}")),
+            req.cost_ceiling, max(0, self.wallet.available_for(req.handle, reason)), cover,
         ))
-        ret = self.assemblies[action_id].invoke(req)
+        try:
+            ret = asm.invoke(req)
+        finally:
+            self.entitlement_bridges.pop(req.handle, None)
+        if ceiling is not None:
+            self.seat_ceilings[action_id] = {
+                "ceiling": ceiling, "world_chars": self._world_chars(req.inputs.get("world")),
+            }
         count = self.stats.invocations_by_assembly.get(action_id, 0) + 1
         self.ledger.append({"kind": "novelty.invocation", "assembly_id": action_id,
                             "handle": req.handle, "count": count})

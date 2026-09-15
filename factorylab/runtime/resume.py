@@ -503,6 +503,8 @@ _RUNTIME_FIELDS = (
     "notes",
     # The pause between releases: None while awake, else the entry record (C2).
     "dormancy",
+    # C10: each seat's last rendered call ceiling and the world size it was priced at.
+    "seat_ceilings",
     # The per-launch venue identity: a resumed world keeps the client order IDs
     # it already submitted, and a fresh ledger can never reproduce them.
     "launch_nonce",

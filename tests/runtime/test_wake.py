@@ -452,8 +452,8 @@ def test_edition2_views_are_additive_and_read_only_public_items(tmp_path, script
     manifest = load_manifest("scripted")
     data = collect_wake(world)
     assert SAMPLE_KEYS < set(data)
-    assert set(data) - SAMPLE_KEYS == {"entitlements", "money", "deliveries", "commitments", "cells",
-                                        "liveness"}
+    assert set(data) - SAMPLE_KEYS == {"entitlements", "money", "deliveries", "commitments",
+                                        "cells", "liveness"}
     # Existing keys keep their shape: the five pots the site reads are all present,
     # beside the endowment keys W1 added (C1, C2).
     assert {"venue", "reserve", "venice", "seed", "complete"} <= set(data["pots"]["current"])

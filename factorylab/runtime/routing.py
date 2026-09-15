@@ -434,6 +434,29 @@ class RoutingMixin:
         model = self.assemblies[action].spec.model_id
         return self.wallet.available_for(handle, f"model:{model}")
 
+    def _seat_need(self, action_id: str) -> int:
+        """The ceiling one call of this seat needs now: its last rendered ceiling plus the
+        input price of every character the world block has grown by since (at the
+        meter's own slack). Before its first call, the ceiling of its last hold."""
+        record = self.seat_ceilings.get(action_id)
+        if record is None:
+            return self.budget.last_hold(action_id)
+        growth = max(0, self._current_world_chars() - record["world_chars"])
+        if not growth:
+            return record["ceiling"]
+        asm = self.assemblies[action_id]
+        price = self.prices.price(asm.spec.model_id)
+        slack = getattr(asm.model, "input_slack", 1.5)
+        return record["ceiling"] + price.cost(int(growth * slack), 0) - price.cost(0, 0)
+
+    def _current_world_chars(self) -> int:
+        """The world block's rendered size for this event, measured once per event."""
+        cached = getattr(self, "_world_chars_cache", None)
+        if cached is None or cached[0] != self.n:
+            cached = (self.n, self._world_chars(self._world_block()))
+            self._world_chars_cache = cached
+        return cached[1]
+
     def _is_feasible(self, action_id: str) -> tuple[bool, str]:
         asm = self.assemblies[action_id]
         probe = ModelRequest(
@@ -450,13 +473,14 @@ class RoutingMixin:
             return False, f"compute: ceiling {ceiling} exceeds wallet {available}"
         # An exhausted entitlement is the seat's own state, not the factory's: it is
         # infeasible for this request until credited, and never counts as insolvency.
-        # The seat's last model hold is the ceiling one of its calls really needs; the
-        # empty probe above only bounds it from below. An unhistoried seat's trial is
-        # funded by the unallocated pool as well, exactly as the wallet's own check
-        # lets a protected call use everything the novelty share does not withhold.
+        # The empty probe above only bounds a call from below; the seat's last real
+        # ceiling, repriced for the world block's growth since, is what one of its
+        # calls needs now. An unhistoried seat's trial is funded by the unallocated
+        # pool as well, exactly as the wallet's own check lets a protected call use
+        # everything the novelty share does not withhold.
         entitlement = self.budget.entitlement(action_id)
         protected = max(0, self.budget.unallocated()) if self._unhistoried(action_id) else 0
-        need = max(ceiling, self.budget.last_hold(action_id))
+        need = max(ceiling, self._seat_need(action_id))
         if need > entitlement + protected:
             return False, f"entitlement: ceiling {need} exceeds seat entitlement {entitlement}"
         try:

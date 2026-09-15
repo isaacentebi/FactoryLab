@@ -118,6 +118,62 @@ def test_entitlements_restore_exactly_after_a_crash(tmp_path):
     assert restored.run()["ledger_verify"]
 
 
+def test_routing_need_is_the_last_real_ceiling_repriced_for_world_growth():
+    rt = make_runtime()
+    seat = "seed-decider"
+    assert rt._seat_need(seat) == 0  # no call yet, no hold yet
+    now = rt._current_world_chars()
+    assert now > 0
+    rt.seat_ceilings[seat] = {"ceiling": 400_000, "world_chars": now}
+    assert rt._seat_need(seat) == 400_000
+    rt.seat_ceilings[seat] = {"ceiling": 400_000, "world_chars": now - 10_000}
+    price = rt.prices.price(rt.assemblies[seat].spec.model_id)
+    grown = 400_000 + price.cost(15_000, 0)  # 10 000 characters at the meter's 1.5 slack
+    assert rt._seat_need(seat) == grown > 400_000
+    rt.seat_ceilings[seat] = {"ceiling": 400_000, "world_chars": now + 10_000}
+    assert rt._seat_need(seat) == 400_000  # a shrunken world never lowers the evidence
+    # the need is what routing compares against the seat's cover
+    rt._unhistoried = lambda action_id: False
+    rt.budget.debit(seat, rt.budget.entitlement(seat) - grown + 1, "test")
+    rt.seat_ceilings[seat] = {"ceiling": 400_000, "world_chars": now - 10_000}
+    assert not rt._is_feasible(seat)[0]
+    rt.seat_ceilings[seat] = {"ceiling": 400_000, "world_chars": now}
+    assert rt._is_feasible(seat)[0]
+
+
+def test_a_stale_routing_estimate_is_bridged_by_the_pool_never_a_failed_return():
+    rt = Runtime(load_manifest("scripted"), events=30, seed=1, initial_balance_micro=None,
+                 ledger_path=None, drip=False, router_gamma=.1)
+    items = []
+    append = rt.ledger.append
+
+    def capture(item):
+        items.append(dict(item))
+        return append(item)
+
+    rt.ledger.append = capture
+    stop_after(rt, lambda r, e: r.n == 12)
+    seat = "seed-observer"
+    real = rt.seat_ceilings[seat]["ceiling"]
+    assert real > 0
+    # the seat is historied, its recorded ceiling is stale by a lot, and its entitlement
+    # covers the stale figure but not the rendered request
+    rt._unhistoried = lambda action_id: False
+    rt.seat_ceilings[seat] = {"ceiling": 1, "world_chars": rt._current_world_chars()}
+    rt.budget.debit(seat, rt.budget.entitlement(seat) - real // 2, "test")
+    assert rt._is_feasible(seat)[0]
+    rt.run()
+    bridges = [i for i in items if i.get("kind") == "budget" and i.get("op") == "bridge"
+               and i["assembly_id"] == seat]
+    assert bridges and all(b["backed"] == b["amount"] > 0 for b in bridges)
+    assert bridges[0]["reason"] == "routing estimate"
+    invocations = [i for i in items if i.get("kind") == "invocation"
+                   and i["assembly_id"] == seat and items.index(i) > items.index(bridges[0])]
+    assert invocations and all(i["status"] == "ok" for i in invocations)
+    assert rt.seat_ceilings[seat]["ceiling"] >= real  # the evidence is refreshed
+    assert rt.budget.holds() == 0 and invariant(rt)
+
+
 def test_snapshot_codec_carries_the_book_and_older_snapshots_keep_genesis():
     rt = make_runtime()
     rt.budget.transfer("seed-decider", "eval-a", 1_000, "test")
