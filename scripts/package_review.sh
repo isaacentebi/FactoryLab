@@ -3,11 +3,13 @@
 # runs, no venv. Usage: scripts/package_review.sh <out.zip>
 set -euo pipefail
 out="${1:?usage: package_review.sh <out.zip>}"
+mkdir -p "$(dirname "$out")"
+out="$(cd "$(dirname "$out")" && pwd)/$(basename "$out")"
 head="$(git rev-parse HEAD)"
 tmp="$(mktemp -d)"
 git archive --format=tar --prefix="FactoryLab-${head:0:7}/" HEAD | tar -x -C "$tmp"
 # Belt and braces: no key file may ride along even if one were ever tracked by mistake.
 find "$tmp" -name '*.key' -delete
-( cd "$tmp" && zip -qr "$OLDPWD/$out" . )
+( cd "$tmp" && zip -qr "$out" . )
 rm -rf "$tmp"
 echo "packaged HEAD ${head} -> ${out}"
