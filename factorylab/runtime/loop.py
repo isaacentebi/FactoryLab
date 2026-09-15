@@ -216,6 +216,10 @@ class Runtime(
                 self.clock.now_ns,
                 {"manifest_hash": self.m.manifest_hash(),
                  "launch_nonce": self.launch_nonce,
+                 # A checkpoint written before release identity replays the exact
+                 # historical Launch, which carried no digest.
+                 **({"release_digest": self.release_digest}
+                    if self.release_digest is not None else {}),
                  "manifest": json.loads(self.m.canonical_json())},
                 "kernel",
             )

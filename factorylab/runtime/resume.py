@@ -504,6 +504,8 @@ _RUNTIME_FIELDS = (
     # The per-launch venue identity: a resumed world keeps the client order IDs
     # it already submitted, and a fresh ledger can never reproduce them.
     "launch_nonce",
+    # The release that launched the world; restore refuses a different one (C4).
+    "release_digest",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
@@ -593,12 +595,24 @@ def restore_runtime(rt, state: dict) -> None:
         raise ResumeError("venue account differs from the saved world",
                           code="venue_account_mismatch")
     saved_runtime = decode(state["runtime"])
+    running_digest = getattr(rt, "release_digest", None)  # read before the saved fields land
     for name, value in saved_runtime.items():
         setattr(rt, name, value)
     # A checkpoint written before launch-bound venue identities keeps its historical
     # client order IDs rather than adopting this process's fresh nonce. The adapter
     # is rebound below, after a deterministic venue's own state has been restored.
     rt.launch_nonce = saved_runtime.get("launch_nonce")
+    # The saved world names the release that launched it. A different release does
+    # not continue that identity: it is a new kernel and must be a new world. A
+    # checkpoint written before release identity carries no digest; it keeps its
+    # historical Launch (no digest to replay) and, once launched, adopts the
+    # running release so every later resume is bound.
+    saved_digest = saved_runtime.get("release_digest")
+    if saved_digest is not None and saved_digest != running_digest:
+        raise ResumeError("release digest differs from the saved world",
+                          code="release_mismatch")
+    rt.release_digest = saved_digest if saved_digest is not None or not rt.started else (
+        running_digest)
     rt.observer.predicates = rt.predicates
     if rt.window.index in rt.price_windows:
         rt.price_windows[rt.window.index] = rt.window
@@ -707,11 +721,24 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     journal.bootstrap = True
     rt = Runtime(manifest, **state["config"], ledger_path=None, provider=provider, market=market,
                  exchange=exchange, clock_source=clock_source, _journal=journal, _lock=lock)
-    restore_runtime(rt, state)
+    running_digest = getattr(rt, "release_digest", None)
+    try:
+        restore_runtime(rt, state)
+    except ResumeError as exc:
+        if exc.code == "release_mismatch":
+            # The refusal is the world's own evidence: which release launched it and
+            # which one was refused. Replay skips this item like a repair note.
+            ledger.append({
+                "kind": "failed_resume", "reason": "release_mismatch",
+                "ledgered_release_digest": decode(state["runtime"]).get("release_digest"),
+                "running_release_digest": running_digest,
+                "snapshot_seq": snapshot["seq"], "ts": state["clock_ns"],
+            })
+        raise
     journal.bootstrap = False
     journal.active = journal.recovering = True
     journal.tail = (item for item in tail
-                    if item.get("kind") != "ledger.repaired")
+                    if item.get("kind") not in ("ledger.repaired", "failed_resume"))
     try:
         if not rt.started:
             rt._launch()

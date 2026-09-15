@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -422,7 +423,14 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
     assert proc.returncode == 0, proc.stderr.decode()
     with tarfile.open(capture) as archive:
         assert {m.name for m in archive if m.isfile()} == {
-            "runs/funded.jsonl", "repo/worlds/funded.toml", *relatives}
+            "runs/funded.jsonl", "runs/funded.release.json", "repo/worlds/funded.toml",
+            *relatives}
         assert archive.extractfile("runs/funded.jsonl").read() == original
         assert archive.extractfile("repo/worlds/funded.toml").read() == manifest.read_bytes()
+        # The release record travels beside the ledger and names the exact bytes archived
+        # (C4). This fixture root carries no package, so the digest is declared missing.
+        record = json.loads(archive.extractfile("runs/funded.release.json").read())
+        assert record["release_digest"] == "unavailable"
+        assert record["ledger"] == {"bytes": len(original),
+                                    "sha256": hashlib.sha256(original).hexdigest()}
     assert (root / "runs/funded.jsonl").read_bytes() == original + b'{"item":'

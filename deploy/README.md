@@ -158,7 +158,11 @@ AGE_RECIPIENT=age1_REPLACE_WITH_PUBLIC_RECIPIENT
 BACKUP_REMOTE=factory-backups:bucket/factorylab
 RCLONE_CONFIG=/srv/factorylab/rclone.conf
 FACTORY_WEBHOOK_URL=https://REPLACE_WITH_RECEIVER
+FACTORYLAB_WITNESS_URL=https://REPLACE_WITH_WITNESS_RECEIVER
 ```
+
+`FACTORYLAB_WITNESS_URL` is optional; without it the witness lines stay in
+`runs/funded.witness.jsonl` only (see "Witness" below).
 
 The receiver accepts precisely one JSON line such as
 `{"world":"funded","event":"terminated"}` or
@@ -220,6 +224,58 @@ do not inspect the interior or change anything. systemd resumes the same ledger
 after process failure/reboot. There is no polling agent making intervention
 choices, no live service upgrade, and no automatic replacement world.
 
+### Release identity
+
+A diary binds its manifest and its venue account; edition 2 also binds the
+release that executes them (cold audit F1). At every start the runtime computes
+
+```
+release_digest = sha256(git_head + sha256(uv.lock) + tree_hash(factorylab/))
+```
+
+in `factorylab/runtime/release.py`, ledgers it in the `Launch` event and in every
+checkpoint, and `resume` refuses a checkpoint whose digest differs from the
+running one with the reason code `release_mismatch` (exit 1, a `failed_resume`
+webhook and witness line, and a `failed_resume` item in the diary naming both
+digests). The tree hash covers the package as it is on disk, so an uncommitted
+edit is a different release exactly as a new commit is. There is no override:
+a changed release is a new world.
+
+The head comes from git when the checkout has it. The provisioner also runs
+`deploy/install.sh`, which records the identity in `repo/RELEASE`; a host without
+git reads the head from there, and `release_info()["git_head_source"]` says which
+was used (`git`, `release_file`, or `none`). Print it on the host:
+
+```sh
+cd /srv/factorylab/repo && .venv/bin/python -m factorylab.runtime.release
+```
+
+Record the digest with the launch record. `backup.sh` writes the same JSON, plus
+the archived ledger's byte length and SHA-256, to `runs/funded.release.json` inside
+every archive, so a restore knows which release the ledger resumes under.
+
+### Witness
+
+`deploy/witness.sh <launch|dormant|kill|failed_resume> [reason]` appends one line
+
+```json
+{"world":"funded","event":"launch","ts":"2026-09-14T03:00:00Z","release_digest":"<64 hex>","ledger_head":"<sha256 of the ledger bytes>"}
+```
+
+to `runs/funded.witness.jsonl` (append-only, 0600, backed up with the ledger) and,
+when `ops.env` sets `FACTORYLAB_WITNESS_URL`, POSTs the identical line as JSON.
+The append never waits on the receiver; the POST is best effort (20-second
+timeout, HTTPS only except a loopback rehearsal receiver) and cannot fail the
+caller. `start.sh` emits `launch` after the first `run` succeeds, `kill` when
+`resume` reports finality (exit 3: the operator's kill or the world's own death)
+and `failed_resume` with the reason code when `resume` exits 1. The kill runbook
+below adds one line so an operator's kill is witnessed at once rather than at
+the next service start. `dormant` is the entry into budget dormancy (C2); it is
+ledgered by the runtime and shown in the wake, and the wake publisher is the
+intended caller of `witness.sh dormant` once that field lands. Nothing in a
+witness line is read from the diary: the digest is computed from the checkout
+and the head is the hash of the ledger file's bytes.
+
 ### The one control: kill
 
 `systemctl stop` is not a kill. It leaves the world unterminated, the seal
@@ -230,6 +286,7 @@ experiment is one command, and it is the only intervention the architect keeps:
 systemctl stop factorylab.service
 sudo -u factory /srv/factorylab/repo/.venv/bin/factorylab kill \
     --world funded --ledger /srv/factorylab/runs/funded.jsonl
+sudo -u factory bash /srv/factorylab/repo/deploy/witness.sh kill
 ```
 
 It takes the writer lock (so stop the unit first, or it exits 4), records
@@ -263,8 +320,9 @@ without this file.
 
 Every failing command prints exactly one line, `factorylab <command>: <code>`,
 where the code comes from the closed vocabulary in `factorylab/runtime/reasons.py`
-(`ledger_integrity`, `manifest_mismatch`, `credential_missing` for a key the
-environment lacks, `credential_unsafe` for a key file whose mode or owner is
+(`ledger_integrity`, `manifest_mismatch`, `release_mismatch` for a checkout whose
+release digest is not the one that launched the world, `credential_missing` for a
+key the environment lacks, `credential_unsafe` for a key file whose mode or owner is
 wrong, `venue_unreachable`, `jail_unavailable`, and the rest). No exception
 text, no interpolation and no provider response body is ever printed, so nothing
 that could carry a key, an address or a body can reach a log or a webhook.

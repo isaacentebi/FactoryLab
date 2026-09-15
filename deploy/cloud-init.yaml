@@ -32,6 +32,8 @@ write_files:
       uv python install 3.13
       cd /srv/factorylab/repo
       uv sync --frozen --python 3.13
+      # Record the release identity (git head, lock hash, tree hash) beside the checkout.
+      bash deploy/install.sh
       uv run --no-sync ruff check .
       uv run --no-sync pytest
       chmod -R a+rX /opt/factorylab-python
