@@ -21,7 +21,7 @@ state before death; rent is byte-time; the release digest is ledgered and resume
 different one; Venice confirms on debit evidence; the verdict baseline, cost card, tool card,
 lot credit and blame floor are fixed; the population can sell a service over x402; the wake
 shows earned, subsidy and principal-conversion separately and the architect can watch without
-pushing; the charter is five read-only norms and eight cards, no quotas.
+pushing; the charter is four read-only norms and eight cards, no quotas.
 
 ## Scope
 

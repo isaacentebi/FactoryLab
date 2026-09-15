@@ -9,19 +9,12 @@
 # - cost-cap measures every attempt, failed included (cost_per_attempt), so expensive failures
 #   cannot hide inside the tolerated tenth of the well-formed floor.
 # - tool-discipline is the mean per return, which is what its prose always said.
-# - A fifth norm, bounded reciprocity, because edition 2 can sell a service to outsiders: the
-#   factory may not finance its advantage by imposing unconsented costs on anyone outside it.
-#   Norms are read-only for the edition; the population writes and prices the cards.
+# - The four norms are unchanged. Harm to outsiders is a hard cast (jail, permissions, spend
+#   caps), enforced by the kernel, not priced by a card.
 
 [charter]
 edition = 1
-norms = [
-  "truthful commitments",
-  "care with scarce resources",
-  "useful inquiry",
-  "the capacity to revise inadequate practices",
-  "bounded reciprocity",
-]
+norms = ["truthful commitments", "care with scarce resources", "useful inquiry", "the capacity to revise inadequate practices"]
 
 [[charter.cards]]
 id = "tool-discipline"
