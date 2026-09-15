@@ -36,13 +36,22 @@ VIEWS = (
     "action_frequencies", "settlement_latency",
 )
 SECTIONS = ("roster", "tools", "connectors", "notes", "observations", "charter", "compute", "pots",
-            "immune", "portfolio")
+            "immune", "portfolio",
+            # Edition 2: the architect watches money, deliveries, open promises, the
+            # behavioural cells and the alive/dormant/terminated state, without a lever.
+            "money", "deliveries", "commitments", "cells", "liveness")
 UNAVAILABLE = "unavailable"
 PUBLIC_KIND = "wake.public"
 #: Every observatory list is bounded so one page cannot grow with the diary.
 MAX_ROWS = 200
 ROLES = ("producer", "evaluator", "meta", "antagonist")
 RAILS = ("openrouter", "venice", "x402")
+INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_micro")
+#: Money that entered the wallet, by class, and money that left it, by the reason it left.
+IN_CLASSES = ("initial", "drip", "release", "subsidy", "earned", "converted_from_principal",
+              "exchange_pnl", "funding")
+OUT_CLASSES = ("model", "tool", "connector", "treasury", "registration", "exchange_pnl",
+               "funding", "transfer_fees", "other")
 
 
 def rail_for_model(model_id: str) -> str:
@@ -109,6 +118,7 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
         "pots": {"venue": pots.get("venue"), "reserve": pots.get("reserve"),
                  "venice": pots.get("sellers", {}).get("venice"), "seed": pots.get("seed"),
                  "complete": pots.get("complete")},
+        "income": {name: pots.get(name) for name in INCOME_CLASSES},
         "portfolio": {
             "equity_micro": pots.get("venue"),
             "realized_to_date_micro": rt.realized_to_date,
@@ -145,6 +155,21 @@ class _Observatory:
         self.invocations: dict[str, Counter] = {}
         self.transfers: list[dict] = []
         self.windows: dict[int, dict] = {}
+        # Edition 2 views. Money by class; deliveries per closed window; open
+        # decisions and sealed forecasts still waiting (ages only: a handle is a
+        # sealed key); the immune organ's own window profiles (for cells);
+        # dormancy and termination.
+        self.money_in: Counter = Counter()
+        self.money_out: Counter = Counter()
+        self.current_window = 0
+        self.deliveries: dict[int, dict[str, Counter]] = {}
+        self.open_handles: dict[str, dict] = {}
+        self.open_forecasts: dict[str, dict] = {}
+        self.profiles: list[dict] = []
+        self.launched_ns: int | None = None
+        self.terminated_ns: int | None = None
+        self.dormant_periods: list[dict] = []
+        self.dormant_since: int | None = None
 
     def feed(self, item: dict) -> None:
         """Read one authenticated item; unknown and sealed kinds are simply not read."""
@@ -171,7 +196,15 @@ class _Observatory:
         # five aggregates' rule that no assembly id is published.
         event = item.get("event", {})
         payload = event.get("payload", {})
-        if event.get("kind") != "Registered" or not isinstance(payload, dict):
+        kind = event.get("kind")
+        if kind == "Launch":
+            self.launched_ns = event.get("ts_ns")
+        elif kind == "Terminated":
+            self.terminated_ns = event.get("ts_ns")
+        elif kind == "ForecastSettled" and isinstance(payload, dict):
+            self.open_forecasts.pop(str(payload.get("handle")), None)
+            self._delivered("forecast", "settled")
+        if kind != "Registered" or not isinstance(payload, dict):
             return
         self.registered = [*self.registered, {
             "ts_ns": event.get("ts_ns"), "registered": payload.get("kind"),
@@ -225,12 +258,109 @@ class _Observatory:
 
     def _on_wallet_commit(self, item: dict) -> None:
         reason = str(item.get("reason", ""))
+        amount = item.get("amount", 0)
+        if type(amount) is int:
+            prefix = reason.split(":", 1)[0]
+            self.money_out[prefix if prefix in OUT_CLASSES else "other"] += amount
         if not reason.startswith("model:"):
             return
         rail = rail_for_model(reason.removeprefix("model:"))
         ts = item.get("ts", 0)
         self.spend_day.setdefault(_day(ts), Counter())[rail] += item.get("amount", 0)
         self.spend_week.setdefault(_week(ts), Counter())[rail] += item.get("amount", 0)
+
+    # --- money by class ------------------------------------------------------
+
+    def _money_in(self, name: str, amount) -> None:
+        if type(amount) is int and amount > 0:
+            self.money_in[name] += amount
+
+    def _on_wallet_initial(self, item: dict) -> None:
+        self._money_in("initial", item.get("amount"))
+
+    def _on_wallet_drip(self, item: dict) -> None:
+        self._money_in("drip", item.get("amount"))
+
+    def _on_wallet_settle(self, item: dict) -> None:
+        # Signed venue effects: a gain is money in, a loss is money out, by source.
+        reason, amount = str(item.get("reason", "")), item.get("amount")
+        if reason not in ("exchange_pnl", "funding") or type(amount) is not int:
+            return
+        if amount >= 0:
+            self.money_in[reason] += amount
+        else:
+            self.money_out[reason] += -amount
+
+    def _on_wallet_release(self, item: dict) -> None:
+        # A hold cancelled moves nothing; an endowment tranche released (edition 2)
+        # does. The tranche says so with its reason; a reservation names its handle.
+        if str(item.get("reason", "")) == "release":
+            self._money_in("release", item.get("amount"))
+
+    def _on_income_earned(self, item: dict) -> None:
+        self._money_in("earned", item.get("micro"))
+
+    def _on_treasury_subsidy(self, item: dict) -> None:
+        self._money_in("subsidy", item.get("micro"))
+
+    # --- deliveries and open commitments ---------------------------------------
+
+    def _delivered(self, kind: str, status: str) -> None:
+        window = self.deliveries.get(self.current_window)
+        if window is None:
+            window = {}
+            if len(self.deliveries) >= MAX_ROWS:
+                self.deliveries.pop(next(iter(self.deliveries)))
+            self.deliveries[self.current_window] = window
+        window.setdefault(str(kind), Counter())[str(status)] += 1
+
+    def _on_price_window(self, item: dict) -> None:
+        # A closed window ends the bucket its settlements were counted in.
+        index = item.get("window")
+        self.current_window = index + 1 if type(index) is int else self.current_window + 1
+
+    def _on_decision_open(self, item: dict) -> None:
+        handle = str(item.get("handle"))
+        self.open_handles[handle] = {"opened_ns": item.get("opened_ns", item.get("ts")),
+                                     "channel": item.get("channel"),
+                                     "deadline_ns": item.get("deadline_ns")}
+
+    def _settled_return(self, item: dict, status_override: str | None = None) -> None:
+        ret = item.get("return") or {}
+        if not isinstance(ret, dict):
+            return
+        self.open_handles.pop(str(ret.get("handle")), None)
+        self._delivered(ret.get("channel", "unknown"), status_override or ret.get("status"))
+
+    def _on_decision_settle(self, item: dict) -> None:
+        self._settled_return(item)
+
+    def _on_decision_timeout(self, item: dict) -> None:
+        self._settled_return(item, "timed_out")
+
+    def _on_forecast_seal(self, item: dict) -> None:
+        self.open_forecasts[str(item.get("handle"))] = {
+            "sealed_ns": item.get("ts"), "due_at_event": item.get("due_at_event"),
+            "predicate": item.get("predicate_id")}
+
+    # --- cells and state -------------------------------------------------------
+
+    def _on_dormant(self, item: dict) -> None:
+        # Tolerates the shapes a dormancy item may take: a phase field, or the
+        # phase as the key that carries the timestamp.
+        phase = item.get("state") or item.get("phase") or item.get("transition")
+        ts = item.get("ts")
+        for name in ("entered", "exited"):
+            if phase is None and name in item:
+                phase = name
+                if type(item[name]) is int:
+                    ts = item[name]
+        if phase == "entered":
+            self.dormant_since = ts
+        elif phase == "exited":
+            self.dormant_periods = [*self.dormant_periods, {
+                "entered_ns": self.dormant_since, "exited_ns": ts}][-MAX_ROWS:]
+            self.dormant_since = None
 
     def _on_invocation(self, item: dict) -> None:
         role = item.get("role")
@@ -248,6 +378,11 @@ class _Observatory:
     def _on_treasury_confirmed(self, item: dict) -> None:
         state = item.get("state", {})
         self._transfer(item, "confirmed", state.get("direction"), state.get("amount_micro"))
+        if state.get("direction") == "to_venice":
+            self._money_in("converted_from_principal", state.get("received_micro"))
+        fees = state.get("fees_micro")
+        if type(fees) is int and fees > 0:
+            self.money_out["transfer_fees"] += fees
 
     def _on_treasury_submitted(self, item: dict) -> None:
         state = item.get("state", {})
@@ -267,6 +402,11 @@ class _Observatory:
 
     def _on_immune_window(self, item: dict) -> None:
         self._window(item.get("window"))["flags"] = item.get("flags", {})
+        if isinstance(item.get("profile"), dict) and isinstance(item.get("regions"), dict):
+            self.profiles = [*self.profiles, {
+                "window": item.get("window"), "profile": item["profile"],
+                "regions": item["regions"], "charter_edition": item.get("charter_edition"),
+            }][-(MAX_ROWS + 1):]
 
     def _respond(self, index, response: dict) -> None:
         self._window(index)["responses"].append(response)
@@ -287,8 +427,62 @@ class _Observatory:
     def _on_novelty_grant(self, item: dict) -> None:
         self._respond(item.get("window"), {"response": "novelty_grant"})
 
-    def result(self, manifest) -> dict:
-        """Return the eight widened sections.
+    def _cells(self, manifest) -> dict:
+        """Cells from the immune organ's own per-window profiles, by the versioning module."""
+        from factorylab.versioning.operator import cell_series
+
+        cards = sorted({name for row in self.profiles for name in row["regions"]})
+        try:
+            series = cell_series(self.profiles, cards,
+                                 registration_bins=tuple(manifest.immune.registration_bins),
+                                 revision_bins=tuple(manifest.immune.revision_bins))
+        except (ValueError, TypeError, KeyError):
+            return {"dimensions": [], "cuts": {}, "windows": [], "transitions": 0}
+        rows, previous, transitions = [], None, 0
+        for row, cell in zip(self.profiles, series["cells"], strict=True):
+            changed = previous is not None and cell != previous
+            transitions += changed
+            rows.append({"window": row["window"], "cell": list(cell), "changed": changed,
+                         "charter_edition": row["charter_edition"]})
+            previous = cell
+        return {"dimensions": series["dimensions"], "cuts": series["cuts"],
+                "windows": rows[-MAX_ROWS:], "transitions": transitions}
+
+    def _commitments(self, now_ns: int | None) -> dict:
+        def age(ts):
+            return now_ns - ts if type(ts) is int and type(now_ns) is int else None
+
+        handles = sorted(self.open_handles.items(),
+                         key=lambda kv: (kv[1]["opened_ns"] is None, kv[1]["opened_ns"] or 0))
+        forecasts = sorted(self.open_forecasts.items(),
+                           key=lambda kv: (kv[1]["sealed_ns"] is None, kv[1]["sealed_ns"] or 0))
+        return {
+            "as_of_ns": now_ns,
+            "handles": {
+                "unsettled": len(handles),
+                "oldest_age_ns": age(handles[0][1]["opened_ns"]) if handles else None,
+                "rows": [{"channel": row["channel"], "age_ns": age(row["opened_ns"]),
+                          "deadline_ns": row["deadline_ns"]}
+                         for _, row in handles[:MAX_ROWS]],
+            },
+            "forecasts": {
+                "pending": len(forecasts),
+                "oldest_age_ns": age(forecasts[0][1]["sealed_ns"]) if forecasts else None,
+                "rows": [{"predicate": row["predicate"], "age_ns": age(row["sealed_ns"]),
+                          "due_at_event": row["due_at_event"]}
+                         for _, row in forecasts[:MAX_ROWS]],
+            },
+        }
+
+    def _liveness(self) -> dict:
+        status = ("terminated" if self.terminated_ns is not None
+                  else "dormant" if self.dormant_since is not None else "alive")
+        return {"status": status, "launched_ns": self.launched_ns,
+                "terminated_ns": self.terminated_ns, "dormant_since_ns": self.dormant_since,
+                "dormant_periods": self.dormant_periods}
+
+    def result(self, manifest, *, now_ns: int | None = None) -> dict:
+        """Return the widened sections.
 
         Before the first window closes there is no published world block yet, so
         the roster and the charter fall back to the genesis manifest the wake has
@@ -322,10 +516,26 @@ class _Observatory:
                                                 for day, counts in sorted(
                                                     self.invocations.items())[-MAX_ROWS:]},
             },
-            "pots": {"current": latest.get("pots") or {}, "transfers": self.transfers},
+            "pots": {"current": latest.get("pots") or {}, "transfers": self.transfers,
+                     "income": latest.get("income") or dict.fromkeys(INCOME_CLASSES)},
             "immune": list(self.windows.values()),
             "portfolio": latest.get("portfolio") or {"equity_micro": UNAVAILABLE,
                                                      "realized_to_date_micro": UNAVAILABLE},
+            "money": {
+                "in_by_class": {name: self.money_in.get(name, 0) for name in IN_CLASSES},
+                "out_by_class": {name: self.money_out.get(name, 0) for name in OUT_CLASSES},
+            },
+            "deliveries": {
+                # Rows, not keys: a channel name such as "verdict" is a sealed key
+                # when it names a field, and here it only names a count.
+                "per_window": [{"window": window,
+                                "by_kind": [{"kind": kind, "counts": dict(sorted(counts.items()))}
+                                            for kind, counts in sorted(kinds.items())]}
+                               for window, kinds in sorted(self.deliveries.items())],
+            },
+            "commitments": self._commitments(now_ns),
+            "cells": self._cells(manifest),
+            "liveness": self._liveness(),
         }
 
 
@@ -490,10 +700,16 @@ def collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.slee
             ledger, candidate = _open_snapshot(Path(path))
             observatory = _Observatory()
             aggregates = ledger.public_aggregates(candidate, observatory)
-            timing = ledger.timing(live=candidate.exchange.kind != "fake",
+            live = candidate.exchange.kind != "fake"
+            timing = ledger.timing(live=live,
                                    now_ns=time.time_ns() if now_ns is None else now_ns)
-            result.update(aggregates, **observatory.result(candidate), **timing,
-                          world=candidate.name, manifest_hash=candidate.manifest_hash())
+            # Ages of open commitments are measured against the clock the world
+            # keeps: wall time while it lives, event time once it does not.
+            as_of = (time.time_ns() if now_ns is None else now_ns) if live and not (
+                observatory.terminated_ns is not None) else timing["last_event_time_ns"]
+            result.update(aggregates, **observatory.result(candidate, now_ns=as_of),
+                          **timing, world=candidate.name,
+                          manifest_hash=candidate.manifest_hash())
             manifest = candidate
             break
         except (LedgerIntegrityError, InvalidToken, OSError, ValueError, KeyError, TypeError):
@@ -542,14 +758,17 @@ def render_wake(data: dict) -> str:
     sections = []
     order = (
         "world", "manifest_hash", "uptime_ns", "last_event_time_ns", "venue", "reserve",
-        "portfolio", "pots", "roster", "tools", "connectors", "notes", "observations", "charter",
-        "compute", "immune",
+        "portfolio", "pots", "liveness", "money", "roster", "tools", "connectors", "notes",
+        "observations", "charter", "compute", "deliveries", "commitments", "cells", "immune",
         *VIEWS,
     )
     folded = {"wallet_series": "Balance series", "roster": "Roster", "tools": "Tools",
               "connectors": "Connectors", "notes": "Notes", "observations": "Observations",
               "charter": "Charter and amendments",
-              "compute": "Compute", "immune": "Windows", "pots": "Pots and transfers"}
+              "compute": "Compute", "immune": "Windows", "pots": "Pots and transfers",
+              "money": "Money in and out by class", "deliveries": "Deliveries per window",
+              "commitments": "Open commitments", "cells": "Behavioural cells",
+              "liveness": "Alive, dormant or terminated"}
     for field in order:
         if field not in data:
             continue

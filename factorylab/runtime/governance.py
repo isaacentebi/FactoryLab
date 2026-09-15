@@ -23,6 +23,7 @@ from factorylab.cortex.registration import (
     ObservationProposal,
     PredicateProposal,
     RetireProposal,
+    ServiceProposal,
     ToolProposal,
     parse_proposals,
     reward_contracts,
@@ -347,6 +348,9 @@ class GovernanceMixin:
         if isinstance(prop, LearnerProposal):
             self._register_learner(handle, prop)
             return
+        if isinstance(prop, ServiceProposal):
+            self._register_service(handle, prop)
+            return
         if isinstance(prop, ToolProposal):
             if not self.tool_jail_available:
                 raise Infeasible("no jail on this host")
@@ -555,6 +559,39 @@ class GovernanceMixin:
         self._activate_policy_ballots(vote_id)
         self._emit(EventKind.REGISTERED, {"kind": "connector", "id": prop.id,
                                           "version": version, "origin": prop.origin})
+
+    def _register_service(self, handle: str, prop: ServiceProposal) -> None:
+        """One novelty trial publishes a paid endpoint for a registered population program.
+
+        The program is frozen at registration: the ledger item carries the exact
+        source the wake host serves, so a later tool version never changes what a
+        buyer already paid for. Nothing here opens a socket; ``deploy/serve.py``
+        reads this item and ``world/seller.py`` verifies each payment.
+        """
+        from factorylab.world.seller import service_contract
+
+        tool = self.population_tools.get(prop.program_id)
+        if tool is None:
+            raise ValueError("program_id must name a registered population tool")
+        if not self.tool_jail_available:
+            raise Infeasible("no jail on this host")
+        try:
+            version = self.registry.get(f"service:{prop.program_id}").version + 1
+        except KeyError:
+            version = 1
+        contract = service_contract(prop, version, timeout_s=tool.timeout_s)
+        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        owner = self.handle_to_assembly.get(handle)
+        self.ledger.append({
+            "kind": "service.registered", "id": prop.program_id, "version": version,
+            "program_id": prop.program_id, "price_micro": prop.price_micro,
+            "description": prop.description, "handle": handle, "owner": owner,
+            "code": tool.code, "args_schema": _to_plain(tool.args_schema),
+            "timeout_s": tool.timeout_s, "ts": self.clock.now_ns,
+        })
+        self._emit(EventKind.REGISTERED, {"kind": "service", "id": prop.program_id,
+                                          "version": version,
+                                          "price_micro": prop.price_micro})
 
     def _register_market(self, handle: str, prop: MarketProposal) -> None:
         """One novelty trial admits a listed market, with durable identity before effects."""

@@ -20,6 +20,7 @@ from factorylab.runtime.wake import (
     _reserve,
     _venue,
     collect_wake,
+    public_window_item,
     render_wake,
 )
 from factorylab.runtime.worlds import load_manifest
@@ -426,3 +427,102 @@ def test_backup_captures_complete_prefix_and_pipes_to_age_before_upload(world, t
         assert archive.extractfile("runs/funded.jsonl").read() == original
         assert archive.extractfile("repo/worlds/funded.toml").read() == manifest.read_bytes()
     assert (root / "runs/funded.jsonl").read_bytes() == original + b'{"item":'
+
+
+SAMPLE_KEYS = {
+    # Every key the published site's wake.sample.json carried before edition 2.
+    "wallet_series", "spend_by_capability", "invocations_by_assembly", "action_frequencies",
+    "settlement_latency", "roster", "tools", "connectors", "notes", "observations", "charter",
+    "compute", "pots", "immune", "portfolio", "world", "manifest_hash", "uptime_ns",
+    "last_event_time_ns",
+}
+
+
+def test_edition2_views_are_additive_and_read_only_public_items(tmp_path, scripted_run):
+    # Long enough for price windows to close, so the standing pots and cells exist.
+    world = scripted_run("scripted", 150, 1).copy_to(tmp_path / "world")
+    manifest = load_manifest("scripted")
+    data = collect_wake(world)
+    assert SAMPLE_KEYS < set(data)
+    assert set(data) - SAMPLE_KEYS == {"money", "deliveries", "commitments", "cells",
+                                        "liveness"}
+    # Existing keys keep their shape: the pots the site reads are exactly the five.
+    assert set(data["pots"]["current"]) == {"venue", "reserve", "venice", "seed", "complete"}
+    assert set(data["pots"]["income"]) == {"earned_micro", "subsidy_micro",
+                                           "converted_from_principal_micro"}
+    assert data["pots"]["income"]["earned_micro"] == 0
+    assert data["pots"]["income"]["subsidy_micro"] == 0  # a scripted world has no credit
+    money = data["money"]
+    assert money["in_by_class"]["initial"] == manifest.initial_balance_micro
+    assert money["in_by_class"]["earned"] == 0 and money["in_by_class"]["subsidy"] == 0
+    assert sum(money["out_by_class"].values()) > 0 and money["out_by_class"]["model"] > 0
+    assert all(type(v) is int for v in (*money["in_by_class"].values(),
+                                         *money["out_by_class"].values()))
+    deliveries = data["deliveries"]["per_window"]
+    assert deliveries and all(set(row) == {"window", "by_kind"} for row in deliveries)
+    assert all(set(kind) == {"kind", "counts"} for row in deliveries for kind in row["by_kind"])
+    assert sum(sum(k["counts"].values()) for row in deliveries for k in row["by_kind"]) > 0
+    assert any(k["kind"] == "verdict" and k["counts"].get("settled", 0) > 0
+               for row in deliveries for k in row["by_kind"])
+    commitments = data["commitments"]
+    assert set(commitments) == {"as_of_ns", "handles", "forecasts"}
+    assert commitments["as_of_ns"] == data["last_event_time_ns"]
+    for open_kind, count in (("handles", "unsettled"), ("forecasts", "pending")):
+        rows = commitments[open_kind]["rows"]
+        assert all(type(r["age_ns"]) is int and r["age_ns"] >= 0 for r in rows)
+        assert len(rows) == min(commitments[open_kind][count], 200)
+    cells = data["cells"]
+    assert set(cells) == {"dimensions", "cuts", "windows", "transitions"}
+    assert cells["dimensions"][-2:] == ["registrations", "revision"]
+    assert all(set(row) == {"window", "cell", "changed", "charter_edition"}
+               for row in cells["windows"])
+    assert cells["transitions"] == sum(row["changed"] for row in cells["windows"])
+    liveness = data["liveness"]
+    assert liveness["status"] == "alive" and liveness["launched_ns"] == 0
+    assert liveness["dormant_periods"] == [] and liveness["terminated_ns"] is None
+    # No identity, handle, source or address reaches the page through the new views.
+    views = {k: data[k] for k in ("money", "deliveries", "commitments", "cells", "liveness")}
+    text = json.dumps(views)
+    assert "seed-decider" not in text and "eval-a" not in text and "0x" not in text
+    assert '"handle"' not in text and "decision-" not in text
+    page = render_wake(data)
+    for field in views:
+        assert f"<h2>{field}</h2>" in page
+
+    # The public items edition 2 writes are read as they land: dormancy, income, subsidy.
+    writer = Ledger.reopen(world, manifest=json.loads(manifest.canonical_json()))
+    writer.append({"kind": "dormant", "state": "entered", "ts": 10**12})
+    data = collect_wake(world)
+    assert data["liveness"]["status"] == "dormant"
+    assert data["liveness"]["dormant_since_ns"] == 10**12
+    writer.append({"kind": "dormant", "exited": 2 * 10**12})
+    writer.append({"kind": "income.earned", "service": "doubler", "micro": 3000, "tx": "0x1",
+                   "payer": "0x" + "12" * 20, "ts": 2 * 10**12})
+    writer.append({"kind": "treasury.subsidy", "micro": 5_000_000, "ts": 2 * 10**12})
+    writer.append({"kind": "treasury.confirmed", "ts": 2 * 10**12, "state": {
+        "direction": "to_venice", "amount_micro": 5_000_000, "received_micro": 5_000_000,
+        "fees_micro": 0}})
+    data = collect_wake(world)
+    assert data["liveness"]["status"] == "alive"
+    assert data["liveness"]["dormant_periods"] == [{"entered_ns": 10**12,
+                                                    "exited_ns": 2 * 10**12}]
+    assert data["money"]["in_by_class"]["earned"] == 3000
+    assert data["money"]["in_by_class"]["subsidy"] == 5_000_000
+    assert data["money"]["in_by_class"]["converted_from_principal"] == 5_000_000
+    assert "0x" not in json.dumps(data["money"])
+    writer.append({"kind": "event", "event": {"kind": "Terminated", "ts_ns": 3 * 10**12}})
+    data = collect_wake(world)
+    assert data["liveness"]["status"] == "terminated"
+    assert data["liveness"]["terminated_ns"] == 3 * 10**12
+
+
+def test_public_window_item_carries_the_income_classes_beside_the_pots():
+    from tests.conftest import make_runtime
+
+    rt = make_runtime()
+    item = public_window_item(rt, window=0, event=0)
+    assert set(item["pots"]) == {"venue", "reserve", "venice", "seed", "complete"}
+    assert item["income"] == {"earned_micro": 0, "subsidy_micro": 0,
+                              "converted_from_principal_micro": 0}
+    rt.treasury.earn("doubler", 2500, "0x1")
+    assert public_window_item(rt, window=0, event=0)["income"]["earned_micro"] == 2500

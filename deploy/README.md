@@ -220,6 +220,46 @@ do not inspect the interior or change anything. systemd resumes the same ledger
 after process failure/reboot. There is no polling agent making intervention
 choices, no live service upgrade, and no automatic replacement world.
 
+### Selling a service (edition 2, contract C11)
+
+A population program registered as a tool can be put up for sale with a
+`service` proposal (`program_id`, `price_micro`, `description`). Registration
+costs one novelty trial, freezes the program's source in a `service.registered`
+ledger item, and makes `POST /service/<program_id>` a paid endpoint under x402:
+an unpaid request gets the v2 quote (exact canonical Base USDC, the manifest's
+`treasury.reserve_address` as `payTo`, the price as the amount); a paid request
+carries the buyer's signed EIP-3009 authorization, which `world/seller.py`
+verifies by rebuilding exactly the typed data `world/x402.py`'s buyer signs and
+recovering its signer, then hands to the facilitator (`FACTORYLAB_FACILITATOR_URL`,
+default `https://x402.org/facilitator`) for settlement. Only an explicit,
+matching settlement runs the program, in the same jail population tools use, and
+returns its output with a `PAYMENT-RESPONSE` header. `GET /services` lists the
+catalogue (id, description, price, version, argument schema; never source).
+
+The runtime holds the ledger's only writer lock, so the server runs beside it as
+the `factory` user and reads the sealed ledger the way the wake does:
+
+```sh
+FACTORYLAB_FACILITATOR_URL=https://x402.org/facilitator \
+/srv/factorylab/repo/.venv/bin/python /srv/factorylab/repo/deploy/serve.py \
+    --ledger /srv/factorylab/runs/funded.jsonl \
+    --spool /srv/factorylab/runs/funded.income.jsonl --bind 127.0.0.1 --port 8402
+```
+
+Each settled call is appended to the receipt spool before the program runs, and
+the runtime (started with `FACTORYLAB_INCOME_SPOOL=/srv/factorylab/runs/funded.income.jsonl`
+in its environment) books every complete receipt line on its next tick as an
+`income.earned {service, micro, tx, payer, program, version}` ledger item, through
+the recovery journal, with the consumed offset in the treasury snapshot so no
+receipt is booked twice. A paid call served in-process (tests, or a future loop
+hook) books through `Treasury.earn` directly. The pots view gains three classes:
+`earned_micro` (x402 income), `subsidy_micro` (the first complete observation of
+the architect's compute credit, ledgered once as `treasury.subsidy`) and
+`converted_from_principal_micro` (Venice tranches confirmed from trading capital).
+Crediting the earning seat's entitlement is C10's job and lands with it. Publish
+the port through a reverse proxy of your own choosing; the server itself never
+reads a key, never signs, and exits 2 when the manifest names no reserve address.
+
 ### The one control: kill
 
 `systemctl stop` is not a kill. It leaves the world unterminated, the seal
@@ -304,6 +344,7 @@ service logging after launch.
 Exactly these fields are published: `wallet_series`, `spend_by_capability`,
 `invocations_by_assembly`, `action_frequencies`, `settlement_latency`, `roster`,
 `tools`, `observations`, `charter`, `compute`, `pots`, `immune`, `portfolio`,
+`money`, `deliveries`, `commitments`, `cells`, `liveness`,
 `world`, `manifest_hash`, `uptime_ns`, `last_event_time_ns`, plus `venue` when a
 venue key is present and `reserve` when a reserve key is present. The five views originate
 from `Ledger.aggregate`, each verifying the same frozen chain. The three identity-bearing
@@ -341,6 +382,12 @@ the page cannot grow with the diary.
 | `pots` | `wake.public.pots` (venue, reserve, Venice credit, OpenRouter seed, completeness) and every `treasury.submitted`, `treasury.confirmed` and `treasury.refused` with its direction, amount and public refusal reason. |
 | `immune` | `immune.window` flags per window, plus the organ's responses: `immune.gain` (direction and pathology only — the exploration rate itself is learner state), `immune.price_relief`, `immune.decay` and `novelty.grant`. |
 | `portfolio` | `wake.public.portfolio`: `equity_micro` (the venue pot as last observed, the same number the population reads in `world.pots`), `realized_to_date_micro`, and open positions as coin and side only — no size, no entry price, no lot, no handle. |
+| `pots.income` | `wake.public.income`: `earned_micro`, `subsidy_micro` and `converted_from_principal_micro`, the three classes the treasury keeps beside the pots (edition 2). |
+| `money` | `in_by_class`: `wallet.initial`, `wallet.drip`, an endowment `wallet.release` whose reason is `release`, `treasury.subsidy`, `income.earned`, `treasury.confirmed` tranches to Venice (`converted_from_principal`), and positive `wallet.settle` by source; `out_by_class`: `wallet.commit` amounts by the reason's class (`model`, `tool`, `connector`, `treasury`, `registration`, `other`), negative `wallet.settle` by source, and confirmed transfer fees. Integer micro-USD, never an address. |
+| `deliveries` | `decision.settle`, `decision.timeout` and `ForecastSettled` counted per closed price window (the window a settlement lands in, by `price.window` closes), as rows of channel and status counts. |
+| `commitments` | Open decisions (`decision.open` without a `decision.settle` or `decision.timeout`) and sealed forecasts (`forecast.seal` without a `ForecastSettled`): counts, the oldest age, and up to 200 rows of channel or predicate, age and deadline. Ages are against wall time while the world lives and against the last event once it does not. No handle is published. |
+| `cells` | The behavioural cell of each `immune.window` profile, computed by the versioning module's `cell_series` with the manifest's immune cuts: dimensions, cuts, one row per window with its cell and whether it changed, and the transition count. |
+| `liveness` | `alive`, `dormant` or `terminated`, from the `Launch` and `Terminated` events and the `dormant` items an endowed world writes when it pauses between releases (`entered`/`exited` with timestamps); every dormant period is listed. |
 
 Sealed and never published anywhere in either artifact: learner state and router
 weights, propensities, private memories, raw request and return text, per-decision

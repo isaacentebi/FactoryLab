@@ -57,6 +57,8 @@ class SchematicsMixin:
                       "preflight_path": "/data", "pay": "x402", "max_call_usd": "0.003"},
         "market": {"kind": "market", "coin": "listed perp coin; omit when using pair",
                    "pair": "listed BASE/USDC pair; omit when using coin"},
+        "service": {"kind": "service", "program_id": "id of a tool you registered",
+                    "price_micro": 1000, "description": "what a buyer receives"},
         "tool": {
             "kind": "tool",
             "id": "slug",
@@ -163,7 +165,9 @@ class SchematicsMixin:
         "Unmeasurable windows, duplicate role/observation bindings and unchanged amendments "
         "are refused before a vote. A connector may omit preflight_path (default /), pay, "
         "and max_call_usd; pay=x402 requires an exact max_call_usd cap. A market proposal "
-        "names exactly one coin or pair from venue.instruments.",
+        "names exactly one coin or pair from venue.instruments. A service proposal sells a "
+        "registered tool's output to outside buyers at price_micro (integer micro-USD) per "
+        "call over x402; each paid call is ledgered as income.earned and shown in pots.",
         "tool_calls": (
             'a list of {"tool": id, "args": {...}} bounded by mechanics.tools.max_tool_calls; '
             'results come back in one continuation per request'
