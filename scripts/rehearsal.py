@@ -39,7 +39,11 @@ def preflight(world: Path, charter_path: Path) -> dict:
     manifest = load_manifest(str(world))
     charter = voted_charter(charter_path, manifest)
     raw = tomllib.loads(world.read_text())
-    if not manifest.charter_explicit or raw.get("charter") != charter:
+    # The manifest may carry the ratification's provenance digests beside the cards
+    # (charter.ratified_sha256, charter.roster_sha256); the vote is on the cards.
+    loaded = {k: v for k, v in (raw.get("charter") or {}).items()
+              if k not in ("ratified_sha256", "roster_sha256")}
+    if not manifest.charter_explicit or loaded != charter:
         raise ValueError("rehearsal did not load the exact voted charter")
     if manifest.exchange.kind != "hyperliquid" or manifest.exchange.mainnet:
         raise ValueError("live rehearsal requires Hyperliquid testnet")
