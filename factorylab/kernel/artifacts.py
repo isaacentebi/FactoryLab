@@ -30,6 +30,9 @@ SHA_HEX_CHARS = 64
 # text, never a page of the archive. Larger artifacts are readable by their
 # owner's program, which receives its state on stdin rather than through a tool.
 MAX_TOOL_READ_BYTES = 65_536
+# The one thing a scoped-out reader is told (``Reason.ARTIFACT_PRIVATE``); the kernel
+# keeps the literal so the archive never imports the runtime.
+PRIVATE_REFUSAL = "artifact_private"
 
 
 class ArtifactError(ValueError):
@@ -60,7 +63,7 @@ class ArtifactStore:
         self.index: dict[str, dict[str, Any]] = {}
         self._memory: dict[str, bytes] = {}
 
-    def put(self, data: bytes, *, owner: str, kind: str) -> str:
+    def put(self, data: bytes, *, owner: str, kind: str, public: bool = False) -> str:
         """Archive ``data`` for ``owner`` and return its hash; the record precedes the bytes."""
         if not isinstance(data, (bytes, bytearray)):
             raise TypeError("artifact data must be bytes")
@@ -70,10 +73,12 @@ class ArtifactStore:
         sha = hashlib.sha256(data).hexdigest()
         ts = self.clock()
         self.ledger.append({"kind": "artifact.put", "sha": sha, "owner": owner,
-                            "artifact_kind": kind, "bytes": len(data), "ts": ts})
+                            "artifact_kind": kind, "bytes": len(data), "public": bool(public),
+                            "ts": ts})
         # The first record of a hash stands: a second owner of identical bytes is a
         # reader of the first's artifact, not a new liability for the same file.
-        self.index.setdefault(sha, {"owner": owner, "kind": kind, "bytes": len(data), "ts": ts})
+        self.index.setdefault(sha, {"owner": owner, "kind": kind, "bytes": len(data), "ts": ts,
+                                    "public": bool(public)})
         self._write(sha, data)
         return sha
 
@@ -98,6 +103,34 @@ class ArtifactStore:
         return [{"sha": sha, **record} for sha, record in self.index.items()
                 if owner is None or record["owner"] == owner]
 
+    def entries(self) -> list[tuple[str, str, bool, int, int]]:
+        """Every record as ``(sha, owner, public, bytes, created_ns)``, in put order.
+
+        The directory listing W4 builds (C4) reads its rows from here, so the
+        index has one shape both a scoped read and a bounded listing agree on.
+        """
+        return [(sha, record["owner"], bool(record.get("public")), record["bytes"],
+                 record["ts"]) for sha, record in self.index.items()]
+
+    def visible_to(self, sha: str, reader: str | None,
+                   lineage_of: Callable[[str], str] | None = None) -> bool:
+        """Whether ``reader`` may read this artifact (C1): own, published, or same lineage.
+
+        A seat reads what it wrote and whatever was published; a program's state
+        is private to its program's owner lineage, so the seat that registered a
+        program can still read what the program keeps, and a stranger cannot.
+        A hash the archive never saw is not private, it is unknown, and the read
+        path says so instead.
+        """
+        record = self.index.get(sha)
+        if record is None or reader is None:
+            return True
+        if record["owner"] == reader or record.get("public"):
+            return True
+        if record["kind"] == "program.state" and lineage_of is not None:
+            return lineage_of(record["owner"]) == lineage_of(reader)
+        return False
+
     def owner_for(self, sha: str) -> str | None:
         """The seat liable for an artifact's rent, or None for a hash the archive never saw.
 
@@ -107,10 +140,17 @@ class ArtifactStore:
         record = self.index.get(_valid_sha(sha))
         return None if record is None else record["owner"]
 
-    def read(self, sha: Any) -> dict[str, Any]:
-        """The ``artifact.get`` view: metadata and inline content, or a bounded error."""
+    def read(self, sha: Any, *, reader: str | None = None,
+             lineage_of: Callable[[str], str] | None = None) -> dict[str, Any]:
+        """The ``artifact.get`` view: metadata and inline content, or a bounded error.
+
+        Scoping precedes retrieval: a reader who may not see the artifact is told
+        it is private and nothing about its bytes, its size or its owner.
+        """
         try:
             sha = _valid_sha(sha)
+            if not self.visible_to(sha, reader, lineage_of):
+                return {"sha": sha, "error": PRIVATE_REFUSAL}
             data = self.get(sha)
         except ArtifactError as exc:
             return {"error": str(exc)}

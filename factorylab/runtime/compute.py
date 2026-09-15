@@ -5,18 +5,19 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections import deque
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 
 from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.request import ChildRequest, Request, Return
+from factorylab.kernel.artifacts import PRIVATE_REFUSAL
 from factorylab.kernel.budget import SeatWallet
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
+from factorylab.runtime.reasons import Reason
 from factorylab.runtime.routing import _KeyedLearner
 from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, NOOP, _to_plain
 from factorylab.runtime.summary import _price_str
@@ -274,7 +275,7 @@ class ComputeMixin:
                 validate_schema(
                     {k: v for k, v in parsed.items()
                      if k not in ("emits", "register", "requests", "tool_calls", "about_handle",
-                                  "status", "reason")},
+                                  "status", "reason", "working_state", "ack_through")},
                     spec.schemas[emits],
                     partial=bool(parsed.get("requests") or parsed.get("tool_calls")
                                  or parsed.get("status") == "cannot"),
@@ -620,10 +621,25 @@ class ComputeMixin:
 
             return run(self, action_id, handle, tool_id, args)
         if tool_id == "artifact.get":
-            # Free by contract (C9): any seat reads any artifact; the read is ledgered.
-            result = self.artifacts.read(args.get("sha"))
+            # Free by contract (C9) and scoped by contract (C1): a seat reads what it
+            # wrote, what was published, and a program's state within its own lineage.
+            # Every read is ledgered, refusals included.
+            result = self.artifacts.read(args.get("sha"), reader=action_id,
+                                         lineage_of=self.budget.lineage)
             self.ledger.append({"kind": "artifact.get", "sha": str(args.get("sha"))[:64],
                                 "handle": handle, "assembly_id": action_id,
+                                "found": "error" not in result,
+                                **({"reason": Reason.ARTIFACT_PRIVATE.value}
+                                   if result.get("error") == PRIVATE_REFUSAL else {}),
+                                "ts": self.clock.now_ns})
+            return result, 0
+        if tool_id == "outcome.get":
+            # A kernel read of the seat's own inbox: no model call, priced like
+            # artifact.get, and addressed — one seat cannot read another's outcomes.
+            result = self.outcomes.get(action_id, args.get("handle"))
+            self.ledger.append({"kind": "outcome.get",
+                                "handle": handle, "assembly_id": action_id,
+                                "about_handle": str(args.get("handle"))[:64],
                                 "found": "error" not in result, "ts": self.clock.now_ns})
             return result, 0
         if tool_id in self.CONSEQUENCE_WRITES and not self._may_write(handle):
@@ -874,7 +890,7 @@ class ComputeMixin:
             # The extra round composes the retrieved text through ordinary jailed tools.
             if tool_round < round_limit and ret.tool_calls:
                 if any(self.tool_specs.get(c["tool"], {}).get("kind")
-                       not in ("population", "note", "artifact")
+                       not in ("population", "note", "artifact", "outcome")
                        for c in ret.tool_calls):
                     round_limit = tool_round
             if ret.tool_calls and tool_round >= round_limit:
@@ -948,8 +964,32 @@ class ComputeMixin:
             if role == "producer":
                 self.window.costs.append(ret.cost)
         self._record_declared_propensity(action_id, req, ret, role, effects=tuple(effects))
+        self._apply_continuity(action_id, req.handle, ret)
         del self.ledger.connector_bodies[body_mark:]
         return ret
+
+    def _apply_continuity(self, action_id: str, handle: str, ret: Return) -> None:
+        """Advance the seat's own head and inbox cursor from its answer (C1).
+
+        Every answer of every shape passes here — producer, verdict, meta, child,
+        program — so a seat's state and its cursor are the seat's own business and
+        not a privilege of one return kind. Nothing here can fail the return: a
+        state the archive refuses is ledgered and the head is left exactly as it
+        was, and an ``ack_through`` naming no item of this seat's inbox does
+        nothing at all.
+        """
+        if action_id not in self.assemblies or not isinstance(ret.outputs, dict):
+            return
+        self.outcomes.record_said(action_id, handle, ret.outputs)
+        if "working_state" in ret.outputs:
+            try:
+                self.working_state.put(action_id, ret.outputs["working_state"], handle=handle)
+            except ValueError as exc:
+                self.ledger.append({"kind": "state.refused", "assembly_id": action_id,
+                                    "handle": handle, "reason": str(exc)[:200],
+                                    "ts": self.clock.now_ns})
+        if "ack_through" in ret.outputs:
+            self.outcomes.ack_through(action_id, ret.outputs["ack_through"])
 
     # --- the deciding agent's propensity rides on the request -------------------
 
@@ -1210,8 +1250,6 @@ class ComputeMixin:
                 if self._may_write(handle):
                     self._execute_outputs(ret)
                 self._apply_registrations(handle, ret)
-                self.memory.setdefault(target, deque(maxlen=3)).append(
-                    {"handle": handle, "outputs": ret.outputs, "verdict": None})
             self.consequences.finish(handle, ret.cost)
             if emitted == "Exposure":
                 self.pending_exposure[handle] = self.n

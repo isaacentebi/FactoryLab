@@ -51,7 +51,8 @@ def test_put_ledgers_before_writing_and_get_returns_the_same_bytes(tmp_path):
     assert archive.get(sha) == data
     assert archive.owner_for(sha) == "prog-a"
     assert archive.list() == [{"sha": sha, "owner": "prog-a", "kind": "program.state",
-                               "bytes": len(data), "ts": 8}]
+                               "bytes": len(data), "ts": 8, "public": False}]
+    assert archive.entries() == [(sha, "prog-a", False, len(data), 8)]
 
 
 def test_put_is_idempotent_by_content_and_the_first_owner_stands(tmp_path):

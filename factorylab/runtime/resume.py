@@ -483,7 +483,7 @@ class JournalProxy:
 _RUNTIME_FIELDS = (
     "rng", "cascade", "cascade_windows", "stats", "charter", "pending_exposure",
     "delivered_seen", "snapshot_keys", "recent_mids", "realized_to_date", "fees_to_date",
-    "funding_to_date", "spot_inventory", "memory", "handle_to_assembly", "tool_specs",
+    "funding_to_date", "spot_inventory", "handle_to_assembly", "tool_specs",
     "population_tools",
     "tool_owner", "pending_votes", "regions", "priced", "rolling", "unparsed_logged", "window",
     "pending", "balance_at", "events_log", "last_closure_ns", "reserve_window_start", "internal",
@@ -542,9 +542,16 @@ _COMPONENT_FIELDS = (
     ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events")),
     ("consequence_fills", "", ("since_ns", "seen")),
     ("reconciler", "", ("every", "_ticks")),
-    # The artifact archive's index (C9): hash -> owner, kind, size, time. The bytes
-    # stay beside the ledger and are found again by hash.
+    # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
+    # The bytes stay beside the ledger and are found again by hash.
     ("artifacts", "", ("index",)),
+    # Continuity (C1): the head pointer each seat holds and the inbox indexes and
+    # read cursors addressed to it. Both name artifacts; the bodies are in the
+    # archive and ``_verify_artifacts`` proves they are still there before the
+    # world continues, so a seat never resumes into a state or an outcome it
+    # cannot be shown.
+    ("working_state", "", ("heads",)),
+    ("outcomes", "", ("items", "cursors", "said", "seq")),
     # The bill settlement's reference: the last provider balance read per namespace and
     # what was booked through it since, so a resumed world settles against the same read.
     ("bill_settlement", "", ("reference",)),
@@ -727,6 +734,9 @@ def restore_runtime(rt, state: dict) -> None:
             if name == "artifacts" and name not in components:
                 # Older checkpoints predate the artifact archive; it starts empty.
                 continue
+            if name in ("working_state", "outcomes") and name not in components:
+                # Older checkpoints predate continuity; heads and inboxes start empty.
+                continue
             if name == "bill_settlement" and name not in components:
                 # Older checkpoints predate bill settlement; the next read takes a reference.
                 continue
@@ -802,6 +812,17 @@ def _verify_artifacts(rt) -> None:
         if sha is not None and sha not in referenced:
             raise ResumeError("a program seat names state the archive index does not hold",
                               code="artifact_missing", sha=sha, owner=assembly.spec.id)
+    # Continuity (C1) names artifacts the same way: a head, and every inbox item's
+    # body. A world does not continue with a seat's state or its outcomes missing.
+    for seat, head in rt.working_state.heads.items():
+        if head["sha"] not in referenced:
+            raise ResumeError("a seat names a working state the archive index does not hold",
+                              code="artifact_missing", sha=head["sha"], owner=seat)
+    for seat, items in rt.outcomes.items.items():
+        for item in items:
+            if item["sha"] not in referenced:
+                raise ResumeError("an outcome item's body is not in the archive index",
+                                  code="artifact_missing", sha=item["sha"], owner=seat)
     for sha, record in referenced.items():
         try:
             store.get(sha)

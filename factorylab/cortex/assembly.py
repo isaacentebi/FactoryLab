@@ -26,7 +26,12 @@ from decimal import Decimal
 from typing import Any
 
 from factorylab.cortex.registration import output_contracts, reward_contracts, seed_emits
-from factorylab.cortex.request import ChildRequest, Request, Return
+from factorylab.cortex.request import (
+    CONTINUITY_RETURN_FIELDS,
+    ChildRequest,
+    Request,
+    Return,
+)
 from factorylab.cortex.sandbox import MAX_PROGRAM_TIMEOUT_S
 from factorylab.kernel.ledger import utf8_text
 from factorylab.world.metering import BillingUncertain, Infeasible, MeteredModel
@@ -580,6 +585,7 @@ def reserved_return_fields(*, max_children: int | None = None,
     properties.update({k: {"type": "number", "minimum": 0, "maximum": 1}
                        for k in ("verdict", "payoff", "conformity")})
     properties.update({
+        **CONTINUITY_RETURN_FIELDS,  # working_state and ack_through (C1)
         "vote": {"type": "boolean"},
         # The deciding agent's own distribution over its own actions.
         "propensity": {"type": "object"},

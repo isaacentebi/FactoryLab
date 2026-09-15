@@ -411,7 +411,6 @@ class BootstrapMixin:
                 self.ledger.append({"kind": "spot.inventory", "coin": coin,
                                     "size": size, "entry_px": px, "source": "launch"})
                 self.spot_inventory[coin] = (Decimal(size), Decimal(px))
-        self.memory: dict[str, deque[dict[str, Any]]] = {}
         self.notes: dict[str, dict] = {}
         # The artifact archive (C9): records in the ledger, bytes beside it by hash.
         from factorylab.kernel.artifacts import ArtifactStore, artifact_root
@@ -420,6 +419,21 @@ class BootstrapMixin:
             self.ledger, root=artifact_root(ledger_path) if ledger_path else None,
             clock_ns=self.clock,
         )
+        # Continuity (C1): a head pointer per seat over the archive, and an inbox of
+        # settled consequences addressed to the seat that decided them. These replace
+        # the three-entry memory deque, which lost a decision before its outcome landed.
+        from factorylab.runtime.continuity import OutcomeInbox, WorkingState
+
+        self.working_state = WorkingState(self.artifacts, self.ledger, self.clock)
+        self.outcomes = OutcomeInbox(self.artifacts, self.ledger, self.clock)
+        if not self.ledger.bootstrap:
+            # The manifest may hand a seat its first head — a lens, a method, a
+            # starting hypothesis. It is the initial value of a pointer the seat
+            # owns from then on, not a field the world keeps rewriting. A resume
+            # restores the head the seat actually holds instead.
+            for a in manifest.assemblies:
+                if getattr(a, "initial_state", None):
+                    self.working_state.put(a.id, dict(a.initial_state))
         self.handle_to_assembly: dict[str, str] = {}
         self.tool_specs: dict[str, dict[str, Any]] = {}  # tool id -> spec dict (world block)
         self.population_tools: dict[str, Any] = {}
@@ -518,16 +532,18 @@ class BootstrapMixin:
             "note.put": [{"key": "shared-plan", "text": "What the last window showed."}],
             "note.get": [{"key": "shared-plan"}],
             "artifact.get": [{"sha": "0" * 64}],
+            "outcome.get": [{"handle": "decision-1"}],
         }
         from factorylab.runtime.notes import specs as note_specs
 
         self.tool_specs.update(note_specs(manifest.notes))
         self.tool_specs["artifact.get"] = {
             "id": "artifact.get",
-            "description": "Read an archived artifact by its sha256: the private state a "
-            "program seat kept, or any other artifact the diary names. Any seat may read "
-            "any artifact; the read is free and ledgered. Returns owner, kind, bytes and "
-            "text (base64 for binary), up to 64 KiB.",
+            "description": "Read an archived artifact by its sha256: your own working "
+            "state, an artifact you wrote, an artifact published with public: true, or "
+            "the private state of a program in your own lineage. Anything else is "
+            "refused with artifact_private. The read is free and ledgered. Returns "
+            "owner, kind, bytes and text (base64 for binary), up to 64 KiB.",
             "args_schema": {
                 "type": "object",
                 "properties": {"sha": {"type": "string", "minLength": 64, "maxLength": 64}},
@@ -536,6 +552,22 @@ class BootstrapMixin:
             },
             "price_micro_per_call": 0,
             "kind": "artifact",
+        }
+        self.tool_specs["outcome.get"] = {
+            "id": "outcome.get",
+            "description": "Read one item of your own outcome inbox by the handle of the "
+            "decision it is about — including items older than the few carried inline on "
+            "your request. Returns what you said then, the outcome, when it was observed, "
+            "the financial delta and an evidence pointer. Free and ledgered; a kernel "
+            "read, never a model call.",
+            "args_schema": {
+                "type": "object",
+                "properties": {"handle": {"type": "string", "minLength": 1, "maxLength": 128}},
+                "required": ["handle"],
+                "additionalProperties": False,
+            },
+            "price_micro_per_call": 0,
+            "kind": "outcome",
         }
         # Every published tool carries examples its own schema accepts (B1). Stamping
         # after the whole seed set is assembled keeps that total: a seed tool added

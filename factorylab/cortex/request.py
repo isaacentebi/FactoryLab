@@ -52,6 +52,19 @@ WORLD_HEADER = (
     "the cards, the reserve — arrive below with the work.\n"
 )
 
+# Continuity (edition 3, C1). Two fields any answer may carry, published with the
+# rest of the reserved return names so a seat can see that it owns them:
+# ``working_state`` replaces the seat's own head — the next request of that seat
+# renders it verbatim under ``your_state`` — and ``ack_through`` advances that
+# seat's outcome-inbox cursor past the named handle. Both are the seat's own
+# business: neither is scored, and refusing either changes nothing else about
+# the return. The hard size bound lives with the store (``runtime/continuity.py``),
+# because it is a property of what the archive will keep, not of the wire type.
+CONTINUITY_RETURN_FIELDS: dict[str, dict[str, Any]] = {
+    "working_state": {"type": "object"},
+    "ack_through": {"type": "string"},
+}
+
 # The kernel bounds only the size of a declared action set, never its contents.
 MAX_DECLARED_ACTIONS = 32
 MAX_ACTION_ID_CHARS = 64

@@ -111,8 +111,9 @@ def test_seat_2_strategy_costs_the_evaluator_standing_once_the_window_blames_the
     # The producer's own reward is still the verdict, unchanged.
     assert runtime.queue.history(about)[0].score == 1.0
     # The judge is told, privately.
-    memory = next(e for e in runtime.memory["eval-a"] if e["handle"] == judge)
-    assert memory["judged_return_blamed"] == 1.0 and memory["your_verdict_brier"] == 0.0
+    item = runtime.outcomes.get("eval-a", judge)
+    assert item["outcome"]["judged_return_blamed"] == 1.0
+    assert item["outcome"]["your_verdict_brier"] == 0.0
     assert runtime._standing_for("eval-a")["settled_verdicts"] == 1
     assert runtime.ledger.verify()
 

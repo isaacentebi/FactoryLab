@@ -79,8 +79,10 @@ def test_research_judged_useful_earns_a_good_payoff_brier_without_verdict_penalt
                 if i["kind"] == "forecast.seal" and i["predicate_id"] == "return_paid_off")
     assert seal["q"] == 0.1 and seal["evaluator_id"] == "eval-a"
     assert runtime.queue.get(seal["handle"]).parent_handle == judge
-    memory = next(e for e in runtime.memory["eval-a"] if e["handle"] == judge)
-    assert memory["judged_return_paid_off"] == 0 and memory["your_payoff_brier"] == 0.99
+    # The judge is told, in its own outcome inbox, addressed to the verdict it made.
+    item = runtime.outcomes.get("eval-a", judge)
+    assert item["outcome"]["judged_return_paid_off"] == 0
+    assert item["outcome"]["your_payoff_brier"] == 0.99
 
 
 def test_payoff_is_mandatory_and_the_old_single_number_path_is_gone():

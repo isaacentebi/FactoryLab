@@ -247,11 +247,7 @@ class FeedbackMixin:
         self.stats.max_settlement_latency_events = max(
             self.stats.max_settlement_latency_events, self.n - pend.opened_at_event
         )
-        owner = self.handle_to_assembly.get(about)
-        if owner is not None:
-            for entry in self.memory.get(owner, ()):
-                if entry["handle"] == about:
-                    entry["verdict"] = payload["score"]
+        self._deliver_verdict_to_inbox(about, payload["score"], judge_handle=payload["by"])
 
     def _facts_for(self, f: Forecast) -> WindowFacts | None:
         if f.made_at_event >= len(self.balance_at):
@@ -297,35 +293,57 @@ class FeedbackMixin:
             "selection_weight": round(float(st["weight"]), 4),
         }
 
-    def _deliver_consequence_to_memory(self, s: Any) -> None:
+    def _deliver_verdict_to_inbox(self, about: str, score: Any, *, judge_handle: str) -> None:
+        """A verdict on a seat's return reaches that seat, whenever it lands (C1).
+
+        The three-entry deque used to carry this and could only carry it while the
+        return was still one of the last three. An inbox item is addressed to the
+        handle, so a verdict that arrives after twenty other returns still finds
+        the reasoning it is about.
+        """
+        owner = self.handle_to_assembly.get(about) or self.outcomes.seat_of(about)
+        if owner is None:
+            return
+        self.outcomes.append(owner, handle=about, evidence=judge_handle,
+                             outcome={"verdict": (round(float(score), 4)
+                                                  if score is not None else None)})
+
+    def _deliver_consequence_to_inbox(self, s: Any) -> None:
         """The reward line must reach the primitive that acted, not only its router (essay
         II.I.b: memory across rounds, reward attributable to the decision). A producer learns
         whether its return paid off; a judge learns whether the return it blessed paid off and
-        how its verdict scored. Private local state, never public. Run 7 showed judges blessing
-        inaction at 1.0 while their standing fell, because nothing ever told them."""
+        how its verdict scored. Private to the seat, never public. Run 7 showed judges blessing
+        inaction at 1.0 while their standing fell, because nothing ever told them.
+
+        The deque this replaces delivered only while the decision was still among a
+        seat's last three returns; an inbox item is addressed by handle and waits.
+        """
         if s.predicate_id != "return_paid_off":
             return
-        producer = self.handle_to_assembly.get(s.about_handle)
-        if producer is not None:
-            for entry in self.memory.get(producer, ()):
-                if entry["handle"] == s.about_handle:
-                    entry["paid_off"] = s.y
         event_id = self.queue.get(s.handle).event_id
         prefix = "verdict-" if event_id.startswith("verdict-") else "self-"
-        if not event_id.startswith(prefix):
+        forecaster_handle = event_id[len(prefix):] if event_id.startswith(prefix) else None
+        producer = (self.handle_to_assembly.get(s.about_handle)
+                    or self.outcomes.seat_of(s.about_handle))
+        # The producer's own payoff arrives with its money in ``_credit_consequence``.
+        # Here it is delivered only when the forecast was somebody else's, so a seat is
+        # never told the same settlement twice.
+        if producer is not None and s.about_handle != forecaster_handle:
+            self.outcomes.append(producer, handle=s.about_handle, evidence=s.handle,
+                                 outcome={"return_paid_off": s.y})
+        if forecaster_handle is None:
             return
-        forecaster_handle = event_id[len(prefix) :]
-        forecaster = self.handle_to_assembly.get(forecaster_handle)
+        forecaster = (self.handle_to_assembly.get(forecaster_handle)
+                      or self.outcomes.seat_of(forecaster_handle))
         if forecaster is None:
             return
-        for entry in self.memory.get(forecaster, ()):
-            if entry["handle"] == forecaster_handle:
-                if prefix == "verdict-":
-                    entry["judged_return_paid_off"] = s.y
-                entry["your_payoff_brier"] = round(float(s.brier), 4)
-                entry["baseline_brier"] = (
-                    round(float(s.baseline_brier), 4) if s.baseline_brier is not None else None
-                )
+        outcome = {"your_payoff_brier": round(float(s.brier), 4),
+                   "baseline_brier": (round(float(s.baseline_brier), 4)
+                                      if s.baseline_brier is not None else None)}
+        if prefix == "verdict-":
+            outcome["judged_return_paid_off"] = s.y
+        self.outcomes.append(forecaster, handle=forecaster_handle, evidence=s.handle,
+                             outcome=outcome)
 
     def _exposure_evidence(self, handle: str) -> dict[str, bool]:
         """The three facts that can expose a judge on this return, each False until it lands."""
@@ -438,7 +456,17 @@ class FeedbackMixin:
         backstop, not settled money, and moves nothing here: what its lots realise
         later is booked to the owner as a late consequence (``_settle_late``).
         """
-        owner = self.handle_to_assembly.get(payoff.handle)
+        owner = self.handle_to_assembly.get(payoff.handle) or self.outcomes.seat_of(payoff.handle)
+        if owner is not None:
+            # The seat that decided it is told what it came to, marked or settled,
+            # with the money attached (C1). A marked outcome says so, so an estimate
+            # at the backstop is never read as realised cash.
+            self.outcomes.append(
+                owner, handle=payoff.handle, delta_micro=payoff.net_micro,
+                evidence=payoff.handle,
+                outcome={"return_paid_off": payoff.y, "net_micro": payoff.net_micro,
+                         "cost_micro": payoff.cost_micro, "earned_micro": payoff.earned_micro,
+                         "marked": payoff.marked, "liquidated": payoff.liquidated})
         if payoff.marked or owner is None or owner not in self.assemblies:
             return
         self._book_consequence(owner, payoff.net_micro, "return_paid_off")
@@ -458,10 +486,13 @@ class FeedbackMixin:
         marked outcome stays as it was; only the money moves.
         """
         for handle, micro in self.consequences.settle_late(self.n).items():
-            owner = self.handle_to_assembly.get(handle)
+            owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
             if owner is None or owner not in self.assemblies:
                 continue
             self._book_consequence(owner, micro, "late_consequence")
+            # A realisation after the outcome was fixed is still this seat's news (C1).
+            self.outcomes.append(owner, handle=handle, delta_micro=micro, evidence=handle,
+                                 outcome={"late_realization_micro": micro})
 
     def _book_income(self, item: dict) -> None:
         """Earned x402 income is new money: it enters the root wallet and is the
@@ -578,7 +609,7 @@ class FeedbackMixin:
             )
             if s.brier is None:
                 continue
-            self._deliver_consequence_to_memory(s)
+            self._deliver_consequence_to_inbox(s)
             self.last_closure_ns = max(self.clock.now_ns, self.last_closure_ns + 1)
             self.timing.record_closure("leaf", self.last_closure_ns)
             self.buffer.add(
@@ -694,7 +725,7 @@ class FeedbackMixin:
                 evaluator_id=c.evaluator_id, about_handle=c.about, q=c.q, share=share,
             )
             c.verdict_beat = int(result.brier >= result.baseline_brier)
-            self.ledger.append({
+            seq = self.ledger.append({
                 "kind": "verdict.consequence", "handle": c.judge,
                 "forecast_handle": c.handle, "about_handle": c.about,
                 "evaluator_id": c.evaluator_id, "cards": c.cards, "q": c.q,
@@ -703,11 +734,12 @@ class FeedbackMixin:
                 "baseline_brier": result.baseline_brier, "beat_baseline": c.verdict_beat,
                 "terms": terms, "ts": self.clock.now_ns,
             })
-            for entry in self.memory.get(c.evaluator_id, ()):
-                if entry["handle"] == c.judge:
-                    entry["judged_return_blamed"] = round(float(share), 4)
-                    entry["your_verdict_brier"] = round(float(result.brier), 4)
-                    entry["verdict_baseline_brier"] = round(float(result.baseline_brier), 4)
+            self.outcomes.append(
+                c.evaluator_id, handle=c.judge, evidence=seq,
+                outcome={"judged_return_blamed": round(float(share), 4),
+                         "your_verdict_brier": round(float(result.brier), 4),
+                         "verdict_baseline_brier": round(float(result.baseline_brier), 4),
+                         "beat_baseline": c.verdict_beat})
             if c.about in self.pending_exposure:
                 evidence = self._exposure_evidence(c.about)
                 evidence["verdict_exposed"] |= c.q >= VERDICT_ENDORSEMENT and share > 0
