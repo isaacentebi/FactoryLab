@@ -130,7 +130,11 @@ def test_a17_rails_follow_the_model_id_namespace_registration_uses():
 
 def test_a17_pots_publish_the_three_pots_and_their_transfers(wake):
     pots = wake["pots"]
-    assert set(pots["current"]) == {"venue", "reserve", "venice", "seed", "complete"}
+    # The three pots and the account's endowment facts (C1/C2): locked backing, the
+    # unlocked part, the next scheduled release and whether the factory is dormant.
+    assert set(pots["current"]) == {"venue", "reserve", "venice", "seed", "complete",
+                                    "locked_micro", "unlocked_micro", "next_release_ns",
+                                    "dormant"}
     refused = next(t for t in pots["transfers"] if t["status"] == "refused")
     assert refused["direction"] == "to_venue" and refused["reason"]
     assert all(set(t) == {"ts_ns", "status", "direction", "amount_micro", "reason"}
