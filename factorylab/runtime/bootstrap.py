@@ -406,6 +406,9 @@ class BootstrapMixin:
         self.tool_specs: dict[str, dict[str, Any]] = {}  # tool id -> spec dict (world block)
         self.population_tools: dict[str, Any] = {}
         self.tool_owner: dict[str, str] = {}  # population tool id -> proposing assembly id
+        # C10 routing evidence: each seat's last rendered ceiling and the world size then.
+        self.seat_ceilings: dict[str, dict[str, int]] = {}
+        self.entitlement_bridges: dict[str, int] = {}  # handle -> pool-backed cover, one call
         self.venue_tools = VenueTools(
             self.exchange,
             coins=manifest.exchange.coins,

@@ -194,6 +194,23 @@ class BudgetBook:
         self.__gross[seat] = after
         return own
 
+    def bridge(self, assembly_id: str, handle: str, amount: Money, reason: str) -> Money:
+        """Back one call's ceiling beyond a seat's cover from the pool, as far as it goes.
+
+        Routing admitted the seat on the ceiling it could see; the rendered request
+        is dearer. The gap is the runtime's estimation error, not the seat's choice,
+        so the commons backs it for this one call rather than failing the return.
+        Nothing moves here: the seat still pays what it has on commit and the rest
+        is ledgered there as ``commons``. Returns the backed amount.
+        """
+        seat = self._seat(assembly_id)
+        require_money(amount, nonnegative=True)
+        backed = max(0, min(amount, self.unallocated()))
+        self._log("bridge", assembly_id=seat, handle=handle, amount=amount, backed=backed,
+                  reason=reason, entitlement=self.entitlement(seat),
+                  unallocated_after=self.unallocated())
+        return backed
+
     def transfer(self, src: str, dst: str, amount: Money, reason: str) -> None:
         """Move ``amount`` from one seat to another; refuses beyond the source's entitlement."""
         source, target = self._seat(src), self._seat(dst)
