@@ -122,19 +122,55 @@ def diagnose(
         pair = cell_series([previous, current], names, registration_bins=registration_bins,
                            revision_bins=revision_bins)["cells"]
         changes.append(pair[0] != pair[1])
+    frontier = frontier_evidence(tail)
     flags = {
         "stable_failure": bool(same and failures),
-        "learning_death": bool(same and all(
-            w["profile"].get("registrations") == 0 and w["profile"].get("revision") == 0
-            for w in tail
-        )),
+        # Learning death is the frontier gone (essay: extinguished or quarantined), not a
+        # count of edits: stable cells, no registrations or revisions, no improvement in
+        # consequence outcomes and a compliance the cards cannot vouch for.
+        "learning_death": bool(same and frontier["quiet"] and not frontier["improving"]
+                               and not frontier["holding"]),
         "thrash": bool(len(changes) == k and all(changes) and all(violated)),
     }
     return {
         "flags": flags, "cells": [list(c) for c in cells],
         "dimensions": fixed["dimensions"],
         "gap_bound": transition_operator(cells)["gap_bound"],
-        "violated_cards": sorted(failures), "changes": changes,
+        "violated_cards": sorted(failures), "changes": changes, "frontier": frontier,
+    }
+
+
+def _holds(window: dict) -> bool:
+    """Every card of the window is measured against a region it satisfies."""
+    profile, regions = window["profile"], window["regions"]
+    cards = set(regions) | {name for name in profile if name.startswith("card:")}
+    return bool(cards) and all(
+        name in regions and profile.get(name) is not None
+        and violation(CardRegion(**dict(regions[name], card_id=name)), profile[name]) == 0
+        for name in cards
+    )
+
+
+def frontier_evidence(tail: list[dict]) -> dict:
+    """The surplus-generating frontier is gone only when the tail is quiet and flat.
+
+    ``quiet``: no registrations and no revisions in any tail window. ``improving``:
+    the consequence outcomes rise over the tail (a positive least-squares slope of
+    the paid-off rate or of realized P&L; an unmeasured series never improves).
+    ``holding``: every card in every tail window is measured and inside its
+    region, which a charter with no measured card cannot show.
+    """
+    paid_off = slope([w["profile"].get("paid_off") for w in tail])
+    realized = slope([w["profile"].get("realized_pnl") for w in tail])
+    return {
+        "quiet": bool(tail) and all(
+            w["profile"].get("registrations") == 0 and w["profile"].get("revision") == 0
+            for w in tail
+        ),
+        "improving": bool(paid_off is not None and paid_off > 0
+                          or realized is not None and realized > 0),
+        "holding": bool(tail) and all(_holds(w) for w in tail),
+        "paid_off_slope": paid_off, "realized_pnl_slope": realized,
     }
 
 

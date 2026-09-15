@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 import tomllib
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from decimal import Decimal
 from math import isfinite
 from pathlib import Path
@@ -203,6 +203,9 @@ class NoveltySpec:
 class CommitteeSpec:
     min_settled: int = 5
     seats: int = 5
+    # A promised move counts once it clears this fraction of the frozen region's scale
+    # (the observation's declared unit width); smaller moves are "did not move".
+    promise_resolution: float = 0.01
 
 
 @dataclass(frozen=True)
@@ -350,6 +353,9 @@ class WorldManifest:
         # Preserve historical manifest identities while the blame floor keeps its default.
         if payload["prices"].get("min_blame_share") == 0.1:
             payload["prices"].pop("min_blame_share")
+        # Preserve historical manifest identities while promise grading keeps its resolution.
+        if payload["committee"].get("promise_resolution") == 0.01:
+            payload["committee"].pop("promise_resolution")
         # Preserve historical manifest identities while the program call price is its default.
         if payload["prices"].get("program_micro_per_call") == 50:
             payload["prices"].pop("program_micro_per_call")
@@ -663,6 +669,15 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
     return Charter(1, tuple(norms), tuple(cards)), tuple(prices)
 
 
+def _committee(raw: dict) -> CommitteeSpec:
+    spec = CommitteeSpec(**raw)
+    resolution = spec.promise_resolution
+    if (type(resolution) not in (int, float) or isinstance(resolution, bool)
+            or not isfinite(resolution) or resolution <= 0):
+        raise ValueError("committee.promise_resolution must be a finite positive number")
+    return replace(spec, promise_resolution=float(resolution))
+
+
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     note = d.get("notes", {})
     if not isinstance(note, dict) or set(note) - {
@@ -800,7 +815,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         assemblies=assemblies,
         novelty=NoveltySpec(nov.get("share", 0.1), duration_ns(nov.get("window", "1d")),
                             nov.get("trials", 3), nov.get("max_lifetime_windows", 6)),
-        committee=CommitteeSpec(**d.get("committee", {})),
+        committee=_committee(d.get("committee", {})),
         immune=ImmuneSpec(**d.get("immune", {})),
         timing=TimingSpec(
             int(tim.get("min_ratio", 3)), float(tim.get("jitter_fraction", 0.2)),

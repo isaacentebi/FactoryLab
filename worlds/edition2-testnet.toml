@@ -296,8 +296,9 @@ max_transfer_fee_usd = "2"
 # (docs/launch-decisions.md, "Self-serve gas"), one more MarketMid per tick.
 spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 
-# Edition 2 charter, architect's draft (docs/charter/edition2-draft.toml), verbatim. Not
-# ratified: scripts/ratify_charter.py adds ratified_sha256 and roster_sha256 after the vote.
+# Edition 2 charter as ratified on 15 September 2026 (third ballot): scripts/ratify_charter.py
+# wrote the ratified_sha256 and roster_sha256 below after the vote
+# (docs/charter/edition2-ratification.json); the draft was docs/charter/edition2-draft.toml.
 #
 # What changed from edition 1 and why (docs/audits/v4/gpt6-triage.md):
 # - Five quota cards removed: noop-ceiling, revision-presence, amendments_activated_floor,

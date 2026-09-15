@@ -60,7 +60,8 @@ def profile(items: list[dict], cards: list[str]) -> Profile:
     Counts are floats for the observer profile; wallet accounting is untouched.
     Card/profile name collisions are rejected instead of overwriting evidence.
     """
-    names = (*CHANNELS, "noop_share", "registrations", "revision", "disagreement", "balance")
+    names = (*CHANNELS, "noop_share", "registrations", "revision", "disagreement", "balance",
+             "paid_off", "realized_pnl")
     if set(cards).intersection(names):
         raise ValueError("card name collides with a profile field")
     result = dict.fromkeys((*CHANNELS, *cards))
@@ -69,6 +70,7 @@ def profile(items: list[dict], cards: list[str]) -> Profile:
     judged = {}
     registrations = 0
     revision = 0.0
+    paid_off = realized_pnl = None
     balance = None
     for item in items:
         kind = item.get("kind", "")
@@ -81,7 +83,10 @@ def profile(items: list[dict], cards: list[str]) -> Profile:
         elif kind == "decision.open":
             decisions.append(item["propensity"]["chosen"] == "NOOP")
         elif kind == "price.window":
-            revision = number(item.get("observations", {}).get("revision_rate", 0.0))
+            observations = item.get("observations", {})
+            revision = number(observations.get("revision_rate", 0.0))
+            paid_off = number(observations.get("consequence_paid_off_rate"))
+            realized_pnl = number(observations.get("realized_pnl_usd"))
             for card in cards:
                 result[card] = number(item.get("values", {}).get(card))
         elif kind == "event":
@@ -101,6 +106,8 @@ def profile(items: list[dict], cards: list[str]) -> Profile:
         noop_share=mean(decisions),
         registrations=float(registrations),
         revision=revision,
+        paid_off=paid_off,
+        realized_pnl=realized_pnl,
         disagreement=mean([pstdev(group.values()) for group in judged.values() if len(group) > 1]),
         balance=balance,
     )

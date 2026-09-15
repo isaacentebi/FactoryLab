@@ -536,3 +536,18 @@ def test_prices_min_blame_share_is_optional_bounded_and_absent_from_the_hash_at_
         raw["prices"]["min_blame_share"] = bad
         with pytest.raises(ValueError, match="min_blame_share"):
             manifest_from_dict(raw)
+
+
+def test_promise_resolution_is_explicit_and_hash_neutral_at_its_default():
+    default = manifest_from_dict(_base())
+    assert default.committee.promise_resolution == 0.01
+    assert "promise_resolution" not in default.canonical_json()
+    raw = _base()
+    raw["committee"] = {"promise_resolution": 0.01}
+    assert manifest_from_dict(raw).manifest_hash() == default.manifest_hash()
+    raw["committee"] = {"promise_resolution": 0.05}
+    assert manifest_from_dict(raw).manifest_hash() != default.manifest_hash()
+    for bad in (0, -0.1, "0.01", True, float("inf")):
+        raw["committee"] = {"promise_resolution": bad}
+        with pytest.raises((ValueError, TypeError)):
+            manifest_from_dict(raw)

@@ -45,6 +45,7 @@ def diary():
                     "window": i + 1,
                     "window_end_event": (i + 1) * 120,
                     "values": row.get("cards", {}),
+                    "observations": row.get("observations", {}),
                 }
             )
         return [dict(item, seq=i) for i, item in enumerate(items)]

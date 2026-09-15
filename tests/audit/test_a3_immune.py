@@ -30,14 +30,43 @@ def runtime():
     return rt
 
 
-def freeze(rt, index, cost=920, skill=-0.3, turnover=230, registrations=0, revision=0):
+def freeze(rt, index, cost=920, skill=-0.3, turnover=230, registrations=0, revision=0,
+           **outcomes):
     rt.window.index = index
     rt.window.closed_values = {"cost": cost, "skill": skill, "turnover": turnover}
     rt.window.closed_regions = dict(rt.regions)
     for cid in rt.regions:
         rt.controller.set_price(cid, 1, amendment_id="fixture")
     close_window(rt, dict(cost_per_return=cost, forecast_skill=skill, turnover=turnover,
-                         verdict_mean=0.6, registrations=registrations, revision_rate=revision))
+                         verdict_mean=0.6, registrations=registrations, revision_rate=revision,
+                         **outcomes))
+
+
+def test_a3_profitable_compliant_stability_is_not_learning_death():
+    """P2-08 live: a stable, compliant, improving organisation keeps its frontier."""
+    rt = runtime()
+    for i in range(1, 4):  # every card inside its region, realized P&L rising, no edits
+        freeze(rt, i, cost=400, skill=0.2, turnover=2, realized_pnl_usd=float(i))
+    assert rt.stats.pathologies == {"stable_failure": False, "learning_death": False,
+                                    "thrash": False}
+    last = [i for i in rt.ledger._recovery_items() if i["kind"] == "immune.window"][-1]
+    assert last["frontier"]["holding"] and last["frontier"]["improving"]
+    assert last["profile"]["realized_pnl"] == 3.0
+    # Compliance alone is enough; so is improvement alone under a violated card.
+    rt = runtime()
+    for i in range(1, 4):
+        freeze(rt, i, cost=400, skill=0.2, turnover=2)
+    assert not rt.stats.pathologies["learning_death"]
+    rt = runtime()
+    for i in range(1, 4):
+        freeze(rt, i, consequence_paid_off_rate=0.2 * i)
+    assert rt.stats.pathologies["stable_failure"]
+    assert not rt.stats.pathologies["learning_death"]
+    # Neither: the frozen run of the test above is learning-dead as it always was.
+    rt = runtime()
+    for i in range(1, 4):
+        freeze(rt, i, consequence_paid_off_rate=0.4, realized_pnl_usd=-1.0)
+    assert rt.stats.pathologies["learning_death"]
 
 
 def test_a3_frozen_run_flags_failure_and_learning_death():

@@ -1,8 +1,12 @@
 from types import SimpleNamespace
 
+import pytest
+
 from factorylab.charter.amendment import PredictedEffect
+from factorylab.charter.controller import CardRegion, promise_kept
 from factorylab.cortex.registration import RouterProposal, parse_proposals
 from factorylab.cortex.request import Return
+from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from tests.conftest import make_runtime
 
 
@@ -91,3 +95,117 @@ def test_a_router_add_at_the_cap_is_refused_before_the_receipt_is_spent():
     # Replacing a router is still allowed at the cap, and that one does register.
     rt._register('author', RouterProposal('Tick', 'exp3', .1))
     assert len(rt.routers['Tick']) == 1 and rt.reserve.remaining() < remaining
+
+
+FLOOR = CardRegion("well_formed_rate", "min", 0.9, None, 1.0)
+
+
+def _policy_decision(rt, assembly="eval-a"):
+    """A ballot's decision lives on the policy channel under the assembly's identity."""
+    return rt.queue.open(
+        actor=f"assembly:{assembly}", event_id="test", channel="policy", deadline_ns=10**18,
+        parent_handle=None, cost_ceiling=0,
+        propensity=PropensityRecord((assembly,), (1.0,), assembly, 0, f"assembly:{assembly}",
+                                    "direct-committee-seat"),
+    )
+
+
+@pytest.mark.parametrize("direction, baseline, value, kept", [
+    # Already inside: kept only by staying inside without moving against the promise.
+    ("increase", 0.95, 0.92, False),   # the reviewer's case: compliant, went the wrong way
+    ("decrease", 0.92, 0.95, False),   # the mirror
+    ("increase", 0.92, 0.95, True),
+    ("decrease", 0.95, 0.92, True),
+    ("increase", 0.95, 0.945, True),   # within resolution: did not move
+    ("decrease", 0.95, 0.955, True),
+    ("increase", 0.95, 0.99, True),
+    ("decrease", 0.95, 0.85, False),   # left the region
+    # Outside at baseline: kept only by moving the promised way by the resolution.
+    ("increase", 0.5, 0.6, True),      # still outside, but the promise held
+    ("increase", 0.5, 0.505, False),   # below resolution
+    ("increase", 0.5, 0.4, False),
+    ("decrease", 0.5, 0.4, True),
+])
+def test_promise_grading_scores_the_direction_against_the_baseline(direction, baseline, value,
+                                                                   kept):
+    assert promise_kept(direction, baseline, value, FLOOR, resolution=0.01) is kept
+
+
+def test_promise_grading_rejects_bad_direction_and_resolution():
+    with pytest.raises(ValueError, match="direction"):
+        promise_kept("sideways", 0.9, 0.9, FLOOR, resolution=0.01)
+    with pytest.raises(ValueError, match="resolution"):
+        promise_kept("increase", 0.9, 0.9, FLOOR, resolution=0.0)
+
+
+def _ballot(rt, monkeypatch, direction, *, baseline, value, vote=True):
+    """One favourable ballot on the well-formed card, activated at ``baseline``."""
+    import factorylab.runtime.governance as governance
+
+    reading = {"value": baseline}
+    monkeypatch.setattr(governance, "measure_card",
+                        lambda card, samples, observations=None: {"all": reading["value"]})
+    card = next(c for c in rt.charter.cards if c.id == "well_formed_rate")
+    proposal = SimpleNamespace(id=f"am-{direction}",
+                               predicted_effect=PredictedEffect(card.id, direction, 1))
+    handle = _policy_decision(rt)
+    rt._record_policy_ballot(proposal, handle, "eval-a", vote)
+    rt._activate_policy_ballots(proposal.id)
+    ballot = rt.pending_votes[-1]
+    assert ballot["baseline"] == baseline and ballot["region"] is not None
+    reading["value"] = value
+    rt._close_policy_window(rt.window.index)
+    outcome = [i for i in rt.ledger._recovery_items() if i["kind"] == "policy.outcome"][-1]
+    return handle, outcome
+
+
+@pytest.mark.parametrize("direction, baseline, value", [
+    ("increase", 0.95, 0.92), ("decrease", 0.92, 0.95),
+])
+def test_a_vote_for_a_change_that_went_the_wrong_way_is_wrong_inside_the_region(
+        monkeypatch, direction, baseline, value):
+    """P2-09: the frozen region still holds, yet the promise was broken."""
+    rt = make_runtime()
+    handle, outcome = _ballot(rt, monkeypatch, direction, baseline=baseline, value=value)
+    assert outcome["y"] is False and outcome["score"] == 0.0
+    assert outcome["direction"] == direction and outcome["resolution"] == 0.01
+    assert outcome["baseline"] == baseline and outcome["value"] == value
+    settled = rt.queue.history(handle)[-1]
+    assert settled.score == 0.0 and settled.status is SettleStatus.SETTLED
+    assert settled.definition_version == "policy-promise-brier-v2"
+
+
+@pytest.mark.parametrize("direction, baseline, value", [
+    ("increase", 0.92, 0.95), ("decrease", 0.95, 0.92),
+])
+def test_a_vote_for_a_change_that_kept_its_promise_is_right(monkeypatch, direction, baseline,
+                                                            value):
+    rt = make_runtime()
+    handle, outcome = _ballot(rt, monkeypatch, direction, baseline=baseline, value=value)
+    assert outcome["y"] is True and outcome["score"] == 1.0
+    assert rt.queue.history(handle)[-1].score == 1.0
+    # A no vote on the same change is the wrong call.
+    rt = make_runtime()
+    handle, outcome = _ballot(rt, monkeypatch, direction, baseline=baseline, value=value,
+                              vote=False)
+    assert outcome["y"] is True and rt.queue.history(handle)[-1].score == 0.0
+
+
+def test_a_ballot_without_a_baseline_is_censored(monkeypatch):
+    import factorylab.runtime.governance as governance
+
+    rt = make_runtime()
+    monkeypatch.setattr(governance, "measure_card", lambda card, samples, observations=None: {})
+    card = next(c for c in rt.charter.cards if c.id == "well_formed_rate")
+    proposal = SimpleNamespace(id="am-none",
+                               predicted_effect=PredictedEffect(card.id, "increase", 1))
+    handle = _policy_decision(rt)
+    rt._record_policy_ballot(proposal, handle, "eval-a", True)
+    rt._activate_policy_ballots("am-none")
+    assert rt.pending_votes[-1]["baseline"] is None
+    monkeypatch.setattr(governance, "measure_card",
+                        lambda card, samples, observations=None: {"all": 0.95})
+    rt._close_policy_window(rt.window.index)
+    outcome = [i for i in rt.ledger._recovery_items() if i["kind"] == "policy.outcome"][-1]
+    assert outcome["y"] is None and outcome["status"] == str(SettleStatus.CENSORED)
+    assert rt.queue.history(handle)[-1].status is SettleStatus.CENSORED

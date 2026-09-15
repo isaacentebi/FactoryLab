@@ -10,7 +10,7 @@ from typing import Any
 from factorylab.charter.amendment import Amendment, PredictedEffect
 from factorylab.charter.book import Refusal
 from factorylab.charter.charter import Charter, MetricCard
-from factorylab.charter.controller import violation
+from factorylab.charter.controller import promise_kept
 from factorylab.charter.measurement import measure_card, preflight_measurement
 from factorylab.cortex.assembly import AssemblySpec
 from factorylab.cortex.registration import (
@@ -1434,7 +1434,7 @@ class GovernanceMixin:
     def _settle_policy(self, handle, score, status) -> None:
         """Policy feedback reaches the original assembly's durable, private return channel."""
         self.queue.settle(handle, channel="policy", score=score, status=status,
-                          definition_version="policy-region-brier-v1", sampling_ref=None)
+                          definition_version="policy-promise-brier-v2", sampling_ref=None)
 
     def _close_policy_window(self, index: int) -> None:
         """Each vote is graded once at its declared post-activation boundary, or censored."""
@@ -1450,13 +1450,19 @@ class GovernanceMixin:
             value = fmean(values.values()) if values else None
             baseline = vote["baseline"]
             region = vote["region"]
-            status = (SettleStatus.CENSORED if value is None or region is None
+            resolution = self.m.committee.promise_resolution
+            status = (SettleStatus.CENSORED
+                      if value is None or region is None or baseline is None
                       else SettleStatus.SETTLED)
-            outcome = (violation(region, value) == 0
+            # The outcome is the promise, not compliance: a change whose value went the
+            # wrong way is a broken promise even when the region still holds.
+            outcome = (promise_kept(effect.direction, baseline, value, region,
+                                    resolution=resolution)
                        if status is SettleStatus.SETTLED else None)
             score = float(vote["vote"] == outcome) if outcome is not None else 0.0
             self.ledger.append({"kind": "policy.outcome", "handle": vote["handle"],
                                 "amendment_id": vote["amendment_id"], "baseline": baseline,
+                                "direction": effect.direction, "resolution": resolution,
                                 "region": asdict(region) if region is not None else None,
                                 "observation_id": vote["observation_id"],
                                 "observation_version": vote["observation_version"],

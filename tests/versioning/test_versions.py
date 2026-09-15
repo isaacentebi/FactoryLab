@@ -30,6 +30,40 @@ def test_learning_death_only_and_registrations_split_runs(diary):
     assert [(flag["start_window"], flag["end_window"]) for flag in flags] == [(2, 3), (7, 8)]
 
 
+def _stable_rows(n=6, *, value=0.2, hi=1.0, observations=None):
+    region = {"kind": "max", "lo": None, "hi": hi, "scale": 2.0}
+    return [{"verdict": 0.5, "registrations": 0, "cards": {"cost": value},
+             "regions": {"cost": region},
+             **({"observations": observations(i)} if observations else {})}
+            for i in range(n)]
+
+
+def test_profitable_compliant_stability_is_not_learning_death(diary):
+    """P2-08: the frontier is alive while the cards hold or the outcomes improve."""
+    # The reviewer's case: same cell, no edits, every card inside, realized P&L rising.
+    rows = _stable_rows(observations=lambda i: {"realized_pnl_usd": 1.0 + i})
+    assert summary(diary(rows))["pathologies"] == []
+    # Compliance alone keeps the flag down, whatever the outcomes do.
+    assert summary(diary(_stable_rows()))["pathologies"] == []
+    # A rising paid-off rate alone keeps it down with a violated card.
+    rows = _stable_rows(value=5, observations=lambda i: {"consequence_paid_off_rate": i / 10})
+    assert [f["kind"] for f in summary(diary(rows))["pathologies"]] == ["stable_failure"]
+    # Falling outcomes with a violated card: the frontier is gone.
+    rows = _stable_rows(value=5, observations=lambda i: {"realized_pnl_usd": -float(i),
+                                                          "consequence_paid_off_rate": 0.5})
+    kinds = [f["kind"] for f in summary(diary(rows))["pathologies"]]
+    assert kinds == ["learning_death", "stable_failure"]
+    # An unmeasured card cannot vouch for compliance, so flat outcomes flag it.
+    rows = _stable_rows()
+    for row in rows:
+        row["cards"] = {}
+    flags = summary(diary(rows))["pathologies"]
+    assert [f["kind"] for f in flags] == ["learning_death"]
+    frontier = flags[0]["evidence"]["windows"][-1]["frontier"]
+    assert frontier == {"quiet": True, "improving": False, "holding": False,
+                        "paid_off_slope": None, "realized_pnl_slope": None}
+
+
 def test_thrash_only_and_stops_when_cells_stop_changing(diary):
     # A card supplies cells without adding a score slope that could flag divergence.
     rows = [{"cards": {"activity": i % 2},
