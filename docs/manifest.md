@@ -1153,9 +1153,9 @@ A `challenge` proposal (contract C7) is the route for replacing what a card
 measures without the card it challenges judging the change:
 
 ```json
-{"kind": "challenge", "card_id": "cost-cap", "evidence": "text",
- "replacement": {"observation": "cost_per_attempt", "rule": "at most", "value": 5000,
-                 "window": {"kind": "returns", "n": 10, "per": "role"}},
+{"kind": "challenge", "card_id": "censorship-bound", "evidence": "text",
+ "replacement": {"observation": "censored_share", "rule": "at most", "value": 0.2,
+                 "window": {"kind": "windows", "n": 5}},
  "trial_windows": 6}
 ```
 

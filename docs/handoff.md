@@ -35,8 +35,10 @@ reviewed on its diff and merged after the full gate. Main now holds, with the re
   ledgered `income.earned`; the wake shows earned, subsidy and principal-conversion apart, plus
   money by class, deliveries, open commitments, cells, liveness and entitlements: the architect
   can watch without pushing.
-- **Charter edition 2** (C12): the reviewer's four norms and eight cards, the five quota cards
-  gone, ratified by the seeded committee of the testnet roster (`docs/audits/v5/charter-ratification.md`).
+- **Charter edition 2** (C12): five norms (the reviewer's four plus fidelity) and three cards
+  (consequence paid off, forecast skill, censorship bound); the quota, frugality and concentration
+  cards gone, re-ratified by the seeded committee of the testnet roster on 15 September
+  (`docs/charter/edition2-ratification.json`; the eight-card ballot is under `docs/charter/history/`).
 - **Seat calibration** (C13): `scripts/calibrate_seats.py` runs candidates through the real
   contracts under a hard budget.
 - **The twelve-step slice** (`tests/audit/test_edition2_slice.py`): the reviewer's vertical slice
