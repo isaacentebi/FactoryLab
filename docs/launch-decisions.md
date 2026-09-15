@@ -122,3 +122,48 @@ The edition 2 testnet manifest is `worlds/edition2-testnet.toml` (hash
 - Uncertain provider bills are settled from the provider's balance, not charged at the ceiling.
 
 The funded manifest derives from this file.
+
+## Edition 3 (15 September)
+
+The edition 3 testnet manifest is `worlds/edition3-testnet.toml` (hash
+`805ada83f08a4a051ad5491ec021900f6704042c01777c4fc29cc1ec3c53ff94`, pinned in
+`tests/runtime/test_manifests.py`): GPT-6 Pro's nine-seat roster
+(`docs/audits/v6/gpt6/architect-review.md` §10.3) with the seed lenses of §11 carried
+verbatim, Hyperliquid testnet, the ten-minute tick, one-hour windows, and the edition 3
+physics (`docs/plans/edition3.md`, C5). Decisions taken:
+
+- **Kill winds the venue down.** `[kill] wind_down = true` is in the manifest, so it is
+  precommitted before launch rather than decided while a position is open. Every kill path —
+  the operator's `factorylab kill` and the end-of-budget kill alike — cancels every resting
+  order, closes every open perp position and sells every spot balance above a dollar of
+  dust at market, each order and each venue answer ledgered as `kill.wind_down` before
+  `Terminated`, and the witness line outside the diary carries `wind_down` and the count of
+  orders sent. **Why: a dead factory carries no exposure.** The alternative GPT-6 named
+  ([E14]) is to accept residual exposure, which leaves real money moving at a venue with
+  nobody alive to answer for it, and makes "kill" a claim about the computation only. A
+  venue may never block a kill in exchange for this: every step is guarded and a failure —
+  unreachable API, missing credential, refused order — is ledgered and stepped over, so the
+  world still terminates and a partial wind-down is visible as `failed` in the summary
+  rather than as a hung kill. `deploy/README.md` states the contract and its limits.
+- Money (§12): $300 of inference backing precommitted whole, $120 released at genesis and
+  $60 on days 7, 14 and 21; `base_share` 0.8, so genesis gives each of the nine lineages
+  10,666,666 micro-USD and the commons the remaining fifth. $120 of trading principal.
+  Provider inventories are stated separately and never summed — $220 OpenRouter, $80 Venice
+  — because an OpenRouter balance cannot refill a Venice-only seat. The genesis tranche is
+  modelled as unlocked at launch, the way edition 2 models its $40: a release with a zero
+  offset would leave the world holding $300 it may not spend until the first release runs,
+  which reads as dormancy at genesis.
+- Roster: the routes of §10.2 at their undiscounted list prices (Sol's promotion is not a
+  price promise), OpenRouter routes pinned with `require_parameters` so a cheaper fallback
+  that ignores them is never silently authorized. One expensive seat, the constructor on
+  `openai/gpt-5.6-sol` at 4,096 output tokens with a nine-tick cadence floor — about sixteen
+  uncommissioned wakes a day, roughly $1.30 — a replaceable availability policy and not a
+  construction quota.
+- Lenses are population text. Each seat carries the common seed paragraph plus its own lens
+  twice: as `initial_state` (C1's first working-state head, which the seat may overwrite
+  from its first return) and as `system_prompt` (what it reads until C1 delivers state in
+  the request). A seat that rejects its lens keeps no penalty for having done so.
+- Calibration before ratification: at least 40 bounded cases per route
+  (`scripts/calibrate_seats.py --cases`), every safety and accounting case passing and at
+  least 95% valid returns. The gate is an initial screen, not a reliability certificate;
+  fourteen successes never established production reliability and forty do not either.

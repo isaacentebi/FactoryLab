@@ -13,8 +13,123 @@ from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import Order, OrderKind, OrderResult
 
 
+def wind_down(exchange, ledger, *, dust_micro: int = 1_000_000) -> dict:
+    """Leave the venue flat before the world dies: cancel, close, sell (edition 3, C5).
+
+    Three passes, each ledgered order by order as ``kill.wind_down`` with the venue's
+    own answer: every resting order is cancelled, every open perp position is closed at
+    market, and every spot balance worth more than ``dust_micro`` is sold at market.
+    Dust is left because selling it costs more than it is worth.
+
+    Nothing here may raise. A kill that a venue can block is not a kill: an unreachable
+    or refusing venue is recorded as a failed step (``status`` ``"failed"`` with the
+    exception type, or the venue's own rejection) and the caller terminates anyway. The
+    returned report is what the witness line and the diary summary are written from.
+    """
+    report = {"attempted": True, "orders": 0, "cancelled": 0, "closed": 0, "sold": 0,
+              "failed": 0, "errors": []}
+
+    def step(kind: str, detail: dict, call) -> dict | None:
+        report["orders"] += 1
+        try:
+            result = call()
+            result = _to_plain(vars(result)) if isinstance(result, OrderResult) else result
+            if not isinstance(result, dict):
+                result = {"status": "unknown", "acknowledgement": str(result)[:200]}
+        except Exception as exc:  # noqa: BLE001 - a venue may never block a kill
+            result = {"status": "failed", "error": type(exc).__name__}
+        # The diary takes plain JSON; a venue answers in Decimals and its own types.
+        result = json.loads(json.dumps(result, default=str))
+        ok = result.get("status") in ("filled", "cancelled", "resting", "ok")
+        if ok:
+            report[kind] += 1
+        else:
+            report["failed"] += 1
+            report["errors"].append({**detail, "status": result.get("status"),
+                                     "error": str(result.get("error") or "")[:200]})
+        ledger.append({"kind": "kill.wind_down", "step": kind, **detail, "result": result})
+        return result
+
+    try:
+        resting = list(exchange.open_orders())
+    except Exception as exc:  # noqa: BLE001
+        resting = []
+        report["failed"] += 1
+        report["errors"].append({"step": "open_orders", "error": type(exc).__name__})
+        ledger.append({"kind": "kill.wind_down", "step": "read_failed",
+                       "read": "open_orders", "error": type(exc).__name__})
+    for order in resting:
+        oid, coin = str(order.get("order_id")), str(order.get("coin"))
+        step("cancelled", {"order_id": oid, "coin": coin},
+             lambda oid=oid, coin=coin: exchange.cancel(oid, coin=coin))
+
+    try:
+        account = exchange.account()
+        mids = exchange.mids()
+    except Exception as exc:  # noqa: BLE001
+        account, mids = None, {}
+        report["failed"] += 1
+        report["errors"].append({"step": "account", "error": type(exc).__name__})
+        ledger.append({"kind": "kill.wind_down", "step": "read_failed", "read": "account",
+                       "error": type(exc).__name__})
+    if account is not None:
+        for position in account.positions:
+            if not position.size:
+                continue
+            coin = position.coin
+            step("closed", {"coin": coin, "size": str(position.size)},
+                 lambda coin=coin: exchange.close(coin))
+        for balance in account.spot_balances:
+            base = balance.coin
+            if base == "USDC" or balance.total <= 0:
+                continue
+            pair = f"{base}/USDC"
+            mid = mids.get(pair) or mids.get(base)
+            value = None if mid is None else usd_to_micro(
+                Decimal(str(balance.total)) * Decimal(str(mid)), rounding="nearest")
+            if value is not None and value <= dust_micro:
+                ledger.append({"kind": "kill.wind_down", "step": "dust", "coin": pair,
+                               "size": str(balance.total), "value_micro": value})
+                continue
+            step("sold", {"coin": pair, "size": str(balance.total),
+                          "value_micro": value},
+                 lambda pair=pair, balance=balance: exchange.close(
+                     pair, Decimal(str(balance.total)), market="spot"))
+    ledger.append({"kind": "kill.wind_down", "step": "summary",
+                   **{k: v for k, v in report.items() if k != "errors"}})
+    return report
+
+
 class VenueMixin:
     """Preserve runtime state and behavior for venue operations."""
+
+    def kill(self, reason: str) -> dict:
+        """End this world, winding the venue down first when the manifest precommitted it.
+
+        The single kill path inside a living runtime: the duration kill through
+        ``_finish_budget`` and any other runtime death go through here, and the
+        operator's ``factorylab kill`` runs the same ``wind_down`` against the same
+        manifest. ``kill.wind_down`` and each of its orders are in the diary before
+        ``Terminated``, and the witness line outside the diary carries whether a
+        wind-down was owed and how many orders it sent.
+        """
+        from factorylab.runtime import witness
+
+        report = {"attempted": False, "orders": 0}
+        exchange = getattr(self, "exchange", None)
+        # Every exchange, the deterministic fake included: a world that precommitted a
+        # wind-down leaves its book empty whether or not the book was ever real, so the
+        # contract is exercised by the same path a live world will take.
+        if self.m.kill.wind_down and exchange is not None:
+            report = wind_down(exchange, self.ledger, dust_micro=self.m.kill.dust_micro)
+        elif self.m.kill.wind_down:
+            self.ledger.append({"kind": "kill.wind_down", "step": "skipped",
+                                "reason": "world has no exchange"})
+        witness.note_wind_down(wind_down=bool(self.m.kill.wind_down),
+                               orders=report["orders"])
+        self.wind_down_report = report
+        self.termination.kill(reason)
+        return report
 
     def _finish_budget(self) -> None:
         """Reconcile once without invoking the population, then irreversibly end the run.
@@ -37,7 +152,7 @@ class VenueMixin:
             self._settle_exchange_effects(observed, observe_positions=False)
         self.ledger.append({"kind": "venue.terminal_reconciliation", **report})
         self.terminal_reconciliation = report
-        self.termination.kill("explicit_kill:budget")
+        self.kill("explicit_kill:budget")
 
     def _trading_markets(self) -> tuple[str, ...]:
         """Return the markets this world trades: the manifest seed plus every registration.

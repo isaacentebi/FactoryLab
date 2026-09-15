@@ -282,8 +282,12 @@ The runtime writes the `kill` line itself, from inside every kill path
 kill): `Termination.kill` appends
 
 ```json
-{"world":"funded","event":"kill","ts":"...","release_digest":"<64 hex>","ledger_head":"<sha256 of the ledger bytes>","launch_nonce":"<32 hex>","diary":"<sha256 of the diary's first sealed record>","reason":"explicit_kill:operator"}
+{"world":"funded","event":"kill","ts":"...","release_digest":"<64 hex>","ledger_head":"<sha256 of the ledger bytes>","launch_nonce":"<32 hex>","diary":"<sha256 of the diary's first sealed record>","reason":"explicit_kill:operator","wind_down":true,"wind_down_orders":3}
 ```
+
+`wind_down` is what the manifest owed the venue and `wind_down_orders` how many
+orders the kill actually sent it ("What a kill owes the venue", below); a world
+that precommitted nothing is witnessed as `false` with no orders.
 
 to the same file (`factorylab/runtime/witness.py`, standard library only, never
 raising into the kill) and POSTs it to the receiver when the URL is set. That
@@ -426,6 +430,49 @@ already final would also emit. Killing an already dead world prints
 the diary resumes on this host (`identity_killed`), and none resumes anywhere
 that asks the receiver.
 It takes no other argument: there is nothing to steer, only to end.
+
+#### What a kill owes the venue
+
+Until edition 3 a kill ended the computation and left the account alone: whatever
+was resting or open at the venue stayed resting or open, and a computationally
+dead factory still carried financial exposure with nobody alive to answer for it
+(GPT-6's architect reading, §13, [E14]). Edition 3 precommits the other answer in
+the manifest, where it cannot be decided in the moment:
+
+```toml
+[kill]
+wind_down = true
+dust_usd = "1"
+```
+
+With `wind_down = true`, every kill path — `factorylab kill` and the end-of-budget
+kill alike — empties the account before `Terminated`, in three passes: cancel every
+resting order, close every open perp position at market, sell every spot balance
+worth more than `dust_usd` at market. Each order and the venue's own answer is one
+`kill.wind_down` item in the diary, followed by a `kill.wind_down` `summary`
+counting what was sent, cancelled, closed, sold and failed. All of it is in the
+diary before the `Terminated` event, so the record of the exit is inside the thing
+the exit seals. Dust is left where it is: selling a dollar of PURR costs more than
+the dollar.
+
+A venue may never block a kill. Every step is individually guarded: an unreachable
+API, a missing credential, a refused order or a venue that answers nothing at all
+is ledgered as a failed step and the kill proceeds to `Terminated` regardless. A
+partial wind-down is therefore possible and is visible as `failed` in the summary;
+check it against the venue by hand afterwards. This is the one thing `factorylab
+kill` reaches the network for, and it is why the kill loads the venue credential
+when — and only when — the manifest precommitted a wind-down.
+
+With `wind_down = false` or no `[kill]` table at all, the behaviour is the old one:
+the kill loads no credential, reaches no network, and residual exposure survives the
+world. That is a choice a manifest may make; it is not this one's.
+
+The witness line outside the diary carries the same contract, so a restored copy of
+a diary can be asked what the dead world owed its venue and what it sent:
+
+```json
+{"world":"funded","event":"kill","ts":"...","wind_down":true,"wind_down_orders":3,"reason":"explicit_kill:operator", "...":"..."}
+```
 
 Afterwards `systemctl disable --now factorylab.service` stops systemd from
 starting a resume that would only exit 3. The diary can then be read with
