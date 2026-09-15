@@ -28,6 +28,7 @@ from factorylab.kernel.timing import TimingRegistry, UpwardBuffer
 from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Wallet
 from factorylab.runtime import release
 from factorylab.runtime.cadence import GovernanceCadence
+from factorylab.runtime.cards import forecast_weight
 from factorylab.runtime.cascade import CascadeGate
 from factorylab.runtime.compute import ContractConsequences
 from factorylab.runtime.feedback import PendingJudgement
@@ -256,7 +257,14 @@ class BootstrapMixin:
         self.baseline = PrevalenceBaseline()
         self.standing = ConsequenceStanding(self.ev.min_coverage)
         self.observer = Observer()
-        self.settler = Settler(self.book, self.queue, self.standing, self.baseline, self.observer)
+        # Edition 3 (C3): the charter's cards, not the settler, say what a judge's
+        # forecasts are worth. A claim about a return in a scope no card answers
+        # for carries no weight; with no scoped card every claim counts equally.
+        self.settler = Settler(
+            self.book, self.queue, self.standing, self.baseline, self.observer,
+            weight_for=lambda forecast: forecast_weight(
+                self.charter, self.return_kinds.get(forecast.about_handle)),
+        )
         self.consequences = ContractConsequences(
             self.ledger, self.ev.consequence_backstop_events, self)
         self.consequence_fills = FillCursor(self.ledger, start_ns=self.clock.now_ns)

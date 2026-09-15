@@ -4,6 +4,8 @@ import json
 from fractions import Fraction
 from types import SimpleNamespace
 
+import pytest
+
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import SettleStatus
 from factorylab.settlement.lots import LotTable
@@ -73,7 +75,8 @@ def test_research_judged_useful_earns_a_good_payoff_brier_without_verdict_penalt
     judge = _consequence_judge(runtime, event, "eval-a")
     assert runtime.queue.history(about)[0].score == 0.9  # quality is the verdict
     standing = runtime.standing.snapshot()["eval-a"]
-    assert standing["n"] == 1 and standing["mean_brier"] == 0.99  # payoff 0.1 against y = 0
+    # payoff 0.1 against y = 0; the mean is now over the charter's weight on the claim
+    assert standing["n"] == 1 and standing["mean_brier"] == pytest.approx(0.99)
     assert runtime.standing.skill("eval-a") > 0
     seal = next(i for i in runtime.ledger._recovery_items()
                 if i["kind"] == "forecast.seal" and i["predicate_id"] == "return_paid_off")
@@ -157,7 +160,8 @@ def test_the_payoff_predicate_is_named_to_the_population_but_never_computed_for_
         assert not any(word in text for word in RULE_WORDS), text
 
 
-def test_standing_uses_payoff_brier_only():
+def test_standing_is_trained_by_every_settled_predicate_not_only_the_payoff():
+    """Edition 3 (C3) removes A16's privilege: public predicates train standing too."""
     runtime = _consequence_runtime(provider=_Judge(0.5, 0.1))
     parent = _consequence_decision(runtime, "eval-a", "conformity")
     runtime._open_forecasts(parent, "eval-a", "unused", [
@@ -167,11 +171,11 @@ def test_standing_uses_payoff_brier_only():
     runtime.balance_at.extend([runtime.wallet.balance] * 2)
     runtime._settle_due_forecasts()
     assert runtime.book.outstanding() == 0  # the optional forecast settled to its handle
-    assert runtime.standing.snapshot() == {}  # and trained no standing
+    assert runtime.standing.snapshot()["eval-a"]["n"] == 1  # and trained standing with it
     about, event = _consequence_produce(runtime, "NOOP")
     _consequence_judge(runtime, event, "eval-a")
-    assert runtime.standing.snapshot()["eval-a"]["n"] == 1
-    assert runtime.standing.coverage("eval-a") == 1.0  # coverage counts payoff forecasts only
+    assert runtime.standing.snapshot()["eval-a"]["n"] == 2
+    assert runtime.standing.coverage("eval-a") == 1.0  # every forecast asked for, settled
 
 
 def test_verdict_event_carries_payoff_and_meta_sees_it():

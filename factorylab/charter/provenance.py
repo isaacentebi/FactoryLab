@@ -31,6 +31,21 @@ def charter_content(raw: Any) -> dict:
     return {k: v for k, v in raw.items() if k not in PROVENANCE_FIELDS}
 
 
+def norms_raw(norms: Any) -> list:
+    """The TOML form of a charter's norms: a bare name where there is no definition.
+
+    Edition 3 norms carry their definitions in the charter object, so they are
+    written as ``{id, definition}`` tables. A norm without a definition is
+    written as the bare string it has always been, so a charter surveyed before
+    definitions existed renders and hashes exactly as it did.
+    """
+    out = []
+    for norm in norms:
+        definition = getattr(norm, "definition", "")
+        out.append({"id": str(norm), "definition": definition} if definition else str(norm))
+    return out
+
+
 def roster_hash(manifest: Any) -> str:
     """Bind the survey to the exact assemblies and the model configurations they used."""
     from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT

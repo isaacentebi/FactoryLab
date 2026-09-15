@@ -37,7 +37,7 @@ from factorylab.charter.measurement import measurement_catalogue as catalogue
 from factorylab.charter.measurement import preflight_measurement
 
 # The load path enforces these digests; the script and the kernel must agree exactly.
-from factorylab.charter.provenance import charter_digest, roster_hash
+from factorylab.charter.provenance import charter_digest, norms_raw, roster_hash
 from factorylab.charter.windows import window_schema
 from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, _parse_json_object
 from factorylab.runtime.cards import parses
@@ -374,8 +374,25 @@ def _toml_str(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
 
 
+def _render_norms(norms: tuple[str, ...]) -> str:
+    """Render norms as bare names, or as tables once any of them carries a definition.
+
+    A charter whose norms have no definitions renders the single-line array it
+    always did, so its content digest is unchanged.
+    """
+    rows = norms_raw(norms)
+    if all(isinstance(row, str) for row in rows):
+        return "norms = " + json.dumps(rows, ensure_ascii=False)
+    tables = [
+        row if isinstance(row, str) else "{ " + ", ".join(
+            f"{key} = {_toml_str(value)}" for key, value in row.items()) + " }"
+        for row in rows
+    ]
+    return "norms = [\n" + "".join(f"  {table},\n" for table in tables) + "]"
+
+
 def render_toml(cards: list[tuple[MetricCard, float | None]], norms: tuple[str, ...]) -> str:
-    out = ["[charter]", "edition = 1", "norms = " + json.dumps(norms), ""]
+    out = ["[charter]", "edition = 1", _render_norms(norms), ""]
     for card, price in cards:
         out.append("[[charter.cards]]")
         for f in CARD_FIELDS:

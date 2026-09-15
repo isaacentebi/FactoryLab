@@ -4,7 +4,8 @@ The reproduction: an approved card naming `downside_variance` was admitted, then
 yielded `price.unparsed` for an unknown observation, so the population's own
 risk criterion received no measured penalty — while launch validation rejected
 the very same name. Measurement stopped at the architect's twenty-two; edition 2's
-``cost_per_attempt`` (C6) makes twenty-three seeds.
+``cost_per_attempt`` (C6) and edition 3's ``avoidably_unresolved_share`` (C3)
+make twenty-four seeds.
 """
 
 import json
@@ -114,7 +115,8 @@ def test_the_twenty_three_seeds_are_registered_contracts_with_a_version():
         contract = runtime.registry.get(f"observation:{observation.id}")
         assert contract.kind == "observation" and contract.version == 1
         assert contract.provenance == "seed"
-    assert len(SEED_IDS) == 23  # edition 2 added cost_per_attempt (C6)
+    assert len(SEED_IDS) == 24  # edition 2 added cost_per_attempt (C6), edition 3
+    # added avoidably_unresolved_share (C3)
 
 
 def test_the_book_reads_seeds_and_registrations_through_one_vocabulary():
@@ -126,7 +128,7 @@ def test_the_book_reads_seeds_and_registrations_through_one_vocabulary():
     assert registered.registered and registered.version == 3 and registered.scale == 2.0
     assert book.get("cost_per_return") is observation_for("cost_per_return")
     assert book.get("nothing-here") is None
-    assert len(book.all()) == 24  # twenty-three seeds and one registration
+    assert len(book.all()) == 25  # twenty-four seeds and one registration
     assert observation_for("downside-variance") is None  # the seeds alone know nothing of it
 
 

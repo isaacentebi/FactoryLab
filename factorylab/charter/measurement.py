@@ -24,6 +24,7 @@ ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_ca
                       "closed_prices", "series_discarded")
 FORECAST_OBSERVATIONS = frozenset({
     "forecast_skill", "verdict_mean", "verdict_std", "consequence_paid_off_rate", "censored_share",
+    "avoidably_unresolved_share",
 })
 
 
@@ -60,6 +61,11 @@ def measurement_catalogue(observations=None) -> list[dict]:
         "consequences; forecast selectors restrict this to selected forecast records.",
         "censored_share": "Censored outcomes over resolved outcomes; forecast selectors use "
         "forecast records, global closed windows also include judgements and exposures.",
+        "avoidably_unresolved_share": "Attributable, avoidably unresolved accepted commitments "
+        "over the eligible commitments due in the responsible scope. A commitment not yet due "
+        "is not in the sample; one the owner documented as externally unobservable without its "
+        "own fault, and an event the seat never committed to observe, are excluded. No eligible "
+        "sample is unmeasured, never zero.",
     }
     result = (observations or seed_book()).catalogue()
     for row in result:
@@ -128,14 +134,21 @@ class CardSamples:
     def resolved_forecast(
         self, *, forecast, role: str, window: int, skill: float | None,
         y: int | None, status: str, source: dict, subject: dict,
+        excluded: str | None = None,
     ) -> None:
-        """Resolved rows retain separate forecaster and judged-return identities."""
+        """Resolved rows retain separate forecaster and judged-return identities.
+
+        ``excluded`` names the documented reason this due commitment is not an
+        eligible sample for accountable resolution (C3): external unobservability
+        the owner is not at fault for. It is a reason, never a silent zero.
+        """
         self.forecasts.append({
             "handle": forecast.handle, "assembly": forecast.evaluator_id, "role": role,
             "subject_handle": forecast.about_handle,
             "subject_assembly": subject.get("assembly"), "subject_role": subject.get("role"),
             "window": window, "skill": skill, "predicate": forecast.predicate_id,
             "y": y, "status": status, "verdict": source.get("verdict"),
+            "excluded": excluded,
         })
 
     def closed(self, window) -> None:
@@ -209,7 +222,14 @@ def record_card_forecasts(runtime, pending, baseline) -> None:
         samples.resolved_forecast(
             forecast=forecast, role=role, window=runtime.window.index, skill=skill,
             y=row["y"], status=row["status"], source=source, subject=subject,
+            excluded=row.get("excluded") or _excluded(runtime, row["handle"]),
         )
+
+
+def _excluded(runtime, handle: str) -> str | None:
+    """The settler's documented exclusion for this settlement, if it recorded one."""
+    settler = getattr(runtime, "settler", None)
+    return settler.excluded(handle) if settler is not None else None
 
 
 def preflight_card(card: MetricCard, observations=None) -> None:
@@ -303,6 +323,11 @@ def _horizon(observation: str, group: list[dict], n: int, *,
     filled yet, which retention needs and measurement refuses.
     """
     responses = [row for row in group if not row.get("storage")]
+    if observation.strip().lower() == "avoidably_unresolved_share":
+        # The horizon is the last `n` *eligible* due commitments: a documented
+        # exclusion never occupies a slot, so external unobservability cannot
+        # push an accountable commitment out of the sample it answers for.
+        responses = [row for row in responses if row.get("excluded") is None]
     if len(responses) < n and not partial:
         return None
     responses = responses[-n:]
@@ -361,6 +386,14 @@ def _measure_rows(observation: str, rows: list[dict]) -> float | None:
         return fmean(row["tool_calls"] for row in rows)
     if observation == "censored_share":
         return fmean(row["status"] == "censored" for row in rows)
+    if observation == "avoidably_unresolved_share":
+        # Eligible: a commitment this scope accepted and that came due, minus the
+        # exclusions. A commitment still open has no row here at all, so a promise
+        # whose horizon has not arrived can never be counted against its owner.
+        eligible = [row for row in rows if row.get("excluded") is None]
+        if not eligible:
+            return None  # unmeasured; a scope with no due commitment is not compliant
+        return fmean(row["status"] == "censored" for row in eligible)
     if observation == "consequence_paid_off_rate":
         values = [row["y"] for row in rows if row["predicate"] == "return_paid_off"
                   and row["status"] == "settled"]

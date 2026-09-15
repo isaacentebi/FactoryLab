@@ -97,6 +97,10 @@ class ForecastBook:
             raise KeyError(handle)
         self.__ledger.append({"kind": "forecast.consequence", "handle": handle, **evidence})
 
+    def record_objection(self, evidence: dict) -> None:
+        """Persist one fidelity objection before anything scores it (edition 3, C3)."""
+        self.__ledger.append({"kind": "fidelity.objection", **evidence})
+
     def outstanding(self) -> int:
         """Return the count of sealed forecasts without a book settlement."""
         return len(self.__forecasts) - len(self.__settled)

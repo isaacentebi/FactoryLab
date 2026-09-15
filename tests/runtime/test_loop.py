@@ -130,7 +130,10 @@ def test_scripted_world_phase3_spec_condition_2() -> None:
     # the amendment's turnover card ("below 5", ratio units) is registered once edition 2 is
     # live and is violated by two orders of magnitude every window. Its price saturates,
     # while the bounded, attributed penalty preserves positive settled producer rewards.
-    assert "turnover" in cards and cards["turnover"]["lambda"] == 1.0
+    # Its price saturates at the ceiling; where it ends depends on the last window that
+    # measured its scope, and edition 3's standing (C3, every settled predicate trains it,
+    # so the router's mixture moves) shifts which seat churned in that window.
+    assert "turnover" in cards and cards["turnover"]["max_step"] == 1.0
     assert cards["turnover"]["saturations"] >= 1
     assert st["last_window_values"]["turnover"] > 5
     assert st["penalized_settlements"] >= 1

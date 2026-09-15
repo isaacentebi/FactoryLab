@@ -717,8 +717,12 @@ class FeedbackMixin:
             total = sum(t["weight"] for t in terms)
             share = sum(t["weight"] * t["share"] for t in terms) / total if total > 0 else 0.0
             share = min(1.0, max(0.0, share))
+            self.settler.record_objection(c.judge, self.memory.get(c.evaluator_id, ()),
+                                          self.charter, evaluator_id=c.evaluator_id,
+                                          about_handle=c.about)  # W3 seam (C3 fidelity)
             result = self.settler.settle_verdict(
                 evaluator_id=c.evaluator_id, about_handle=c.about, q=c.q, share=share,
+                judge_handle=c.judge,
             )
             c.verdict_beat = int(result.brier >= result.baseline_brier)
             seq = self.ledger.append({

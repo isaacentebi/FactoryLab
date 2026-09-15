@@ -151,6 +151,38 @@ def _holds(window: dict) -> bool:
     )
 
 
+#: The three accesses whose loss is what "learning death" names (edition 3, C3):
+#: the diagnosis is loss of affordable, usable access to investigation and
+#: revision, never unchanged behaviour. Each is carried by the immune organ's own
+#: window profile as ``access:<name>`` (1.0 present, 0.0 lost, absent unknown).
+ACCESS = ("affordable_seat", "registration_route", "revision_route")
+ACCESS_MEANING = {
+    "affordable_seat": "no affordable seat",
+    "registration_route": "no route to registration",
+    "revision_route": "no route to revision",
+}
+
+
+def lost_access(tail: list[dict]) -> list[dict]:
+    """Which access the tail shows lost, and the reason the organ recorded for it.
+
+    An access is lost when every window of the tail measured it absent; an
+    access no window measured is unknown and is not reported as lost. Protected
+    exploration buys an option: a population that can still afford to look and
+    to revise, and does not, has not lost anything, so nothing is listed.
+    """
+    result = []
+    for name in ACCESS:
+        values = [w["profile"].get(f"access:{name}") for w in tail]
+        measured = [v for v in values if v is not None]
+        if not measured or any(v for v in measured):
+            continue
+        why = next((w.get("access", {}).get(name) for w in reversed(tail)
+                    if isinstance(w.get("access"), dict) and w["access"].get(name)), None)
+        result.append({"access": name, "diagnosis": ACCESS_MEANING[name], "why": why})
+    return result
+
+
 def frontier_evidence(tail: list[dict]) -> dict:
     """The surplus-generating frontier is gone only when the tail is quiet and flat.
 
@@ -159,6 +191,13 @@ def frontier_evidence(tail: list[dict]) -> dict:
     the paid-off rate or of realized P&L; an unmeasured series never improves).
     ``holding``: every card in every tail window is measured and inside its
     region, which a charter with no measured card cannot show.
+
+    ``lost_access`` is the causal half the diagnosis is actually about: which of
+    the affordable seat, the route to registration and the route to revision the
+    tail shows gone, and the reason the organ recorded. A quiet tail with every
+    access intact is a population that could look and chose not to; the flag
+    still fires on the gone-frontier rule, and the record says what was lost, so
+    "unchanged behaviour" is never the finding on its own.
     """
     paid_off = slope([w["profile"].get("paid_off") for w in tail])
     realized = slope([w["profile"].get("realized_pnl") for w in tail])
@@ -171,6 +210,7 @@ def frontier_evidence(tail: list[dict]) -> dict:
                           or realized is not None and realized > 0),
         "holding": bool(tail) and all(_holds(w) for w in tail),
         "paid_off_slope": paid_off, "realized_pnl_slope": realized,
+        "lost_access": lost_access(tail),
     }
 
 

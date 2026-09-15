@@ -11,7 +11,53 @@ from fractions import Fraction
 from factorylab.kernel.events import EventKind
 from factorylab.kernel.money import require_money
 from factorylab.kernel.registry import _freeze
+from factorylab.settlement.fidelity import objection_schema
 from factorylab.settlement.scoring import _require_id, _require_probability
+
+
+class _Unobservable:
+    """The documented absence of a fact the owner is not at fault for.
+
+    A ``facts_for`` callable returns this instead of ``None`` when the world was
+    asked and did not answer, and the commitment's owner could not have made it
+    answer. The commitment still settles censored — nothing is scored from a
+    fact nobody has — but it is an excluded sample for accountable resolution
+    (``avoidably_unresolved_share``), never a silent zero and never blame.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostic only
+        return "UNOBSERVABLE"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+#: The single documented-unobservability marker; compared by identity.
+UNOBSERVABLE = _Unobservable()
+
+
+def evaluator_answer_schema(forecasts: dict, register: dict) -> dict:
+    """The evaluator answer schema, including edition 3's structured fidelity objection.
+
+    It lives here rather than inline in ``runtime.loop`` so the charter's own
+    vocabulary owns what a judge is asked to say, and the loop names it once.
+    """
+    return {
+        "type": "object",
+        "properties": {
+            "verdict": {"type": "number", "minimum": 0, "maximum": 1},
+            "payoff": {"type": "number", "minimum": 0, "maximum": 1},
+            "rationale": {"type": "string"},
+            "propensity": {"type": "object"},
+            "forecasts": forecasts,
+            "register": register,
+            "about_handle": {"type": "string"},
+            "fidelity_objection": objection_schema(),
+        },
+        "required": ["verdict", "payoff", "rationale", "forecasts"],
+    }
 
 
 @dataclass(frozen=True)
