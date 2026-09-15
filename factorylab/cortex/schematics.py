@@ -577,7 +577,7 @@ class SchematicsMixin:
                 "properties": {"kind": {"enum": ["model", "assembly", "router", "tool",
                                                    "observation", "predicate", "learner",
                                                    "amendment", "retire", "connector",
-                                                   "market", "challenge"]}},
+                                                   "market", "challenge", "service"]}},
                 "required": ["kind"],
             },
         }

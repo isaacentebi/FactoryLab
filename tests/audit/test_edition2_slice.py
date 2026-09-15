@@ -635,12 +635,6 @@ def test_step_5_a_paid_service_call_runs_the_tool_ledgers_income_and_credits_its
     assert s["invariant"]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "C11 seam: factorylab/cortex/schematics.py::_register_schema enumerates the proposal "
-    "kinds a live return may carry and omits \"service\", so a producer return with "
-    "{\"kind\": \"service\"} fails the return schema and is ledgered malformed before "
-    "_apply_registrations sees it; the service can only be registered by handing "
-    "_apply_registrations a Return directly, as tests/runtime/test_seller.py does."))
 def test_step_5_seam_a_live_return_can_carry_the_service_proposal(story):
     s = story.stage(1)
     rows = s["crashed"]
