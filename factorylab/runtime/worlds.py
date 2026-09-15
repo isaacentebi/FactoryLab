@@ -169,6 +169,8 @@ class PricesSpec:
     # Floor on a decision's share of a generic (non-attributable) violation, so
     # splitting participation across many decisions cannot dilute it away.
     min_blame_share: float = 0.1
+    # The flat price of one program seat call (C8), reserved and committed like a model call.
+    program_micro_per_call: int = 50
 
 
 @dataclass(frozen=True)
@@ -334,6 +336,9 @@ class WorldManifest:
         # Preserve historical manifest identities while the blame floor keeps its default.
         if payload["prices"].get("min_blame_share") == 0.1:
             payload["prices"].pop("min_blame_share")
+        # Preserve historical manifest identities while the program call price is its default.
+        if payload["prices"].get("program_micro_per_call") == 50:
+            payload["prices"].pop("program_micro_per_call")
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -757,6 +762,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         min_window_events=int(pr.get("min_window_events", 1)),
         penalty_cap=pr.get("penalty_cap", 0.5),
         min_blame_share=pr.get("min_blame_share", 0.1),
+        program_micro_per_call=int(pr.get("program_micro_per_call", 50)),
     )
     # Scripted providers run in virtual time, including live-shaped test fixtures.
     default_min_tick = "1s" if all(m.provider == "fake" for m in models) else "10s"

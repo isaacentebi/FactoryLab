@@ -25,8 +25,9 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 
-from factorylab.cortex.registration import output_contracts, seed_emits
+from factorylab.cortex.registration import output_contracts, reward_contracts, seed_emits
 from factorylab.cortex.request import ChildRequest, Request, Return
+from factorylab.cortex.sandbox import MAX_PROGRAM_TIMEOUT_S
 from factorylab.kernel.ledger import utf8_text
 from factorylab.world.metering import BillingUncertain, Infeasible, MeteredModel
 from factorylab.world.models import ModelRequest
@@ -209,13 +210,229 @@ class Assembly:
         )
 
     def _children(self, req: Request, parsed: dict[str, Any]) -> tuple[ChildRequest | Request, ...]:
-        raw = parsed.get("requests")
-        if not isinstance(raw, list):
-            return ()
-        if self.child_factory is not None:
-            return tuple(self.child_factory(req, item, i) for i, item in enumerate(raw))
-        return tuple(ChildRequest(item["target"], item["description"], item["inputs"],
-                                  item["outcome_schema"]) for item in raw)
+        return _children(req, parsed, self.child_factory)
+
+
+def _children(req: Request, parsed: dict[str, Any],
+              child_factory: Callable[[Request, dict[str, Any], int], Request] | None,
+              ) -> tuple[ChildRequest | Request, ...]:
+    raw = parsed.get("requests")
+    if not isinstance(raw, list):
+        return ()
+    if child_factory is not None:
+        return tuple(child_factory(req, item, i) for i, item in enumerate(raw))
+    return tuple(ChildRequest(item["target"], item["description"], item["inputs"],
+                              item["outcome_schema"]) for item in raw)
+
+
+# --- programs as seats (contract C8) -----------------------------------------
+
+PROGRAM_MODEL_ID = "program"
+MAX_PROGRAM_CODE_CHARS = 16_000
+MAX_PROGRAM_STATE_BYTES = 65_536
+PROGRAM_STATE_POLICIES = ("none", "private")
+
+
+@dataclass(frozen=True)
+class ProgramAssemblySpec(AssemblySpec):
+    """A seat whose executor is population Python in the jail rather than a model.
+
+    ``code`` reads one JSON object from stdin — ``prompt`` (the rendered request,
+    exactly what a model would read), ``description``, ``inputs``,
+    ``outcome_schema`` and ``state`` — and prints the same Return JSON a model
+    would. With ``state_policy = "private"`` the object it prints under
+    ``state`` is archived as an artifact owned by this seat and handed back on
+    its next call; the archive is versioned by content hash, one artifact per
+    call that changes it. ``reward_shapes`` carries admitted shapes for custom
+    emitted kinds, as ``WorkAssemblySpec`` does for model seats.
+    """
+
+    code: str = ""
+    timeout_s: int = 10
+    state_policy: str = "none"
+    reward_shapes: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.model_id != PROGRAM_MODEL_ID:
+            raise ValueError("a program seat's model_id is program")
+        if not isinstance(self.code, str) or not self.code.strip():
+            raise ValueError("a program seat needs code")
+        if len(self.code) > MAX_PROGRAM_CODE_CHARS:
+            raise ValueError(f"code exceeds {MAX_PROGRAM_CODE_CHARS} chars")
+        if type(self.timeout_s) is not int or not 1 <= self.timeout_s <= MAX_PROGRAM_TIMEOUT_S:
+            raise ValueError(f"timeout_s must be an int in [1, {MAX_PROGRAM_TIMEOUT_S}]")
+        if self.state_policy not in PROGRAM_STATE_POLICIES:
+            raise ValueError("state_policy must be none or private")
+        object.__setattr__(self, "reward_shapes", reward_contracts(self.emits, self.reward_shapes))
+
+
+@dataclass(frozen=True)
+class _ProgramPrice:
+    """What routing asks a seat's model: the ceiling of one call. A program's is flat."""
+
+    micro_per_call: int
+
+    def ceiling(self, req: Any) -> int:
+        return self.micro_per_call
+
+
+@dataclass
+class ProgramAssembly:
+    """Executes requests by running the seat's program in the jail.
+
+    Guarantees, matching ``Assembly``: the program runs at most once per
+    request; ``cost`` is exactly what the wallet was charged, which is the flat
+    ``price`` reserved and committed through the meter under the reason
+    ``model:program``, so every call is a wallet transaction and the novelty
+    reserve treats it as this seat's own compute; every failure — no jail, a
+    non-zero exit, a wall timeout, a reply that is not the Return JSON the
+    validator accepts — is a ``Return`` with status ``malformed`` (or ``failed``
+    when nothing ran), never an exception. Private state is loaded from and
+    saved to the artifact archive around the call, and the hash of the state
+    the call left behind is ledgered (``program.call``) before the Return
+    leaves, so the diary names the machinery's memory as well as its answer.
+    """
+
+    spec: ProgramAssemblySpec
+    runner: Any  # ProgramRunner or its journal proxy: run(code, stdin=, timeout_s=) -> dict
+    meter: Any  # Meter over the world wallet
+    price: int
+    artifacts: Any | None = None  # ArtifactStore; required for state_policy "private"
+    memory: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    child_factory: Callable[[Request, dict[str, Any], int], Request] | None = None
+    validator: Callable[[dict[str, Any], Request], None] | None = None
+    record: Callable[[dict[str, Any]], Any] | None = None
+    state_sha: str | None = None
+    model: _ProgramPrice = field(init=False)
+
+    def __post_init__(self) -> None:
+        if type(self.price) is not int or self.price < 0:
+            raise ValueError("program price must be a non-negative integer micro-USD")
+        self.model = _ProgramPrice(self.price)
+
+    def build_stdin(self, req: Request, state: Any) -> str:
+        """Render what the program reads: the request as a model would see it, plus state."""
+        req = replace(req, inputs={**req.inputs, "you": self.spec.id})
+        return json.dumps({
+            "prompt": req.prompt_text(),
+            "description": req.description,
+            "inputs": req.inputs,
+            "outcome_schema": req.outcome_schema,
+            "state": state,
+        }, sort_keys=True, ensure_ascii=False)
+
+    def _load_state(self) -> tuple[Any, str | None]:
+        """The state the last successful call left, or None and why it could not be read."""
+        if self.spec.state_policy != "private" or self.state_sha is None:
+            return None, None
+        if self.artifacts is None:
+            return None, "no artifact archive"
+        try:
+            return json.loads(self.artifacts.get(self.state_sha).decode("utf-8")), None
+        except Exception as exc:
+            return None, type(exc).__name__
+
+    def invoke(self, req: Request) -> Return:
+        if self.price > req.cost_ceiling:
+            return Return(req.handle, {"reason": "ceiling exceeds request cost_ceiling"}, 0,
+                          "failed")
+        state, state_error = self._load_state()
+        try:
+            stdin = self.build_stdin(req, state)
+        except (TypeError, ValueError) as exc:
+            return Return(req.handle, {"reason": type(exc).__name__}, 0, "failed")
+        code, timeout_s = self.spec.code, self.spec.timeout_s
+
+        def execute() -> dict:
+            return self.runner.run(code, stdin=stdin, timeout_s=timeout_s)
+
+        try:
+            metered = self.meter.run(
+                handle=req.handle, reason=f"model:{PROGRAM_MODEL_ID}", ceiling=self.price,
+                execute=execute, cost_of=lambda _r: self.price,
+            )
+        except Infeasible as exc:
+            return Return(req.handle, {"reason": f"infeasible: {exc}"}, 0, "failed")
+        except BillingUncertain as exc:
+            return Return(req.handle, {"reason": str(exc)}, exc.cost, "failed")
+        except Exception as exc:
+            return Return(req.handle, {"reason": type(exc).__name__}, 0, "failed")
+        cost = metered.cost
+        result = metered.result if isinstance(metered.result, dict) else {}
+        state_in = self.state_sha
+        ret = self._interpret(req, result, cost, state_error)
+        if self.record is not None:
+            self.record({
+                "kind": "program.call", "assembly_id": self.spec.id, "handle": req.handle,
+                "status": ret.status, "cost": cost, "state_in": state_in,
+                "state_out": self.state_sha,
+            })
+        return ret
+
+    def _interpret(self, req: Request, result: dict, cost: int,
+                   state_error: str | None) -> Return:
+        provider = {"finish_reason": "stop", "input_tokens": None, "output_tokens": None,
+                    "reasoning_tokens": None, "cached_tokens": None,
+                    "max_tokens": self.spec.max_tokens, "state_sha": self.state_sha}
+        if state_error is not None:
+            provider["state_error"] = state_error
+
+        def malformed(outputs: dict, finish: str) -> Return:
+            return Return(req.handle, outputs, cost, "malformed", served_by=PROGRAM_MODEL_ID,
+                          stop_reason=finish, provider={**provider, "finish_reason": finish})
+
+        if "error" in result:
+            return malformed({"reason": str(result["error"])[:200]}, "error")
+        if result.get("timed_out") is True:
+            return malformed({"reason": "timeout"}, "timeout")
+        if result.get("returncode") != 0:
+            return malformed({"reason": f"exit {result.get('returncode')}",
+                              "stderr": str(result.get("stderr", ""))[:500]}, "error")
+        text = utf8_text(result.get("stdout", "")) if isinstance(result.get("stdout"), str) else ""
+        parsed = _parse_json_object(text)
+        new_state: Any = None
+        if parsed is not None:
+            # The state is the program's, not the return's: it never reaches the
+            # outcome schema, the judges or the ledger's outputs field.
+            new_state = parsed.pop("state", None)
+            if self.spec.state_policy != "private" and new_state is not None:
+                parsed = None
+            else:
+                try:
+                    _validate_return(parsed, req.outcome_schema)
+                    if self.validator is not None:
+                        self.validator(parsed, req)
+                except (ValueError, TypeError, ArithmeticError, RecursionError):
+                    parsed = None
+        if parsed is None:
+            return malformed({"raw": text[:4000]}, "stop")
+        if new_state is not None:
+            try:
+                encoded = json.dumps(new_state, sort_keys=True, allow_nan=False,
+                                     ensure_ascii=False).encode("utf-8")
+            except (TypeError, ValueError):
+                return malformed({"reason": "state is not JSON"}, "stop")
+            if len(encoded) > MAX_PROGRAM_STATE_BYTES:
+                return malformed({"reason": f"state exceeds {MAX_PROGRAM_STATE_BYTES} bytes"},
+                                 "stop")
+            if self.artifacts is None:
+                return malformed({"reason": "no artifact archive"}, "stop")
+            self.state_sha = self.artifacts.put(encoded, owner=self.spec.id,
+                                                kind="program.state")
+            provider["state_sha"] = self.state_sha
+        children = _children(req, parsed, self.child_factory)
+        raw_calls = parsed.get("tool_calls")
+        tool_calls = (
+            tuple(c for c in raw_calls if isinstance(c, dict) and isinstance(c.get("tool"), str))
+            if isinstance(raw_calls, list)
+            else ()
+        )
+        outputs = {k: v for k, v in parsed.items() if k not in ("requests", "tool_calls")}
+        return Return(
+            req.handle, outputs, cost, "ok", children=children, served_by=PROGRAM_MODEL_ID,
+            stop_reason="stop", tool_calls=tool_calls, provider=provider,
+        )
 
 
 def _provider_report(resp: Any, max_tokens: int) -> dict[str, Any]:
@@ -394,10 +611,13 @@ def validate_proposal(proposal: dict) -> None:
     fields = {k: {"type": "string"} for k in (
         "kind", "id", "model_id", "openrouter_id", "role", "system_prompt", "effort",
         "event_kind", "learner", "description", "code", "tick_interval",
-        "unit", "assembly_id")}
+        "unit", "assembly_id", "state_policy")}
+    # A tool's timeout stays within [1, 5] (checked where tools are parsed); a
+    # program seat's may reach MAX_PROGRAM_TIMEOUT_S.
     fields.update({"gamma": {"type": "number", "minimum": 1e-300, "maximum": 1},
                    "max_tokens": {"type": "integer", "minimum": 16, "maximum": 4096},
-                   "timeout_s": {"type": "integer", "minimum": 1, "maximum": 5},
+                   "timeout_s": {"type": "integer", "minimum": 1,
+                                 "maximum": MAX_PROGRAM_TIMEOUT_S},
                    "accepts": {"type": "array", "items": {"type": "string"}},
                    "emits": {"type": "array", "items": {"type": "string"}},
                    "schemas": {"type": "object"},
