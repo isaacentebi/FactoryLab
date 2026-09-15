@@ -494,7 +494,13 @@ def test_edition2_testnet_manifest_carries_the_edition2_physics_and_hashes_stabl
                                "durable agency", "bounded reciprocity")
     draft = tomllib.loads((WORLDS_DIR.parent / "docs/charter/edition2-draft.toml").read_text())
     raw = tomllib.loads((WORLDS_DIR / "edition2-testnet.toml").read_text())
+    # The manifest carries the ratification's provenance digests beside the cards it
+    # loads; the cards and norms themselves are the draft verbatim.
+    provenance = {k: raw["charter"].pop(k) for k in ("ratified_sha256", "roster_sha256")}
     assert raw["charter"] == draft["charter"]
+    assert provenance == {
+        "ratified_sha256": "929f1b04bee45155e74d196c80b1a6d764a75555fa4ecc5872beffc629578935",
+        "roster_sha256": "3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb"}
     assert m.charter_ratified_sha256 is None  # ratification stamps the hashes later
     assert m.manifest_hash() == (
         "9eb460e4b3d4c974feefbc7cd6a5e182defda231f4f33a5d3cb4ac060fa9d224")
