@@ -330,6 +330,12 @@ class Runtime(
         self.ledger.append(
             {"kind": "snapshot", "boundary": boundary, "n": self.n, "state": state}
         )
+        # The held venue listing is not in the checkpoint — it is 260 KB of the venue's
+        # own facts, and a checkpoint is a continuation, not a cache. Dropping it here
+        # is what makes it safe to leave out: a resume restores this checkpoint with no
+        # listing held, and the run that wrote it holds none from this point either, so
+        # the replayed tail asks the venue exactly where the recorded tail did.
+        self._instruments_memo = None
         return True
 
     def _resume_at(self, now_ns: int) -> None:

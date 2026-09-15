@@ -595,6 +595,9 @@ class BootstrapMixin:
         self.world_consumed = 0
         self.ticks_consumed = 0
         self.drips_consumed = 0
+        # The venue listing prompts are built from, held for the tick that read it.
+        # Not resumable state: a resumed runtime reads afresh and records that read.
+        self._instruments_memo: tuple[int, dict] | None = None
         self.started = False
 
     def _venice_usage_since(self, since_ns: int) -> int:
