@@ -87,9 +87,17 @@ def test_determinism_same_seed_same_summary() -> None:
     assert a == b
 
 
-def test_scripted_world_phase3_spec_condition_2(scripted_run) -> None:
+def test_scripted_world_phase3_spec_condition_2() -> None:
     m = _short_cadence_manifest()
-    s = scripted_run(m, 500, 1).summary
+    # C10: the seeded trader bears its own trading losses, about a cent per decision
+    # over these 500 events, fees included, and more than an equal ninth of the
+    # launch balance. It is staked from the unallocated pool before launch so it
+    # keeps churning through the last window; the pool still funds the children's
+    # trials. The rule is not weakened: every loss is charged to the trader.
+    rt = Runtime(m, events=500, seed=1, initial_balance_micro=None, ledger_path=None,
+                 drip=True, router_gamma=.1)
+    rt.budget.grant("seed-decider", 10_000_000, "fixture: the trader's stake")
+    s = rt.run()
     st = s["stats"]
     assert s["terminated"] is False
     assert s["wallet_conservation"] is True and s["ledger_verify"] is True
@@ -216,8 +224,14 @@ class RecursiveMetaProvider(ScriptedProvider):
 
 
 def _recursive_runtime(*, events=100, provider=None):
+    # C10: a registered child lives on the trial its proposer moves to it. The
+    # recursive meta judges on fake-opus, whose call ceiling exceeds the scripted
+    # 0.10 USD trial, so these tiers are exercised with a trial the seat can keep
+    # working on once its protected trial calls are spent.
+    base = load_manifest("scripted")
+    manifest = replace(base, evaluation=replace(base.evaluation, trial_amount_micro=2_000_000))
     return Runtime(
-        load_manifest("scripted"),
+        manifest,
         events=events,
         seed=1,
         initial_balance_micro=None,
@@ -975,6 +989,9 @@ def _register_test_seller(runtime):
 def test_x402_feasibility_uses_one_fixed_request_and_on_chain_reserve(market_http):
     runtime = _market_runtime(market_http)
     _register_test_seller(runtime)
+    # C10: the buyer's own entitlement must cover the fixed request as well as the
+    # wallet; its trial endowment is below one request, so a seed endows it.
+    runtime.budget.transfer(runtime.m.assemblies[0].id, "market-buyer", 1734, "test")
     runtime.wallet.settle(1734 - runtime.wallet.balance, "test", "exchange_pnl")
     market_http.balance = 1734
     assert runtime._is_feasible("market-buyer") == (True, "")

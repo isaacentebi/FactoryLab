@@ -243,7 +243,11 @@ class Runtime(
             dq.append({"t_s": ev.ts_ns // 1_000_000_000, "mid": str(ev.payload.get("mid"))})
 
         self.wallet.drip(self.clock.now_ns)
-        self.wallet.release_due(self.clock.now_ns)  # due tranches, mandatory even while dormant
+        # Due tranches are mandatory even while dormant; each released tranche is then
+        # classified (C10): base_share across live seats, the remainder unallocated.
+        released = self.wallet.release_due(self.clock.now_ns)
+        if released:
+            self.budget.on_release(released)
         self._manage_reserve_window()
         self.treasury.open_window(self.stats.reserve_windows)  # reserve-window top-up cap
         if previous_window is not None and previous_window != self.reserve_window_start:
@@ -251,6 +255,7 @@ class Runtime(
         self._observe_delivered_event(ev)
         if ev.kind is EventKind.TICK:
             self._reconcile_orders()
+            self._collect_income()  # C10: each receipt credits its owning seat before the tick
             self.treasury.tick(self.clock.now_ns)
             self._reconcile_x402()
             if self.venue is not None:
@@ -341,6 +346,7 @@ class Runtime(
             ]
             observed.extend(self.venue.funding_payments(now_ns))
             self._settle_exchange_effects(observed)
+            self._collect_income()
             self.treasury.tick(now_ns)
         snapshot = Reconciler.snapshot(
             self.wallet.balance,

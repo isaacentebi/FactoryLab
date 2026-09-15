@@ -39,7 +39,7 @@ SECTIONS = ("roster", "tools", "connectors", "notes", "observations", "charter",
             "immune", "portfolio",
             # Edition 2: the architect watches money, deliveries, open promises, the
             # behavioural cells and the alive/dormant/terminated state, without a lever.
-            "money", "deliveries", "commitments", "cells", "liveness")
+            "money", "deliveries", "commitments", "cells", "liveness", "entitlements")
 UNAVAILABLE = "unavailable"
 PUBLIC_KIND = "wake.public"
 #: Every observatory list is bounded so one page cannot grow with the diary.
@@ -127,7 +127,28 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
             "equity_micro": pots.get("venue"),
             "realized_to_date_micro": rt.realized_to_date,
         },
+        # Each seat's entitlement (C10): an id is a public schematic every assembly
+        # already reads in the roster, and the number is what the seat may spend.
+        "entitlements": {
+            "seats": [{"id": seat, "kind": rt.assemblies[seat].spec.role
+                       if seat in rt.assemblies else "other", "micro": micro}
+                      for seat, micro in rt.budget.entitlements().items()],
+            "unallocated_micro": rt.budget.unallocated(),
+        },
     }
+
+
+def _fold_entitlements(item: dict | None) -> dict:
+    """Only role totals escape the wake, as for every identity-bearing view."""
+    if not isinstance(item, dict):
+        return {"by_kind": {}, "seats": 0, "unallocated_micro": UNAVAILABLE}
+    totals: Counter = Counter()
+    seats = item.get("seats") or []
+    for row in seats:
+        kind = row.get("kind")
+        totals[kind if kind in ROLES else "other"] += row.get("micro", 0)
+    return {"by_kind": dict(sorted(totals.items())), "seats": len(seats),
+            "unallocated_micro": item.get("unallocated_micro", UNAVAILABLE)}
 
 
 def _day(ts_ns: int) -> str:
@@ -548,6 +569,7 @@ class _Observatory:
             "commitments": self._commitments(now_ns),
             "cells": self._cells(manifest),
             "liveness": self._liveness(),
+            "entitlements": _fold_entitlements(latest.get("entitlements")),
         }
 
 
@@ -770,7 +792,8 @@ def render_wake(data: dict) -> str:
     sections = []
     order = (
         "world", "manifest_hash", "uptime_ns", "last_event_time_ns", "venue", "reserve",
-        "portfolio", "pots", "liveness", "money", "roster", "tools", "connectors", "notes",
+        "portfolio", "pots", "entitlements", "liveness", "money", "roster", "tools", "connectors",
+        "notes",
         "observations", "charter", "compute", "deliveries", "commitments", "cells", "immune",
         *VIEWS,
     )
@@ -780,7 +803,8 @@ def render_wake(data: dict) -> str:
               "compute": "Compute", "immune": "Windows", "pots": "Pots and transfers",
               "money": "Money in and out by class", "deliveries": "Deliveries per window",
               "commitments": "Open commitments", "cells": "Behavioural cells",
-              "liveness": "Alive, dormant or terminated"}
+              "liveness": "Alive, dormant or terminated",
+              "entitlements": "Entitlements"}
     for field in order:
         if field not in data:
             continue

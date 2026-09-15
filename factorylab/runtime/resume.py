@@ -561,6 +561,7 @@ def runtime_state(rt) -> dict:
         "runtime": encode(runtime), "clock_ns": rt.clock.now_ns,
         "tick_clock": rt.tick_clock.state(),
         "kernel": {name: encode(getattr(rt, name).state()) for name in _KERNEL_FIELDS},
+        "budget": encode(rt.budget.state()),
         "components": encode(components),
         "treasury": encode(rt.treasury.snapshot()),
         # A program seat's private state is restored by artifact hash (C8); the key is
@@ -637,6 +638,8 @@ def restore_runtime(rt, state: dict) -> None:
         rt.clock_source = rt.tick_clock
     for name in _KERNEL_FIELDS:
         getattr(rt, name)._restore_state(decode(state["kernel"][name]))
+    if "budget" in state:  # entitlements restore exactly; older checkpoints predate them
+        rt.budget._restore_state(decode(state["budget"]))
     rt.treasury.restore(decode(state["treasury"]))
     components = decode(state["components"])
     for name, prefix, names in _COMPONENT_FIELDS:

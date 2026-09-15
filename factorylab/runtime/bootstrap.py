@@ -16,6 +16,7 @@ from factorylab.charter.controller import CardRegion
 from factorylab.charter.measurement import CardSamples
 from factorylab.cortex.assembly import Assembly, AssemblySpec
 from factorylab.cortex.tools import ObservationRunner, ToolRunner
+from factorylab.kernel.budget import BudgetBook
 from factorylab.kernel.events import Bus, Event
 from factorylab.kernel.ledger import Ledger, LedgerLock
 from factorylab.kernel.money import money_to_usd
@@ -269,6 +270,9 @@ class BootstrapMixin:
         )
         self.prices = manifest.price_table()
         self.meter = Meter(self.wallet)
+        # Each seat spends through its own entitlement (C10); the pool is the remainder.
+        self.budget = BudgetBook(self.wallet, self.ledger, clock_ns=self.clock,
+                                 base_share=str(manifest.endowment.base_share))
         from factorylab.world.treasury import FakeTreasury, Treasury
 
         if not self.live:
@@ -334,6 +338,11 @@ class BootstrapMixin:
                     schemas=a.schemas,
                 )
             )
+        if not self.ledger.bootstrap:
+            # Genesis: base_share of the unlocked launch balance, equally across the
+            # seeded seats; the remainder is the unallocated pool. A resume restores
+            # the book from its checkpoint instead.
+            self.budget.genesis([a.id for a in manifest.assemblies])
 
         # nervous system
         self.router_gamma = router_gamma
