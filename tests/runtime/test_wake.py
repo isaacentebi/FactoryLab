@@ -538,3 +538,126 @@ def test_public_window_item_carries_the_income_classes_beside_the_pots():
                               "converted_from_principal_micro": 0}
     rt.treasury.earn("doubler", 2500, "0x1")
     assert public_window_item(rt, window=0, event=0)["income"]["earned_micro"] == 2500
+
+
+def _liveness_helper():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("witness_liveness",
+                                                  DEPLOY / "witness_liveness.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _fake_witness(tmp_path):
+    """A witness.sh stand-in that records its arguments; WITNESS_FAIL makes it refuse."""
+    script, log = tmp_path / "witness.sh", tmp_path / "witness.log"
+    script.write_text('#!/bin/bash\nset -eu\n[[ -z ${WITNESS_FAIL:-} ]] || exit 1\n'
+                      f'printf \'%s\\n\' "$*" >> "{log}"\n')
+    return script, log
+
+
+def _publish(wake: Path, status) -> None:
+    wake.parent.mkdir(parents=True, exist_ok=True)
+    wake.write_text(json.dumps({"liveness": {"status": status}} if status is not None
+                               else {"wallet_series": "unavailable"}))
+
+
+def test_witness_liveness_emits_one_line_into_dormancy_and_one_back(tmp_path, monkeypatch):
+    helper = _liveness_helper()
+    script, log = _fake_witness(tmp_path)
+    wake, state = tmp_path / "www" / "wake.json", tmp_path / "runs" / "funded.liveness"
+    run = lambda: helper.main(["--wake", str(wake), "--state", str(state),  # noqa: E731
+                               "--witness", str(script)])
+    monkeypatch.delenv("WITNESS_FAIL", raising=False)
+    # Alive from the start: nothing to witness, and no record is needed yet.
+    _publish(wake, "alive")
+    assert run() == 0 and not log.exists() and not state.exists()
+    # Into dormancy: exactly one line, however many times the same wake is republished.
+    _publish(wake, "dormant")
+    assert run() == 0 and run() == 0 and run() == 0
+    assert log.read_text().splitlines() == ["dormant entered"]
+    assert state.read_text() == "dormant\n" and (state.stat().st_mode & 0o777) == 0o600
+    # Back to alive: one more line, idempotent again.
+    _publish(wake, "alive")
+    assert run() == 0 and run() == 0
+    assert log.read_text().splitlines() == ["dormant entered", "dormant exited"]
+    assert state.read_text() == "alive\n"
+    # A second pause is its own pair of lines.
+    _publish(wake, "dormant")
+    assert run() == 0
+    _publish(wake, "alive")
+    assert run() == 0
+    assert log.read_text().splitlines() == ["dormant entered", "dormant exited"] * 2
+
+
+def test_witness_liveness_ignores_unreadable_wakes_and_leaves_kills_to_the_supervisor(
+        tmp_path, monkeypatch):
+    helper = _liveness_helper()
+    script, log = _fake_witness(tmp_path)
+    wake, state = tmp_path / "www" / "wake.json", tmp_path / "runs" / "funded.liveness"
+    run = lambda: helper.main(["--wake", str(wake), "--state", str(state),  # noqa: E731
+                               "--witness", str(script)])
+    monkeypatch.delenv("WITNESS_FAIL", raising=False)
+    # No wake, an unverified wake, a wake without liveness, an unknown status: nothing.
+    assert run() == 0
+    _publish(wake, None)
+    assert run() == 0
+    wake.write_text("not json")
+    assert run() == 0
+    _publish(wake, "sleeping")
+    assert run() == 0
+    assert not log.exists() and not state.exists()
+    # A world found dormant on the helper's first run is witnessed as entering.
+    _publish(wake, "dormant")
+    assert run() == 0 and log.read_text().splitlines() == ["dormant entered"]
+    # A failed append keeps the old record, so the next publish tries again.
+    _publish(wake, "alive")
+    monkeypatch.setenv("WITNESS_FAIL", "1")
+    assert run() == 1 and state.read_text() == "dormant\n"
+    monkeypatch.delenv("WITNESS_FAIL")
+    assert run() == 0 and log.read_text().splitlines() == ["dormant entered", "dormant exited"]
+    # Termination is start.sh's kill line, never an exited line from the wake.
+    _publish(wake, "dormant")
+    assert run() == 0
+    _publish(wake, "terminated")
+    assert run() == 0 and run() == 0
+    assert log.read_text().splitlines() == ["dormant entered", "dormant exited",
+                                            "dormant entered"]
+    assert state.read_text() == "terminated\n"
+
+
+def test_witness_liveness_drives_the_real_witness_script(tmp_path, monkeypatch):
+    import sys
+
+    helper = _liveness_helper()
+    (tmp_path / "runs").mkdir()
+    ledger = tmp_path / "runs" / "rehearsal.jsonl"
+    ledger.write_bytes(b'{"format":1,"genesis_hash":"fixture"}\n')
+    monkeypatch.setenv("FACTORYLAB_ROOT", str(tmp_path))
+    monkeypatch.setenv("FACTORYLAB_REPO", str(DEPLOY.parent))
+    monkeypatch.setenv("FACTORYLAB_WORLD", "rehearsal")
+    monkeypatch.setenv("FACTORYLAB_PYTHON", sys.executable)
+    monkeypatch.delenv("FACTORYLAB_WITNESS_URL", raising=False)
+    wake, state = tmp_path / "www" / "wake.json", tmp_path / "runs" / "rehearsal.liveness"
+    _publish(wake, "dormant")
+    assert helper.main(["--wake", str(wake), "--state", str(state)]) == 0
+    _publish(wake, "alive")
+    assert helper.main(["--wake", str(wake), "--state", str(state)]) == 0
+    lines = [json.loads(line)
+             for line in (tmp_path / "runs" / "rehearsal.witness.jsonl").read_text().splitlines()]
+    assert [(line["event"], line["reason"]) for line in lines] == [("dormant", "entered"),
+                                                                    ("dormant", "exited")]
+    assert all(line["world"] == "rehearsal"
+               and line["ledger_head"] == hashlib.sha256(ledger.read_bytes()).hexdigest()
+               for line in lines)
+
+
+def test_wake_unit_witnesses_liveness_after_each_publish():
+    unit = (DEPLOY / "factorylab-wake.service").read_text()
+    assert "ExecStartPost=-" in unit and "deploy/witness_liveness.py" in unit
+    assert "--wake /srv/factorylab/www/wake.json" in unit
+    assert "--state /srv/factorylab/runs/funded.liveness" in unit
+    assert "ReadWritePaths=/srv/factorylab/www /srv/factorylab/runs" in unit
+    assert "EnvironmentFile=-/srv/factorylab/ops.env" in unit

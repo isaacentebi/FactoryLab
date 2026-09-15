@@ -189,14 +189,26 @@ the cache discount.
 `sampling.lower` (A14); `novelty.release`, `novelty.grant`,
 `novelty.grant_consumed` (A13).
 
-A handle that opens and closes its own lot receives realised profit once,
-net of its opening fees, funding, other charges and closing fees. Distinct
-opener and closer handles retain their separate net attribution.
+A closed lot's realised P&L is credited once (edition 2, cold audit F7). A
+handle that opens and closes its own lot receives the whole of it, net of its
+opening fees, funding, other charges and closing fees. A distinct closer takes
+the part its exit notional contributed, `pnl × exit_price / (entry_price +
+exit_price)`, net of its closing fee; the opener keeps the rest, net of its
+opening charges. The two credits sum to the lot's P&L and never both hold it in
+full. A liquidation has no closer: the liquidated opener carries the whole P&L
+and the liquidation fee. `return_paid_off` reads the result credited to a
+return as opener or closer, so a trade cannot pay off twice.
 
 A verdict is also a prediction that the judged return will not be blamed by the
 charter. It is scored against the share of its window's blame the pricing pass
 attributed to that return, and the score joins payoff skill in the judge's
-standing (`verdict.consequence`). A window that has not closed by the
+standing (`verdict.consequence`). The outcome is fractional, `1 - share`, and
+the prevalence baseline the judge is scored against learns that same fraction
+(`record_fraction`, once per judged return however many judges it has), never a
+rounded `share == 0` (edition 2, cold audit F3): a judge that only repeats the
+constant share of blame every return carries shows no excess skill. Every
+verdict about one return is scored against the base rate as it stood before
+that return's outcome entered it. A window that has not closed by the
 consequence backstop, or whose attribution evidence was released before it could
 be read, judged nothing: there is no fact either way, so the commitment is closed
 out unscored (`verdict.unread`). It moves neither the judge's standing nor the
@@ -207,18 +219,26 @@ graded on the payoff fact alone. A missing fact is never performance.
 
 `returns` selects the latest `n` completed invocation responses in each selected
 scope. A continuation's cost belongs to its invocation, and a child invocation
-is a separate response. For cost, only successful responses in those selected
-rows contribute to the mean, and a retained-storage charge is selected beside
-them as a cost row of the decision that holds it: it adds to what those
-responses cost and is never divided into as one of them, so paying rent can only
-raise a cost per response. The `n` are counted over responses alone, before any
-charge joins them, and the charges that join a selected horizon are the ones
-metered in the same measurement windows as its selected responses, so a charge
-never fills a response slot, never displaces a response from a full horizon and
-never supplies the support a short scope lacks. No other observation selects
-one. Well-formedness uses all selected responses as its denominator. The other
-supported return observations are `noop_share`, `revision_rate` and
-`tool_calls`.
+is a separate response. There are two cost observations. `cost_per_return`
+keeps its old meaning for old charters: only successful responses in the
+selected rows contribute to the mean. `cost_per_attempt` (edition 2, cold audit
+F4) is the mean over every selected response, failed and malformed ones
+included, so an expensive failure cannot hide inside the tenth the well-formed
+floor tolerates; over global closed windows it uses every return the window
+made. For both, a retained-storage charge is selected beside the responses as
+a cost row of the decision that holds it: it adds to what those responses cost
+and is never divided into as one of them, so paying rent can only raise a cost
+per response. The `n` are counted over responses alone, before any charge joins
+them, and the charges that join a selected horizon are the ones metered in the
+same measurement windows as its selected responses, so a charge never fills a
+response slot, never displaces a response from a full horizon and never
+supplies the support a short scope lacks. No other observation selects one.
+Well-formedness uses all selected responses as its denominator. `tool_calls`
+is the mean attempted tool calls per selected response, failures included, as
+its card prose always said (edition 2, cold audit F5): ten returns of one call
+each measure one, not ten; over global closed windows it divides the window's
+attempted calls by its invocations. The other supported return observations
+are `noop_share` and `revision_rate`.
 
 `forecasts` selects the latest `n` resolved forecast records in each scope.
 `forecast_skill` uses paired Brier skill against the baseline as it stood before
@@ -290,9 +310,15 @@ resume. A pending or stranded transfer prevents another transfer.
 
 The journal records the quote, unsigned authorization, nonce and expiry before
 submission. Retries sign that same authorization. Confirmation requires the
-canonical USDC debit for that nonce and observed Venice credit. Unknown evidence
-keeps the principal held; it is not converted into a second payment or a claimed
-arrival. The mainnet adapter requires wallet-bound Venice credit and Base USDC;
+canonical USDC debit for that nonce: the unique successful `AuthorizationUsed`
+whose receipt transfers exactly the tranche from the reserve to Venice's payee.
+The Venice credit balance is advisory (edition 2, cold audit F2): a balance is
+a stock, and usage between purchase and confirmation lowers it without
+contradicting the purchase, so the observed credit, `credit_before_micro`, the
+amount, the balance's source and the diary's own `metered_usage_since_micro`
+are recorded in the confirmation's evidence and never decide it. Unknown
+evidence keeps the principal held; it is not converted into a second payment
+or a claimed arrival. The mainnet adapter requires wallet-bound Venice credit and Base USDC;
 the testnet rail refuses that live route. The offline fake rail exercises the
 same journal, principal hold, credit view and budget.
 
@@ -486,22 +512,29 @@ For card j, `v_j = distance_outside_region / card_region.scale`, and
 `min(S, prices.penalty_cap) * share`. When cards measure different quantities,
 `share = sum(lambda_j * v_j * share_j) / S`, or zero when S is zero.
 
-Cost shares use the card's selected scopes and successful returns. Each selected
-row contributes its cost divided by the count of successful responses in that
-scope, so a retained-storage charge adds its own cost to the scope it is held in
-and is never one of the responses that count is taken over; a scope with no
-response of its own is measured nowhere and attributed nowhere. The
-contributions are normalised across supported scopes. Evaluator and meta
-cost cards therefore charge those roles. Global window cost retains the
-producer-cost sufficient statistics. Tool attempts and turnover use the
-decision's contribution divided by the window total.
-A lower-bound well-formedness violation is allocated by malformed
-invocations, so a correct return does not pay for someone else's malformed one;
-an upper-bound violation uses well-formed invocations. A zero attributable total
-contributes zero. Other observations use `1/n` decisions for the card's role
-(or all roles for `answers_for = "all"`), counting the decisions that responded
-in the window and not one whose only entry there is a retained-storage charge.
-The final score is `clip(raw_score - penalty, 0, 1)`.
+Cost shares use the card's selected scopes. For `cost_per_return` only
+successful returns own cost; for `cost_per_attempt` every invocation's cost is
+spent and owned, failed ones included. Each selected row contributes its cost
+divided by the count of responses the observation divides over in that scope,
+so a retained-storage charge adds its own cost to the scope it is held in and is
+never one of the responses that count is taken over; a scope with no response
+of its own is measured nowhere and attributed nowhere. The contributions are
+normalised across supported scopes. Evaluator and meta cost cards therefore
+charge those roles. Global window cost retains the producer-cost sufficient
+statistics. Tool attempts and turnover use the decision's contribution divided
+by the window total. A lower-bound well-formedness violation is allocated by
+malformed invocations, so a correct return does not pay for someone else's
+malformed one; an upper-bound violation uses well-formed invocations. A zero
+attributable total contributes zero. Other observations use `1/n` decisions
+for the card's role (or all roles for `answers_for = "all"`), counting the
+decisions that responded in the window and not one whose only entry there is a
+retained-storage charge, and that generic share never falls below
+`prices.min_blame_share` (edition 2, cold audit F6): splitting participation
+across many decisions cannot dilute what each one carries of a violation below
+the floor. The generic share is `max(min_blame_share, 1/n)`, so two decisions
+still carry a half each; the floor bites only once `n` exceeds its reciprocal.
+Attributable observations (cost, well-formedness, tool attempts, turnover) keep
+their exact shares. The final score is `clip(raw_score - penalty, 0, 1)`.
 
 Closed windows retain their observations, regions, contributions, and the cards
 and prices of the edition in force at the close, for delayed settlements. A
@@ -884,7 +917,7 @@ HTTP 402 with no data cost. `world.connectors` publishes `optional_fields`,
 the `payment` note, and each registered connector's `pay` and `max_call_micro`.
 
 `note.put` and `note.get` are a public key-value notebook bounded in UTF-8 bytes
-and charged rent per byte-window; unaffordable rent retains the text, an
+and charged rent by byte-time; unaffordable rent retains the text, an
 overwrite cannot escape the debt, reads are journaled and priced, and the wake
 publishes counts only. `[notes]` is a hard cast with exactly these keys.
 
@@ -892,21 +925,29 @@ publishes counts only. `[notes]` is a hard cast with exactly these keys.
 | --- | --- | --- |
 | `max_keys` | `128` | Positive integer count of retained keys. |
 | `max_bytes` | `262144` | Positive integer total of key and text bytes. |
-| `byte_window_micro` | `1` | Positive integer micro-USD charged per byte per window. |
+| `byte_window_micro` | `1` | Positive integer micro-USD charged per byte moved by a `note.put` or `note.get` call. It no longer prices storage; the name is kept so old manifests still load. |
+| `micro_per_byte_day` | `"0.04"` | Exact positive decimal text (or integer) micro-USD per retained byte per day: the storage rent (edition 2, contract C3). At its default the whole 256 KiB cap costs 10,485 micro-USD, about a cent, a day. Absent or default, it leaves the manifest hash unchanged. |
 
 A key is 1–128 printable UTF-8 bytes. An entry's size is its key bytes plus its
-text bytes, and its price is that size plus any unpaid retained bytes, times
-`byte_window_micro`. A call above the caller's available compute or its request
-ceiling is refused before any debit or overwrite. `note.get` on an unknown key is
-an error. Each window boundary charges every retained note for the windows it has
-not paid for: `note.rent` when the writer's compute affords it, `note.rent_due`
-when it does not, in which case the text stays and the debt is still owed on the
-next read or overwrite. The ledger items `note.put` and `note.get` carry the key,
-handle, assembly id, cost, window, version and byte count, and `note.put` also
-carries the text. The `note.read` journal call is replayable read-only work.
-`world.notes` publishes the key and byte counts, the three bounds and the pricing
-rule; the wake's `notes` section publishes counts only; the notebook survives
-resume.
+text bytes, and a call's price is that size times `byte_window_micro` plus any
+rent the entry still owes. A call above the caller's available compute or its
+request ceiling is refused before any debit or overwrite. `note.get` on an
+unknown key is an error. Rent is `bytes × elapsed_ns × rate`, accrued from the
+moment a key is written (an overwrite inherits the open interval, so rewriting
+forgives nothing) and collected at each reserve-window boundary for the time
+elapsed since the last boundary, not per window counted: the rate is an exact
+ratio of micro-USD per byte-nanosecond, and whatever fraction of a micro-USD an
+interval leaves over is carried on the entry (`rent_carry`), so collecting
+hourly charges exactly what collecting daily charges and a two-minute window
+cannot round a small note up to a micro-USD (the reviewer's rent trap). The
+boundary writes `note.rent` when the holding decision's compute affords it,
+`note.rent_due` when it does not, in which case the text stays and the debt is
+owed on the next read or overwrite. The ledger items `note.put` and `note.get`
+carry the key, handle, assembly id, cost, window, version and byte count, and
+`note.put` also carries the text. The `note.read` journal call is replayable
+read-only work. `world.notes` publishes the key and byte counts, the bounds and
+the pricing rule; the wake's `notes` section publishes counts only; the
+notebook, its accrual marks and its carried remainders survive resume.
 
 Retained storage is an explicit, resumable liability of the decision that holds
 the note, not only a wallet debit. Every paid charge is added to that
@@ -946,6 +987,320 @@ false, with `forecast.evidence_discarded` in the diary. A claim that comes due
 after a window boundary is read against a window that opened after the mark, so
 every sample in it counts and any sample it has already discarded censors the
 claim the same way.
+
+## Edition 2: endowment, machinery, challenge, income, release identity
+
+The edition 2 contracts (`docs/plans/edition2.md`, from the cold audit in
+`docs/audits/v4/gpt6-triage.md`) add no objective for the population. They
+add a locked endowment released on a schedule and a pause instead of a death
+between releases, seats that are programs, an archive of what a seat keeps, a
+route for changing a card's measurement without the old card vetoing it, a
+second way to earn beside trading, and a release identity bound into the
+diary. Each is a classification of the one conserved wallet or a ledgered
+fact; none is new money. Everything below is what the code on `main` does.
+
+### `[endowment]`
+
+| Key | Type | Default | Hard cast? |
+| --- | --- | --- | --- |
+| `endowment.locked_micro` | nonnegative integer micro-USD, at most `initial_balance_micro` | `0` | Yes: backing booked in the balance at launch that nobody can spend until released. |
+| `endowment.releases` | array of tables `{at = "7d", amount_micro = N}`, ascending `at`, positive amounts summing exactly to `locked_micro` | `[]` | Yes: the tranches, as durations after the ledgered `Launch`, never absolute times. |
+
+An absent or default `[endowment]` leaves the manifest hash unchanged. The
+wallet is built with the locked amount and a `ReleaseSchedule`; `sum(releases)
+== locked_micro` is validated at load and again at construction. `wallet.locked`
+is the backing not yet released and `wallet.unlocked` is `balance - locked`;
+`available` and `unhistoried_available` are taken from the unlocked part, so
+locked money can never be reserved, committed or counted as novelty budget. A
+venue loss can carry the unlocked part below zero until a release lands. The
+novelty reserve window opens on `wallet.unlocked`, not on the balance.
+
+The schedule is anchored once, at the ledgered `Launch` timestamp
+(`wallet.anchor`, carrying `launch_ns` and the locked amount). Every delivered
+event calls `wallet.release_due(now_ns)` before anything else spends: each
+tranche whose `launch_ns + at` has passed moves from locked to unlocked once,
+in order, ledgered as `release` with `tranche`, `amount`, `due_ns`,
+`locked_after` and `balance_after`. The balance does not change; only its
+classification does. `drip` is unrelated to releases and a final ledger
+releases nothing. `next_release_ns` is the absolute time of the next unreleased
+tranche, or null. The locked amount, the schedule, the anchor and the count of
+released tranches are checkpointed and checked on restore: a checkpoint whose
+locked backing disagrees with its released tranches is refused. The wake's
+`pots.current` carries `locked_micro`, `unlocked_micro`, `next_release_ns` and
+`dormant`. The wake's `money.in_by_class` has a `release` class, but on `main`
+it stays at zero: the tranche item's kind is `release`, and the wake's reader
+counts only a `wallet.release` item whose `reason` is `release`, which the
+wallet never writes (a finding, not a design). No per-seat split of a release
+(`base_share`) exists on `main`; a release goes to the wallet's unlocked pool
+as a whole.
+
+### Dormancy
+
+`Termination.check` returns `budget_dormant` when the unlocked, unheld money
+cannot buy the cheapest live seat (the smallest reserve ceiling routing would
+probe, doubled for a non-x402 seat, or one micro-USD when no seat prices),
+`wallet.locked > 0` and `next_release_ns` is not null. It is not a terminal
+reason: `Termination.kill` refuses it. Terminal death by budget requires
+`locked == 0`; a world with backing and a release still due never dies of
+budget (`balance_zero`, `balance_floor`), though it still dies of a ledger
+failure or an operator kill.
+
+The loop enters dormancy on that trigger (`trigger: "wallet"`) or, while
+backing and a release remain, when the compute-insolvency streak reaches
+`treasury.insolvency_events` (`trigger: "insolvency"`); without backing that
+streak is still `insolvency:compute` death. Entry and exit are ledgered before
+the state changes: `{"kind": "dormant", "state": "entered", ts, trigger,
+locked, unlocked, next_release_ns, n}` and `{"kind": "dormant", "state":
+"exited", ts, since_ns, locked, unlocked, n}`. A wallet entry is left as soon
+as the check no longer reports dormancy; an insolvency entry is left only once
+a release has landed since it began, so a provider shortfall is not retried on
+the same money, and leaving resets the insolvency count.
+
+While dormant the event is not routed: no seat is woken for it, so no model or
+program call, no return, no registration and no tool call comes of it, and the
+compute-insolvency streak is not advanced. Everything mandatory continues on
+every event: drips and due releases, reserve-window management (windows still
+close, cards are still measured and priced, note rent still accrues and is
+collected, and an activation boundary still falls due), the treasury's window
+cap and its tick, order reconciliation, fills and settled funding from the
+venue, x402 reconciliation, the reconciler's snapshot, settlement of due
+forecasts, censoring of stale judgements, queue expiry and return delivery,
+and the checkpoint at each window boundary. One paid path is not paused by
+dormancy on `main`: a metric challenge whose trial completed is balloted at
+the next activation boundary from inside window management, and those ballots
+are metered requests to the committee's seats; while the wallet cannot afford
+them each such ballot is a failed return and an abstention. The dormancy record
+(`since_ns`, `trigger`, released-tranche count, `next_release_ns`) is
+checkpointed. The wake shows `liveness.status` as `alive`, `dormant` or
+`terminated` with `dormant_since_ns` and every `dormant_periods` pair, and
+`pots.dormancy` lists each episode (`state`, `ts_ns`, `locked_micro`,
+`next_release_ns`). The wake host witnesses each transition (deploy/README.md,
+"Witness").
+
+### Program seats
+
+| Key | Type | Default | Hard cast? |
+| --- | --- | --- | --- |
+| `prices.program_micro_per_call` | nonnegative integer micro-USD | `50` | Yes: the flat price of one program-seat call. Absent or default, it leaves the manifest hash unchanged. |
+
+An assembly proposal whose `model_id` is `program` registers a seat whose
+executor is population Python in the tool jail rather than a model
+(`ProgramAssemblySpec`, contract C8). The proposal carries `code` (nonempty,
+at most 16,000 chars), `timeout_s` (integer 1–10 wall seconds, default 10) and
+`state_policy` (`none` or `private`, default `none`) beside the ordinary
+assembly fields; `accepts`, `emits`, `schemas`, `reward_shapes` and `role` mean
+what they mean for a model seat. Admission costs the same novelty trial as a
+model seat, registers the same `assembly:<id>` contract at the next version,
+and is refused before the trial is spent on a host without the jail. The
+`REGISTERED` payload adds `program: true` and the `state_policy`.
+
+Each call runs the code once with one JSON object on stdin — `prompt` (the
+rendered request, exactly what a model would read, with `inputs.you` set to
+the seat's id), `description`, `inputs`, `outcome_schema` and `state` — and
+expects on stdout the same Return JSON a model would print, tool calls,
+child requests and registrations included; it passes through the same output
+validator. The price is reserved and committed through the meter under the
+reason `model:program`, so every call is a wallet transaction and the novelty
+reserve treats it as the seat's own compute; a call whose price exceeds the
+request's cost ceiling is a `failed` return that ran nothing. A non-zero exit,
+a wall timeout, a reply that is not valid Return JSON, or a `state` printed
+under `state_policy = "none"` is a billed `malformed` return, exactly as a
+model's malformed reply would be. Programs are routed, judged, given standing,
+priced by the cards and retired exactly like model seats; the wake's roster
+counts them under the model id `program`.
+
+With `state_policy = "private"` the object the program prints under `state`
+is its private memory: it never reaches the outcome schema, the judges or the
+return's outputs. It is serialised as canonical JSON (at most 65,536 bytes,
+else `malformed`), archived as an artifact owned by the seat with kind
+`program.state`, and handed back as `state` on the next call; the hash is
+carried on the return's provider metadata (`state_sha`) and every metered call
+(one the meter admitted, whatever its status) is ledgered as `program.call
+{assembly_id, handle, status, cost, state_in, state_out}`, so the diary names
+the machinery's memory as well as its answer.
+A state the archive cannot read arrives as null with `state_error` on the
+return. The spec (code included) and the current `state_sha` are checkpointed;
+resume restores the state by hash from the archive.
+
+### The artifact archive
+
+`kernel/artifacts.py` is a content-addressed store (contract C9): an
+artifact is a byte string named by its SHA-256. `put(data, owner, kind)`
+ledgers `artifact.put {sha, owner, artifact_kind, bytes, ts}` before the bytes
+exist, so a crash between the two leaves a record without bytes rather than
+bytes without a record; the bytes live beside the ledger under
+`runs/<world>.artifacts/<sha>` (mode 0600, written through a temporary file
+and an atomic replace), or in memory for a world without a ledger path. A put
+is idempotent by content, the first owner of a hash stays its owner (a second
+owner of identical bytes is a reader of the first's artifact), `get` verifies
+the hash it was asked for and refuses a tampered file, and nothing deletes:
+retirement of an owner leaves its artifacts readable. The index (hash to
+owner, kind, size, time) is checkpointed; a checkpoint from before the archive
+restores it empty.
+
+`artifact.get {sha}` is a seed tool, version 1, priced at zero and available
+to every seat: it returns `sha`, `owner`, `kind`, `bytes` and the content as
+`text` (or `base64` for bytes that are not UTF-8) up to 65,536 bytes, an
+`error` above that or for an unknown or malformed hash, and ledgers
+`artifact.get {sha, handle, assembly_id, found, ts}`. There is no
+`artifact.put` tool: the only writer on `main` is a private-state program seat.
+The archive charges no rent on `main`; byte-time rent (C3) applies to the
+notebook. `owner_for(sha)` exists for whoever charges it.
+
+### The metric challenge
+
+A `challenge` proposal (contract C7) is the route for replacing what a card
+measures without the card it challenges judging the change:
+
+```json
+{"kind": "challenge", "card_id": "cost-cap", "evidence": "text",
+ "replacement": {"observation": "cost_per_attempt", "rule": "at most", "value": 5000,
+                 "window": {"kind": "returns", "n": 10, "per": "role"}},
+ "trial_windows": 6}
+```
+
+Exactly those keys. `card_id` names a current card that is not already under
+challenge; `evidence` is a nonempty string of at most 4,000 chars;
+`replacement` has `observation` (a seed or registered observation), `rule`
+(`at most`, `at least`, `above`, `below`), a finite `value` and a typed
+`window`, and may add `description`, `units` and `answers_for`; it keeps the
+challenged card's `id` and `norm`, so adopting it is the ordinary replace
+amendment. `trial_windows` is an integer in `[1, 50]`. An unchanged
+replacement, an unmeasurable window, an unparsable region, a duplicate
+observation binding or a refused preflight is refused with the reason before
+anything is spent.
+
+Admission costs one novelty trial, registered as the contract
+`challenge:<challenge id>` (`challenge-<n>-<card slug>`), and ledgers
+`challenge.proposed` with the frozen incumbent and replacement cards, the
+evidence, the trial length, the start window and the frozen definitions of
+any registered observations either card reads. The incumbent keeps pricing the
+live charter throughout: nothing in the charter changes at admission, and a
+window closed during the trial is priced by the edition that measured it, so
+commitments incurred under the incumbent settle under the incumbent. At every
+window close of the trial both cards are measured, frozen, over the same
+samples with the definitions frozen at admission, and one `challenge.window
+{challenge_id, window, incumbent: {card_id, observation, value, scopes},
+replacement: {...}}` item is ledgered; `value` is the equal mean of the
+supported scopes, or null. When the series holds `trial_windows` rows the
+trial is complete (`challenge.trial_complete`, status `due`) and no further
+window is measured.
+
+At the next activation boundary the completed trial goes to the existing
+committee ballot: the replace amendment is proposed under the challenge's own
+id with the observation bindings frozen at admission (so a definition that
+drifted during the trial refuses activation exactly as any amendment would,
+ledgered `challenge.refused`), its promise is the replacement holding inside
+its region one window after activation, the proposer is excluded and the
+committee is seated by the usual sortition (`challenge.balloted`). Each
+voter's request carries the ordinary amendment inputs and, for a
+challenge-originated amendment only, `inputs.challenge`: the challenge id and
+card, the evidence (cut to 2,000 chars, with `evidence_truncated`), the frozen
+incumbent and replacement cards, and both measured series side by side, one
+row per trial window with each side's observation, value and scopes, bounded to
+the last 24 windows and 8 scopes per side; the request's description names the
+challenge. The ledger keeps the whole series. Votes, tally, activation and
+ballot liability are the amendment's. While a challenge is in trial, due or
+balloted, a connector or retire proposal may name the challenge id as its
+`predicted_effect.card_id`, and that promise is frozen on the replacement card
+and graded on it, never on the incumbent. Challenges, their series and their
+status survive checkpoints.
+
+### The service seller
+
+A `service` proposal, `{"kind": "service", "program_id", "price_micro",
+"description"}` with exactly those keys, sells a registered population tool's
+output to outside buyers over x402 (contract C11). `program_id` must be the
+slug of a tool the population registered (a `population_tools` entry, not a
+program seat), `price_micro` an integer in `[1, 10,000,000]`, and the host
+must have the jail. Admission costs one novelty trial, registers
+`service:<program_id>` at the next version, and ledgers `service.registered`
+with the id, version, price, description, the proposing handle and owner,
+and the tool's exact `code`, `args_schema` and `timeout_s`: the program is
+frozen at registration, so a later tool version never changes what a buyer
+already paid for. The `REGISTERED` payload carries the price.
+
+The runtime holds the ledger's only writer lock, so the endpoint is served
+beside it by `deploy/serve.py`, which reads the sealed ledger the way the wake
+does (re-read every `--refresh` seconds; the latest version of each service
+wins) and takes the reserve address from the manifest the genesis names,
+exiting 2 without one. `GET /services` lists the catalogue: id, description,
+price, version and argument schema, never source. `POST /service/<id>` without
+a payment header returns 402 with the v2 quote: `exact` canonical Base USDC,
+the price as the amount, `treasury.reserve_address` as `payTo`, a 300-second
+timeout. With a payment header (`payment-signature`, `x-payment` or
+`x-402-payment`), `runtime/seller.py` verifies it by rebuilding exactly the
+EIP-3009 typed data `world/x402.py`'s buyer signs and recovering its signer,
+refuses a reused nonce (the last 4,096 are remembered), submits it once to the
+facilitator (`FACTORYLAB_FACILITATOR_URL`, default
+`https://x402.org/facilitator`) and accepts only an explicit, matching
+settlement naming the recovered payer and a transaction; any refusal is a
+fresh 402 with a local reason and the header is never echoed. Request bodies
+above 65,536 bytes are refused. Only then does the program run, in the same
+jail population tools use, and its output returns with a `PAYMENT-RESPONSE`
+header. The receipt is appended to the spool (`--spool`,
+`world/income.py`: one JSON line `{service, micro, tx, payer, program,
+version, ts}`, fsynced, 0600) before the program runs, so a program that fails
+still leaves the receipt it was paid for. Nothing in the server reads a key or
+signs.
+
+The runtime, started with `FACTORYLAB_INCOME_SPOOL` naming that file, reads
+the spool on every treasury tick through the recovery journal
+(`treasury.income.lookup`, replayed byte-for-byte on resume), from the offset
+its snapshot carries: only newline-terminated lines are read, a spool shorter
+than the offset is treated as replaced and read from nowhere, and the consumed
+offset is part of the treasury snapshot, so no receipt is booked twice. Each
+complete receipt becomes `income.earned {service, micro, tx, payer, program,
+version, served_ns}` through `Treasury.earn`, which a paid call served
+in-process (tests, or a future loop hook) reaches directly. `earn` ledgers the
+item and adds to `earned_micro`; it does not credit the integer wallet
+balance. The USDC itself arrived at the reserve address and appears in the
+reserve pot when the rail is next observed. Crediting the earning seat's
+entitlement is contract C10's and is not on `main`.
+
+### The three income classes
+
+The treasury keeps, beside the pots, where money that entered them came from
+(`INCOME_CLASSES`), and the wake publishes the three separately as
+`pots.income` and counts them in `money.in_by_class`:
+
+| Class | Meaning | Ledger evidence |
+| --- | --- | --- |
+| `earned_micro` | x402 income from sold service calls. The only earned line. | `income.earned` |
+| `subsidy_micro` | The architect's compute credit: the first complete observation of the seed provider credit plus every seller credit, recorded once. Null until observed. | `treasury.subsidy {micro, seed_micro, sellers}` |
+| `converted_from_principal_micro` | Venice credit bought from trading capital: the `received_micro` of every confirmed `to_venice` transfer. Conversion, not profit. | `treasury.confirmed` with `direction = "to_venice"` |
+
+All three, and the spool offset, survive resume with the treasury snapshot.
+
+### Release identity and witness
+
+Beside its manifest hash and its venue account, a diary binds the release that
+executes it (cold audit F1, contract C4). `factorylab/runtime/release.py`
+computes once per process
+
+```
+release_digest = sha256(git_head + sha256(uv.lock) + tree_hash(factorylab/))
+```
+
+where the tree hash covers every regular file under the package by relative
+path and content, byte-compiled caches excluded, so an uncommitted edit is a
+different release exactly as a new commit is; the head comes from git, else
+from the `RELEASE` record `deploy/install.sh` wrote, and `release_info()`
+says which (`git`, `release_file`, `none`). The digest is drawn at
+construction and carried in the `Launch` event's payload and in every
+checkpoint. `restore_runtime` compares the saved digest with the running one
+and refuses a different release with `failed_resume reason=release_mismatch`:
+the CLI exits 1 with that reason code, the supervisor's webhook and witness
+lines carry it, and the diary gets a `failed_resume` item naming both digests.
+There is no override; a changed release is a new world. A checkpoint written
+before release identity carries no digest: it restores, keeps its historical
+`Launch`, and, once launched, adopts the running release so every later resume
+is bound. `deploy/backup.sh` writes the same identity, plus the archived
+ledger's byte length and SHA-256, to `runs/funded.release.json` in every
+archive. `deploy/witness.sh` appends `{world, event, ts, release_digest,
+ledger_head[, reason]}` for `launch`, `dormant`, `kill` and `failed_resume` to
+an append-only file outside the diary and, when `FACTORYLAB_WITNESS_URL` is
+set, POSTs the same line; `deploy/README.md` says who calls it when.
 
 ## Operator controls and recovery
 

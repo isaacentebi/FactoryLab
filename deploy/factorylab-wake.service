@@ -8,7 +8,11 @@ Type=oneshot
 User=factory
 Group=factory
 WorkingDirectory=/srv/factorylab
+EnvironmentFile=-/srv/factorylab/ops.env
 ExecStart=/srv/factorylab/repo/.venv/bin/factorylab wake --ledger /srv/factorylab/runs/funded.jsonl --out /srv/factorylab/www
+# After each publish, witness a change into or out of dormancy (deploy/witness_liveness.py);
+# best effort, so a witness failure never fails the wake.
+ExecStartPost=-/srv/factorylab/repo/.venv/bin/python /srv/factorylab/repo/deploy/witness_liveness.py --wake /srv/factorylab/www/wake.json --state /srv/factorylab/runs/funded.liveness
 UMask=0077
 TimeoutStartSec=15min
 StandardOutput=null
@@ -18,4 +22,4 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/srv/factorylab/www
+ReadWritePaths=/srv/factorylab/www /srv/factorylab/runs

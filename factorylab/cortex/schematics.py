@@ -295,8 +295,12 @@ class SchematicsMixin:
             "notes": {**counts(self.notes), "max_keys": self.m.notes.max_keys,
                       "max_bytes": self.m.notes.max_bytes,
                       "byte_window_micro": self.m.notes.byte_window_micro,
-                      "pricing": "UTF-8 key and text bytes; storage per window, reads per byte. "
-                      "Unpaid storage rent is due before a read or overwrite; text is retained."},
+                      "micro_per_byte_day": self.m.notes.micro_per_byte_day,
+                      "pricing": "UTF-8 key and text bytes; a put or get pays byte_window_micro "
+                      "per byte moved, and retained text pays storage rent of "
+                      "micro_per_byte_day per byte by elapsed time, collected at each window "
+                      "boundary. Unpaid storage rent is due before a read or overwrite; text "
+                      "is retained."},
             "tools": self._published_tool_specs(),
             "connectors": {"registered": self._connector_catalogue(),
                            "max_bytes": self.m.connectors.max_bytes,
