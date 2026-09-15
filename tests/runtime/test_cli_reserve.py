@@ -48,7 +48,7 @@ def wire(monkeypatch):
 
     def fake_open(self, req, timeout):
         calls.append(req)
-        assert timeout == 60
+        assert timeout == 180  # world.x402.MODEL_HTTP_TIMEOUT_S
         response = pending.pop(0)
         if isinstance(response, Exception):
             raise response

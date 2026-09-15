@@ -109,7 +109,10 @@ def test_ratified_charters_naming_cost_per_return_and_tool_calls_still_preflight
         seen.add(card.observation)
         preflight_card(card)
         preflight_measurement(card)
-    assert seen & {"cost_per_return", "tool_calls"}
+    if not seen & {"cost_per_return", "tool_calls"}:
+        # The ratified edition 2 charter names neither: every frugality card was removed
+        # because the wallet prices cost (docs/launch-decisions.md, "Edition 2").
+        pytest.skip("this charter names neither observation")
 
 
 def test_the_edition_one_example_world_loads_with_its_cost_per_return_card_unchanged():
