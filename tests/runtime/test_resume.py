@@ -231,22 +231,42 @@ def test_partial_event_replays_settlement_after_durable_item_before_mutation(
     assert resumed == scripted_run(m, 8, 1).summary
 
 
-def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_memory(tmp_path):
+@pytest.mark.parametrize("endowed", [False, True])
+def test_snapshot_and_tail_restore_all_state_with_delayed_router_and_assembly_memory(
+    tmp_path, endowed
+):
+    from factorylab.runtime.worlds import NS_PER_DAY, EndowmentSpec
+
     base = load_manifest("scripted")
     m = replace(
         base,
         novelty=replace(base.novelty, window_ns=2 * base.tick_interval_ns),
         assemblies=tuple(replace(a, memory_policy="handle-scoped") for a in base.assemblies),
     )
+    if endowed:
+        # Everything locked (C1): the world launches dormant (C2), a first tranche too
+        # small to buy any seat releases during the run, the rest waits past the stop.
+        m = replace(m, endowment=EndowmentSpec(m.initial_balance_micro, (
+            (base.tick_interval_ns + 1, 1_000), (NS_PER_DAY, m.initial_balance_micro - 1_000))))
     path = tmp_path / "state.jsonl"
     rt = make_runtime(m, path)
     rt.events_budget = 6
     rt._build_router("Tick", "blum_mansour", 0.2)
     rt._build_router("Tick", "exp3", 0.3, replace=False)
     stop_after(rt, lambda r, e: r.ticks_consumed == 4 and str(e.kind) == "Tick")
-    assert any(a.memory for a in rt.assemblies.values())
+    if endowed:
+        assert rt.dormancy is not None and rt.wallet.released_tranches == 1
+        assert rt.wallet.locked == m.initial_balance_micro - 1_000
+        kinds = [i for i in items(path, m) if i["kind"] in ("dormant", "release")]
+        assert [(i["kind"], i.get("state")) for i in kinds] == [
+            ("dormant", "entered"), ("release", None)]
+        assert not any(a.memory for a in rt.assemblies.values())  # no paid cognition
+    else:
+        assert any(a.memory for a in rt.assemblies.values())
     assert len([i for i in items(path, m) if i["kind"] == "snapshot"]) >= 3
     restored = resume_runtime(m, str(path))
+    if endowed:
+        assert restored.dormancy == rt.dormancy and restored.wallet.state() == rt.wallet.state()
     assert restored.stats.resumes == 1
     with pytest.raises(PermissionError):
         _ = restored.ledger.key_store.key

@@ -71,7 +71,7 @@ def _record_types() -> dict[str, type]:
     from factorylab.kernel.queue import Decision, LearningReturn, PropensityRecord, SettleStatus
     from factorylab.kernel.registry import Contract, PriceSpec, ResourceBounds
     from factorylab.kernel.timing import DistributionSummary
-    from factorylab.kernel.wallet import DripSchedule, Reservation
+    from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Reservation
     from factorylab.runtime.cascade import CascadeGate
     from factorylab.runtime.feedback import PendingJudgement
     from factorylab.runtime.governance import Retirement, WorkAssemblySpec
@@ -105,6 +105,7 @@ def _record_types() -> dict[str, type]:
         PopulationTool, Event, PopulationEvent, EventKind, Decision,
         LearningReturn, PropensityRecord,
         SettleStatus, Contract, PriceSpec, ResourceBounds, DistributionSummary, DripSchedule,
+        ReleaseSchedule,
         Reservation, Retirement, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast,
         Lot,
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
@@ -498,6 +499,8 @@ _RUNTIME_FIELDS = (
     "registered_predicates", "kind_reward_shapes", "forecast_returns",
     "connector_calls", "connector_calls_day",
     "notes",
+    # The pause between releases: None while awake, else the entry record (C2).
+    "dormancy",
     # The per-launch venue identity: a resumed world keeps the client order IDs
     # it already submitted, and a fresh ledger can never reproduce them.
     "launch_nonce",

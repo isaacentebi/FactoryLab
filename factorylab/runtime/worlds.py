@@ -232,6 +232,14 @@ class TerminationSpec:
 
 
 @dataclass(frozen=True)
+class EndowmentSpec:
+    """Locked backing and the tranches that release it, as offsets from the Launch (C1)."""
+
+    locked_micro: int = 0
+    releases: tuple[tuple[int, int], ...] = ()  # (at_ns offset from launch, amount_micro)
+
+
+@dataclass(frozen=True)
 class WorldManifest:
     name: str
     seed: int
@@ -253,6 +261,7 @@ class WorldManifest:
     committee: CommitteeSpec = CommitteeSpec()
     immune: ImmuneSpec = ImmuneSpec()
     tick_interval_ns: int = 10 * NS_PER_SECOND
+    endowment: EndowmentSpec = EndowmentSpec()
     extra: dict[str, Any] = field(default_factory=dict)
 
     charter: Charter = field(default_factory=seed_charter)
@@ -313,6 +322,12 @@ class WorldManifest:
                              ("forward_wait_windows", 2)):
             if payload["treasury"].get(key) == default:
                 payload["treasury"].pop(key)
+        # Edition 2 keys keep the identity of every manifest that predates them: a world
+        # without locked backing, or at the default byte-day rent, hashes as it always did.
+        if payload["endowment"] == asdict(EndowmentSpec()):
+            payload.pop("endowment")
+        if payload["notes"].get("micro_per_byte_day") == NotesSpec().micro_per_byte_day:
+            payload["notes"].pop("micro_per_byte_day")
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -378,6 +393,28 @@ class WorldManifest:
             raise ValueError("mainnet charter differs from the ratified charter digest")
         if roster_hash(self) != self.charter_roster_sha256:
             raise ValueError("mainnet roster differs from the roster the charter was ratified on")
+
+    def _validate_endowment(self) -> None:
+        """Locked backing is part of the initial balance and its tranches sum to it exactly."""
+        e = self.endowment
+        if type(e.locked_micro) is not int or e.locked_micro < 0:
+            raise ValueError("endowment.locked_micro must be nonnegative integer money")
+        if e.locked_micro > self.initial_balance_micro:
+            raise ValueError("endowment.locked_micro cannot exceed the initial balance")
+        previous = -1
+        for item in e.releases:
+            if not isinstance(item, tuple) or len(item) != 2:
+                raise ValueError("endowment.releases entries need at and amount_micro")
+            at_ns, amount = item
+            if type(at_ns) is not int or at_ns < 0:
+                raise ValueError("endowment.releases at must be a nonnegative duration")
+            if type(amount) is not int or amount < 1:
+                raise ValueError("endowment.releases amount_micro must be positive integer money")
+            if at_ns < previous:
+                raise ValueError("endowment.releases must be in ascending order")
+            previous = at_ns
+        if sum(amount for _, amount in e.releases) != e.locked_micro:
+            raise ValueError("endowment.releases must sum to endowment.locked_micro")
 
     def validate(self) -> None:
         namespace = self.exchange.client_namespace
@@ -509,6 +546,7 @@ class WorldManifest:
                 raise ValueError("shock step must be >= 1 and multiplier positive")
         if self.drip is not None and (self.drip.period_ns <= 0 or self.drip.amount_micro < 0):
             raise ValueError("drip period must be positive and amount non-negative")
+        self._validate_endowment()
         from factorylab.charter.book import validate_observation_bindings
 
         validate_observation_bindings(self.charter.cards)
@@ -596,9 +634,14 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
 
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     note = d.get("notes", {})
-    if not isinstance(note, dict) or set(note) - {"max_keys", "max_bytes", "byte_window_micro"}:
+    if not isinstance(note, dict) or set(note) - {
+        "max_keys", "max_bytes", "byte_window_micro", "micro_per_byte_day"
+    }:
         raise ValueError("unknown notes manifest key")
+    # ``byte_window_micro`` stays readable and maps to the per-byte call price; storage
+    # rent is ``micro_per_byte_day`` (C3), at its default unless the manifest names one.
     notes = NotesSpec(**note)
+    endowment = _manifest_endowment(d.get("endowment"))
     conn = d.get("connectors", {})
     if not isinstance(conn, dict) or set(conn) - {
         "max_bytes", "timeout_s", "call_price_usd", "max_calls_per_window", "origin_denylist"
@@ -777,10 +820,37 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         ),
         clock=ClockSpec(duration_ns(clock.get("min_tick", default_min_tick))),
         tick_interval_ns=duration_ns(d.get("tick_interval", "10s")),
+        endowment=endowment,
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
     m.validate()
     return m
+
+
+def _manifest_endowment(raw: Any) -> EndowmentSpec:
+    """``[endowment] locked_micro = N`` and ``releases = [{at = "7d", amount_micro = N}]``."""
+    if raw is None:
+        return EndowmentSpec()
+    if not isinstance(raw, dict) or set(raw) - {"locked_micro", "releases"}:
+        raise ValueError("endowment accepts only locked_micro and releases")
+    locked = raw.get("locked_micro", 0)
+    if type(locked) is not int:
+        raise ValueError("endowment.locked_micro must be integer micro-USD")
+    releases = raw.get("releases", [])
+    if not isinstance(releases, list):
+        raise ValueError("endowment.releases must be a list of tables")
+    tranches = []
+    for item in releases:
+        if not isinstance(item, dict) or set(item) != {"at", "amount_micro"}:
+            raise ValueError("endowment.releases entries need exactly at and amount_micro")
+        amount = item["amount_micro"]
+        if type(amount) is not int:
+            raise ValueError("endowment.releases amount_micro must be integer micro-USD")
+        at = item["at"]
+        if type(at) not in (int, str):
+            raise ValueError("endowment.releases at must be a duration such as '7d'")
+        tranches.append((duration_ns(at), amount))
+    return EndowmentSpec(locked_micro=locked, releases=tuple(tranches))
 
 
 def load_manifest(name_or_path: str) -> WorldManifest:

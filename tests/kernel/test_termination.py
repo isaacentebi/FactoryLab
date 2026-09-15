@@ -3,8 +3,8 @@ import pytest
 from factorylab.kernel.events import Bus, Event
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.registry import Registry
-from factorylab.kernel.termination import Termination
-from factorylab.kernel.wallet import Infeasible, Wallet
+from factorylab.kernel.termination import DORMANT, Termination
+from factorylab.kernel.wallet import Infeasible, ReleaseSchedule, Wallet
 
 
 def test_invariant_3_termination_is_final_and_releases_key(ledger, clock, contract_factory):
@@ -131,3 +131,29 @@ def test_final_seal_is_released_even_if_terminal_disk_write_fails(ledger, monkey
     with pytest.raises(OSError):
         termination.kill("explicit_kill")
     assert termination.final and ledger.final and ledger.seal_key_released()
+
+
+def test_budget_dormant_is_a_pause_between_releases_never_a_death(ledger, clock):
+    wallet = Wallet(100, ledger, clock_ns=clock, locked_micro=90,
+                    release_schedule=ReleaseSchedule(((50, 90),)))
+    termination = Termination(ledger=ledger, bus=Bus(ledger), clock_ns=clock)
+    # Before the Launch anchors the schedule there is no release to wait for.
+    assert termination.check(wallet, clock.now, cheapest_seat_micro=11) is None
+    wallet.launch(clock.now)
+    assert termination.check(wallet, clock.now) is None
+    assert termination.check(wallet, clock.now, cheapest_seat_micro=10) is None
+    assert termination.check(wallet, clock.now, cheapest_seat_micro=11) == DORMANT
+    wallet.commit(wallet.reserve(10, "h", "model"), 10)
+    assert wallet.unlocked == 0 and wallet.locked == 90 and not wallet.dead
+    assert termination.check(wallet, clock.now) == DORMANT
+    with pytest.raises(ValueError, match="pause"):
+        termination.kill(DORMANT)
+    assert not termination.final and not ledger.final
+    assert wallet.release_due(clock.now + 50) == 90
+    assert termination.check(wallet, clock.now + 50) is None
+    wallet.commit(wallet.reserve(90, "h2", "model"), 90)
+    # Terminal death by budget needs locked == 0: nothing remains to wait for.
+    assert wallet.locked == 0 and wallet.dead
+    assert termination.check(wallet, clock.now + 50) == "balance_zero"
+    with pytest.raises(ValueError):
+        termination.check(wallet, clock.now, cheapest_seat_micro=-1)

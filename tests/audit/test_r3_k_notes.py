@@ -38,8 +38,13 @@ def test_note_utf8_bounds_and_overwrites_never_erase_on_refusal():
     assert cost == 4 and result["version"] == 2 and counts(rt.notes) == {"keys": 1, "bytes": 4}
 
 
-def test_note_rent_is_charged_once_per_window_and_survives_resume():
+#: One micro-USD per byte per two-minute scripted window, stated as a byte-day rate (C3).
+PER_WINDOW_RATE = "720"
+
+
+def test_note_rent_is_charged_by_byte_time_once_and_survives_resume():
     rt = make_runtime()
+    rt.m = replace(rt.m, notes=NotesSpec(micro_per_byte_day=PER_WINDOW_RATE))
     rt._manage_reserve_window()
     handle = decision(rt)
     assert put(rt, handle)[1] == 15
@@ -48,9 +53,10 @@ def test_note_rent_is_charged_once_per_window_and_survives_resume():
     rt._manage_reserve_window()
     assert rt.wallet.balance == before - 15
     assert ledger_items(rt, "note.rent")[-1]["cost"] == 15
-    charge_window(rt)
+    charge_window(rt)  # no time has passed: nothing more is due
     assert rt.wallet.balance == before - 15
     restored = make_runtime()
+    restored.m = rt.m
     restore_runtime(restored, runtime_state(rt))
     assert restored.notes == rt.notes
     assert get(restored, handle)[1] == 15
@@ -58,12 +64,13 @@ def test_note_rent_is_charged_once_per_window_and_survives_resume():
 
 def test_unaffordable_rent_retains_text_and_cannot_be_escaped_by_overwriting(monkeypatch):
     rt = make_runtime()
+    rt.m = replace(rt.m, notes=NotesSpec(micro_per_byte_day=PER_WINDOW_RATE))
     rt._manage_reserve_window()
     handle = decision(rt)
     put(rt, handle)
     original_available = rt.wallet.available_for
     monkeypatch.setattr(rt.wallet, "available_for", lambda *a: 0)
-    rt.window.index += 2
+    rt.clock.now_ns += 2 * rt.m.novelty.window_ns
     charge_window(rt)
     assert rt.notes["fact"]["text"] == "public fact"
     assert ledger_items(rt, "note.rent_due")[-1]["cost"] == 30

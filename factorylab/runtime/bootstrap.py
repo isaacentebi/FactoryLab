@@ -24,7 +24,7 @@ from factorylab.kernel.registry import Contract, PriceSpec, Registry, ResourceBo
 from factorylab.kernel.reserve import NoveltyReserve
 from factorylab.kernel.termination import Termination
 from factorylab.kernel.timing import TimingRegistry, UpwardBuffer
-from factorylab.kernel.wallet import DripSchedule, Wallet
+from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Wallet
 from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cascade import CascadeGate
 from factorylab.runtime.compute import ContractConsequences
@@ -196,9 +196,15 @@ class BootstrapMixin:
         if self.use_drip and manifest.drip is not None:
             d = manifest.drip
             schedule = DripSchedule(d.amount_micro, d.period_ns, d.start_ns, d.end_ns)
+        # Locked backing and its release schedule come from the manifest; the offsets
+        # are anchored to the ledgered Launch timestamp when the world launches.
+        endowment = manifest.endowment
+        releases = (ReleaseSchedule(tuple(endowment.releases))
+                    if endowment.locked_micro else None)
         self.wallet = Wallet(self.initial, self.ledger, schedule, clock_ns=self.clock,
                              balance_floor_micro=manifest.termination.balance_floor_micro,
-                             reported_cost_multiple=manifest.treasury.reported_cost_multiple)
+                             reported_cost_multiple=manifest.treasury.reported_cost_multiple,
+                             locked_micro=endowment.locked_micro, release_schedule=releases)
         self.bus = Bus(self.ledger)
         self.termination = Termination(ledger=self.ledger, bus=self.bus, clock_ns=self.clock)
         self.registry = Registry(self.ledger)
@@ -518,6 +524,7 @@ class BootstrapMixin:
         self.n = 0
         self.emitted = 0
         self.insolvency_count = 0
+        self.dormancy: dict[str, Any] | None = None  # C2: set while paid cognition is paused
         self.registration_feedback: deque[dict[str, Any]] = deque(maxlen=8)
         self._compute_routed = False
         self._compute_unaffordable = False
