@@ -11,7 +11,7 @@ channel. The shipped registrations preserve the seeded evaluation chain.
 Unjudged returns are censored, and retirement preserves delayed feedback.
 
 Prices. At each reserve-window boundary the runtime measures the window
-that closed using the factory's observation vocabulary — the twenty-two seeds
+that closed using the factory's observation vocabulary — the twenty-three seeds
 and whatever measurements the population has registered —
 and hands each priced metric card one observation. The price controller
 revises a bounded λ per card; verdict and conformity

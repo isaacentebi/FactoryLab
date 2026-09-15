@@ -1,6 +1,6 @@
 """Supported observations; absent evidence never becomes a score.
 
-The twenty-two seed observations below are the factory's starting measurement
+The twenty-three seed observations below are the factory's starting measurement
 vocabulary. They are not the whole of it: the population may also register
 its own observation — a pure ``observe(facts) -> float`` over the public
 per-window facts, run in the tool jail — and a card may then name it. Seed and

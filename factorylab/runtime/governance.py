@@ -755,9 +755,9 @@ class GovernanceMixin:
         The program is frozen at registration: the ledger item carries the exact
         source the wake host serves, so a later tool version never changes what a
         buyer already paid for. Nothing here opens a socket; ``deploy/serve.py``
-        reads this item and ``world/seller.py`` verifies each payment.
+        reads this item and ``runtime/seller.py`` verifies each payment.
         """
-        from factorylab.world.seller import service_contract
+        from factorylab.runtime.seller import service_contract
 
         tool = self.population_tools.get(prop.program_id)
         if tool is None:

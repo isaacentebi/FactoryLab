@@ -37,9 +37,17 @@ def test_mixed_ownership_deduplicates_only_the_closers_own_lot(coin):
     table = fill(table, "b", "b-open", "1", "110", "2", coin=coin)
     table = fill(table, "b", "close", "2", "120", "4", buy=False, coin=coin)
     table = table.finish("a", 0).finish("b", 0).resolve(1, 200, {})
-    assert table.account("a").payoff.net_micro == 19_000_000
-    # b's own 10 plus its closer credit on a's 20, less b's opening 2 and closing 4.
-    assert table.account("b").payoff.net_micro == 24_000_000
+    # C6/F7: a's 20 on the lot b closed is credited once, split 100:120 by entry and
+    # exit notional; a keeps its part net of its own opening 1.
+    a_part, b_part = Fraction(20) * 100 / 220, Fraction(20) * 120 / 220
+    assert table.account("a").payoff.net_micro == int((a_part - 1) * 1_000_000)  # 8_090_909
+    # b's own 10 once (a self-close is not split) plus its closer part of a's 20, less
+    # b's opening 2 and closing 4.
+    assert table.account("b").payoff.net_micro == int((10 + b_part - 2 - 4) * 1_000_000)
+    assert table.account("b").payoff.net_micro == 14_909_090
+    # The two credits carry the 30 of P&L less 7 of fees once, to the two floors.
+    credited = table.account("a").payoff.net_micro + table.account("b").payoff.net_micro
+    assert 0 <= 23_000_000 - credited <= 2
 
 
 @pytest.mark.parametrize("buy,reverse,close", [(True, "110", "100"), (False, "90", "100")])

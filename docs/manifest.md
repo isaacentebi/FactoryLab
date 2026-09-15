@@ -636,7 +636,7 @@ including combined multi-window measurements. These samples survive checkpoints.
 
 Registration is versioned in the registry as `observation:<id>`: re-registering
 an id supersedes it with the next version and cards then measure with the new
-code. The twenty-two seed observations are registered the same way at bootstrap
+code. The twenty-three seed observations are registered the same way at bootstrap
 (`observation:<id>`, version 1, provenance `seed`) and cannot be redefined: the
 charter's own cards are measured by them, and their ids are not even slug-shaped,
 so a proposal cannot name one. A registered observation is measured over closed

@@ -166,11 +166,25 @@ def test_scripted_amendment_lambda_is_voted_adopted_and_visible(scripted_runtime
         ("registration_rejections", "registrations_rejected"),
         ("amendments_proposed", "amendments_proposed"),
         ("amendments_activated", "amendments_activated"),
-        ("fills", "fills"), ("tool_calls", "tool_calls"),
+        ("fills", "fills"),
     ):
         measured = sum(e["observations"][observation] for e in windows)
         measured += getattr(rt.window, observation)
         assert measured == result["stats"][stat]
+    # C6/F5: ``tool_calls`` is the mean of attempted calls per invocation, so a closed
+    # window's value is its count divided by that window's invocations, one
+    # ``price.contribution`` carrying ``invocations`` each (storage charges and fill
+    # notionals are contributions too, but not invocations); scaled back and added to
+    # the open window's raw count, the measured calls are the runtime's own statistic.
+    invocations: dict[int, int] = {}
+    for e in entries:
+        if e["kind"] == "price.contribution":
+            invocations[e["window"]] = invocations.get(e["window"], 0) + e.get("invocations", 0)
+    assert invocations[rt.window.index] == rt.window.invocations
+    measured = sum(e["observations"].get("tool_calls", 0.0) * invocations.get(e["window"], 0)
+                   for e in windows)
+    measured += rt.window.tool_calls
+    assert measured == pytest.approx(result["stats"]["tool_calls"])
     assert sum(e["observations"]["realized_pnl_usd"] for e in windows) == pytest.approx(
         (rt.realized_to_date - rt.window.realized_pnl_micro) / 1_000_000
     )
@@ -681,7 +695,7 @@ def test_tool_order_and_close_belong_to_calling_returns_and_tool_charge_decides_
     exchange = FakeExchange(
         coins=("BTC",),
         start_prices={"BTC": Decimal("100")},
-        price_path={"BTC": [Decimal("100.005010")]},
+        price_path={"BTC": [Decimal("100.010020")]},
         fee_bps=Decimal(0),
         spread_bps=Decimal(0),
     )
@@ -693,10 +707,14 @@ def test_tool_order_and_close_belong_to_calling_returns_and_tool_charge_decides_
     runtime._settle_exchange_effects(exchange.advance(1_000_000_000))
     closer, _ = _consequence_produce(runtime)
     payoff = runtime.consequences.payoff(opener)
-    assert payoff.net_micro == 5010 and payoff.cost_micro == 5011 and payoff.y == 0
+    # C6/F7: the lot's 10020 micro-USD is credited once, split 100:100.010020 by entry
+    # and exit notional and floored on each side. The opener's 5009 clears its 5000
+    # compute and falls to the 11 micro-USD tool charge; the closer's 5010 clears 5000.
+    assert payoff.net_micro == 5009 and payoff.cost_micro == 5011 and payoff.y == 0
     assert not payoff.marked
     closed = runtime.consequences.payoff(closer)
     assert closed.net_micro == 5010 and closed.cost_micro == 5000 and closed.y == 1  # credited
+    assert payoff.net_micro + closed.net_micro == 10020 - 1  # once, less the two floors
     assert runtime.consequences.table.lots == ()
     assert runtime.window.producer_returns == runtime.window.noop_returns == 2
     assert runtime.window.revision_returns == 0  # Tool calls are not revisions (A14).

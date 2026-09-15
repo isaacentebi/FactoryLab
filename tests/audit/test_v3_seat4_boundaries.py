@@ -95,7 +95,12 @@ def test_evaluator_cost_card_attributes_its_measured_cost():
         "notional_micro": 0,
     }
     region = CardRegion(card.id, "max", None, 500, 1_000_000)
+    # C6: the generic floor reads ``m.prices.min_blame_share`` from the runtime, so the
+    # method is bound on a stand-in carrying only that setting; an attributable cost
+    # share never reaches the floor.
+    pricing = SimpleNamespace(m=SimpleNamespace(prices=SimpleNamespace(min_blame_share=0.1)))
     share = PricingMixin._decision_share(
+        pricing,
         window,
         "judge",
         card.observation,

@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from factorylab.world.seller import (  # noqa: E402
+from factorylab.runtime.seller import (  # noqa: E402
     IncomeSpool,
     Seller,
     default_runner,

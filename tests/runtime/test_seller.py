@@ -18,10 +18,7 @@ from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.kernel.wallet import Wallet
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.worlds import load_manifest
-from factorylab.world.exchange import FakeExchange
-from factorylab.world.scripted import ScriptedProvider
-from factorylab.world.seller import (
+from factorylab.runtime.seller import (
     IncomeSpool,
     Seller,
     Service,
@@ -33,6 +30,9 @@ from factorylab.world.seller import (
     spool_earn,
     verify_payment,
 )
+from factorylab.runtime.worlds import load_manifest
+from factorylab.world.exchange import FakeExchange
+from factorylab.world.scripted import ScriptedProvider
 from factorylab.world.treasury import FakeTreasury
 from factorylab.world.x402 import (
     BASE_NETWORK,

@@ -188,7 +188,7 @@ class Treasury:
         """
         if self.income_spool is None:
             return []
-        from factorylab.world.seller import read_income_spool
+        from factorylab.world.income import read_income_spool
 
         offset = self.income["spool_offset"]
         args = (str(self.income_spool), offset)

@@ -1,6 +1,7 @@
 """A16: verdict and payoff are two numbers; closers are credited (seat 1, finding 5)."""
 
 import json
+from fractions import Fraction
 from types import SimpleNamespace
 
 from factorylab.kernel.events import Event, EventKind
@@ -32,8 +33,11 @@ def test_seat_1_abc_reproduction_credits_the_closer_and_zeroes_research():
     table = _fill(table, "B", "close", px="110", buy=False)
     table = table.resolve(1, 200, {})
     a, b, c = (table.account(h).payoff for h in ("A", "B", "C"))
-    assert a.y == 1 and a.net_micro == 10_000_000
-    assert b.y == 1 and b.net_micro == 10_000_000  # the closer is credited what it realised
+    # C6/F7: the lot's 10 is credited once, split 100:110 by entry and exit notional and
+    # floored on each side; both parts clear the 100 micro-USD cost.
+    assert a.y == 1 and a.net_micro == int(Fraction(10) * 100 / 210 * 1_000_000)  # 4_761_904
+    assert b.y == 1 and b.net_micro == int(Fraction(10) * 110 / 210 * 1_000_000)  # 5_238_095
+    assert a.net_micro + b.net_micro == 10_000_000 - 1  # once, less the two floors
     assert c.y == 0 and c.net_micro == 0
     assert table.account("B").closes == 1 and table.account("A").opened_lots == 1
     assert table.lots == ()
@@ -45,10 +49,13 @@ def test_each_side_is_net_of_its_own_costs_only():
     table = _fill(table, "opener", "open", size="2", px="100", fee="2")
     table = table.funding("BTC", "4")
     table = _fill(table, "closer", "close", size="1", px="120", buy=False, fee="1")
-    # P&L on the closed unit is 20; the opener pays half its opening fee (1) and half the
-    # funding (2); the closer pays its whole closing fee (1).
-    assert table.account("opener").realized_micro == 17_000_000
-    assert table.account("closer").realized_micro == 19_000_000
+    # P&L on the closed unit is 20, split 100:120 by entry and exit notional (C6/F7); the
+    # opener's part is net of half its opening fee (1) and half the funding (2), the
+    # closer's of its whole closing fee (1), and neither of the other's.
+    opener_part, closer_part = Fraction(20) * 100 / 220, Fraction(20) * 120 / 220
+    assert table.account("opener").realized_micro == (opener_part - 3) * 1_000_000
+    assert table.account("closer").realized_micro == (closer_part - 1) * 1_000_000
+    assert opener_part + closer_part == 20
 
 
 class _Judge(ScriptedProvider):

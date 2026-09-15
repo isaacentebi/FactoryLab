@@ -283,7 +283,7 @@ costs one novelty trial, freezes the program's source in a `service.registered`
 ledger item, and makes `POST /service/<program_id>` a paid endpoint under x402:
 an unpaid request gets the v2 quote (exact canonical Base USDC, the manifest's
 `treasury.reserve_address` as `payTo`, the price as the amount); a paid request
-carries the buyer's signed EIP-3009 authorization, which `world/seller.py`
+carries the buyer's signed EIP-3009 authorization, which `runtime/seller.py`
 verifies by rebuilding exactly the typed data `world/x402.py`'s buyer signs and
 recovering its signer, then hands to the facilitator (`FACTORYLAB_FACILITATOR_URL`,
 default `https://x402.org/facilitator`) for settlement. Only an explicit,
