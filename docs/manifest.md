@@ -1325,6 +1325,19 @@ the reserve only when the manifest configures a reserve address, with the
 respective credentials present. Host credentials alone do not attach live
 accounts to a fake world. Public portfolio and window items expose no open positions.
 
+The wake's `returns` view publishes every agent's answer live and unredacted:
+one row per `invocation` item as soon as it is in the ledger, with the window,
+timestamp, seat id, role, model served, status, cost and the `outputs` exactly
+as written (action, rationale, forecasts, register proposals, notes, ballots
+with their reasons), the `tool.call` items under the same handle, and the
+`Verdict` and `MetaVerdict` events about that handle once they land. Darkness
+is not secrecy: what the population wrote is the experiment's product. The page
+carries the latest `--returns` rows (default 500, `factorylab wake --returns N`);
+every return is also written to `returns-<window>.json` beside `wake.json`.
+Every other section still folds to role totals, and the machinery stays sealed
+until death: learner state, router weights and sampling propensities, private
+memories, prompts and per-decision scores.
+
 Interrupted `sandbox.run` and `observation.run` journal calls are replayable
 read-only work and may re-execute after a crash. An authenticated ledger head
 whose offset exceeds the file length raises `LedgerIntegrityError`; reopen

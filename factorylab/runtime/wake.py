@@ -1,4 +1,4 @@
-"""The public wake contains only authenticated aggregates and account statements.
+"""The public wake: authenticated aggregates, account statements, and every return.
 
 The control tower sees whatever the population already sees. The
 world block an assembly reads on every request is public by construction, so its
@@ -6,9 +6,18 @@ standing facts (roster, tools, observations, charter, pots, portfolio) are
 projected into one unsealed ledger item at each window close and republished
 here; the histories (registrations, amendments, compute spend, transfers,
 pathologies and the immune organ's answers) are read from public ledger items
-that already existed. Nothing the essay keeps private crosses this boundary:
-learner state, router weights and propensities, private memories, raw request
-and return text and per-decision scores stay sealed until death.
+that already existed.
+
+The ``returns`` view publishes every agent's answer live and unredacted: one
+row per invocation as soon as it is in the ledger, with the seat, the model
+served, the status and cost, the outputs exactly as written (action, rationale,
+forecasts, register proposals, notes, ballots), the tool calls the return made,
+and the judge verdicts and meta verdicts about it once they land. The essay says
+darkness should not be confused with secrecy or information asymmetry: what the
+population wrote is the experiment's product, and hiding it was the architect
+protecting himself from reading, not the world from being read. What stays
+sealed until death is the machinery, not the answers: learner state, router
+weights and propensities, private memories, prompts and per-decision scores.
 """
 
 from __future__ import annotations
@@ -39,11 +48,16 @@ SECTIONS = ("roster", "tools", "connectors", "notes", "observations", "charter",
             "immune", "portfolio",
             # Edition 2: the architect watches money, deliveries, open promises, the
             # behavioural cells and the alive/dormant/terminated state, without a lever.
-            "money", "deliveries", "commitments", "cells", "liveness", "entitlements")
+            "money", "deliveries", "commitments", "cells", "liveness", "entitlements",
+            # Every return, live and unredacted, linked to the verdicts about it.
+            "returns")
 UNAVAILABLE = "unavailable"
 PUBLIC_KIND = "wake.public"
 #: Every observatory list is bounded so one page cannot grow with the diary.
 MAX_ROWS = 200
+#: The page carries the latest returns; every older row lives in its window's page file.
+RETURNS_ROWS = 500
+RETURNS_PAGE = "returns-{window}.json"
 ROLES = ("producer", "evaluator", "meta", "antagonist")
 RAILS = ("openrouter", "venice", "x402")
 INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_micro")
@@ -196,6 +210,13 @@ class _Observatory:
         self.terminated_ns: int | None = None
         self.dormant_periods: list[dict] = []
         self.dormant_since: int | None = None
+        # Every return in ledger order, its row reachable by handle so the tool calls
+        # that preceded it and the verdicts that follow it attach to the same row.
+        self.returns: list[dict] = []
+        self.returns_by_handle: dict[str, dict] = {}
+        self.tool_calls_by_handle: dict[str, list[dict]] = {}
+        self.verdicts_by_handle: dict[str, list[dict]] = {}
+        self.meta_verdicts_by_handle: dict[str, list[dict]] = {}
 
     def feed(self, item: dict) -> None:
         """Read one authenticated item; unknown and sealed kinds are simply not read."""
@@ -230,6 +251,18 @@ class _Observatory:
         elif kind == "ForecastSettled" and isinstance(payload, dict):
             self.open_forecasts.pop(str(payload.get("handle")), None)
             self._delivered("forecast", "settled")
+        elif kind == "Verdict" and isinstance(payload, dict):
+            self._verdict(self.verdicts_by_handle, "verdicts", payload.get("about_handle"), {
+                "ts_ns": event.get("ts_ns"), "by": payload.get("evaluator_handle"),
+                "verdict": payload.get("verdict"), "payoff": payload.get("payoff"),
+                "rationale": payload.get("rationale"),
+            })
+        elif kind == "MetaVerdict" and isinstance(payload, dict):
+            self._verdict(self.meta_verdicts_by_handle, "meta_verdicts", payload.get("about"), {
+                "ts_ns": event.get("ts_ns"), "by": payload.get("by"),
+                "judge": payload.get("evaluator_handle"), "tier": payload.get("tier"),
+                "score": payload.get("score"), "rationale": payload.get("rationale"),
+            })
         if kind != "Registered" or not isinstance(payload, dict):
             return
         self.registered = [*self.registered, {
@@ -399,6 +432,64 @@ class _Observatory:
         self.invocations.setdefault(_day(item.get("ts", 0)), Counter())[
             role if role in ROLES else "other"
         ] += 1
+        handle = str(item.get("handle"))
+        row = {
+            "window": self.current_window, "ts_ns": item.get("ts"), "handle": handle,
+            "seat": item.get("assembly_id"), "role": role, "model": item.get("served_by"),
+            "status": item.get("status"), "stop_reason": item.get("stop_reason"),
+            "cost_micro": item.get("cost"), "outputs": _outputs(item.get("outputs")),
+            "tool_calls": self.tool_calls_by_handle.pop(handle, []),
+            "verdicts": self.verdicts_by_handle.pop(handle, []),
+            "meta_verdicts": self.meta_verdicts_by_handle.pop(handle, []),
+        }
+        self.returns.append(row)
+        self.returns_by_handle[handle] = row
+
+    # --- every return, linked to what was said about it -------------------------
+
+    def _verdict(self, pending: dict[str, list[dict]], field: str, about, verdict: dict) -> None:
+        row = self.returns_by_handle.get(str(about))
+        if row is not None:
+            row[field].append(verdict)
+        else:
+            pending.setdefault(str(about), []).append(verdict)
+
+    def _on_tool_call(self, item: dict) -> None:
+        # Ledgered while the return is still being composed, before its invocation
+        # row exists: the args as logged (bodies already stripped), the outcome the
+        # tool reported, and what the call cost.
+        handle = str(item.get("handle"))
+        call = {"ts_ns": item.get("ts"), "tool": item.get("tool"), "args": item.get("args"),
+                "outcome": item.get("outcome"), "ok": item.get("ok"),
+                "cost_micro": item.get("cost")}
+        row = self.returns_by_handle.get(handle)
+        if row is not None:
+            row["tool_calls"].append(call)
+        else:
+            self.tool_calls_by_handle.setdefault(handle, []).append(call)
+
+    def _returns(self, limit: int) -> dict:
+        """The latest rows for the page, and where every older row is published."""
+        per_window = Counter(row["window"] for row in self.returns)
+        windows = sorted(per_window)
+        return {
+            "limit": limit, "total": len(self.returns),
+            "rows": self.returns[-limit:] if limit > 0 else [],
+            "pages": {
+                "file": RETURNS_PAGE,
+                "first_window": windows[0] if windows else None,
+                "last_window": windows[-1] if windows else None,
+                "windows": [{"window": window, "rows": per_window[window]}
+                            for window in windows[-MAX_ROWS:]],
+            },
+        }
+
+    def pages(self) -> dict[int, list[dict]]:
+        """Every return grouped by the price window it landed in."""
+        grouped: dict[int, list[dict]] = {}
+        for row in self.returns:
+            grouped.setdefault(row["window"], []).append(row)
+        return grouped
 
     def _transfer(self, item: dict, status: str, direction, amount) -> None:
         self.transfers = [*self.transfers, {
@@ -513,7 +604,8 @@ class _Observatory:
                 "terminated_ns": self.terminated_ns, "dormant_since_ns": self.dormant_since,
                 "dormant_periods": self.dormant_periods}
 
-    def result(self, manifest, *, now_ns: int | None = None) -> dict:
+    def result(self, manifest, *, now_ns: int | None = None,
+               returns: int = RETURNS_ROWS) -> dict:
         """Return the widened sections.
 
         Before the first window closes there is no published world block yet, so
@@ -570,7 +662,22 @@ class _Observatory:
             "cells": self._cells(manifest),
             "liveness": self._liveness(),
             "entitlements": _fold_entitlements(latest.get("entitlements")),
+            "returns": self._returns(returns),
         }
+
+
+def _outputs(value):
+    """The outputs as written: the diary keeps them as JSON text, capped at 4000 characters.
+
+    A return short enough to fit is published as the object it was; one the cap
+    cut is published as the text that survived, so nothing is invented.
+    """
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except ValueError:
+        return {"truncated_text": value}
 
 
 def _genesis_charter(manifest) -> dict:
@@ -724,11 +831,19 @@ def _reserve() -> dict:
     return result
 
 
-def collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sleep) -> dict:
+def collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sleep,
+                 returns: int = RETURNS_ROWS) -> dict:
     """Exactly the allowlist escapes; a failed chain is retried once, never partially shown."""
+    return _collect_wake(path, now_ns=now_ns, sleep=sleep, returns=returns)[0]
+
+
+def _collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.sleep,
+                  returns: int = RETURNS_ROWS) -> tuple[dict, dict[int, list[dict]]]:
+    """The wake document and every return grouped by window, for the page files."""
     result = dict.fromkeys((*VIEWS, *SECTIONS, "world", "manifest_hash", "uptime_ns",
                             "last_event_time_ns"), UNAVAILABLE)
     manifest = None
+    pages: dict[int, list[dict]] = {}
     for attempt in range(2):
         try:
             ledger, candidate = _open_snapshot(Path(path))
@@ -741,10 +856,12 @@ def collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.slee
             # keeps: wall time while it lives, event time once it does not.
             as_of = (time.time_ns() if now_ns is None else now_ns) if live and not (
                 observatory.terminated_ns is not None) else timing["last_event_time_ns"]
-            result.update(aggregates, **observatory.result(candidate, now_ns=as_of),
+            result.update(aggregates,
+                          **observatory.result(candidate, now_ns=as_of, returns=returns),
                           **timing, world=candidate.name,
                           manifest_hash=candidate.manifest_hash())
             manifest = candidate
+            pages = observatory.pages()
             break
         except (LedgerIntegrityError, InvalidToken, OSError, ValueError, KeyError, TypeError):
             if attempt == 0:
@@ -766,7 +883,7 @@ def collect_wake(path: str | Path, *, now_ns: int | None = None, sleep=time.slee
             "usdc_micro": UNAVAILABLE,
             "venice_micro": UNAVAILABLE,
         }
-    return result
+    return result, pages
 
 
 def _chart(wallet) -> str:
@@ -787,6 +904,53 @@ def _chart(wallet) -> str:
     )
 
 
+def _text(value) -> str:
+    return html.escape(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False))
+
+
+def _return_article(row: dict) -> str:
+    """One return, its rationale readable as prose and everything else as written."""
+    outputs = row.get("outputs")
+    fields = outputs if isinstance(outputs, dict) else {}
+    when = row.get("ts_ns")
+    stamp = (datetime.fromtimestamp(when / 1e9, UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+             if type(when) is int else "")
+    head = " · ".join(_text(part) for part in (
+        f"window {row.get('window')}", stamp, row.get("seat"), row.get("role"),
+        row.get("model"), row.get("status"), f"{row.get('cost_micro')} micro-USD") if part)
+    body = [f'<header>{head}</header>']
+    if fields.get("action") is not None:
+        body.append(f'<p><b>action</b> {_text(fields["action"])}</p>')
+    rationale = fields.get("rationale")
+    if isinstance(rationale, str) and rationale.strip():
+        body.append(f'<blockquote>{html.escape(rationale)}</blockquote>')
+    for verdict in row.get("verdicts") or []:
+        body.append(f'<p><b>verdict</b> {_text(verdict.get("verdict"))} by '
+                    f'{_text(verdict.get("by"))}</p>')
+        if isinstance(verdict.get("rationale"), str) and verdict["rationale"].strip():
+            body.append(f'<blockquote>{html.escape(verdict["rationale"])}</blockquote>')
+    for verdict in row.get("meta_verdicts") or []:
+        body.append(f'<p><b>meta verdict</b> {_text(verdict.get("score"))} at tier '
+                    f'{_text(verdict.get("tier"))} by {_text(verdict.get("by"))}</p>')
+        if isinstance(verdict.get("rationale"), str) and verdict["rationale"].strip():
+            body.append(f'<blockquote>{html.escape(verdict["rationale"])}</blockquote>')
+    body.append(f'<details><summary>{html.escape(str(row.get("handle")))}: full return'
+                '</summary><pre>' + html.escape(json.dumps(row, indent=2, ensure_ascii=False))
+                + '</pre></details>')
+    return '<article>' + "".join(body) + '</article>'
+
+
+def _returns_section(returns) -> str:
+    if not isinstance(returns, dict):
+        return '<pre>' + html.escape(json.dumps(returns)) + '</pre>'
+    rows = returns.get("rows") or []
+    pages = returns.get("pages") or {}
+    note = (f'<p>{len(rows)} of {_text(returns.get("total"))} returns, latest last; every '
+            f'older return is in its window\'s page, {_text(pages.get("file"))}, from window '
+            f'{_text(pages.get("first_window"))} to {_text(pages.get("last_window"))}.</p>')
+    return note + "".join(_return_article(row) for row in reversed(rows))
+
+
 def render_wake(data: dict) -> str:
     """The page is self-contained, script-free and escapes every dynamic text value."""
     sections = []
@@ -795,7 +959,7 @@ def render_wake(data: dict) -> str:
         "portfolio", "pots", "entitlements", "liveness", "money", "roster", "tools", "connectors",
         "notes",
         "observations", "charter", "compute", "deliveries", "commitments", "cells", "immune",
-        *VIEWS,
+        *VIEWS, "returns",
     )
     folded = {"wallet_series": "Balance series", "roster": "Roster", "tools": "Tools",
               "connectors": "Connectors", "notes": "Notes", "observations": "Observations",
@@ -810,6 +974,10 @@ def render_wake(data: dict) -> str:
             continue
         value = data[field]
         chart = _chart(value) if field == "wallet_series" else ""
+        if field == "returns":
+            sections.append(f'<section class="returns"><h2>{field}</h2>'
+                            f'{_returns_section(value)}</section>')
+            continue
         body = '<pre>' + html.escape(json.dumps(value, indent=2, ensure_ascii=False)) + '</pre>'
         if field in folded:
             body = (f'<details><summary>{html.escape(folded[field])}</summary>'
@@ -825,24 +993,47 @@ main{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,350px),1
 section{min-width:0;padding:16px;border:1px solid #34404d;border-radius:12px}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.85rem}svg{width:100%;color:#91e0bf}
 text{fill:currentColor;font-size:16px}@media(max-width:480px){body{padding:12px}}
+section.returns{grid-column:1/-1}article{padding:12px 0;border-top:1px solid #34404d}
+header{font-size:.85rem;color:#aedacb}blockquote{margin:8px 0;padding-left:12px;
+border-left:3px solid #91e0bf;white-space:pre-wrap;overflow-wrap:anywhere}
 </style></head><body><h1>Factory wake</h1><main>''' + "".join(sections) + '</main></body></html>'
 
 
-def write_wake(path: str | Path, out: str | Path) -> dict:
-    """Each public artifact replaces its predecessor atomically; no private bytes are written."""
-    data = collect_wake(path)
+def _publish(directory: Path, name: str, body: str) -> None:
+    fd, temporary = tempfile.mkstemp(prefix=".wake-", dir=directory)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchmod(stream.fileno(), 0o644)
+        os.replace(temporary, directory / name)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def write_wake(path: str | Path, out: str | Path, *, returns: int = RETURNS_ROWS) -> dict:
+    """Each public artifact replaces its predecessor atomically; no private bytes are written.
+
+    The page carries the latest ``returns`` rows; every return is also written to
+    its window's ``returns-<window>.json`` beside ``wake.json``, so the page stays
+    bounded while nothing said is lost. A page file whose bytes have not changed
+    is left alone.
+    """
+    data, pages = _collect_wake(path, returns=returns)
     directory = Path(out)
     directory.mkdir(parents=True, exist_ok=True)
     for name, body in (("wake.json", json.dumps(data, indent=2) + "\n"),
                        ("wake.html", render_wake(data))):
-        fd, temporary = tempfile.mkstemp(prefix=".wake-", dir=directory)
+        _publish(directory, name, body)
+    for window, rows in sorted(pages.items()):
+        name = RETURNS_PAGE.format(window=window)
+        body = json.dumps({"world": data.get("world"), "window": window, "rows": rows},
+                          indent=2) + "\n"
         try:
-            with os.fdopen(fd, "w") as stream:
-                stream.write(body)
-                stream.flush()
-                os.fsync(stream.fileno())
-                os.fchmod(stream.fileno(), 0o644)
-            os.replace(temporary, directory / name)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
+            if (directory / name).read_text() == body:
+                continue
+        except OSError:
+            pass
+        _publish(directory, name, body)
     return data

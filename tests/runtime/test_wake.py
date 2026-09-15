@@ -80,7 +80,11 @@ def test_cli_exact_public_content_and_self_contained_page(world, tmp_path, capsy
     with pytest.raises(PermissionError):
         ledger.append({"kind": "bad"})
     assert world.read_bytes() == before
-    assert {p.name for p in out.iterdir()} == {"wake.html", "wake.json"}
+    # The page, its document, and one returns page per window that saw a return.
+    names = {p.name for p in out.iterdir()}
+    assert {"wake.html", "wake.json"} <= names
+    assert names - {"wake.html", "wake.json"} == {
+        f"returns-{row['window']}.json" for row in data["returns"]["pages"]["windows"]}
     page = Page((out / "wake.html").read_text())
     assert any(tag == "svg" for tag, _ in page.tags)
     assert any(tag == "details" and "open" not in attrs for tag, attrs in page.tags)
@@ -453,7 +457,7 @@ def test_edition2_views_are_additive_and_read_only_public_items(tmp_path, script
     data = collect_wake(world)
     assert SAMPLE_KEYS < set(data)
     assert set(data) - SAMPLE_KEYS == {"entitlements", "money", "deliveries", "commitments",
-                                        "cells", "liveness"}
+                                        "cells", "liveness", "returns"}
     # Existing keys keep their shape: the five pots the site reads are all present,
     # beside the endowment keys W1 added (C1, C2).
     assert {"venue", "reserve", "venice", "seed", "complete"} <= set(data["pots"]["current"])
@@ -531,6 +535,153 @@ def test_edition2_views_are_additive_and_read_only_public_items(tmp_path, script
     data = collect_wake(world)
     assert data["liveness"]["status"] == "terminated"
     assert data["liveness"]["terminated_ns"] == 3 * 10**12
+
+
+def _event(kind, ts_ns, payload):
+    return {"kind": "event", "event": {"kind": kind, "ts_ns": ts_ns, "payload": payload}}
+
+
+def _invocation(handle, seat, role, outputs, *, ts_ns, cost=7, model="fake-haiku"):
+    return {"kind": "invocation", "assembly_id": seat, "role": role, "handle": handle,
+            "cost": cost, "status": "ok", "stop_reason": "end_turn", "served_by": model,
+            "outputs": json.dumps(outputs), "ts": ts_ns}
+
+
+def test_returns_publish_every_answer_live_with_its_verdicts(world, tmp_path):
+    """One row per invocation as soon as it is in the ledger, linked to what judged it."""
+    manifest = load_manifest("scripted")
+    before = collect_wake(world)
+    returns = before["returns"]
+    assert set(returns) == {"limit", "total", "rows", "pages"}
+    assert returns["limit"] == 500 and returns["total"] == len(returns["rows"]) > 0
+    for row in returns["rows"]:
+        assert set(row) == {"window", "ts_ns", "handle", "seat", "role", "model", "status",
+                            "stop_reason", "cost_micro", "outputs", "tool_calls", "verdicts",
+                            "meta_verdicts"}
+        assert row["seat"] in {a.id for a in manifest.assemblies}
+        assert isinstance(row["outputs"], dict)  # as written, parsed back from the diary
+    # The scripted judges write a rationale; it is on the page, unredacted.
+    assert any(row["outputs"].get("rationale") == "scripted judgement" for row in returns["rows"])
+
+    writer = Ledger.reopen(world, manifest=json.loads(manifest.canonical_json()))
+    late = 10**13
+    writer.append({"kind": "tool.call", "handle": "decision-live", "assembly_id": "seed-decider",
+                   "tool": "market.mid", "args": '{"coin": "BTC"}', "ok": True, "outcome": "ok",
+                   "cost": 3, "ts": late})
+    writer.append(_invocation("decision-live", "seed-decider", "producer", {
+        "action": "hold", "rationale": "LIVE_RATIONALE_TEXT <b>unescaped?</b>",
+        "register": [{"kind": "tool", "id": "spread-check"}],
+        "forecasts": [{"predicate": "wallet_up", "q": 0.4}],
+    }, ts_ns=late))
+    after = collect_wake(world)["returns"]
+    assert after["total"] == returns["total"] + 1
+    row = after["rows"][-1]
+    assert row["handle"] == "decision-live" and row["seat"] == "seed-decider"
+    assert row["role"] == "producer" and row["model"] == "fake-haiku"
+    assert row["status"] == "ok" and row["cost_micro"] == 7 and row["ts_ns"] == late
+    assert row["outputs"]["rationale"].startswith("LIVE_RATIONALE_TEXT")
+    assert row["outputs"]["register"] == [{"kind": "tool", "id": "spread-check"}]
+    assert row["tool_calls"] == [{"ts_ns": late, "tool": "market.mid", "args": '{"coin": "BTC"}',
+                                  "outcome": "ok", "ok": True, "cost_micro": 3}]
+    assert row["verdicts"] == [] and row["meta_verdicts"] == []
+    # A judge's verdict and a meta verdict about that return attach by handle once they land.
+    writer.append(_event("Verdict", late + 1, {
+        "about_handle": "decision-live", "evaluator_handle": "decision-judge",
+        "verdict": 0.8, "payoff": 0.6, "rationale": "JUDGE_RATIONALE_TEXT",
+        "producer_outputs": {"action": "hold"}, "propensity": {"chosen": "hold"}}))
+    writer.append(_event("MetaVerdict", late + 2, {
+        "about": "decision-live", "tier": 2, "score": 0.9, "by": "decision-meta",
+        "evaluator_handle": "decision-judge", "rationale": "META_RATIONALE_TEXT",
+        "propensity": {"chosen": "conform"}}))
+    row = collect_wake(world)["returns"]["rows"][-1]
+    assert row["verdicts"] == [{"ts_ns": late + 1, "by": "decision-judge", "verdict": 0.8,
+                                "payoff": 0.6, "rationale": "JUDGE_RATIONALE_TEXT"}]
+    assert row["meta_verdicts"] == [{"ts_ns": late + 2, "by": "decision-meta",
+                                     "judge": "decision-judge", "tier": 2, "score": 0.9,
+                                     "rationale": "META_RATIONALE_TEXT"}]
+    # A verdict that lands before its return's row (an out-of-order diary) still attaches.
+    writer.append(_event("Verdict", late + 3, {"about_handle": "decision-early",
+                                                "evaluator_handle": "decision-judge",
+                                                "verdict": 0.1, "payoff": 0.2,
+                                                "rationale": "early"}))
+    writer.append(_invocation("decision-early", "seed-decider", "producer", {"action": "noop"},
+                              ts_ns=late + 4))
+    row = collect_wake(world)["returns"]["rows"][-1]
+    assert row["handle"] == "decision-early" and row["verdicts"][0]["rationale"] == "early"
+    # A return the diary's cap cut is published as the text that survived, never invented.
+    writer.append({**_invocation("decision-cut", "seed-decider", "producer", {}, ts_ns=late + 5),
+                   "outputs": '{"action": "hold", "rationale": "cut off he'})
+    row = collect_wake(world)["returns"]["rows"][-1]
+    assert row["outputs"] == {"truncated_text": '{"action": "hold", "rationale": "cut off he'}
+    # The page renders the rationale as readable, escaped prose, not only as JSON.
+    page = render_wake(collect_wake(world))
+    assert "<h2>returns</h2>" in page
+    assert "<blockquote>LIVE_RATIONALE_TEXT &lt;b&gt;unescaped?&lt;/b&gt;</blockquote>" in page
+    assert "<blockquote>JUDGE_RATIONALE_TEXT</blockquote>" in page
+    assert "<blockquote>META_RATIONALE_TEXT</blockquote>" in page
+    assert "<b>unescaped?</b>" not in page
+    assert page.count("<article>") == collect_wake(world)["returns"]["total"]
+
+
+def test_returns_are_bounded_on_the_page_and_paginated_by_window(world, tmp_path):
+    manifest = load_manifest("scripted")
+    writer = Ledger.reopen(world, manifest=json.loads(manifest.canonical_json()))
+    for n in range(4):
+        writer.append(_invocation(f"decision-w{n}", "seed-decider", "producer",
+                                  {"action": "hold", "n": n}, ts_ns=10**13 + n))
+    writer.append({"kind": "price.window", "window": 7, "ts": 10**13 + 10})
+    writer.append(_invocation("decision-next", "eval-a", "evaluator", {"verdict": 0.5},
+                              ts_ns=10**13 + 11))
+    total = collect_wake(world)["returns"]["total"]
+    out = tmp_path / "public"
+    assert main(["wake", "--ledger", str(world), "--out", str(out), "--returns", "3"]) == 0
+    data = json.loads((out / "wake.json").read_text())
+    returns = data["returns"]
+    assert returns["limit"] == 3 and returns["total"] == total and len(returns["rows"]) == 3
+    assert [row["handle"] for row in returns["rows"]] == ["decision-w2", "decision-w3",
+                                                          "decision-next"]
+    assert returns["rows"][-1]["window"] == 8 and returns["rows"][0]["window"] == 0
+    pages = returns["pages"]
+    assert pages["file"] == "returns-{window}.json"
+    assert pages["first_window"] == 0 and pages["last_window"] == 8
+    assert {p["window"] for p in pages["windows"]} == {0, 8}
+    assert sum(p["rows"] for p in pages["windows"]) == total
+    # Every return is in its window's page, in ledger order, whatever the page limit.
+    for page in pages["windows"]:
+        document = json.loads((out / f"returns-{page['window']}.json").read_text())
+        assert document["world"] == "scripted" and document["window"] == page["window"]
+        assert len(document["rows"]) == page["rows"]
+        assert all(row["window"] == page["window"] for row in document["rows"])
+    first = json.loads((out / "returns-0.json").read_text())["rows"]
+    assert [row["handle"] for row in first[-4:]] == [f"decision-w{n}" for n in range(4)]
+    assert json.loads((out / "returns-8.json").read_text())["rows"][0]["handle"] == "decision-next"
+    # The page shows exactly the bounded rows, and every page file is world-readable.
+    html_page = (out / "wake.html").read_text()
+    assert html_page.count("<article>") == 3 and "3 of " in html_page
+    assert all((p.stat().st_mode & 0o777) == 0o644 for p in out.iterdir())
+    # An unchanged page is left alone on republish; a changed one is replaced atomically.
+    stamp = (out / "returns-0.json").stat().st_mtime_ns
+    assert main(["wake", "--ledger", str(world), "--out", str(out), "--returns", "3"]) == 0
+    assert (out / "returns-0.json").stat().st_mtime_ns == stamp
+    assert main(["wake", "--ledger", str(world), "--out", str(out), "--returns", "0"]) == 0
+    assert json.loads((out / "wake.json").read_text())["returns"]["rows"] == []
+
+
+def test_returns_are_additive_and_leave_every_existing_key_unchanged(world):
+    with_returns = collect_wake(world)
+    without = collect_wake(world, returns=0)
+    assert set(with_returns) == set(without) == {*VIEWS, *SECTIONS, "world", "manifest_hash",
+                                                 "uptime_ns", "last_event_time_ns"}
+    assert SAMPLE_KEYS < set(with_returns) and "returns" in SECTIONS
+    for key in set(with_returns) - {"returns"}:
+        assert with_returns[key] == without[key], key
+    # The other sections still fold to role totals: no seat id or handle outside returns.
+    text = json.dumps({k: v for k, v in with_returns.items() if k != "returns"})
+    assert "seed-decider" not in text and "eval-a" not in text and "decision-" not in text
+    # A failed chain leaves returns unavailable with everything else, never half a list.
+    with world.open("ab") as stream:
+        stream.write(b'{"item":')
+    assert collect_wake(world, sleep=lambda _: None)["returns"] == UNAVAILABLE
 
 
 def test_public_window_item_carries_the_income_classes_beside_the_pots():

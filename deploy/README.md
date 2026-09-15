@@ -181,8 +181,8 @@ The CLI loads the usual root key files; the ledger's existing
 resume and wake. No new viewing key is generated. Wake never releases the public
 seal. Do not use `postmortem`, `report`, summaries or key inspection as a live view.
 The web server has a separate dynamic user and no access to the key files or runs.
-Keep `www` exclusively for `wake.html` and `wake.json`; never symlink private
-files into it.
+Keep `www` exclusively for `wake.html`, `wake.json` and the `returns-<window>.json`
+pages the wake writes beside them; never symlink private files into it.
 
 ## Rehearse, start once, verify, leave it alone
 
@@ -458,7 +458,7 @@ service logging after launch.
 Exactly these fields are published: `wallet_series`, `spend_by_capability`,
 `invocations_by_assembly`, `action_frequencies`, `settlement_latency`, `roster`,
 `tools`, `observations`, `charter`, `compute`, `pots`, `immune`, `portfolio`,
-`money`, `deliveries`, `commitments`, `cells`, `liveness`,
+`money`, `deliveries`, `commitments`, `cells`, `liveness`, `entitlements`, `returns`,
 `world`, `manifest_hash`, `uptime_ns`, `last_event_time_ns`, plus `venue` when a
 venue key is present and `reserve` when a reserve key is present. The five views originate
 from `Ledger.aggregate`, each verifying the same frozen chain. The three identity-bearing
@@ -502,10 +502,15 @@ the page cannot grow with the diary.
 | `commitments` | Open decisions (`decision.open` without a `decision.settle` or `decision.timeout`) and sealed forecasts (`forecast.seal` without a `ForecastSettled`): counts, the oldest age, and up to 200 rows of channel or predicate, age and deadline. Ages are against wall time while the world lives and against the last event once it does not. No handle is published. |
 | `cells` | The behavioural cell of each `immune.window` profile, computed by the versioning module's `cell_series` with the manifest's immune cuts: dimensions, cuts, one row per window with its cell and whether it changed, and the transition count. |
 | `liveness` | `alive`, `dormant` or `terminated`, from the `Launch` and `Terminated` events and the `dormant` items an endowed world writes when it pauses between releases (`entered`/`exited` with timestamps); every dormant period is listed. |
+| `returns` | Every agent's answer, live and unredacted: one row per `invocation` item as soon as it is in the ledger, with `window`, `ts_ns`, `handle`, `seat` (the assembly id), `role`, `model` (as served), `status`, `stop_reason`, `cost_micro` and `outputs` exactly as the diary wrote them (action, rationale, forecasts, register proposals, notes, ballots and their reasons; a return the diary's 4000-character cap cut is published as `truncated_text`). `tool_calls` are the `tool.call` items under the same handle (tool, logged args, outcome, cost). `verdicts` and `meta_verdicts` are the `Verdict` and `MetaVerdict` events about that handle, attached as they land: who judged, the verdict or score, the payoff, the tier and the judge's rationale. The page carries the latest `--returns` rows (default 500) with `total` and a `pages` index; every return is also written to its window's `returns-<window>.json` beside `wake.json`, so nothing said is lost when the page rolls. |
 
-Sealed and never published anywhere in either artifact: learner state and router
-weights, propensities, private memories, raw request and return text, per-decision
-scores, prompts, tool source, assembly ids and wallet or chain addresses. The page
+Every return is public because the essay says darkness is not secrecy: what the
+population wrote is the experiment's product, and withholding it protected the
+architect from reading, not the world from being read. What stays sealed until
+death is the machinery: learner state and router weights, the router's own
+sampling propensities, private memories, prompts, per-decision scores, tool
+source and wallet or chain addresses. Assembly ids and handles appear only in
+`returns`; every other section still folds to role totals. The page
 stays static: no script, no external resource, no address, no key material. These
 sections are absent (`"unavailable"`) only when the chain fails to verify; before
 the first window closes the standing sections fall back to the genesis manifest's
