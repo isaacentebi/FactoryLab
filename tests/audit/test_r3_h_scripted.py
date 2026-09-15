@@ -12,7 +12,9 @@ from factorylab.world.scripted import ScriptedProvider
 
 
 def _tick(wallet="10", venue="1000", mid="100", index=1):
-    return {"world": {"wallet_balance_usd": wallet},
+    # Edition 3 (C4): the scripted producer sizes from the trading equity in its own
+    # YOU block, not from a root wallet figure the world block no longer carries.
+    return {"seat": {"world_resources": {"trading_equity_usd": wallet}},
             "payload": {"account": {"equity_usd": venue},
                         "mids": {"BTC": mid}, "index": index}}
 
@@ -28,7 +30,7 @@ def test_sizes_from_world_wallet(leverage):
 
 def test_missing_wallet_does_not_fall_back_to_venue_equity():
     inputs = _tick()
-    del inputs["world"]
+    del inputs["seat"]
     assert ScriptedProvider()._produce("event Tick", inputs)["action"] == "hold"
 
 
