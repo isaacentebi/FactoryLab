@@ -93,10 +93,26 @@ class AssemblySeed:
     role: str = "producer"
     emits: tuple[str, ...] | None = None
     schemas: dict[str, dict] = field(default_factory=dict)
+    #: Edition 3, C2: the minimum ticks between this seat's paid wakes. The seat owns it
+    #: after launch; the manifest only says where it starts. 1 is "every tick it is drawn".
+    cadence_floor: int = 1
+    #: Edition 3, C1: the first head of this seat's working state, a JSON object. The
+    #: manifest lens lives here (``{"lens": "..."}``); the seat may overwrite it.
+    initial_state: dict[str, Any] = field(default_factory=dict)
+    #: The seat's own system prompt. ``None`` keeps the population-wide seed prompt, which
+    #: is what every world before edition 3 used and what their roster hashes recorded.
+    system_prompt: str | None = None
 
     def __post_init__(self) -> None:
         from factorylab.cortex.registration import output_contracts, seed_emits
 
+        if type(self.cadence_floor) is not int or self.cadence_floor < 1:
+            raise ValueError("assembly cadence_floor must be a positive integer of ticks")
+        if not isinstance(self.initial_state, dict):
+            raise ValueError("assembly initial_state must be a JSON object")
+        if self.system_prompt is not None and (
+                not isinstance(self.system_prompt, str) or not self.system_prompt.strip()):
+            raise ValueError("assembly system_prompt must be nonempty text when present")
         emits, schemas = output_contracts(
             self.emits if self.emits is not None else seed_emits(self.role), self.schemas)
         object.__setattr__(self, "emits", emits)
@@ -243,6 +259,33 @@ class TerminationSpec:
 
 
 @dataclass(frozen=True)
+class KillSpec:
+    """The kill contract (edition 3, C5), precommitted in the manifest and nowhere else.
+
+    ``wind_down = true``: every kill cancels the world's resting orders, closes its open
+    perp positions and sells its spot balances at market before ``Terminated``, so a dead
+    factory carries no exposure. ``false`` is the behaviour every world before edition 3
+    had: the runtime stops and whatever is open at the venue stays open.
+    """
+
+    wind_down: bool = False
+    #: Spot balances worth at most this are left alone: selling dust is a fee, not an exit.
+    dust_micro: int = 1_000_000
+
+
+@dataclass(frozen=True)
+class ProvidersSpec:
+    """Prepaid inference inventories, shown separately because they do not substitute.
+
+    An OpenRouter balance cannot refill a Venice-only seat (GPT-6 §12.1). These are
+    inventory facts for the world block and the accounting, never a spend authority.
+    """
+
+    openrouter_micro: int = 0
+    venice_micro: int = 0
+
+
+@dataclass(frozen=True)
 class EndowmentSpec:
     """Locked backing and the tranches that release it, as offsets from the Launch (C1), and
     how each unlocked tranche is classified: ``base_share`` split equally across live seats,
@@ -275,6 +318,8 @@ class WorldManifest:
     committee: CommitteeSpec = CommitteeSpec()
     immune: ImmuneSpec = ImmuneSpec()
     endowment: EndowmentSpec = EndowmentSpec()
+    kill: KillSpec = KillSpec()
+    providers: ProvidersSpec = ProvidersSpec()
     tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -348,6 +393,20 @@ class WorldManifest:
         # without locked backing, or at the default byte-day rent, hashes as it always did.
         if payload["endowment"] == asdict(EndowmentSpec()):
             payload.pop("endowment")
+        # Edition 3's keys are hash-neutral at their defaults, so every world that predates
+        # the kill contract, the provider inventories and the per-seat fields keeps both its
+        # manifest identity and the roster hash its charter was ratified against.
+        if payload["kill"] == asdict(KillSpec()):
+            payload.pop("kill")
+        if payload["providers"] == asdict(ProvidersSpec()):
+            payload.pop("providers")
+        for assembly in payload["assemblies"]:
+            if assembly.get("cadence_floor") == 1:
+                assembly.pop("cadence_floor", None)
+            if not assembly.get("initial_state"):
+                assembly.pop("initial_state", None)
+            if assembly.get("system_prompt") is None:
+                assembly.pop("system_prompt", None)
         if payload["notes"].get("micro_per_byte_day") == NotesSpec().micro_per_byte_day:
             payload["notes"].pop("micro_per_byte_day")
         # Preserve historical manifest identities while the blame floor keeps its default.
@@ -769,6 +828,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             role=a.get("role", "producer"),
             emits=tuple(a["emits"]) if "emits" in a else None,
             schemas=a.get("schemas", {}),
+            cadence_floor=a.get("cadence_floor", 1),
+            initial_state=a.get("initial_state", {}),
+            system_prompt=a.get("system_prompt"),
         )
         for a in d.get("assemblies", [])
     )
@@ -870,10 +932,45 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         clock=ClockSpec(duration_ns(clock.get("min_tick", default_min_tick))),
         tick_interval_ns=duration_ns(d.get("tick_interval", "10s")),
         endowment=endowment,
+        kill=_manifest_kill(d.get("kill")),
+        providers=_manifest_providers(d.get("providers")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
     m.validate()
     return m
+
+
+def _manifest_kill(raw: Any) -> KillSpec:
+    """``[kill] wind_down = true`` (C5): what a kill owes the venue, fixed before launch."""
+    if raw is None:
+        return KillSpec()
+    if not isinstance(raw, dict) or set(raw) - {"wind_down", "dust_usd"}:
+        raise ValueError("kill accepts only wind_down and dust_usd")
+    wind_down = raw.get("wind_down", False)
+    if type(wind_down) is not bool:
+        raise ValueError("kill.wind_down must be true or false")
+    dust = raw.get("dust_usd", "1")
+    if type(dust) not in (str, int):
+        raise ValueError("kill.dust_usd must be exact USD text or integer")
+    return KillSpec(wind_down=wind_down, dust_micro=usd_to_micro(dust, rounding="exact"))
+
+
+def _manifest_providers(raw: Any) -> ProvidersSpec:
+    """``[providers]``: the prepaid inventory behind each route, stated separately (C5)."""
+    if raw is None:
+        return ProvidersSpec()
+    if not isinstance(raw, dict) or set(raw) - {"openrouter_usd", "venice_usd"}:
+        raise ValueError("providers accepts only openrouter_usd and venice_usd")
+    amounts = []
+    for key in ("openrouter_usd", "venice_usd"):
+        value = raw.get(key, 0)
+        if type(value) not in (str, int):
+            raise ValueError(f"providers.{key} must be exact USD text or integer")
+        micro = usd_to_micro(value, rounding="exact")
+        if micro < 0:
+            raise ValueError(f"providers.{key} must be nonnegative")
+        amounts.append(micro)
+    return ProvidersSpec(openrouter_micro=amounts[0], venice_micro=amounts[1])
 
 
 def _manifest_endowment(raw: Any) -> EndowmentSpec:

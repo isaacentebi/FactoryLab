@@ -36,7 +36,13 @@ def roster_hash(manifest: Any) -> str:
     from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT
 
     model_ids = {a.model_id for a in manifest.assemblies}
-    roster = {"assemblies": [asdict(a) for a in manifest.assemblies],
+    # Edition 3's per-seat keys (cadence_floor, initial_state, system_prompt) are dropped
+    # at their defaults for the same reason extra_body is: a roster surveyed before they
+    # existed must keep the exact hash its ratification recorded.
+    seed_defaults = {"cadence_floor": 1, "initial_state": {}, "system_prompt": None}
+    roster = {"assemblies": [{k: v for k, v in asdict(a).items()
+                              if seed_defaults.get(k, object()) != v}
+                             for a in manifest.assemblies],
               "system_prompt": SEED_SYSTEM_PROMPT,
               # A model tier's optional extra request body (edition 2, W10) is dropped when
               # empty so every roster surveyed before it existed keeps its recorded hash.

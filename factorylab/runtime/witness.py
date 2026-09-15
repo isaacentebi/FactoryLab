@@ -50,6 +50,7 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from factorylab.kernel import termination as _termination
 
@@ -163,8 +164,23 @@ def _post(url: str, line: dict, *, timeout: float) -> dict | None:
     return parsed if isinstance(parsed, dict) else {}
 
 
+#: What the kill about to happen owed the venue (edition 3, C5): whether the manifest
+#: precommitted a wind-down and how many orders it sent. Set by the kill path just
+#: before ``Termination.kill`` (``runtime/venue.py``, ``runtime/cli.py``) and read once
+#: by ``record_kill``. A kill that never set it is witnessed as ``wind_down: false``
+#: with no orders, which is the truth about every world before the contract existed.
+_pending_wind_down: dict[str, Any] = {"wind_down": False, "orders": 0}
+
+
+def note_wind_down(*, wind_down: bool, orders: int) -> None:
+    """Record what the next kill line should say about the venue. Never raises."""
+    _pending_wind_down["wind_down"] = bool(wind_down)
+    _pending_wind_down["orders"] = int(orders) if type(orders) is int else 0
+
+
 def kill_line(*, world: str | None, launch_nonce: str | None, release_digest: str | None,
-              ledger_head: str | None, diary: str | None, reason: str | None) -> dict:
+              ledger_head: str | None, diary: str | None, reason: str | None,
+              wind_down: bool = False, wind_down_orders: int = 0) -> dict:
     """The one line a kill writes: the identity, the release, the diary prefix and the reason."""
     line = {
         "world": world if isinstance(world, str) and _WORLD.match(world) else "unknown",
@@ -173,6 +189,10 @@ def kill_line(*, world: str | None, launch_nonce: str | None, release_digest: st
         "ledger_head": ledger_head or "absent",
         "launch_nonce": launch_nonce,
         "reason": reason if isinstance(reason, str) and _REASON.match(reason) else "none",
+        # The kill contract, outside the diary: what this world owed the venue and how
+        # many orders it actually sent. A reader of a restored copy learns both.
+        "wind_down": bool(wind_down),
+        "wind_down_orders": int(wind_down_orders) if type(wind_down_orders) is int else 0,
     }
     if diary is not None:
         line["diary"] = diary
@@ -198,7 +218,10 @@ def record_kill(ledger, reason: str) -> dict | None:
             return None
         line = kill_line(world=identity.get("world"), launch_nonce=nonce,
                          release_digest=identity.get("release_digest"),
-                         ledger_head=ledger.byte_hash(), diary=diary, reason=reason)
+                         ledger_head=ledger.byte_hash(), diary=diary, reason=reason,
+                         wind_down=_pending_wind_down["wind_down"],
+                         wind_down_orders=_pending_wind_down["orders"])
+        note_wind_down(wind_down=False, orders=0)  # one note belongs to one kill
         # Append first: the local file is the record; the receiver holds a copy.
         _append(witness_path(path), line)
         url = _receiver_url()

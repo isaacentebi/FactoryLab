@@ -349,6 +349,11 @@ class BootstrapMixin:
                     role=a.role,
                     emits=a.emits,
                     schemas=a.schemas,
+                    # Edition 3, C5: a seat may carry its own lens. Until C1's working
+                    # state lands the lens is the seat's prompt; a manifest that names
+                    # none keeps the population-wide seed prompt.
+                    **({"system_prompt": a.system_prompt}
+                       if a.system_prompt is not None else {}),
                 )
             )
         if not self.ledger.bootstrap:

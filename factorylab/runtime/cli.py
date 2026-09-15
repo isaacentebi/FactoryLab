@@ -400,6 +400,32 @@ def _cmd_order_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _kill_wind_down(manifest, ledger, wind_down) -> dict:
+    """Build the world's venue and leave it flat, or ledger why that was impossible.
+
+    Separated so the one rule is visible in one place: nothing raised here reaches
+    the kill. A world on the deterministic fake venue has no external exposure to
+    unwind, and says so rather than pretending it acted.
+    """
+    if manifest.exchange.kind != "hyperliquid":
+        ledger.append({"kind": "kill.wind_down", "step": "skipped",
+                       "reason": f"no live venue: exchange kind {manifest.exchange.kind}"})
+        return {"attempted": False, "orders": 0,
+                "skipped": f"exchange kind {manifest.exchange.kind}"}
+    try:
+        from factorylab.world.exchange import live_exchange
+
+        _load_dotenv()
+        exchange = live_exchange(manifest.exchange,
+                                 launch_nonce=(ledger.identity() or {}).get("launch_nonce"))
+    except Exception as exc:  # noqa: BLE001 - the venue may never block a kill
+        ledger.append({"kind": "kill.wind_down", "step": "unavailable",
+                       "error": type(exc).__name__})
+        return {"attempted": True, "orders": 0, "failed": 1,
+                "errors": [{"step": "venue", "error": type(exc).__name__}]}
+    return wind_down(exchange, ledger, dust_micro=manifest.kill.dust_micro)
+
+
 def _cmd_kill(args: argparse.Namespace) -> int:
     """End a living world now, finally, and release its seal. The operator's one control.
 
@@ -409,21 +435,38 @@ def _cmd_kill(args: argparse.Namespace) -> int:
     and the only path that releases the ledger key. Takes no argument that could
     steer a world: a world is created once and ended once, and nothing in
     between is the experimenter's to say.
+
+    When the world's manifest precommitted ``[kill] wind_down = true`` (edition 3,
+    C5) the venue is wound down first: every resting order cancelled, every open
+    position closed, every spot balance above dust sold, each ledgered as
+    ``kill.wind_down`` before ``Terminated``. That is the one thing a kill reaches
+    the network for, and it cannot delay finality: an unreachable venue, a missing
+    credential or a refused order is ledgered as a failed wind-down and the kill
+    proceeds regardless. A manifest that says nothing, or says false, keeps the
+    old behaviour and loads no credential at all.
     """
     from factorylab.kernel.events import Bus
     from factorylab.kernel.ledger import Ledger, LedgerBusyError, LedgerIntegrityError, LedgerLock
     from factorylab.kernel.termination import Termination
+    from factorylab.runtime import witness
+    from factorylab.runtime.venue import wind_down
 
     try:
         with LedgerLock(args.ledger):
             manifest = load_manifest(args.world)
             ledger = Ledger.reopen(args.ledger, manifest=json.loads(manifest.canonical_json()))
             termination = Termination(ledger=ledger, bus=Bus(ledger))
+            report = {"attempted": False, "orders": 0}
+            if manifest.kill.wind_down:
+                report = _kill_wind_down(manifest, ledger, wind_down)
+            witness.note_wind_down(wind_down=bool(manifest.kill.wind_down),
+                                   orders=report["orders"])
             termination.kill("explicit_kill:operator")
             print(json.dumps({
                 "world": manifest.name,
                 "terminated": True,
                 "termination_reason": termination.reason,
+                "wind_down": report,
                 "seal_key_released": ledger.seal_key_released(),
             }))
         return TERMINATED_EXIT
@@ -818,8 +861,11 @@ def main(argv: list[str] | None = None) -> int:
     """Dispatch one command, translating every failure into one reason code."""
     args = build_parser().parse_args(argv)
     if args.cmd == "kill":
-        # Finality must not depend on a credential: kill loads none and reaches
-        # no network. It handles its own failures and names its own exit code.
+        # Finality must not depend on a credential or a venue. A world whose manifest
+        # precommitted a wind-down (edition 3, C5) has its venue emptied first, and
+        # every failure of that step is ledgered and stepped over; a world that did
+        # not precommit one still loads nothing and reaches no network. Either way
+        # this command handles its own failures and names its own exit code.
         return int(args.func(args))
     if args.cmd == "run":
         from factorylab.cortex.sandbox import NoJail
