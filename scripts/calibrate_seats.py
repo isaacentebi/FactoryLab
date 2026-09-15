@@ -395,7 +395,8 @@ def build_scenarios(rt: Runtime, candidate: str, seats: dict[str, str], *, sampl
     handle = open_handle(rt, producer, CH_VERDICT, f"{tag}:produce")
     produce_inputs = {
         "kind": "Tick", "payload": _tick_payload(rt, sample + 1), "world": world,
-        "your_recent_returns": list(rt.memory.get(producer, ())),
+        "your_state": rt.working_state.render(producer),
+        "unread_outcomes": rt.outcomes.unread(producer),
         "your_action_policy": rt._action_policy(producer),
     }
     produce_schema = {"type": "object", "properties": {
@@ -417,7 +418,8 @@ def build_scenarios(rt: Runtime, candidate: str, seats: dict[str, str], *, sampl
                              "params": {"horizon_events": rt.ev.forecast_horizon_events},
                              "q": 0.4},
         "world": world,
-        "your_recent_returns": list(rt.memory.get(judge, ())),
+        "your_state": rt.working_state.render(judge),
+        "unread_outcomes": rt.outcomes.unread(judge),
         "your_consequence_standing": rt._standing_for(judge),
         "your_action_policy": rt._action_policy(judge),
     }

@@ -147,9 +147,19 @@ class OutcomeInbox:
             "rationale": outputs.get("rationale") or outputs.get("action"),
             "payoff": outputs.get("payoff"),
             "forecasts": forecasts if isinstance(forecasts, list) else [],
+            # A judge's fidelity objection (C3) rides on its return; the settler
+            # reads it back from here when the verdict's consequence settles.
+            "fidelity_objection": outputs.get("fidelity_objection"),
         }
         while len(self.said) > MAX_SAID:
             self.said.pop(next(iter(self.said)))
+
+    def entry_for(self, handle: str) -> dict[str, Any]:
+        """The ``{"handle", "outputs"}`` view of one retained return, for the settler."""
+        record = self.said.get(handle, {})
+        outputs = {k: record[k] for k in ("rationale", "payoff", "forecasts",
+                                          "fidelity_objection") if k in record}
+        return {"handle": handle, "outputs": outputs}
 
     def seat_of(self, handle: str) -> str | None:
         """The seat that made a decision, as the inbox recorded it."""

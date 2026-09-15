@@ -50,7 +50,8 @@ def test_reserved_names_and_types_are_published_from_the_validator():
         assert set(declared) == {"action", "rationale", "reason", "status", "coin", "side",
                                  "verdict", "payoff", "conformity", "vote", "register",
                                  "tool_calls", "requests", "forecasts", "emits", "about_handle",
-                                 "propensity"}
+                                 "propensity",
+                                 "working_state", "ack_through"}  # edition 3, C1
         assert declared["status"] == {"type": "string"}
         with pytest.raises(ValueError):
             _validate_return({"status": {"done": True}}, {"type": "object"})
