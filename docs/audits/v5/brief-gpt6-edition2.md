@@ -1,8 +1,9 @@
 # Cold review brief for edition 2 (for GPT-6 Pro, after wave two merges)
 
-Paste everything below the line into the reviewer with the repository zip at the commit named
-in "Scope", `Superdark Factory.md` as the essay, and your own prior deliverables
-(`docs/audits/v4/gpt6/`) so it can hold itself to them.
+Paste everything below the line into the reviewer as the message, with the zip attached. The
+zip is self-contained: the repository at the commit named in "Scope", the essay as
+`Superdark Factory.md` at its top level, a copy of this brief as `BRIEF.md`, and the reviewer's
+own first-round deliverables under `docs/audits/v4/gpt6/` so it can hold itself to them.
 
 ---
 
