@@ -724,7 +724,9 @@ def build_parser() -> argparse.ArgumentParser:
                                            metavar="subcommand")
     for name, summary in (("status", "print the journal's state and both rails' balances"),
                           ("transfer", "submit one transfer and journal every step"),
-                          ("advance", "continue an interrupted transfer; never start another")):
+                          ("advance", "continue an interrupted transfer; never start another"),
+                          ("probe", "read balances, fee quotes and the exit branch; "
+                                    "no transaction, no signature, no journal write")):
         command = treasury_sub.add_parser(name, help=summary)
         command.add_argument("--ledger", default="runs/treasury-testnet.jsonl",
                              help="acceptance journal path")
@@ -734,6 +736,14 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--direction", required=True, choices=("to_reserve", "to_venue"),
                                  help="which way the USDC moves")
             command.add_argument("--usd", required=True, help="amount in USD, as text")
+        if name == "probe":
+            command.add_argument("--usd", help="also dry-run the to_reserve preflight and print "
+                                               "the unsigned withdrawal reference for this amount")
+        if name in ("transfer", "probe"):
+            command.add_argument("--forwarding", default="on_empty_gas",
+                                 choices=("never", "on_empty_gas", "always"),
+                                 help="when Circle forwards the Base mint instead of the reserve "
+                                      "paying its gas (treasury.cctp_forwarding)")
         command.set_defaults(func=_cmd_treasury)
 
     kill = sub.add_parser("kill", help="end a living world now and release its seal",

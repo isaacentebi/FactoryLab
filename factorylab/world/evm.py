@@ -21,7 +21,17 @@ class RailError(RuntimeError):
 
 
 class Pending(RailError):
-    """Keep the existing reference live; a new nonce or refund would be unsafe."""
+    """Keep the existing reference live; a new nonce or refund would be unsafe.
+
+    ``carry`` is optional plain data (no RPC bodies, no signing material) the rail
+    hands back to the treasury to persist in the transfer's pending record and
+    receive again on the next attempt, such as a log-scan cursor. It is journaled
+    with the recorded call result, so a resumed world carries it too.
+    """
+
+    def __init__(self, message: str = "", carry: dict | None = None) -> None:
+        super().__init__(message)
+        self.carry = carry
 
 
 @dataclass(frozen=True)
@@ -77,6 +87,9 @@ BASE = Chain(
 CORE_TEST_WALLET = "0x0B80659a4076E9E93C7DbE0f10675A16a3e5C206"
 CORE_WALLET = "0x6B9E773128f453f5c2C60935Ee2DE2CBc5390A24"
 CORE_USDC_SYSTEM = "0x2000000000000000000000000000000000000000"
+# Blocks per eth_getLogs page: Hyperliquid's official RPC documents a 50-block range
+# limit, and a page is a fixed code constant rather than a manifest setting.
+LOG_PAGE_BLOCKS = 50
 
 
 def address(value: str) -> str:
@@ -297,15 +310,28 @@ class EVM:
 
     def logs(self, contract: str, topics: list, start: int) -> list:
         """Read finalized logs only; callers verify event fields as well as the contract."""
+        return self.scan(contract, topics, start)[0]
+
+    def scan(
+        self, contract: str, topics: list, start: int, *, max_pages: int | None = None
+    ) -> tuple[list, int]:
+        """Read finalized logs from ``start`` and report the last block actually read.
+
+        ``max_pages`` bounds one call to that many ``LOG_PAGE_BLOCKS`` pages; a caller
+        that persists the returned block and resumes from the one after it reads every
+        finalized block exactly once across calls. With nothing finalized past
+        ``start`` no page is requested and ``start - 1`` is reported, so the cursor holds.
+        """
         self.check_chain()
         final = self.call("eth_getBlockByNumber", ["finalized", False])
         if not final or int(final["number"], 16) < start:
-            return []
+            return [], start - 1
         end = int(final["number"], 16)
+        if max_pages is not None:
+            end = min(end, start + max_pages * LOG_PAGE_BLOCKS - 1)
         logs = []
         # Bound each RPC page without silently losing events on a provider range limit.
-        # Hyperliquid's official RPC documents a 50-block range limit.
-        for first in range(start, end + 1, 50):
+        for first in range(start, end + 1, LOG_PAGE_BLOCKS):
             logs.extend(
                 self.call(
                     "eth_getLogs",
@@ -314,7 +340,7 @@ class EVM:
                             "address": address(contract),
                             "topics": topics,
                             "fromBlock": hex(first),
-                            "toBlock": hex(min(first + 49, end)),
+                            "toBlock": hex(min(first + LOG_PAGE_BLOCKS - 1, end)),
                         }
                     ],
                 )
@@ -335,7 +361,7 @@ class EVM:
             canonical = self.call("eth_getBlockByNumber", [log["blockNumber"], False])
             if canonical and canonical["hash"].lower() == log["blockHash"].lower():
                 verified.append(log)
-        return verified
+        return verified, end
 
     def system_transfer(
         self, contract: str, data: str, start: int, core_time_ms: int

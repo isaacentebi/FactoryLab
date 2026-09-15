@@ -249,8 +249,10 @@ def test_example_manifest_and_cli_resolve_population_charter(capsys):
     # The launch world's cadence decision is the launch world's: edition 1 is
     # re-drafted with the actual roster and takes a cadence then. Everything else
     # about the two files is still the same file.
-    # The funded draft seeds BTC and ETH perps only; testnet keeps the spot pair
-    # its rehearsals exercised. The population registers spot pairs itself.
+    # The funded draft seeds BTC and ETH perps and the HYPE/USDC spot pair; testnet
+    # keeps PURR/USDC from its rehearsals beside it. HYPE/USDC is the physics of the
+    # exit route (docs/launch-decisions.md, "Self-serve gas"); other pairs the
+    # population registers itself.
     assert replace(example, name=base.name, charter=base.charter, treasury=base.treasury,
                    charter_explicit=base.charter_explicit, exchange=base.exchange,
                    charter_content_sha256=base.charter_content_sha256,
@@ -322,6 +324,37 @@ def test_fidelity_casts_are_explicit_in_all_worlds_and_hashed():
             assert raw["immune"][key] == getattr(manifest.immune, key)
         raw["immune"]["k"] += 1
         assert manifest.manifest_hash() != manifest_from_dict(raw).manifest_hash()
+
+
+def test_forward_fee_headroom_and_the_wait_bound_leave_manifest_identities_unchanged():
+    """Hashes recorded at 25d2750 on feat/self-serve-gas, before ``max_forward_fee_usd``
+    defaulted to "0.30" and ``treasury.forward_wait_windows`` existed. Both defaults are
+    dropped from the canonical JSON, so an unchanged manifest keeps its identity. Testnet's
+    one deliberate identity change in that pass is the seeded HYPE/USDC pair (the physics
+    of the exit route, docs/launch-decisions.md), so it is compared with that seed removed."""
+    import json
+    import tomllib
+
+    from factorylab.runtime.worlds import WORLDS_DIR
+
+    assert load_manifest("scripted").manifest_hash() == (
+        "f3bf34acc6aa2e9a530bd176453c1968e526b4083f7f3dedbea59636bdad2dd8")
+    raw = tomllib.loads((WORLDS_DIR / "testnet.toml").read_text())
+    assert raw["venue"]["spot_pairs"] == ["PURR/USDC", "HYPE/USDC"]
+    raw["venue"]["spot_pairs"] = ["PURR/USDC"]
+    assert manifest_from_dict(raw).manifest_hash() == (
+        "25d4e21e7161d2075bd8fa66b640842fba102970cad7511d14d2e8a697ac9a62")
+    for world in ("scripted", "testnet"):
+        raw = tomllib.loads((WORLDS_DIR / f"{world}.toml").read_text())
+        default = manifest_from_dict(raw)
+        treasury = json.loads(default.canonical_json())["treasury"]
+        assert not {"max_forward_fee_micro", "forward_wait_windows"} & set(treasury)
+        assert default.treasury.max_forward_fee_micro == 300_000
+        assert default.treasury.forward_wait_windows == 2
+        raw.setdefault("treasury", {}).update(max_forward_fee_usd="0.30", forward_wait_windows=2)
+        assert manifest_from_dict(raw).manifest_hash() == default.manifest_hash()
+        raw["treasury"]["max_forward_fee_usd"] = "0.20"
+        assert manifest_from_dict(raw).manifest_hash() != default.manifest_hash()
 
 
 def _testnet_with_charter():

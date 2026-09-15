@@ -9,6 +9,7 @@ from pathlib import Path
 from time import time_ns
 
 from factorylab.kernel.ledger import Ledger
+from factorylab.kernel.money import usd_to_money
 from factorylab.kernel.wallet import Wallet
 from factorylab.runtime.resume import (
     JournalProxy,
@@ -72,6 +73,7 @@ class AcceptanceSession:
         self.treasury = Treasury(
             self.journal, self.wallet, JournalProxy(rail, self.journal, "treasury.rail"),
             fee_ceiling_micro=config["max_transfer_fee_micro"],
+            max_forward_fees_per_window=config.get("max_forward_fees_per_window", 1_000_000),
         )
         self.wallet.bind_pots(self.treasury.pots)
         if saved:
@@ -136,6 +138,44 @@ class AcceptanceSession:
         }
 
 
+def probe(rail, path: Path, config: dict, *, usd: str | None = None) -> dict:
+    """Read both balances, the on-chain fee quotes and the branch the next exit would take.
+
+    Seconds, and read-only: no transaction, no signature, no journal write. With an
+    amount, the real preflight and the unsigned withdrawal reference are printed and
+    discarded, exactly as a world would prepare them. Gas already spent is read from
+    the journal's last checkpoint when one exists.
+    """
+    gas_spent, journal = {}, "absent"
+    if path.exists():
+        try:
+            items = Ledger.reopen(path, manifest=config)._recovery_items()
+            saved = next((i for i in reversed(items)
+                          if i.get("kind") == "treasury.acceptance.snapshot"), None)
+            gas_spent = decode(saved["treasury"])["gas_spent"] if saved else {}
+            journal = "read"
+        except Exception as exc:  # a journal under another config still leaves the probe read-only
+            journal = f"unreadable ({type(exc).__name__})"
+    result = {"reserve_address": rail.reserve_address, "venue_address": rail.venue_address,
+              "networks": [998, 84532], "forwarding": rail.spec.cctp_forwarding,
+              "journal": journal, "gas_spent_wei": gas_spent, "balances": rail.balances(),
+              "reserve_hype_wei": rail.hyper.balance(), "gas": rail.gas_view(gas_spent)}
+    if usd is not None:
+        amount = usd_to_money(str(usd))
+        dry_run = {"direction": "to_reserve", "amount_micro": amount,
+                   "signed": False, "broadcast": False}
+        try:
+            rail.preflight("to_reserve", amount, gas_spent)
+            reference = rail.prepare("withdraw_burn", {
+                "received_micro": amount, "nonce": time_ns() // 1_000_000, "route_data": {},
+            }, gas_spent)
+            dry_run.update(preflight="ok", reference=reference)
+        except RailError as exc:
+            dry_run["refused"] = str(exc)
+        result["dry_run"] = dry_run
+    return result
+
+
 def command(args) -> int:
     """The acceptance CLI can only select Hyperliquid testnet, HyperEVM testnet and Base Sepolia."""
     from eth_account import Account
@@ -146,7 +186,8 @@ def command(args) -> int:
 
     reserve = Account.from_key(os.environ["RESERVE_PRIVATE_KEY"]).address
     spec = TreasurySpec(reserve_address=reserve, hyperevm_gas_budget_wei=5 * 10**16,
-                        base_gas_budget_wei=10**15)
+                        base_gas_budget_wei=10**15,
+                        cctp_forwarding=getattr(args, "forwarding", "on_empty_gas"))
     exchange = HyperliquidExchange(mainnet=False, coins=("ETH",))
     rail = LiveRail(exchange, spec)
     assert rail.testnet and rail.hyper.chain.id == 998 and rail.base.chain.id == 84532
@@ -156,8 +197,15 @@ def command(args) -> int:
               "withdrawal_fee_micro": spec.withdrawal_fee_micro,
               "cctp_max_fee_micro": spec.cctp_max_fee_micro,
               "hyperevm_gas_budget_wei": spec.hyperevm_gas_budget_wei,
-              "base_gas_budget_wei": spec.base_gas_budget_wei}
+              "base_gas_budget_wei": spec.base_gas_budget_wei,
+              # The forwarding mode is a per-transfer choice recorded in treasury.gas_route,
+              # so advance and status reopen the journal without repeating the flag.
+              "max_forward_fee_micro": spec.max_forward_fee_micro,
+              "max_forward_fees_per_window": spec.max_forward_fees_per_window}
     path = Path(args.ledger)
+    if args.treasury_command == "probe":
+        print(json.dumps(probe(rail, path, config, usd=args.usd), default=str))
+        return 0
     if args.treasury_command == "status" and path.exists():
         # Status must not replay an interrupted write. Advance is the explicit recovery command.
         items = Ledger.reopen(path, manifest=config)._recovery_items()

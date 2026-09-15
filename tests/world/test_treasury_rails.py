@@ -59,6 +59,8 @@ class Chain:
         self.disabled = 0
         self.enabled = 1
         self.log_rows = []
+        self.scans = []
+        self.scanned_to = 99
         self.proved = None
         self.core_fee = 0
         self.credit_transfer = True
@@ -84,6 +86,10 @@ class Chain:
 
     def logs(self, contract, topics, start):
         return self.log_rows
+
+    def scan(self, contract, topics, start, *, max_pages=None):
+        self.scans.append((start, max_pages))
+        return self.log_rows, self.scanned_to
 
     def proof(self, txhash):
         return self.proved
@@ -127,6 +133,8 @@ def test_route_is_native_cctp_and_pots_count_usdc_only():
 @pytest.mark.parametrize("direction", ["to_reserve", "to_venue"])
 def test_no_gas_and_source_pot_shortage_are_refused(direction):
     rail = setup()
+    # The self-mint branch is pinned; the forwarded exit is covered in test_gas_route.
+    rail.spec = TreasurySpec(reserve_address=rail.reserve_address, cctp_forwarding="never")
     rail.preflight(direction, 10_000_000, {})
     with pytest.raises(RailError, match="source pot"):
         rail.preflight(direction, 51_000_000, {})
@@ -151,6 +159,7 @@ def test_route_upgrade_agent_key_or_disabled_forwarding_refuses():
 
 def test_used_native_budget_is_not_available_again():
     rail = setup()
+    rail.spec = TreasurySpec(reserve_address=rail.reserve_address, cctp_forwarding="never")
     with pytest.raises(RailError, match="exhausted"):
         rail.preflight("to_reserve", 10_000_000, {"base": rail.base.gas_budget_wei})
 

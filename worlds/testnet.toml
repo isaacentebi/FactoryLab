@@ -206,5 +206,7 @@ max_transfer_fee_usd = "2"
 # Testnet spot: PURR/USDC is the only pair on testnet with a canonical name and a
 # rehearsable lot (szDecimals 0, mid ~$4.6). BTC/USDC exists there but szDecimals 0
 # at a ~$6,100 mid puts one lot far beyond the spot balance a rehearsal holds, and
-# ETH/USDC does not exist on testnet at all.
-spot_pairs = ["PURR/USDC"]
+# ETH/USDC does not exist on testnet at all. HYPE/USDC (@1035 on testnet) is the
+# physics of the exit route: the spot HYPE that pays the population's own Core gas
+# (docs/launch-decisions.md, "Self-serve gas"), one more MarketMid per tick.
+spot_pairs = ["PURR/USDC", "HYPE/USDC"]

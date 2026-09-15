@@ -225,3 +225,22 @@ def test_system_burn_requires_destination_signature_validation_not_just_iris_suc
     row["attestation"] = "0x"
     with pytest.raises(RailError, match="attestation size"):
         cctp.prove_system_burn(source, dest, burn["tx_hash"], expected)
+
+
+def test_a_zero_nonce_is_never_a_consumed_message():
+    source, dest, row, burn = fixture_attestation()
+    dest.read = lambda contract, data: (1).to_bytes(32)
+    with pytest.raises(RailError, match="nonce"):
+        CCTP.consumed(dest, bytes(376))
+    with pytest.raises(RailError, match="nonce"):
+        CCTP.nonce_used(dest, bytes(32))
+    assert CCTP.consumed(dest, bytes(12) + (123).to_bytes(32) + bytes(332))
+    assert CCTP.nonce_used(dest, (123).to_bytes(32))
+    # An attestation whose nonce is zero cannot prove a burn by the consumed-nonce record.
+    attested = bytearray.fromhex(row["message"][2:])
+    attested[12:44] = bytes(32)
+    row["message"] = "0x" + attested.hex()
+    cctp = CCTP(testnet=True, transport=lambda *args: HTTPResponse(200, {"messages": [row]}, {}))
+    expected = cctp.expected_message(source, dest, 5_000_000, **params(source))
+    with pytest.raises(RailError, match="nonce"):
+        cctp.prove_system_burn(source, dest, burn["tx_hash"], expected)

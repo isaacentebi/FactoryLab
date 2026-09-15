@@ -41,7 +41,7 @@ def _available_pairs(meta: dict) -> set[str]:
             for row in meta["universe"]}
 
 
-@pytest.mark.parametrize("world", ["testnet"])
+@pytest.mark.parametrize("world", ["testnet", "edition1-example"])
 def test_every_seeded_spot_pair_exists_on_the_network_the_world_runs_on(world):
     """``_configure_spot`` raises on a pair the venue has never heard of, from a
     constructor that runs before genesis, so a manifest naming one cannot launch."""
@@ -80,8 +80,13 @@ def test_testnet_governance_can_act_every_six_hours_of_world_time():
     assert backstop_s == 6000
     assert manifest.timing.min_ratio * backstop_s == 18000
 
-    # The funded draft seeds no spot pair: the population registers pairs itself.
-    assert load_manifest("edition1-example").exchange.spot_pairs == ()
+    # Both drafts seed HYPE/USDC: the pair is the physics of the exit route, the spot
+    # HYPE the population buys to pay its own Core gas (docs/launch-decisions.md,
+    # "Self-serve gas"), not a trading instruction. Testnet keeps PURR/USDC from its
+    # rehearsals; any other pair the population registers itself. One seeded spot
+    # market is one more MarketMid per tick, so the count stays at that.
+    assert load_manifest("edition1-example").exchange.spot_pairs == ("HYPE/USDC",)
+    assert load_manifest("testnet").exchange.spot_pairs == ("PURR/USDC", "HYPE/USDC")
 
 
 def test_a_launch_refusal_names_the_subsystem_that_refused(capsys):

@@ -145,6 +145,15 @@ class TreasurySpec:
     max_request_micro: int = 500_000
     reported_cost_multiple: int = 10
     max_venice_per_window: int = 10_000_000
+    # The exit route's Base mint: never forwarded, forwarded when the reserve has no
+    # ETH (default), or always forwarded. The quote is read on-chain before signing.
+    cctp_forwarding: str = "on_empty_gas"
+    # $0.10 of headroom over the $0.20 the deployed CoreDepositWallet quotes on both networks.
+    max_forward_fee_micro: int = 300_000
+    max_forward_fees_per_window: int = 1_000_000
+    # Reserve windows a forwarded mint may stay unobserved before the exit is stranded
+    # (recoverably) and the treasury admits new transfers again.
+    forward_wait_windows: int = 2
 
 
 @dataclass(frozen=True)
@@ -297,6 +306,13 @@ class WorldManifest:
         # Preserve historical manifest identities when the opt-in namespace is absent.
         if payload["exchange"]["client_namespace"] is None:
             payload["exchange"].pop("client_namespace")
+        # Preserve historical manifest identities while the gas-route keys keep their defaults.
+        for key, default in (("cctp_forwarding", "on_empty_gas"),
+                             ("max_forward_fee_micro", 300_000),
+                             ("max_forward_fees_per_window", 1_000_000),
+                             ("forward_wait_windows", 2)):
+            if payload["treasury"].get(key) == default:
+                payload["treasury"].pop(key)
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -392,13 +408,21 @@ class WorldManifest:
                 raise ValueError("treasury.reserve_address must be a nonzero EVM address")
         for budget_field in ("hyperevm_gas_budget_wei", "base_gas_budget_wei",
                       "max_transfer_fee_micro", "withdrawal_fee_micro", "cctp_max_fee_micro",
-                      "fake_fee_micro", "max_request_micro", "max_venice_per_window"):
+                      "fake_fee_micro", "max_request_micro", "max_venice_per_window",
+                      "max_forward_fee_micro", "max_forward_fees_per_window"):
             value = getattr(self.treasury, budget_field)
             if type(value) is not int or value < 0:
                 raise ValueError(f"treasury.{budget_field} must be nonnegative integer money")
+        if self.treasury.cctp_forwarding not in ("never", "on_empty_gas", "always"):
+            raise ValueError("treasury.cctp_forwarding must be never, on_empty_gas or always")
+        windows = self.treasury.forward_wait_windows
+        if type(windows) is not int or windows < 1:
+            raise ValueError("treasury.forward_wait_windows must be a positive integer")
+        # A forwarded exit's burn carries maxFee up to the CCTP cap plus the forwarding cap;
+        # the mint step must still fit the transfer fee cap after the principal burned.
         if (self.treasury.withdrawal_fee_micro + self.treasury.cctp_max_fee_micro
-                > self.treasury.max_transfer_fee_micro):
-            raise ValueError("withdrawal fee exceeds maximum transfer fee")
+                + self.treasury.max_forward_fee_micro > self.treasury.max_transfer_fee_micro):
+            raise ValueError("withdrawal, CCTP and forwarding fee caps exceed maximum transfer fee")
         from urllib.parse import urlsplit
 
         discovery = urlsplit(self.treasury.discovery_url)
@@ -592,6 +616,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     venice_cap = (d.get("treasury") or {}).get("max_venice_per_window", "10")
     if type(venice_cap) not in (str, int):
         raise ValueError("treasury.max_venice_per_window must be exact USD text or integer")
+    forward_cap = (d.get("treasury") or {}).get("max_forward_fees_per_window", "1")
+    if type(forward_cap) not in (str, int):
+        raise ValueError("treasury.max_forward_fees_per_window must be exact USD text or integer")
     charter, charter_prices = (
         _manifest_charter(d["charter"]) if "charter" in d else (seed_charter(), ())
     )
@@ -742,6 +769,11 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             max_request_micro=(d.get("treasury") or {}).get("max_request_micro", 500_000),
             reported_cost_multiple=(d.get("treasury") or {}).get("reported_cost_multiple", 10),
             max_venice_per_window=usd_to_micro(venice_cap, rounding="exact"),
+            cctp_forwarding=(d.get("treasury") or {}).get("cctp_forwarding", "on_empty_gas"),
+            max_forward_fee_micro=usd_to_micro(
+                (d.get("treasury") or {}).get("max_forward_fee_usd", "0.30"), rounding="exact"),
+            max_forward_fees_per_window=usd_to_micro(forward_cap, rounding="exact"),
+            forward_wait_windows=(d.get("treasury") or {}).get("forward_wait_windows", 2),
         ),
         clock=ClockSpec(duration_ns(clock.get("min_tick", default_min_tick))),
         tick_interval_ns=duration_ns(d.get("tick_interval", "10s")),

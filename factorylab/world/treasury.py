@@ -10,6 +10,14 @@ from factorylab.kernel.money import money_to_usd, usd_to_money
 from factorylab.world.evm import Pending, RailError
 from factorylab.world.x402 import TOP_UP_MICRO
 
+# A stalled step is ledgered on its first failed attempt, whenever its reason changes,
+# and then once every this many attempts, so a wait of any length stays public without
+# writing one item per tick. Attempts are counted per step and never reset by the limit.
+PENDING_JOURNAL_EVERY = 10
+# The reason a forwarded exit strands when Circle's mint stays unobserved past the bound.
+FORWARD_WAIT_EXCEEDED = "forwarded mint not delivered within treasury.forward_wait_windows"
+TRANSFER_BLOCKED = "a previous transfer is still pending or stranded"
+
 
 def _seed_credits(provider: Any) -> int | None:
     """Account credits are independent of an API key's optional spending allowance."""
@@ -58,6 +66,12 @@ class Treasury:
     Pot observations are cached while a transfer is in flight and labelled incomplete.
     Reconciliation never silently writes an observed balance into the kernel wallet.
     One transfer at a time serializes each signer's nonce and simplifies recovery.
+
+    A forwarded exit whose burn confirmed but whose mint Circle never delivered is
+    stranded after ``forward_wait_windows`` reserve windows and parked in ``stranded``
+    with its principal hold: it no longer occupies the transfer slot, and whenever the
+    slot is free a tick re-checks it (the forwarder's delivery, or the reserve's own
+    self-mint of the still-unclaimed message) and completes it through the same steps.
     """
 
     def __init__(
@@ -69,21 +83,33 @@ class Treasury:
         provider=None,
         fee_ceiling_micro=2_000_000,
         max_venice_per_window=10_000_000,
+        max_forward_fees_per_window=1_000_000,
+        forward_wait_windows=2,
     ):
         self.ledger, self.wallet, self.rail, self.provider = ledger, wallet, rail, provider
+        if type(forward_wait_windows) is not int or forward_wait_windows < 1:
+            raise ValueError("forward_wait_windows must be a positive integer")
+        self.forward_wait_windows = forward_wait_windows
         if type(fee_ceiling_micro) is not int or fee_ceiling_micro < 0:
             raise ValueError("fee ceiling must be nonnegative integer micro-USD")
         self.fee_ceiling_micro = fee_ceiling_micro
         if type(max_venice_per_window) is not int or max_venice_per_window < 0:
             raise ValueError("Venice window budget must be nonnegative integer micro-USD")
         self.max_venice_per_window = max_venice_per_window
+        if type(max_forward_fees_per_window) is not int or max_forward_fees_per_window < 0:
+            raise ValueError("forwarding fee window budget must be nonnegative integer micro-USD")
+        self.max_forward_fees_per_window = max_forward_fees_per_window
         self.venice_window = 0
         self.venice_spent = 0
+        # Forwarding fees quoted for submitted exits this window; a failure still counts.
+        self.forward_spent = 0
         self.state: dict | None = None
         self.next_id = 0
         self.last_nonce = 0
         self.gas_spent: dict[str, int] = {}
         self.principal_hold = self.fee_hold = None
+        # Recoverable forwarded strands, oldest first, each with its own principal hold.
+        self.stranded: list[dict] = []
         self._pots = {"venue": None, "reserve": None, "seed": None, "sellers": {}}
 
     def _write(self, kind: str, **fields) -> None:
@@ -94,23 +120,58 @@ class Treasury:
         if type(index) is not int or index < self.venice_window:
             raise ValueError("treasury window must advance monotonically")
         if index != self.venice_window:
-            self._write("venice_window", window=index, spent_micro=0)
+            self._write("venice_window", window=index, spent_micro=0, forward_fees_micro=0)
             self.venice_window, self.venice_spent = index, 0
+            self.forward_spent = 0
+
+    def _blocking(self) -> bool:
+        """The slot is taken: a transfer in flight, or a strand nothing can recover."""
+        state = self.state
+        return bool(state and (state["status"] == "submitted" or (
+            state["status"] == "stranded" and not state.get("recoverable"))))
 
     def pots(self) -> dict:
         """Return a detached observed view; unknown balances are never converted to zero."""
-        pending = bool(self.state and self.state["status"] in {"submitted", "stranded"})
+        pending = self._blocking()
         result = deepcopy(self._pots)
         result["pending"] = pending
+        # A stall is public: the last reason a poll or preparation could not complete,
+        # and when that wait began on the current step.
+        stall = (self.state or {}).get("pending") if pending else None
+        result["pending_reason"] = stall["reason"] if stall else None
+        result["pending_since"] = stall["since_ns"] if stall else None
+        # Parked forwarded strands: burned principal still held, claimable and re-checked.
+        result["stranded"] = [
+            {"transfer_id": entry["state"]["id"],
+             "stranded_micro": entry["state"]["received_micro"],
+             "reason": entry["state"]["reason"], "since_ns": entry["state"]["stranded_ns"]}
+            for entry in self.stranded]
         values = [result[k] for k in ("venue", "reserve", "seed")]
         values.extend(result["sellers"].values())
         result["complete"] = not pending and all(type(v) is int for v in values)
         result["total_micro"] = sum(values) if result["complete"] else None
         return result
 
+    def _gas_view(self) -> dict:
+        """The exit route's gas position: never money, so it cannot change completeness."""
+        try:
+            gas = self.rail.gas_view(dict(self.gas_spent))
+        except Exception:
+            return {"refill_ready": False, "blocked_by": "gas position unavailable"}
+        if self._blocking():
+            gas = {**gas, "refill_ready": False, "blocked_by": gas.get("blocked_by")
+                   or TRANSFER_BLOCKED}
+        return gas
+
     def refresh_pots(self) -> dict:
         """Persist a complete or explicitly unavailable observation before replacing the view."""
-        if self.state and self.state["status"] in {"submitted", "stranded"}:
+        if self._blocking():
+            # Money pots stay the cached observation, labelled incomplete; the gas block
+            # is re-read so the population sees the stall and what blocks the next exit.
+            if hasattr(self.rail, "gas_view"):
+                pots = {**self._pots, "gas": self._gas_view()}
+                self._write("pots", pots=pots, pending=True)
+                self._pots = pots
             return self.pots()
         if hasattr(self.ledger, "call"):
             seed, sellers = self.ledger.call(
@@ -128,6 +189,8 @@ class Treasury:
             venue = reserve = None
         pots = {"venue": venue, "reserve": reserve, "seed": seed, "sellers": sellers}
         pots.update({k: observed[k] for k in ("perps", "spot") if k in observed})
+        if hasattr(self.rail, "gas_view"):
+            pots["gas"] = self._gas_view()
         self._write("pots", pots=pots)
         self._pots = pots
         return self.pots()
@@ -151,8 +214,8 @@ class Treasury:
                     raise RailError("to_venice requires the fixed $5 tranche")
                 if self.venice_spent + amount > self.max_venice_per_window:
                     raise RailError("treasury.max_venice_per_window exhausted")
-            if self.state and self.state["status"] in {"submitted", "stranded"}:
-                raise RailError("a previous transfer is still pending or stranded")
+            if self._blocking():
+                raise RailError(TRANSFER_BLOCKED)
             self.rail.preflight(direction, amount, self.gas_spent)
             steps = self.rail.plan(direction)
             nonce = max(now_ns // 1_000_000, self.last_nonce + 1)
@@ -179,6 +242,12 @@ class Treasury:
                              venice_spent_after=self.venice_spent + amount)
             reference = self.rail.prepare(steps[0], state, self.gas_spent)
             self._check_fee(reference, state)
+            route = reference.get("gas_route")
+            if route and route.get("forward"):
+                quoted = route["forward_fee_micro"]
+                if self.forward_spent + quoted > self.max_forward_fees_per_window:
+                    raise RailError("treasury.max_forward_fees_per_window exhausted")
+                state["forward_spent_after"] = self.forward_spent + quoted
             fee_budget = (0 if direction in ("to_venice", "spot_to_perps", "perps_to_spot")
                           else self.fee_ceiling_micro)
             if amount + fee_budget > self.wallet.available:
@@ -193,6 +262,9 @@ class Treasury:
                 "refused", direction=direction, reason="rail preflight unavailable", handle=handle
             )
             return {"status": "refused", "error": "rail preflight unavailable"}
+        if route:
+            # The branch the route chose from its own observed position, public before signing.
+            self._write("gas_route", transfer_id=state["id"], direction=direction, **route)
         self.principal_hold = self.wallet.reserve(amount, handle, "treasury:principal")
         try:
             self.fee_hold = self.wallet.reserve(fee_budget, handle, "treasury:fees")
@@ -209,6 +281,8 @@ class Treasury:
         self.last_nonce = nonce
         if direction == "to_venice":
             self.venice_spent = state["venice_spent_after"]
+        if "forward_spent_after" in state:
+            self.forward_spent = state["forward_spent_after"]
         self._send()
         return {
             "status": self.state["status"],
@@ -258,14 +332,11 @@ class Treasury:
         step = state["steps"][state["index"]]
         try:
             outcome = self.rail.poll(step, {**deepcopy(state), "gas_spent": dict(self.gas_spent)})
-        except (Pending, ConnectionError, TimeoutError):
-            return []
-        except Exception:
-            self._write(
-                "pending", transfer_id=state["id"], reason="receipt verification unavailable"
-            )
+        except Exception as exc:
+            self._stall(step, "poll", exc, now_ns)
             return []
         if outcome is None:
+            self.state = self._settled(state)  # a clean poll with no evidence yet: no stall
             return []
         fee = outcome["fee_micro"]
         if type(fee) is not int or not 0 <= fee <= self.fee_ceiling_micro - state["fees_micro"]:
@@ -277,7 +348,7 @@ class Treasury:
         if type(wallet_fee) is not int or not 0 <= wallet_fee <= fee:
             self._write("pending", transfer_id=state["id"], reason="invalid wallet fee evidence")
             return []
-        updated = deepcopy(state)
+        updated = self._settled(deepcopy(state))
         updated["fees_micro"] += fee
         updated["receipts"].append(outcome["evidence"])
         updated["received_micro"] = outcome["received_micro"]
@@ -310,7 +381,7 @@ class Treasury:
             self.fee_hold = None
             self._reserve_fees()
         if not outcome["confirmed"]:
-            return [self._fail(outcome.get("reason", "confirmed chain failure"))]
+            return [self._fail(outcome.get("reason", "confirmed chain failure"), now_ns)]
         if updated["index"] + 1 == len(updated["steps"]):
             if hasattr(self.rail, "confirm"):
                 try:
@@ -321,7 +392,7 @@ class Treasury:
                     # settles nothing, so no principal left and the transfer fails.
                     self.state = {**updated, "principal_moved": False}
                     return [self._fail(f"venue refused the settlement: {exc}")]
-            finished = {**updated, "status": "confirmed"}
+            finished = {**self._settled(updated), "status": "confirmed"}
             self._write("confirmed", state=finished, tx_refs=finished["receipts"], ts=now_ns)
             self.state = finished
             self.wallet.release(self.principal_hold)
@@ -349,13 +420,15 @@ class Treasury:
         }
         self._write("advance", state=next_state)
         self.state = next_state
-        self._prepare_next()
+        self._prepare_next(now_ns)
         return []
 
-    def _prepare_next(self) -> None:
+    def _prepare_next(self, now_ns: int, ref: dict | None = None) -> None:
         state = self.state
+        step = state["steps"][state["index"]]
         try:
-            ref = self.rail.prepare(state["steps"][state["index"]], deepcopy(state), self.gas_spent)
+            if ref is None:
+                ref = self.rail.prepare(step, deepcopy(state), self.gas_spent)
             self._check_fee(ref, state)
             if ref.get("fee_ceiling_micro", 0) > (
                 self.fee_hold.amount if self.fee_hold is not None else 0
@@ -364,12 +437,92 @@ class Treasury:
                             required_micro=ref["fee_ceiling_micro"],
                             reserved_micro=self.fee_hold.amount if self.fee_hold else 0)
                 return
-        except Exception:
-            return  # existing transfer and principal hold remain pending
-        updated = {**state, "reference": ref}
+        except Exception as exc:
+            # The existing transfer and principal hold remain pending, and the wait is public.
+            self._stall(step, "prepare", exc, now_ns)
+            if self._forward_wait_exceeded():
+                # Circle has not delivered for the bounded number of reserve windows and
+                # the reserve could not (or need not) self-mint: strand, recoverably.
+                self._fail(FORWARD_WAIT_EXCEEDED, now_ns, waited=self.state["pending"])
+            return
+        updated = {**self._settled(state), "reference": ref}
         self._write("step_submitted", state=updated, tx_refs=[ref])
         self.state = updated
         self._send()
+
+    @staticmethod
+    def _settled(state: dict) -> dict:
+        """The step made progress: its stall record, if any, is over."""
+        return {k: v for k, v in state.items() if k != "pending"}
+
+    def _stall(self, step: str, phase: str, exc: BaseException, now_ns: int) -> None:
+        """Record why the current step could not advance, bounded and without RPC text.
+
+        The reason is a rail's own locally authored message (RailError and Pending
+        carry no response bodies) or, for any other exception, its class name alone.
+        A Pending ``carry`` replaces the record's reference; a failure without one
+        keeps the reference already carried, so a transient outage never loses a cursor.
+        """
+        state = self.state
+        reason = str(exc) if isinstance(exc, RailError) else type(exc).__name__
+        carry = getattr(exc, "carry", None)
+        previous = state.get("pending")
+        if previous is None:
+            record = {"step": step, "phase": phase, "reason": reason, "attempts": 1,
+                      "since_ns": now_ns, "since_window": self.venice_window,
+                      "reference": deepcopy(carry)}
+        else:
+            record = {**previous, "phase": phase, "reason": reason,
+                      "attempts": previous["attempts"] + 1}
+            if carry is not None:
+                record["reference"] = deepcopy(carry)
+        if (previous is None or reason != previous["reason"]
+                or record["attempts"] % PENDING_JOURNAL_EVERY == 0):
+            self._write("pending", transfer_id=state["id"], **record)
+        self.state = {**state, "pending": record}
+
+    @staticmethod
+    def _forwarded(state: dict) -> bool:
+        """The principal left HyperCore in a burn whose Base mint is Circle's to deliver."""
+        return bool(state["principal_moved"]
+                    and (state["route_data"].get("burn") or {}).get("forwarded"))
+
+    def _forward_wait_exceeded(self) -> bool:
+        """A forwarded mint still unobserved after the manifest's windows is stranded."""
+        state = self.state
+        record = state.get("pending")
+        if record is None or not self._forwarded(state):
+            return False
+        # Checkpoints predating the bound carry no window: the wait is measured from now.
+        since = record.get("since_window", self.venice_window)
+        return self.venice_window - since >= self.forward_wait_windows
+
+    def _recover(self, now_ns: int) -> None:
+        """Re-check the oldest parked strand on a free slot; a reference re-enters the plan.
+
+        The rail's mint preparation is the same read as during the wait: Circle's
+        finalized delivery, or the reserve's own delivery of an unclaimed message when it
+        can pay. Nothing is written while the check still waits; the strand is public in
+        the pots view and in its ``treasury.failed`` item until it moves.
+        """
+        entry = self.stranded[0]
+        state = entry["state"]
+        step = state["steps"][state["index"]]
+        try:
+            ref = self.rail.prepare(step, deepcopy(state), self.gas_spent)
+            self._check_fee(ref, state)
+        except Exception:
+            return
+        self.stranded.pop(0)
+        self.principal_hold = entry["principal_hold"]
+        recovered = {k: v for k, v in self._settled(state).items()
+                     if k not in ("reason", "recoverable", "stranded_ns")}
+        recovered.update(status="submitted", reference=None, attempts=0, last_send_ns=now_ns,
+                         recovered_ns=now_ns)
+        self.state = recovered
+        self._write("recovered", state=recovered, ts=now_ns)
+        self._reserve_fees()
+        self._prepare_next(now_ns, ref)
 
     def _reserve_fees(self) -> None:
         """A trading loss reduces the remaining fee hold without losing receipt reconciliation."""
@@ -383,6 +536,9 @@ class Treasury:
             self.fee_hold = self.wallet.reserve(affordable, self.state["handle"], "treasury:fees")
 
     def tick(self, now_ns: int) -> list[dict]:
+        if self.stranded and not self._blocking():
+            self._recover(now_ns)
+            return []
         if self.state and self.state["status"] == "submitted" and self.state["reference"] is None:
             if self.fee_hold is not None and self.wallet.available > 0 and (
                 self.fee_hold.amount < self.fee_ceiling_micro - self.state["fees_micro"]
@@ -390,7 +546,7 @@ class Treasury:
                 self.wallet.release(self.fee_hold)
                 self.fee_hold = None
                 self._reserve_fees()
-            self._prepare_next()
+            self._prepare_next(now_ns)
             return []
         result = self.reconcile(now_ns)
         if (
@@ -405,20 +561,30 @@ class Treasury:
             self._send()  # exactly the same nonce and transaction, never a replacement
         return result
 
-    def _fail(self, reason: str) -> dict:
+    def _fail(self, reason: str, now_ns: int | None = None, **detail) -> dict:
         state = self.state
         stranded = state["principal_moved"]
-        result = {**state, "status": "stranded" if stranded else "failed", "reason": reason}
+        result = {**self._settled(state), "status": "stranded" if stranded else "failed",
+                  "reason": reason}
+        recoverable = stranded and self._forwarded(state)
+        if recoverable:
+            # The message is Circle's to deliver or anyone's to submit: the strand keeps
+            # its principal hold, leaves the slot and is re-checked whenever it is free.
+            result.update(recoverable=True, stranded_ns=now_ns)
         self._write(
             "failed",
             state=result,
             tx_refs=state["receipts"],
             reason=reason,
             stranded_micro=state["received_micro"] if stranded else 0,
+            **detail,
         )
         self.state = result
         if not stranded:
             self.wallet.release(self.principal_hold)
+            self.principal_hold = None
+        elif recoverable:
+            self.stranded.append({"state": deepcopy(result), "principal_hold": self.principal_hold})
             self.principal_hold = None
         if self.fee_hold is not None:
             self.wallet.release(self.fee_hold)
@@ -436,11 +602,16 @@ class Treasury:
                 "pots": self._pots,
                 "principal_hold_id": self.principal_hold.id if self.principal_hold else None,
                 "fee_hold_id": self.fee_hold.id if self.fee_hold else None,
+                "stranded": [{"state": entry["state"],
+                              "principal_hold_id": entry["principal_hold"].id
+                              if entry["principal_hold"] else None}
+                             for entry in self.stranded],
                 "rail_name": self.rail.name,
                 "fake_reserve": self.rail.reserve if self.rail.name == "scripted" else None,
                 "fake_venice": self.rail.venice if self.rail.name == "scripted" else None,
                 "venice_window": self.venice_window,
                 "venice_spent": self.venice_spent,
+                "forward_spent": self.forward_spent,
             }
         )
 
@@ -453,14 +624,21 @@ class Treasury:
         fee = saved["fee_hold_id"]
         self.principal_hold = self.wallet._reservation_for_resume(principal) if principal else None
         self.fee_hold = self.wallet._reservation_for_resume(fee) if fee else None
-        for hold, reason in ((self.principal_hold, "treasury:principal"),
-                             (self.fee_hold, "treasury:fees")):
+        self.stranded = []
+        for entry in saved.get("stranded", []):  # checkpoints predate parked strands
+            hold_id = entry["principal_hold_id"]
+            hold = self.wallet._reservation_for_resume(hold_id) if hold_id else None
+            self.stranded.append({"state": entry["state"], "principal_hold": hold})
+        holds = [(self.principal_hold, "treasury:principal"), (self.fee_hold, "treasury:fees")]
+        holds.extend((entry["principal_hold"], "treasury:principal") for entry in self.stranded)
+        for hold, reason in holds:
             if hold is not None and hold.reason != reason:
                 raise RailError("saved treasury hold belongs to another purpose")
         self.state = saved["state"]
         self.next_id, self.last_nonce = saved["next_id"], saved["last_nonce"]
         self.gas_spent, self._pots = saved["gas_spent"], saved["pots"]
         self.venice_window, self.venice_spent = saved["venice_window"], saved["venice_spent"]
+        self.forward_spent = saved.get("forward_spent", 0)  # checkpoints predate forwarding
         if saved["fake_reserve"] is not None:
             self.rail.reserve = saved["fake_reserve"]
             self.rail.venice = saved["fake_venice"]

@@ -240,3 +240,120 @@ def test_seller_seed_and_reserve_are_not_double_counted():
     venice = SimpleNamespace(name="venice", balance_micro=lambda: 20)
     assert provider_pots(venice) == (0, {"venice": 20})
     assert Decimal("0.000020") * 1_000_000 == 20
+
+
+class StalledRail(FakeRail):
+    """A poll that cannot complete: the transfer waits with no receipt and no refusal."""
+
+    def __init__(self, wallet):
+        super().__init__(wallet)
+        self.failure = Pending("RPC call rejected or unavailable")
+
+    def poll(self, step, state):
+        if self.failure is None:
+            return super().poll(step, state)
+        raise self.failure
+
+
+def test_a_stalled_poll_is_ledgered_bounded_and_public_until_evidence_arrives():
+    ledger, wallet, records = setup()
+    rail = StalledRail(wallet)
+    treasury = Treasury(ledger, wallet, rail, fee_ceiling_micro=10_000)
+    wallet.bind_pots(treasury.pots)
+    treasury.transfer("to_reserve", "10", handle="a", now_ns=1)
+    view = wallet.pots()
+    assert view["pending"] and view["pending_reason"] is None and view["pending_since"] is None
+    for now_ns in range(2, 27):
+        assert treasury.tick(now_ns) == []
+    stalls = [i for i in records if i["kind"] == "treasury.pending" and "attempts" in i]
+    assert [i["attempts"] for i in stalls] == [1, 10, 20]
+    assert stalls[0] == {"kind": "treasury.pending", "transfer_id": "treasury-0",
+                         "step": "to_reserve", "phase": "poll",
+                         "reason": "RPC call rejected or unavailable", "attempts": 1,
+                         "since_ns": 2, "since_window": 0, "reference": None}
+    assert all(i["since_ns"] == 2 for i in stalls)
+    assert treasury.state["pending"]["attempts"] == 25
+    view = wallet.pots()
+    assert view["pending"] and view["pending_reason"] == "RPC call rejected or unavailable"
+    assert view["pending_since"] == 2 and not view["complete"]
+    # A changed reason is public at once; a transport error is named by class only,
+    # so a URL or a body it carries never reaches the journal.
+    rail.failure = ConnectionError("https://rpc.example/?token=secret")
+    treasury.tick(27)
+    assert records[-1]["kind"] == "treasury.pending" and records[-1]["attempts"] == 26
+    assert records[-1]["reason"] == "ConnectionError" and "secret" not in str(records)
+    rail.failure = Pending("RPC call rejected or unavailable")
+    treasury.tick(28)
+    assert records[-1]["attempts"] == 27 and records[-1]["since_ns"] == 2
+    written = len(records)
+    treasury.tick(29)  # the same reason again, off the tenth-attempt beat: nothing written
+    assert len(records) == written and treasury.state["pending"]["attempts"] == 28
+    assert wallet.available == 89_990_000  # the principal and fee holds never moved
+    rail.failure = None
+    treasury.tick(30)
+    assert treasury.state["status"] == "confirmed" and "pending" not in treasury.state
+    view = wallet.pots()
+    assert view["pending_reason"] is None and view["pending_since"] is None
+    assert not view["pending"] and wallet.balance == 99_990_000
+
+
+def test_a_pending_preparation_is_ledgered_with_its_step_and_carries_the_rail_cursor():
+    ledger, wallet, records = setup()
+    rail = MultiStepRail(wallet)
+    cursors = []
+
+    def prepare(step, state, gas_spent):
+        if step == "mint_base" and not rail.attestation_ready:
+            cursors.append((state.get("pending") or {}).get("reference"))
+            raise Pending("awaiting the Circle forwarder's Base mint",
+                          carry={"scanned_to": 100 + len(cursors)})
+        return {"network": "scripted", "tx_hash": step}
+
+    rail.prepare = prepare
+    treasury = Treasury(ledger, wallet, rail, fee_ceiling_micro=30_000)
+    treasury.transfer("to_reserve", "10", handle="a", now_ns=1)
+    treasury.tick(2)  # the burn confirms and the mint is prepared: it waits
+    stalls = [i for i in records if i["kind"] == "treasury.pending"]
+    assert stalls == [{"kind": "treasury.pending", "transfer_id": "treasury-0",
+                       "step": "mint_base", "phase": "prepare",
+                       "reason": "awaiting the Circle forwarder's Base mint", "attempts": 1,
+                       "since_ns": 2, "since_window": 0, "reference": {"scanned_to": 101}}]
+    for tick in range(3, 12):
+        treasury.tick(tick)
+    # Each wait resumes from the cursor the previous wait carried back.
+    assert cursors == [None] + [{"scanned_to": 100 + n} for n in range(1, 10)]
+    assert treasury.state["pending"]["reference"] == {"scanned_to": 110}
+    assert [i["attempts"] for i in records if i["kind"] == "treasury.pending"] == [1, 10]
+    assert treasury.pots()["pending_reason"] == "awaiting the Circle forwarder's Base mint"
+    assert treasury.pots()["pending_since"] == 2
+    # An outage without a cursor keeps the one already carried.
+    rail.prepare = lambda step, state, spent: (_ for _ in ()).throw(
+        Pending("Circle attestation service unavailable"))
+    treasury.tick(12)
+    assert treasury.state["pending"]["reference"] == {"scanned_to": 110}
+    assert records[-1]["reason"] == "Circle attestation service unavailable"
+    rail.prepare = prepare
+    rail.attestation_ready = True
+    treasury.tick(13)
+    assert treasury.state["reference"] == {"network": "scripted", "tx_hash": "mint_base"}
+    assert "pending" not in treasury.state and treasury.pots()["pending_reason"] is None
+    treasury.tick(14)
+    assert treasury.state["status"] == "confirmed"
+
+
+def test_an_old_checkpoint_without_a_pending_record_restores():
+    ledger, wallet, records = setup()
+    rail = StalledRail(wallet)
+    treasury = Treasury(ledger, wallet, rail, fee_ceiling_micro=10_000)
+    treasury.transfer("to_reserve", "10", handle="a", now_ns=1)
+    treasury.tick(2)
+    saved = treasury.snapshot()
+    assert saved["state"]["pending"]["attempts"] == 1
+    del saved["state"]["pending"]
+    restored = Treasury(ledger, wallet, StalledRail(wallet), fee_ceiling_micro=10_000)
+    restored.restore(saved)
+    assert restored.pots()["pending_reason"] is None
+    restored.tick(3)
+    assert restored.state["pending"] == {
+        "step": "to_reserve", "phase": "poll", "reason": "RPC call rejected or unavailable",
+        "attempts": 1, "since_ns": 3, "since_window": 0, "reference": None}
