@@ -49,6 +49,9 @@ SECTIONS = ("roster", "tools", "connectors", "notes", "observations", "charter",
             # Edition 2: the architect watches money, deliveries, open promises, the
             # behavioural cells and the alive/dormant/terminated state, without a lever.
             "money", "deliveries", "commitments", "cells", "liveness", "entitlements",
+            # Edition 3: what the prompts were made of, by section, so the compact
+            # affordance index is answerable to bytes rather than to a claim.
+            "prompt_sections",
             # Every return, live and unredacted, linked to the verdicts about it.
             "returns")
 UNAVAILABLE = "unavailable"
@@ -122,6 +125,11 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
         "charter": {
             "edition": rt.charter.edition,
             "norms": list(rt.charter.norms),
+            # Edition 3 (C3) moved the substantive clauses into the charter object.
+            # A ``Norm`` is a str, so ``norms`` above serialises to the names alone
+            # and the definitions would be dropped exactly where a reader of the
+            # wake has no other way to see what the population is held to.
+            "norm_definitions": _norm_definitions(rt.charter.norms),
             "cards": [{"id": card.id, "norm": card.norm, "observation": card.observation,
                        "answers_for": card.answers_for,
                        "lambda": rt.controller.price(card.id),
@@ -219,6 +227,10 @@ class _Observatory:
         self.terminated_ns: int | None = None
         self.dormant_periods: list[dict] = []
         self.dormant_since: int | None = None
+        # Rendered prompt bytes per section, summed over invocations and counted,
+        # so the compact catalogue's claim about size is checkable on the page.
+        self.section_bytes: Counter = Counter()
+        self.section_prompts = 0
         # Every return in ledger order, its row reachable by handle so the tool calls
         # that preceded it and the verdicts that follow it attach to the same row.
         self.returns: list[dict] = []
@@ -469,6 +481,31 @@ class _Observatory:
         }
         self.returns.append(row)
         self.returns_by_handle[handle] = row
+        sections = item.get("sections")
+        if isinstance(sections, dict):
+            self.section_prompts += 1
+            for name, value in sections.items():
+                if type(value) is int:
+                    self.section_bytes[str(name)] += value
+
+    def _prompt_sections(self) -> dict:
+        """What the prompts this world sent were actually made of, by section.
+
+        The compact affordance index is a claim about bytes — that the tool
+        schemas and proposal shapes a decision never reads should not ride in
+        front of every decision — and a claim about bytes is checkable only if
+        the bytes are published. Mean bytes per prompt, per section, over every
+        invocation the diary recorded.
+        """
+        prompts = self.section_prompts
+        # Rows, not keys: a section name such as "propensity" is a sealed key when
+        # it names a field, and here it only names a count of bytes.
+        return {
+            "prompts": prompts,
+            "sections": [{"section": name, "mean_bytes": self.section_bytes[name] // prompts,
+                          "total_bytes": self.section_bytes[name]}
+                         for name in sorted(self.section_bytes)] if prompts else [],
+        }
 
     # --- every return, linked to what was said about it -------------------------
 
@@ -687,6 +724,7 @@ class _Observatory:
             "cells": self._cells(manifest),
             "liveness": self._liveness(),
             "entitlements": _fold_entitlements(latest.get("entitlements")),
+            "prompt_sections": self._prompt_sections(),
             "returns": self._returns(returns),
         }
 
@@ -705,6 +743,16 @@ def _outputs(value):
         return {"truncated_text": value}
 
 
+def _norm_definitions(norms) -> dict[str, str]:
+    """Each norm's ratified definition, by name; a norm that carries none is absent.
+
+    The names stay where they were, in ``charter.norms``, because a card's ``norm``
+    field names one of them and the page matches the two.
+    """
+    return {str(norm): definition for norm in norms
+            if (definition := getattr(norm, "definition", ""))}
+
+
 def _genesis_charter(manifest) -> dict:
     """The launch charter, exactly as the first ledger item committed it."""
     prices = dict(getattr(manifest, "charter_prices", ()))
@@ -712,6 +760,7 @@ def _genesis_charter(manifest) -> dict:
     return {
         "edition": charter.edition,
         "norms": list(charter.norms),
+        "norm_definitions": _norm_definitions(charter.norms),
         "cards": [{"id": card.id, "norm": card.norm, "observation": card.observation,
                    "answers_for": card.answers_for, "lambda": prices.get(card.id, 0.0),
                    "region": None} for card in charter.cards],
@@ -983,7 +1032,8 @@ def render_wake(data: dict) -> str:
         "world", "manifest_hash", "uptime_ns", "last_event_time_ns", "venue", "reserve",
         "portfolio", "pots", "entitlements", "liveness", "money", "roster", "tools", "connectors",
         "notes",
-        "observations", "charter", "compute", "deliveries", "commitments", "cells", "immune",
+        "observations", "charter", "compute", "prompt_sections", "deliveries", "commitments",
+        "cells", "immune",
         *VIEWS, "returns",
     )
     folded = {"wallet_series": "Balance series", "roster": "Roster", "tools": "Tools",
@@ -993,7 +1043,8 @@ def render_wake(data: dict) -> str:
               "money": "Money in and out by class", "deliveries": "Deliveries per window",
               "commitments": "Open commitments", "cells": "Behavioural cells",
               "liveness": "Alive, dormant or terminated",
-              "entitlements": "Entitlements"}
+              "entitlements": "Entitlements",
+              "prompt_sections": "Prompt bytes by section"}
     for field in order:
         if field not in data:
             continue

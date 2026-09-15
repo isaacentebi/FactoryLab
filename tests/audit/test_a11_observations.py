@@ -428,8 +428,10 @@ def test_a_priced_card_on_a_registered_observation_is_no_longer_unparsed():
 def test_the_world_block_tells_the_population_how_to_register_a_measurement():
     runtime = _consequence_runtime()
     block = runtime._world_block()
-    assert block["proposal_shapes"]["observation"]["kind"] == "observation"
-    assert "observe(facts)" in block["proposal_shapes"]["observation"]["code"]
+    # The block indexes the kind in one line; the shape itself is retrieved.
+    assert "measurement" in block["proposal_shapes"]["observation"]
+    shape = runtime._proposal_shape_search("observation")["observation"]
+    assert shape["kind"] == "observation" and "observe(facts)" in shape["code"]
     assert "costs" in block["observation_facts"]
     assert "tool jail" in block["scoring"]["observations"]
     assert {"observation", "learner"} <= set(

@@ -165,6 +165,41 @@ it, `usage.prompt_tokens_details.cached_tokens` is recorded as
 Cost metering is unchanged: OpenRouter's reported `usage.cost` already carries
 the cache discount.
 
+Edition 3 (contract C4) adds a `YOU` block between the stable prefix and the
+work, and makes the institutional catalogue an index rather than a copy. The
+`YOU` block is rendered from kernel state — never by a model — and carries five
+sections: `self` (seat id, lineage, capability version, and the request's own
+handle, deadline, cost ceiling and liable budget, which the decider previously
+never saw), `your_resources` (spendable entitlement net of holds, reservations,
+unsettled bills, the credit available on this seat's own route, metered spend,
+the next endowment release with the rule that splits it, a runway range from the
+observed interval, and whether that release is reachable), `world_resources`
+(root unlocked and locked, trading equity, external income by source, principal
+converted to compute, provider inventory per rail, hosting), `continuity`
+(working-state head, unread outcomes, open commitments, shared-directory
+changes, market data as of per coin with stale and missing flags) and the
+accounting facts, which are constant text and therefore live in the stable
+prefix under `world.accounting_facts`. `world.seats` carries one entry per live
+seat because one world block serves every request built in a tick;
+`Request.prompt_text` renders the acting seat's entry and no other, so no seat
+reads another's account. No number is asserted from too little evidence: a burn
+rate observed over less than six hours is reported as `insufficient history`
+rather than extrapolated, and an unobserved provider balance is `null`, never
+zero. Nothing in the block performs I/O — the provider inventory is the last
+treasury observation the runtime already holds.
+
+`world.tools` and `world.proposal_shapes` are compact indexes: every tool's id,
+kind, one-line description, price and argument names, and one line per proposal
+kind. The full `args_schema` of any tool and the full shape of any proposal kind
+are retrieved by `catalogue.search`, whose result carries `models`, `tools` and
+`proposal_shapes`. Nothing became undiscoverable — every id and description is
+still in the prefix — and the schemas a decision never reads no longer ride in
+front of every decision. The change is measured, not assumed: every `invocation`
+item carries `sections`, the UTF-8 bytes rendered per prompt section
+(`stable_prefix`, `you`, `request`, `inputs`, `propensity`, `outcome_schema`,
+`completion_criterion`, `total`), and the wake publishes `prompt_sections` with
+the mean and total per section over every recorded invocation.
+
 ## Round-two W2: judges, consequences, the reserve
 
 ### `[evaluation]`
@@ -934,8 +969,8 @@ paid read is the journal call `connector.paid_fetch`, and the ledger retains
 HTTP 402 with no data cost. `world.connectors` publishes `optional_fields`,
 the `payment` note, and each registered connector's `pay` and `max_call_micro`.
 
-`note.put` and `note.get` are a public key-value notebook bounded in UTF-8 bytes
-and charged rent by byte-time; unaffordable rent retains the text, an
+`note.put`, `note.get` and `note.list` are a public key-value notebook bounded in
+UTF-8 bytes and charged rent by byte-time; unaffordable rent retains the text, an
 overwrite cannot escape the debt, reads are journaled and priced, and the wake
 publishes counts only. `[notes]` is a hard cast with exactly these keys.
 
@@ -943,12 +978,24 @@ publishes counts only. `[notes]` is a hard cast with exactly these keys.
 | --- | --- | --- |
 | `max_keys` | `128` | Positive integer count of retained keys. |
 | `max_bytes` | `262144` | Positive integer total of key and text bytes. |
-| `byte_window_micro` | `1` | Positive integer micro-USD charged per byte moved by a `note.put` or `note.get` call. It no longer prices storage; the name is kept so old manifests still load. |
+| `byte_window_micro` | `1` | Positive integer micro-USD charged as the flat price of one `note.put` or `note.get` call. It prices neither storage nor bytes moved; the name is kept so old manifests still load. |
 | `micro_per_byte_day` | `"0.04"` | Exact positive decimal text (or integer) micro-USD per retained byte per day: the storage rent (edition 2, contract C3). At its default the whole 256 KiB cap costs 10,485 micro-USD, about a cent, a day. Absent or default, it leaves the manifest hash unchanged. |
 
 A key is 1–128 printable UTF-8 bytes. An entry's size is its key bytes plus its
-text bytes, and a call's price is that size times `byte_window_micro` plus any
-rent the entry still owes. A call above the caller's available compute or its
+text bytes, and a call's price is the flat `byte_window_micro` plus any rent the
+entry still owes. Edition 3 (contract C4) removed the per-byte transfer toll:
+charging a micro-USD for every byte moved made a 4 KiB read cost about $0.0041
+before the model had consumed one character of it — more than a cheap model call
+— for a resource the factory does not actually pay for, which made remembering
+dearer than producing another unsupported paragraph. Byte-time rent is
+unchanged: storage is a real resource, and a note nobody will pay to keep should
+go. `note.list` is free, like `artifact.get`, and returns up to 50 rows of key,
+title, type, bytes, version, owner seat, the window last written and `public`
+(always true for the notebook), newest first, with `next_cursor` for the next
+page and `count` for the whole index; it carries no text, so a reader need not
+already know a key. `artifact.list` is its counterpart over the archive, with
+`sha` in place of the key and an optional `owner` filter. A call above the
+caller's available compute or its
 request ceiling is refused before any debit or overwrite. `note.get` on an
 unknown key is an error. Rent is `bytes × elapsed_ns × rate`, accrued from the
 moment a key is written (an overwrite inherits the open interval, so rewriting

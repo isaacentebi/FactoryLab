@@ -159,7 +159,11 @@ def test_one_assembly_on_two_events_opens_with_a_byte_identical_wire_prefix():
     assert '"recurrence"' in prefix and '"consequence_mix"' in prefix  # mechanics
     assert '"venue.place_market"' in prefix and '"venue.instruments"' in prefix
     stable = {k: v for k, v in block.items() if k in STABLE_WORLD_KEYS}
-    assert len(rendered(stable)) > 0.85 * len(rendered(block))
+    # The ratio that matters is the rendered one: what the provider tokenises, not
+    # what the world block happens to hold. Edition 3's ``seats`` map carries an
+    # entry per live seat and exactly one of them is ever rendered, so measuring
+    # the block would count bytes no prompt has ever contained.
+    assert len(prefix) > 0.85 * len(first)
     assert len(prefix) >= len(rendered(stable))
 
 

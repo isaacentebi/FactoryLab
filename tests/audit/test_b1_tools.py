@@ -16,8 +16,15 @@ from tests.conftest import make_runtime
 def test_every_published_tool_accepts_its_examples():
     rt = make_runtime()
     try:
+        seeded = dict(rt.tool_specs)
+        # The shared directory's indexes are registered on first use rather than at
+        # launch; they carry examples their own schemas accept like every other tool.
+        rt._ensure_connector_tool()
+        directory = {k: v for k, v in rt.tool_specs.items()
+                     if k in ("note.list", "artifact.list")}
+        assert len(directory) == 2
         request = rt._request("examples", "tool examples", {}, {}, 100, "test")
-        for tool_id, spec in rt.tool_specs.items():
+        for tool_id, spec in {**seeded, **directory}.items():
             assert spec["args_schema"]["examples"], tool_id
             for args in spec["args_schema"]["examples"]:
                 rt._validate_output_contract({"tool_calls": [{"tool": tool_id, "args": args}]},

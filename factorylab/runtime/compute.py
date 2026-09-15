@@ -337,6 +337,31 @@ class ComputeMixin:
         out.sort(key=lambda m: m["id"])
         return out[: max(1, min(limit, 50))]
 
+    def _tool_schema_search(self, substring: str, limit: int) -> list[dict[str, Any]]:
+        """Registered tools whose id or description matches, with their full args_schema.
+
+        This is the other half of the compact affordance index: the world block
+        publishes every tool's id, kind, description, price and argument names,
+        and the schema a caller must satisfy is read here, once, by the seat that
+        is about to call it. Nothing is hidden — an empty substring matches every
+        tool — and the specs returned are exactly the ones dispatch validates
+        against, taken through ``_published_tool_specs(full=True)`` so the venue's
+        thousand-instrument enum is named rather than spelled here too.
+        """
+        needle = substring.lower()
+        specs = [spec for spec in self._published_tool_specs(full=True)
+                 if needle in str(spec.get("id", "")).lower()
+                 or needle in str(spec.get("description", "")).lower()]
+        specs.sort(key=lambda spec: str(spec.get("id")))
+        return specs[: max(1, min(limit, 50))]
+
+    def _proposal_shape_search(self, substring: str) -> dict[str, Any]:
+        """Full proposal shapes whose kind or one-line index entry matches the substring."""
+        needle = substring.lower()
+        lines = self._proposal_index()
+        return {kind: shape for kind, shape in self.PROPOSAL_SHAPES.items()
+                if needle in kind.lower() or needle in str(lines.get(kind, "")).lower()}
+
     def _record_market(self, item: dict) -> None:
         """Payment and pricing evidence is ledgered before dependent runtime state changes."""
         self.ledger.append({**item, "ts": self.clock.now_ns})
@@ -441,6 +466,96 @@ class ComputeMixin:
         self._init_connectors()
         self.tool_specs.setdefault(
             "connector.fetch", connector_spec(self.m.connectors.call_price_micro))
+        self._ensure_directory_tools()
+
+    #: What one page of a shared-directory listing returns before a cursor.
+    DIRECTORY_PAGE = 50
+
+    def _ensure_directory_tools(self) -> None:
+        """Expose the shared directory: an index of the notebook and of the archive.
+
+        Public storage without a discovery surface is a poor shared memory. Both
+        tools are indexes — key or sha, title, type, bytes, owner seat, when it
+        was updated, whether it is public — so a reader need not already know a
+        key or a hash to find what the population has written down. Neither
+        returns contents: ``note.get`` and ``artifact.get`` do that, at their own
+        prices.
+        """
+        from factorylab.runtime.notes import list_spec
+
+        page = self.DIRECTORY_PAGE
+        self.tool_specs.setdefault("note.list", list_spec())
+        self.tool_specs.setdefault("artifact.list", {
+            "id": "artifact.list",
+            "kind": "artifact",
+            "description": f"Index the artifact archive: up to {page} rows of sha, kind, "
+            "bytes, owner seat, when it was archived and whether it is public, newest "
+            "first, with a cursor for the next page. Optionally filtered by owner seat. "
+            "Free, like artifact.get.",
+            "args_schema": {
+                "type": "object",
+                "properties": {"owner": {"type": "string", "maxLength": 64},
+                               "cursor": {"type": "string", "maxLength": 128}},
+                "additionalProperties": False,
+                # Every published tool carries examples its own schema accepts (B1).
+                "examples": [{}, {"owner": "seed-decider"}],
+            },
+            "price_micro_per_call": 0,
+        })
+
+    def _artifact_entries(self) -> list[dict[str, Any]]:
+        """Every archived artifact's index row, newest first.
+
+        The rows come from ``ArtifactStore.entries()`` — ``(sha, owner, public,
+        bytes, created_ns)`` — so a scoped read and a bounded listing agree on one
+        shape and one published flag; an older store with only ``list()`` still
+        indexes, with the same fields under their record names. The listing itself
+        is not scoped: C1 makes an artifact readable when it is published *or*
+        listed in the directory, and an index of hashes, sizes and owners is what
+        makes shared memory findable without disclosing a byte of any of it.
+        """
+        store = self.artifacts
+        kinds = {sha: record.get("kind") for sha, record in store.index.items()}
+        if hasattr(store, "entries"):
+            rows = [{"sha": sha, "owner": owner, "public": bool(public), "bytes": size,
+                     "updated_ns": ts} for sha, owner, public, size, ts in store.entries()]
+        else:  # pragma: no cover - a store from before C1
+            rows = [{"sha": row["sha"], "owner": row["owner"],
+                     "public": bool(row.get("public")), "bytes": row["bytes"],
+                     "updated_ns": row["ts"]} for row in store.list()]
+        for row in rows:
+            row["title"] = str(row["sha"])[:12]
+            row["type"] = row["kind"] = kinds.get(row["sha"])
+        rows.sort(key=lambda row: (-(row["updated_ns"] or 0), str(row["sha"])))
+        return rows
+
+    def _artifact_index(self, owner: str | None = None,
+                        cursor: str | None = None) -> list[dict[str, Any]]:
+        """The archive's rows, optionally one owner's; the full list for the world block."""
+        rows = self._artifact_entries()
+        if owner is not None:
+            rows = [row for row in rows if row["owner"] == owner]
+        if cursor:
+            shas = [row["sha"] for row in rows]
+            start = shas.index(cursor) + 1 if cursor in shas else len(rows)
+            rows = rows[start:]
+        return rows
+
+    def _artifact_page(self, args: dict) -> dict[str, Any]:
+        """One ``artifact.list`` page: rows, the total, and the cursor that continues it.
+
+        ``count`` is the whole listing under this filter, not the remainder, so a
+        reader knows how much it has not seen; an unknown cursor ends the listing
+        rather than restarting it, so paging can never loop.
+        """
+        owner = args.get("owner")
+        owner = owner if isinstance(owner, str) and owner else None
+        cursor = args.get("cursor") if isinstance(args.get("cursor"), str) else None
+        total = len(self._artifact_index(owner))
+        remaining = self._artifact_index(owner, cursor)
+        page = remaining[:self.DIRECTORY_PAGE]
+        return {"items": page, "count": total,
+                "next_cursor": page[-1]["sha"] if len(remaining) > len(page) else None}
 
     def _connector_catalogue(self) -> list[dict]:
         """Public connector contracts expose latest versions, descriptions and origins."""
@@ -616,6 +731,24 @@ class ComputeMixin:
             return {"error": "unknown or disallowed tool"}, 0
         if tool_id == "connector.fetch":
             return self._fetch_connector(action_id, handle, args)
+        if tool_id == "note.list":
+            # An index of public keys, free like artifact.get: a directory nobody
+            # can afford to read is not a directory. It is ledgered like any call.
+            from factorylab.runtime.notes import index
+
+            cursor = args.get("cursor")
+            result = index(self.notes, cursor if isinstance(cursor, str) else None)
+            self.ledger.append({"kind": "note.list", "handle": handle,
+                                "assembly_id": action_id, "rows": len(result["items"]),
+                                "count": result["count"], "ts": self.clock.now_ns})
+            return result, 0
+        if tool_id == "artifact.list":
+            result = self._artifact_page(args)
+            self.ledger.append({"kind": "artifact.list", "handle": handle,
+                                "assembly_id": action_id, "rows": len(result["items"]),
+                                "count": result["count"], "owner": args.get("owner"),
+                                "ts": self.clock.now_ns})
+            return result, 0
         if tool_id in ("note.put", "note.get"):
             from factorylab.runtime.notes import run
 
@@ -670,10 +803,16 @@ class ComputeMixin:
                     return self._venue_write(handle, tool_id, args, slot=slot)
                 return self.venue_tools.call(tool_id, args)
             if spec["kind"] == "catalogue":
+                needle = str(args["substring"])
+                limit = int(args.get("limit", 20))
                 return {
-                    "models": self._catalogue_search(
-                        str(args["substring"]), int(args.get("limit", 20))
-                    )
+                    "models": self._catalogue_search(needle, limit),
+                    # The institutional catalogue, retrieved instead of carried:
+                    # world.tools and world.proposal_shapes are one-line indexes,
+                    # and this is where their full schemas are read when a seat
+                    # actually means to call a tool or register something.
+                    "tools": self._tool_schema_search(needle, limit),
+                    "proposal_shapes": self._proposal_shape_search(needle),
                 }
             if spec["kind"] == "market":
                 return {
@@ -944,9 +1083,16 @@ class ComputeMixin:
                 } | ({"cached_tokens": cached}
                      if type(cached := ret.provider.get("cached_tokens")) is int else {}),
                 "outputs": json.dumps(ret.outputs, default=str)[:4000],
+                # Rendered bytes per prompt section (edition 3, C4). Moving the
+                # institutional catalogue behind catalogue.search is a claim about
+                # bytes; the claim is recorded beside the bill it is supposed to
+                # move, so the change is measured rather than assumed.
+                "sections": replace(
+                    req, inputs={**req.inputs, "you": action_id}).section_bytes(),
                 "ts": self.clock.now_ns,
             }
         )
+        self._record_spend(action_id, ret.cost)
         fault = _provider_fault(ret)
         if fault is not None:
             # The vendor charged for tokens nobody can read. The bill stands (the

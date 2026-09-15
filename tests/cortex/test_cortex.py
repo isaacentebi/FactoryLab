@@ -73,7 +73,11 @@ def test_request_rejects_author_fields_and_bad_ceiling() -> None:
     with pytest.raises(ValueError):
         Request("h", "d", {}, {}, {}, 1, -1, None, "c", "fast", "self")
     text = _req().prompt_text()
-    assert "h1" not in text and "fast" not in text and "REQUEST" in text
+    # Edition 3 C4: the decider sees its own handle, deadline, ceiling and liable
+    # budget — an actor that cannot see its own ceiling cannot answer for it. The
+    # scoring channel is still none of its business, and neither is its parent.
+    assert "REQUEST" in text and "YOU" in text
+    assert '"request_handle": "h1"' in text and "fast" not in text
 
 
 def test_invoke_charges_wallet_exactly_and_parses_output() -> None:

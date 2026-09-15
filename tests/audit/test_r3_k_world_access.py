@@ -68,7 +68,7 @@ def test_t10_preflight_path_registers_404_root(monkeypatch):
     }]}, 0, "ok"))
     assert rt.registry.available("connector"), rt.registration_feedback
     assert transport.calls[0][1] == "/v1/data?q=1"
-    assert rt._world_block()["proposal_shapes"]["connector"]["preflight_path"]
+    assert rt._proposal_shape_search("connector")["connector"]["preflight_path"]
 
 
 @pytest.mark.parametrize("path", ["//evil.org", "/a\r\nx:y", "/#fragment", "https://evil.org"])
@@ -208,7 +208,7 @@ def test_scripted_access_connector_market_order_note_and_persistent_resume(monke
     assert trade(rt, decision(rt))["status"] == "filled"
     result, cost = rt._run_tool("seed-decider", handle, {
         "tool": "note.put", "args": {"key": "thesis", "text": "ETH is interesting"}})
-    assert "error" not in result and cost == 24
+    assert "error" not in result and cost == 1  # the flat call price; no per-byte toll (C4)
     assert rt._snapshot("k-audit")
     manifest = rt.m
     rt._ledger_lock.close()
@@ -217,7 +217,7 @@ def test_scripted_access_connector_market_order_note_and_persistent_resume(monke
     try:
         result, cost = restored._run_tool("seed-decider", decision(restored), {
             "tool": "note.get", "args": {"key": "thesis"}})
-        assert result["text"] == "ETH is interesting" and cost == 24
+        assert result["text"] == "ETH is interesting" and cost == 1  # flat, no per-byte toll
         assert restored.registry.get("connector:source").input_schema["preflight_path"] == "/data"
         assert trade(restored, decision(restored))["status"] == "filled"
         assert restored.wallet.check_conservation() and restored.ledger.verify()

@@ -35,7 +35,9 @@ def test_the_world_block_publishes_a_contract_catalogue_with_ids_and_nothing_sea
     assert '"menu"' not in text and "PRIVATE" not in text
     for row in block["catalogue"]:
         assert "model" not in row and "prompt" not in json.dumps(row)
-    assert "world.catalogue" in block["proposal_shapes"]["retire"]["assembly_id"]
+    # The retire shape is retrieved; the block indexes it in a line.
+    assert "assembly" in block["proposal_shapes"]["retire"]
+    assert "world.catalogue" in rt.PROPOSAL_SHAPES["retire"]["assembly_id"]
     assert "catalogue" in block["a_return_may_include"]["requests"]
     assert "catalogue" in block["a_return_may_include"]["register"]
 
