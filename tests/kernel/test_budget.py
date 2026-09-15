@@ -195,6 +195,36 @@ def test_meter_runs_against_a_seat_wallet(ledger, clock):
     assert invariant(book, wallet)
 
 
+def test_a_seat_the_book_never_endowed_is_refused_by_name_not_key_error(ledger, clock):
+    """A seat instantiated past registration has no entitlement: its meter reports a
+    refusal naming the seat, even when novelty protection would have covered the call,
+    and the wallet never books a reservation for it."""
+    wallet = Wallet(1_000, ledger, clock_ns=clock)
+    book = BudgetBook(wallet, ledger, clock_ns=clock)
+    book.grant("known", 100, "test")
+    stray = SeatWallet(wallet, book, "stray", protected=lambda _h, _r: 500)
+    with pytest.raises(Infeasible, match="'stray' has no entitlement"):
+        stray.reserve(10, "h1", "model:m")
+    assert wallet.available == 1_000 and book.holds() == 0
+    refused = budget_items(ledger)[-1]
+    assert refused["op"] == "infeasible" and refused["unknown_seat"] is True
+    assert refused["assembly_id"] == "stray" and refused["entitlement"] == 0
+    from factorylab.world.metering import Infeasible as MeterInfeasible
+
+    with pytest.raises(MeterInfeasible, match="'stray' has no entitlement"):
+        Meter(stray).run(handle="h2", reason="model:m", ceiling=10, execute=lambda: "ok",
+                         cost_of=lambda _: 1)
+    # once endowed it is an ordinary seat
+    book.grant("stray", 50, "test")
+    held = stray.reserve(10, "h3", "model:m")
+    stray.commit(held, 4)
+    assert book.entitlement("stray") == 46 and invariant(book, wallet)
+    # a reservation this book never held is refused the same way, not with a KeyError
+    foreign = wallet.reserve(5, "h4", "treasury:fees")
+    with pytest.raises(Infeasible, match="not held by this budget book"):
+        stray.release(foreign)
+
+
 def test_state_round_trips_exactly(ledger, clock):
     wallet = Wallet(1_000, ledger, clock_ns=clock)
     book = BudgetBook(wallet, ledger, clock_ns=clock, base_share="0.6")

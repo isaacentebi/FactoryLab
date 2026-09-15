@@ -36,7 +36,7 @@ uv run factorylab run --world scripted --events 500 --seed 1
 uv run factorylab run --world scripted-crash --events 600 --seed 2
 ```
 
-The first runs a deterministic world for 500 events, registers a population observation and an assembly learner, activates a card amendment and a seed evaluator retirement on separate governance boundaries, and prints a summary. Its orders size from the world wallet, and its consequence backstop is 20 events. The second halves the price of BTC four times under a leveraged long; gap liquidation can take the wallet below zero, and the world dies of `balance_zero` and releases its key. Then the tests:
+The first runs a deterministic world for 500 events, registers an assembly learner, activates a card amendment and a seed evaluator retirement on separate governance boundaries, and prints a summary. Its orders size from the world wallet, and its consequence backstop is 20 events. Every seat spends from its own entitlement (edition 2, C10): the seeded trader bears its own trading losses and runs its share down before the 500 events are out, so the scripted population observation, which the script places past its 1,600th producer call, is not registered inside this run. The second halves the price of BTC four times under a leveraged long; gap liquidation can take the wallet below zero, and the world dies of `balance_zero` and releases its key. Then the tests:
 
 ```bash
 uv run pytest

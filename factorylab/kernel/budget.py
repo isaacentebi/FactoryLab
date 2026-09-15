@@ -291,6 +291,13 @@ class BudgetBook:
         seat = self._seat(assembly_id)
         require_money(amount, nonnegative=True)
         require_money(extra, nonnegative=True)
+        if seat not in self.__gross:
+            # A seat this book never endowed (instantiated past registration, or a
+            # child whose trial the pool could not cover) is refused by name: the
+            # meter reports it like any other refusal instead of failing inside.
+            self._log("infeasible", assembly_id=seat, amount=amount, handle=handle,
+                      reason=reason, entitlement=0, protected=extra, unknown_seat=True)
+            raise Infeasible(f"seat {seat!r} has no entitlement: this book never endowed it")
         if seat in self.__retired or amount > self.entitlement(seat) + extra:
             self._log("infeasible", assembly_id=seat, amount=amount, handle=handle, reason=reason,
                       entitlement=self.entitlement(seat), protected=extra)
@@ -317,9 +324,9 @@ class BudgetBook:
         as ``commons`` so the commons-funded part of every call is visible.
         """
         require_money(actual, nonnegative=True)
-        seat, held = self.__holds[reservation.id]
-        own = max(0, min(actual, self.__gross[seat]))
-        after = self.__gross[seat] - own
+        seat, held = self._held(reservation)
+        own = max(0, min(actual, self.__gross.get(seat, 0)))
+        after = self.__gross.get(seat, 0) - own
         self._log("commit", assembly_id=seat, amount=actual, own=own, commons=actual - own,
                   handle=reservation.handle, reason=reservation.reason,
                   reservation_id=reservation.id,
@@ -329,8 +336,16 @@ class BudgetBook:
         del self.__holds[reservation.id]
         self.__gross[seat] = after
 
+    def _held(self, reservation: Any) -> tuple[str, Money]:
+        """Return the seat and amount behind a reservation this book holds."""
+        try:
+            return self.__holds[reservation.id]
+        except KeyError:
+            raise Infeasible(
+                f"reservation {reservation.id!r} is not held by this budget book") from None
+
     def _release_hold(self, reservation: Any) -> None:
-        seat, held = self.__holds[reservation.id]
+        seat, held = self._held(reservation)
         self._log("release_hold", assembly_id=seat, amount=held, handle=reservation.handle,
                   reason=reservation.reason, reservation_id=reservation.id,
                   entitlement_after={seat: self.entitlement(seat) + held},

@@ -39,12 +39,13 @@ def test_scripted_800_event_diaries_have_equal_summaries(tmp_path):
         # scripted consequence backstop at 20 events, A2's cadence allows activation from
         # launch + min_ratio * 20 = event 61, and the scripted measurement window is 120
         # events, so the first window carrying the new card closes at event 121. The
-        # scripted fill-card amendment proposed later in the run does not activate inside
-        # this budget on its own; with population observations admitted to the charter
-        # (round three, T3) the scripted fill-card amendment also activates, later.
+        # scripted fill-card amendment sits past the script's 1,600th producer call: with
+        # every seat spending from its own entitlement (edition 2, C10) the seeded trader
+        # runs its share below one call's ceiling and the router draws NOOP for most of
+        # its decisions, so the fill card does not activate inside 800 events and the
+        # turnover card is the one activation. Both diaries must still agree exactly.
         activation = [item for item in items if item.get("kind") == "charter.activate"]
-        assert [item["amendment_id"] for item in activation] == ["turnover-card",
-                                                                  "scripted-fill-card"]
+        assert [item["amendment_id"] for item in activation] == ["turnover-card"]
         assert "card:turnover" in report["operator"]["dimensions"]
         assert any(w["profile"]["verdict"] is not None for w in report["windows"])
         assert report["settling"] and report["settling"][0]["edition"] == 2

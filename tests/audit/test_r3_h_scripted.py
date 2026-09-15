@@ -94,7 +94,13 @@ def test_readme_500_event_acceptance(monkeypatch, capsys):
                          sort_keys=True))
     assert not summary["terminated"]
     assert summary["ledger_verify"] and summary["wallet_conservation"]
-    assert summary["stats"]["observations_registered"] >= 1
+    # C10: the seeded trader spends its own entitlement on its calls and its trading
+    # losses and runs it below one fake-opus call's ceiling before the run is out, so
+    # the world makes fewer producer calls than before and the scripted population
+    # observation, placed past the script's 1,600th producer call, is not reached
+    # inside 500 events. The README says so; the provider's own schedule is pinned by
+    # test_registers_observation_then_names_it_in_amendment.
+    assert summary["stats"]["observations_registered"] == 0
     assert summary["stats"]["assembly_learners_registered"] >= 1
     assert activations
     assert any(i["assembly_id"] == "eval-a" for i in retirements)

@@ -36,10 +36,12 @@ class ScriptedProvider:
     _producer_calls: int = 0
     spot_pair: str | None = None
     # The population's own observation and the amendment that puts it on a card. They are
-    # counted in producer calls, and the world makes several of those per event: a
-    # 260-event run makes about 1220, a 500-event run about 2520, an 800-event run about
-    # 3950. These sit past the short runs — which assert on the one amendment the world
-    # proposes early — and well inside the long ones, which watch this one activate.
+    # counted in producer calls. Under per-seat entitlements (edition 2, C10) the seeded
+    # trader spends its own share on its calls and its trading losses and runs it below
+    # one call's ceiling, after which the router draws NOOP for most of its decisions:
+    # a 500-event run makes about 1450 producer-side calls, so neither the 500-event
+    # README run nor the 800-event diaries run reaches these. The schedule itself is
+    # pinned by test_registers_observation_then_names_it_in_amendment.
     late_observation_call: int = 1600
     late_amendment_call: int = 1610
 

@@ -201,6 +201,10 @@ def test_custom_forecast_child_uses_the_forecast_channel(monkeypatch):
     rt = make_runtime()
     register_work(rt)
     parent = parent_request(rt)
+    # C10: the child spends its parent's entitlement; the parent decision is
+    # seed-decider's, as a routed one would be, so the weather desk's call (its
+    # ceiling exceeds the 0.10 USD trial it was registered with) is covered.
+    rt.handle_to_assembly[parent.handle] = "seed-decider"
     monkeypatch.setattr(rt.provider.target, "complete", lambda req: ModelResponse(
         req.model_id, json.dumps({"forecasts": [{"predicate": "wallet_up",
             "params": {"horizon_events": 1}, "q": 0.8}]}), 1, 1, "end_turn"))

@@ -105,6 +105,14 @@ def test_fatal_vote_overrun_cannot_invoke_another_seat(monkeypatch):
     monkeypatch.setattr(rt.provider.target, "complete", provider)
     monkeypatch.setattr(rt.charter_book, "vote", lambda *_: None)
     monkeypatch.setattr(rt.charter_book, "tally", lambda *_: "failed")
+    # C10: a ballot is metered against the voter's entitlement, and its ceiling
+    # (about 0.53 USD here) exceeds an equal ninth of this 1 USD wallet. The voter
+    # is staked with the unallocated pool and three siblings' shares so its first
+    # ballot is affordable; the bill it then reports exceeds the whole wallet.
+    rt.budget.grant("seed-decider", rt.budget.unallocated(), "fixture: the voter's stake")
+    for sibling in ("eval-a", "eval-b", "eval-c"):
+        rt.budget.transfer(sibling, "seed-decider", rt.budget.entitlement(sibling),
+                           "fixture: the voter's stake")
     am = SimpleNamespace(id="test", proposed_prices=(), add=(), replace=(), remove=(),
                          predicted_effect=PredictedEffect("cost_per_return", "decrease", 1),
                     tick_interval=None)
