@@ -4,9 +4,14 @@
 #   witness.sh <launch|dormant|kill|failed_resume> [reason]
 #
 # Appends one JSON line {world, event, ts, release_digest, ledger_head[, reason]}
-# to runs/<world>.witness.jsonl (append-only, 0600) and, when
+# to .witness/<world>.jsonl beside runs/ (append-only, 0600) and, when
 # FACTORYLAB_WITNESS_URL is set, POSTs the same line. The append never depends
 # on the POST; the POST is best effort and never fails the caller.
+#
+# The same file is where the runtime itself writes a world's kill line
+# (factorylab/runtime/witness.py, with the launch nonce) and where resume looks
+# for one. It is deliberately outside runs/: a copy or a restore of the diary
+# directory must not carry the witness with it (deploy/README.md, "Witness").
 #
 # release_digest is the identity of the release on disk now (deploy/README.md,
 # "Release identity"); ledger_head is the SHA-256 of the ledger file's bytes at
@@ -16,7 +21,7 @@
 # Overridable for rehearsals and tests (never on the funded host):
 #   FACTORYLAB_ROOT (/srv/factorylab)  FACTORYLAB_REPO ($root/repo)
 #   FACTORYLAB_WORLD (funded)          FACTORYLAB_LEDGER ($root/runs/$world.jsonl)
-#   FACTORYLAB_WITNESS_FILE ($root/runs/$world.witness.jsonl)
+#   FACTORYLAB_WITNESS_FILE ($root/.witness/$world.jsonl)
 #   FACTORYLAB_PYTHON ($repo/.venv/bin/python)
 set -eu
 umask 077
@@ -30,7 +35,7 @@ root=${FACTORYLAB_ROOT:-/srv/factorylab}
 repo=${FACTORYLAB_REPO:-$root/repo}
 world=${FACTORYLAB_WORLD:-funded}
 ledger=${FACTORYLAB_LEDGER:-$root/runs/$world.jsonl}
-witness=${FACTORYLAB_WITNESS_FILE:-$root/runs/$world.witness.jsonl}
+witness=${FACTORYLAB_WITNESS_FILE:-$root/.witness/$world.jsonl}
 python=${FACTORYLAB_PYTHON:-$repo/.venv/bin/python}
 # Only closed vocabularies reach the line: a world name and a reason code.
 [[ $world =~ ^[a-z0-9][a-z0-9_-]{0,63}$ ]] || { printf 'witness: bad world\n' >&2; exit 2; }
@@ -56,6 +61,7 @@ if [[ -n $reason ]]; then
 fi
 line="$line}"
 # Append first: the local file is the record; the receiver is a copy.
+mkdir -p -m 700 "$(dirname "$witness")"
 printf '%s\n' "$line" >> "$witness"
 [[ -n ${FACTORYLAB_WITNESS_URL:-} ]] || exit 0
 url=$FACTORYLAB_WITNESS_URL

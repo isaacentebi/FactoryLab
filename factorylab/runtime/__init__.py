@@ -9,3 +9,8 @@ kernel physics.
 Imports every other package, and is imported by ``charter`` and ``cortex`` only
 for vocabularies it owns. Nothing outside this package starts a world.
 """
+
+# Loading the runtime installs the kill witness into the kernel's one hook, so a
+# kill reached through any runtime entry point (the loop, the CLI's ``kill``, a
+# reopened ledger under ``Termination``) is recorded outside the diary.
+from factorylab.runtime import witness as _witness  # noqa: E402, F401

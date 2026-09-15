@@ -219,6 +219,7 @@ class Ledger:
         self.__verified_head = self.__genesis
         self.__verified_count = -1  # No item count has had its full walk yet.
         self.__path = Path(path) if path is not None else None
+        self.__world = manifest.get("name") if isinstance(manifest, dict) else None
         self.__final = False
         self.__authority = None
         self.__wallet = None
@@ -318,7 +319,8 @@ class Ledger:
         return {"choices": {}, "wallet_series": [], "spend": {}, "invocations": {},
                 "actions": {}, "latency_count": 0, "latency_total": 0,
                 "latency_min": None, "latency_max": None,
-                "first_tick": None, "last_event": None, "launch": False, "terminated": False}
+                "first_tick": None, "last_event": None, "launch": False, "terminated": False,
+                "launch_nonce": None, "release_digest": None}
 
     @staticmethod
     def _copy_index(index: dict) -> dict:
@@ -369,6 +371,12 @@ class Ledger:
                 index["first_tick"] = event["ts_ns"]
             index["launch"] |= event["kind"] == "Launch"
             index["terminated"] |= event["kind"] == "Terminated"
+            if event["kind"] == "Launch":
+                # The identity the world launched under, kept where a kill can read
+                # it without walking the diary (runtime/witness.py).
+                payload = event.get("payload") or {}
+                index["launch_nonce"] = payload.get("launch_nonce")
+                index["release_digest"] = payload.get("release_digest")
 
     def _load_head(self, size: int) -> dict | None:
         try:
@@ -571,6 +579,48 @@ class Ledger:
     def seal_key_released(self) -> bool:
         """Report seal state without exposing any item or key material."""
         return self.__keys.released
+
+    @property
+    def path(self) -> Path | None:
+        """Where the diary lives, or None for a memory-only ledger."""
+        return self.__path
+
+    def identity(self) -> dict:
+        """What names this world outside its diary: the launch identity and whether it ended.
+
+        The nonce and the release digest come from the indexed ``Launch`` event, so
+        a reopened ledger knows them without decrypting its history. ``terminated``
+        is true once a ``Terminated`` event is in the diary, whether appended by
+        this process or found on disk.
+        """
+        return {"world": self.__world,
+                "launch_nonce": self.__index.get("launch_nonce"),
+                "release_digest": self.__index.get("release_digest"),
+                "terminated": bool(self.__final or self.__index.get("terminated"))}
+
+    @property
+    def diary_id(self) -> str | None:
+        """The hash of the first sealed record: one value for every copy of this diary.
+
+        Two deterministic worlds of one manifest and seed share a launch nonce by
+        design; their diaries are sealed under different keys, so their first
+        records differ. None before the first record exists.
+        """
+        if self.__path is None:
+            token = self.__tokens[0] if self.__tokens else None
+        else:
+            try:
+                with self.__path.open("rb") as stream:
+                    stream.readline()  # the plaintext genesis header
+                    first = stream.readline()
+                token = self._token(first) if first.endswith(b"\n") else None
+            except (OSError, LedgerIntegrityError, ValueError, AttributeError):
+                return None
+        return hashlib.sha256(token).hexdigest() if token else None
+
+    def byte_hash(self) -> str | None:
+        """SHA-256 of every diary byte written or verified so far; None for a memory-only ledger."""
+        return self.__raw_hash.hexdigest() if self.__path is not None else None
 
     def healthy(self) -> bool:
         """Cheap integrity check: persisted size and tail match what this ledger wrote.

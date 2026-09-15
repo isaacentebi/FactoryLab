@@ -11,8 +11,10 @@ Reads ``liveness.status`` from the published ``wake.json`` (``alive``,
 this helper last witnessed, kept in the small state file. A change into
 ``dormant`` runs ``witness.sh dormant entered``; a change from ``dormant`` back
 to ``alive`` runs ``witness.sh dormant exited``. Nothing else is witnessed
-here: ``launch``, ``kill`` and ``failed_resume`` belong to ``start.sh`` and the
-kill runbook, so a world that is killed while dormant gets its ``kill`` line
+here: ``launch`` and ``failed_resume`` belong to ``start.sh``, and ``kill`` is
+written by the runtime itself from inside ``Termination.kill``
+(``factorylab/runtime/witness.py``) with ``start.sh`` and the kill runbook adding
+the outside view, so a world that is killed while dormant gets its ``kill`` line
 from them and no ``exited`` line from us.
 
 Idempotent across republishes: the state file is rewritten only after the

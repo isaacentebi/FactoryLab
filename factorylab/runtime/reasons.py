@@ -34,6 +34,7 @@ class Reason(StrEnum):
     MANIFEST_UNAVAILABLE = "manifest_unavailable"
     MANIFEST_MISMATCH = "manifest_mismatch"
     RELEASE_MISMATCH = "release_mismatch"  # The executing release differs from the launched one.
+    IDENTITY_KILLED = "identity_killed"  # The witness records this identity's kill: it stays dead.
     TICK_OVERRIDE_REFUSED = "tick_override_refused"
     NO_LIVE_VENUE = "no_live_venue"
 

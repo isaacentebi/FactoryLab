@@ -162,7 +162,8 @@ FACTORYLAB_WITNESS_URL=https://REPLACE_WITH_WITNESS_RECEIVER
 ```
 
 `FACTORYLAB_WITNESS_URL` is optional; without it the witness lines stay in
-`runs/funded.witness.jsonl` only (see "Witness" below).
+`.witness/funded.jsonl` beside `runs/` only, and a kill is final only as far as
+that one file survives (see "Witness" below: the receiver is the real guarantee).
 
 The receiver accepts precisely one JSON line such as
 `{"world":"funded","event":"terminated"}` or
@@ -262,15 +263,53 @@ every archive, so a restore knows which release the ledger resumes under.
 {"world":"funded","event":"launch","ts":"2026-09-14T03:00:00Z","release_digest":"<64 hex>","ledger_head":"<sha256 of the ledger bytes>"}
 ```
 
-to `runs/funded.witness.jsonl` (append-only, 0600, backed up with the ledger) and,
-when `ops.env` sets `FACTORYLAB_WITNESS_URL`, POSTs the identical line as JSON.
+to `.witness/funded.jsonl` beside `runs/` (append-only, 0600) and, when
+`ops.env` sets `FACTORYLAB_WITNESS_URL`, POSTs the identical line as JSON.
 The append never waits on the receiver; the POST is best effort (20-second
 timeout, HTTPS only except a loopback rehearsal receiver) and cannot fail the
 caller. `start.sh` emits `launch` after the first `run` succeeds, `kill` when
 `resume` reports finality (exit 3: the operator's kill or the world's own death)
-and `failed_resume` with the reason code when `resume` exits 1. The kill runbook
-below adds one line so an operator's kill is witnessed at once rather than at
-the next service start. `dormant` is budget dormancy (C2): the runtime ledgers
+and `failed_resume` with the reason code when `resume` exits 1.
+
+The runtime writes the `kill` line itself, from inside every kill path
+(`factorylab kill`, the world's death by balance or budget, the end-of-budget
+kill): `Termination.kill` appends
+
+```json
+{"world":"funded","event":"kill","ts":"...","release_digest":"<64 hex>","ledger_head":"<sha256 of the ledger bytes>","launch_nonce":"<32 hex>","diary":"<sha256 of the diary's first sealed record>","reason":"explicit_kill:operator"}
+```
+
+to the same file (`factorylab/runtime/witness.py`, standard library only, never
+raising into the kill) and POSTs it to the receiver when the URL is set. That
+line is the death record the diary itself cannot carry. A killed diary refuses
+to reopen, but an *earlier copy* of it (a backup restored beside the original,
+a `cp -r` taken before the kill) has a valid chain, the right key and the right
+release digest, and nothing inside it knows a later terminal state occurred
+(cold audit F1, "backup restoration"). So `resume` reads the witness before it
+restores anything: a `kill` line for the checkpoint's `launch_nonce` (and, when
+both know it, the same `diary`) refuses the resume with the reason code
+`identity_killed` (exit 1, a `failed_resume` item in that copy's diary naming
+the witness that answered, `failed_resume` webhook and witness line). When the
+URL is set, resume also asks the receiver (a `query` line with the same
+`launch_nonce` and `diary`, five-second timeout): a receiver that answers
+`{"killed": true}` is final; a receiver that is unreachable or gives no
+verdict is logged and does not count either way. A checkpoint restored into a
+runtime that is already final, or one whose identity this process or the local
+witness records as killed, is refused the same way (`restore_runtime`,
+`identity_killed`); `Termination.kill` stays irreversible on the object.
+
+**Never restore `.witness/` from a backup, and never delete it.** The witness
+directory is the one thing on the host that must be *newer* than the diary:
+restoring an older copy of it, or the archive's `witness/` folder over it, erases
+the record that the diary it sits beside is dead. `backup.sh` archives the
+witness under `witness/` (not `runs/`) for the post-mortem only; a restore
+extracts `runs/` and the keys and leaves `.witness/` as it is on the host. The
+directory is a sibling of `runs/` rather than inside it for exactly this reason:
+copying or restoring the diary directory never carries the witness with it, and
+every copy of the diary under the same parent resolves to the same witness file.
+What the local file cannot survive is an operator who deletes it, or a host that
+is lost with it; `FACTORYLAB_WITNESS_URL` is the guarantee for that case, and
+without it a kill is final only as far as that one file survives. `dormant` is budget dormancy (C2): the runtime ledgers
 each entry and exit, the wake publishes them as `liveness.status` and
 `pots.dormancy`, and the wake unit witnesses the transitions. After every
 publish, `factorylab-wake.service` runs `deploy/witness_liveness.py` as
@@ -341,8 +380,14 @@ sudo -u factory bash /srv/factorylab/repo/deploy/witness.sh kill
 
 It takes the writer lock (so stop the unit first, or it exits 4), records
 `explicit_kill:operator` in the world's own diary through the only authority
-that may publish a `Terminated` event, releases the seal and exits 3. Killing an
-already dead world prints `terminated` and exits 3 again, changing nothing.
+that may publish a `Terminated` event, releases the seal and exits 3. The kill
+command itself writes the runtime's `kill` line (with the launch nonce) to
+`.witness/funded.jsonl` and to the receiver; the `witness.sh kill` line after it
+is the outside view of the same event and is what a resume that finds the world
+already final would also emit. Killing an already dead world prints
+`terminated` and exits 3 again, changing nothing. From that moment no copy of
+the diary resumes on this host (`identity_killed`), and none resumes anywhere
+that asks the receiver.
 It takes no other argument: there is nothing to steer, only to end.
 
 Afterwards `systemctl disable --now factorylab.service` stops systemd from
@@ -371,7 +416,8 @@ without this file.
 Every failing command prints exactly one line, `factorylab <command>: <code>`,
 where the code comes from the closed vocabulary in `factorylab/runtime/reasons.py`
 (`ledger_integrity`, `manifest_mismatch`, `release_mismatch` for a checkout whose
-release digest is not the one that launched the world, `credential_missing` for a
+release digest is not the one that launched the world, `identity_killed` for a
+diary whose launch identity the witness records as killed, `credential_missing` for a
 key the environment lacks, `credential_unsafe` for a key file whose mode or owner is
 wrong, `venue_unreachable`, `jail_unavailable`, and the rest). No exception
 text, no interpolation and no provider response body is ever printed, so nothing

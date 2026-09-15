@@ -652,7 +652,7 @@ def test_witness_liveness_drives_the_real_witness_script(tmp_path, monkeypatch):
     _publish(wake, "alive")
     assert helper.main(["--wake", str(wake), "--state", str(state)]) == 0
     lines = [json.loads(line)
-             for line in (tmp_path / "runs" / "rehearsal.witness.jsonl").read_text().splitlines()]
+             for line in (tmp_path / ".witness" / "rehearsal.jsonl").read_text().splitlines()]
     assert [(line["event"], line["reason"]) for line in lines] == [("dormant", "entered"),
                                                                     ("dormant", "exited")]
     assert all(line["world"] == "rehearsal"

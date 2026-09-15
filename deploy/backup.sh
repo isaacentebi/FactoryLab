@@ -19,9 +19,14 @@ if ! (cd "$root/repo" && PYTHONPATH="$root/repo" "$python" -m factorylab.runtime
     # A rehearsal root without the package still archives, and says the digest is missing.
     printf '{"release_digest": "unavailable"}\n' > "$stage/runs/funded.release.json"
 fi
-# The witness file (launch, kill, failed_resume lines) travels with the ledger.
-if [[ -f "$root/runs/funded.witness.jsonl" ]]; then
-    cp "$root/runs/funded.witness.jsonl" "$stage/runs/funded.witness.jsonl"
+# The witness file (launch, dormant, kill, failed_resume lines) is archived for
+# the post-mortem under witness/, never under runs/: it is the record a restored
+# diary must not carry, and the host reads it only from .witness/ beside runs/.
+# Restoring an archive never puts an older witness where resume would read it
+# (deploy/README.md, "Witness").
+if [[ -f "$root/.witness/funded.jsonl" ]]; then
+    mkdir "$stage/witness"
+    cp "$root/.witness/funded.jsonl" "$stage/witness/funded.jsonl"
 fi
 # Fix the byte limit before copying. Discard only an unfinished final record.
 # Keys are copied by the unattended process, never displayed or embedded in the image.
@@ -72,7 +77,9 @@ record['ledger'] = {'bytes': copied.stat().st_size,
 (stage / 'runs/funded.release.json').write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
 PY
 # No unencrypted tar is ever created. The stage is root-only in systemd's PrivateTmp.
-tar -C "$stage" -cf - runs repo openrouter.key hyperliquid.key reserve.key |
+members=(runs repo openrouter.key hyperliquid.key reserve.key)
+[[ -d "$stage/witness" ]] && members+=(witness)
+tar -C "$stage" -cf - "${members[@]}" |
     age --encrypt --recipient "$AGE_RECIPIENT" --output "$stage/backup.tar.age"
 name="factorylab-$(date -u +%Y%m%dT%H%M%SZ).tar.age"
 rclone copyto "$stage/backup.tar.age" "${BACKUP_REMOTE%/}/$name" \

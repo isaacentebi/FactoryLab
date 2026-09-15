@@ -73,6 +73,11 @@ start by `factorylab/runtime/release.py::release_digest()`. Ledgered in the `Lau
 `deploy/backup.sh` records the digest beside the ledger. `deploy/witness.sh` appends
 `{world, event, ts, release_digest, ledger_head}` for launch, dormant, kill and failed_resume
 to a local append-only file and, when `FACTORYLAB_WITNESS_URL` is set, POSTs the same line.
+The kill line is also written by the runtime itself (`runtime/witness.py`, from
+`Termination.kill`, with `launch_nonce` and the diary fingerprint) to `.witness/<world>.jsonl`
+beside the diary's directory, where a copy of that directory does not carry it; `resume`
+and `restore_runtime` read it (and ask the receiver) before restoring anything and refuse a
+killed identity with `failed_resume reason=identity_killed`.
 
 ### C5. Venice receipt (`world/treasury_rails.py`)
 

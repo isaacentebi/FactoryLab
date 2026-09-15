@@ -842,15 +842,8 @@ def test_step_12_kill_is_ledgered_final_and_the_killed_ledger_cannot_resume(stor
     assert str(s["refused"]) == "cannot resume a terminated world"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "kill binds finality to the one ledger file that recorded it: "
-    "factorylab/runtime/resume.py::_resume_runtime reads only Ledger.reopen's terminated "
-    "index of the file it opens, and restore_runtime checks manifest hash, adapters, venue "
-    "account and release digest, never a kill; a pre-kill copy of the same diary, key and "
-    "archive (same launch_nonce, same release digest) resumes and routes paid cognition. "
-    "deploy/witness.sh records the kill outside the diary but nothing reads the witness "
-    "on resume."))
 def test_step_12_an_earlier_copy_of_the_killed_diary_cannot_purchase_again(story):
+    """The kill is witnessed outside the diary's directory; a pre-kill copy reads it there."""
     story.stage(7)
     earlier = story.root / "earlier" / story.path.name
     try:
@@ -867,12 +860,8 @@ def test_step_12_an_earlier_copy_of_the_killed_diary_cannot_purchase_again(story
     assert routed == 0, f"the killed identity bought {routed} more routed decisions"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "an in-memory checkpoint (runtime_state) taken before the kill carries no finality: "
-    "factorylab/runtime/resume.py::restore_runtime rebuilds a live Termination from it, "
-    "so the restored world is not final and routes paid cognition under the killed "
-    "launch_nonce and release digest."))
 def test_step_12_an_earlier_checkpoint_of_the_killed_identity_is_final_when_restored(story):
+    """A checkpoint names the diary it came from; the kill of that diary is on record."""
     s = story.stage(7)
     twin = Runtime(manifest(), ledger_path=None, provider=SliceProvider(), exchange=exchange(),
                    **s["earlier_state"]["config"])

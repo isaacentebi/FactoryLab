@@ -11,6 +11,18 @@ from factorylab.kernel.wallet import Wallet
 #: The non-terminal budget trigger: unaffordable now, backed by a scheduled release.
 DORMANT = "budget_dormant"
 
+#: The one hook a kill calls once the terminal event is in the diary: the witness
+#: outside the diary (``factorylab/runtime/witness.py`` installs it through
+#: ``bind_witness``). The kernel names no upper layer; a kill with no witness
+#: bound is final all the same.
+_witness: Callable[[Ledger, str], object] | None = None
+
+
+def bind_witness(witness: Callable[[Ledger, str], object] | None) -> None:
+    """Install (or clear) the kill witness. Called by the runtime, never by a world."""
+    global _witness
+    _witness = witness
+
 
 class Termination:
     """World finality and seal release remain irreversible, even if event callbacks fail."""
@@ -91,7 +103,15 @@ class Termination:
                 and wallet.unhistoried_available < needed)
 
     def kill(self, reason: str) -> None:
-        """Publish one final event and release the key; repeated kills preserve the first reason."""
+        """Publish one final event and release the key; repeated kills preserve the first reason.
+
+        The kill is also witnessed outside the diary (``runtime/witness.py``): in
+        this process, in the local witness file beside the diary's directory and,
+        when a receiver is configured, at the receiver. An earlier copy of the
+        diary cannot carry its own death, so resume reads that record. The
+        witness never raises into the kill: finality here and in the ledger does
+        not wait on it.
+        """
         if not isinstance(reason, str) or not reason:
             raise ValueError("termination reason is required")
         if reason == DORMANT:
@@ -102,4 +122,11 @@ class Termination:
             "termination", EventKind.TERMINATED, self.__clock(), {"reason": reason}, "kernel"
         )
         self.__reason = reason
-        self.__bus._publish_terminal(event, self)
+        try:
+            self.__bus._publish_terminal(event, self)
+        finally:
+            if _witness is not None:
+                try:
+                    _witness(self.__ledger, reason)
+                except Exception:  # noqa: BLE001 - nothing may raise into a kill
+                    pass

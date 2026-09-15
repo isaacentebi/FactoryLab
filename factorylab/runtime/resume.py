@@ -540,7 +540,20 @@ def _venue_address(exchange) -> str | None:
     return address.lower() if isinstance(address, str) else None
 
 
-def runtime_state(rt) -> dict:
+class Checkpoint(dict):
+    """A checkpoint's mapping is what the diary keeps; the diary it came from rides beside it.
+
+    Two runs of one manifest and seed write byte-identical items, so the mapping
+    cannot carry anything sealed under one run's own key. The diary fingerprint
+    (``Ledger.diary_id``) is therefore an attribute, not a key: an in-memory
+    checkpoint restored in this process still names the diary it came from, and
+    a ledgered one, read back as a plain mapping, is bound by the file it is in.
+    """
+
+    diary: str | None = None
+
+
+def runtime_state(rt) -> Checkpoint:
     """Retain learning, FIFO lots, private memory and exact source cursors in one checkpoint."""
     rt._ensure_connector_tool()
     runtime = {name: getattr(rt, name) for name in _RUNTIME_FIELDS}
@@ -549,7 +562,7 @@ def runtime_state(rt) -> dict:
         name: {field: getattr(getattr(rt, name), prefix + field) for field in names}
         for name, prefix, names in _COMPONENT_FIELDS
     }
-    return {
+    state = Checkpoint({
         "format": 1, "manifest_hash": rt.m.manifest_hash(),
         "config": {
             "events": rt.events_budget, "seed": rt.seed, "initial_balance_micro": rt.initial,
@@ -585,7 +598,10 @@ def runtime_state(rt) -> dict:
         "venue_tool_log": encode(rt.venue_tools.log) if rt.venue_tools else None,
         "fake_exchange": encode(vars(rt.exchange.target)) if rt.exchange.deterministic else None,
         "fake_provider": encode(vars(rt.provider.target)) if rt.provider.deterministic else None,
-    }
+    })
+    # The diary this state descends from, beside the mapping and never in it.
+    state.diary = rt.diary_id or rt.ledger.diary_id
+    return state
 
 
 def restore_runtime(rt, state: dict) -> None:
@@ -608,8 +624,26 @@ def restore_runtime(rt, state: dict) -> None:
                           code="venue_account_mismatch")
     saved_runtime = decode(state["runtime"])
     running_digest = getattr(rt, "release_digest", None)  # read before the saved fields land
+    # A checkpoint cannot revive a killed runtime. The runtime restored into may
+    # already be final (its own Termination, or a Terminated event in its ledger),
+    # or the identity the checkpoint names may be recorded as killed in this
+    # process or in the local witness beside the diary. Either way nothing is
+    # restored; the world stays dead (runtime/witness.py).
+    if rt.termination.final or rt.ledger.identity()["terminated"]:
+        raise ResumeError("the runtime is final; a checkpoint cannot revive it",
+                          code="identity_killed")
+    from factorylab.runtime.witness import killed
+
+    # An in-memory checkpoint names its diary (Checkpoint.diary); a ledgered one,
+    # read back as a plain mapping, is bound by the file this runtime resumes.
+    diary = getattr(state, "diary", None) or (
+        rt.ledger.diary_id if rt.ledger.path is not None else None)
+    if killed(world=rt.m.name, launch_nonce=saved_runtime.get("launch_nonce"),
+              diary=diary, ledger_path=rt.ledger.path, remote=False) is not None:
+        raise ResumeError("the checkpoint names a killed identity", code="identity_killed")
     for name, value in saved_runtime.items():
         setattr(rt, name, value)
+    rt.diary_id = diary
     # A checkpoint written before launch-bound venue identities keeps its historical
     # client order IDs rather than adopting this process's fresh nonce. The adapter
     # is rebound below, after a deterministic venue's own state has been restored.
@@ -736,6 +770,24 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     state = snapshot["state"]
     if state.get("manifest_hash") != manifest.manifest_hash():
         raise ResumeError("snapshot manifest hash differs")
+    # The diary says it is alive; the witness may know it was killed. An earlier
+    # copy of a killed diary (a backup restored beside the original) has a valid
+    # chain, the right key and the right release, and no record of its own death:
+    # that record lives outside the diary's directory and, when a receiver is
+    # configured, outside the host. Asked before any state is restored or any
+    # adapter is contacted; the refusal is ledgered like a release mismatch.
+    from factorylab.runtime.witness import killed
+
+    launch_nonce = decode(state["runtime"]).get("launch_nonce")
+    seen = killed(world=manifest.name, launch_nonce=launch_nonce, diary=ledger.diary_id,
+                  ledger_path=ledger_path)
+    if seen is not None:
+        ledger.append({
+            "kind": "failed_resume", "reason": "identity_killed", "witness": seen,
+            "launch_nonce": launch_nonce, "snapshot_seq": snapshot["seq"],
+            "ts": state["clock_ns"],
+        })
+        raise ResumeError("the witness records this identity's kill", code="identity_killed")
     journal = RecoveryJournal(ledger, clock)
     journal.bootstrap = True
     rt = Runtime(manifest, **state["config"], ledger_path=None, provider=provider, market=market,
@@ -756,6 +808,12 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
                 "ledgered_release_digest": decode(state["runtime"]).get("release_digest"),
                 "running_release_digest": running_digest,
                 "snapshot_seq": snapshot["seq"], "ts": state["clock_ns"],
+            })
+        elif exc.code == "identity_killed":
+            ledger.append({
+                "kind": "failed_resume", "reason": "identity_killed", "witness": "restore",
+                "launch_nonce": launch_nonce, "snapshot_seq": snapshot["seq"],
+                "ts": state["clock_ns"],
             })
         raise
     journal.bootstrap = False

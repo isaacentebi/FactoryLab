@@ -152,6 +152,10 @@ class BootstrapMixin:
         # it; restore compares the saved digest with the running one and refuses a
         # different release under the old identity (C4).
         self.release_digest = release.release_digest()
+        # The diary this state descends from (the hash of its first sealed record).
+        # None until the ledger has one; restore sets it from the checkpoint so a
+        # twin restored in memory still names the diary it came from.
+        self.diary_id: str | None = None
         if provider is None:
             provider = build_provider(manifest)
         self.provider = provider if provider is not None else ScriptedProvider()

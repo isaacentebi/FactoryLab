@@ -164,7 +164,7 @@ def test_the_witness_appends_one_line_per_event_and_posts_the_same_line(tmp_path
     assert _witness(tmp_path, url, "launch").returncode == 0
     assert _witness(tmp_path, url, "failed_resume", "release_mismatch").returncode == 0
     assert _witness(tmp_path, url, "kill").returncode == 0
-    lines = (tmp_path / "runs" / "rehearsal.witness.jsonl").read_text().splitlines()
+    lines = (tmp_path / ".witness" / "rehearsal.jsonl").read_text().splitlines()
     assert [json.loads(line)["event"] for line in lines] == ["launch", "failed_resume", "kill"]
     for line in lines:
         record = json.loads(line)
@@ -180,10 +180,10 @@ def test_the_witness_appends_one_line_per_event_and_posts_the_same_line(tmp_path
 def test_the_witness_refuses_unknown_events_and_survives_a_dead_receiver(tmp_path):
     (tmp_path / "runs").mkdir()
     assert _witness(tmp_path, None, "upgrade").returncode == 2
-    assert not (tmp_path / "runs" / "rehearsal.witness.jsonl").exists()
+    assert not (tmp_path / ".witness" / "rehearsal.jsonl").exists()
     result = _witness(tmp_path, "http://127.0.0.1:9/witness", "dormant")
     assert result.returncode == 0
-    record = json.loads((tmp_path / "runs" / "rehearsal.witness.jsonl").read_text())
+    record = json.loads((tmp_path / ".witness" / "rehearsal.jsonl").read_text())
     assert record["event"] == "dormant" and record["ledger_head"] == "absent"
     # A non-loopback plain-HTTP receiver is never contacted, and still appended.
     assert _witness(tmp_path, "http://example.invalid/witness", "kill").returncode == 0
