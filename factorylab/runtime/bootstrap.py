@@ -370,6 +370,13 @@ class BootstrapMixin:
                 self.spot_inventory[coin] = (Decimal(size), Decimal(px))
         self.memory: dict[str, deque[dict[str, Any]]] = {}
         self.notes: dict[str, dict] = {}
+        # The artifact archive (C9): records in the ledger, bytes beside it by hash.
+        from factorylab.kernel.artifacts import ArtifactStore, artifact_root
+
+        self.artifacts = ArtifactStore(
+            self.ledger, root=artifact_root(ledger_path) if ledger_path else None,
+            clock_ns=self.clock,
+        )
         self.handle_to_assembly: dict[str, str] = {}
         self.tool_specs: dict[str, dict[str, Any]] = {}  # tool id -> spec dict (world block)
         self.population_tools: dict[str, Any] = {}
@@ -464,10 +471,26 @@ class BootstrapMixin:
             "market.discover": [{"query": "inference", "limit": 20}],
             "note.put": [{"key": "shared-plan", "text": "What the last window showed."}],
             "note.get": [{"key": "shared-plan"}],
+            "artifact.get": [{"sha": "0" * 64}],
         }
         from factorylab.runtime.notes import specs as note_specs
 
         self.tool_specs.update(note_specs(manifest.notes))
+        self.tool_specs["artifact.get"] = {
+            "id": "artifact.get",
+            "description": "Read an archived artifact by its sha256: the private state a "
+            "program seat kept, or any other artifact the diary names. Any seat may read "
+            "any artifact; the read is free and ledgered. Returns owner, kind, bytes and "
+            "text (base64 for binary), up to 64 KiB.",
+            "args_schema": {
+                "type": "object",
+                "properties": {"sha": {"type": "string", "minLength": 64, "maxLength": 64}},
+                "required": ["sha"],
+                "additionalProperties": False,
+            },
+            "price_micro_per_call": 0,
+            "kind": "artifact",
+        }
         # Every published tool carries examples its own schema accepts (B1). Stamping
         # after the whole seed set is assembled keeps that total: a seed tool added
         # without an example fails at launch rather than reaching the population.
@@ -477,6 +500,12 @@ class BootstrapMixin:
         available = self.tool_runner.available
         self.ledger.append({"kind": "sandbox.availability", "available": available})
         self.tool_jail_available = available
+        # Program seats (C8) run in the same jail; the journal name ``sandbox.run`` is
+        # already a recorded read, so a resume replays a program's reply, never its code.
+        from factorylab.cortex.sandbox import ProgramRunner
+
+        self.program_runner = JournalProxy(ProgramRunner(available=available), self.ledger,
+                                           "sandbox")
         # Population measurements run in the same jail, under the tool limits.
         self.observation_runner = JournalProxy(ObservationRunner(), self.ledger, "observation")
         self.registered_observations: dict[str, dict[str, Any]] = {}

@@ -418,6 +418,12 @@ class GovernanceMixin:
                 EventKind.REGISTERED, {"kind": "model", "id": prop.openrouter_id}
             )
         elif isinstance(prop, AssemblyProposal):
+            # A program seat (C8) is admitted like a model seat — same trial, same
+            # contract, same routers — but its executor is jailed code, so a host
+            # without the jail refuses it before the trial is spent.
+            program = prop.model_id == "program"
+            if program and not self.tool_jail_available:
+                raise Infeasible("no jail on this host")
             live = prop.id in self.assemblies and prop.id not in self.retired_assemblies
             version = (self.assemblies[prop.id].spec.version + 1
                        if prop.id in self.assemblies else 1)
@@ -427,12 +433,21 @@ class GovernanceMixin:
                                       registered=self._kind_rewards())
             custom = any(k not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
                          for k in declared_emits)
-            spec = (WorkAssemblySpec if custom else AssemblySpec)(
+            if program:
+                from factorylab.cortex.assembly import ProgramAssemblySpec
+
+                spec_class, extra = ProgramAssemblySpec, {
+                    "code": prop.code, "timeout_s": prop.timeout_s,
+                    "state_policy": prop.state_policy,
+                    **({"reward_shapes": shapes} if custom else {})}
+            else:
+                spec_class = WorkAssemblySpec if custom else AssemblySpec
+                extra = {"reward_shapes": shapes} if custom else {}
+            spec = spec_class(
                 id=prop.id, version=version, model_id=prop.model_id,
                 system_prompt=prop.system_prompt, max_tokens=prop.max_tokens,
                 effort=prop.effort, accepts=frozenset(prop.accepts), role=prop.role,
-                emits=emits, schemas=prop.schemas,
-                **({"reward_shapes": shapes} if custom else {}))
+                emits=emits, schemas=prop.schemas, **extra)
             self._check_event_schemas(spec)
             contract = _assembly_contract(prop.id, prop.role, prop.accepts, prop.max_tokens,
                                          emits=spec.emits, schemas=spec.schemas, version=version)
@@ -457,6 +472,7 @@ class GovernanceMixin:
                     "schemas": spec.schemas,
                     "version": version,
                     **({"reward_shapes": shapes} if custom else {}),
+                    **({"program": True, "state_policy": prop.state_policy} if program else {}),
                 },
             )
         else:

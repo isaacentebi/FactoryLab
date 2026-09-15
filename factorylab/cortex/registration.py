@@ -141,6 +141,11 @@ class AssemblyProposal:
     emits: tuple[str, ...] = ()
     schemas: dict[str, dict] = field(default_factory=dict)
     reward_shapes: dict[str, str] = field(default_factory=dict)
+    # A program seat (``model_id == "program"``): its jailed code, wall timeout and
+    # whether it keeps private state between calls. Empty for a model seat.
+    code: str = ""
+    timeout_s: int = 10
+    state_policy: str = "none"
 
     def __post_init__(self) -> None:
         """``reward_shapes`` holds the resolved contract for the kinds this proposal emits.
@@ -326,7 +331,7 @@ def parse_proposals(
             elif kind == "assembly":
                 accepted.append(_assembly(item, event_kinds, known_models,
                                           known_assemblies - retired_assemblies,
-                                          known_reward_shapes))
+                                          known_reward_shapes, jail=tool_jail))
             elif kind == "router":
                 accepted.append(_router(item, event_kinds))
             elif kind == "tool":
@@ -370,6 +375,8 @@ def _assembly(
     known_models: frozenset[str],
     known_assemblies: frozenset[str],
     known_reward_shapes: Mapping[str, str] | None = None,
+    *,
+    jail: bool | None = None,
 ) -> AssemblyProposal:
     aid = item.get("id")
     if not isinstance(aid, str) or not SLUG.match(aid):
@@ -381,9 +388,29 @@ def _assembly(
     if not isinstance(role, str) or not SLUG.fullmatch(role):
         raise ValueError("role must be a descriptive slug")
     model_id = item.get("model_id")
-    if not isinstance(model_id, str) or model_id not in known_models:
+    # ``program`` is not a registered model: the seat's executor is its own code.
+    program = model_id == "program"
+    if not isinstance(model_id, str) or (model_id not in known_models and not program):
         raise ValueError("model_id must name a registered model")
-    prompt = item.get("system_prompt")
+    code, timeout_s, state_policy = "", 10, "none"
+    if program:
+        code = item.get("code")
+        if not isinstance(code, str) or not code.strip():
+            raise ValueError("a program seat needs code")
+        if len(code) > 16_000:
+            raise ValueError("code exceeds 16000 chars")
+        timeout_s = item.get("timeout_s", 10)
+        if type(timeout_s) is not int or not 1 <= timeout_s <= 10:
+            raise ValueError("timeout_s must be an int in [1, 10]")
+        state_policy = item.get("state_policy", "none")
+        if state_policy not in ("none", "private"):
+            raise ValueError("state_policy must be none or private")
+        if not (jail_available() if jail is None else jail):
+            raise ValueError("no jail on this host")
+    elif any(k in item for k in ("code", "timeout_s", "state_policy")):
+        raise ValueError("code, timeout_s and state_policy belong to a program seat")
+    # A program has no system role; the prompt field is kept only as its label.
+    prompt = item.get("system_prompt", "program" if program else None)
     if not isinstance(prompt, str) or not prompt.strip():
         raise ValueError("system_prompt is required")
     if len(prompt) > MAX_PROMPT_CHARS:
@@ -405,6 +432,7 @@ def _assembly(
     return AssemblyProposal(
         aid, role, model_id, prompt, accepts, max_tokens, effort, emits, schemas,
         reward_contracts(emits, item.get("reward_shapes", {}), registered=known_reward_shapes),
+        code, timeout_s, state_policy,
     )
 
 

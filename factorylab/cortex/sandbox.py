@@ -253,6 +253,48 @@ def run_python(
         )
 
 
+MAX_PROGRAM_TIMEOUT_S = 10
+# A Return plus the largest private state a program may keep (64 KiB), with room to
+# spare, so the state bound is the one a program meets first.
+PROGRAM_MAX_OUTPUT_BYTES = 256_000
+
+
+class ProgramRunner:
+    """One program seat call under the tool jail: the request on stdin, a reply on stdout.
+
+    The result is a plain mapping and nothing here raises, so the meter that
+    wraps a call always commits the call's flat price: a program that cannot
+    start, exits non-zero or outruns its wall clock is a billed malformed
+    return, exactly as a model that answered nonsense would be. The mapping
+    holds only bounded streams and exit facts, so a recovery journal can
+    record it and replay it without re-running population code.
+    """
+
+    def __init__(self, *, available: bool | None = None) -> None:
+        self.available = jail_available() if available is None else available
+
+    def run(self, code: str, *, stdin: str, timeout_s: int) -> dict:
+        try:
+            if not self.available:
+                return {"error": "no jail on this host"}
+            if type(timeout_s) is not int or not 1 <= timeout_s <= MAX_PROGRAM_TIMEOUT_S:
+                return {"error": "invalid program timeout"}
+            result = run_python(
+                code, stdin=stdin, timeout_s=timeout_s, cpu_s=timeout_s,
+                max_output_bytes=PROGRAM_MAX_OUTPUT_BYTES,
+            )
+            return {
+                "stdout": result.stdout, "stderr": result.stderr[:2000],
+                "returncode": result.returncode, "timed_out": result.timed_out,
+            }
+        except NoJail:
+            return {"error": "no jail on this host"}
+        except Exception:
+            # Launch and decoding failures stay inside the result protocol; no host
+            # exception detail reaches the population or the diary.
+            return {"error": "program execution failed"}
+
+
 def main() -> int:
     """Exit 0 only when a confined interpreter runs here; print the reason otherwise.
 

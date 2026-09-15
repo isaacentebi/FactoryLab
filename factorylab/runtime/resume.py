@@ -65,7 +65,7 @@ def _record_types() -> dict[str, type]:
     from factorylab.charter.controller import CardRegion, _CardState
     from factorylab.charter.measurement import CardSamples
     from factorylab.charter.windows import MetricWindow
-    from factorylab.cortex.assembly import AssemblySpec
+    from factorylab.cortex.assembly import AssemblySpec, ProgramAssemblySpec
     from factorylab.cortex.tools import PopulationTool
     from factorylab.kernel.events import Event, EventKind
     from factorylab.kernel.queue import Decision, LearningReturn, PropensityRecord, SettleStatus
@@ -101,7 +101,7 @@ def _record_types() -> dict[str, type]:
     classes = (
         Amendment, PredictedEffect, Charter, MetricCard, MetricWindow, CardSamples,
         Ballot, Committee, Seat, CardRegion, _CardState,
-        AssemblySpec, WorkAssemblySpec, Predicate, PredicateForecast,
+        AssemblySpec, WorkAssemblySpec, ProgramAssemblySpec, Predicate, PredicateForecast,
         PopulationTool, Event, PopulationEvent, EventKind, Decision,
         LearningReturn, PropensityRecord,
         SettleStatus, Contract, PriceSpec, ResourceBounds, DistributionSummary, DripSchedule,
@@ -520,6 +520,9 @@ _COMPONENT_FIELDS = (
     ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events")),
     ("consequence_fills", "", ("since_ns", "seen")),
     ("reconciler", "", ("every", "_ticks")),
+    # The artifact archive's index (C9): hash -> owner, kind, size, time. The bytes
+    # stay beside the ledger and are found again by hash.
+    ("artifacts", "", ("index",)),
 )
 
 
@@ -553,7 +556,11 @@ def runtime_state(rt) -> dict:
         "kernel": {name: encode(getattr(rt, name).state()) for name in _KERNEL_FIELDS},
         "components": encode(components),
         "treasury": encode(rt.treasury.snapshot()),
-        "assemblies": encode([{"spec": a.spec, "memory": a.memory}
+        # A program seat's private state is restored by artifact hash (C8); the key is
+        # present only for program seats, so a world without one checkpoints as before.
+        "assemblies": encode([{"spec": a.spec, "memory": a.memory,
+                               **({"state_sha": a.state_sha} if hasattr(a, "state_sha")
+                                  else {})}
                               for a in rt.assemblies.values()]),
         "prices": encode(rt.prices.prices),
         "routers": [st.state() for st in rt._all_router_states()],
@@ -621,12 +628,17 @@ def restore_runtime(rt, state: dict) -> None:
             if name == "charter_book" and field == "bindings" and field not in components[name]:
                 # Older checkpoints predate the frozen observation version per proposal.
                 continue
+            if name == "artifacts" and name not in components:
+                # Older checkpoints predate the artifact archive; it starts empty.
+                continue
             setattr(getattr(rt, name), prefix + field, components[name][field])
     rt.prices.prices = decode(state["prices"])
     rt.assemblies.clear()
     for assembly in decode(state["assemblies"]):
         restored = rt._instantiate(assembly["spec"])
         restored.memory = assembly["memory"]
+        if "state_sha" in assembly:
+            restored.state_sha = assembly["state_sha"]
     rt.routers.clear()
     for saved in state["routers"]:
         router = RouterState.restore(saved)
@@ -704,6 +716,10 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
     journal.bootstrap = True
     rt = Runtime(manifest, **state["config"], ledger_path=None, provider=provider, market=market,
                  exchange=exchange, clock_source=clock_source, _journal=journal, _lock=lock)
+    # The journal carries no path; the archive's bytes live beside the ledger (C9).
+    from factorylab.kernel.artifacts import artifact_root
+
+    rt.artifacts.root = artifact_root(ledger_path)
     restore_runtime(rt, state)
     journal.bootstrap = False
     journal.active = journal.recovering = True

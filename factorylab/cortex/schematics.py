@@ -65,6 +65,19 @@ class SchematicsMixin:
             "code": "python: read a JSON object from stdin, print a JSON object",
             "timeout_s": 2,
         },
+        "program": {
+            "kind": "assembly",
+            "id": "slug-2-to-48-chars",
+            "role": "producer",
+            "model_id": "program",
+            "accepts": ["Tick"],
+            "emits": ["ProducerReturn"],
+            "code": "python: read one JSON object from stdin with prompt, description, inputs, "
+            "outcome_schema and state; print the same Return JSON a model would, plus an "
+            "optional state object to keep",
+            "timeout_s": 10,
+            "state_policy": "private",
+        },
         "observation": {
             "kind": "observation",
             "id": "slug",
@@ -147,7 +160,16 @@ class SchematicsMixin:
         "blum_mansour. Roles are descriptive labels; accepts and emits define the contract. "
         "A retire proposal names an id from world.catalogue (any assembly, the seeds "
         "included) and removes it from every router; a retired id may be "
-        "registered again as its next version. Effort: low, medium, high. An observation "
+        "registered again as its next version. Effort: low, medium, high. An assembly with "
+        "model_id program is a program seat (proposal_shapes.program): its code runs in the "
+        "tool jail instead of a model, reads one JSON object from stdin (prompt, description, "
+        "inputs, outcome_schema, state) and prints the Return JSON a model would; it is "
+        "routed, judged, paid and retired exactly like a model seat, each call costing "
+        "prices.program_micro_per_call. With state_policy private the object it prints under "
+        "state is archived as an artifact it owns and handed back on its next call; the "
+        "artifact's sha is in the diary and artifact.get reads any artifact, free. Machinery "
+        "you have learned belongs in a program seat, where it costs a flat call and cannot "
+        "drift. An observation "
         "registers a measurement: its code runs in the tool jail over a closed window's "
         "public facts and is admitted only if it produces a finite number on the last "
         "closed window; a card may then name it, and re-registering the same id supersedes "
@@ -265,7 +287,8 @@ class SchematicsMixin:
                            "payment": "pay=x402 uses max_call_usd as the seller charge cap; "
                            "the flat call price is additional. Omit pay for free sources.",
                            "result": "UTF-8 text in seen_tool_results[].result.body",
-                           "tool_rounds": 2, "continuation_tool_kinds": ["population", "note"],
+                           "tool_rounds": 2,
+                           "continuation_tool_kinds": ["population", "note", "artifact"],
                            "encoding": "UTF-8 with replacement", "redirects": "refused",
                            "oversize": "refused", "credentials": False},
             "population_tools": {
@@ -346,7 +369,8 @@ class SchematicsMixin:
             # change these, so they are published here and never inside the prefix.
             "adaptive_scoring": self._adaptive_scoring_block(),
             "prices": {"lambda_max": self.m.prices.lambda_max,
-                       "penalty_cap": self.m.prices.penalty_cap},
+                       "penalty_cap": self.m.prices.penalty_cap,
+                       "program_micro_per_call": self.m.prices.program_micro_per_call},
             "amendment_feedback": getattr(self, "amendment_feedback", None),
             "card_prices": [
                 {

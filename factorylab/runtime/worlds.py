@@ -166,6 +166,8 @@ class PricesSpec:
     min_window_events: int = 1
     kappa: float = 0.5
     penalty_cap: float = 0.5
+    # The flat price of one program seat call (C8), reserved and committed like a model call.
+    program_micro_per_call: int = 50
 
 
 @dataclass(frozen=True)
@@ -313,6 +315,9 @@ class WorldManifest:
                              ("forward_wait_windows", 2)):
             if payload["treasury"].get(key) == default:
                 payload["treasury"].pop(key)
+        # Preserve historical manifest identities while the program call price is its default.
+        if payload["prices"].get("program_micro_per_call") == 50:
+            payload["prices"].pop("program_micro_per_call")
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -704,6 +709,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         lambda_max=float(pr.get("lambda_max", 1.0)),
         min_window_events=int(pr.get("min_window_events", 1)),
         penalty_cap=pr.get("penalty_cap", 0.5),
+        program_micro_per_call=int(pr.get("program_micro_per_call", 50)),
     )
     # Scripted providers run in virtual time, including live-shaped test fixtures.
     default_min_tick = "1s" if all(m.provider == "fake" for m in models) else "10s"

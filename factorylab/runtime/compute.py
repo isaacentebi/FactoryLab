@@ -112,6 +112,21 @@ class ComputeMixin:
     def _instantiate(self, spec: AssemblySpec) -> Assembly:
         self._init_connectors()
         self._check_event_schemas(spec)
+        if spec.model_id == "program":
+            from factorylab.cortex.assembly import ProgramAssembly
+
+            # The seat's executor is its own code in the jail; its flat price is
+            # reserved and committed through the same meter as a model call.
+            asm = ProgramAssembly(
+                spec, self.program_runner, self.meter, self.m.prices.program_micro_per_call,
+                artifacts=self.artifacts, validator=self._validate_output_contract,
+                record=lambda entry: self.ledger.append(entry),
+            )
+            self.assemblies[spec.id] = asm
+            self.event_schemas.update(spec.schemas)
+            if not self.ledger.bootstrap:
+                self.stats.registered_window.setdefault(spec.id, self.stats.reserve_windows)
+            return asm
         model = _ObservedMeteredModel(
             self.provider, self.prices, self.meter, record=self._record_market,
         )
@@ -512,6 +527,13 @@ class ComputeMixin:
             from factorylab.runtime.notes import run
 
             return run(self, action_id, handle, tool_id, args)
+        if tool_id == "artifact.get":
+            # Free by contract (C9): any seat reads any artifact; the read is ledgered.
+            result = self.artifacts.read(args.get("sha"))
+            self.ledger.append({"kind": "artifact.get", "sha": str(args.get("sha"))[:64],
+                                "handle": handle, "assembly_id": action_id,
+                                "found": "error" not in result, "ts": self.clock.now_ns})
+            return result, 0
         if tool_id in self.CONSEQUENCE_WRITES and not self._may_write(handle):
             # No judge trades what it judges (essay II.III): the refusal is public.
             self.ledger.append({"kind": "tool.refused", "handle": handle,
@@ -730,7 +752,8 @@ class ComputeMixin:
                 ret = replace(ret, children=())
             # The extra round composes the retrieved text through ordinary jailed tools.
             if tool_round < round_limit and ret.tool_calls:
-                if any(self.tool_specs.get(c["tool"], {}).get("kind") not in ("population", "note")
+                if any(self.tool_specs.get(c["tool"], {}).get("kind")
+                       not in ("population", "note", "artifact")
                        for c in ret.tool_calls):
                     round_limit = tool_round
             if ret.tool_calls and tool_round >= round_limit:
