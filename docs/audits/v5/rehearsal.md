@@ -154,8 +154,9 @@ only one of eleven.
    `exchange.instruments`, about 260 KB each: the prompt builder reads the venue's full listing
    every time it builds a request and the recorded-I/O layer keeps every copy. Run 3 had the
    same (105 reads, 27 MB). At the funded cadence that is one to two gigabytes of diary a day,
-   all one listing, and the backup copies it. Fix in flight: one read per tick for prompt
-   building (the population's own paid `venue.instruments` call is untouched).
+   all one listing, and the backup copies it. Fixed in #89: one read per tick for prompt
+   building, dropped at each checkpoint so a replayed tail asks the venue where the recorded
+   one did (the population's own paid `venue.instruments` call is untouched).
 2. *The wake's pots and entitlements views are empty in a short run.* They come from the public
    snapshot the runtime writes at each price-window close, and the window is one hour. Runs 2
    and 3 had the same. In the funded world they fill hourly.
