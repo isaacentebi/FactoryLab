@@ -454,8 +454,11 @@ def test_edition2_views_are_additive_and_read_only_public_items(tmp_path, script
     assert SAMPLE_KEYS < set(data)
     assert set(data) - SAMPLE_KEYS == {"money", "deliveries", "commitments", "cells",
                                         "liveness"}
-    # Existing keys keep their shape: the pots the site reads are exactly the five.
-    assert set(data["pots"]["current"]) == {"venue", "reserve", "venice", "seed", "complete"}
+    # Existing keys keep their shape: the five pots the site reads are all present,
+    # beside the endowment keys W1 added (C1, C2).
+    assert {"venue", "reserve", "venice", "seed", "complete"} <= set(data["pots"]["current"])
+    assert {"locked_micro", "unlocked_micro", "next_release_ns", "dormant"} <= set(
+        data["pots"]["current"])
     assert set(data["pots"]["income"]) == {"earned_micro", "subsidy_micro",
                                            "converted_from_principal_micro"}
     assert data["pots"]["income"]["earned_micro"] == 0
@@ -529,7 +532,8 @@ def test_public_window_item_carries_the_income_classes_beside_the_pots():
 
     rt = make_runtime()
     item = public_window_item(rt, window=0, event=0)
-    assert set(item["pots"]) == {"venue", "reserve", "venice", "seed", "complete"}
+    assert {"venue", "reserve", "venice", "seed", "complete", "locked_micro", "unlocked_micro",
+            "next_release_ns", "dormant"} == set(item["pots"])
     assert item["income"] == {"earned_micro": 0, "subsidy_micro": 0,
                               "converted_from_principal_micro": 0}
     rt.treasury.earn("doubler", 2500, "0x1")
