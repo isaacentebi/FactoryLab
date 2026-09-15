@@ -232,6 +232,65 @@ class MarketProposal:
     market: str = "perp"
 
 
+CHALLENGE_RULES = ("at most", "at least", "above", "below")
+MAX_CHALLENGE_TRIAL_WINDOWS = 50
+MAX_EVIDENCE_CHARS = 4000
+
+
+@dataclass(frozen=True)
+class ChallengeProposal:
+    """A challenge names a live card, gives evidence, and offers a replacement to trial.
+
+    The replacement keeps the challenged card's id and norm: it states a new
+    observation, rule, value and window (and optionally description, units and
+    answers_for) for the same standard. The runtime measures both, frozen, for
+    ``trial_windows`` reserve windows before the committee ballots on adoption.
+    """
+
+    card_id: str
+    evidence: str
+    replacement: dict[str, Any]
+    trial_windows: int
+
+
+def _challenge(item: dict[str, Any]) -> ChallengeProposal:
+    required = {"kind", "card_id", "evidence", "replacement", "trial_windows"}
+    if set(item) != required:
+        raise ValueError("challenge needs exactly card_id, evidence, replacement, trial_windows")
+    card_id = item["card_id"]
+    if not isinstance(card_id, str) or not card_id.strip() or len(card_id) > 64:
+        raise ValueError("card_id must name a current card")
+    evidence = item["evidence"]
+    if not isinstance(evidence, str) or not evidence.strip():
+        raise ValueError("evidence must be a nonempty string")
+    if len(evidence) > MAX_EVIDENCE_CHARS:
+        raise ValueError(f"evidence must be at most {MAX_EVIDENCE_CHARS} chars")
+    windows = item["trial_windows"]
+    if type(windows) is not int or not 1 <= windows <= MAX_CHALLENGE_TRIAL_WINDOWS:
+        raise ValueError(f"trial_windows must be an integer in [1, {MAX_CHALLENGE_TRIAL_WINDOWS}]")
+    replacement = item["replacement"]
+    if not isinstance(replacement, dict):
+        raise ValueError("replacement must be an object")
+    allowed = {"observation", "rule", "value", "window", "description", "units", "answers_for"}
+    if not {"observation", "rule", "value", "window"} <= set(replacement) <= allowed:
+        raise ValueError("replacement needs observation, rule, value and window; optional "
+                         "description, units, answers_for")
+    for key in ("observation", "description", "units", "answers_for"):
+        text = replacement.get(key)
+        if key in replacement and (not isinstance(text, str) or not text.strip()
+                                   or len(text) > 512):
+            raise ValueError(f"replacement.{key} must be a nonempty string")
+    if replacement["rule"] not in CHALLENGE_RULES:
+        raise ValueError(f"replacement.rule must be one of {', '.join(CHALLENGE_RULES)}")
+    value = replacement["value"]
+    if type(value) not in (int, float) or not math.isfinite(value):
+        raise ValueError("replacement.value must be a finite number")
+    window = replacement["window"]
+    if not isinstance(window, dict) or not {"kind", "n"} <= set(window) <= {"kind", "n", "per"}:
+        raise ValueError("replacement.window must be {kind, n, per}")
+    return ChallengeProposal(card_id.strip(), evidence, dict(replacement), windows)
+
+
 def _market(item: dict[str, Any]) -> MarketProposal:
     if set(item) not in ({"kind", "coin"}, {"kind", "pair"}):
         raise ValueError("market requires exactly one coin or pair")
@@ -275,7 +334,7 @@ def _connector(item: dict[str, Any]) -> ConnectorProposal:
 Proposal = (
     ModelProposal | AssemblyProposal | RouterProposal | ToolProposal | RetireProposal
     | ObservationProposal | PredicateProposal | LearnerProposal | ConnectorProposal
-    | MarketProposal
+    | MarketProposal | ChallengeProposal
 )
 
 
@@ -348,6 +407,8 @@ def parse_proposals(
                 accepted.append(_predicate(item, jail=tool_jail))
             elif kind == "learner":
                 accepted.append(_learner(item, known_assemblies))
+            elif kind == "challenge":
+                accepted.append(_challenge(item))
             else:
                 raise ValueError("unknown proposal kind")
         except ValueError as exc:

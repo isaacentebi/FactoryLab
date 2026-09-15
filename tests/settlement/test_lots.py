@@ -1,3 +1,4 @@
+import math
 from dataclasses import FrozenInstanceError
 from fractions import Fraction
 
@@ -18,7 +19,12 @@ def fill(table, owner, oid, *, size="1", px="100", buy=True, fee="0", coin="BTC"
     )
 
 
-def test_fifo_partial_closes_credit_openers_net_of_their_fees_and_funding_and_the_closer():
+def test_fifo_partial_closes_split_each_lots_pnl_once_between_opener_and_closer():
+    """Edition 2 (cold audit F7): a lot's P&L is credited once, split by notional contributed.
+
+    Before, the opener and a distinct closer each received the whole P&L; the
+    paid-off rate could improve while the pair spent more than it made.
+    """
     table = LotTable().start("first", 1).finish("first", 100_000)
     table = table.start("second", 2).finish("second", 100_000)
     table = table.start("closer", 3).finish("closer", 100_000)
@@ -27,18 +33,30 @@ def test_fifo_partial_closes_credit_openers_net_of_their_fees_and_funding_and_th
     table = fill(table, "second", "2", px="110", fee="1")
     table = table.funding("BTC", "3")  # first pays 2, second pays 1
     table = fill(table, "closer", "3", px="120", buy=False, fee="1")
-    # P&L 20 on the closed unit: first pays half its fee and funding (2); the closer its fee.
-    assert table.account("first").realized_micro == 18_000_000
-    assert table.account("closer").realized_micro == 19_000_000
+    # P&L 20 on the closed unit, split 100:120 by entry and exit notional. First pays
+    # half its fee and funding (2); the closer its fee (1). The two credits sum to 20.
+    opener_1, closer_1 = Fraction(20) * 100 / 220, Fraction(20) * 120 / 220
+    assert opener_1 + closer_1 == 20
+    assert table.account("first").realized_micro == (opener_1 - 2) * 1_000_000
+    assert table.account("closer").realized_micro == (closer_1 - 1) * 1_000_000
     assert table.account("second").realized_micro == 0
     assert table.resolve(4, 200, {}).account("first").payoff is None
     table = fill(table, "closer", "4", size="2", px="115", buy=False, fee="2")
     table = table.resolve(5, 200, {})
-    assert table.account("first").payoff.net_micro == 31_000_000
-    assert table.account("second").payoff.net_micro == 3_000_000
+    # First's last unit: P&L 15 split 100:115; second's unit: P&L 5 split 110:115.
+    opener_2, closer_2 = Fraction(15) * 100 / 215, Fraction(15) * 115 / 215
+    opener_3, closer_3 = Fraction(5) * 110 / 225, Fraction(5) * 115 / 225
+    first_net = opener_1 - 2 + opener_2 - 2
+    second_net = opener_3 - 2
+    closer_net = closer_1 - 1 + closer_2 - 1 + closer_3 - 1
+    assert table.account("first").payoff.net_micro == int(first_net * 1_000_000)
+    assert table.account("second").payoff.net_micro == int(second_net * 1_000_000)
+    assert table.account("closer").payoff.net_micro == int(closer_net * 1_000_000)
     assert table.account("first").payoff.y == table.account("second").payoff.y == 1
-    assert table.account("closer").payoff.net_micro == 37_000_000  # 19 + (15 + 5 - 2)
     assert table.account("closer").payoff.y == 1 and table.account("closer").closes == 3
+    # Conservation: every credit together is exactly the realised P&L less every fee and funding.
+    credited = first_net + second_net + closer_net
+    assert credited == 20 + 15 + 5 - (2 + 1 + 3) - (1 + 2)
     assert table.lots == () and original.lots == ()
     with pytest.raises(FrozenInstanceError):
         table.account("first").cost_micro = 0
@@ -50,8 +68,12 @@ def test_reversal_closes_short_then_opens_only_residual_long_for_new_owner():
     table = fill(table, "short", "1", buy=False, size="2", fee="2")
     table = fill(table, "reverse", "2", size="3", px="90", fee="3")
     table = table.resolve(3, 20, {"BTC": "90"})
-    assert table.account("short").payoff.net_micro == 18_000_000  # 20 less its own fee
+    # P&L 20 on the two closed units, split 100:90 by notional (F7); the short keeps its
+    # entry share less its own fee, the reverser's exit share stays with its open account.
+    short_share = Fraction(20) * 100 / 190
+    assert table.account("short").payoff.net_micro == int((short_share - 2) * 1_000_000)
     assert table.account("short").payoff.y == 1
+    assert table.account("reverse").realized_micro == (Fraction(20) * 90 / 190 - 2) * 1_000_000
     assert table.account("reverse").payoff is None
     assert len(table.lots) == 1
     assert (table.lots[0].handle, table.lots[0].size, table.lots[0].charges_micro) == (
@@ -62,7 +84,10 @@ def test_reversal_closes_short_then_opens_only_residual_long_for_new_owner():
 
 
 def test_all_coins_and_all_lots_must_close_and_strict_cost_threshold_applies():
-    table = LotTable().start("return", 1).finish("return", 1_000_000)
+    # The opener's share of +2 on BTC (100:102) and of -1 on ETH (100:99), floored once, is
+    # its cost to the micro: paying off needs strictly more than that.
+    net = int((Fraction(2) * 100 / 202 - Fraction(1) * 100 / 199) * 1_000_000)
+    table = LotTable().start("return", 1).finish("return", net)
     table = table.start("other", 1).finish("other", 0)
     table = fill(table, "return", "1")
     table = fill(table, "return", "2", coin="ETH")
@@ -70,7 +95,7 @@ def test_all_coins_and_all_lots_must_close_and_strict_cost_threshold_applies():
     assert table.resolve(3, 200, {}).account("return").payoff is None
     table = fill(table, "other", "4", buy=False, px="99", coin="ETH")
     payoff = table.resolve(4, 200, {}).account("return").payoff
-    assert payoff.net_micro == payoff.cost_micro == 1_000_000
+    assert payoff.net_micro == payoff.cost_micro == net == 487_586
     assert payoff.y == 0
 
 
@@ -92,7 +117,11 @@ def test_backstop_marks_only_remainder_with_funding_and_keeps_inventory_owned():
     assert table.resolve(11, 10, {}).account("loser").payoff is None
     table = table.resolve(11, 10, {"BTC": "80"})
     payoff = table.account("loser").payoff
-    assert payoff.net_micro == -14_000_000 and payoff.y == 0 and payoff.marked
+    # Its 100:110 share of the +10 close less its fee on that unit, then the marked unit:
+    # -20 less its fee (1) and the funding (2). Floored once.
+    expected = (Fraction(10) * 100 / 210 - 1) + (-20 - 1 - 2)
+    assert payoff.net_micro == math.floor(expected * 1_000_000) == -19_238_096
+    assert payoff.y == 0 and payoff.marked
     table = table.start("late", 12).finish("late", 0)
     table = fill(table, "late", "3", buy=False, px="200")
     table = table.resolve(12, 10, {})
@@ -175,7 +204,10 @@ def test_split_fills_preserve_submicro_charges_and_cannot_round_up_a_payoff():
     split = table
     for i in range(3):
         split = fill(split, "closer", f"close-{i}", px="100.0000005", buy=False)
-    assert whole.account("owner").realized_micro == Fraction(1, 2)
+    # 1.5 micro of P&L split 100:100.0000005 (F7), less the owner's 1 micro opening fee.
+    exit_px = Fraction("100.0000005")
+    owner_share = Fraction(3, 2) * 100 / (100 + exit_px)
+    assert whole.account("owner").realized_micro == owner_share - 1
     assert split.account("owner").realized_micro == whole.account("owner").realized_micro
     assert split.resolve(2, 200, {}).account("owner").payoff.y == 0
     assert whole.resolve(2, 200, {}).account("owner").payoff.y == 0
@@ -191,7 +223,9 @@ def test_splitting_returns_cannot_amplify_fractional_gain_or_erase_fractional_lo
     openers = [r for r in table.returns if r.handle != "closer"]
     assert all(r.payoff.net_micro == -1 and r.payoff.y == 0 for r in openers)
     closer = table.account("closer").payoff
-    assert closer.net_micro == 1 and closer.y == 1  # 1.5 realised, floored once
+    # The closer's exit share of 1.5 micro is 0.75, floored once to 0: with a cost of 0 the
+    # strict threshold is not cleared, and no split of the fill could round it up.
+    assert closer.net_micro == 0 and closer.y == 0
 
 
 @pytest.mark.parametrize("value", [1.0, True, "NaN", "Infinity", "0", "-1"])

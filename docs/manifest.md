@@ -411,6 +411,7 @@ parameters; the observer never substitutes a second set of thresholds.
 | `timing.min_ratio` | integer, at least 3 | `3` | Yes: cascade and governance separation. |
 | `evaluation.consequence_backstop_events` | positive integer | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
+| `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation; absent from the manifest hash at its default. |
 | `immune.k` | integer, at least 2 | `3` | Yes: consecutive windows or changes required for diagnosis. |
 | `immune.bins` | integer, exactly 3 | `3` | Yes: inside, up to one scale unit outside, more than one unit outside. |
 | `immune.registration_bins` | increasing nonnegative numeric array | `[0, 2]` | Yes: zero, 1–2, 3+ registrations. Values equal to a cut enter the lower bin. |

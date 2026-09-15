@@ -15,7 +15,9 @@ def test_spot_fifo_closer_credit_and_perp_separation():
     table = table.fill(order_id='p', coin='BTC', is_buy=False, size='1', px='100', fee_usd='0')
     table = table.fill(order_id='c', coin='BTC/USDC', is_buy=False, size='1', px='150',
                        fee_usd='1', market='spot')
-    assert table.account('a').realized_micro == table.account('c').realized_micro == 49_000_000
+    # +50 on the closed unit split 100:150 by notional (F7), each side less its 1 fee.
+    assert table.account('a').realized_micro == 19_000_000
+    assert table.account('c').realized_micro == 29_000_000
     assert [(lot.handle, lot.size) for lot in table.lots] == [
         ('b', Fraction(1)), ('p', Fraction(1))]
     result = table.resolve(1, 100, {})

@@ -102,6 +102,18 @@ class SchematicsMixin:
             "predicted_effect": {"card_id": "card-id", "direction": "increase", "window": 1},
             "tick_interval": "30s",
         },
+        "challenge": {
+            "kind": "challenge",
+            "card_id": "a current card id",
+            "evidence": "why the card measures the wrong thing, at most 4000 chars",
+            "replacement": {
+                "observation": "one of world.observations ids",
+                "rule": "at most",
+                "value": 5000,
+                "window": {"kind": "returns", "n": 10, "per": "role"},
+            },
+            "trial_windows": 6,
+        },
     }
 
 
@@ -163,7 +175,14 @@ class SchematicsMixin:
         "Unmeasurable windows, duplicate role/observation bindings and unchanged amendments "
         "are refused before a vote. A connector may omit preflight_path (default /), pay, "
         "and max_call_usd; pay=x402 requires an exact max_call_usd cap. A market proposal "
-        "names exactly one coin or pair from venue.instruments.",
+        "names exactly one coin or pair from venue.instruments. A challenge names a current "
+        "card, gives evidence, and offers a replacement (observation, rule: at most | at least "
+        "| above | below, value, window; optionally description, units, answers_for) that "
+        "keeps the card's id and norm; admission costs one novelty trial, both cards are then "
+        "measured frozen for trial_windows closed windows (ledgered as challenge.window), and "
+        "the committee ballots on adopting the replacement as an amendment. During the trial "
+        "a connector or retire proposal may name the challenge id as its predicted_effect "
+        "card_id, and is then graded on the replacement.",
         "tool_calls": (
             'a list of {"tool": id, "args": {...}} bounded by mechanics.tools.max_tool_calls; '
             'results come back in one continuation per request'
@@ -526,7 +545,7 @@ class SchematicsMixin:
                 "properties": {"kind": {"enum": ["model", "assembly", "router", "tool",
                                                    "observation", "predicate", "learner",
                                                    "amendment", "retire", "connector",
-                                                   "market"]}},
+                                                   "market", "challenge"]}},
                 "required": ["kind"],
             },
         }

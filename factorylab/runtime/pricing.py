@@ -573,15 +573,22 @@ class PricingMixin:
         total = sum(shares.values())
         return {h: float(amount / total) for h, amount in shares.items()} if total else {}
 
-    @staticmethod
-    def _decision_share(window, handle, observation, role, region, value) -> float:
-        """Attributable violations use own contributions; other observations divide by support."""
+    def _decision_share(self, window, handle, observation, role, region, value) -> float:
+        """Attributable violations use own contributions; other observations divide by support.
+
+        A generic share never falls below ``prices.min_blame_share``: splitting
+        participation across many decisions cannot dilute what each one carries
+        of a violation below that floor.
+        """
         samples = window.decisions
         own = samples.get(handle, {})
         numerator = denominator = 0
-        if observation == "cost_per_return":
+        if observation in ("cost_per_return", "cost_per_attempt"):
+            # Per return, only successful cost is measured; per attempt, every
+            # invocation's cost is spent and owned, failed ones included.
             eligible = {h: d["cost"] for h, d in samples.items()
-                        if (role == "all" or d["role"] == role) and d["ok"]}
+                        if (role == "all" or d["role"] == role)
+                        and (d["ok"] if observation == "cost_per_return" else d["cost"])}
             numerator, denominator = eligible.get(handle, 0), sum(eligible.values())
         elif observation == "well_formed_rate":
             deficit = region.kind in ("min", "band") and value < region.lo
@@ -598,7 +605,7 @@ class PricingMixin:
             # share of the violation and does not dilute the shares that do.
             n = sum(role == "all" or d["role"] == role for d in samples.values()
                     if d["invocations"] or d["ok"] or not d["cost"])
-            return 1 / max(1, n)
+            return max(self.m.prices.min_blame_share, 1 / max(1, n))
         return min(1.0, numerator / denominator) if denominator > 0 else 0.0
 
     def _penalty_for(self, cards: str, handle: str | None = None) -> float:

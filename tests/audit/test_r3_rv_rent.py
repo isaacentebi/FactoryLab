@@ -412,9 +412,9 @@ def test_rent_does_not_dilute_the_equal_split_of_a_non_cost_violation():
         "role": "producer", "cost": 10_000, "ok": 0, "invocations": 0,
         "tool_calls": 0, "notional_micro": 0}
 
-    with_rent = type(rt)._decision_share(
+    with_rent = rt._decision_share(
         rt.window, responder, "noop_share", "producer", None, 1.0)
     del rt.window.decisions[renter]
-    without_rent = type(rt)._decision_share(
+    without_rent = rt._decision_share(
         rt.window, responder, "noop_share", "producer", None, 1.0)
     assert with_rent == without_rent == pytest.approx(1.0)

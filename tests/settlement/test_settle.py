@@ -284,3 +284,28 @@ def test_replaced_population_definition_starts_its_own_prevalence_baseline(
     assert replaced.baseline_brier == 0.75
     assert baseline.baseline_q("has-fill@2") == 1.0
     assert baseline.baseline_q("has-fill") == PrevalenceBaseline().baseline_q("has-fill") == 0.5
+
+
+def test_verdicts_are_scored_against_a_fractional_unblamed_base_rate(settler, baseline):
+    """Edition 2 (cold audit F3): the baseline learns the same target the judge is scored on.
+
+    Ten percent of blame on every return used to teach the base rate "never
+    unblamed" (target 0) while the judge was scored against 0.9, so a judge
+    that always answered 0.9 showed 0.81 of invented skill.
+    """
+    first = settler.settle_verdict(evaluator_id="judge-a", about_handle="r1", q=0.9, share=0.1)
+    assert first.outcome == pytest.approx(0.9)
+    assert first.baseline_brier == pytest.approx(1 - (0.5 - 0.9) ** 2)  # the prior, once
+    assert baseline.baseline_q("verdict_not_blamed") == pytest.approx(0.9)
+    second = settler.settle_verdict(evaluator_id="judge-a", about_handle="r2", q=0.9, share=0.1)
+    assert second.brier == second.baseline_brier == 1.0
+    # One return, one observation: a second judge of r2 shares its pre-outcome base rate.
+    again = settler.settle_verdict(evaluator_id="judge-b", about_handle="r2", q=0.5, share=0.1)
+    assert again.baseline_brier == second.baseline_brier
+    assert baseline.baseline_q("verdict_not_blamed") == pytest.approx(0.9)
+    # The binary controls keep their matched targets.
+    clean = settler.settle_verdict(evaluator_id="judge-a", about_handle="r3", q=1.0, share=0.0)
+    assert clean.outcome == 1.0 and clean.brier == 1.0
+    blamed = settler.settle_verdict(evaluator_id="judge-a", about_handle="r4", q=0.0, share=1.0)
+    assert blamed.outcome == 0.0 and blamed.brier == 1.0
+    assert baseline.baseline_q("verdict_not_blamed") == pytest.approx((0.9 + 0.9 + 1 + 0) / 4)

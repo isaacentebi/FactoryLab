@@ -441,3 +441,28 @@ def test_manifest_card_scope_must_name_a_kind_a_seed_assembly_emits():
         manifest_from_dict(raw)
     raw["charter"]["cards"][0]["answers_for"] = "WeatherForecast"
     assert manifest_from_dict(raw).charter.cards[0].answers_for == "WeatherForecast"
+
+
+def test_prices_min_blame_share_is_optional_bounded_and_absent_from_the_hash_at_default():
+    """Edition 2 (C6): the generic blame floor is a manifest price with a default of 0.1."""
+    import json
+    import tomllib
+
+    from factorylab.runtime.worlds import WORLDS_DIR
+
+    raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
+    default = manifest_from_dict(raw)
+    assert default.prices.min_blame_share == 0.1
+    assert "min_blame_share" not in json.loads(default.canonical_json())["prices"]
+    assert default.manifest_hash() == (
+        "f3bf34acc6aa2e9a530bd176453c1968e526b4083f7f3dedbea59636bdad2dd8")
+    raw.setdefault("prices", {})["min_blame_share"] = 0.1
+    assert manifest_from_dict(raw).manifest_hash() == default.manifest_hash()
+    raw["prices"]["min_blame_share"] = 0.25
+    explicit = manifest_from_dict(raw)
+    assert explicit.prices.min_blame_share == 0.25
+    assert explicit.manifest_hash() != default.manifest_hash()
+    for bad in (-0.1, 1.5, "0.1", True):
+        raw["prices"]["min_blame_share"] = bad
+        with pytest.raises(ValueError, match="min_blame_share"):
+            manifest_from_dict(raw)

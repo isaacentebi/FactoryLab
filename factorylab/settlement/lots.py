@@ -4,8 +4,10 @@ Prices and sizes enter as decimal strings, never binary floats. Fractional micro
 fees, funding and P&L remain exact until each return's final total is floored once.
 A backstop fixes the outcome, not the inventory: subsequent closes still consume
 the marked opener's lots. A close credits the realised P&L of the closed quantity
-to distinct sides: the opener, net of its opening fee and funding, and the closer,
-net of its closing fee. A handle closing its own lot receives the profit once.
+once, split between its distinct sides by the notional each contributed (the
+opener's entry price and the closer's exit price on the closed quantity): the
+opener's part is net of its opening fee and funding, the closer's net of its
+closing fee. A handle closing its own lot receives the whole profit once.
 Only a decision with an open account can own an order or a lot.
 """
 
@@ -175,14 +177,20 @@ class LotTable:
         market: str = "perp",
         order_size: str | None = None,
     ) -> "LotTable":
-        """Close opposite lots FIFO, crediting realised P&L once per distinct handle.
+        """Close opposite lots FIFO, crediting each closed lot's realised P&L once.
 
-        The opener's credit is net of its opening fee and accrued funding; the
-        closer's is net of its closing fee. A reversal opens only its residual
-        quantity for the caller. Liquidation never opens a new position and
-        credits no closer. Venue average-entry realized P&L is not an allocation
-        key: FIFO P&L is computed from actual opening/closing prices. A fill
-        whose order belongs to no open account is refused rather than pooled.
+        The P&L of a closed quantity is conserved: an opener and a distinct
+        closer split it by the notional each contributed, the entry price and
+        the exit price on that quantity, so the two credits sum to the lot's
+        P&L and never both hold it in full. The opener's part is net of its
+        opening fee and accrued funding; the closer's is net of its closing
+        fee. A handle closing its own lot takes the whole P&L once. A reversal
+        opens only its residual quantity for the caller. Liquidation never
+        opens a new position and credits no closer: the liquidated opener
+        keeps the whole P&L and pays the fee. Venue average-entry realized P&L
+        is not an allocation key: FIFO P&L is computed from actual
+        opening/closing prices. A fill whose order belongs to no open account
+        is refused rather than pooled.
         """
         _require_id(order_id)
         if "/" in coin:
@@ -219,9 +227,15 @@ class LotTable:
             share = closed / lot.size
             pnl = (price - lot.px) * closed * (1 if lot.is_buy else -1) * 1_000_000
             closing_fee = fee * closed / quantity
-            # A liquidation has no closer: its fee is the liquidated opener's own cost.
-            net = pnl - lot.charges_micro * share - (closing_fee if liquidation else 0)
-            closer_net += (pnl if owner != lot.handle else 0) - closing_fee
+            # One P&L, credited once. A distinct closer takes the part its exit
+            # notional contributed; the opener keeps the part its entry notional
+            # did. A self-close, or a liquidation (which has no closer, so its
+            # fee is the liquidated opener's own cost), leaves it all with the opener.
+            closer_pnl = (pnl * price / (lot.px + price)
+                          if owner != lot.handle and not liquidation else Fraction(0))
+            net = pnl - closer_pnl - lot.charges_micro * share - (closing_fee if liquidation
+                                                                  else 0)
+            closer_net += closer_pnl - closing_fee
             closes += 1
             if lot.handle in accounts:
                 account = accounts[lot.handle]

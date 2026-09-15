@@ -9,13 +9,14 @@ from typing import Any
 
 from factorylab.charter.amendment import Amendment, PredictedEffect
 from factorylab.charter.book import Refusal
-from factorylab.charter.charter import Charter
+from factorylab.charter.charter import Charter, MetricCard
 from factorylab.charter.controller import violation
 from factorylab.charter.measurement import measure_card, preflight_measurement
 from factorylab.cortex.assembly import AssemblySpec
 from factorylab.cortex.registration import (
     MAX_PROPOSALS_PER_RETURN,
     AssemblyProposal,
+    ChallengeProposal,
     ConnectorProposal,
     LearnerProposal,
     MarketProposal,
@@ -78,6 +79,8 @@ class GovernanceMixin:
         self.registered_predicates = {}
         self.kind_reward_shapes = {}
         self.forecast_returns = {}
+        # challenge id -> frozen incumbent and replacement cards, trial series, status
+        self.challenges: dict[str, dict] = {}
         self.predicate_runner = JournalProxy(PredicateRunner(), self.ledger, "predicate")
         self.observer.predicates = self.predicates
         self.PROPOSAL_SHAPES = deepcopy(self.PROPOSAL_SHAPES)
@@ -317,8 +320,19 @@ class GovernanceMixin:
                                           "actions": list(actions)})
 
     def _policy_prediction(self, value: Any) -> PredictedEffect:
-        """Connector and retirement promises bind to an existing measurable charter card."""
+        """Connector and retirement promises bind to an existing measurable charter card.
+
+        While a challenge is being trialled, or awaits its ballot, a promise may
+        name the challenge id instead: it is then graded on the replacement
+        card the challenge offered, frozen as it was admitted, and not on the
+        card it challenges.
+        """
         prediction = PredictedEffect.parse(value)
+        challenge = self._live_challenges().get(prediction.card_id)
+        if challenge is not None:
+            preflight_measurement(challenge["replacement"], self._policy_observations(challenge),
+                                  registered_kinds=frozenset(self._kind_rewards()))
+            return prediction
         card = next((c for c in self.charter.cards if c.id == prediction.card_id), None)
         if card is None:
             raise ValueError("predicted_effect.card_id must name a current card")
@@ -326,9 +340,168 @@ class GovernanceMixin:
                               registered_kinds=frozenset(self._kind_rewards()))
         return prediction
 
+    def _live_challenges(self) -> dict[str, dict]:
+        """Challenges a promise may still name: in trial, due for ballot, or balloted."""
+        return {cid: ch for cid, ch in self.challenges.items()
+                if ch["status"] in ("trial", "due", "balloted")}
+
+    def _challenge_cards(self) -> dict[str, MetricCard]:
+        """The replacement cards under trial or ballot, keyed by challenge id."""
+        return {cid: ch["replacement"] for cid, ch in self._live_challenges().items()}
+
+    def _register_challenge(self, handle: str, prop: ChallengeProposal) -> None:
+        """Admit a metric challenge: one novelty trial buys a frozen side-by-side trial.
+
+        The replacement keeps the challenged card's id and norm, so adopting it
+        is the ordinary replace amendment. Both cards and the observation
+        definitions behind them are frozen here; the incumbent keeps pricing
+        the live charter throughout, so commitments incurred under it settle
+        under it. The challenge is ledgered before it exists in state.
+        """
+        from factorylab.charter.amendment import proposed_answers_for
+        from factorylab.charter.book import validate_observation_bindings
+        from factorylab.runtime.cards import parses
+
+        incumbent = next((c for c in self.charter.cards if c.id == prop.card_id), None)
+        if incumbent is None:
+            raise ValueError("challenge card_id must name a current card")
+        if any(ch["card_id"] == prop.card_id for ch in self._live_challenges().values()):
+            raise ValueError("card is already under challenge")
+        spec = prop.replacement
+        answers_for = spec.get("answers_for", incumbent.answers_for)
+        if answers_for not in self._kind_rewards():
+            answers_for = proposed_answers_for(answers_for, incumbent.id)
+        replacement = MetricCard(
+            incumbent.id, incumbent.norm,
+            str(spec.get("description", incumbent.description)),
+            str(spec.get("units", incumbent.units)),
+            spec["window"], f"{spec['rule']} {spec['value']}", str(spec["observation"]),
+            answers_for,
+        )
+        if replacement == incumbent:
+            raise ValueError("challenge leaves the card unchanged")
+        replacement.validate_answers_for(frozenset(self._kind_rewards()))
+        if not parses(replacement):
+            raise ValueError("replacement acceptable_region has no finite usable bounds")
+        region_for(replacement, rolling={}, observations=self.observations)
+        preflight_measurement(replacement, self.observations,
+                              registered_kinds=frozenset(self._kind_rewards()))
+        validate_observation_bindings(tuple(
+            replacement if c.id == incumbent.id else c for c in self.charter.cards))
+        slug = "".join(ch if ch.isalnum() else "-" for ch in incumbent.id.lower())
+        challenge_id = f"challenge-{len(self.challenges) + 1}-{slug}"[:48].rstrip("-")
+        definitions = {}
+        for card in (incumbent, replacement):
+            observation = self.observations.get(card.observation)
+            if observation is not None and observation.registered:
+                definitions[observation.id] = deepcopy(
+                    self.registered_observations[observation.id])
+        contract = Contract(
+            id=f"challenge:{challenge_id}",
+            version=1,
+            kind="tool",
+            description="metric challenge",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+            price=PriceSpec({}),
+            permissions=frozenset(),
+            resource_bounds=ResourceBounds(),
+        )
+        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        record = {
+            "id": challenge_id, "handle": handle, "card_id": incumbent.id,
+            "evidence": prop.evidence, "incumbent": incumbent, "replacement": replacement,
+            "trial_windows": prop.trial_windows, "start_window": self.window.index,
+            "observations": definitions, "series": [], "status": "trial",
+            "amendment_id": None,
+        }
+        self.ledger.append({"kind": "challenge.proposed",
+                            **{k: v for k, v in record.items() if k != "series"},
+                            "edition": self.charter.edition, "ts": self.clock.now_ns})
+        self.challenges[challenge_id] = record
+
+    def _close_challenge_window(self, index: int) -> None:
+        """Measure every trialled pair on the closing window and ledger both series.
+
+        Each closed window of a trial adds one ``challenge.window`` item holding
+        the incumbent's and the replacement's measurements, read with the
+        observation definitions frozen at admission. The trial ends when it has
+        its declared number of windows; the ballot waits for the next boundary.
+        """
+        for challenge in self.challenges.values():
+            if challenge["status"] != "trial":
+                continue
+            observations = self._policy_observations(challenge)
+            row = {"window": index}
+            for side in ("incumbent", "replacement"):
+                scopes = measure_card(challenge[side], self.card_samples, observations)
+                row[side] = {"card_id": challenge[side].id,
+                             "observation": challenge[side].observation,
+                             "value": fmean(scopes.values()) if scopes else None,
+                             "scopes": scopes}
+            self.ledger.append({"kind": "challenge.window", "challenge_id": challenge["id"],
+                                **row, "ts": self.clock.now_ns})
+            challenge["series"].append(row)
+            if len(challenge["series"]) >= challenge["trial_windows"]:
+                self.ledger.append({"kind": "challenge.trial_complete",
+                                    "challenge_id": challenge["id"], "window": index,
+                                    "windows": len(challenge["series"]),
+                                    "ts": self.clock.now_ns})
+                challenge["status"] = "due"
+
+    def _ballot_due_challenges(self) -> None:
+        """A completed trial goes to the existing amendment ballot at the next boundary.
+
+        The adoption candidate is the ordinary replace amendment, proposed under
+        the challenge's id with the observation bindings frozen at admission, so
+        a definition that drifted during the trial refuses activation exactly
+        as it would for any amendment. The challenge's own promise is the
+        replacement holding inside its region one window after activation.
+        """
+        for challenge in self.challenges.values():
+            if challenge["status"] != "due":
+                continue
+            replacement = challenge["replacement"]
+            direction = ("increase" if replacement.acceptable_region.startswith(
+                ("at least", "above")) else "decrease")
+            try:
+                am = Amendment(
+                    id=challenge["id"], proposer_handle=challenge["handle"],
+                    edition_base=self.charter.edition, add=(), replace=(replacement,),
+                    remove=(),
+                    predicted_effect=PredictedEffect(replacement.id, direction, 1),
+                )
+                self.charter_book.propose(am, self._policy_observations(challenge))
+            except ValueError as exc:
+                self.ledger.append({"kind": "challenge.refused", "challenge_id": challenge["id"],
+                                    "reason": str(exc)[:300], "ts": self.clock.now_ns})
+                challenge["status"] = "refused"
+                continue
+            self.ledger.append({"kind": "challenge.balloted", "challenge_id": challenge["id"],
+                                "amendment_id": am.id, "windows": len(challenge["series"]),
+                                "ts": self.clock.now_ns})
+            challenge["status"] = "balloted"
+            challenge["amendment_id"] = am.id
+            self.stats.amendments_proposed += 1
+            self.window.amendments_proposed += 1
+            eligible = self._committee_eligible()
+            proposer = self.handle_to_assembly.get(challenge["handle"])
+            if proposer is None:
+                try:
+                    proposer = self.queue.get(challenge["handle"]).propensity.chosen
+                except KeyError:
+                    pass
+            eligible.pop(proposer, None)
+            committee = self.charter_book.seat(am.id, eligible, self.rng,
+                                               size=self.m.committee.seats)
+            self._hold_vote(am, committee)
+
     def _register(self, handle: str, prop: Any, *,
                   predicted_effect: PredictedEffect | None = None) -> None:
         amount = self.ev.trial_amount_micro
+        if isinstance(prop, ChallengeProposal):
+            self._register_challenge(handle, prop)
+            return
         if isinstance(prop, MarketProposal):
             self._register_market(handle, prop)
             return
@@ -1024,6 +1197,7 @@ class GovernanceMixin:
                                  if v["amendment_id"] != amendment_id]
 
     def _activate_charter_if_due(self) -> None:
+        self._ballot_due_challenges()
         self._activate_retirements_if_due()
         new = self._next_charter_activation()
         while new is not None:
@@ -1070,6 +1244,7 @@ class GovernanceMixin:
             return
         cards = {c.id: c for c in (*self.charter.cards, *getattr(proposal, "replace", ()),
                                    *getattr(proposal, "add", ()))}
+        cards.update(self._challenge_cards())  # a promise may name a challenge under trial
         card = cards[proposal.predicted_effect.card_id]
         observation = self.observations.get(card.observation)
         definitions = ({observation.id: deepcopy(self.registered_observations[observation.id])}
@@ -1111,6 +1286,7 @@ class GovernanceMixin:
 
     def _close_policy_window(self, index: int) -> None:
         """Each vote is graded once at its declared post-activation boundary, or censored."""
+        self._close_challenge_window(index)  # both series of every trial, ledgered
         remaining = []
         for vote in self.pending_votes:
             activation = vote["activation_window"]
@@ -1137,7 +1313,8 @@ class GovernanceMixin:
             self._settle_policy(vote["handle"], score, status)
         self.pending_votes[:] = remaining
         pending_handles = {self.queue.get(f.handle).parent_handle for f in self.book.pending()}
-        self.card_samples.prune((*self.charter.cards, *(v["card"] for v in remaining)),
+        self.card_samples.prune((*self.charter.cards, *(v["card"] for v in remaining),
+                                 *self._challenge_cards().values()),
                                 pending_handles=pending_handles)
 
     def _record_card_forecasts(self, pending, baseline) -> None:
