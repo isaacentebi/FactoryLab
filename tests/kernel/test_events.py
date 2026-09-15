@@ -111,6 +111,8 @@ def test_event_kinds_are_exactly_the_kinds_a_world_can_emit():
         "Reconciled",
         "TransferIntent",
         "Terminated",
+        "WorldUpdate",  # edition 3, C2: one coalesced world update per seat per tick
+        "WatcherFired",  # edition 3, C2: a watcher predicate fired for its owner
     }
     with pytest.raises(ValueError):
         Event("a", "Unknown", 0, {}, "kernel")

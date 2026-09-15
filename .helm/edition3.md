@@ -5,7 +5,7 @@ Out of scope: project funding contracts and commissioned judges (deferred, plan 
 ## Workstreams
 - [x] 1. W1 continuity (state + inbox + artifact scoping) — implementer: opus — acceptance: C1 test
 - [x] 2. W2 thinking control (coalesced update, subscriptions, defer, watchers, vocabulary) — implementer: opus — acceptance: C2 test
-- [ ] 3. W3 charter (norm definitions, one card, privileged predicate removed, fidelity objection) — implementer: opus — acceptance: C3 test, historical hashes hold
+- [x] 3. W3 charter (norm definitions, one card, privileged predicate removed, fidelity objection) — implementer: opus — acceptance: C3 test, historical hashes hold
 - [ ] 4. W4 world block (self, resources, continuity, directory, compact catalogue, toll removed) — implementer: opus — acceptance: golden block reconciles with ledger
 - [x] 5. W5 first world (roster, seeds, $300/$120 schedule, kill wind-down, calibration cases) — implementer: opus — acceptance: manifest pinned, wind-down test
 ## Log
@@ -13,3 +13,4 @@ Out of scope: project funding contracts and commissioned judges (deferred, plan 
 - W5 #90 merged (roster, seeds, $300/$120, kill wind-down, 45 calibration cases; manifest 805ada83…). Integration items: loop.py:486 insolvency death must call self.kill (one line, after W1/W2 merge); preflight needs edition 3 ratification on the new roster.
 - W2 #92 merged (coalesced WorldUpdate, subscriptions/defer/cadence floor, watchers at program price, quiet tick, action vocabulary; also fixed an _open_epoch KeyError when a universe swaps an action).
 - W1 #91 merged (working state, outcome inbox, artifact scoping, memory deque removed). Coordinator: loop.py insolvency death now goes through Runtime.kill (wind-down). Open: W3 charter, W4 world block; then full gate, extended slice, ratification on the edition 3 roster, calibration (paid), 24 h rehearsal.
+- W3 #94 merged (norm definitions, one card on avoidably_unresolved_share, privileged predicate removed, fidelity objection, learning-death access reasons). Event-kinds pin extended for WorldUpdate/WatcherFired. Draft digest c25f5617…, roster 488c62ef… await ratification after W4.
