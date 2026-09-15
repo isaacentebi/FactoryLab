@@ -22,3 +22,4 @@ Out of scope: mainnet, fund transfers, a manifest named `funded`, publishing the
 - Then: final gate with W9 → testnet rehearsal at 600 s (scripts/rehearsal.py prepare/run on edition2-testnet) → docs/audits/v5/rehearsal.md → GPT-6 zip at the final commit → handoff.md.
 - W9 #82 (kill finality: witness read on resume, checkpoint cannot revive) and #81 (unhistoried cover rule) merged; main 4afa4cb. Final gate running. Edition 2 testnet rehearsal running: worlds/edition2-rehearsal.toml (namespace 73347490…), ledger /tmp/e2-rehearsal.jsonl, 70 min at 600 s tick, kill at end; started 02:22 local.
 - Remaining: gate verdict → rehearsal report docs/audits/v5/rehearsal.md (tick gaps, well-formed, burn, dormancy/entitlement views in the wake) → scripts/package_review.sh zip for GPT-6 at the final commit → docs/handoff.md.
+- Final gate on main: 2916 passed, 1 failed only because HEAD moved during the run (witness digest); passes alone. Code final. Packaging for GPT-6.

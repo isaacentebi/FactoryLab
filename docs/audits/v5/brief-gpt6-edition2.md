@@ -25,8 +25,10 @@ pushing; the charter is four read-only norms and eight cards, no quotas.
 
 ## Scope
 
-The whole repository at the commit named here, with the diff from `3a27fa4` as the primary
-object. `docs/manifest.md` is the reference for how the code is meant to behave; where it and
+The whole repository, attached as a zip whose top-level directory is named
+`FactoryLab-<short sha>`; that sha is the commit under review, on `main`, and the diff from
+`3a27fa4` to it is the primary object. The zip holds tracked files only: no keys, no runs, no
+virtual environment. `docs/manifest.md` is the reference for how the code is meant to behave; where it and
 the code disagree, that is a finding.
 
 ## Questions, in order
