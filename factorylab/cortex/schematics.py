@@ -57,6 +57,8 @@ class SchematicsMixin:
                       "preflight_path": "/data", "pay": "x402", "max_call_usd": "0.003"},
         "market": {"kind": "market", "coin": "listed perp coin; omit when using pair",
                    "pair": "listed BASE/USDC pair; omit when using coin"},
+        "service": {"kind": "service", "program_id": "id of a tool you registered",
+                    "price_micro": 1000, "description": "what a buyer receives"},
         "tool": {
             "kind": "tool",
             "id": "slug",
@@ -182,7 +184,9 @@ class SchematicsMixin:
         "measured frozen for trial_windows closed windows (ledgered as challenge.window), and "
         "the committee ballots on adopting the replacement as an amendment. During the trial "
         "a connector or retire proposal may name the challenge id as its predicted_effect "
-        "card_id, and is then graded on the replacement.",
+        "card_id, and is then graded on the replacement. A service proposal sells a "
+        "registered tool's output to outside buyers at price_micro (integer micro-USD) per "
+        "call over x402; each paid call is ledgered as income.earned and shown in pots.",
         "tool_calls": (
             'a list of {"tool": id, "args": {...}} bounded by mechanics.tools.max_tool_calls; '
             'results come back in one continuation per request'

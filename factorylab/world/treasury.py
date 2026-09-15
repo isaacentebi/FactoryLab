@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from decimal import Decimal
 from typing import Any
@@ -17,6 +18,14 @@ PENDING_JOURNAL_EVERY = 10
 # The reason a forwarded exit strands when Circle's mint stays unobserved past the bound.
 FORWARD_WAIT_EXCEEDED = "forwarded mint not delivered within treasury.forward_wait_windows"
 TRANSFER_BLOCKED = "a previous transfer is still pending or stranded"
+# Money that entered the wallet's pots, by class: the architect's initial compute credit
+# (subsidy), Venice credit bought from trading capital (conversion), and x402 income.
+INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_micro")
+
+
+def _fresh_income() -> dict:
+    return {"earned_micro": 0, "subsidy_micro": None, "converted_from_principal_micro": 0,
+            "spool_offset": 0}
 
 
 def _seed_credits(provider: Any) -> int | None:
@@ -111,6 +120,10 @@ class Treasury:
         # Recoverable forwarded strands, oldest first, each with its own principal hold.
         self.stranded: list[dict] = []
         self._pots = {"venue": None, "reserve": None, "seed": None, "sellers": {}}
+        self.income = _fresh_income()
+        # Receipts the wake host's seller wrote for paid calls it served; the runtime,
+        # the only writer of this ledger, turns each into an ``income.earned`` item.
+        self.income_spool = os.environ.get("FACTORYLAB_INCOME_SPOOL") or None
 
     def _write(self, kind: str, **fields) -> None:
         self.ledger.append({"kind": "treasury." + kind, **fields})
@@ -150,7 +163,49 @@ class Treasury:
         values.extend(result["sellers"].values())
         result["complete"] = not pending and all(type(v) is int for v in values)
         result["total_micro"] = sum(values) if result["complete"] else None
+        result.update({k: self.income[k] for k in INCOME_CLASSES})
         return result
+
+    def earn(self, service: str, micro: int, tx: str, **detail) -> dict:
+        """Book one paid service call: ledgered first, then counted as earned income."""
+        if not isinstance(service, str) or not service:
+            raise ValueError("service id is required")
+        if type(micro) is not int or micro <= 0:
+            raise ValueError("earned amount must be positive integer micro-USD")
+        if not isinstance(tx, str) or not tx:
+            raise ValueError("a settlement reference is required")
+        item = {"kind": "income.earned", "service": service, "micro": micro, "tx": tx, **detail}
+        self.ledger.append(item)
+        self.income = {**self.income, "earned_micro": self.income["earned_micro"] + micro}
+        return item
+
+    def collect_income(self) -> list[dict]:
+        """Read the seller's receipt spool through the journal and ledger each new receipt.
+
+        The read is an external observation like a rail balance, so it is recorded
+        by the recovery journal and replays byte-for-byte; the consumed offset is
+        part of the treasury snapshot, so a receipt is never booked twice.
+        """
+        if self.income_spool is None:
+            return []
+        from factorylab.world.seller import read_income_spool
+
+        offset = self.income["spool_offset"]
+        args = (str(self.income_spool), offset)
+        if hasattr(self.ledger, "call"):
+            # The name's ``lookup`` suffix classifies the call read-only for replay.
+            observed = self.ledger.call("treasury.income.lookup", read_income_spool, args, {})
+        else:
+            observed = read_income_spool(*args)
+        booked = []
+        for receipt in observed["receipts"]:
+            booked.append(self.earn(
+                receipt["service"], receipt["micro"], receipt["tx"],
+                payer=receipt.get("payer"), program=receipt.get("program"),
+                version=receipt.get("version"), served_ns=receipt.get("ts"),
+            ))
+        self.income = {**self.income, "spool_offset": observed["offset"]}
+        return booked
 
     def _gas_view(self) -> dict:
         """The exit route's gas position: never money, so it cannot change completeness."""
@@ -191,6 +246,13 @@ class Treasury:
         pots.update({k: observed[k] for k in ("perps", "spot") if k in observed})
         if hasattr(self.rail, "gas_view"):
             pots["gas"] = self._gas_view()
+        credits = [seed, *sellers.values()]
+        if self.income["subsidy_micro"] is None and all(type(v) is int for v in credits):
+            # The first complete observation of compute credit is the architect's
+            # subsidy: nothing has been converted from principal or earned before it.
+            subsidy = sum(credits)
+            self._write("subsidy", micro=subsidy, seed_micro=seed, sellers=dict(sellers))
+            self.income = {**self.income, "subsidy_micro": subsidy}
         self._write("pots", pots=pots)
         self._pots = pots
         return self.pots()
@@ -395,6 +457,10 @@ class Treasury:
             finished = {**self._settled(updated), "status": "confirmed"}
             self._write("confirmed", state=finished, tx_refs=finished["receipts"], ts=now_ns)
             self.state = finished
+            if finished["direction"] == "to_venice":
+                self.income = {**self.income, "converted_from_principal_micro":
+                               self.income["converted_from_principal_micro"]
+                               + finished["received_micro"]}
             self.wallet.release(self.principal_hold)
             if self.fee_hold is not None:
                 self.wallet.release(self.fee_hold)
@@ -536,6 +602,7 @@ class Treasury:
             self.fee_hold = self.wallet.reserve(affordable, self.state["handle"], "treasury:fees")
 
     def tick(self, now_ns: int) -> list[dict]:
+        self.collect_income()
         if self.stranded and not self._blocking():
             self._recover(now_ns)
             return []
@@ -612,6 +679,7 @@ class Treasury:
                 "venice_window": self.venice_window,
                 "venice_spent": self.venice_spent,
                 "forward_spent": self.forward_spent,
+                "income": self.income,
             }
         )
 
@@ -639,6 +707,7 @@ class Treasury:
         self.gas_spent, self._pots = saved["gas_spent"], saved["pots"]
         self.venice_window, self.venice_spent = saved["venice_window"], saved["venice_spent"]
         self.forward_spent = saved.get("forward_spent", 0)  # checkpoints predate forwarding
+        self.income = {**_fresh_income(), **saved.get("income", {})}  # and income classes
         if saved["fake_reserve"] is not None:
             self.rail.reserve = saved["fake_reserve"]
             self.rail.venice = saved["fake_venice"]

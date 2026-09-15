@@ -64,7 +64,7 @@ class Contract:
     version: int
     kind: Literal[
         "model", "tool", "assembly", "router", "purchase", "exchange",
-            "observation", "connector"
+            "observation", "connector", "service"
     ]
     description: str
     input_schema: dict
@@ -81,7 +81,7 @@ class Contract:
             raise ValueError("contract version must be a positive integer")
         if self.kind not in (
             "model", "tool", "assembly", "router", "purchase", "exchange",
-            "observation", "connector"
+            "observation", "connector", "service"
         ):
             raise ValueError("unknown contract kind")
         if not isinstance(self.input_schema, Mapping) or not isinstance(

@@ -289,6 +289,36 @@ def _challenge(item: dict[str, Any]) -> ChallengeProposal:
     if not isinstance(window, dict) or not {"kind", "n"} <= set(window) <= {"kind", "n", "per"}:
         raise ValueError("replacement.window must be {kind, n, per}")
     return ChallengeProposal(card_id.strip(), evidence, dict(replacement), windows)
+@dataclass(frozen=True)
+class ServiceProposal:
+    """A service sells one registered program's output over x402 at a fixed price."""
+
+    program_id: str
+    price_micro: int
+    description: str
+
+
+# A service price is bounded like every other per-request amount on the x402 rail.
+MAX_SERVICE_PRICE_MICRO = 10_000_000
+
+
+def _service(item: dict[str, Any], known_tools: frozenset[str]) -> ServiceProposal:
+    if set(item) != {"kind", "program_id", "price_micro", "description"}:
+        raise ValueError("service fields are kind, program_id, price_micro, description")
+    program_id = item["program_id"]
+    if not isinstance(program_id, str) or not SLUG.fullmatch(program_id):
+        raise ValueError("program_id must be a slug of 2-48 chars")
+    if program_id not in known_tools:
+        raise ValueError("program_id must name a registered population tool")
+    price = item["price_micro"]
+    if type(price) is not int or not 1 <= price <= MAX_SERVICE_PRICE_MICRO:
+        raise ValueError(f"price_micro must be an int in [1, {MAX_SERVICE_PRICE_MICRO}]")
+    description = item["description"]
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError("description is required")
+    if len(description) > 500:
+        raise ValueError("description exceeds 500 chars")
+    return ServiceProposal(program_id, price, description.strip())
 
 
 def _market(item: dict[str, Any]) -> MarketProposal:
@@ -335,6 +365,7 @@ Proposal = (
     ModelProposal | AssemblyProposal | RouterProposal | ToolProposal | RetireProposal
     | ObservationProposal | PredicateProposal | LearnerProposal | ConnectorProposal
     | MarketProposal | ChallengeProposal
+    | MarketProposal | ServiceProposal
 )
 
 
@@ -401,6 +432,8 @@ def parse_proposals(
                 accepted.append(_connector(item))
             elif kind == "market":
                 accepted.append(_market(item))
+            elif kind == "service":
+                accepted.append(_service(item, known_tools))
             elif kind == "observation":
                 accepted.append(_observation(item, seed_observations, jail=tool_jail))
             elif kind == "predicate":
