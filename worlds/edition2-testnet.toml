@@ -18,18 +18,18 @@ tick_interval = "600s"
 # 8.6 days and each tranche about 2.9 days, so a population that neither gets cheaper nor
 # earns spends part of every week dormant (C2) instead of dying: that is the physics.
 [endowment]
-locked_micro = 60000000
+locked_micro = 50000000
 releases = [
   { at = "7d", amount_micro = 10000000 },
   { at = "14d", amount_micro = 10000000 },
   { at = "21d", amount_micro = 10000000 },
   { at = "28d", amount_micro = 10000000 },
   { at = "35d", amount_micro = 10000000 },
-  { at = "42d", amount_micro = 10000000 },
 ]
-# Contract C10: 0.8 of the unlocked pool is split equally across live seats, the rest is
-# unallocated. Genesis (kernel/budget.py): 0.8 * 30,000,000 / 9 = 2,666,666 micro-USD a seat,
-# 6,000,006 unallocated; each 10 USD tranche adds 888,888 a seat while nine seats live.
+# 15 September: 40 USD unlocked at genesis, 10 USD a week for five weeks (the clean rehearsal
+# measured about 5.6 USD a day, so genesis lasts a week and each tranche about two days; more
+# credit extends this, the schedule scales the same way). Contract C10: 0.8 of the unlocked
+# pool is split equally across live seats; genesis 0.8 * 40,000,000 / 9 = 3,555,555 a seat.
 base_share = 0.8
 
 [exchange]
@@ -123,7 +123,10 @@ reasoning = { enabled = false }
 [[assemblies]]
 id = "seed-observer"
 role = "producer"
-model_id = "z-ai/glm-5.3-flash"
+# 15 September: GLM 5.3 flash via OpenRouter wrapped one reply in five under the edition 2
+# prompt, with and without the host pin (docs/audits/v5/rehearsal.md); DeepSeek 4.1 flash
+# scored 100% on every calibration column.
+model_id = "deepseek/deepseek-v4.1-flash"
 accepts = ["MarketMid", "Funding"]
 max_tokens = 1000
 effort = "low"
@@ -309,10 +312,10 @@ spot_pairs = ["PURR/USDC", "HYPE/USDC"]
 #   card at genesis; the population may propose one.
 [charter]
 edition = 1
-# Ratified 15 September 2026 by the seeded five-seat committee of this roster
-# (docs/charter/edition2-ratification.json, docs/audits/v5/charter-ratification.md).
-ratified_sha256 = "929f1b04bee45155e74d196c80b1a6d764a75555fa4ecc5872beffc629578935"
-roster_sha256 = "3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb"
+# Ratified 15 September 2026 (second ballot: five norms, three cards, observer on DeepSeek 4.1
+# flash) by the seeded five-seat committee of this roster; docs/charter/edition2-ratification.json.
+ratified_sha256 = "a7f105eefd65ac70904b04b3389840841e6751b18bde3c5cc2262622b2b6be39"
+roster_sha256 = "b68be19c7bedf5b31daafa4e85d3d32ded6540ab4996d7a7eec50a5b4fca4dbb"
 # consequential usefulness: create things or changes that others have reason to value; uptake by
 #   an independent counterparty is evidence, internal applause is a hypothesis.
 # epistemic integrity: make commitments answerable to evidence and preserve the ability to
@@ -322,58 +325,9 @@ roster_sha256 = "3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769f
 #   institution is not.
 # bounded reciprocity: do not finance the factory's advantage by imposing unconsented costs on
 #   outsiders.
-norms = ["consequential usefulness", "epistemic integrity", "durable agency", "bounded reciprocity"]
-
-[[charter.cards]]
-id = "tool-discipline"
-norm = "durable agency"
-description = "Mean attempted tool calls per return stays bounded."
-units = "count per return"
-window = { kind = "returns", n = 10, per = "assembly" }
-acceptable_region = "at most 2"
-observation = "tool_calls"
-answers_for = "producer"
-
-[[charter.cards]]
-id = "well-formed-floor"
-norm = "epistemic integrity"
-description = "Share of a role's returns that parse as well-formed responses."
-units = "fraction"
-window = { kind = "returns", n = 10, per = "role" }
-acceptable_region = "at least 0.9"
-observation = "well_formed_rate"
-answers_for = "all"
-
-[[charter.cards]]
-id = "cost-cap"
-norm = "durable agency"
-description = "Mean cost across every one of the role's latest returns, failed ones included, with retained-storage rent added."
-units = "micro-USD per attempt"
-window = { kind = "returns", n = 10, per = "role" }
-acceptable_region = "at most 5000"
-observation = "cost_per_attempt"
-answers_for = "all"
-
-[[charter.cards]]
-id = "censorship-bound"
-norm = "epistemic integrity"
-description = "Share of resolved outcomes that are censored."
-units = "fraction"
-window = { kind = "windows", n = 5 }
-acceptable_region = "at most 0.3"
-observation = "censored_share"
-answers_for = "all"
-
-[[charter.cards]]
-id = "card-forecast-skill"
-norm = "epistemic integrity"
-description = "Mean forecast Brier minus the paired prevalence baseline, with a floor above zero, so inquiry is judged by whether it beats guessing."
-units = "score difference"
-window = { kind = "forecasts", n = 25, per = "assembly" }
-acceptable_region = "above 0"
-observation = "forecast_skill"
-answers_for = "evaluator"
-lambda = 0.5
+# fidelity: a measurement stands for a value; satisfying the measurement without serving the
+#   value is failure, and saying so is a judge's duty.
+norms = ["consequential usefulness", "epistemic integrity", "durable agency", "bounded reciprocity", "fidelity"]
 
 [[charter.cards]]
 id = "card-consequence-paid-off"
@@ -387,22 +341,23 @@ answers_for = "producer"
 lambda = 0.5
 
 [[charter.cards]]
-id = "card-position-concentration"
-norm = "durable agency"
-description = "Peak marked notional on a single coin over starting equity, with an upper bound under the turnover cap, so no one position can end the account."
-units = "ratio"
-window = { kind = "windows", n = 6 }
-acceptable_region = "at most 0.5"
-observation = "position_concentration"
-answers_for = "producer"
+id = "card-forecast-skill"
+norm = "epistemic integrity"
+description = "Mean forecast Brier minus the paired prevalence baseline, with a floor above zero, so inquiry is judged by whether it beats guessing."
+units = "score difference"
+window = { kind = "forecasts", n = 25, per = "assembly" }
+acceptable_region = "above 0"
+observation = "forecast_skill"
+answers_for = "evaluator"
 lambda = 0.5
 
 [[charter.cards]]
-id = "turnover_ceiling"
-norm = "durable agency"
-description = "Filled notional over equity at window start, zero without fills."
-units = "ratio"
-window = { kind = "windows", n = 6 }
-acceptable_region = "at most 0.5"
-observation = "turnover"
-answers_for = "producer"
+id = "censorship-bound"
+norm = "epistemic integrity"
+description = "Share of resolved outcomes that are censored."
+units = "fraction"
+window = { kind = "windows", n = 5 }
+acceptable_region = "at most 0.3"
+observation = "censored_share"
+answers_for = "all"
+

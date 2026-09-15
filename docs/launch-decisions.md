@@ -95,33 +95,29 @@ architect gas seed are part of the launch.
 ## Edition 2 (15 September)
 
 The edition 2 testnet manifest is `worlds/edition2-testnet.toml` (hash
-`9eb460e4b3d4c974feefbc7cd6a5e182defda231f4f33a5d3cb4ac060fa9d224`, pinned in
-`tests/runtime/test_manifests.py`). It keeps the mixed OpenRouter/Venice roster of
-`worlds/compute-continuity-testnet.toml` (the same nine seats and ten models), the Hyperliquid
-testnet with BTC and ETH perps and the `PURR/USDC` and `HYPE/USDC` spot pairs, the reserve
-address, and the ten-minute tick, and sets the edition 2 physics
-(`docs/plans/edition2.md`):
+`b184b1d8dc55daf56978ea51181be0d06e59493bef2727d97b2f67717efdbf8b`, pinned in
+`tests/runtime/test_manifests.py`): the compute-continuity roster with the observer moved to
+`deepseek/deepseek-v4.1-flash`, Hyperliquid testnet with BTC and ETH perps and the `PURR/USDC` and
+`HYPE/USDC` spot pairs, the ten-minute tick, one-hour windows, and the edition 2 physics
+(`docs/plans/edition2.md`). Decisions taken after the first rehearsals
+(`docs/audits/v5/rehearsal.md`):
 
-- Endowment (C1): 90 USD in the wallet, 30 USD unlocked at genesis, 60 USD locked and released
-  as 10 USD on days 7, 14, 21, 28, 35 and 42 after the ledgered Launch. `base_share` 0.8
-  (C10): genesis gives each of the nine seats 2,666,666 micro-USD and leaves 6,000,006
-  unallocated; each tranche adds 888,888 a seat while nine seats live. At the rehearsal burn
-  of $3.47 a day the genesis money lasts about 8.6 days and a tranche about 2.9 days, so a
-  population that neither gets cheaper nor earns is dormant part of every week rather than
-  dead.
-- Novelty window one hour, never the compute-continuity two-minute window: at one micro-USD
-  per byte-window that window drained $47 a day at 64 KiB of notes
-  (`docs/audits/v4/gpt6-triage.md`). Storage rent `notes.micro_per_byte_day` at the loader
-  default `"0.04"`: the whole 256 KiB cap costs about a cent a day.
-- `trial_amount_usd` 0.05, sized as a child's whole endowment (C10) rather than a fee: three
-  calls of the cheapest seat (eval-b, `qwen/qwen3.7-flash` at 3000 tokens) at the meter's
-  reservation ceiling for the largest measured request (52,832 input tokens) cost 3 x 5,811 =
-  17,433 micro-USD; the arithmetic is in the manifest. `prices.min_blame_share` 0.1 (C6) and
-  `prices.program_micro_per_call` 50 (C8), both the loader defaults, stated.
-- The charter is the architect's draft `docs/charter/edition2-draft.toml` verbatim: the four
-  reviewer norms and eight cards, the five quota cards gone. It is not ratified; the manifest
-  carries no `ratified_sha256` or `roster_sha256`.
+- Endowment: 90 USD in the wallet, 40 USD unlocked at genesis, 50 USD released as 10 USD on days
+  7, 14, 21, 28 and 35. At the clean rehearsal's burn of about 5.6 USD a day genesis lasts a week
+  and each tranche about two days; added credit scales the schedule the same way.
+- Charter: five norms (the reviewer's four plus fidelity: a measurement stands for a value, and
+  satisfying it without serving the value is failure a judge must say so about) and three cards
+  (consequence paid off, forecast skill, censorship bound). Every frugality card was removed:
+  under per-seat entitlements the wallet already prices cost, tool calls, malformed answers and
+  fees, and the half-cent cost cap had made looking at the market a violation (fourteen wakes,
+  fourteen holds). The concentration card was removed because a card prices a bet after it is
+  on; ruin is bounded by the kernel's leverage wall, a hard cast. Ratified by the seeded committee
+  of this roster, all three cards carried, `docs/charter/edition2-ratification.json`; the earlier
+  eight-card ratification is kept under `docs/charter/history/`.
+- Observer: GLM 5.3 flash via OpenRouter wrapped one reply in five under the edition 2 prompt with
+  and without the host pin; DeepSeek 4.1 flash scored 100% on every calibration column.
+- The wake publishes every agent's answer live and unredacted (`returns`). Sealing the diary was
+  secrecy, not darkness; the experimenter's only lever is kill and he does not want protecting.
+- Uncertain provider bills are settled from the provider's balance, not charged at the ceiling.
 
-Ratification is a separate step: a testnet committee vote through `scripts/ratify_charter.py`
-stamps the hashes. The funded manifest is derived from this file after that vote, with fresh
-reconciled starting accounting, and is not named `funded` before the launch gates.
+The funded manifest derives from this file.

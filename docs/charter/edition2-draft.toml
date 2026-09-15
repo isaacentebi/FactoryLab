@@ -2,7 +2,7 @@
 # after the testnet committee vote (workstream W7).
 #
 # What changed from edition 1 and why (docs/audits/v4/gpt6-triage.md):
-# - Five quota cards removed: noop-ceiling, revision-presence, amendments_activated_floor,
+# - Five quota cards removed (14 September): noop-ceiling, revision-presence, amendments_activated_floor,
 #   truthful_commitments_verdict_consistency, evaluator_disagreement_ceiling. Each turned an
 #   instrument into an obligation and together they produce the two most likely deaths
 #   (institutional churn, cheap consensus).
@@ -13,6 +13,14 @@
 #   edition; the population writes and prices the cards under them. Bounded reciprocity has no
 #   card at genesis; the population may propose one.
 
+# 15 September, after the first rehearsals: every card that measured frugality (cost per answer,
+# tool calls, well-formed share, turnover) and the concentration card are removed. In edition 2
+# every thought is paid from the seat's own slice, so the wallet already prices cost, waste and
+# fees exactly; a card on top punished the same thing twice, and at half a cent made looking at
+# the market a violation: fourteen wakes, fourteen holds. Ruin is bounded by the kernel's leverage
+# wall (tools.max_leverage), a hard cast, not a card. Three cards remain, all about consequences
+# in the world. A fifth norm, fidelity, gives judges the basis to mark down work that satisfies a
+# measurement without serving its value.
 [charter]
 edition = 1
 # consequential usefulness: create things or changes that others have reason to value; uptake by
@@ -24,58 +32,9 @@ edition = 1
 #   institution is not.
 # bounded reciprocity: do not finance the factory's advantage by imposing unconsented costs on
 #   outsiders.
-norms = ["consequential usefulness", "epistemic integrity", "durable agency", "bounded reciprocity"]
-
-[[charter.cards]]
-id = "tool-discipline"
-norm = "durable agency"
-description = "Mean attempted tool calls per return stays bounded."
-units = "count per return"
-window = { kind = "returns", n = 10, per = "assembly" }
-acceptable_region = "at most 2"
-observation = "tool_calls"
-answers_for = "producer"
-
-[[charter.cards]]
-id = "well-formed-floor"
-norm = "epistemic integrity"
-description = "Share of a role's returns that parse as well-formed responses."
-units = "fraction"
-window = { kind = "returns", n = 10, per = "role" }
-acceptable_region = "at least 0.9"
-observation = "well_formed_rate"
-answers_for = "all"
-
-[[charter.cards]]
-id = "cost-cap"
-norm = "durable agency"
-description = "Mean cost across every one of the role's latest returns, failed ones included, with retained-storage rent added."
-units = "micro-USD per attempt"
-window = { kind = "returns", n = 10, per = "role" }
-acceptable_region = "at most 5000"
-observation = "cost_per_attempt"
-answers_for = "all"
-
-[[charter.cards]]
-id = "censorship-bound"
-norm = "epistemic integrity"
-description = "Share of resolved outcomes that are censored."
-units = "fraction"
-window = { kind = "windows", n = 5 }
-acceptable_region = "at most 0.3"
-observation = "censored_share"
-answers_for = "all"
-
-[[charter.cards]]
-id = "card-forecast-skill"
-norm = "epistemic integrity"
-description = "Mean forecast Brier minus the paired prevalence baseline, with a floor above zero, so inquiry is judged by whether it beats guessing."
-units = "score difference"
-window = { kind = "forecasts", n = 25, per = "assembly" }
-acceptable_region = "above 0"
-observation = "forecast_skill"
-answers_for = "evaluator"
-lambda = 0.5
+# fidelity: a measurement stands for a value; satisfying the measurement without serving the
+#   value is failure, and saying so is a judge's duty.
+norms = ["consequential usefulness", "epistemic integrity", "durable agency", "bounded reciprocity", "fidelity"]
 
 [[charter.cards]]
 id = "card-consequence-paid-off"
@@ -89,22 +48,22 @@ answers_for = "producer"
 lambda = 0.5
 
 [[charter.cards]]
-id = "card-position-concentration"
-norm = "durable agency"
-description = "Peak marked notional on a single coin over starting equity, with an upper bound under the turnover cap, so no one position can end the account."
-units = "ratio"
-window = { kind = "windows", n = 6 }
-acceptable_region = "at most 0.5"
-observation = "position_concentration"
-answers_for = "producer"
+id = "card-forecast-skill"
+norm = "epistemic integrity"
+description = "Mean forecast Brier minus the paired prevalence baseline, with a floor above zero, so inquiry is judged by whether it beats guessing."
+units = "score difference"
+window = { kind = "forecasts", n = 25, per = "assembly" }
+acceptable_region = "above 0"
+observation = "forecast_skill"
+answers_for = "evaluator"
 lambda = 0.5
 
 [[charter.cards]]
-id = "turnover_ceiling"
-norm = "durable agency"
-description = "Filled notional over equity at window start, zero without fills."
-units = "ratio"
-window = { kind = "windows", n = 6 }
-acceptable_region = "at most 0.5"
-observation = "turnover"
-answers_for = "producer"
+id = "censorship-bound"
+norm = "epistemic integrity"
+description = "Share of resolved outcomes that are censored."
+units = "fraction"
+window = { kind = "windows", n = 5 }
+acceptable_region = "at most 0.3"
+observation = "censored_share"
+answers_for = "all"

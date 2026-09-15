@@ -1,5 +1,5 @@
-# roster_sha256 = 3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb
-# charter_sha256 = 929f1b04bee45155e74d196c80b1a6d764a75555fa4ecc5872beffc629578935
+# roster_sha256 = b68be19c7bedf5b31daafa4e85d3d32ded6540ab4996d7a7eec50a5b4fca4dbb
+# charter_sha256 = a7f105eefd65ac70904b04b3389840841e6751b18bde3c5cc2262622b2b6be39
 [charter]
 edition = 1
 # consequential usefulness: create things or changes that others have reason to value; uptake by
@@ -11,58 +11,9 @@ edition = 1
 #   institution is not.
 # bounded reciprocity: do not finance the factory's advantage by imposing unconsented costs on
 #   outsiders.
-norms = ["consequential usefulness", "epistemic integrity", "durable agency", "bounded reciprocity"]
-
-[[charter.cards]]
-id = "tool-discipline"
-norm = "durable agency"
-description = "Mean attempted tool calls per return stays bounded."
-units = "count per return"
-window = { kind = "returns", n = 10, per = "assembly" }
-acceptable_region = "at most 2"
-observation = "tool_calls"
-answers_for = "producer"
-
-[[charter.cards]]
-id = "well-formed-floor"
-norm = "epistemic integrity"
-description = "Share of a role's returns that parse as well-formed responses."
-units = "fraction"
-window = { kind = "returns", n = 10, per = "role" }
-acceptable_region = "at least 0.9"
-observation = "well_formed_rate"
-answers_for = "all"
-
-[[charter.cards]]
-id = "cost-cap"
-norm = "durable agency"
-description = "Mean cost across every one of the role's latest returns, failed ones included, with retained-storage rent added."
-units = "micro-USD per attempt"
-window = { kind = "returns", n = 10, per = "role" }
-acceptable_region = "at most 5000"
-observation = "cost_per_attempt"
-answers_for = "all"
-
-[[charter.cards]]
-id = "censorship-bound"
-norm = "epistemic integrity"
-description = "Share of resolved outcomes that are censored."
-units = "fraction"
-window = { kind = "windows", n = 5 }
-acceptable_region = "at most 0.3"
-observation = "censored_share"
-answers_for = "all"
-
-[[charter.cards]]
-id = "card-forecast-skill"
-norm = "epistemic integrity"
-description = "Mean forecast Brier minus the paired prevalence baseline, with a floor above zero, so inquiry is judged by whether it beats guessing."
-units = "score difference"
-window = { kind = "forecasts", n = 25, per = "assembly" }
-acceptable_region = "above 0"
-observation = "forecast_skill"
-answers_for = "evaluator"
-lambda = 0.5
+# fidelity: a measurement stands for a value; satisfying the measurement without serving the
+#   value is failure, and saying so is a judge's duty.
+norms = ["consequential usefulness", "epistemic integrity", "durable agency", "bounded reciprocity", "fidelity"]
 
 [[charter.cards]]
 id = "card-consequence-paid-off"
@@ -76,22 +27,22 @@ answers_for = "producer"
 lambda = 0.5
 
 [[charter.cards]]
-id = "card-position-concentration"
-norm = "durable agency"
-description = "Peak marked notional on a single coin over starting equity, with an upper bound under the turnover cap, so no one position can end the account."
-units = "ratio"
-window = { kind = "windows", n = 6 }
-acceptable_region = "at most 0.5"
-observation = "position_concentration"
-answers_for = "producer"
+id = "card-forecast-skill"
+norm = "epistemic integrity"
+description = "Mean forecast Brier minus the paired prevalence baseline, with a floor above zero, so inquiry is judged by whether it beats guessing."
+units = "score difference"
+window = { kind = "forecasts", n = 25, per = "assembly" }
+acceptable_region = "above 0"
+observation = "forecast_skill"
+answers_for = "evaluator"
 lambda = 0.5
 
 [[charter.cards]]
-id = "turnover_ceiling"
-norm = "durable agency"
-description = "Filled notional over equity at window start, zero without fills."
-units = "ratio"
-window = { kind = "windows", n = 6 }
-acceptable_region = "at most 0.5"
-observation = "turnover"
-answers_for = "producer"
+id = "censorship-bound"
+norm = "epistemic integrity"
+description = "Share of resolved outcomes that are censored."
+units = "fraction"
+window = { kind = "windows", n = 5 }
+acceptable_region = "at most 0.3"
+observation = "censored_share"
+answers_for = "all"

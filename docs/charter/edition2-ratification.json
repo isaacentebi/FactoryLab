@@ -1,6 +1,6 @@
 {
-  "roster_sha256": "3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb",
-  "parent_charter_sha256": "929f1b04bee45155e74d196c80b1a6d764a75555fa4ecc5872beffc629578935",
+  "roster_sha256": "b68be19c7bedf5b31daafa4e85d3d32ded6540ab4996d7a7eec50a5b4fca4dbb",
+  "parent_charter_sha256": "a7f105eefd65ac70904b04b3389840841e6751b18bde3c5cc2262622b2b6be39",
   "conflicts": [],
   "calls": [
     {
@@ -10,22 +10,17 @@
         "role": "meta"
       },
       "model": "venice:deepseek-v4-1-flash",
-      "text": "{\"selected\": [\"tool-discipline\", \"well-formed-floor\", \"cost-cap\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-position-concentration\", \"turnover_ceiling\"], \"reason\": \"All eight cards passed the first survey with majority support and the preflight feedback is empty, so nothing requires revision; keeping each definition unchanged and selecting them together preserves the full, internally consistent set of norms (producer, evaluator, and all-role coverage) for edition 1.\"}",
+      "text": "{\"selected\": [\"card-consequence-paid-off\", \"card-forecast-skill\", \"censorship-bound\"], \"reason\": \"All three cards passed the first survey and have empty preflight feedback, so they can be jointly approved for edition 1 without any definition changes.\"}",
       "stop": "stop",
-      "cost_micro": 883,
-      "input_tokens": 1898,
-      "output_tokens": 114,
+      "cost_micro": 621,
+      "input_tokens": 1423,
+      "output_tokens": 58,
       "served_by": "venice:deepseek-v4-1-flash",
       "valid": true,
       "selected": [
-        "tool-discipline",
-        "well-formed-floor",
-        "cost-cap",
-        "censorship-bound",
-        "card-forecast-skill",
         "card-consequence-paid-off",
-        "card-position-concentration",
-        "turnover_ceiling"
+        "card-forecast-skill",
+        "censorship-bound"
       ]
     },
     {
@@ -34,23 +29,18 @@
         "assembly_id": "seed-observer",
         "role": "producer"
       },
-      "model": "z-ai/glm-5.3-flash",
-      "text": "{\"selected\": [\"tool-discipline\", \"well-formed-floor\", \"cost-cap\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-position-concentration\", \"turnover_ceiling\"], \"reason\": \"Preflight feedback is empty, so no card raised issues; approving all majority-backed definitions unchanged for edition 1.\"}\n",
+      "model": "deepseek/deepseek-v4.1-flash",
+      "text": "{\"selected\": [\"card-consequence-paid-off\", \"card-forecast-skill\", \"censorship-bound\"], \"reason\": \"All three majority-approved cards are mutually compatible, have no preflight conflicts, and together cover consequential usefulness and epistemic integrity with unchanged definitions.\"}",
       "stop": "stop",
-      "cost_micro": 193,
-      "input_tokens": 1024,
-      "output_tokens": 94,
-      "served_by": "z-ai/glm-5.3-flash",
+      "cost_micro": 216,
+      "input_tokens": 494,
+      "output_tokens": 56,
+      "served_by": "deepseek/deepseek-v4.1-flash",
       "valid": true,
       "selected": [
-        "tool-discipline",
-        "well-formed-floor",
-        "cost-cap",
-        "censorship-bound",
-        "card-forecast-skill",
         "card-consequence-paid-off",
-        "card-position-concentration",
-        "turnover_ceiling"
+        "card-forecast-skill",
+        "censorship-bound"
       ]
     },
     {
@@ -60,22 +50,17 @@
         "role": "evaluator"
       },
       "model": "venice:deepseek-v4-1-flash",
-      "text": "{\"selected\": [\"tool-discipline\", \"well-formed-floor\", \"cost-cap\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\", \"card-position-concentration\", \"turnover_ceiling\"], \"reason\": \"With no preflight feedback flagging any card, all eight majority-approved cards have distinct norms, units, windows, and observation keys, so they can ship together in edition 1 without overlap or unresolved conflicts.\"}",
+      "text": "{\"selected\": [\"card-consequence-paid-off\", \"card-forecast-skill\", \"censorship-bound\"], \"reason\": \"With no preflight feedback flagging any card, all three majority-approved cards form a coherent set: two floors that reward real consequences and beating guessing, plus a ceiling that keeps censorship from hollowing out that evidence.\"}",
       "stop": "stop",
-      "cost_micro": 859,
-      "input_tokens": 1898,
-      "output_tokens": 98,
+      "cost_micro": 167,
+      "input_tokens": 1423,
+      "output_tokens": 72,
       "served_by": "venice:deepseek-v4-1-flash",
       "valid": true,
       "selected": [
-        "tool-discipline",
-        "well-formed-floor",
-        "cost-cap",
-        "censorship-bound",
-        "card-forecast-skill",
         "card-consequence-paid-off",
-        "card-position-concentration",
-        "turnover_ceiling"
+        "card-forecast-skill",
+        "censorship-bound"
       ]
     },
     {
@@ -85,22 +70,16 @@
         "role": "evaluator"
       },
       "model": "openai/gpt-5.6-luna",
-      "text": "{\"selected\":[\"tool-discipline\",\"well-formed-floor\",\"cost-cap\",\"censorship-bound\",\"card-forecast-skill\",\"card-consequence-paid-off\",\"card-position-concentration\",\"turnover_ceiling\"],\"reason\":\"No preflight feedback identified any issue, so I approve the complete majority-supported set for edition 1.\"}",
+      "text": "{\"selected\":[\"card-consequence-paid-off\",\"censorship-bound\"],\"reason\":\"These definitions are operationally coherent as written; the forecast-skill card reverses the direction of Brier improvement because better forecasts score below the baseline, not above it.\"}",
       "stop": "stop",
-      "cost_micro": 469,
-      "input_tokens": 974,
-      "output_tokens": 228,
+      "cost_micro": 305,
+      "input_tokens": 487,
+      "output_tokens": 173,
       "served_by": "openai/gpt-5.6-luna",
       "valid": true,
       "selected": [
-        "tool-discipline",
-        "well-formed-floor",
-        "cost-cap",
-        "censorship-bound",
-        "card-forecast-skill",
         "card-consequence-paid-off",
-        "card-position-concentration",
-        "turnover_ceiling"
+        "censorship-bound"
       ]
     },
     {
@@ -110,31 +89,24 @@
         "role": "producer"
       },
       "model": "venice:deepseek-v4-1-flash",
-      "text": "{\"selected\": [\"well-formed-floor\", \"cost-cap\", \"censorship-bound\", \"card-forecast-skill\", \"card-consequence-paid-off\"], \"reason\": \"This subset keeps the integrity, cost, and truth-tracking measures that answer for all roles or the evaluator and lack redundant overlap, while omitting the producer-specific trading and tool cards whose definitions and preflight feedback are absent, so every included card is coherent and genuinely approved.\"}",
+      "text": "{\"selected\": [\"card-consequence-paid-off\", \"card-forecast-skill\", \"censorship-bound\"], \"reason\": \"All three cards passed the first survey with a majority and form a coherent set: two norm-anchored performance metrics (consequences paid off for producers, forecast skill for evaluators) plus a cross-cutting censorship bound that protects both norms from being gamed by attrition.\"}",
       "stop": "stop",
-      "cost_micro": 853,
-      "input_tokens": 1898,
-      "output_tokens": 94,
+      "cost_micro": 183,
+      "input_tokens": 1423,
+      "output_tokens": 83,
       "served_by": "venice:deepseek-v4-1-flash",
       "valid": true,
       "selected": [
-        "well-formed-floor",
-        "cost-cap",
-        "censorship-bound",
+        "card-consequence-paid-off",
         "card-forecast-skill",
-        "card-consequence-paid-off"
+        "censorship-bound"
       ]
     }
   ],
   "accepted": [
-    "tool-discipline",
-    "well-formed-floor",
-    "cost-cap",
-    "censorship-bound",
-    "card-forecast-skill",
     "card-consequence-paid-off",
-    "card-position-concentration",
-    "turnover_ceiling"
+    "card-forecast-skill",
+    "censorship-bound"
   ],
-  "charter_sha256": "929f1b04bee45155e74d196c80b1a6d764a75555fa4ecc5872beffc629578935"
+  "charter_sha256": "a7f105eefd65ac70904b04b3389840841e6751b18bde3c5cc2262622b2b6be39"
 }

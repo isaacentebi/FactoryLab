@@ -463,10 +463,10 @@ def test_edition2_testnet_manifest_carries_the_edition2_physics_and_hashes_stabl
     assert m.tick_interval_ns == 600_000_000_000
     # C1: the endowment sums. 90 USD in, 30 unlocked at genesis, the rest on days 7..42.
     assert m.initial_balance_micro == 90_000_000
-    assert m.endowment.locked_micro == 60_000_000
-    assert m.initial_balance_micro - m.endowment.locked_micro == 30_000_000
+    assert m.endowment.locked_micro == 50_000_000
+    assert m.initial_balance_micro - m.endowment.locked_micro == 40_000_000
     assert m.endowment.releases == tuple(
-        (day * NS_PER_DAY, 10_000_000) for day in (7, 14, 21, 28, 35, 42))
+        (day * NS_PER_DAY, 10_000_000) for day in (7, 14, 21, 28, 35))
     assert sum(amount for _, amount in m.endowment.releases) == m.endowment.locked_micro
     assert m.endowment.base_share == 0.8
     # The one-hour window, and the rent, blame and program prices at their stated values.
@@ -482,16 +482,20 @@ def test_edition2_testnet_manifest_carries_the_edition2_physics_and_hashes_stabl
     assert ceiling == 5_811 and 3 * ceiling <= m.evaluation.trial_amount_micro
     # The same nine seats and ten models as the compute-continuity roster.
     continuity = load_manifest("compute-continuity-testnet")
-    assert m.assemblies == continuity.assemblies and m.models == continuity.models
+    # Same roster as the compute-continuity manifest except the observer, moved to
+    # DeepSeek 4.1 flash after the calibration (docs/audits/v5/rehearsal.md).
+    changed = {(a.id, a.model_id) for a in m.assemblies} ^ {
+        (a.id, a.model_id) for a in continuity.assemblies}
+    assert changed == {("seed-observer", "deepseek/deepseek-v4.1-flash"),
+                       ("seed-observer", "z-ai/glm-5.3-flash")}
+    assert m.models == continuity.models
     assert m.treasury.reserve_address == continuity.treasury.reserve_address
-    # The eight draft cards and four norms, verbatim.
+    # The three draft cards and five norms, verbatim: every frugality card is gone because
+    # the wallet prices cost; fidelity gives judges the basis to mark down hollow compliance.
     assert [c.id for c in m.charter.cards] == [
-        "tool-discipline", "well-formed-floor", "cost-cap", "censorship-bound",
-        "card-forecast-skill", "card-consequence-paid-off", "card-position-concentration",
-        "turnover_ceiling",
-    ]
+        "card-consequence-paid-off", "card-forecast-skill", "censorship-bound"]
     assert m.charter.norms == ("consequential usefulness", "epistemic integrity",
-                               "durable agency", "bounded reciprocity")
+                               "durable agency", "bounded reciprocity", "fidelity")
     draft = tomllib.loads((WORLDS_DIR.parent / "docs/charter/edition2-draft.toml").read_text())
     raw = tomllib.loads((WORLDS_DIR / "edition2-testnet.toml").read_text())
     # The manifest carries the ratification's provenance digests beside the cards it
@@ -499,14 +503,14 @@ def test_edition2_testnet_manifest_carries_the_edition2_physics_and_hashes_stabl
     provenance = {k: raw["charter"].pop(k) for k in ("ratified_sha256", "roster_sha256")}
     assert raw["charter"] == draft["charter"]
     assert provenance == {
-        "ratified_sha256": "929f1b04bee45155e74d196c80b1a6d764a75555fa4ecc5872beffc629578935",
-        "roster_sha256": "3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb"}
+        "ratified_sha256": "a7f105eefd65ac70904b04b3389840841e6751b18bde3c5cc2262622b2b6be39",
+        "roster_sha256": "b68be19c7bedf5b31daafa4e85d3d32ded6540ab4996d7a7eec50a5b4fca4dbb"}
     # Ratified 15 September: the loader carries the digests and they equal the loaded cards.
     assert m.charter_ratified_sha256 == provenance["ratified_sha256"]
     assert m.charter_roster_sha256 == provenance["roster_sha256"]
     assert m.charter_content_sha256 == m.charter_ratified_sha256
     assert m.manifest_hash() == (
-        "9eb460e4b3d4c974feefbc7cd6a5e182defda231f4f33a5d3cb4ac060fa9d224")
+        "b184b1d8dc55daf56978ea51181be0d06e59493bef2727d97b2f67717efdbf8b")
 
 
 def test_prices_min_blame_share_is_optional_bounded_and_absent_from_the_hash_at_default():

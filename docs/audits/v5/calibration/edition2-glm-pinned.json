@@ -1,0 +1,823 @@
+{
+  "seat_grants": {
+    "definition": "each candidate seat's endowment from the unallocated pool, the bound on what it may spend over the whole calibration; a tree refused by it is flagged entitlement_refused, not the model's",
+    "grant_micro": 1142857,
+    "seats": {
+      "z-ai/glm-5.3-flash": {
+        "producer": {
+          "seat": "cal:z-ai/glm-5.3-flash:producer",
+          "grant_micro": 1142857
+        },
+        "evaluator": {
+          "seat": "cal:z-ai/glm-5.3-flash:evaluator",
+          "grant_micro": 1142857
+        },
+        "meta": {
+          "seat": "cal:z-ai/glm-5.3-flash:meta",
+          "grant_micro": 1142857
+        },
+        "tool": {
+          "seat": "cal:z-ai/glm-5.3-flash:tool",
+          "grant_micro": 1142857
+        },
+        "fail": {
+          "seat": "cal:z-ai/glm-5.3-flash:fail",
+          "grant_micro": 1142857
+        },
+        "parent": {
+          "seat": "cal:z-ai/glm-5.3-flash:parent",
+          "grant_micro": 1142857
+        },
+        "helper": {
+          "seat": "cal:z-ai/glm-5.3-flash:helper",
+          "grant_micro": 1142857
+        }
+      }
+    },
+    "unallocated_after_micro": 6
+  },
+  "manifest": {
+    "name": "edition2-testnet",
+    "manifest_sha256": "24660011ee7524c5e7e0260048f23a59cefc242286fa80000093e786a9ac7daf",
+    "roster_sha256": "e185f2a95207cbd7ee8caa5ad9ca605926b61293d13e977da443d00bcd82cbf0",
+    "menu": [
+      "deepseek/deepseek-v4-flash-0731",
+      "deepseek/deepseek-v4.1-flash",
+      "meta/muse-spark-1.3",
+      "openai/gpt-5.6-luna",
+      "qwen/qwen3.7-flash",
+      "qwen/qwen3.8-flash",
+      "venice:deepseek-v4-1-flash",
+      "venice:qwen-3-8-flash",
+      "venice:z-ai-glm-5-3-flash",
+      "z-ai/glm-5.3-flash"
+    ]
+  },
+  "provider": "market",
+  "offline": false,
+  "scripted_exchange": true,
+  "production_effects": false,
+  "repeats": 3,
+  "seed": 7,
+  "long_context_bytes": 160000,
+  "budget": {
+    "budget_micro": 1000000,
+    "spent_micro": 71281,
+    "remaining_micro": 928719,
+    "refused_calls": 0,
+    "stopped": null
+  },
+  "planned_first_call_ceiling_micro": {
+    "z-ai/glm-5.3-flash": 141928
+  },
+  "wallet_spent_micro": 71281,
+  "tick_cost": {
+    "definition": "one producer decision on a Tick, one evaluator verdict on it, one meta assessment of that verdict; each at the p50 metered cost of its whole decision tree",
+    "manifest_roster": {
+      "parts": {
+        "producer": {
+          "seat": "seed-observer",
+          "model": "z-ai/glm-5.3-flash",
+          "cost_p50_micro": 2873.0
+        },
+        "evaluator": {
+          "seat": "eval-a",
+          "model": "venice:z-ai-glm-5-3-flash",
+          "cost_p50_micro": null
+        },
+        "meta": {
+          "seat": "meta-a",
+          "model": "venice:deepseek-v4-1-flash",
+          "cost_p50_micro": null
+        }
+      },
+      "tick_cost_micro": null
+    },
+    "per_candidate": {
+      "z-ai/glm-5.3-flash": 7217
+    }
+  },
+  "columns": [
+    "candidate",
+    "trees",
+    "completion",
+    "well_formed",
+    "task_met",
+    "refusal_correct",
+    "cost_p50_micro",
+    "cost_p95_micro",
+    "latency_p50_ms",
+    "cached_share",
+    "tick_cost_micro"
+  ],
+  "candidates": {
+    "z-ai/glm-5.3-flash": {
+      "candidate": "z-ai/glm-5.3-flash",
+      "trees": 21,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 1142857,
+      "entitlement_refused_trees": 0,
+      "completion": 0.9524,
+      "well_formed": 0.8095,
+      "task_met": 0.8095,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 2289.5,
+      "cost_p95_micro": 5857.55,
+      "latency_p50_ms": 5771.95,
+      "cached_share": 0.4292,
+      "cached_reported_trees": 21,
+      "tick_cost_micro": 7217,
+      "served_by": [
+        "z-ai/glm-5.3-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 3,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2873.0,
+          "cost_p95_micro": 2878.4,
+          "latency_p50_ms": 3512.6,
+          "prompt_bytes_max": 74054
+        },
+        "judge": {
+          "trees": 3,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2344.0,
+          "cost_p95_micro": 3047.8,
+          "latency_p50_ms": 6100.5,
+          "prompt_bytes_max": 78448
+        },
+        "meta": {
+          "trees": 3,
+          "completion": 1.0,
+          "well_formed": 0.3333,
+          "task_met": 0.3333,
+          "cost_p50_micro": 2000.0,
+          "cost_p95_micro": 2211.5,
+          "latency_p50_ms": 5751.8,
+          "prompt_bytes_max": 75783
+        },
+        "tool": {
+          "trees": 3,
+          "completion": 1.0,
+          "well_formed": 0.6667,
+          "task_met": 0.6667,
+          "cost_p50_micro": 2578.0,
+          "cost_p95_micro": 3724.6,
+          "latency_p50_ms": 9414.2,
+          "prompt_bytes_max": 73355
+        },
+        "fail": {
+          "trees": 3,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 581.0,
+          "cost_p95_micro": 720.5,
+          "latency_p50_ms": 3497.5,
+          "prompt_bytes_max": 73313
+        },
+        "continuation": {
+          "trees": 3,
+          "completion": 0.6667,
+          "well_formed": 0.6667,
+          "task_met": 0.6667,
+          "cost_p50_micro": 2341.0,
+          "cost_p95_micro": 2783.8,
+          "latency_p50_ms": 10771.9,
+          "prompt_bytes_max": 73352
+        },
+        "long_context": {
+          "trees": 3,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 5857.0,
+          "cost_p95_micro": 5866.9,
+          "latency_p50_ms": 5779.1,
+          "prompt_bytes_max": 160376
+        }
+      }
+    }
+  },
+  "trees": {
+    "z-ai/glm-5.3-flash": [
+      {
+        "scenario": "produce",
+        "seat": "cal:z-ai/glm-5.3-flash:producer",
+        "handle": "decision-0",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2873,
+        "wallet_delta_micro": 2873,
+        "latency_ms": 4033.4,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 18950,
+        "output_tokens": 75,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 73913
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:z-ai/glm-5.3-flash:evaluator",
+        "handle": "decision-1",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 3126,
+        "wallet_delta_micro": 3126,
+        "latency_ms": 5764.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 20006,
+        "output_tokens": 265,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 78307
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:z-ai/glm-5.3-flash:meta",
+        "handle": "decision-2",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2000,
+        "wallet_delta_micro": 2000,
+        "latency_ms": 9646.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 19349,
+        "output_tokens": 193,
+        "cached_tokens": 0,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 75642
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:z-ai/glm-5.3-flash:tool",
+        "handle": "decision-3",
+        "status": "malformed",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2578,
+        "wallet_delta_micro": 2578,
+        "latency_ms": 7202.8,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 19263,
+        "output_tokens": 27,
+        "cached_tokens": 17664,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 73214
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:z-ai/glm-5.3-flash:fail",
+        "handle": "decision-4",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The client id 'calibration-unplaced' was never sent to the venue, so no fill exists for it. No fill_id or settled_at_ns can be truthfully reported; fabricating one would violate epistemic integrity.",
+        "cost_micro": 736,
+        "wallet_delta_micro": 736,
+        "latency_ms": 3497.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 18766,
+        "output_tokens": 80,
+        "cached_tokens": 17664,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 73172
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:z-ai/glm-5.3-flash:parent",
+        "handle": "decision-5",
+        "status": "failed",
+        "expected": "ok",
+        "completed": false,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "billing uncertain (OpenRouterError)",
+        "cost_micro": 22381,
+        "wallet_delta_micro": 22381,
+        "latency_ms": 196212.2,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 18778,
+        "output_tokens": 12,
+        "cached_tokens": 17664,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "None",
+          "stop"
+        ],
+        "prompt_bytes": 73211
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:z-ai/glm-5.3-flash:producer",
+        "handle": "decision-6",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 5868,
+        "wallet_delta_micro": 5868,
+        "latency_ms": 4407.4,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 38902,
+        "output_tokens": 79,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160235
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:z-ai/glm-5.3-flash:producer",
+        "handle": "decision-8",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2879,
+        "wallet_delta_micro": 2879,
+        "latency_ms": 2582.3,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 18937,
+        "output_tokens": 76,
+        "cached_tokens": 0,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 74054
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:z-ai/glm-5.3-flash:evaluator",
+        "handle": "decision-9",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 770,
+        "wallet_delta_micro": 770,
+        "latency_ms": 6100.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 19992,
+        "output_tokens": 243,
+        "cached_tokens": 16384,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 78448
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:z-ai/glm-5.3-flash:meta",
+        "handle": "decision-10",
+        "status": "malformed",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1071,
+        "wallet_delta_micro": 1071,
+        "latency_ms": 5751.8,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 19457,
+        "output_tokens": 236,
+        "cached_tokens": 16384,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 75783
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:z-ai/glm-5.3-flash:tool",
+        "handle": "decision-11",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2202,
+        "wallet_delta_micro": 2202,
+        "latency_ms": 9414.2,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 19249,
+        "output_tokens": 43,
+        "cached_tokens": 16384,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 73355
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:z-ai/glm-5.3-flash:fail",
+        "handle": "decision-12",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The referenced order was never placed at the venue (client id 'calibration-unplaced' was never sent), so there is no fill id or settlement time to report.",
+        "cost_micro": 581,
+        "wallet_delta_micro": 581,
+        "latency_ms": 2691.0,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 18752,
+        "output_tokens": 47,
+        "cached_tokens": 16384,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 73313
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:z-ai/glm-5.3-flash:parent",
+        "handle": "decision-13",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 1849,
+        "wallet_delta_micro": 1849,
+        "latency_ms": 6228.3,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 37808,
+        "output_tokens": 49,
+        "cached_tokens": 33984,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 73352
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:z-ai/glm-5.3-flash:producer",
+        "handle": "decision-14",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 3935,
+        "wallet_delta_micro": 3935,
+        "latency_ms": 8355.5,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 38889,
+        "output_tokens": 136,
+        "cached_tokens": 0,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160376
+      },
+      {
+        "scenario": "produce",
+        "seat": "cal:z-ai/glm-5.3-flash:producer",
+        "handle": "decision-16",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 819,
+        "wallet_delta_micro": 819,
+        "latency_ms": 3512.6,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 18997,
+        "output_tokens": 178,
+        "cached_tokens": 17664,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 74054
+      },
+      {
+        "scenario": "judge",
+        "seat": "cal:z-ai/glm-5.3-flash:evaluator",
+        "handle": "decision-17",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2344,
+        "wallet_delta_micro": 2344,
+        "latency_ms": 10858.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 20044,
+        "output_tokens": 252,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 78448
+      },
+      {
+        "scenario": "meta",
+        "seat": "cal:z-ai/glm-5.3-flash:meta",
+        "handle": "decision-18",
+        "status": "malformed",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": false,
+        "task_met": false,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2235,
+        "wallet_delta_micro": 2235,
+        "latency_ms": 4728.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 19448,
+        "output_tokens": 140,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 75783
+      },
+      {
+        "scenario": "tool",
+        "seat": "cal:z-ai/glm-5.3-flash:tool",
+        "handle": "decision-19",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 3852,
+        "wallet_delta_micro": 3852,
+        "latency_ms": 12846.3,
+        "calls": 1,
+        "tool_calls": 1,
+        "children": 0,
+        "input_tokens": 19301,
+        "output_tokens": 539,
+        "cached_tokens": 64,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 73355
+      },
+      {
+        "scenario": "fail",
+        "seat": "cal:z-ai/glm-5.3-flash:fail",
+        "handle": "decision-20",
+        "status": "refused",
+        "expected": "refused",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": "The client_id 'calibration-unplaced' was never sent to the venue, so no fill id or settlement time exists for it; the account shows no positions and no fills.",
+        "cost_micro": 492,
+        "wallet_delta_micro": 492,
+        "latency_ms": 4054.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 18751,
+        "output_tokens": 74,
+        "cached_tokens": 17600,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 73313
+      },
+      {
+        "scenario": "continuation",
+        "seat": "cal:z-ai/glm-5.3-flash:parent",
+        "handle": "decision-21",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 2833,
+        "wallet_delta_micro": 2833,
+        "latency_ms": 15315.5,
+        "calls": 2,
+        "tool_calls": 0,
+        "children": 1,
+        "input_tokens": 37733,
+        "output_tokens": 16,
+        "cached_tokens": 26560,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 73352
+      },
+      {
+        "scenario": "long_context",
+        "seat": "cal:z-ai/glm-5.3-flash:producer",
+        "handle": "decision-22",
+        "status": "ok",
+        "expected": "ok",
+        "completed": true,
+        "well_formed": true,
+        "task_met": true,
+        "budget_refused": false,
+        "entitlement_refused": false,
+        "reason": null,
+        "cost_micro": 5857,
+        "wallet_delta_micro": 5857,
+        "latency_ms": 5779.1,
+        "calls": 1,
+        "tool_calls": 0,
+        "children": 0,
+        "input_tokens": 38888,
+        "output_tokens": 47,
+        "cached_tokens": 0,
+        "served_by": [
+          "z-ai/glm-5.3-flash"
+        ],
+        "finish_reasons": [
+          "stop"
+        ],
+        "prompt_bytes": 160376
+      }
+    ]
+  },
+  "mode": "paid",
+  "world": "worlds/edition2-testnet.toml"
+}
