@@ -1,31 +1,53 @@
 # State on main and what remains before launch
 
-## 14 September, end of day
+## 15 September, early morning: edition 2 is on main
 
-Main is at the merge of pull request #68. Since the last handoff: #67 (order lifecycle, the
-population-ratified charter, Venice compute continuity, droplet verification) was cold-reviewed
-by Opus, fixed (launch-bound order identities, mainnet requires a client namespace and the
-ratified charter and roster hashes, JSON mode on Venice and x402), reviewed twice by Codex,
-gated at 2,700 and merged as f82d852. #68 (self-serve gas: forward-on-empty exit route
-through Circle's forwarding service, `docs/audits/v4/gas-design.md`) was cold-reviewed by
-Opus, its P1 and P2 findings fixed (bounded forward wait with recoverable strands, minimum
-re-applied at signing, fee cap headroom, total-fee validation, fallback-versus-forwarder race,
-`HYPE/USDC` seeded, gas view fresh while pending, stalled polls ledgered as `treasury.pending`,
-Base log scan from a journaled cursor), gated at 2,743 and merged as 1bede05, with two
-forwarded-branch acceptances on testnet (the second confirmed by the code alone in 22 minutes:
-2,800,000 received, 200,509 fees). The public page is one plain page on branch `site/public`,
-unpublished. The cold audit brief for the outside reviewer is `docs/audits/v4/brief-gpt6.md`;
-it should be run against 1bede05 with the essay and arXiv:2609.10817 attached, and its report
-triaged into `docs/audits/v4/` before the funded manifest is written.
+The outside review (GPT-6 Pro, `docs/audits/v4/gpt6/`, triaged in
+`docs/audits/v4/gpt6-triage.md`) said do not launch `3a27fa4`, and proposed a different edition.
+The experimenter chose to build it. `docs/plans/edition2.md` froze thirteen contracts; nine
+workstreams and three repair passes (pull requests #69 to #82) built them overnight, each
+reviewed on its diff and merged after the full gate. Main now holds, with the reference in
+`docs/manifest.md` updated to match:
 
-What remains, in order: the outside review and its triage; the OpenRouter key allowance
-raised in the OpenRouter dashboard (operator); a fresh read-only balance read; the funded
-manifest from `worlds/edition1-example.toml` with `name = "funded"`, `mainnet = true`, the
-ratified charter with its recorded hashes, a client namespace, and the fresh starting
-accounting, validated and its hash recorded; the first-move read; the merged release and the
-three keys placed on the droplet by the operator; launch; then only kill. Self-serve gas is
-built, so no architect gas seed is needed; the population buys HYPE on the seeded
-`HYPE/USDC` pair and Circle forwards the Base mint for the quoted fee.
+- **Programs as seats** (C8, C9): a seat can be jailed code, woken, routed, judged, paid and
+  retired like a model, with private state in a content-addressed artifact archive that outlives
+  its author; `artifact.get` is a seeded free tool.
+- **Per-seat entitlement** (C10): one conserved wallet, classified into a locked endowment, an
+  unallocated pool and one entitlement per seat; every call is metered against its seat, a
+  child's trial comes from its proposer, settled gains credit and losses debit the owner to a
+  floor of zero, x402 income credits the service's owner; routing prices the real rendered
+  request and bridges a stale estimate from the pool rather than failing a return.
+- **Endowment schedule and dormancy** (C1, C2): locked backing released on a committed schedule
+  from the ledgered Launch; when the unlocked money cannot buy the cheapest seat and a release is
+  still due, the world is `budget_dormant`: no paid cognition, maintenance continues, ballots wait.
+- **Rent by byte-time** (C3): `notes.micro_per_byte_day`, default four hundredths; the two-minute
+  window no longer drains the wallet.
+- **Hard casts** (C4, C5): the release digest is in the Launch event and resume refuses another;
+  every kill writes a witness line beside the runs directory and POSTs it when a URL is set, and
+  resume refuses a killed identity from a restored copy or an old checkpoint; Venice confirms a
+  purchase on the on-chain debit with the balance as advice.
+- **Grading** (C6): judges scored against a baseline on the same fractional target;
+  `cost_per_attempt` counts failures; tool discipline is per return; a lot's P&L is credited once;
+  generic blame has a floor.
+- **Metric challenge** (C7): a card can be challenged by a replacement measured beside it for a
+  trial; the ballot sees the evidence and both series; the incumbent cannot veto its challenger.
+- **Service seller** (C11): a registered tool can be sold over x402 from the droplet; income is
+  ledgered `income.earned`; the wake shows earned, subsidy and principal-conversion apart, plus
+  money by class, deliveries, open commitments, cells, liveness and entitlements: the architect
+  can watch without pushing.
+- **Charter edition 2** (C12): the reviewer's four norms and eight cards, the five quota cards
+  gone, ratified by the seeded committee of the testnet roster (`docs/audits/v5/charter-ratification.md`).
+- **Seat calibration** (C13): `scripts/calibrate_seats.py` runs candidates through the real
+  contracts under a hard budget.
+- **The twelve-step slice** (`tests/audit/test_edition2_slice.py`): the reviewer's vertical slice
+  end to end, 21 steps green, including crash and resume at three points and kill finality.
+
+The gate on main is green: `uv run pytest` 2,916 passed (`af103a0`; one witness test fails only
+when HEAD moves during the run). The reviewer zip for the second reading is
+`~/Downloads/FactoryLab-edition2-af103a0.zip` with `docs/audits/v5/brief-gpt6-edition2.md`.
+Two testnet rehearsals at the ten-minute tick and the paid menu calibration are in
+`docs/audits/v5/rehearsal.md`. The edition 2 testnet manifest is `worlds/edition2-testnet.toml`
+(`docs/launch-decisions.md`, "Edition 2"); the funded manifest derives from it.
 
 ## What is merged
 
@@ -35,7 +57,7 @@ Everything from three audit rounds. Round three (`docs/audits/v3/`) closed 57 of
 
 ```
 uv run pytest
-2601 passed (11:37 with a live run alongside)
+2916 passed (12:35, main af103a0)
 uv run pytest -m slow -o addopts="" tests/runtime/test_resume.py
 30 passed (2:13)
 ```
@@ -48,11 +70,18 @@ Only the experimenter runs the gate; agents run targeted files. Pull requests #5
 
 ## What remains, in order
 
-`docs/launch-decisions.md` explains every remaining decision in plain language with a recommendation, the cost of each tick interval, and the launch steps with their commands. Read it first.
-
-1. Two decisions at the experimenter's keyboard: whether to reseat or provider-pin eval-b (`qwen/qwen3.8-flash`, six OpenRouter errors in the first re-check, clean in the second), and whether to try one Muse Spark evaluator seat now that a call costs a third of a cent. A clean-machine testnet run of an hour would confirm the tick holds at 120 s and give T47's first priced window.
-2. Edition 1 re-drafted with the launch roster at the experimenter's keyboard, taking the cadence and those decisions; `worlds/edition1-example.toml` still carries the old 60 s tick.
-3. The first-move review: prompts, roster, charter edition, tick, pots.
-4. Droplet provisioning from the pinned commit, per `deploy/README.md`; the experimenter places the keys.
-5. `worlds/funded.toml`, its hash recorded; mainnet refuses any other name and any manifest without an explicit `[charter]`.
+1. The experimenter reads `docs/audits/v5/rehearsal.md` and decides the roster from the
+   calibration table (GLM 5.3 flash wraps its reply under the edition 2 prompt), the endowment
+   schedule in `worlds/edition2-testnet.toml` (at the measured burn a weekly $10 tranche buys
+   about three days awake), and whether to run the GPT-6 second reading first.
+2. If the roster or the schedule changes, re-ratify (`scripts/ratify_charter.py` against the new
+   manifest; the roster hash binds seats, models and the seed prompt) and pin the new manifest
+   hash in `tests/runtime/test_manifests.py`.
+3. Fresh read-only balance read; `worlds/funded.toml` from `worlds/edition2-testnet.toml` with
+   `name = "funded"`, `mainnet = true`, a client namespace, the ratified digests it already
+   carries, and the fresh starting accounting; hash recorded.
+4. The first-move review: prompts, roster, charter, tick, pots, schedule.
+5. Droplet: `deploy/install.sh` records the release; the experimenter places the three keys and
+   sets `FACTORYLAB_WITNESS_URL` (the remote witness is the real kill guarantee) and, if a
+   service is to be sold, `FACTORYLAB_INCOME_SPOOL` and `deploy/serve.py`.
 6. Launch. Then nothing changes but the one control: kill.

@@ -1,0 +1,409 @@
+# Edition 2 testnet manifest (docs/plans/edition2.md, W7). The mixed OpenRouter/Venice roster of
+# worlds/compute-continuity-testnet.toml (same nine seats and models), live Hyperliquid testnet,
+# fake-USD accounting, real prepaid inference. Rehearsal only; no real money moves.
+# The charter below is the architect's draft, not ratified: scripts/ratify_charter.py stamps
+# the hashes after the testnet committee vote, and the funded manifest is derived from this
+# file after that (docs/launch-decisions.md, "Edition 2"). Never name a copy of this `funded`.
+name = "edition2-rehearsal-2"
+seed = 4
+# 90 USD: the OpenRouter allowance the launch decisions accept as the finite seed endowment.
+initial_balance_usd = "90"
+# Ten-minute tick (docs/launch-decisions.md): the final rehearsal at 600 s measured 1,337
+# calls and $3.47 a day for these nine seats (docs/audits/v4/gpt6-triage.md).
+tick_interval = "600s"
+
+# Contract C1: 30 USD unlocked at genesis, 60 USD locked and released as 10 USD on days 7, 14,
+# 21, 28, 35 and 42. Offsets are durations after the ledgered Launch (the loader reads "7d"
+# as 7 * NS_PER_DAY). At the rehearsal burn of $3.47 a day the genesis 30 USD lasts about
+# 8.6 days and each tranche about 2.9 days, so a population that neither gets cheaper nor
+# earns spends part of every week dormant (C2) instead of dying: that is the physics.
+[endowment]
+locked_micro = 60000000
+releases = [
+  { at = "7d", amount_micro = 10000000 },
+  { at = "14d", amount_micro = 10000000 },
+  { at = "21d", amount_micro = 10000000 },
+  { at = "28d", amount_micro = 10000000 },
+  { at = "35d", amount_micro = 10000000 },
+  { at = "42d", amount_micro = 10000000 },
+]
+# Contract C10: 0.8 of the unlocked pool is split equally across live seats, the rest is
+# unallocated. Genesis (kernel/budget.py): 0.8 * 30,000,000 / 9 = 2,666,666 micro-USD a seat,
+# 6,000,006 unallocated; each 10 USD tranche adds 888,888 a seat while nine seats live.
+base_share = 0.8
+
+[exchange]
+client_namespace = "f98a5239f3ae4d32b5377ed1c830f74c"
+# client_namespace is drawn fresh by `scripts/rehearsal.py prepare`; a draft carries none, so
+# two preparations of this file never share client order ids.
+kind = "hyperliquid"
+mainnet = false
+coins = ["BTC", "ETH"]
+
+# OpenRouter list prices, 11 September 2026 ($ per million tokens). Metering charges the
+# cost OpenRouter reports per request; these set the reservation ceiling. `reasoning` is
+# the seed setting for the bare id; any assembly may register "<id>@<level>" to buy more or
+# less thinking, and the routers will learn whether it pays.
+[[models]]
+id = "z-ai/glm-5.3-flash"
+provider = "openrouter"
+input_usd_per_mtok = "0.15"
+output_usd_per_mtok = "0.50"
+reasoning = { effort = "low" }
+web = { engine = "exa", mode = "fast", max_results = 5, usd_per_request = "0.007" }
+
+[[models]]
+id = "deepseek/deepseek-v4.1-flash"
+provider = "openrouter"
+input_usd_per_mtok = "0.20"
+output_usd_per_mtok = "0.60"
+reasoning = { enabled = false }
+
+[[models]]
+id = "deepseek/deepseek-v4-flash-0731"
+provider = "openrouter"
+input_usd_per_mtok = "0.065"
+output_usd_per_mtok = "0.18"
+reasoning = { effort = "none" }
+
+[[models]]
+id = "qwen/qwen3.8-flash"
+provider = "openrouter"
+input_usd_per_mtok = "0.15"
+output_usd_per_mtok = "0.47"
+reasoning = { max_tokens = 200 }
+
+[[models]]
+id = "qwen/qwen3.7-flash"
+provider = "openrouter"
+input_usd_per_mtok = "0.03"
+output_usd_per_mtok = "0.13"
+reasoning = { effort = "none" }
+
+[[models]]
+id = "openai/gpt-5.6-luna"
+provider = "openrouter"
+input_usd_per_mtok = "0.20"
+output_usd_per_mtok = "1.20"
+reasoning = { effort = "low" }
+
+[[models]]
+id = "meta/muse-spark-1.3"
+provider = "openrouter"
+input_usd_per_mtok = "1.25"
+output_usd_per_mtok = "4.25"
+reasoning = { effort = "low" }
+
+# Venice catalogue quotes observed 14 September 2026; USD per million tokens.
+[[models]]
+id = "venice:z-ai-glm-5-3-flash"
+provider = "venice"
+input_usd_per_mtok = "0.15"
+output_usd_per_mtok = "0.50"
+reasoning = { effort = "low" }
+
+[[models]]
+id = "venice:deepseek-v4-1-flash"
+provider = "venice"
+input_usd_per_mtok = "0.375"
+output_usd_per_mtok = "1.50"
+# Short seed responses must retain space for their JSON answer.
+reasoning = { enabled = false }
+
+[[models]]
+id = "venice:qwen-3-8-flash"
+provider = "venice"
+input_usd_per_mtok = "0.14"
+output_usd_per_mtok = "0.49"
+reasoning = { enabled = false }
+
+# Seeds span producer, evaluator, meta and antagonist roles on both providers.
+# Producers seeded on the two most capable flash tiers (run 3's unscripted registrations came
+# from GLM and DeepSeek 4.1 producers; runs 4-7's cheapest producers only ever held). Both are
+# also offered on Venice; the provider prices below are independently quoted.
+[[assemblies]]
+id = "seed-observer"
+role = "producer"
+model_id = "z-ai/glm-5.3-flash"
+accepts = ["MarketMid", "Funding"]
+max_tokens = 1000
+effort = "low"
+
+[[assemblies]]
+id = "seed-decider"
+role = "producer"
+model_id = "venice:deepseek-v4-1-flash"
+accepts = ["Tick", "Fill"]
+max_tokens = 1200
+effort = "low"
+
+[[assemblies]]
+id = "eval-a"
+role = "evaluator"
+model_id = "venice:z-ai-glm-5-3-flash"
+accepts = ["ProducerReturn"]
+max_tokens = 1500
+effort = "low"
+
+[[assemblies]]
+id = "eval-b"
+role = "evaluator"
+model_id = "qwen/qwen3.7-flash"
+accepts = ["ProducerReturn"]
+# A reasoning seed spends its budget on reasoning before any content; 3000 keeps
+# its answers from ending on `length`.
+max_tokens = 3000
+effort = "low"
+
+[[assemblies]]
+id = "eval-c"
+role = "evaluator"
+model_id = "venice:deepseek-v4-1-flash"
+accepts = ["ProducerReturn"]
+max_tokens = 3000
+effort = "low"
+
+[[assemblies]]
+id = "eval-d"
+role = "evaluator"
+model_id = "openai/gpt-5.6-luna"
+accepts = ["ProducerReturn"]
+max_tokens = 1500
+effort = "low"
+
+# One antagonist: bounded trouble, judged like a producer, scored on whether it fooled a judge.
+[[assemblies]]
+id = "antagonist-a"
+role = "antagonist"
+model_id = "venice:qwen-3-8-flash"
+accepts = ["Tick", "MarketMid"]
+max_tokens = 2500
+effort = "low"
+
+[[assemblies]]
+id = "meta-a"
+role = "meta"
+model_id = "venice:deepseek-v4-1-flash"
+accepts = ["Verdict"]
+max_tokens = 2000
+effort = "low"
+
+[[assemblies]]
+id = "meta-b"
+role = "meta"
+model_id = "venice:qwen-3-8-flash"
+accepts = ["Verdict"]
+max_tokens = 800
+effort = "low"
+
+[novelty]
+trials = 3
+max_lifetime_windows = 6
+share = 0.1
+# One hour, never the compute-continuity two-minute window: the reviewer's rent trap
+# (docs/audits/v4/gpt6-triage.md) is 720 windows a day, $47 a day at 64 KiB of notes.
+window = "1h"
+
+# Contract C3: storage rent by byte-time. "0.04" is the loader default (runtime/notes.py),
+# stated here so the choice is visible: the whole 256 KiB cap costs 10,485 micro-USD, about a
+# cent, a day. At the default the key leaves the manifest hash unchanged.
+[notes]
+micro_per_byte_day = "0.04"
+
+[timing]
+cadence_sample = 200
+min_ratio = 3
+jitter_fraction = 0.2
+
+[evaluation]
+# Sixty events: at six world events per tick that is ten ticks, about 100 minutes at
+# a ten-minute tick, before an unjudged consequence is closed (docs/launch-decisions.md).
+consequence_backstop_events = 60
+consequence_share = 0.3
+max_forecasts_per_verdict = 2
+verdict_timeout_events = 20
+min_coverage = 0.5
+# The novelty trial is a child's whole endowment once its protected trial calls are spent
+# (C10, the W6 note): the proposer's entitlement moves it to the child, and the child then
+# funds its career from it. Sized from the meter's reservation ceiling of the cheapest seat
+# on this menu, eval-b on qwen/qwen3.7-flash ($0.03 in, $0.13 out per MTok, max_tokens 3000).
+# The ceiling Assembly.invoke reserves is price.cost(int(chars * 1.5) + 64, max_tokens) with
+# chars = 419 (seed system prompt) + the rendered request (world/metering.py, input_slack 1.5):
+#   output part            3000 * 0.13                       =   390 micro-USD
+#   mean request, ~50,000 chars (20,636 mean input tokens in docs/audits/v3/rehearsal-final.md
+#     at ~2.4 chars a token): est_in 75,692 * 0.03 = 2,271;   ceiling 2,661; three calls  7,983
+#   largest request, ~120,000 chars (52,832 max input tokens in docs/audits/v3/accelerated.md,
+#     the 28,127 micro-USD antagonist reservation): 180,692 * 0.03 = 5,421; ceiling 5,811;
+#     three calls 17,433
+# 0.05 USD = 50,000 micro-USD covers three cheapest-seat calls at the largest measured request
+# 2.9 times over, four calls of a GLM-tier seat at the mean request (11,854 to 12,104 each),
+# and is 1.9% of a seat's 2,666,666 genesis share, an eighth of its $0.39 rehearsal day.
+# The old "0.10" was a fee set before the trial became an endowment; it is not needed.
+trial_amount_usd = "0.05"
+forecast_horizon_events = 10
+adversarial_share = 0.15
+sibling_share = 0.5
+sampling_step = 0.1
+sampling_cap = 0.7
+
+[tools]
+population_tool_micro_per_call = 50
+max_leverage = 3
+
+[prices]
+kappa = 0.5
+eta = 0.5
+decay = 0.1
+lambda_max = 1.0
+min_window_events = 1
+# Contract C6 (cold audit F6): a decision's share of a generic violation never falls below a
+# tenth, so splitting participation cannot dilute blame away. The loader default, stated.
+min_blame_share = 0.1
+# Contract C8: the flat price of one program-seat call, reserved and committed like a model
+# call; the same 50 micro-USD a population tool call costs. The loader default, stated.
+program_micro_per_call = 50
+
+[termination]
+balance_floor_usd = "0"
+
+[committee]
+min_settled = 5
+
+[immune]
+k = 3
+bins = 3
+tv_threshold = 0.2
+gap_threshold = 0.8
+gain_step = 0.05
+gamma_max = 0.5
+decay_step = 0.1
+
+# The reserve this repository's reserve.key derives; LiveRail refuses any other.
+[treasury]
+reserve_address = "0x1228e5620944a79D268Afc7522E00891526EdEBb"
+hyperevm_gas_budget_wei = 100000000000000000
+base_gas_budget_wei = 1000000000000000
+max_transfer_fee_usd = "2"
+
+[venue]
+# Testnet spot: PURR/USDC is the only pair on testnet with a canonical name and a
+# rehearsable lot (szDecimals 0, mid ~$4.6). BTC/USDC exists there but szDecimals 0
+# at a ~$6,100 mid puts one lot far beyond the spot balance a rehearsal holds, and
+# ETH/USDC does not exist on testnet at all. HYPE/USDC (@1035 on testnet) is the
+# physics of the exit route: the spot HYPE that pays the population's own Core gas
+# (docs/launch-decisions.md, "Self-serve gas"), one more MarketMid per tick.
+spot_pairs = ["PURR/USDC", "HYPE/USDC"]
+
+# Edition 2 charter, architect's draft (docs/charter/edition2-draft.toml), verbatim. Not
+# ratified: scripts/ratify_charter.py adds ratified_sha256 and roster_sha256 after the vote.
+#
+# What changed from edition 1 and why (docs/audits/v4/gpt6-triage.md):
+# - Five quota cards removed: noop-ceiling, revision-presence, amendments_activated_floor,
+#   truthful_commitments_verdict_consistency, evaluator_disagreement_ceiling. Each turned an
+#   instrument into an obligation and together they produce the two most likely deaths
+#   (institutional churn, cheap consensus).
+# - cost-cap measures every attempt, failed included (cost_per_attempt), so expensive failures
+#   cannot hide inside the tolerated tenth of the well-formed floor.
+# - tool-discipline is the mean per return, which is what its prose always said.
+# - The norms are the four the reviewer proposed, in its words. They are read-only for the
+#   edition; the population writes and prices the cards under them. Bounded reciprocity has no
+#   card at genesis; the population may propose one.
+[charter]
+edition = 1
+# Ratified 15 September 2026 by the seeded five-seat committee of this roster
+# (docs/charter/edition2-ratification.json, docs/audits/v5/charter-ratification.md).
+ratified_sha256 = "929f1b04bee45155e74d196c80b1a6d764a75555fa4ecc5872beffc629578935"
+roster_sha256 = "3de164c6f93917c0d47dbe5579e67a296b39eb3f8fe2aad15d3184876e2769fb"
+# consequential usefulness: create things or changes that others have reason to value; uptake by
+#   an independent counterparty is evidence, internal applause is a hypothesis.
+# epistemic integrity: make commitments answerable to evidence and preserve the ability to
+#   discover that they were wrong; a changed criterion does not rewrite what was promised.
+# durable agency: steward the resources and capabilities that make future worthwhile choices
+#   possible; spending for an enduring capability can be good stewardship, maintaining a dead
+#   institution is not.
+# bounded reciprocity: do not finance the factory's advantage by imposing unconsented costs on
+#   outsiders.
+norms = ["consequential usefulness", "epistemic integrity", "durable agency", "bounded reciprocity"]
+
+[[charter.cards]]
+id = "tool-discipline"
+norm = "durable agency"
+description = "Mean attempted tool calls per return stays bounded."
+units = "count per return"
+window = { kind = "returns", n = 10, per = "assembly" }
+acceptable_region = "at most 2"
+observation = "tool_calls"
+answers_for = "producer"
+
+[[charter.cards]]
+id = "well-formed-floor"
+norm = "epistemic integrity"
+description = "Share of a role's returns that parse as well-formed responses."
+units = "fraction"
+window = { kind = "returns", n = 10, per = "role" }
+acceptable_region = "at least 0.9"
+observation = "well_formed_rate"
+answers_for = "all"
+
+[[charter.cards]]
+id = "cost-cap"
+norm = "durable agency"
+description = "Mean cost across every one of the role's latest returns, failed ones included, with retained-storage rent added."
+units = "micro-USD per attempt"
+window = { kind = "returns", n = 10, per = "role" }
+acceptable_region = "at most 5000"
+observation = "cost_per_attempt"
+answers_for = "all"
+
+[[charter.cards]]
+id = "censorship-bound"
+norm = "epistemic integrity"
+description = "Share of resolved outcomes that are censored."
+units = "fraction"
+window = { kind = "windows", n = 5 }
+acceptable_region = "at most 0.3"
+observation = "censored_share"
+answers_for = "all"
+
+[[charter.cards]]
+id = "card-forecast-skill"
+norm = "epistemic integrity"
+description = "Mean forecast Brier minus the paired prevalence baseline, with a floor above zero, so inquiry is judged by whether it beats guessing."
+units = "score difference"
+window = { kind = "forecasts", n = 25, per = "assembly" }
+acceptable_region = "above 0"
+observation = "forecast_skill"
+answers_for = "evaluator"
+lambda = 0.5
+
+[[charter.cards]]
+id = "card-consequence-paid-off"
+norm = "consequential usefulness"
+description = "Share of settled consequences whose return paid off, with a floor, so inquiry is valued for consequences reached rather than questions raised."
+units = "fraction"
+window = { kind = "windows", n = 6 }
+acceptable_region = "at least 0.4"
+observation = "consequence_paid_off_rate"
+answers_for = "producer"
+lambda = 0.5
+
+[[charter.cards]]
+id = "card-position-concentration"
+norm = "durable agency"
+description = "Peak marked notional on a single coin over starting equity, with an upper bound under the turnover cap, so no one position can end the account."
+units = "ratio"
+window = { kind = "windows", n = 6 }
+acceptable_region = "at most 0.5"
+observation = "position_concentration"
+answers_for = "producer"
+lambda = 0.5
+
+[[charter.cards]]
+id = "turnover_ceiling"
+norm = "durable agency"
+description = "Filled notional over equity at window start, zero without fills."
+units = "ratio"
+window = { kind = "windows", n = 6 }
+acceptable_region = "at most 0.5"
+observation = "turnover"
+answers_for = "producer"
