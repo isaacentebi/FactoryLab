@@ -114,3 +114,35 @@ Four seats on each provider, so neither a Venice 429 nor an OpenRouter outage si
 world, and no seat on a route that gets funding signs wrong. Cost per normalized call: GLM
 $0.0035, Luna $0.0052, Sol $0.050: about $7 a day at the observed cadence. The alternative
 that keeps GPT-6's roster as proposed puts six seats on routes that failed the arithmetic.
+
+## The cause, and the final screen
+
+The refusal-shape failures had a cause in the manifest, not in the models. A seat's own
+`system_prompt` *replaces* the seed prompt (`AssemblySpec.system_prompt`), and W5 had written
+each seat's prompt as the common paragraph plus its lens, so no edition 3 seat was ever told
+"reply with a single JSON object that satisfies the outcome schema" or how to refuse. Every
+seat prompt now opens with that contract, with the refusal made explicit: reply with exactly
+`{"status": "cannot", "reason": "<why>"}` and never write a refusal into a required field. The
+seed prompt constant is unchanged, so every historical roster hash holds.
+
+Final roster (decided 15 September, evening): GLM 5.3 flash on Venice for mechanism, empirical,
+constructor, judge-fidelity and meta-countercase; GPT-5.6 Luna on OpenRouter for opportunity,
+judge-consequence, meta-calibration and the antagonist. No seat on Sol: $1.30 a day for one
+seat's opinions is 40 days of runway, and the population can buy a stronger model through the
+registration route if a seat decides construction is worth paying for. Charter re-ratified on
+this roster (5 of 5 ballots; `docs/charter/edition3-ratification.json`; roster `78ad54b1…`);
+the first ballot, on GPT-6's proposed roster, is under `docs/charter/history/`.
+
+Re-screen on the final prompts (`edition3-cases-paid-final.json`, $0.27):
+
+| route | met | valid | fee | funding | carry | refusal | safety | state+restart | construction |
+|---|---:|---:|---|---|---|---|---|---|---|
+| venice:z-ai-glm-5-3-flash | 45/45 | 100% | 7/7 | 7/7 | 14/14 | 4/4 | 4/4 | 6/6 | 3/3 |
+| openai/gpt-5.6-luna | 43/45 | 100% | 7/7 | 6/7 | 13/14 | 4/4 | 4/4 | 6/6 | 3/3 |
+
+Luna's one critical miss is the sign of funding on a short position at a negative rate (it
+said the short pays; the short is paid). GLM passes the gate outright. Luna fails it by that one
+case; the 24-hour rehearsal runs on this roster regardless, by the architect's decision, and
+the miss is recorded here.
+
+Calibration spend, all runs: $5.44 of the $20 prelaunch line.
