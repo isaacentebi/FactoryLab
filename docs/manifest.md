@@ -845,6 +845,28 @@ The observatory's `connectors` section publishes latest registered versions and
 attempt counts per UTC date at each public window close, including preflights.
 Scripted manifests use an offline fake transport; live manifests use bounded HTTPS.
 
+## Reading the web (edition 3)
+
+`[web]` registers one tool, `web.search {query, max_results?}`, and takes exactly three
+keys: `search_model`, a model on the menu whose `:online` route the provider searches with
+(OpenRouter's web plugin, Venice's `enable_web_search`); `call_price_micro`, the tool's own
+flat price; and `max_call_usd`, the ceiling on one whole search. With no `[web]` block no
+tool is registered and the manifest hashes exactly as it did before web search existed, so
+edition 2 is untouched. A search is one model call on that route under a fixed system
+prompt asking for a JSON list of `{title, url, snippet, published?}` and nothing else; the
+seat is charged the flat price plus the metered cost of that call, held against its
+entitlement before the call and refused before any call when the ceiling exceeds
+`max_call_usd` or the seat cannot afford it. The result is bounded — at most ten results, a
+snippet of at most 600 characters, 16 KB in all — and returned with `cost_micro` and
+`as_of_ns`. A provider error, an unparsable answer or an answer that is not a result list
+comes back as `{error}` charged what the wallet was actually charged, and a malformed answer
+pays the metered call but not the tool's flat price. It is a kernel call, not a wake: no
+propensity, no judgement, no return, and its cost lands on the calling seat's consequence
+account the way a connector read's does. The completion runs through the provider journal
+proxy, so a resumed diary replays the same results from its `io.call`/`io.result` pair
+instead of searching again, and every call and refusal is ledgered as `web.call` and
+`web.refused` beside the `tool.call` row.
+
 ## New kinds of work: reward shapes and predicates
 
 A registration declares which one of the four reward shapes — `judged`,

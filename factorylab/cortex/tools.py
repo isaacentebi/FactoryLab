@@ -204,6 +204,26 @@ def connector_spec(price_micro_per_call: int) -> dict:
     }
 
 
+def web_search_spec(price_micro_per_call: int, max_call_usd: str) -> dict:
+    """The search primitive publishes a query, a result count and a flat call price."""
+    return {
+        "id": "web.search",
+        "description": (
+            "Search the web through this world's search-capable model route. Returns a "
+            "bounded list of results, each {title, url, snippet, published?}, with the "
+            "cost of the search and when it was run. Costs the flat call price plus the "
+            f"metered cost of that one model call, and never more than ${max_call_usd}."
+        ),
+        "kind": "web", "price_micro_per_call": price_micro_per_call,
+        "args_schema": {"type": "object", "properties": {
+            "query": {"type": "string"}, "max_results": {"type": "integer"}},
+            "required": ["query"], "additionalProperties": False,
+            # Every published tool carries examples its own schema accepts (B1).
+            "examples": [{"query": "Hyperliquid HYPE funding rate history"},
+                         {"query": "USDC depeg news", "max_results": 3}]},
+    }
+
+
 def as_spec(tool: PopulationTool, price_micro_per_call: int) -> dict:
     """Return public ToolSpec fields without source, provenance or schema aliases."""
     if type(price_micro_per_call) is not int or price_micro_per_call < 0:
