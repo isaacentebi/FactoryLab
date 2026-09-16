@@ -242,8 +242,8 @@ the UTF-8 bytes rendered per prompt section (`stable_prefix`, `you`,
 `outcome_contract`, `completion_criterion`, `total`), and the wake publishes
 `prompt_sections` with the mean and total per section over every recorded
 invocation. On the scripted world, before R3-E and after: `stable_prefix`
-52,447 → 8,239, `you` 3,195 → 3,663, `world_update` 0 → 3,798, `inputs` 5,433 →
-48,060, `outcome_contract` 0 → 1,315, total 61,290 → 65,290. The prefix that a
+52,671 → 8,441, `you` 3,195 → 3,663, `world_update` 0 → 3,798, `inputs` 5,433 →
+48,060, `outcome_contract` 0 → 1,315, total 61,514 → 65,492. The prefix that a
 provider caches falls by 84%; the institutional disclosure it used to carry is
 rendered once with the work, where a seat reads it at the moment it matters, and
 the 6.5% the total rises is that disclosure plus what §8 added — the outcome
