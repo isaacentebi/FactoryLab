@@ -1,101 +1,121 @@
 {
-  "continuity": {
-    "market_data_as_of": {
-      "BTC": {
-        "age": null,
-        "as_of_utc": null,
-        "missing": true,
-        "stale": true
-      },
-      "BTC/USDC": {
-        "age": null,
-        "as_of_utc": null,
-        "missing": true,
-        "stale": true
-      },
-      "ETH": {
-        "age": null,
-        "as_of_utc": null,
-        "missing": true,
-        "stale": true
-      }
+  "clock": {
+    "last_successful_delivery": {
+      "basis": "the kernel records the tick index of a paid wake, not a wall clock",
+      "reason": "this seat has taken no paid wake",
+      "tick_index": null,
+      "utc": "unavailable"
     },
-    "open_commitments": {
-      "events_so_far": 0,
-      "open_decision_count": 0,
-      "open_decisions": [],
-      "sealed_forecast_count": 0,
-      "sealed_forecasts": []
-    },
-    "shared_directory_changes": {
-      "artifacts": {
-        "count": 0,
-        "newest": []
-      },
-      "notes": {
-        "count": 0,
-        "newest": []
-      },
-      "paging": "note.list and artifact.list return 50 rows a page with a cursor; both are indexes, not contents"
-    },
-    "since_you_last_woke": null,
-    "unread_outcomes": {
+    "now_utc": "2025-10-09T08:53:20Z",
+    "tick_index": 0,
+    "tick_interval_seconds": 1
+  },
+  "directory": {
+    "artifacts": {
       "count": 0,
-      "items": []
+      "newest": []
     },
-    "your_state": null
-  },
-  "self": {
-    "capability_version": 1,
-    "liable_budget": "decision-golden",
-    "lineage_id": "seed-decider",
-    "request_cost_ceiling_usd": "90.000000",
-    "request_deadline_utc": "2025-10-09T08:54:20Z",
-    "request_handle": "decision-golden",
-    "seat_id": "seed-decider"
-  },
-  "world_resources": {
-    "external_net_income_to_date": {
-      "services_usd": "0.000000",
-      "trading_usd": "0.000000"
+    "notes": {
+      "count": 0,
+      "keys": []
     },
-    "hosting_paid_through_utc": null,
-    "principal_converted_to_compute_usd": "0.000000",
-    "provider_inventory": {
-      "as_of": "observed values are the runtime's last treasury read; the prompt reads no rail. Committed values are the manifest's [providers] block. An OpenRouter balance cannot pay for a Venice model.",
-      "committed_at_launch": {
-        "openrouter_usd": "0.000000",
-        "venice_usd": "0.000000"
-      },
-      "complete": true,
+    "paging": "note.list and artifact.list return 50 rows a page"
+  },
+  "lineage": "seed-decider",
+  "open_commitments": {
+    "events_so_far": 0,
+    "open_decision_count": 0,
+    "open_decisions": [],
+    "sealed_forecast_count": 0,
+    "sealed_forecasts": []
+  },
+  "outcomes": {
+    "items": [],
+    "more": "unavailable",
+    "unread_count": "unavailable"
+  },
+  "pending_conversions": {
+    "items": [],
+    "note": "no conversion is in flight; a source hold and a destination claim would both be listed here",
+    "status": "observed"
+  },
+  "provider_inventory": {
+    "as_of": "observed values are the runtime's last treasury read; the prompt reads no rail. Committed values are the manifest's [providers] block. An OpenRouter balance cannot pay for a Venice model.",
+    "available_on_your_route_usd": "0.000000",
+    "committed_at_launch": {
       "openrouter_usd": "0.000000",
-      "venice_usd": "0.000000",
-      "x402_sellers_usd": {}
+      "venice_usd": "0.000000"
     },
-    "root_locked_usd": "0.000000",
-    "root_unlocked_usd": "100.000000",
-    "trading_equity_usd": "100",
-    "unallocated_usd": "20.000008"
+    "complete": true,
+    "openrouter_usd": "0.000000",
+    "venice_usd": "0.000000",
+    "x402_sellers_usd": {},
+    "your_route": "openrouter"
   },
-  "your_resources": {
-    "next_endowment_release": {
+  "request": {
+    "capability_version": 1,
+    "cost_ceiling_usd": "90.000000",
+    "deadline_utc": "2025-10-09T08:54:20Z",
+    "handle": "decision-golden",
+    "liable_budget": "decision-golden"
+  },
+  "runway": {
+    "days_high": "insufficient history",
+    "days_low": "insufficient history",
+    "observed_over": "0h"
+  },
+  "seat": "seed-decider",
+  "spending_authority": {
+    "available_micro_usd": 8888888,
+    "entitlement_micro_usd": 8888888,
+    "held_micro_usd": 0,
+    "next_release": {
       "at_utc": null,
+      "reachable_at_observed_burn": "unknown",
       "root_amount_usd": null,
       "rule": "no tranche remains on this wallet's release schedule",
       "your_share_usd": null
     },
-    "next_release_reachable": "unknown",
-    "provider_credit_available_for_this_route_usd": "0.000000",
-    "reserved_for_open_work_usd": "0.000000",
-    "runway_at_observed_burn": {
-      "days_high": "insufficient history",
-      "days_low": "insufficient history",
-      "observed_over": "0h"
+    "unsettled_bills": {
+      "basis": "booked at their ceiling; the true cost is unknown until the provider reports it",
+      "micro_usd": 0
+    }
+  },
+  "subscription": {
+    "cadence_floor": 1,
+    "coins": null,
+    "contract": "defer and cadence_floor are whole numbers of routine ticks; a fill, a refusal or a fired watcher reaches a seat that deferred",
+    "deferred_through_tick": null,
+    "kinds": null,
+    "last_paid_wake_tick": null,
+    "next_eligible_tick": 0
+  },
+  "venue_accounts": {
+    "base_reserve": {
+      "usdc_usd": "0.000000"
     },
-    "spend_last_24h_usd": "insufficient history",
-    "spendable_entitlement_usd": "8.888888",
-    "this_route": "openrouter",
-    "unsettled_bills_note": "booked at their ceiling; the true cost is unknown until the provider reports it",
-    "unsettled_bills_usd": "0.000000"
-  }
+    "observed_at_utc": "2025-10-09T08:53:20Z",
+    "status": "observed",
+    "to_date": {
+      "fees_usd": "0.000000",
+      "funding_usd": "0.000000",
+      "realized_pnl_usd": "0.000000"
+    },
+    "venue_perps": {
+      "cash_usd": "100",
+      "equity_usd": "100",
+      "margin_used_usd": "0",
+      "positions": []
+    },
+    "venue_spot": {
+      "balances": [
+        {
+          "available": "0",
+          "coin": "USDC",
+          "total": "0"
+        }
+      ]
+    }
+  },
+  "working_state": "unavailable"
 }

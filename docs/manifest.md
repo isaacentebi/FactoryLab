@@ -132,73 +132,141 @@ pointer back to their committed values; `mechanics` and `scoring` name that key
 rather than quoting either number. The scoring block states the capped,
 attributed formula recorded under "Observation units and attribution".
 
-A rendered request puts the world facts that hold still first, in one contiguous
-`WORLD` block, and everything that moves after it. The block carries the keys
-named in `cortex/request.py:STABLE_WORLD_KEYS` — the charter text, mechanics,
-scoring, tool, connector, work and observation catalogues, the assembly
-catalogue and contracts, the trading markets and their instrument records — and
-is byte-identical across consecutive calls to an assembly, so DeepSeek's and
-OpenAI's automatic prefix caching hits it without any `cache_control` marker.
+A rendered request opens with a stable prefix and puts everything that moves
+after it. Round three (R3-E, GPT-6's third reading §8) makes that prefix exactly
+two things: the **WORLD CONTRACT** wrapper — its text verbatim, with the five
+fixed norms rendered from the charter object, so a ratified edition renders its
+own definitions — and a **compact base capability index**, one line and one
+price for every tool and one line for every proposal kind. Nothing else. It is
+serialised once per runtime by `cortex/schematics.py:_stable_prefix_text`,
+carried on the world block under `stable_prefix`, and reused byte-for-byte:
+every request in a world renders the same string object, and a runtime restored
+from a checkpoint recomputes the same bytes from the same restored state, which
+is what DeepSeek's and OpenAI's automatic prefix caching keys on with no
+`cache_control` marker. It is a function of the charter's norms, the tool set
+with its prices and the proposal kinds, and of nothing else — a seat registered,
+a card repriced or a charter edition bumped no longer breaks every cached prefix
+in the world. The reviewer's own instruction: byte stability "does not require
+copying every institutional description into that prefix". Measured on the
+scripted world, the prefix falls from 52,447 rendered bytes to 8,239.
+
 It is the head of the **first user message**, never the system message, and
-that placement is a boundary, not a preference: the block publishes catalogues
-the population writes — registered tool, observation, predicate and work
+that placement is a boundary, not a preference: the capability index publishes
+one-line descriptions the population wrote for its own registered tools, and
+everything after it publishes the rest — observation, predicate and work
 descriptions, metric cards, the charter text — and the system role is where one
 member's prose would outrank every other assembly's own prompt. The system
 message is exactly the assembly's world-supplied `system_prompt`; no
 population-authored text ever enters it. The cache hit this keeps is the
 per-assembly one, which is where the volume is: an assembly's system text is a
 constant, so each of its calls opens with the identical `system` message
-followed by the identical stable block, and a provider keys on nothing more
-than that identical leading sequence. Handle-scoped memory, where a world
-registers it, is the one thing that precedes the block and costs that assembly
-the hit. The block changes when the charter edition, the mechanics or one of
-those catalogues changes, and at nothing else; a live adaptation does not
-change it. Everything that moves between calls — `inputs.you`, the event, the account, `recent_mids`, the pots,
-note counts, pathologies, the reserve remaining, `governance`, `tick_intervals`,
-`registration_feedback`, `adaptive_scoring` and `card_prices` — is rendered
-after it, in the same user message inside `INPUTS`. The controller re-prices
-every card at every closed window, so the charter disclosure names
-`world.card_prices` instead of inlining each lambda; `card_prices` still
-publishes every card's current price and region. Where the provider reports
+followed by the identical prefix, and a provider keys on nothing more than that
+identical leading sequence. Handle-scoped memory, where a world registers it, is
+the one thing that precedes the prefix and costs that assembly the hit.
+
+After the prefix come the `YOU` block, the `WORLD UPDATE` block, and then the
+work. `WORLD UPDATE` is the world's moving facts in §8's order:
+`observation_window` (the measurement window, the tick, and how fresh each price
+source is), `changes_since_last_successful_delivery` (C2's coalesced fold, or a
+statement that this request carries none), `execution_receipts` (the receipts
+newly addressed to this seat, or that no addressed-receipt source is carried),
+`charter` (edition, text, live cards with their prices and regions, pending
+changes), `catalogue` (version and changed entries only), `public_observations`
+(last closed window's values, pathologies, recent prints, the shared directory)
+and `unavailable_observations` — every source that could not be read, with the
+reason. No private state is in this block; a seat's own state appears exactly
+once, in `YOU`. Everything else the world publishes — `inputs.you`, the event,
+the pots, note counts, the reserve remaining, `tick_intervals`,
+`registration_feedback`, `adaptive_scoring`, the tool, connector, work and
+observation catalogues, the mechanics and the scoring formulas — is rendered
+after those, inside `INPUTS`. A key of the world block is rendered in exactly
+one of those four places: the partition is `PREFIX_WORLD_KEY` with
+`PREFIX_SOURCE_KEYS`, `SEAT_WORLD_KEYS`, `UPDATE_WORLD_KEY` with
+`UPDATE_SOURCE_KEYS`, and everything left over. A source key stays in the world
+block, which is the runtime's own disclosure surface, and is rendered only
+through the block that carries it. The controller re-prices every card at every
+closed window, so the cards ride in `WORLD UPDATE` and never in the prefix.
+Where the provider reports
 it, `usage.prompt_tokens_details.cached_tokens` is recorded as
 `usage.cached_tokens` on the `invocation` item, absent where it is not reported.
 Cost metering is unchanged: OpenRouter's reported `usage.cost` already carries
 the cache discount.
 
 Edition 3 (contract C4) adds a `YOU` block between the stable prefix and the
-work, and makes the institutional catalogue an index rather than a copy. The
-`YOU` block is rendered from kernel state — never by a model — and carries five
-sections: `self` (seat id, lineage, capability version, and the request's own
-handle, deadline, cost ceiling and liable budget, which the decider previously
-never saw), `your_resources` (spendable entitlement net of holds, reservations,
-unsettled bills, the credit available on this seat's own route, metered spend,
-the next endowment release with the rule that splits it, a runway range from the
-observed interval, and whether that release is reachable), `world_resources`
-(root unlocked and locked, trading equity, external income by source, principal
-converted to compute, provider inventory per rail, hosting), `continuity`
-(working-state head, unread outcomes, open commitments, shared-directory
-changes, market data as of per coin with stale and missing flags) and the
-accounting facts, which are constant text and therefore live in the stable
-prefix under `world.accounting_facts`. `world.seats` carries one entry per live
+work, and makes the institutional catalogue an index rather than a copy. R3-E
+gives it §8's template, every slot serialised by the kernel and never by a
+model: `seat`, `lineage`, `request` (this decision's own handle, deadline, cost
+ceiling and liable budget, which the decider previously never saw), `clock`
+(now, tick index, **tick interval in seconds** — a tick count is not a duration
+until it is multiplied by this — and this seat's last successful delivery),
+`working_state` (C1's head, exactly), `spending_authority` (entitlement, held,
+available, unsettled bills and the next release with this seat's own share),
+`provider_inventory` with its freshness, `venue_accounts` and
+`pending_conversions` by custody, `runway`, `subscription` with its next
+eligible tick, `open_commitments`, `outcomes` (`unread_count`, the inline window
+oldest-first with each item's exact `outcome_id`, and `more`) and `directory`.
+
+Where a source is missing a slot renders the string `unavailable`, never a
+number: a venue read that failed is `{"status": "unavailable", "reason": …}` and
+never an equity of zero or an empty position set, an unobserved provider balance
+is `null`, and a burn rate observed over less than six hours is `insufficient
+history` rather than extrapolated. `venue_accounts` and `pending_conversions`
+defer to `runtime/custody.py:custody_view` where R3-B's typed custody is
+present, and otherwise render the account read the runtime already performs,
+marked `observed` or `unavailable`. Nothing in the block performs I/O.
+The accounting facts are constant text and are published, once, with the rest of
+the institutional disclosure under `world.accounting_facts`.
+`world.seats` carries one entry per live
 seat because one world block serves every request built in a tick;
 `Request.prompt_text` renders the acting seat's entry and no other, so no seat
-reads another's account. No number is asserted from too little evidence: a burn
-rate observed over less than six hours is reported as `insufficient history`
-rather than extrapolated, and an unobserved provider balance is `null`, never
-zero. Nothing in the block performs I/O — the provider inventory is the last
-treasury observation the runtime already holds.
+reads another's account. The provider inventory is the last treasury
+observation the runtime already holds.
 
-`world.tools` and `world.proposal_shapes` are compact indexes: every tool's id,
-kind, one-line description, price and argument names, and one line per proposal
-kind. The full `args_schema` of any tool and the full shape of any proposal kind
-are retrieved by `catalogue.search`, whose result carries `models`, `tools` and
+The capability index in the prefix is the one published copy: every tool's id,
+one-line description and price, and one line per proposal kind. The full
+`args_schema` of any tool and the full shape of any proposal kind are retrieved
+by `catalogue.search`, whose result carries `models`, `tools` and
 `proposal_shapes`. Nothing became undiscoverable — every id and description is
-still in the prefix — and the schemas a decision never reads no longer ride in
-front of every decision. The change is measured, not assumed: every `invocation`
-item carries `sections`, the UTF-8 bytes rendered per prompt section
-(`stable_prefix`, `you`, `request`, `inputs`, `propensity`, `outcome_schema`,
-`completion_criterion`, `total`), and the wake publishes `prompt_sections` with
-the mean and total per section over every recorded invocation.
+in the prefix — and the schemas a decision never reads no longer ride in front
+of every decision.
+
+The **OUTCOME CONTRACT** (§8, verbatim) is rendered once per request,
+immediately after the outcome schema it is about: what an execution claim must
+distinguish (`intended`, `submitted`, `settled`, `rejected`, `unknown`), what a
+forecast and a fidelity objection must carry, what a pause must state, and that
+a monetary quantity names its asset, its custody account and its unit.
+
+The change is measured, not assumed: every `invocation` item carries `sections`,
+the UTF-8 bytes rendered per prompt section (`stable_prefix`, `you`,
+`world_update`, `request`, `inputs`, `propensity`, `outcome_schema`,
+`outcome_contract`, `completion_criterion`, `total`), and the wake publishes
+`prompt_sections` with the mean and total per section over every recorded
+invocation. On the scripted world, before R3-E and after: `stable_prefix`
+52,447 → 8,239, `you` 3,195 → 3,275, `world_update` 0 → 5,736, `inputs` 3,747 →
+47,831, `outcome_contract` 0 → 1,315, total 59,604 → 66,611. The prefix that a
+provider caches falls by 84%; the institutional disclosure it used to carry is
+rendered once with the work, where a seat reads it at the moment it matters, and
+the 12% the total rises is that disclosure plus what §8 added — the outcome
+contract, the custody and subscription slots, the observation window and the
+sources that could not be read.
+
+### `calc`
+
+A deterministic, unit-explicit arithmetic tool (`cortex/calc.py`), GPT-6's third
+reading §7: the final roster did not meet "every critical arithmetic case", and
+the repair it named is a capability rather than a better prompt. Five
+operations — `notional(size, price)`, `fee(fee_bps` with either `notional` or
+`size` and `price`), `funding(size, mark, rate)`, `carry(size, mark,
+hourly_rate, hours, round_trip_fee)` and `margin(size, mark, leverage)` — all in
+exact `Decimal` arithmetic quantised to six decimal places, with the unit in
+every field name. Funding and carry state the venue's sign convention and
+settlement period in the result: a positive `funding_usd` is what the position
+pays. It prescribes no objective: `carry` reports `net_usd_positive`, a fact
+about a subtraction, and never a recommendation. It is published wherever the
+fixed primitives are (a resume included), priced at
+`prices.tool_micro_per_call` where a world commits one and free otherwise, and
+metered and ledgered like any other tool. It answers every fee, funding and
+carry case of `scripts/calibrate_seats.py` exactly.
 
 ## Round-two W2: judges, consequences, the reserve
 

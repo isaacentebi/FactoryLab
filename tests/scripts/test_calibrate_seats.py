@@ -54,10 +54,14 @@ def test_every_scenario_renders_as_a_real_request(manifest):
     for scenario in scenarios:
         prompt = rt.assemblies[scenario.seat].build_model_request(scenario.request)
         text = prompt.messages[-1]["content"]
-        # The seat sees the world block first, then the request, inputs and schema.
-        assert text.startswith("WORLD\n")
+        # R3-E: the seat sees the WORLD CONTRACT and the base capability index
+        # first — the stable prefix — then YOU, then the world's moving facts,
+        # then the request, inputs, schema and the outcome contract.
+        assert text.startswith("WORLD CONTRACT\n")
+        assert "\nYOU\n" in text and "\nWORLD UPDATE\n" in text
         assert f"REQUEST\n{scenario.request.description}\n" in text
         assert "OUTCOME SCHEMA" in text and "COMPLETION CRITERION" in text
+        assert text.count("OUTCOME CONTRACT\n") == 1
         assert prompt.model_id == CANDIDATE
         assert rt.queue.get(scenario.request.handle).propensity.chosen == scenario.seat
     # The judge sees the subject's own propensity; the meta sees the judge's.
@@ -67,7 +71,11 @@ def test_every_scenario_renders_as_a_real_request(manifest):
     assert by_name["tool"].check == "tool" and by_name["continuation"].check == "child"
     long_prompt = rt.assemblies[by_name["long_context"].seat].build_model_request(
         by_name["long_context"].request).messages[-1]["content"]
-    assert len(long_prompt.encode()) >= 90_000
+    # R3-E: the long-context scenario pads the registered tool catalogue, and the
+    # catalogue is now published as a one-line index rather than as every argument
+    # schema, so the same padding renders fewer bytes. What the scenario is for is
+    # a prompt several times the seed world's, and it still is.
+    assert len(long_prompt.encode()) >= 70_000
     assert len(by_name["produce"].request.prompt_text().encode()) < 90_000
 
 

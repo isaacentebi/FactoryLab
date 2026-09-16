@@ -50,6 +50,20 @@ def _usd(micro: Any) -> str | None:
     sign = "-" if micro < 0 else ""
     return f"{sign}{Decimal(abs(micro)).scaleb(-6):f}"
 
+
+def _outcome_id(item: Any) -> Any:
+    """The exact id of one inbox item: the inbox's own, or the handle it is about.
+
+    R3-F stamps ``outcome_id`` on every delivered item. Where it is present it is
+    what ``outcome.get`` and ``ack_through`` address, and it is used verbatim.
+    Where it is not, the decision handle is the address those two tools already
+    accept. Nothing is minted here: a renderer that invented an id would hand a
+    seat an address the kernel would refuse.
+    """
+    if not isinstance(item, dict):
+        return UNAVAILABLE
+    return item.get("outcome_id") or item.get("handle") or UNAVAILABLE
+
 # The world facts that hold still between calls: everything fixed within a charter
 # edition and a registration state. They are rendered first, in one contiguous
 # block at the head of the first user message — never in the system message, which
@@ -74,37 +88,109 @@ STABLE_WORLD_KEYS = frozenset({
     "trading_markets", "venue", "venue_listing", "work",
 })
 
+# R3-E. The prefix is no longer derived from the world block at render time: it is
+# the WORLD CONTRACT wrapper with the charter's own norms and a compact base
+# capability index, serialised once per runtime by
+# ``SchematicsMixin._stable_prefix_text`` and carried here as its exact bytes. Two
+# requests cannot differ by a character because they render the same string object,
+# and a restored runtime recomputes the same string from the same restored state.
+# GPT-6's third reading, §8: "Byte stability should be enforced by serializing the
+# fixed prefix once and reusing its exact bytes; it does not require copying every
+# institutional description into that prefix."
+PREFIX_WORLD_KEY = "stable_prefix"
+# The world keys the prefix's capability index is built from. They stay in the world
+# block, which more than the prompt reads, and are rendered only through the index:
+# ``tools`` and ``proposal_shapes`` published a second, longer copy of exactly what
+# the index names, which is the largest thing a compaction can remove without
+# removing a fact. The argument names and proposal skeletons they carried are a
+# ``catalogue.search`` away, retrieved when a seat means to use one.
+PREFIX_SOURCE_KEYS = frozenset({"tools", "proposal_shapes"})
+
+# The moving world block (§8's WORLD UPDATE). ``world_update`` is the rendered
+# block; the keys beside it are the sources it is built from, and they are
+# suppressed from ``INPUTS`` so each fact is rendered exactly once. They remain in
+# the world block itself, which is the runtime's own disclosure surface and is read
+# by more than the prompt.
+UPDATE_WORLD_KEY = "world_update"
+UPDATE_SOURCE_KEYS = frozenset({
+    "charter", "charter_edition", "card_prices", "continuity", "governance",
+    "pathologies", "recent_mids",
+})
+
 # The world keys that are about the acting seat rather than about the world, and
 # are lifted out of ``INPUTS`` into the block at the head of the changing part
 # (edition 3, C4). ``seats`` carries one row per live seat because one world
 # block serves every request built in a tick; only the acting seat's row is ever
 # rendered, so no seat reads another's account.
-SEAT_WORLD_KEYS = ("seats", "world_resources", "continuity")
+# ``account`` is the custody view's own source: ``custody`` renders the venue's
+# equity, cash, margin, positions and spot balances by custody account, and the
+# block that published them a second time under ``account`` published the same
+# read twice in one prompt.
+SEAT_WORLD_KEYS = ("seats", "world_resources", "clock_now", "custody", "account")
 
 # The coalesced world update (edition 3, C2) arrives on the event payload. It is
-# what happened while this seat was not awake, which is continuity, so it is
-# rendered in the ``YOU`` block beside the ages of the prices it folds — and taken
-# out of the payload there, so the fold is rendered exactly once.
+# what changed while this seat was not awake, which is a fact about the world, so
+# R3-E renders it in the ``WORLD UPDATE`` block under §8's own name for it,
+# ``changes_since_last_successful_delivery`` — and takes it out of the payload
+# there, so the fold is rendered exactly once.
 COALESCED_UPDATE = "since_you_last_woke"
 
 # The request inputs C1 supplies for continuity: the seat's own working-state head
-# and its unread outcomes. They are rendered inside the ``YOU`` block's
-# ``continuity`` under exactly these names, and taken out of ``INPUTS`` there, so a
+# and its unread outcomes. They are rendered inside the ``YOU`` block as
+# ``working_state`` and ``outcomes``, and taken out of ``INPUTS`` there, so a
 # working state of up to 64 KiB is carried once and appears where a seat looks for
-# what it remembers.
+# what it remembers, and never in the moving block.
 SEAT_INPUT_KEYS = ("your_state", "unread_outcomes")
 
-YOU_HEADER = (
-    "YOU\nRendered from the kernel's own state, never by a model, and reconciled with the "
-    "ledger: the entitlement is yours net of your holds, the resources are the factory's, "
-    "and world.accounting_facts says what they mean. Nothing here is a goal.\n"
-)
+# The request input R3-F supplies for the WORLD UPDATE block: the receipts newly
+# addressed to this seat. It is rendered there and taken out of ``INPUTS``, so it
+# appears exactly once. Absent, the slot says it is unavailable rather than
+# claiming there were none.
+RECEIPTS_INPUT_KEY = "execution_receipts"
 
-WORLD_HEADER = (
-    "WORLD\nWhat holds for every call in this world while its charter edition and its "
-    "registrations stand. The facts that move — the account, the mids, the prices on "
-    "the cards, the reserve — arrive below with the work.\n"
-)
+YOU_HEADER = "YOU\n"
+
+WORLD_UPDATE_HEADER = "WORLD UPDATE\n"
+
+#: GPT-6's third reading, §8, verbatim: the outcome-schema text. It is rendered
+#: once per request, immediately after the schema it is about.
+OUTCOME_CONTRACT = """OUTCOME CONTRACT
+
+Return the public result required by this request's schema. Optional private
+continuity fields are working_state and ack_through.
+
+For an execution claim, distinguish:
+- intended: no operation has been submitted;
+- submitted: an operation identifier exists, but settlement is not known;
+- settled: an addressed receipt establishes the consequence;
+- rejected: an addressed receipt establishes refusal;
+- unknown: the necessary observation is unavailable.
+
+Reference the exact operation or outcome identifier. A narrative assertion does
+not establish execution or payment.
+
+For a forecast, identify the claim, observation rule, horizon, probability and
+the decision it concerns. Do not replace an unobserved outcome with false.
+
+For a fidelity objection, supply:
+{
+  "value": "<one fixed norm>",
+  "measurement": "<identified card or observation>",
+  "evidence": "<specific evidence of a mismatch>",
+  "uncertainty": <number from 0 to 1>
+}
+The objection is a contestable claim. The measurement it challenges cannot
+establish its own fidelity.
+
+For a pause, state the next relevant condition when you can identify one.
+Do not invent a condition merely to justify a pause.
+
+Use monetary quantities with an explicit asset, custody account and unit.
+Keep resource facts separate from learning scores."""
+
+#: What a slot says when the source it would be rendered from is missing. It is a
+#: string and never a number, so no reader can mistake an absent fact for a zero.
+UNAVAILABLE = "unavailable"
 
 # Continuity (edition 3, C1). Two fields any answer may carry, published with the
 # rest of the reserved return names so a seat can see that it owns them:
@@ -220,72 +306,173 @@ class Request:
         """
         return replace(self, inputs=inputs, cost_ceiling=cost_ceiling)
 
+    def _world(self) -> dict[str, Any]:
+        """This request's world block, or an empty mapping when it carries none."""
+        world = self.inputs.get("world")
+        return world if isinstance(world, dict) else {}
+
     def _world_split(self) -> tuple[dict[str, Any], dict[str, Any]]:
         """Return the world's stable facts and its moving ones, in that order.
 
-        Guarantees the two mappings and ``SEAT_WORLD_KEYS`` partition the
-        request's world block exactly once: every key of it is rendered in the
-        stable block, inside ``INPUTS``, or in the ``YOU`` block, and in no two
-        of them, so rendering them apart publishes the whole world and publishes
-        nothing twice. A request whose ``world`` is absent or is not a mapping
-        yields two empty mappings.
+        Guarantees the two mappings, ``SEAT_WORLD_KEYS``, the prefix key and the
+        WORLD UPDATE keys partition the request's world block exactly once: every
+        key of it is rendered in the prefix, in the ``YOU`` block, in the
+        ``WORLD UPDATE`` block, or inside ``INPUTS``, and in no two of them, so
+        rendering them apart publishes the whole world and publishes nothing
+        twice. A request whose ``world`` is absent or is not a mapping yields two
+        empty mappings.
+
+        ``stable`` is kept for the measurement and for readers that ask which
+        world facts hold still; what heads the prompt is ``stable_prefix()``,
+        which is the serialised prefix the runtime hands over, not this mapping.
         """
-        world = self.inputs.get("world")
-        if not isinstance(world, dict):
+        world = self._world()
+        if not world:
             return {}, {}
-        stable = {k: v for k, v in world.items() if k in STABLE_WORLD_KEYS}
-        return stable, {k: v for k, v in world.items()
-                        if k not in STABLE_WORLD_KEYS and k not in SEAT_WORLD_KEYS}
+        inputs_world = self._inputs_world()
+        return ({k: v for k, v in inputs_world.items() if k in STABLE_WORLD_KEYS},
+                {k: v for k, v in inputs_world.items() if k not in STABLE_WORLD_KEYS})
+
+    def _inputs_world(self) -> dict[str, Any]:
+        """The world facts ``INPUTS`` carries: everything no earlier block rendered."""
+        elsewhere = (frozenset(SEAT_WORLD_KEYS) | {PREFIX_WORLD_KEY, UPDATE_WORLD_KEY}
+                     | UPDATE_SOURCE_KEYS | PREFIX_SOURCE_KEYS)
+        return {k: v for k, v in self._world().items() if k not in elsewhere}
 
     def seat_block(self) -> dict[str, Any]:
-        """The acting seat's own account of itself, in GPT-6 §9's five sections.
+        """The acting seat's own account of itself, in §8's ``YOU`` template.
 
         Guarantees it is built only from this request's fields and the world block
-        it carries — no model wrote any of it — and that it is scoped: the world's
-        ``seats`` rows hold one per live seat and exactly one, the acting
-        seat's, is read. A request without a world block, or one whose seat the
-        world does not know, still renders ``self``: the handle, the deadline, the
-        ceiling and the budget that pays are facts about this request, and they
-        were the fields the executor was never shown.
+        it carries — every slot is kernel-serialised and no model wrote any of
+        it — and that it is scoped: the world's ``seats`` rows hold one per live
+        seat and exactly one, the acting seat's, is read.
 
-        The coalesced world update (edition 3, C2) is continuity too: it is
-        everything that happened while this seat was not awake. It is lifted out
-        of the event payload and rendered here, beside the ages of the prices it
-        folds, and ``sections`` removes it from the payload so it is rendered
-        once.
+        Guarantees a slot whose source is missing renders the string
+        ``unavailable`` and never a number. A request without a world block, or
+        one whose seat the world does not know, still renders every slot and
+        still renders ``request``: the handle, the deadline, the ceiling and the
+        budget that pays are facts about this decision, and they were the fields
+        the executor was never shown. A seat told its venue account is empty when
+        the venue would not answer has been taught something false about its own
+        world, and the whole of R3 is that this stops happening.
         """
-        world = self.inputs.get("world")
-        world = world if isinstance(world, dict) else {}
+        world = self._world()
         seat = self.inputs.get("you")
         entry = next((row for row in (world.get("seats") or ())
                       if isinstance(row, dict) and row.get("seat_id") == seat), None)
         entry = entry if isinstance(entry, dict) else {}
-        continuity = dict(world.get("continuity") or {})
-        block: dict[str, Any] = {
-            "self": {
-                "seat_id": seat,
-                "lineage_id": entry.get("lineage_id"),
-                "capability_version": entry.get("capability_version"),
-                "request_handle": self.handle,
-                "request_deadline_utc": _utc(self.deadline_ns),
-                "request_cost_ceiling_usd": _usd(self.cost_ceiling),
+        custody = world.get("custody") if isinstance(world.get("custody"), dict) else {}
+        resources = world.get("world_resources")
+        resources = resources if isinstance(resources, dict) else {}
+        outcomes = self.inputs.get("unread_outcomes")
+        outcomes = outcomes if isinstance(outcomes, dict) else {}
+        items = list(outcomes.get("items") or ())
+        count = outcomes.get("count")
+        return {
+            "seat": seat,
+            "lineage": entry.get("lineage_id", UNAVAILABLE),
+            # Not in §8's template, and kept: the handle, the deadline, the ceiling
+            # and the budget that pays are facts about this decision that the
+            # decider was never shown before edition 3's C4, and an actor that
+            # cannot see its own deadline cannot be answerable for missing it.
+            "request": {
+                "handle": self.handle,
+                "deadline_utc": _utc(self.deadline_ns) or UNAVAILABLE,
+                "cost_ceiling_usd": _usd(self.cost_ceiling) or UNAVAILABLE,
                 "liable_budget": self.resource_liability,
+                "capability_version": entry.get("capability_version", UNAVAILABLE),
             },
-            "your_resources": entry.get("your_resources"),
-            "world_resources": world.get("world_resources"),
-            "continuity": {
-                # C1 supplies these two on the request; until it lands they are
-                # rendered as absent rather than invented.
-                "your_state": self.inputs.get("your_state"),
-                "unread_outcomes": self.inputs.get("unread_outcomes")
-                                   or {"count": 0, "items": []},
-                "open_commitments": entry.get("open_commitments"),
-                "shared_directory_changes": continuity.get("shared_directory_changes"),
-                "since_you_last_woke": self._coalesced_update(),
-                "market_data_as_of": continuity.get("market_data_as_of"),
+            "clock": self._clock(world),
+            "working_state": self.inputs.get("your_state", UNAVAILABLE),
+            "spending_authority": entry.get("spending_authority", UNAVAILABLE),
+            "provider_inventory": self._provider_inventory(resources, entry),
+            "venue_accounts": custody.get("venue_accounts", UNAVAILABLE),
+            "pending_conversions": custody.get("pending_conversions", UNAVAILABLE),
+            "runway": (entry.get("your_resources") or {}).get(
+                "runway_at_observed_burn", UNAVAILABLE),
+            "subscription": entry.get("subscription", UNAVAILABLE),
+            "open_commitments": entry.get("open_commitments", UNAVAILABLE),
+            "outcomes": {
+                "unread_count": count if type(count) is int else UNAVAILABLE,
+                # Oldest first, with the exact id of each item: ``outcome.get`` and
+                # ``ack_through`` both take one of these. The id is the inbox's own
+                # ``outcome_id`` where it has one and the decision handle otherwise;
+                # nothing here is minted by this renderer.
+                "items": [{**item, "outcome_id": _outcome_id(item)} for item in items],
+                "more": (count - len(items)) if type(count) is int else UNAVAILABLE,
             },
+            "directory": entry.get("directory", UNAVAILABLE),
         }
-        return block
+
+    @staticmethod
+    def _provider_inventory(resources: dict[str, Any],
+                            entry: dict[str, Any]) -> dict[str, Any] | str:
+        """Every rail's balance with its freshness, and which rail pays for this seat.
+
+        Two rails cannot refill each other, so an inventory that does not say
+        which one this seat's model is bought on is an inventory a seat cannot
+        act on: the credit that matters to it is the credit on its own route.
+        Both facts are the kernel's; neither is invented here.
+        """
+        inventory = resources.get("provider_inventory")
+        if not isinstance(inventory, dict):
+            return UNAVAILABLE
+        own = entry.get("your_resources") or {}
+        return {**inventory,
+                "your_route": own.get("this_route", UNAVAILABLE),
+                "available_on_your_route_usd": own.get(
+                    "provider_credit_available_for_this_route_usd") or UNAVAILABLE}
+
+    def _clock(self, world: dict[str, Any]) -> dict[str, Any]:
+        """The clock slot: the instant, the tick, how long a tick is, and the last delivery."""
+        now = world.get("clock_now")
+        now = now if isinstance(now, dict) else {}
+        entry = next((row for row in (world.get("seats") or ())
+                      if isinstance(row, dict)
+                      and row.get("seat_id") == self.inputs.get("you")), None)
+        delivery = (entry or {}).get("last_successful_delivery", UNAVAILABLE)
+        return {
+            "now_utc": now.get("now_utc", UNAVAILABLE),
+            "tick_index": now.get("tick_index", UNAVAILABLE),
+            "tick_interval_seconds": now.get("tick_interval_seconds", UNAVAILABLE),
+            "last_successful_delivery": delivery,
+        }
+
+    def world_update_block(self) -> dict[str, Any]:
+        """§8's WORLD UPDATE: what moved, joined to what moved for *this* seat.
+
+        Guarantees no private state is here. The two slots that are about this
+        request rather than about the world — the fold since this seat's last
+        successful delivery, and the receipts newly addressed to it — are the
+        seat's own continuity, and they are rendered in this block exactly once
+        and nowhere else. Everything else is the world's, and is the same text
+        for every seat woken in this tick.
+        """
+        update = self._world().get(UPDATE_WORLD_KEY)
+        update = dict(update) if isinstance(update, dict) else {}
+        receipts = self.inputs.get(RECEIPTS_INPUT_KEY)
+        return {
+            "observation_window": update.get("observation_window", UNAVAILABLE),
+            "changes_since_last_successful_delivery": (
+                self._coalesced_update() if self._coalesced_update() is not None
+                else {"status": UNAVAILABLE,
+                      "reason": "this request carries no coalesced world update"}),
+            "execution_receipts": (
+                receipts if receipts is not None
+                else {"status": UNAVAILABLE,
+                      "reason": "no addressed receipts are carried on this request"}),
+            "charter": update.get("charter", UNAVAILABLE),
+            "catalogue": update.get("catalogue", UNAVAILABLE),
+            "public_observations": update.get("public_observations", UNAVAILABLE),
+            "unavailable_observations": update.get("unavailable_observations", UNAVAILABLE),
+        }
+
+    def world_update_text(self) -> str:
+        """The rendered WORLD UPDATE block; empty when the request carries no world."""
+        if not self._world():
+            return ""
+        return (f"{WORLD_UPDATE_HEADER}"
+                f"{json.dumps(self.world_update_block(), sort_keys=True, indent=2)}\n\n")
 
     def _coalesced_update(self) -> Any:
         """The fold of everything that happened while this seat slept, or None."""
@@ -301,20 +488,22 @@ class Request:
     def stable_prefix(self) -> str:
         """The leading text every request in this world renders identically.
 
-        Guarantees it is a pure function of the world facts named in
-        ``STABLE_WORLD_KEYS`` — no description, no identity, no event, no
-        account — so two requests about two different events render the same
-        bytes here, and a provider's automatic prefix cache scores a hit on the
-        second call an assembly makes. It heads ``prompt_text``, which is the
-        whole of the first user message, and it is never given to the system
-        role: the block publishes catalogues the population writes, and the
-        system role is where an instruction outranks the rest of the prompt. It
-        is the empty string when the request carries no world block.
+        R3-E: the bytes are the runtime's, not this renderer's. The world block
+        carries the prefix the runtime serialised once —  the WORLD CONTRACT
+        wrapper with the charter's own five norms, and the compact base
+        capability index — and this returns exactly those bytes. Two requests in
+        one world therefore open with the same string object, so a provider's
+        automatic prefix cache scores a hit on the second call an assembly makes,
+        and there is no second serialisation that could drift from the first.
+
+        It heads ``prompt_text``, which is the whole of the first user message,
+        and it is never given to the system role: the capability index publishes
+        one-line descriptions the population wrote, and the system role is where
+        an instruction outranks the rest of the prompt. It is the empty string
+        when the request carries no world block.
         """
-        stable, _ = self._world_split()
-        if not stable:
-            return ""
-        return f"{WORLD_HEADER}{json.dumps(stable, sort_keys=True, indent=2)}\n\n"
+        prefix = self._world().get(PREFIX_WORLD_KEY)
+        return prefix if isinstance(prefix, str) else ""
 
     def sections(self) -> tuple[tuple[str, str], ...]:
         """The prompt, in order, as (name, text) pairs: what is rendered and where.
@@ -325,13 +514,14 @@ class Request:
         contract: the stable block first, so a provider's prefix cache can hit;
         then this seat's own account of itself; then the work.
         """
-        stable, moving = self._world_split()
-        inputs = ({**self.inputs, "world": moving}
+        inputs = ({**self.inputs, "world": self._inputs_world()}
                   if isinstance(self.inputs.get("world"), dict) else self.inputs)
-        # The continuity inputs are rendered in ``YOU``, where continuity belongs.
-        # Carrying them here too would put a second copy of a working state — up
-        # to 64 KiB of it — in front of every decision, for no reader.
-        inputs = {k: v for k, v in inputs.items() if k not in SEAT_INPUT_KEYS}
+        # The continuity inputs are rendered in ``YOU``, where continuity belongs,
+        # and the addressed receipts in ``WORLD UPDATE``. Carrying them here too
+        # would put a second copy of a working state — up to 64 KiB of it — in
+        # front of every decision, for no reader.
+        inputs = {k: v for k, v in inputs.items()
+                  if k not in SEAT_INPUT_KEYS and k != RECEIPTS_INPUT_KEY}
         payload = inputs.get("payload")
         if isinstance(payload, dict) and COALESCED_UPDATE in payload:
             inputs = {**inputs,
@@ -351,11 +541,17 @@ class Request:
         blocks.extend([
             ("outcome_schema",
              f"OUTCOME SCHEMA\n{json.dumps(self.outcome_schema, sort_keys=True, indent=2)}"),
+            # §8's outcome-schema text, once per request and immediately after the
+            # schema it is about: what an execution claim must distinguish, what a
+            # forecast and an objection must carry, and that money names its asset,
+            # its custody account and its unit.
+            ("outcome_contract", OUTCOME_CONTRACT),
             ("completion_criterion", f"COMPLETION CRITERION\n{self.completion_criterion}"),
         ])
         joined = [(name, text + ("\n\n" if index + 1 < len(blocks) else ""))
                   for index, (name, text) in enumerate(blocks)]
-        return (("stable_prefix", self.stable_prefix()), ("you", self.seat_text()), *joined)
+        return (("stable_prefix", self.stable_prefix()), ("you", self.seat_text()),
+                ("world_update", self.world_update_text()), *joined)
 
     def section_bytes(self) -> dict[str, int]:
         """UTF-8 bytes rendered per prompt section, plus the whole under ``total``.
