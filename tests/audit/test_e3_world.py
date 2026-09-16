@@ -26,7 +26,7 @@ from factorylab.runtime.venue import wind_down
 from factorylab.runtime.worlds import NS_PER_DAY, KillSpec, load_manifest
 from factorylab.world.exchange import Order
 
-EDITION3_HASH = "781584ce44b746ea660d24944d057140e771882f955550a8312f807986260426"
+EDITION3_HASH = "776d2ecf38aa2cb762c761a894c72c3e2a75d22e7cbcbc01839e664c97c258ea"
 
 
 @pytest.fixture(autouse=True)

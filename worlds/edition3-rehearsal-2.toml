@@ -8,7 +8,7 @@
 # edition 3 charter (C3) and the coordinator ratifies it on this roster; only then does the
 # roster digest belong here. `roster_sha256` is deliberately absent until that vote: the
 # edition 2 digest names the edition 2 roster and this is not it.
-name = "edition3-testnet"
+name = "edition3-rehearsal-2"
 seed = 3
 # $300 of inference backing, precommitted whole (GPT-6 §12.1). $120 is released at genesis
 # and the remaining $180 in three weekly tranches below.
@@ -58,6 +58,7 @@ venice_usd = 80
 # so two preparations of this file never share client order ids.
 kind = "hyperliquid"
 mainnet = false
+client_namespace = "92c9c7bb91174e40afadfa304cd54b42"
 coins = ["BTC", "ETH"]
 # $120 of risk-bearing trading principal (GPT-6 §12.1), stated here the way edition 2
 # states its $100. Not a forecast of revenue: a $120 capital base cannot pay a $5-$9 daily

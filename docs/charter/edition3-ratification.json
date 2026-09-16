@@ -1,5 +1,5 @@
 {
-  "roster_sha256": "488c62ef9b8b97233ab795e5d5d6adabdc5146b6f5fb0364e7555bae91476713",
+  "roster_sha256": "78ad54b1b438b0d833a3a6aca49027d778ea0209f1ee1873fd947974e9d9dbee",
   "parent_charter_sha256": "c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712",
   "conflicts": [],
   "calls": [
@@ -9,13 +9,13 @@
         "assembly_id": "meta-calibration",
         "role": "meta"
       },
-      "model": "deepseek/deepseek-v4.1-flash",
-      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"It is the only card, received majority approval, and its wording already excludes non-due, externally unobservable, and never-committed events, so it can stand unchanged for edition 1.\"}",
+      "model": "openai/gpt-5.6-luna",
+      "text": "{\"selected\":[\"censorship-bound\"],\"reason\":\"Approve because it makes unresolved commitments answerable while explicitly excluding cases outside the owner\u2019s control.\"}",
       "stop": "stop",
-      "cost_micro": 148,
-      "input_tokens": 573,
-      "output_tokens": 55,
-      "served_by": "deepseek/deepseek-v4.1-flash",
+      "cost_micro": 237,
+      "input_tokens": 571,
+      "output_tokens": 102,
+      "served_by": "openai/gpt-5.6-luna",
       "valid": true,
       "selected": [
         "censorship-bound"
@@ -28,11 +28,11 @@
         "role": "producer"
       },
       "model": "venice:z-ai-glm-5-3-flash",
-      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"The card cleanly operationalizes epistemic integrity by measuring attributable, avoidably unresolved commitments with proper exclusions (not-yet-due, unobservable-without-fault, never-committed), preserves the norm's defeasible spirit via its explicit provisionality clause, and with empty preflight feedback there is no basis to withhold approval.\"}",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"With no preflight objections, the card cleanly operationalizes epistemic integrity: it counts only attributable, avoidably unresolved commitments that are actually due, excludes unobservable and never-committed events, keeps a nonzero measurable sample, and is explicitly provisional, so it serves the norm as defeasible evidence rather than replacing it.\"}",
       "stop": "stop",
-      "cost_micro": 272,
+      "cost_micro": 294,
       "input_tokens": 1454,
-      "output_tokens": 107,
+      "output_tokens": 150,
       "served_by": "venice:z-ai-glm-5-3-flash",
       "valid": true,
       "selected": [
@@ -45,10 +45,17 @@
         "assembly_id": "meta-countercase",
         "role": "meta"
       },
-      "model": "venice:qwen-3-8-flash",
-      "valid": false,
-      "failure": "VeniceError",
-      "http_status": 429
+      "model": "venice:z-ai-glm-5-3-flash",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"Preflight feedback is empty, so no actual objection stands against the card; it operationalizes epistemic integrity consistently with the fidelity norm by treating the avoidably-unresolved share as defeasible evidence (ceiling 0.30, attributable to the commitment owner, provisional by design), while correctly excluding commitments not yet due, externally unobservable events without owner fault, and never-committed observations, and it guarantees no eligible sample goes unmeasured.\"}",
+      "stop": "stop",
+      "cost_micro": 316,
+      "input_tokens": 1454,
+      "output_tokens": 194,
+      "served_by": "venice:z-ai-glm-5-3-flash",
+      "valid": true,
+      "selected": [
+        "censorship-bound"
+      ]
     },
     {
       "seat": {
@@ -56,13 +63,13 @@
         "assembly_id": "judge-consequence",
         "role": "evaluator"
       },
-      "model": "deepseek/deepseek-v4.1-flash",
-      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"Only one card was proposed and it received majority support in the first survey; selecting it preserves every definition unchanged, and its explicit provisional status and narrow accountable scope make it suitable for edition 1 without preflight objections.\"}",
+      "model": "openai/gpt-5.6-luna",
+      "text": "{\"selected\":[\"censorship-bound\"],\"reason\":\"No preflight feedback identified a defect, and this card directly operationalizes epistemic integrity with explicit exclusions, accountability, and a bounded measure.\"}",
       "stop": "stop",
-      "cost_micro": 169,
-      "input_tokens": 594,
-      "output_tokens": 57,
-      "served_by": "deepseek/deepseek-v4.1-flash",
+      "cost_micro": 171,
+      "input_tokens": 571,
+      "output_tokens": 47,
+      "served_by": "openai/gpt-5.6-luna",
       "valid": true,
       "selected": [
         "censorship-bound"
@@ -74,13 +81,13 @@
         "assembly_id": "mechanism",
         "role": "producer"
       },
-      "model": "deepseek/deepseek-v4.1-flash",
-      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"The sole candidate received a first-survey majority, the preflight feedback is empty, and its definition already matches the charter's norm on epistemic integrity, so it can be adopted unchanged.\"}",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"With no preflight objections raised, the card is internally consistent with epistemic integrity: it measures only due, attributable, avoidably unresolved commitments, excludes non-fault unobservability, and explicitly flags itself as provisional, so I approve it unchanged for edition 1.\"}",
       "stop": "stop",
-      "cost_micro": 120,
-      "input_tokens": 595,
-      "output_tokens": 50,
-      "served_by": "deepseek/deepseek-v4.1-flash",
+      "cost_micro": 275,
+      "input_tokens": 1454,
+      "output_tokens": 112,
+      "served_by": "venice:z-ai-glm-5-3-flash",
       "valid": true,
       "selected": [
         "censorship-bound"
@@ -90,6 +97,5 @@
   "accepted": [
     "censorship-bound"
   ],
-  "charter_sha256": "c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712",
-  "rendering_note": "Artifact re-rendered after the vote: the first export stringified the norm tables (scripts/draft_edition1.render_toml via norms_raw on raw TOML rows); the cards and ballots are unchanged, the norms are the draft's verbatim. Previous charter_sha256: b73d40b51fb90cb3c1884f1f63be0a406a28c4be0a6c99c0a1abe753189d919b"
+  "charter_sha256": "c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712"
 }

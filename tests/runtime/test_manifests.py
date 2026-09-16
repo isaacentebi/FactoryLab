@@ -524,7 +524,7 @@ def test_edition3_testnet_manifest_identity_is_pinned_beside_edition_2():
     assert m.exchange.kind == "hyperliquid" and m.exchange.mainnet is False
     assert len(m.assemblies) == 9 and m.kill.wind_down is True
     assert m.manifest_hash() == (
-        "781584ce44b746ea660d24944d057140e771882f955550a8312f807986260426")
+        "776d2ecf38aa2cb762c761a894c72c3e2a75d22e7cbcbc01839e664c97c258ea")
     # Edition 3's new keys are hash-neutral at their defaults: edition 2 is untouched.
     assert load_manifest("edition2-testnet").manifest_hash() == (
         "b184b1d8dc55daf56978ea51181be0d06e59493bef2727d97b2f67717efdbf8b")
