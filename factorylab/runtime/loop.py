@@ -43,7 +43,11 @@ from factorylab.learners.router import Sample
 from factorylab.runtime.bootstrap import BootstrapMixin
 from factorylab.runtime.cadence import settle_forecasts
 from factorylab.runtime.compute import ComputeMixin
-from factorylab.runtime.feedback import FeedbackMixin, PendingJudgement
+from factorylab.runtime.feedback import (
+    UNMEASURED_REASON_UNCOMMITTED,
+    FeedbackMixin,
+    PendingJudgement,
+)
 from factorylab.runtime.governance import GovernanceMixin
 from factorylab.runtime.live import LiveClock, Reconciler
 from factorylab.runtime.pricing import PricingMixin
@@ -65,7 +69,13 @@ from factorylab.runtime.subscriptions import SubscriptionBook, ThinkingMixin
 from factorylab.runtime.summary import SummaryMixin, _as_unit
 from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
-from factorylab.settlement.vocabulary import evaluator_answer_schema
+from factorylab.settlement.vocabulary import (
+    DECLINED_DEFINITION,
+    UNMEASURED,
+    UNMEASURED_DEFINITION,
+    commission_block,
+    evaluator_answer_schema,
+)
 from factorylab.world.clock import ClockSource, DripSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.market import X402Provider
@@ -923,6 +933,8 @@ class Runtime(
     def _invoke_child(self, action_id, parent, item, ceiling):
         """New work shapes use the same bounded child admission and declared-shape dispatch."""
         target = action_id if item.target == "self" else item.target
+        if (reason := self._commissioned_judge_refusal(target)) is not None:
+            return self._refuse_commissioned_judge(parent, item, target, reason)
         spec = self.assemblies[target].spec if target in self.assemblies else None
         if (spec is None or target in self.retired_assemblies
                 or not any(k not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
@@ -1007,7 +1019,26 @@ class Runtime(
             "unread_outcomes": self.outcomes.unread(sample.chosen),
             "your_consequence_standing": self._standing_for(sample.chosen),
             "your_action_policy": self._action_policy(sample.chosen),  # private
+            # Evaluation is a commission, not an obligation (§6.B): a subject, a
+            # scope, an evidence horizon and a budget, which may be declined.
+            "commission": commission_block(
+                subject=about,
+                scope=f"the public return addressed by about_handle, judged on {ev.kind}",
+                horizon=self.ev.forecast_horizon_events,
+                budget_micro=self.queue.get(handle).cost_ceiling,
+            ),
         }
+        adjudication = self._adjudication_for(sample.chosen)
+        if adjudication is not None:
+            # An objection someone else made, given to a judge that did not write
+            # the verdict it rides on and does not own the measurement it
+            # challenges (§7: independent adjudication).
+            inputs["adjudication"] = {
+                "id": adjudication.id, "value": adjudication.value,
+                "measurement": adjudication.measurement, "evidence": adjudication.evidence,
+                "about_handle": adjudication.about_handle,
+                "answer_with": "fidelity_finding: {upheld, reason}",
+            }
         generic = ev.kind is not EventKind.PRODUCER_RETURN
         if generic:
             inputs["event"] = {"kind": str(ev.kind), "payload": payload}
@@ -1015,12 +1046,18 @@ class Runtime(
         schema = evaluator_answer_schema(self._forecast_schema(), self._register_schema())
         req = self._request(
             handle,
-            ("Evaluate the public return addressed by about_handle. The input's subject_handle "
-             "is the default when present. Give two numbers: verdict = its quality against "
+            ("Evaluate, on commission, the public return addressed by about_handle. The "
+             "input's subject_handle is the default when present. Give verdict = its quality "
              if generic else
-             "Evaluate a producer return. Give two numbers: verdict = its quality against ") +
-            "the charter (0 to 1); payoff = your probability that return_paid_off, the "
-            "kernel's consequence predicate, resolves true for the return. Then give "
+             "Evaluate, on commission, a producer return. Give verdict = its quality ") +
+            "against the charter (0 to 1). Judge it against what it committed to — a claim, "
+            "a counterfactual, an observation rule, a resource decision, an accepted promise "
+            "— and if it committed to nothing this evidence can measure, answer status: "
+            "unmeasured with a reason instead: that is a complete answer and carries no "
+            "penalty. You may decline the commission with status: cannot and a reason; you "
+            "are then charged for this call alone. Optionally give "
+            "payoff = your probability that return_paid_off, the kernel's consequence "
+            "predicate, resolves true for the return, and up to "
             f"{self.ev.max_forecasts_per_verdict} forecasts: for each, a predicate from the "
             "list and q = your probability it happens within its horizon.",
             inputs,
@@ -1034,8 +1071,22 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self._apply_registrations(handle, ret)
         self.handle_to_assembly[handle] = sample.chosen
+        self._resolve_adjudication(sample.chosen, handle, ret.outputs.get("fidelity_finding"))
+        answered = str(ret.outputs.get("status", "")).strip().lower()
+        reason = str(ret.outputs.get("reason", ""))[:500]
+        if ret.status == "refused" or answered == "cannot":
+            # A commission may be declined. The seat is charged the call it made
+            # and nothing else: no score, no penalty, no quota (§6.B).
+            self._settle_unmeasured(handle, CH_CONFORMITY,
+                                    reason or "the seat declined this commission",
+                                    definition=DECLINED_DEFINITION)
+            return
         verdict = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
         payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
+        if answered == UNMEASURED and verdict is None:
+            self._settle_unmeasured(handle, CH_CONFORMITY,
+                                    reason or "the evaluator found nothing measurable here")
+            return
         target = (self._judged_event(ev, handle, ret, seals_payoff=True)
                   if verdict is not None else None)
         if target is not None:
@@ -1043,7 +1094,7 @@ class Runtime(
             payload = _to_plain(target.payload)
         else:
             verdict = None
-        if verdict is None or payoff is None:
+        if verdict is None:
             # a malformed verdict is objectively non-conforming; the producer stays unjudged
             self.queue.settle(
                 handle,
@@ -1055,6 +1106,12 @@ class Runtime(
             )
             self.stats.conformities += 1
             self.window.outcomes += 1
+            return
+        if self._judged_commitment(about, payload) is None:
+            # Nothing was committed to, so there is nothing to be right or wrong
+            # about. The commission is answered unmeasured: no standing moves and
+            # no price moves, and the judged return keeps its own settlement path.
+            self._settle_unmeasured(handle, CH_CONFORMITY, UNMEASURED_REASON_UNCOMMITTED)
             return
         pend = self.pending.pop(about, None)
         about_decision = self.queue.get(about)
@@ -1079,18 +1136,26 @@ class Runtime(
                 self.stats.max_settlement_latency_events, self.n - pend.opened_at_event
             )
             self._deliver_verdict_to_inbox(about, verdict, judge_handle=handle)
-        forecast = self.consequences.seal_verdict(
-            self.book,
-            self.queue,
-            evaluator_handle=handle,
-            evaluator_id=sample.chosen,
-            about=about,
-            payoff=payoff,
-            event=self.n,
-            now_ns=self.clock.now_ns,
-            tick_ns=self.tick_clock.interval_ns,
-        )
-        self.stats.forecasts_sealed += 1
+        forecast = None
+        if payoff is not None:
+            forecast = self.consequences.seal_verdict(
+                self.book,
+                self.queue,
+                evaluator_handle=handle,
+                evaluator_id=sample.chosen,
+                about=about,
+                payoff=payoff,
+                event=self.n,
+                now_ns=self.clock.now_ns,
+                tick_ns=self.tick_clock.interval_ns,
+            )
+            self.stats.forecasts_sealed += 1
+        else:
+            # §7: the payoff privilege is gone. A verdict with no payoff forecast
+            # is still a commitment about the charter's blame on the return it
+            # judged, so it is committed here under its own handle rather than
+            # under a kernel forecast it never made.
+            self._commit_verdict_without_payoff(handle, sample.chosen, about, verdict)
         self._open_forecasts(handle, sample.chosen, about, ret.outputs.get("forecasts"))
         self.pending[handle] = PendingJudgement(handle, CH_CONFORMITY, self.n)
         self._emit(
@@ -1100,7 +1165,7 @@ class Runtime(
                 "evaluator_handle": handle,
                 "verdict": verdict,
                 "payoff": payoff,
-                "payoff_handle": forecast.handle,
+                "payoff_handle": forecast.handle if forecast is not None else None,
                 "rationale": str(ret.outputs.get("rationale", ""))[:2000],
                 "producer_outputs": payload.get("outputs", payload),
                 "propensity": self._public_propensity(handle),
@@ -1178,6 +1243,17 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self.handle_to_assembly[handle] = sample.chosen
         self._apply_registrations(handle, ret)
+        self._resolve_adjudication(sample.chosen, handle, ret.outputs.get("fidelity_finding"))
+        answered = str(ret.outputs.get("status", "")).strip().lower()
+        if ret.status == "refused" or answered in ("cannot", UNMEASURED):
+            # Meta work is a commission like any other: it may be declined, or
+            # answered "there is nothing here to measure", at the cost of the call.
+            self._settle_unmeasured(
+                handle, channel, str(ret.outputs.get("reason", ""))[:500] or
+                "the seat declined this commission",
+                definition=(DECLINED_DEFINITION if answered != UNMEASURED
+                            else UNMEASURED_DEFINITION))
+            return
         conformity = _as_unit(ret.outputs.get("conformity")) if ret.status == "ok" else None
         target = self._judged_event(ev, handle, ret) if conformity is not None else None
         if target is not None:

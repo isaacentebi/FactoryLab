@@ -6,6 +6,7 @@ from dataclasses import dataclass, fields, replace
 from factorylab.kernel.ledger import Ledger, canonical
 from factorylab.kernel.queue import DecisionQueue, PropensityRecord
 from factorylab.kernel.registry import _freeze
+from factorylab.settlement.receipts import ReceiptBook
 from factorylab.settlement.scoring import _require_id, _require_probability
 from factorylab.settlement.vocabulary import _require_event_index, _validate_params
 
@@ -43,6 +44,9 @@ class ForecastBook:
 
     def __init__(self, ledger: Ledger) -> None:
         self.__ledger = ledger
+        # The four settlement objects share the book's ledger: a learning receipt
+        # about a forecast is written where the forecast's own seal was written.
+        self.receipts = ReceiptBook(ledger)
         self.__forecasts: dict[str, Forecast] = {}
         self.__settled: set[str] = set()
         self.__requested: dict[str, int] = {}

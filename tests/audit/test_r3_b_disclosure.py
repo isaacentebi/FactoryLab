@@ -167,12 +167,20 @@ def test_a_childs_verdict_trains_the_router_that_woke_its_parent(monkeypatch):
 
 
 def test_a_cross_role_childs_score_trains_the_router_that_owns_the_targets_kind(monkeypatch):
-    """A Tick producer requests a ProducerReturn evaluator: the parent's router cannot hold
-    that arm, so the settlement goes to the router whose universe can, and the ledger says so."""
+    """A Tick producer requests a seat routed on another event kind: the parent's router
+    cannot hold that arm, so the settlement goes to the router whose universe can, and the
+    ledger says so.
+
+    Restated for R3-D: the cross-role child used to be an evaluator, and a judging
+    contract can no longer be commissioned as a child at all (GPT-6 third reading §7,
+    the commissioned-child-judge route). The property under test is where a child's
+    score goes, not who the child is, so the target is the observer seat the Funding
+    router holds and the Tick router does not.
+    """
     rt = make_runtime()
     tick = rt.routers["Tick"][0]
-    returns = rt.routers["ProducerReturn"][0]
-    assert "eval-a" not in tick.universe and "eval-a" in returns.universe
+    returns = rt.routers["Funding"][0]
+    assert "seed-observer" not in tick.universe and "seed-observer" in returns.universe
     lid = tick.learner.id
     parent = rt.queue.open(
         actor=lid,
@@ -191,25 +199,22 @@ def test_a_cross_role_childs_score_trains_the_router_that_owns_the_targets_kind(
         "complete",
         lambda request: ModelResponse(
             request.model_id,
-            json.dumps({"verdict": 0.5, "payoff": 0.5, "rationale": "r", "forecasts": []}),
+            json.dumps({"action": "hold"}),
             1,
             1,
             "stop",
         ),
     )
-    # The judgement this child offers is its own business and settles on its own terms;
-    # what is under test is where the score goes, so the step is held and a score supplied.
-    judged = []
-    monkeypatch.setattr(rt, "_evaluator_step", lambda *a, **k: judged.append(a[1]))
+    # What the child returns is its own business and settles on its own terms; what is
+    # under test is where the score goes, so a score is supplied below.
     before_tick, before_returns = tick.learner.state(), returns.learner.state()
     rt._invoke_child(
         "seed-decider",
         req,
-        ChildRequest("eval-a", "judge it", {}, {"type": "object"}),
+        ChildRequest("seed-observer", "observe it", {}, {"type": "object"}),
         req.cost_ceiling,
     )
     child = _items(rt, "request.child")[-1]["handle"]
-    assert judged == [child]  # the child ran as an evaluator, under the parent's router
     assert rt.queue.get(child).actor == lid
     rt.queue.settle(
         child,
@@ -223,10 +228,12 @@ def test_a_cross_role_childs_score_trains_the_router_that_owns_the_targets_kind(
     settled = [i for i in _items(rt, "request.settled") if i["handle"] == child]
     assert settled, "the child's settlement reached no learner and said nothing"
     assert settled[-1]["learner_id"] == returns.learner.id
-    assert settled[-1]["target"] == "eval-a" and settled[-1]["event_kind"] == "ProducerReturn"
-    assert returns.learner.state() != before_returns  # the router that can hold eval-a learned
-    # Five arms started uniform; the reward moved the one the parent chose.
-    assert returns.learner.distribution(returns.universe)["eval-a"] > 1 / len(returns.universe)
+    assert settled[-1]["target"] == "seed-observer"
+    assert settled[-1]["event_kind"] == "Funding"
+    assert returns.learner.state() != before_returns  # the router that can hold it learned
+    # The arms started uniform; the reward moved the one the parent chose.
+    assert (returns.learner.distribution(returns.universe)["seed-observer"]
+            > 1 / len(returns.universe))
     assert tick.learner.state() == before_tick  # the one that cannot was left alone
 
 

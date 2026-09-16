@@ -213,7 +213,10 @@ def test_a_judges_settled_payoff_forecast_counts_as_its_consequence():
     rt._manage_reserve_window()
     rt._register("author", replace(EXPLORER, id="new-judge", role="evaluator",
                                    accepts=("ProducerReturn",)))
-    about, event = _consequence_produce(rt, "NOOP")
+    # Restated for R3-D: the subject has to have committed to something, or the
+    # judgement of it concludes unmeasured and settles no consequence at all
+    # (GPT-6 third reading §6.B). The router's own abstention commits to nothing.
+    about, event = _consequence_produce(rt)
     _consequence_judge(rt, event, "new-judge")
     assert rt.queue.get(about).status is SettleStatus.SETTLED
     assert rt.stats.consequences_by_assembly.get("new-judge") == 1

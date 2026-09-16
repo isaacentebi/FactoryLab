@@ -189,7 +189,11 @@ class ScriptedProvider:
                 "target": "composition-helper", "description": "A1 helper", "inputs": {},
                 "outcome_schema": {"type": "object", "required": ["answer"]},
             }]
-        if n == 45:
+        # Offered on three calls rather than one: a registration carried by a child
+        # invocation is not applied, and which call belongs to a child moves with the
+        # schedule. Re-registering the same id supersedes it, so the world still ends
+        # with one spread-check whichever offer lands first.
+        if n in (45, 47, 49):
             reply["register"] = [
                 {
                     "kind": "tool",

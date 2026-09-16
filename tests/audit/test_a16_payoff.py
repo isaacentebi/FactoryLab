@@ -71,7 +71,7 @@ class _Judge(ScriptedProvider):
 
 def test_research_judged_useful_earns_a_good_payoff_brier_without_verdict_penalty():
     runtime = _consequence_runtime(provider=_Judge(0.9, 0.1))
-    about, event = _consequence_produce(runtime, "NOOP")  # opens and closes nothing: y = 0
+    about, event = _consequence_produce(runtime)  # opens and closes nothing: y = 0
     judge = _consequence_judge(runtime, event, "eval-a")
     assert runtime.queue.history(about)[0].score == 0.9  # quality is the verdict
     standing = runtime.standing.snapshot()["eval-a"]
@@ -88,17 +88,29 @@ def test_research_judged_useful_earns_a_good_payoff_brier_without_verdict_penalt
     assert item["outcome"]["your_payoff_brier"] == 0.99
 
 
-def test_payoff_is_mandatory_and_the_old_single_number_path_is_gone():
+def test_payoff_is_optional_and_the_old_single_number_path_is_gone():
+    """Restated by R3-D: payoff is no longer mandatory.
+
+    A16 pinned the privilege GPT-6's third reading tells us to remove (§7: "Remove the
+    remaining mandatory payoff privilege"), by asserting that a verdict without a payoff
+    number is malformed and settles zero. A judge with nothing to say about the kernel's
+    consequence predicate is no longer forced to invent a number for it: the verdict
+    stands, it settles the return it judged, it is committed as a normative claim under
+    its own key, and no kernel forecast is sealed on the judge's behalf. What A16 was
+    really pinning — the two numbers are two different things, and neither substitutes
+    for the other — is asserted here and in the tests around it.
+    """
     runtime = _consequence_runtime(provider=_Judge(0.9, None))
     del runtime.provider.target.reply["payoff"]
-    about, event = _consequence_produce(runtime, "NOOP")
+    about, event = _consequence_produce(runtime)
     judge = _consequence_judge(runtime, event, "eval-a")
-    # A verdict without a payoff is malformed: the judge settles 0 and the producer stays
-    # unjudged, and nothing was sealed on the judge's behalf.
-    assert runtime.queue.get(judge).status is SettleStatus.SETTLED
-    assert runtime.queue.history(judge)[0].score == 0.0
-    assert runtime.queue.get(about).status is SettleStatus.PENDING
-    assert runtime.book.outstanding() == 0
+    assert runtime.queue.get(judge).status is SettleStatus.PENDING  # awaiting its meta
+    assert runtime.queue.get(about).status is SettleStatus.SETTLED
+    assert runtime.queue.history(about)[0].score == 0.9  # the verdict, as always
+    assert runtime.book.outstanding() == 0  # nothing sealed about return_paid_off
+    committed = [i for i in runtime.ledger._recovery_items()
+                 if i["kind"] == "verdict.committed_without_payoff"]
+    assert committed and committed[0]["handle"] == judge and committed[0]["q"] == 0.9
     schema_required = None
 
     class Capture(ScriptedProvider):
@@ -111,9 +123,11 @@ def test_payoff_is_mandatory_and_the_old_single_number_path_is_gone():
                 {"verdict": 0.5, "payoff": 0.5, "rationale": "t", "forecasts": []}), 1, 1, "s")
 
     runtime = _consequence_runtime(provider=Capture())
-    _, event = _consequence_produce(runtime, "NOOP")
+    _, event = _consequence_produce(runtime)
     _consequence_judge(runtime, event, "eval-a")
-    assert "payoff" in schema_required and "verdict" in schema_required
+    # Both fields are offered; neither is required, because an evaluation may also
+    # conclude that there is nothing here to measure.
+    assert schema_required == ["rationale"]
 
 
 def test_scoring_block_and_return_contract_document_both_numbers():
@@ -172,7 +186,7 @@ def test_standing_is_trained_by_every_settled_predicate_not_only_the_payoff():
     runtime._settle_due_forecasts()
     assert runtime.book.outstanding() == 0  # the optional forecast settled to its handle
     assert runtime.standing.snapshot()["eval-a"]["n"] == 1  # and trained standing with it
-    about, event = _consequence_produce(runtime, "NOOP")
+    about, event = _consequence_produce(runtime)
     _consequence_judge(runtime, event, "eval-a")
     assert runtime.standing.snapshot()["eval-a"]["n"] == 2
     assert runtime.standing.coverage("eval-a") == 1.0  # every forecast asked for, settled
@@ -180,7 +194,7 @@ def test_standing_is_trained_by_every_settled_predicate_not_only_the_payoff():
 
 def test_verdict_event_carries_payoff_and_meta_sees_it():
     runtime = _consequence_runtime(provider=_Judge(0.9, 0.1))
-    _, event = _consequence_produce(runtime, "NOOP")
+    _, event = _consequence_produce(runtime)
     _consequence_judge(runtime, event, "eval-a")
     verdict = next(e for e in runtime.internal if e.kind is EventKind.VERDICT)
     assert verdict.payload["verdict"] == 0.9 and verdict.payload["payoff"] == 0.1

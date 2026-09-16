@@ -37,7 +37,12 @@ class Colluders(ScriptedProvider):
         self.self_payoff = self_payoff
 
     def _produce(self, desc, inputs):
-        reply = {"action": "hold"}
+        # Restated for R3-D: the producer states one thing with its quiet action — the
+        # cadence it is willing to pay to wake at, which is the default and changes
+        # nothing else. A return that commits to nothing is unmeasured under the
+        # evaluation commission (GPT-6 third reading §6.B), and this seat's strategy
+        # is about a verdict that endorses it, not about being unjudgeable.
+        reply = {"action": "hold", "subscribe": {"cadence_floor": 1}}
         if self.self_payoff is not None:
             reply["payoff"] = self.self_payoff
         return reply

@@ -224,7 +224,13 @@ the mean and total per section over every recorded invocation.
 `route.excluded`, `tool.refused`, `consequence.refused` (A9); `exposure.settled` (A5);
 `cascade.sibling`, `meta.consequence`, `meta.awaiting_consequence`, `sampling.raise`,
 `sampling.lower` (A14); `novelty.release`, `novelty.grant`,
-`novelty.grant_consumed` (A13).
+`novelty.grant_consumed` (A13). Edition 3's third round adds
+`evaluation.unmeasured`, `verdict.unmeasured`,
+`verdict.committed_without_payoff`, `receipt.execution`, `receipt.learning`,
+`receipt.commitment`, `receipt.adjudication`,
+`fidelity.adjudication_queued`, `fidelity.adjudicated`,
+`fidelity.finding_refused`, `fidelity.challenge_opened` and
+`fidelity.challenge_skipped`.
 
 A closed lot's realised P&L is credited once (edition 2, cold audit F7). A
 handle that opens and closes its own lot receives the whole of it, net of its
@@ -249,8 +255,104 @@ that return's outcome entered it. A window that has not closed by the
 consequence backstop, or whose attribution evidence was released before it could
 be read, judged nothing: there is no fact either way, so the commitment is closed
 out unscored (`verdict.unread`). It moves neither the judge's standing nor the
-base rate of unblamed returns, and the metas that conformed to that verdict are
-graded on the payoff fact alone. A missing fact is never performance.
+base rate of unblamed returns. A missing fact is never performance.
+
+### Evaluation is a commission (edition 3, third round)
+
+Every evaluator request carries a `commission`: the subject, the observation
+scope, the evidence horizon in events, and the budget in micro-USD. What comes
+back may be a verdict, or one of two other complete answers.
+
+- **Unmeasured.** `{"status": "unmeasured", "reason": ...}` settles the
+  commission `INAPPLICABLE` under `unmeasured-v1` (`evaluation.unmeasured`). No
+  score, no price, no standing, no base rate: the work was done and the finding
+  is that there was nothing here this evidence could measure. It is not a low
+  score and not a censored decision somebody failed to answer.
+- **Declined.** `{"status": "cannot", "reason": ...}` settles under
+  `declined-v1`. The seat is charged the call it made and nothing else. There
+  is no activity quota and no profit quota anywhere in the runtime.
+
+The runtime reaches `unmeasured` on its own in three places. A judged return
+that committed to nothing — no stated claim, counterfactual, observation rule,
+resource decision or accepted promise, in its return or in its inbox-visible
+commitments — cannot be judged against anything, so the commission concludes
+unmeasured rather than scoring how prudent the return looked. Unfamiliar work
+keeps its exploratory allowance: while a seat is inside the novelty share the
+population granted it, its returns stay evaluable whatever they say. A verdict
+whose normative window closed unread settles unmeasured instead of falling back
+to its payoff forecast, and every meta that conformed to it settles unmeasured
+with it rather than timing out at zero for a fact the runtime owed it and never
+delivered.
+
+`payoff` is an optional field. A judge with nothing to say about the kernel's
+consequence predicate is not forced to invent a number for it and is not
+penalised for leaving it out; its verdict is still committed as a normative
+claim (`verdict.committed_without_payoff`) and decided by whatever facts the
+world produced about it — its normative outcome, its payoff forecast, or both.
+When neither exists there is nothing to be right about
+(`verdict.unmeasured`).
+
+Easy questions do not pay. A forecast on a predicate whose prevalence baseline
+is at or above 0.95, or at or below 0.05, over at least 20 recorded
+observations, settles observed and unscored under `uninformative-baseline-v1`:
+the observation still enters the base rate, the learning receipt carries
+`score: null` and the reason `uninformative_baseline`, and no standing moves.
+The bound is on the question, not on the forecaster.
+
+### Four settlement objects
+
+`settlement/receipts.py` keeps four things apart, each addressed by a content
+id of its own and each written to the diary before it is addressable
+(`receipt.execution`, `receipt.learning`, `receipt.commitment`,
+`receipt.adjudication`). An **execution receipt** is a fact the world produced
+— a fill, a refusal, a charge, a transfer, a program result, a failed delivery
+— and carries no score. A **learning receipt** is one assessment of one
+decision: the decision handle, the scoring rule and its version, the
+observation horizon, the outcome, the score, the sampling record; its score may
+be `null` with a reason, and an assessment that could not be made is never a
+zero. A **commitment** is a promise with a responsible principal, a deadline,
+an observation rule and the conditions under which it is unobservable through
+nobody's fault. An **adjudication** is a contestable interpretation: a value, a
+measurement, evidence, a finding and the adjudicator who made it.
+
+### A fidelity objection is an adjudication
+
+An accepted objection becomes an open `Adjudication` the moment it is made, and
+it is queued (`fidelity.adjudication_queued`) for an adjudicator drawn from the
+seats that judge — never the judge that wrote the verdict, and never a seat the
+challenged card answers for. With nobody independent available the claim stays
+open: an interested finding is worse than none. The adjudicator answers with
+`fidelity_finding: {upheld, reason}` on its own judging return. The finding
+produces a learning receipt for the objector, scoring the uncertainty it stated
+against the finding by the same proper score as anything else
+(`fidelity.adjudicated`), and, when the objection is upheld, opens a
+`challenge` proposal for the card through the population's ordinary
+registration route (`fidelity.challenge_opened`). Nothing here reprices a card:
+the committee does that, or nobody does.
+
+### The commissioned-child-judge route is closed
+
+A judging contract cannot be requested as a child. A requested judge may only
+address the chain that requested it, and nothing judges its own output or its
+ancestors', so the route could be bought, paid for and never executed. It is
+refused before a decision is opened or a call is made (`requests.refused`), with
+the reason in `return_feedback` and in the catalogue's addressing text. Judging
+work reaches a seat the three ways it always did: the router's sampling, the
+adversarial share and the cascade.
+
+### Cascade separation is time and completed evidence
+
+A tier's window covers a **duration**, not a number of arrivals: the jittered
+`timing.min_ratio` the manifest already precommits, counted in observation
+windows (the tick interval) rather than in messages, drawn once when the window
+opens and never redrawn inside it (`cascade.arrival` carries `window_ns`,
+`opened_ns` and `elapsed_ns`). The window releases when its duration has
+elapsed and some of the evidence inside it has completed — for a verdict, that
+the return it judged has an outcome. Every arrival is named in the released
+report, so the sibling share still reaches it, and only completed evidence is
+averaged. Three judgements arriving in the same nanosecond are three arrivals
+in an empty window and trigger nothing. Execution facts and safety actions never
+enter the cascade and are never slowed by it.
 
 ## Exact measurement
 

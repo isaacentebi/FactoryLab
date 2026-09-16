@@ -7,6 +7,7 @@ from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.queue import DecisionQueue
 from factorylab.settlement.forecast import Forecast, ForecastBook, open_forecast_decision
 from factorylab.settlement.lots import LotTable, Payoff
+from factorylab.settlement.receipts import ExecutionReceipt, ReceiptBook
 from factorylab.settlement.vocabulary import RETURN_PAID_OFF, _require_event_index
 
 
@@ -21,6 +22,15 @@ class ReturnConsequences:
         self.mids: dict[str, str] = {}
         self.pending_orders: dict[str, dict] = {}
         self.deferred_events: list[tuple[str, dict, int]] = []
+        # §6.A: an execution receipt is a fact about the world — a fill, a
+        # refusal — addressable on its own and never confused with an
+        # assessment of the decision that caused it.
+        self.receipts = ReceiptBook(ledger)
+
+    def _execution(self, kind: str, handle: str, event: int, facts: dict) -> str:
+        """Write one execution receipt for a fact this accounting just admitted."""
+        return self.receipts.record(
+            ExecutionReceipt(kind=kind, handle=handle, owner=None, at_event=event, facts=facts))
 
     def order_intent(self, client_id: str, handle: str, coin: str) -> None:
         """An unacknowledged order keeps attribution and dependent economic outcomes pending."""
@@ -129,8 +139,10 @@ class ReturnConsequences:
                 raise ValueError("order already belongs to another decision")
             return
         if not self.account_open(handle):
+            reason = "no open consequence account"
             self.ledger.append({"kind": "consequence.refused", "handle": handle,
-                                "order_id": oid, "reason": "no open consequence account"})
+                                "order_id": oid, "reason": reason})
+            self._execution("refusal", handle, event, {"order_id": oid, "reason": reason})
             return
         self._apply(
             "order",
@@ -173,6 +185,17 @@ class ReturnConsequences:
                                     "order_id": str(payload["order_id"]), "reason": str(exc)})
                 return
             self._apply("fill", {"event": event, "payload": dict(payload)}, table)
+            order = next((o for o in table.orders if o.order_id == str(payload["order_id"])), None)
+            handle = order.handle if order is not None else self.table.service_return(
+                str(payload["order_id"]))
+            if handle is not None:
+                self._execution("fill", handle, event, {
+                    "order_id": str(payload["order_id"]), "coin": payload["coin"],
+                    "is_buy": payload["is_buy"], "size": str(payload["size"]),
+                    "px": str(payload["px"]), "fee_usd": str(payload["fee_usd"]),
+                    "market": payload.get("market", "perp"),
+                    "liquidation": bool(payload.get("liquidation", False)),
+                })
         elif kind == "Funding" and payload.get("paid_usd") is not None:
             table = self.table.funding(payload["coin"], str(payload["paid_usd"]))
             self._apply("funding", {"event": event, "payload": dict(payload)}, table)

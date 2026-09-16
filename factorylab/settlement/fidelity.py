@@ -27,6 +27,15 @@ charter it validates against is passed in, never imported.
   and blames no card. It is contestable the way any measurement claim is: the
   card it names can be challenged through the existing challenge route, which
   trials a replacement measurement side by side before a committee.
+
+Edition 3's third round adds the missing half (§7: "keep the objection as an
+unresolved claim until independent adjudication"). An accepted objection becomes
+an ``Adjudication`` — an open claim — and is queued for an adjudicator that did
+not write the verdict and does not own the measurement. What the finding
+produces is a learning receipt for the objector, scored on the uncertainty it
+stated, and, when the objection is upheld, a ``challenge`` proposal the
+population votes on. Nothing here reprices a card: only the population's own
+route does that.
 """
 
 from __future__ import annotations
@@ -119,3 +128,49 @@ def parse_objection(raw: object, *, charter=None, measurements=frozenset()) -> F
         raise ValueError("fidelity objection measurement: name a live card or a known "
                          "observation, so the claim can be challenged")
     return objection
+
+
+def choose_adjudicator(
+    candidates, *, author: str, measurement_owner: str | None = None,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Name an independent adjudicator for one objection, and who was excluded.
+
+    Independence has exactly two requirements and they are structural, not
+    reputational: the adjudicator did not write the verdict the objection rides
+    on, and it does not own the measurement the objection challenges — a proxy
+    cannot certify its own fidelity, and neither can the seat whose standing the
+    proxy carries. ``candidates`` is the population the runtime offers (the other
+    judge and the meta seats; the antagonist's evidence route may supply the
+    counter-case), read in its given order so the choice is reproducible.
+
+    Returns ``(adjudicator, excluded)``; the adjudicator is ``None`` when nobody
+    independent exists, and the claim then stays open rather than being resolved
+    by someone with an interest in it.
+    """
+    excluded = tuple(name for name in (author, measurement_owner) if name)
+    for candidate in candidates or ():
+        if isinstance(candidate, str) and candidate and candidate not in excluded:
+            return candidate, excluded
+    return None, excluded
+
+
+def challenge_proposal(adjudication, *, replacement=None, trial_windows: int = 6) -> dict:
+    """The population's own route for an upheld objection: a challenge, not a reprice.
+
+    An upheld objection is evidence that a live card measures the wrong thing.
+    Edition 2 already has the mechanism for that claim — a challenge trials a
+    replacement measurement beside the incumbent for a fixed number of closed
+    windows and the committee ballots on adopting it — and it is the only thing
+    that may change what a card is worth. This builds the proposal; admitting it
+    is the ordinary registration path, with the ordinary refusals.
+    """
+    proposal = {
+        "kind": "challenge",
+        "card_id": adjudication.measurement,
+        "evidence": (f"upheld fidelity objection {adjudication.id}: "
+                     f"{adjudication.evidence}")[:MAX_EVIDENCE_CHARS],
+        "trial_windows": trial_windows,
+    }
+    if replacement is not None:
+        proposal["replacement"] = replacement
+    return proposal

@@ -44,6 +44,7 @@ from factorylab.runtime.observations import (
 )
 from factorylab.runtime.shared import PredicateRunner, _to_plain, assembly_rewards
 from factorylab.runtime.summary import _assembly_contract, _model_contract
+from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 from factorylab.world.x402 import X402Error
 
 #: What a challenge ballot shows its voter beside the amendment: the evidence the
@@ -96,6 +97,51 @@ class GovernanceMixin:
         for kind in ("connector", "retire"):
             self.PROPOSAL_SHAPES[kind]["predicted_effect"] = {
                 "card_id": "a current card id", "direction": "decrease", "window": 1}
+
+    def _commissioned_judge_refusal(self, target: str) -> str | None:
+        """Name why a judging contract cannot be commissioned as a child, or None.
+
+        GPT-6 Pro's third reading, §3 further: "the commissioned-child-judge path
+        has incompatible exclusions (remove the suggestion it is usable)"; §7:
+        "Remove promises of commissioned judges and funding routes that cannot
+        execute." The two exclusions really are incompatible. A requested judge
+        may only address the chain that requested it (``_child_subject_refusal``),
+        and it may not judge that chain, because nothing judges its own output or
+        its ancestors' (``_judged_event``). Between them there is no return left
+        for it to judge, so the route could be bought, paid for, and never
+        executed. Until a commissioned judge can execute without self-judgement,
+        it is refused before the money is spent, with the reason in public.
+
+        Judging work still reaches a seat the three ways it always did: the
+        router's sampling, the adversarial share and the cascade.
+        """
+        from factorylab.runtime.shared import assembly_rewards
+
+        assembly = self.assemblies.get(target)
+        if assembly is None:
+            return None
+        kinds = set(assembly.spec.emits or ())
+        shapes = set(assembly_rewards(assembly.spec).values())
+        if kinds & {"Verdict", "MetaVerdict"} or "conformity" in shapes:
+            return COMMISSIONED_JUDGE_REFUSAL
+        return None
+
+    def _refuse_commissioned_judge(self, parent, item, target: str, reason: str) -> tuple:
+        """Refuse the request in public, before a decision is opened or a call is made."""
+        self.ledger.append({"kind": "requests.refused", "handle": parent.handle,
+                            "target": target, "reason": reason, "ts": self.clock.now_ns})
+        self.registration_feedback.append({"kind": "judgement",
+                                           "reason": f"judgement: {reason}"})
+        return {"tool": f"assembly:{target}", "args": item.inputs,
+                "result": {"error": reason}}, 0
+
+    def _invoke_child(self, action_id, parent, item, ceiling):
+        """A judging contract is never commissioned as a child; everything else proceeds."""
+        target = action_id if item.target == "self" else item.target
+        reason = self._commissioned_judge_refusal(target)
+        if reason is not None:
+            return self._refuse_commissioned_judge(parent, item, target, reason)
+        return super()._invoke_child(action_id, parent, item, ceiling)
 
     def _apply_registrations(self, handle: str, ret: Return) -> None:
         if ret.status != "ok":
