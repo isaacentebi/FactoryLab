@@ -26,7 +26,7 @@ from factorylab.runtime.venue import wind_down
 from factorylab.runtime.worlds import NS_PER_DAY, KillSpec, load_manifest
 from factorylab.world.exchange import Order
 
-EDITION3_HASH = "8d317ba7593daeb744743ba9b9e09427beeae32572cdb57dab6da0d51093d160"
+EDITION3_HASH = "54e84cfaf767f6f9c1af676e6411dddf86d8dd02af4f6d4895bcaaf2a11d29a0"
 
 
 @pytest.fixture(autouse=True)
@@ -81,6 +81,16 @@ def test_edition3_manifest_loads_with_the_roster_money_and_kill_contract_of_c5()
     for model_id in ("deepseek/deepseek-v4.1-flash", "openai/gpt-5.6-sol", "openai/gpt-5.6-luna"):
         assert dict(routes[model_id].extra_body) == {
             "provider": {"require_parameters": True}}
+    # The outside: `web.search` runs on luna's `:online` route, at a flat 0.002 plus the
+    # metered completion, and never more than five cents a call. The seats' own tier is
+    # untouched, so the roster this charter was ratified against keeps its digest.
+    assert m.web.search_model == "openai/gpt-5.6-luna"
+    assert m.web.call_price_micro == 2000 and m.web.max_call_micro == 50_000
+    assert not routes["openai/gpt-5.6-luna"].web
+    online = routes["openai/gpt-5.6-luna:online"]
+    assert (online.input_usd_per_mtok, online.output_usd_per_mtok) == ("0.20", "1.20")
+    assert dict(online.web)["usd_per_request"] == "0.007"
+    assert m.price_table().price("openai/gpt-5.6-luna:online").per_request_micro == 7000
 
     # §12: the whole $300 of backing, $120 at genesis and $60 on days 7, 14 and 21.
     assert m.initial_balance_micro == 300_000_000

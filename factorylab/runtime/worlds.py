@@ -148,6 +148,41 @@ class ConnectorsSpec:
         object.__setattr__(self, "origin_denylist", tuple(self.origin_denylist))
 
 
+def online_id(model_id: str) -> str:
+    """The id of a model's search-capable route: its own, when it already names one.
+
+    A menu entry may be written either way — a base id whose ``web`` table buys the
+    provider's search plugin, or the ``:online`` id itself — and both name the same
+    route, so a price and a plugin configuration are registered once, under the id a
+    request actually carries.
+    """
+    return model_id if model_id.endswith(":online") else f"{model_id}:online"
+
+
+@dataclass(frozen=True)
+class WebSpec:
+    """The search route, its flat call price and the ceiling on one search.
+
+    ``search_model`` names a model on the menu; the tool calls its ``:online``
+    route. With no model named there is no ``[web]`` block and no ``web.search``
+    tool: a world that predates this keeps its manifest identity exactly.
+    """
+
+    search_model: str | None = None
+    call_price_micro: int = 0
+    max_call_micro: int = 0
+
+    def __post_init__(self):
+        if self.search_model is not None and not isinstance(self.search_model, str):
+            raise ValueError("web.search_model must be a model id on the menu")
+        for name in ("call_price_micro", "max_call_micro"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"web.{name} must be a non-negative integer")
+        if self.search_model is not None and self.max_call_micro <= self.call_price_micro:
+            raise ValueError("web.max_call_usd must leave room above the flat call price")
+
+
 @dataclass(frozen=True)
 class TreasurySpec:
     """Compute insolvency and the public discovery index are fixed at launch."""
@@ -311,6 +346,7 @@ class WorldManifest:
     evaluation: EvaluationSpec = EvaluationSpec()
     tools: ToolsSpec = ToolsSpec()
     connectors: ConnectorsSpec = ConnectorsSpec()
+    web: WebSpec = WebSpec()
     notes: NotesSpec = NotesSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
@@ -350,7 +386,7 @@ class WorldManifest:
             if web:
                 per_request = usd_to_micro(web.get("usd_per_request", "0"), rounding="exact")
                 t.register(
-                    f"{m.id}:online",
+                    online_id(m.id),
                     TokenPrice(base.input_micro, base.output_micro, per_request),
                 )
         return t
@@ -361,7 +397,7 @@ class WorldManifest:
         for m in self.models:
             web = {k: v for k, v in dict(m.web).items() if k != "usd_per_request"}
             if dict(m.web):
-                out[f"{m.id}:online"] = web
+                out[online_id(m.id)] = web
         return out
 
     def extra_body_config(self) -> dict[str, dict[str, Any]]:
@@ -400,6 +436,10 @@ class WorldManifest:
             payload.pop("kill")
         if payload["providers"] == asdict(ProvidersSpec()):
             payload.pop("providers")
+        # An absent [web] block registers no search tool, so a world without one hashes
+        # exactly as it did before web search existed.
+        if payload["web"] == asdict(WebSpec()):
+            payload.pop("web")
         for assembly in payload["assemblies"]:
             if assembly.get("cadence_floor") == 1:
                 assembly.pop("cadence_floor", None)
@@ -564,6 +604,13 @@ class WorldManifest:
         if not self.models:
             raise ValueError("a world needs at least one priced model tier")
         ids = {m.id for m in self.models}
+        if self.web.search_model is not None:
+            # The tool calls the route, so the route must be priced: either the menu
+            # names the ``:online`` id itself, or a base entry buys it with a ``web`` table.
+            routes = ids | {online_id(m.id) for m in self.models if m.web}
+            if online_id(self.web.search_model) not in routes:
+                raise ValueError(
+                    "web.search_model must name a search-capable model on the menu")
         for a in self.assemblies:
             if a.model_id not in ids:
                 raise ValueError(f"assembly {a.id} uses unpriced model {a.model_id}")
@@ -767,6 +814,19 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         max_calls_per_window=conn.get("max_calls_per_window", 60),
         origin_denylist=conn.get("origin_denylist", DEFAULT_DENYLIST),
     )
+    web_block = d.get("web", {})
+    if not isinstance(web_block, dict) or set(web_block) - {
+        "search_model", "call_price_micro", "max_call_usd"
+    }:
+        raise ValueError("unknown web manifest key")
+    max_call = web_block.get("max_call_usd", "0")
+    if type(max_call) not in (str, int):
+        raise ValueError("web.max_call_usd must be exact USD text or integer")
+    web = WebSpec(
+        search_model=web_block.get("search_model"),
+        call_price_micro=web_block.get("call_price_micro", 0),
+        max_call_micro=usd_to_micro(max_call, rounding="exact"),
+    )
     venice_cap = (d.get("treasury") or {}).get("max_venice_per_window", "10")
     if type(venice_cap) not in (str, int):
         raise ValueError("treasury.max_venice_per_window must be exact USD text or integer")
@@ -902,6 +962,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         charter_content_sha256=charter_content_sha256,
         evaluation=evaluation,
         connectors=connectors,
+        web=web,
         notes=notes,
         tools=ToolsSpec(
             int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),

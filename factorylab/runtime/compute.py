@@ -466,7 +466,23 @@ class ComputeMixin:
         self._init_connectors()
         self.tool_specs.setdefault(
             "connector.fetch", connector_spec(self.m.connectors.call_price_micro))
+        self._ensure_web_tool()
         self._ensure_directory_tools()
+
+    def _ensure_web_tool(self) -> None:
+        """Register ``web.search`` exactly when the manifest names a search route.
+
+        A world with no ``[web]`` block registers no tool, so nothing about its
+        prompt, its manifest identity or its roster changes: the outside is reachable
+        only where a launch decided what one look at it costs and on which route.
+        """
+        from factorylab.cortex.tools import web_search_spec
+
+        if self.m.web.search_model is None:
+            return
+        cap = (Decimal(self.m.web.max_call_micro) / 1_000_000).normalize()
+        self.tool_specs.setdefault(
+            "web.search", web_search_spec(self.m.web.call_price_micro, f"{cap}"))
 
     #: What one page of a shared-directory listing returns before a cursor.
     DIRECTORY_PAGE = 50
@@ -671,6 +687,10 @@ class ComputeMixin:
             if tool == "connector.fetch":
                 contract = self.registry.get(f"connector:{call['args']['id']}")
                 price += contract.input_schema.get("max_call_micro", 0)
+            if tool == "web.search":
+                # The flat price is not what a search costs: the metered completion
+                # rides with it, and the manifest's ceiling is what must fit.
+                price = self.m.web.max_call_micro
             if tool in ("note.put", "note.get"):
                 from factorylab.runtime.notes import prepare
 
@@ -731,6 +751,12 @@ class ComputeMixin:
             return {"error": "unknown or disallowed tool"}, 0
         if tool_id == "connector.fetch":
             return self._fetch_connector(action_id, handle, args)
+        if tool_id == "web.search":
+            # A kernel call on the seat's own meter: one completion on the search
+            # route, priced and held before it runs, booked to this seat's cost.
+            from factorylab.runtime import websearch
+
+            return websearch.run(self, action_id, handle, args)
         if tool_id == "note.list":
             # An index of public keys, free like artifact.get: a directory nobody
             # can afford to read is not a directory. It is ledgered like any call.
@@ -953,6 +979,11 @@ class ComputeMixin:
                     result, cost = {"error": "request cost ceiling exhausted"}, 0
                     if call["tool"] == "connector.fetch":
                         self._connector_refused(req.handle, result["error"])
+                    elif call["tool"] == "web.search":
+                        self.ledger.append({
+                            "kind": "web.refused", "handle": req.handle,
+                            "assembly_id": action_id, "reason": result["error"],
+                            "ts": self.clock.now_ns})
                 else:
                     result, cost = self._run_tool(action_id, req.handle, call, slot=slot)
                 tool_cost += cost
@@ -965,7 +996,10 @@ class ComputeMixin:
                 # error is a failure.
                 ok = uncertain or not (isinstance(result, dict)
                                        and result.get("error") is not None)
-                if call["tool"] == "connector.fetch" and ok:
+                # Text reached from outside — fetched or searched — earns one more
+                # round of ordinary jailed tools, so a seat can read and then act
+                # within the same wake instead of spending another decision on it.
+                if call["tool"] in ("connector.fetch", "web.search") and ok:
                     round_limit = 2
                 self.stats.tool_calls += 1
                 if not ok:
