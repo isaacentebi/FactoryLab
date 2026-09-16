@@ -1042,6 +1042,24 @@ def _same_value(got: Any, want: Any) -> bool:
         return str(got) == str(want)
 
 
+def _top_up_producers(rt: Runtime, seats: dict[str, dict[str, str]],
+                      candidates: list[str]) -> None:
+    """Give each candidate's producer seat the rest of the pool, equally.
+
+    The case gate runs the producer seat only, and a frontier route's ceiling is some
+    twenty-five times a cheap one's: an equal split over every seat kind left GPT-5.6 Sol
+    refusing thirty cases as ``ceiling exceeds request cost_ceiling`` after fifteen. The
+    brief's rule is that every candidate has enough entitlement for its actual maximum
+    reservation; the budget guard, not the grant, is what bounds real spend.
+    """
+    extra = max(0, rt.budget.unallocated()) // max(1, len(candidates))
+    if extra <= 0:
+        return
+    for candidate in candidates:
+        rt.budget.grant(seats[candidate]["producer"], extra,
+                        f"calibration cases: producer top-up for {candidate}")
+
+
 def score_cases(outcomes_by_route: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     """Apply ``GATE`` to the case outcomes and say, per route, whether it passed and why.
 
@@ -1132,11 +1150,13 @@ def run_cases(manifest: WorldManifest, candidates: list[str], *, provider: Any, 
     rt = build_runtime(manifest, provider, seed=seed)
     grant = seat_grant(rt, len(candidates))
     seats = {c: install_seats(rt, c, guard, grant_micro=grant) for c in candidates}
+    _top_up_producers(rt, seats, candidates)
     restarts = 0
     for case in cases:
         if case.restart:
             rt = build_runtime(manifest, provider, seed=seed)
             seats = {c: install_seats(rt, c, guard, grant_micro=grant) for c in candidates}
+            _top_up_producers(rt, seats, candidates)
             restarts += 1
         for candidate in candidates:
             if guard is not None and guard.remaining_micro == 0:
