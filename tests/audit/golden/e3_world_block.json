@@ -35,9 +35,10 @@
     "unread_count": "unavailable"
   },
   "pending_conversions": {
-    "items": [],
-    "note": "no conversion is in flight; a source hold and a destination claim would both be listed here",
-    "status": "observed"
+    "observed_at_ns": 1760000000000000000,
+    "reason": null,
+    "status": "observed",
+    "transfers": []
   },
   "provider_inventory": {
     "as_of": "observed values are the runtime's last treasury read; the prompt reads no rail. Committed values are the manifest's [providers] block. An OpenRouter balance cannot pay for a Venice model.",
@@ -92,10 +93,12 @@
   },
   "venue_accounts": {
     "base_reserve": {
-      "usdc_usd": "0.000000"
+      "balance_micro": 0,
+      "observed_at_ns": 1760000000000000000,
+      "reason": null,
+      "status": "observed"
     },
-    "observed_at_utc": "2025-10-09T08:53:20Z",
-    "status": "observed",
+    "note": "compute authority is not an asset and is not here; it is in spending_authority, and world.pots labels the wallet as authority",
     "to_date": {
       "fees_usd": "0.000000",
       "funding_usd": "0.000000",
@@ -105,7 +108,10 @@
       "cash_usd": "100",
       "equity_usd": "100",
       "margin_used_usd": "0",
-      "positions": []
+      "observed_at_ns": 1760000000000000000,
+      "positions": [],
+      "reason": null,
+      "status": "observed"
     },
     "venue_spot": {
       "balances": [
@@ -114,7 +120,10 @@
           "coin": "USDC",
           "total": "0"
         }
-      ]
+      ],
+      "observed_at_ns": 1760000000000000000,
+      "reason": null,
+      "status": "observed"
     }
   },
   "working_state": "unavailable"

@@ -199,7 +199,14 @@ def test_you_renders_every_slot_of_the_template():
     assert "openrouter_usd" in block["provider_inventory"]
     assert "as_of" in block["provider_inventory"]  # freshness, always
     assert block["subscription"]["next_eligible_tick"] >= rt.tick_index
-    assert block["venue_accounts"]["status"] in ("observed", "unavailable")
+    # R3-B's typed custody, rendered account by account: each one states whether
+    # it was observed and when, and the compute wallet is not among them.
+    accounts = block["venue_accounts"]
+    assert {"venue_perps", "venue_spot", "base_reserve"} <= set(accounts)
+    for name in ("venue_perps", "venue_spot", "base_reserve"):
+        assert accounts[name]["status"] in ("observed", "unavailable")
+        assert "observed_at_ns" in accounts[name]
+    assert "authority" not in accounts and "compute authority is not an asset" in accounts["note"]
     assert block["pending_conversions"]["status"] in ("observed", "unavailable")
     assert set(block["directory"]) == {"notes", "artifacts", "paging"}
 
@@ -227,21 +234,20 @@ def test_a_missing_source_renders_unavailable_and_never_a_fabricated_number():
 def test_a_venue_read_that_fails_is_unavailable_with_its_reason_and_never_an_empty_account():
     rt = scripted_world()
 
-    def refuse():
-        raise RuntimeError("VenueUnavailable")
-
-    # The venue read the prompt builder performs, and only that: the treasury's
-    # own pots read has its own failure path and is not what this proves.
-    rt._tick_account = refuse
+    # The one venue read the prompt path performs (R3-B memoises its failure too).
+    rt._tick_account_observation = lambda: (None, "VenueUnavailable", None)
     block = request_for(rt).seat_block()
     accounts = block["venue_accounts"]
-    assert accounts["status"] == "unavailable"
-    assert "RuntimeError" in accounts["reason"]
-    assert "equity_usd" not in json.dumps(accounts)
-    assert "positions" not in json.dumps(accounts)
+    for name in ("venue_perps", "venue_spot"):
+        assert accounts[name]["status"] == "unavailable"
+        assert "VenueUnavailable" in accounts[name]["reason"]
+    # Not one fabricated number: no equity, no cash, no position set.
+    rendered = json.dumps({k: v for k, v in accounts.items() if k != "to_date"})
+    assert "equity_usd" not in rendered and "positions" not in rendered
     # And the failure is named where a reader looks for what could not be read.
     reasons = request_for(rt).world_update_block()["unavailable_observations"]
-    assert any(row["source"] == "venue_accounts" for row in reasons)
+    sources = {row["source"] for row in reasons}
+    assert {"custody:venue_perps", "custody:venue_spot"} <= sources
 
 
 def test_private_state_appears_once_and_never_in_the_moving_block():

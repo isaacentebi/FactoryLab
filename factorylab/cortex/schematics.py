@@ -701,37 +701,47 @@ class SchematicsMixin:
     def _catalogue_view(self) -> dict[str, Any]:
         """The live catalogue's version, and only the entries that changed under it.
 
-        Guarantees the changes are computed once a tick and not once a request:
-        two seats woken in the same tick are told about the same changes, and the
-        two calls of one request's continuation render identical bytes. The first
-        block a runtime ever builds reports the whole catalogue as added, which
-        is exactly true for a reader that has seen nothing.
+        Guarantees the block is a pure function of live state: the version is a
+        digest of every live id and its registry version, and the changes are
+        measured against this world's **seeded roster**, which is the manifest
+        and does not move. Nothing here is remembered between calls.
+
+        That basis is the point. An earlier draft diffed against the previous
+        tick's catalogue held in memory, and a runtime restored from a diary —
+        which has no previous tick in memory — then reported the whole catalogue
+        as newly added. A seat cannot be told that nine seats appeared this tick
+        because the process restarted; a fact about the world must not depend on
+        how long this process has been running. The seeded roster survives a
+        restore because it is the manifest, so a restored runtime and the runtime
+        it was restored from render the same bytes.
+
+        What the seat is shown is therefore: what the population has registered,
+        re-registered or retired since the world was seeded. The full addressing
+        index of every live id stays in ``world.catalogue``, so nothing becomes
+        unnameable by being compacted.
         """
         live = {a.spec.id: a.spec.version for a in self.assemblies.values()
                 if a.spec.id not in self.retired_assemblies}
-        tick = self.ticks_consumed
-        memo = getattr(self, "_catalogue_memo", None)
-        if memo is None or memo[0] != tick:
-            previous = memo[2] if memo is not None else None
-            changes = {
-                "added": sorted(k for k in live if previous is None or k not in previous),
-                "changed": sorted(k for k in live if previous is not None
-                                  and k in previous and previous[k] != live[k]),
-                "removed": sorted(k for k in (previous or ()) if k not in live),
-            }
-            memo = (tick, changes, dict(live))
-            self._catalogue_memo = memo
-        version = hashlib.sha256(
-            json.dumps(sorted(live.items()), sort_keys=True).encode()).hexdigest()[:16]
+        seeded = {a.id: 1 for a in self.m.assemblies}
         entries = {a.spec.id: {"id": a.spec.id, "version": a.spec.version,
                                "accepts": sorted(a.spec.accepts), "emits": list(a.spec.emits)}
                    for a in self.assemblies.values()
                    if a.spec.id not in self.retired_assemblies}
-        touched = set(memo[1]["added"]) | set(memo[1]["changed"])
-        return {"version": version, "entry_count": len(entries),
-                "changes": {**memo[1],
-                            "entries": [entries[k] for k in sorted(touched) if k in entries]},
-                "index": "every live id, with its contracts, is in world.catalogue"}
+        added = sorted(k for k in live if k not in seeded)
+        changed = sorted(k for k in live if k in seeded and live[k] != seeded[k])
+        removed = sorted(k for k in seeded if k not in live)
+        version = hashlib.sha256(
+            json.dumps(sorted(live.items()), sort_keys=True).encode()).hexdigest()[:16]
+        return {
+            "version": version,
+            "entry_count": len(entries),
+            "changes": {
+                "since": "this world's seeded roster",
+                "added": added, "changed": changed, "removed": removed,
+                "entries": [entries[k] for k in added + changed if k in entries],
+            },
+            "index": "every live id, with its contracts, is in world.catalogue",
+        }
 
     def _charter_view(self) -> dict[str, Any]:
         """The charter as a moving fact: this edition, its live cards with prices, pending."""
