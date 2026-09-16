@@ -104,7 +104,7 @@ PREFIX_WORLD_KEY = "stable_prefix"
 # the index names, which is the largest thing a compaction can remove without
 # removing a fact. The argument names and proposal skeletons they carried are a
 # ``catalogue.search`` away, retrieved when a seat means to use one.
-PREFIX_SOURCE_KEYS = frozenset({"tools", "proposal_shapes"})
+PREFIX_SOURCE_KEYS = frozenset({"tools", "proposal_shapes", "addressing"})
 
 # The moving world block (§8's WORLD UPDATE). ``world_update`` is the rendered
 # block; the keys beside it are the sources it is built from, and they are

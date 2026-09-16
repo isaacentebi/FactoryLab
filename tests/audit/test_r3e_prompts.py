@@ -47,6 +47,7 @@ from factorylab.cortex.schematics import (
 )
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.worlds import load_manifest
+from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 from tests.conftest import make_runtime
 
 NOW_NS = 1_760_000_000 * 1_000_000_000
@@ -96,6 +97,19 @@ def test_the_prefix_is_the_world_contract_and_the_base_capability_index_and_noth
     for absent in ('"card_prices"', '"pots"', '"account"', '"seats"', '"recent_mids"',
                    '"adaptive_scoring"', '"registration_feedback"'):
         assert absent not in prefix
+
+
+def test_the_addressing_reference_line_is_in_the_prefix_exactly_once():
+    """R3-D's reference line is a constant, so it is cached, not re-sent."""
+    rt = scripted_world()
+    request = request_for(rt)
+    prefix = request.stable_prefix()
+    assert COMMISSIONED_JUDGE_REFUSAL in prefix
+    assert "inputs.you is your own assembly id" in prefix
+    # Once in the whole prompt: the world block still publishes ``addressing`` for
+    # its other readers, and the prompt suppresses that copy from INPUTS.
+    assert request.prompt_text().count(COMMISSIONED_JUDGE_REFUSAL) == 1
+    assert "addressing" in rt._world_block()
 
 
 def test_the_prefix_is_byte_identical_across_two_requests_and_across_a_restore():

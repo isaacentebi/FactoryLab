@@ -19,6 +19,13 @@ from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
 from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 
+_ADDRESSING = (
+    "inputs.you is your own assembly id. catalogue lists every live assembly "
+    "as {id, version, accepts, emits}; those ids are what requests[].target, "
+    "a retire proposal's assembly_id and a learner proposal's assembly_id name. "
+    + COMMISSIONED_JUDGE_REFUSAL
+)
+
 NS_PER_DAY = 86_400 * 1_000_000_000
 NS_PER_HOUR = 3_600 * 1_000_000_000
 #: The observed interval a burn rate is reported from. Under it, no runway is
@@ -489,12 +496,7 @@ class SchematicsMixin:
                 for a in sorted(self.assemblies.values(), key=lambda a: a.spec.id)
                 if a.spec.id not in self.retired_assemblies
             ],
-            "addressing": (
-                "inputs.you is your own assembly id. catalogue lists every live assembly "
-                "as {id, version, accepts, emits}; those ids are what requests[].target, "
-                "a retire proposal's assembly_id and a learner proposal's assembly_id name. "
-                + COMMISSIONED_JUDGE_REFUSAL
-            ),
+            "addressing": _ADDRESSING,
             "event_schemas": dict(self.event_schemas),
             "routers": [
                 {"event_kind": kind, "count": len(states)}
@@ -611,6 +613,11 @@ class SchematicsMixin:
                           for kind, line in sorted(self._proposal_index().items())],
             "schemas": "catalogue.search returns the full args_schema of any tool and "
                        "the full shape of any proposal kind",
+            # R3-D's reference line. It is a constant — what an id addresses, and
+            # the one route a commissioned judge cannot take — so it belongs with
+            # the capability index in the cached prefix rather than re-sent with
+            # every request, and it is rendered here exactly once.
+            "addressing": _ADDRESSING,
         }
 
     def _stable_prefix_text(self) -> str:
