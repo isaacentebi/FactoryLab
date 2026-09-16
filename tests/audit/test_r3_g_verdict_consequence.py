@@ -115,8 +115,11 @@ def test_seat_2_strategy_costs_the_evaluator_standing_once_the_window_blames_the
     assert runtime.standing.weight("eval-a") == pytest.approx(max(0.0, 0.5 + pooled))
     # The producer's own reward is still the verdict, unchanged.
     assert runtime.queue.history(about)[0].score == 1.0
-    # The judge is told, privately.
-    item = runtime.outcomes.get("eval-a", judge)
+    # The judge is told, privately. R3-F: one decision can settle into several
+    # outcomes, so the handle answers with the oldest this seat has not read and the
+    # verdict consequence is addressed by its own id, from that view's related list.
+    oldest = runtime.outcomes.get("eval-a", judge)
+    item = runtime.outcomes.get("eval-a", oldest["related_outcomes"][-1])
     assert item["outcome"]["judged_return_blamed"] == 1.0
     assert item["outcome"]["your_verdict_brier"] == 0.0
     assert runtime._standing_for("eval-a")["settled_verdicts"] == 1

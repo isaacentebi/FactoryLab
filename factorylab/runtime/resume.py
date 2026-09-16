@@ -540,6 +540,12 @@ _RUNTIME_FIELDS = (
     # read yet and each watcher's last observation, as one block of plain data
     # (``ThinkingMixin.subscriptions``; assignment restores the book in place).
     "subscriptions",
+    # edition 3, R3-F
+    # Attention and continuity: how far each seat's outcome inbox was actually
+    # delivered (an ack can never reach past it) and the ``said`` records evicted
+    # under MAX_SAID into the archive. The fold's offered/delivered/acknowledged
+    # states ride inside ``subscriptions`` above, where the fold itself lives.
+    "inbox_delivery",
 )
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (

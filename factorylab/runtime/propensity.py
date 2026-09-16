@@ -35,6 +35,9 @@ from factorylab.cortex.request import validate_propensity
 from factorylab.kernel.queue import PropensityRecord
 
 MALFORMED = "malformed"
+#: A seat answered ``{"status": "cannot", "reason": ...}``: it declined paid work
+#: it was commissioned for. That is a decision with a name, not a parse failure.
+DECLINED = "declined"
 HOLD = "hold"
 #: The action vocabulary of edition 3, C2. A seat's alternatives are not "hold or
 #: trade": deciding to look, to build, to legislate or to sleep are the choices
@@ -146,7 +149,15 @@ def action_label(role: str, outputs: dict[str, Any], status: str,
     They come first in the label, so a return that traded through a tool and then
     answered ``hold`` is named by its trade, not by its last word.
     """
-    if status != "ok" or not isinstance(outputs, dict):
+    if not isinstance(outputs, dict):
+        return MALFORMED
+    if status == "refused" and outputs.get("status") == "cannot":
+        # Declining paid work is a decision, not a failure to parse (R3-F). A seat
+        # that answers ``cannot`` on a judge or meta commission has said something
+        # nameable, and a learner that cannot hold an arm for declining cannot
+        # learn that declining was right.
+        return DECLINED
+    if status != "ok":
         return MALFORMED
     if role in ("evaluator", "meta"):
         key = "verdict" if role == "evaluator" else "conformity"
@@ -180,8 +191,8 @@ def action_class(label: str, outputs: Any, *, tool_calls: int = 0) -> str:
     is that seat's product, not a producer's choice among these six, and keeps
     its own label as its class.
     """
-    if label == MALFORMED:
-        return MALFORMED
+    if label in (MALFORMED, DECLINED):
+        return label
     if label.startswith(("verdict:", "conformity:")):
         return label
     outputs = outputs if isinstance(outputs, dict) else {}

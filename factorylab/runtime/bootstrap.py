@@ -445,6 +445,11 @@ class BootstrapMixin:
 
         self.working_state = WorkingState(self.artifacts, self.ledger, self.clock)
         self.outcomes = OutcomeInbox(self.artifacts, self.ledger, self.clock)
+        # R3-F: what a seat said is retained until that decision's last consequence
+        # settles or the seat retires. This is the inbox's only way to ask.
+        self.outcomes.consequences_open = lambda handle: (
+            self.consequences.account_open(handle)
+            or self.outcomes.seat_of(handle) not in self.retired_assemblies)
         if not self.ledger.bootstrap:
             # The manifest may hand a seat its first head — a lens, a method, a
             # starting hypothesis. It is the initial value of a pointer the seat
@@ -551,7 +556,7 @@ class BootstrapMixin:
             "note.put": [{"key": "shared-plan", "text": "What the last window showed."}],
             "note.get": [{"key": "shared-plan"}],
             "artifact.get": [{"sha": "0" * 64}],
-            "outcome.get": [{"handle": "decision-1"}],
+            "outcome.get": [{"outcome_id": "outcome:1"}, {"handle": "decision-1"}],
         }
         from factorylab.runtime.notes import specs as note_specs
 
@@ -574,15 +579,20 @@ class BootstrapMixin:
         }
         self.tool_specs["outcome.get"] = {
             "id": "outcome.get",
-            "description": "Read one item of your own outcome inbox by the handle of the "
-            "decision it is about — including items older than the few carried inline on "
-            "your request. Returns what you said then, the outcome, when it was observed, "
-            "the financial delta and an evidence pointer. Free and ledgered; a kernel "
-            "read, never a model call.",
+            "description": "Read one item of your own outcome inbox by its exact "
+            "outcome_id (the address carried on every item, including items older than "
+            "the few your request carries inline). One decision can settle into several "
+            "outcomes, so handle is a fallback only: it returns the oldest item of that "
+            "decision you have not read, and says so. Returns what you said then, the "
+            "outcome, when it was observed, the financial delta, an evidence pointer and "
+            "the other outcome_ids on that decision. Free and ledgered; a kernel read, "
+            "never a model call.",
             "args_schema": {
                 "type": "object",
-                "properties": {"handle": {"type": "string", "minLength": 1, "maxLength": 128}},
-                "required": ["handle"],
+                "properties": {
+                    "outcome_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "handle": {"type": "string", "minLength": 1, "maxLength": 128},
+                },
                 "additionalProperties": False,
             },
             "price_micro_per_call": 0,

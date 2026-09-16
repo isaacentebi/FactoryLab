@@ -311,10 +311,13 @@ def test_one_seat_cannot_read_another_seats_outcome():
 
 
 def test_an_answers_ack_through_advances_the_cursor():
+    """R3-F tightened this: an ack never reaches past what the seat was delivered, so the
+    item is rendered onto a request (``unread``) first, exactly as the loop renders it."""
     rt = _consequence_runtime(provider=ScriptedProvider(), exchange=FakeExchange())
     from factorylab.cortex.request import Return
 
     rt.outcomes.append(SEAT, handle="h0", outcome={"verdict": 1.0})
+    assert rt.outcomes.unread(SEAT)["count"] == 1  # the request carried it
     handle = decision(rt, SEAT)
     rt._apply_continuity(SEAT, handle, Return(
         handle, {"action": "hold", "ack_through": "h0"}, 0, "ok"))

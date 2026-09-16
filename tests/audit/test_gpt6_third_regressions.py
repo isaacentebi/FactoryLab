@@ -255,10 +255,15 @@ def test_every_fact_on_one_decision_stays_separately_addressable():
     # Oldest first: the first fact is delivered, not buried under the nine that followed.
     assert unread["items"][0]["outcome"] == {"first": True}
     assert unread["items"][0]["outcome_id"] == "outcome:1"
+    # R3-F restated the handle fallback: a handle names a decision, not an item, so it
+    # answers with the oldest outcome of that decision the seat has not read — the
+    # earliest fact, not the latest, which is what buried the others.
     by_handle = inbox.get("alice", "d1")
-    assert by_handle["outcome"] == {"later": 8}
+    assert by_handle["outcome"] == {"first": True}
     assert by_handle["related_outcomes"] == [f"outcome:{n}" for n in range(1, 11)]
-    assert inbox.get("alice", "outcome:1")["outcome"] == {"first": True}
+    assert "outcome_id" in by_handle["note"]
+    assert inbox.get("alice", "outcome:7")["outcome"] == {"later": 5}
+    assert "note" not in inbox.get("alice", "outcome:7")
 
 
 def test_acknowledging_an_item_never_acknowledges_one_never_shown():
@@ -559,21 +564,31 @@ def test_a_refusal_is_addressed_to_the_seat_that_decided_it():
 # time-based cascade separation, a clear paid-work admission contract) and must keep
 # failing-by-passing until those land.
 
-def test_characterize_judge_work_ignores_its_defer():
+def test_defer_covers_routine_world_wakes_and_not_paid_commissions():
+    """Finding: "Subscriptions do not mean what a seat infers" — "non-routine judge work
+    bypasses deferral; paid-work admission needs a clear contract". The behaviour is
+    unchanged and now it is the stated contract (R3-F, ``docs/manifest.md``): defer and
+    the cadence floor silence routine world wakes, and a commission is declined by
+    answering ``cannot``, at the cost of the call and nothing more."""
     book = SubscriptionBook()
     book.defer("judge", 100, now=1)
     assert book.absent("judge", "WorldUpdate", now=2, coins=frozenset()).startswith("asleep:")
     assert book.absent("judge", "ProducerReturn", now=2, coins=frozenset()) == ""
 
 
-def test_characterize_coin_subscription_does_not_filter_delivered_fold():
+def test_a_coin_subscription_filters_the_delivered_fold():
+    """Finding: "Subscriptions do not mean what a seat infers" — "coin filters affect
+    admission not the fold". R3-F: a seat subscribed to BTC reads BTC."""
     from factorylab.runtime.subscriptions import Subscription
     book = SubscriptionBook()
     book.set_subscription("alice", Subscription(coins=frozenset({"BTC"})))
     for coin in ("BTC", "ETH"):
         book.observe(["alice"], "MarketMid", {"coin": coin, "mid": "100"}, 1, now=1)
     delivered = book.take("alice", now=1)
-    assert "ETH" in json.dumps(delivered)
+    assert "ETH" not in json.dumps(delivered)
+    assert list(delivered["coins"]) == ["BTC"]
+    # The counts it is shown are the counts of what it is shown, not of the world.
+    assert delivered["prints"] == 1 and delivered["events"] == {"MarketMid": 1}
 
 
 # The two witness findings this reviewer characterized here are repaired by R3-C, and
@@ -636,21 +651,55 @@ def test_control_wallet_reservation_is_single_use():
     assert wallet.balance == 9_999_250 and wallet.check_conservation()
 
 
-def test_characterize_fill_is_not_addressed_to_its_owner():
+def test_a_fill_is_addressed_to_the_seat_whose_order_it_was():
+    """Finding: "Owner-directed feedback incomplete" — "fills not consistently addressed".
+
+    R3-F addresses the fill through the inbox, not the router: the draw for a Fill stays
+    open (anyone who accepts the kind may be woken by it), and the fill itself becomes an
+    item with an exact id in the inbox of the seat whose order filled.
+    """
     from factorylab.kernel.events import Event, EventKind
     (RoutingMixin,) = source_objects("factorylab/runtime/routing.py", "RoutingMixin",
                                      injected={"EventKind": EventKind})
-    event = Event("fill-1", EventKind.FILL, 0,
-                  {"owner": "alice", "handle": "decision-1", "order_id": "order-1"}, "venue")
+    event = Event("fill-1", EventKind.FILL, 0, {"order_id": "order-1"}, "venue")
     assert RoutingMixin._addressed_seat(SimpleNamespace(), event) is None
 
-
-def test_characterize_non_payoff_forecast_does_not_reach_seat_inbox():
     (FeedbackMixin,) = source_objects("factorylab/runtime/feedback.py", "FeedbackMixin")
-    rt = SimpleNamespace()
-    # All attributes deliberately absent: the method returns before looking up the owner.
-    assert FeedbackMixin._deliver_consequence_to_inbox(
-        rt, SimpleNamespace(predicate_id="wallet_up")) is None
+    appended = []
+    rt = SimpleNamespace(
+        consequences=SimpleNamespace(table=SimpleNamespace(
+            orders=[SimpleNamespace(order_id="order-1", handle="decision-1")])),
+        handle_to_assembly={"decision-1": "alice"},
+        outcomes=SimpleNamespace(append=lambda *a, **kw: appended.append((a, kw)),
+                                 seat_of=lambda h: None))
+    FeedbackMixin._address_fill_to_inbox(rt, {
+        "order_id": "order-1", "coin": "BTC", "market": "perp", "is_buy": False,
+        "size": "0.01", "px": "60000", "fee_usd": "0.02", "realized_usd": "1.50"})
+    (args, kwargs), = appended
+    assert args == ("alice",) and kwargs["handle"] == "decision-1"
+    assert kwargs["evidence"] == "fill:order-1"
+    assert kwargs["outcome"]["kind"] == "fill" and kwargs["outcome"]["coin"] == "BTC"
+
+
+def test_a_non_payoff_forecast_reaches_the_seat_that_made_it():
+    """Finding: "Owner-directed feedback incomplete" — "non-payoff forecasts miss the
+    inbox". R3-F addresses every settled forecast to the decision that carried it."""
+    (FeedbackMixin,) = source_objects("factorylab/runtime/feedback.py", "FeedbackMixin")
+    appended = []
+    rt = SimpleNamespace(
+        queue=SimpleNamespace(get=lambda h: SimpleNamespace(parent_handle="d1")),
+        handle_to_assembly={"d1": "alice"},
+        outcomes=SimpleNamespace(append=lambda *a, **kw: appended.append((a, kw)),
+                                 seat_of=lambda h: None))
+    rt._deliver_forecast_to_inbox = lambda s: FeedbackMixin._deliver_forecast_to_inbox(rt, s)
+    settled = SimpleNamespace(handle="f1", predicate_id="wallet_up", y=1, brier=0.09,
+                              baseline_brier=0.25, status="settled")
+    # The non-payoff branch is the one that used to return without looking anything up.
+    FeedbackMixin._deliver_consequence_to_inbox(rt, settled)
+    (args, kwargs), = appended
+    assert args == ("alice",) and kwargs["handle"] == "d1" and kwargs["evidence"] == "f1"
+    assert kwargs["outcome"]["predicate"] == "wallet_up"
+    assert kwargs["outcome"]["your_brier"] == 0.09 and kwargs["outcome"]["resolved"] == 1
 
 
 def test_characterize_cascade_counts_arrivals_not_elapsed_time():

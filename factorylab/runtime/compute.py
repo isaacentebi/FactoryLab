@@ -795,10 +795,14 @@ class ComputeMixin:
         if tool_id == "outcome.get":
             # A kernel read of the seat's own inbox: no model call, priced like
             # artifact.get, and addressed — one seat cannot read another's outcomes.
-            result = self.outcomes.get(action_id, args.get("handle"))
+            # ``outcome_id`` names one item exactly; ``handle`` is the fallback and
+            # answers with the oldest unread item of that decision (R3-F).
+            ident = args.get("outcome_id") if args.get("outcome_id") else args.get("handle")
+            result = self.outcomes.get(action_id, ident)
             self.ledger.append({"kind": "outcome.get",
                                 "handle": handle, "assembly_id": action_id,
-                                "about_handle": str(args.get("handle"))[:64],
+                                "asked": str(ident)[:64],
+                                "outcome_id": result.get("outcome_id"),
                                 "found": "error" not in result, "ts": self.clock.now_ns})
             return result, 0
         if tool_id in self.CONSEQUENCE_WRITES and not self._may_write(handle):
@@ -1160,6 +1164,20 @@ class ComputeMixin:
         """
         if action_id not in self.assemblies or not isinstance(ret.outputs, dict):
             return
+        if ret.status == "refused" and ret.outputs.get("status") == "cannot":
+            # Paid work a seat declined (R3-F). Judge and meta commissions are not
+            # covered by defer or the cadence floor — they are somebody else's
+            # request arriving — so the only way to decline one is to answer
+            # ``cannot``. It costs the call and nothing else, and it is a decision
+            # the population can read, not a malformed return.
+            self.ledger.append({"kind": "commission.declined", "assembly_id": action_id,
+                                "handle": handle,
+                                "reason": str(ret.outputs.get("reason"))[:200],
+                                "ts": self.clock.now_ns})
+        if self.assemblies[action_id].spec.model_id == "program":
+            # R3-F: a program has no model to read an inbox, so what it produced
+            # and what it cost reaches the lineage that put it in the world.
+            self._deliver_program_result_to_inbox(action_id, handle, ret)
         self.outcomes.record_said(action_id, handle, ret.outputs)
         if "working_state" in ret.outputs:
             try:

@@ -11,10 +11,24 @@ between them leaves unreferenced bytes rather than an authenticated reference to
 bytes that are not there (GPT-6 third reading, §3: "references can precede
 durable bytes"); a put is idempotent
 by content, so replay after a crash rewrites nothing; a read verifies the hash
-it was asked for, so a tampered file is refused rather than served; nothing
-here deletes — retirement of an owner is not the archive's business, and the
-first owner of a hash stays its owner. Rent (C3) and entitlements (C10) are
-charged by their own workstreams through ``owner_for``.
+it was asked for, so a tampered file is refused rather than served; retirement
+of an owner is not the archive's business, and the first owner of a hash stays
+its owner of record. Rent (C3) and entitlements (C10) are charged by their own
+workstreams through ``owner_for``.
+
+**Ownership is a (sha, owner) reference (edition 3, R3-F).** One blob may carry
+several references: a second writer of identical bytes owns its own reference,
+with its own kind, its own moment and its own published flag, and can read what
+it wrote rather than being told the first writer's bytes are private. Publishing
+an existing sha publishes the blob. The first reference stays the owner of record
+(``owner_for``), so rent has one payer and retirement has one subject.
+
+**Nothing is deleted except an unreferenced, unpublished blob.** ``collect()``
+removes exactly those — durable bytes no reference names and nothing published,
+which is what a crash between ``_write`` and the ledger item leaves behind — and
+ledgers each removal as ``artifact.collected``. It is called by the runtime at a
+reserve-window boundary. A blob any reference names, or any reference published,
+is never a candidate whatever its age.
 """
 
 from __future__ import annotations
@@ -61,7 +75,9 @@ class ArtifactStore:
         self.ledger = ledger
         self.root = Path(root) if root is not None else None
         self.clock = clock_ns
-        # sha -> {"owner", "kind", "bytes", "ts"}: the checkpointed index of the archive.
+        # sha -> {"owner", "kind", "bytes", "ts", "public", "readers", "refs"}: the
+        # checkpointed index. ``refs`` is the (sha, owner) ownership: one entry per
+        # writer, each with the kind it wrote under, when, and whether it published.
         self.index: dict[str, dict[str, Any]] = {}
         self._memory: dict[str, bytes] = {}
 
@@ -78,13 +94,24 @@ class ArtifactStore:
         self.ledger.append({"kind": "artifact.put", "sha": sha, "owner": owner,
                             "artifact_kind": kind, "bytes": len(data), "public": bool(public),
                             "ts": ts})
-        # The first record of a hash stands: a second owner of identical bytes is a
-        # reader of the first's artifact, not a new liability for the same file.
+        # The first record of a hash stands as the owner of record — one payer of
+        # rent, one subject of retirement — but every writer gets its own reference
+        # (R3-F): a second writer of identical bytes owns what it wrote and reads it.
         self.index.setdefault(sha, {"owner": owner, "kind": kind, "bytes": len(data), "ts": ts,
                                     "public": bool(public)})
         record = self.index[sha]
-        record["readers"] = sorted(set(record.get("readers", [record["owner"]])) | {owner})
-        record["public"] = bool(record.get("public") or public)
+        refs = record.setdefault("refs", {})
+        for existing in record.get("readers", [record["owner"]]):
+            # An index restored from a checkpoint written before references carries
+            # its readers; each becomes that reader's own reference, as it always was.
+            refs.setdefault(existing, {"kind": record["kind"], "ts": record["ts"],
+                                       "public": bool(record.get("public"))})
+        reference = refs.setdefault(owner, {"kind": kind, "ts": ts, "public": bool(public)})
+        reference["public"] = bool(reference.get("public") or public)
+        record["readers"] = sorted(refs)
+        # Publishing an existing sha publishes it: the blob is public when any
+        # reference to it is.
+        record["public"] = any(bool(r.get("public")) for r in refs.values())
         return sha
 
     def get(self, sha: str) -> bytes:
@@ -109,16 +136,57 @@ class ArtifactStore:
     def list(self, *, owner: str | None = None) -> list[dict[str, Any]]:
         """Return detached records in put order, optionally those of one owner."""
         return [{"sha": sha, **record} for sha, record in self.index.items()
-                if owner is None or owner in record.get("readers", [record["owner"]])]
+                if owner is None or owner in self.references(sha, record)]
+
+    def references(self, sha: str, record: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """The (sha, owner) references on one record, including a pre-R3-F index's readers."""
+        refs = record.get("refs")
+        if refs:
+            return refs
+        return {reader: {"kind": record["kind"], "ts": record["ts"],
+                         "public": bool(record.get("public"))}
+                for reader in record.get("readers", [record["owner"]])}
 
     def entries(self) -> list[tuple[str, str, bool, int, int]]:
-        """Every record as ``(sha, owner, public, bytes, created_ns)``, in put order.
+        """Every reference as ``(sha, owner, public, bytes, created_ns)``, in put order.
 
         The directory listing W4 builds (C4) reads its rows from here, so the
         index has one shape both a scoped read and a bounded listing agree on.
+        One row per (sha, owner) reference (R3-F): a blob two seats wrote is two
+        rows, each with its own owner and its own published flag, because that is
+        what each of them owns.
         """
-        return [(sha, record["owner"], bool(record.get("public")), record["bytes"],
-                 record["ts"]) for sha, record in self.index.items()]
+        return [(sha, owner, bool(reference.get("public")), record["bytes"],
+                 reference.get("ts", record["ts"]))
+                for sha, record in self.index.items()
+                for owner, reference in self.references(sha, record).items()]
+
+    def collect(self) -> list[str]:
+        """Remove durable blobs no reference names and nothing published; ledger each (R3-F).
+
+        The only blobs this can reach are the ones a crash between ``_write`` and
+        the ledger item left behind, and records whose every reference was released.
+        An owned blob and a published blob are never candidates, so collection can
+        never take a seat's state, an inbox body or anything the population shared.
+        """
+        live = {sha for sha, record in self.index.items()
+                if self.references(sha, record) or record.get("public")}
+        if self.root is None:
+            orphans = sorted(sha for sha in self._memory if sha not in live)
+        else:
+            orphans = sorted(path.name for path in self.root.glob("*")
+                             if len(path.name) == SHA_HEX_CHARS and path.name not in live)
+        for sha in orphans:
+            if self.root is None:
+                self._memory.pop(sha, None)
+            else:
+                try:
+                    (self.root / sha).unlink()
+                except OSError:
+                    continue
+            self.index.pop(sha, None)
+            self.ledger.append({"kind": "artifact.collected", "sha": sha, "ts": self.clock()})
+        return orphans
 
     def visible_to(self, sha: str, reader: str | None,
                    lineage_of: Callable[[str], str] | None = None) -> bool:
@@ -135,7 +203,7 @@ class ArtifactStore:
             return False  # Unindexed durable bytes confer no read authority.
         if reader is None:
             return True  # Kernel-only inspection retains its existing contract.
-        if reader in record.get("readers", [record["owner"]]) or record.get("public"):
+        if reader in self.references(sha, record) or record.get("public"):
             return True
         if record["kind"] == "program.state" and lineage_of is not None:
             return lineage_of(record["owner"]) == lineage_of(reader)
@@ -170,8 +238,13 @@ class ArtifactStore:
         except ArtifactError as exc:
             return {"error": str(exc)}
         record = self.index.get(sha, {})
-        view = {"sha": sha, "owner": record.get("owner"), "kind": record.get("kind"),
-                "bytes": len(data)}
+        # A reader that owns its own reference is shown the kind it wrote under,
+        # not the first writer's; the owner of record and the published flag are
+        # the blob's and are shown as they are.
+        reference = self.references(sha, record).get(reader) if record else None
+        view = {"sha": sha, "owner": record.get("owner"),
+                "kind": (reference or record).get("kind"), "bytes": len(data),
+                "public": bool(record.get("public"))}
         if len(data) > MAX_TOOL_READ_BYTES:
             return {**view, "error": f"artifact exceeds {MAX_TOOL_READ_BYTES} bytes"}
         try:
