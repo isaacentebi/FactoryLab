@@ -377,7 +377,8 @@ def seller_from_runtime(rt, **options) -> Seller:
     def earn(service: Service, micro: int, tx: str, payer: str, served_ns: int):
         item = rt.treasury.earn(service.id, micro, tx, payer=payer, program=service.program_id,
                                 version=service.version, served_ns=served_ns)
-        rt._book_income(item)  # C10: the owning seat's entitlement grows with its income
+        if item is not None:
+            rt._book_income(item)  # A repeated receipt never credits money twice.
         return item
 
     return Seller(services_from_runtime(rt), pay_to=pay_to, runner=rt.tool_runner,

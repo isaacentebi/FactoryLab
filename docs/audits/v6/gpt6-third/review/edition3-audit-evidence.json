@@ -1,0 +1,168 @@
+{
+  "snapshot": "4618f6f",
+  "zip_sha256": "61a468723e27a1dafed415ad507dedf7c2eaf9fdcda25059d9853fa5893824fc",
+  "source_integrity": {
+    "unchanged_archive_files": 549,
+    "changed_archive_files": [],
+    "missing_archive_files": []
+  },
+  "exported_returns": 517,
+  "return_reported_cost_micro": 2788280,
+  "money": {
+    "in_by_class": {
+      "initial": 300000000,
+      "drip": 0,
+      "release": 0,
+      "subsidy": 88916468,
+      "earned": 0,
+      "converted_from_principal": 0,
+      "exchange_pnl": 0,
+      "funding": 29175
+    },
+    "out_by_class": {
+      "model": 2780221,
+      "tool": 3021,
+      "connector": 0,
+      "treasury": 0,
+      "registration": 0,
+      "exchange_pnl": 183419,
+      "funding": 0,
+      "transfer_fees": 0,
+      "other": 0
+    }
+  },
+  "per_seat": {
+    "antagonist": {
+      "returns": 37,
+      "cost_micro": 252181,
+      "malformed": 0,
+      "actions": {
+        "defer": 32,
+        "hold": 5
+      }
+    },
+    "opportunity": {
+      "returns": 17,
+      "cost_micro": 93382,
+      "malformed": 0,
+      "actions": {
+        "defer": 17
+      }
+    },
+    "judge-consequence": {
+      "returns": 172,
+      "cost_micro": 1211061,
+      "malformed": 0,
+      "actions": {
+        "not_applicable": 172
+      }
+    },
+    "mechanism": {
+      "returns": 24,
+      "cost_micro": 84197,
+      "malformed": 6,
+      "actions": {
+        "defer": 14,
+        "not_applicable": 6,
+        "hold": 4
+      }
+    },
+    "judge-fidelity": {
+      "returns": 163,
+      "cost_micro": 662620,
+      "malformed": 2,
+      "actions": {
+        "not_applicable": 163
+      }
+    },
+    "meta-calibration": {
+      "returns": 42,
+      "cost_micro": 231863,
+      "malformed": 0,
+      "actions": {
+        "not_applicable": 42
+      }
+    },
+    "meta-countercase": {
+      "returns": 24,
+      "cost_micro": 82072,
+      "malformed": 11,
+      "actions": {
+        "not_applicable": 24
+      }
+    },
+    "empirical": {
+      "returns": 20,
+      "cost_micro": 77968,
+      "malformed": 9,
+      "actions": {
+        "defer": 9,
+        "hold": 2,
+        "not_applicable": 9
+      }
+    },
+    "constructor": {
+      "returns": 18,
+      "cost_micro": 92936,
+      "malformed": 0,
+      "actions": {
+        "defer": 6,
+        "order": 5,
+        "hold": 7
+      }
+    }
+  },
+  "base_projection": {
+    "ticks": 147,
+    "model_and_tool_micro": 2783242,
+    "usd_per_tick": 0.018933619047619046,
+    "usd_per_10_minute_day": 2.7264411428571425,
+    "usd_per_2_minute_day": 13.632205714285714
+  },
+  "prompt_sections": {
+    "prompts": 517,
+    "sections": [
+      {
+        "section": "completion_criterion",
+        "mean_bytes": 64,
+        "total_bytes": 33088
+      },
+      {
+        "section": "inputs",
+        "mean_bytes": 21235,
+        "total_bytes": 10978746
+      },
+      {
+        "section": "outcome_schema",
+        "mean_bytes": 2051,
+        "total_bytes": 1060752
+      },
+      {
+        "section": "propensity",
+        "mean_bytes": 66,
+        "total_bytes": 34347
+      },
+      {
+        "section": "request",
+        "mean_bytes": 346,
+        "total_bytes": 178914
+      },
+      {
+        "section": "stable_prefix",
+        "mean_bytes": 54215,
+        "total_bytes": 28029155
+      },
+      {
+        "section": "total",
+        "mean_bytes": 98527,
+        "total_bytes": 50938619
+      },
+      {
+        "section": "you",
+        "mean_bytes": 20548,
+        "total_bytes": 10623617
+      }
+    ]
+  },
+  "test_status": "33 characterizations plus 11 in-memory candidate checks passed; no full integration suite or authenticated rehearsal replay"
+}

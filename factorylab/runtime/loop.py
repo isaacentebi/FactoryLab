@@ -33,7 +33,7 @@ from itertools import islice
 from typing import Any
 
 from factorylab.cortex.registration import measured_role
-from factorylab.cortex.request import Request, Return
+from factorylab.cortex.request import Request, Return, public_return
 from factorylab.cortex.sandbox import NoJail, jail_probe
 from factorylab.cortex.schematics import SchematicsMixin
 from factorylab.kernel.events import Event, EventKind
@@ -583,14 +583,12 @@ class Runtime(
         """Only an assembly's declared output contract chooses its request and reward path."""
         self._start_return(handle)
         if sample.chosen == NOOP:
-            if self._event_subject(ev) is not None:
-                self.stats.noops += 1
-                self.consequences.finish(handle, 0)
-                self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
-                                  status=SettleStatus.INAPPLICABLE,
-                                  definition_version=DEF_VERDICT, sampling_ref=None)
-            else:
-                self._producer_step(ev, handle, sample, deadline)
+            # A router abstention is not an authored producer return.
+            self.stats.noops += 1
+            self.consequences.finish(handle, 0)
+            self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
+                              status=SettleStatus.INAPPLICABLE,
+                              definition_version=DEF_VERDICT, sampling_ref=None)
             return
         self.handle_to_assembly[handle] = sample.chosen
         subject = self._event_subject(ev)
@@ -877,7 +875,7 @@ class Runtime(
                 # Judges see the event the producer answered, never the producer's own
                 # state, its inbox or its copy of the world block, and never its name.
                 "inputs": {"kind": inputs["kind"], "payload": inputs["payload"]},
-                "outputs": ret.outputs,
+                "outputs": public_return(ret.outputs),
                 "cost": ret.cost,
                 "status": ret.status,
                 # The one private thing the essay directs forward (II.I.b), so the
@@ -899,7 +897,7 @@ class Runtime(
             ret.outputs.get("forecasts") if ret.status == "ok" else None)
         self.forecast_returns[handle] = {"handles": forecasts, "results": {}}
         self._settle_forecast_returns()
-        self._emit(emitted, {"about_handle": handle, "outputs": ret.outputs,
+        self._emit(emitted, {"about_handle": handle, "outputs": public_return(ret.outputs),
                              "cost": ret.cost, "status": ret.status,
                              "propensity": self._public_propensity(handle)})
 
@@ -946,7 +944,7 @@ class Runtime(
         sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
         self._producer_step(event, handle, sample, parent.deadline_ns, returned=ret)
         return {"tool": f"assembly:{target}", "args": item.inputs,
-                "result": {"outputs": ret.outputs, "status": ret.status,
+                "result": {"outputs": public_return(ret.outputs), "status": ret.status,
                            "cost_micro": ret.cost}}, ret.cost
 
     def _evaluator_step(self, ev: Event, handle: str, sample: Sample, deadline: int,

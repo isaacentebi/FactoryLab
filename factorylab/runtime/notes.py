@@ -187,7 +187,8 @@ def accrue(entry: dict, now_ns: int, bounds: NotesSpec) -> tuple[int, int]:
     if since is None:
         return 0, entry.get("rent_carry", 0)
     numerator, denominator = bounds.rate()
-    owed = entry["bytes"] * max(0, now_ns - since) * numerator + entry.get("rent_carry", 0)
+    byte_ns = entry.get("rent_byte_ns", 0) + entry["bytes"] * max(0, now_ns - since)
+    owed = byte_ns * numerator + entry.get("rent_carry", 0)
     return divmod(owed, denominator)
 
 

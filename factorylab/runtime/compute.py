@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 from factorylab.cortex.assembly import Assembly, AssemblySpec
-from factorylab.cortex.request import ChildRequest, Request, Return
+from factorylab.cortex.request import ChildRequest, Request, Return, public_return
 from factorylab.kernel.artifacts import PRIVATE_REFUSAL
 from factorylab.kernel.budget import SeatWallet
 from factorylab.kernel.events import Event, EventKind
@@ -1417,7 +1417,7 @@ class ComputeMixin:
                               status=SettleStatus.CENSORED,
                               definition_version="unselected-return-v1", sampling_ref=None)
             return {"tool": f"assembly:{target}", "args": item.inputs,
-                    "result": {"outputs": ret.outputs, "status": ret.status,
+                    "result": {"outputs": public_return(ret.outputs), "status": ret.status,
                                "cost_micro": ret.cost}}, ret.cost
         if emitted in ("Verdict", "MetaVerdict"):
             sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
@@ -1444,14 +1444,14 @@ class ComputeMixin:
                 self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
             self.stats.producer_returns += 1
             payload = {"about_handle": handle, "description": item.description,
-                       "inputs": item.inputs, "outputs": ret.outputs,
+                       "inputs": item.inputs, "outputs": public_return(ret.outputs),
                        "cost": ret.cost, "status": ret.status,
                        "propensity": self._public_propensity(handle)}
             self._emit("ProducerReturn" if emitted == "Exposure" else emitted, payload)
             if emitted == "Exposure" and self.routers.get("Exposure"):
                 self._emit("Exposure", payload)
         return {"tool": f"assembly:{target}", "args": item.inputs,
-                "result": {"outputs": ret.outputs, "status": ret.status,
+                "result": {"outputs": public_return(ret.outputs), "status": ret.status,
                            "cost_micro": ret.cost}}, ret.cost
 
     def _check_compute_return(self, handle: str, ret: Return) -> None:

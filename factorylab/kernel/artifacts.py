@@ -72,6 +72,7 @@ class ArtifactStore:
         data = bytes(data)
         sha = hashlib.sha256(data).hexdigest()
         ts = self.clock()
+        self._write(sha, data)  # Durable bytes before any authenticated reference.
         self.ledger.append({"kind": "artifact.put", "sha": sha, "owner": owner,
                             "artifact_kind": kind, "bytes": len(data), "public": bool(public),
                             "ts": ts})
@@ -79,7 +80,9 @@ class ArtifactStore:
         # reader of the first's artifact, not a new liability for the same file.
         self.index.setdefault(sha, {"owner": owner, "kind": kind, "bytes": len(data), "ts": ts,
                                     "public": bool(public)})
-        self._write(sha, data)
+        record = self.index[sha]
+        record["readers"] = sorted(set(record.get("readers", [record["owner"]])) | {owner})
+        record["public"] = bool(record.get("public") or public)
         return sha
 
     def get(self, sha: str) -> bytes:
@@ -88,7 +91,10 @@ class ArtifactStore:
         if self.root is None:
             if sha not in self._memory:
                 raise ArtifactError("unknown artifact")
-            return self._memory[sha]
+            data = self._memory[sha]
+            if hashlib.sha256(data).hexdigest() != sha:
+                raise ArtifactError("artifact bytes do not match their hash")
+            return data
         path = self.root / sha
         try:
             data = path.read_bytes()
@@ -101,7 +107,7 @@ class ArtifactStore:
     def list(self, *, owner: str | None = None) -> list[dict[str, Any]]:
         """Return detached records in put order, optionally those of one owner."""
         return [{"sha": sha, **record} for sha, record in self.index.items()
-                if owner is None or record["owner"] == owner]
+                if owner is None or owner in record.get("readers", [record["owner"]])]
 
     def entries(self) -> list[tuple[str, str, bool, int, int]]:
         """Every record as ``(sha, owner, public, bytes, created_ns)``, in put order.
@@ -123,9 +129,11 @@ class ArtifactStore:
         path says so instead.
         """
         record = self.index.get(sha)
-        if record is None or reader is None:
-            return True
-        if record["owner"] == reader or record.get("public"):
+        if record is None:
+            return False  # Unindexed durable bytes confer no read authority.
+        if reader is None:
+            return True  # Kernel-only inspection retains its existing contract.
+        if reader in record.get("readers", [record["owner"]]) or record.get("public"):
             return True
         if record["kind"] == "program.state" and lineage_of is not None:
             return lineage_of(record["owner"]) == lineage_of(reader)
@@ -166,11 +174,15 @@ class ArtifactStore:
 
     def _write(self, sha: str, data: bytes) -> None:
         if self.root is None:
+            existing = self._memory.get(sha)
+            if existing is not None and existing != data:
+                raise ArtifactError("artifact bytes do not match their hash")
             self._memory.setdefault(sha, data)
             return
         path = self.root / sha
         if path.exists():
-            return  # content-addressed: the same bytes are already there
+            self.get(sha)  # Verify an existing file instead of blessing corruption.
+            return
         self.root.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=f".{sha[:12]}-", dir=self.root)
         try:
@@ -180,6 +192,11 @@ class ArtifactStore:
                 os.fsync(stream.fileno())
             os.chmod(temporary, 0o600)
             os.replace(temporary, path)
+            directory_fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         except BaseException:
             try:
                 os.unlink(temporary)

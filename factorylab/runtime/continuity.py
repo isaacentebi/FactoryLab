@@ -33,6 +33,7 @@ costs and nothing else.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -91,18 +92,21 @@ class WorkingState:
         sha = self.artifacts.put(data, owner=seat, kind=kind)
         now = self.clock()
         previous = self.heads.get(seat)
-        self.heads[seat] = {
+        successor = {
             "sha": sha, "bytes": len(data), "ns": now, "handle": handle,
             # Accrual continues from the last boundary this seat was accounted to:
             # rewriting a state forgives no rent the old bytes already owed.
-            "rent_ns": previous.get("rent_ns", now) if previous else now,
+            "rent_ns": now,
+            "rent_byte_ns": (previous.get("rent_byte_ns", 0) + previous["bytes"] *
+                             max(0, now - previous.get("rent_ns", now))) if previous else 0,
             "rent_carry": previous.get("rent_carry", 0) if previous else 0,
             "rent_due": previous.get("rent_due", 0) if previous else 0,
         }
         self.ledger.append({"kind": "state.put", "assembly_id": seat, "sha": sha,
                             "bytes": len(data), "handle": handle,
                             "over_soft": len(data) > SOFT_STATE_BYTES, "ts": now})
-        return self.heads[seat]
+        self.heads[seat] = successor
+        return successor
 
     def render(self, seat: str) -> dict[str, Any] | None:
         """The head as the seat is shown it: ``{sha, bytes, state}``, verbatim, or None."""
@@ -111,8 +115,8 @@ class WorkingState:
             return None
         try:
             state = json.loads(self.artifacts.get(record["sha"]).decode("utf-8"))
-        except Exception:  # noqa: BLE001 - a head whose bytes are gone shows as absent
-            return None
+        except Exception as exc:
+            raise RuntimeError("working state is present but unavailable") from exc
         return {"sha": record["sha"], "bytes": record["bytes"], "state": state}
 
 
@@ -151,8 +155,8 @@ class OutcomeInbox:
             # reads it back from here when the verdict's consequence settles.
             "fidelity_objection": outputs.get("fidelity_objection"),
         }
-        while len(self.said) > MAX_SAID:
-            self.said.pop(next(iter(self.said)))
+        # Do not evict addressability by unrelated traffic. A future archive-backed
+        # GC must prove that no delayed consequence can reference a removed handle.
 
     def entry_for(self, handle: str) -> dict[str, Any]:
         """The ``{"handle", "outputs"}`` view of one retained return, for the settler."""
@@ -180,6 +184,13 @@ class OutcomeInbox:
         """Address one settled consequence to the seat that decided it; return its record."""
         if not seat or not handle:
             return None
+        fact = (hashlib.sha256(canonical({"handle": handle, "outcome": outcome,
+                    "delta_micro": int(delta_micro), "evidence": evidence})).hexdigest()
+                if evidence is not None else None)
+        if fact is not None:
+            for existing in self.items.get(seat, ()):
+                if existing.get("fact") == fact:
+                    return existing
         observed = self.clock() if observed_at_ns is None else observed_at_ns
         body = {
             "handle": handle,
@@ -190,37 +201,43 @@ class OutcomeInbox:
             "evidence": evidence,
         }
         sha = self.artifacts.put(canonical(body), owner=seat, kind="outcome.item")
-        self.seq += 1
-        record = {"seq": self.seq, "handle": handle, "sha": sha, "observed_at_ns": observed}
-        self.items.setdefault(seat, []).append(record)
+        next_seq = self.seq + 1
+        record = {"seq": next_seq, "handle": handle, "sha": sha,
+                  "observed_at_ns": observed, "fact": fact}
         self.ledger.append({"kind": "outcome.addressed", "assembly_id": seat, "handle": handle,
-                            "sha": sha, "item": self.seq, "delta_micro": int(delta_micro),
+                            "sha": sha, "item": next_seq, "delta_micro": int(delta_micro),
                             "evidence": evidence, "ts": observed})
+        self.seq = next_seq
+        self.items.setdefault(seat, []).append(record)
         return record
 
     def body(self, sha: str) -> dict[str, Any] | None:
         """The stored body of one item, or None when its bytes are not there."""
         try:
             return json.loads(self.artifacts.get(sha).decode("utf-8"))
-        except Exception:  # noqa: BLE001 - a body whose bytes are gone is reported absent
-            return None
+        except Exception as exc:
+            raise RuntimeError("addressed outcome is unavailable") from exc
 
     def unread(self, seat: str) -> dict[str, Any]:
-        """``{count, items}``: every unread item counted, the newest few carried inline."""
+        """Deliver oldest-first, with unambiguous item addresses, until acknowledged."""
         cursor = self.cursors.get(seat, 0)
-        unread = [r for r in self.items.get(seat, ()) if r["seq"] > cursor]
-        bodies = [self.body(r["sha"]) for r in unread[-INLINE_OUTCOMES:]]
-        return {"count": len(unread),
-                "items": [b for b in reversed(bodies) if b is not None]}
+        rows = [r for r in self.items.get(seat, ()) if r["seq"] > cursor]
+        return {"count": len(rows), "items": [
+            {**self.body(r["sha"]), "outcome_id": f"outcome:{r['seq']}"}
+            for r in rows[:INLINE_OUTCOMES]]}
 
     def get(self, seat: str, handle: Any) -> dict[str, Any]:
         """One item by handle, read or unread — the ``outcome.get`` view."""
         if isinstance(handle, str):
             for record in reversed(self.items.get(seat, ())):
-                if record["handle"] == handle:
+                if record["handle"] == handle or handle == f"outcome:{record['seq']}":
                     body = self.body(record["sha"])
                     if body is not None:
                         return {**body, "sha": record["sha"],
+                                "outcome_id": f"outcome:{record['seq']}",
+                                "related_outcomes": [f"outcome:{r['seq']}"
+                                    for r in self.items.get(seat, ())
+                                    if r["handle"] == record["handle"]],
                                 "read": record["seq"] <= self.cursors.get(seat, 0)}
         return {"error": OUTCOME_UNKNOWN}
 
@@ -229,11 +246,11 @@ class OutcomeInbox:
         if not isinstance(handle, str):
             return None
         for record in reversed(self.items.get(seat, ())):
-            if record["handle"] == handle:
+            if record["handle"] == handle or handle == f"outcome:{record['seq']}":
                 cursor = max(self.cursors.get(seat, 0), record["seq"])
-                self.cursors[seat] = cursor
                 self.ledger.append({"kind": "outcome.ack", "assembly_id": seat,
                                     "handle": handle, "cursor": cursor, "ts": self.clock()})
+                self.cursors[seat] = cursor
                 return cursor
         return None
 
@@ -256,6 +273,7 @@ def charge_window(rt) -> None:
         micro, carry = accrue(head, now_ns, rt.m.notes)
         price = head.get("rent_due", 0) + micro
         head["rent_ns"], head["rent_carry"] = now_ns, carry
+        head["rent_byte_ns"] = 0
         if not price:
             continue
         handle = head.get("handle")

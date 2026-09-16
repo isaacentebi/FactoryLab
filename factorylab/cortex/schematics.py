@@ -818,7 +818,8 @@ class SchematicsMixin:
         decisions = [
             {"handle": d.handle, "channel": d.channel, "deadline_utc": _utc(d.deadline_ns),
              "opened_utc": _utc(d.opened_ns), "cost_ceiling_usd": _usd(d.cost_ceiling)}
-            for d in self.queue.outstanding(seat)
+            for d in self.queue.outstanding()
+            if d.actor == seat or self.handle_to_assembly.get(d.handle) == seat
         ]
         forecasts = [
             {"handle": f.handle, "about_handle": f.about_handle, "predicate": f.predicate_id,
