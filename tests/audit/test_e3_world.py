@@ -48,17 +48,18 @@ def test_edition3_manifest_loads_with_the_roster_money_and_kill_contract_of_c5()
     assert m.exchange.client_namespace is None  # drawn by `scripts/rehearsal.py prepare`
     assert m.tick_interval_ns == 600_000_000_000
 
-    # The roster: nine seats, the exact model ids the plan names.
+    # The roster after the calibration case gate (docs/audits/v6/calibration.md): the two
+    # routes that pass the arithmetic, four seats on each provider, no seat on Sol.
     assert [(a.id, a.model_id) for a in m.assemblies] == [
-        ("mechanism", "deepseek/deepseek-v4.1-flash"),
+        ("mechanism", "venice:z-ai-glm-5-3-flash"),
         ("empirical", "venice:z-ai-glm-5-3-flash"),
-        ("constructor", "openai/gpt-5.6-sol"),
-        ("opportunity", "deepseek/deepseek-v4.1-flash"),
-        ("judge-consequence", "deepseek/deepseek-v4.1-flash"),
+        ("constructor", "venice:z-ai-glm-5-3-flash"),
+        ("opportunity", "openai/gpt-5.6-luna"),
+        ("judge-consequence", "openai/gpt-5.6-luna"),
         ("judge-fidelity", "venice:z-ai-glm-5-3-flash"),
-        ("meta-calibration", "deepseek/deepseek-v4.1-flash"),
-        ("meta-countercase", "venice:qwen-3-8-flash"),
-        ("antagonist", "venice:qwen-3-8-flash"),
+        ("meta-calibration", "openai/gpt-5.6-luna"),
+        ("meta-countercase", "venice:z-ai-glm-5-3-flash"),
+        ("antagonist", "openai/gpt-5.6-luna"),
     ]
     seats = {a.id: a for a in m.assemblies}
     producers = ("mechanism", "empirical", "constructor", "opportunity")
@@ -71,13 +72,13 @@ def test_edition3_manifest_loads_with_the_roster_money_and_kill_contract_of_c5()
     assert seats["meta-calibration"].accepts == seats["meta-countercase"].accepts \
         == ("Verdict",)
     assert seats["antagonist"].accepts == ("Tick", "MarketMid")
-    # The one expensive seat, with the availability policy §10.3 sized for it.
+    # The constructor keeps its 4,096-token answers; on a cheap route its cadence floor is the
+    # population's to set, not a cost policy of the architect's.
     assert seats["constructor"].max_tokens == 4096
-    assert seats["constructor"].cadence_floor == 9
-    assert {a.cadence_floor for a in m.assemblies if a.id != "constructor"} == {1}
+    assert {a.cadence_floor for a in m.assemblies} == {1}
     # Every OpenRouter route is pinned; Venice is a single-provider route with no fallback.
     routes = {m_.id: m_ for m_ in m.models}
-    for model_id in ("deepseek/deepseek-v4.1-flash", "openai/gpt-5.6-sol"):
+    for model_id in ("deepseek/deepseek-v4.1-flash", "openai/gpt-5.6-sol", "openai/gpt-5.6-luna"):
         assert dict(routes[model_id].extra_body) == {
             "provider": {"require_parameters": True}}
 
@@ -116,10 +117,13 @@ def test_every_seat_carries_its_seed_lens_verbatim_as_state_and_as_prompt():
     m = load_manifest("edition3-testnet")
     for seat in m.assemblies:
         expected = common + "\n\n" + lenses[seat.id]
-        # The lens is the first head of C1's working state, and, until C1 delivers state
-        # in the request, the prompt the seat actually reads. Both, verbatim, from §11.
+        # The lens is the first head of C1's working state. The seat's prompt opens with
+        # the JSON and refusal contract (a seat prompt replaces the seed prompt, so without
+        # this no seat is ever told how to refuse) and then carries the lens verbatim.
         assert seat.initial_state == {"lens": expected}, seat.id
-        assert seat.system_prompt == expected, seat.id
+        assert seat.system_prompt.startswith("You receive one request."), seat.id
+        assert '{"status": "cannot", "reason": "<why>"}' in seat.system_prompt, seat.id
+        assert seat.system_prompt.endswith("\n\n" + expected), seat.id
 
 
 def test_edition3_keys_leave_every_earlier_world_identical():
