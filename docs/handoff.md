@@ -72,23 +72,35 @@ Only the experimenter runs the gate; agents run targeted files. Pull requests #5
 
 ## What remains, in order
 
-The morning's decisions are taken and rehearsed (`docs/audits/v5/rehearsal.md`, run 3;
-`docs/launch-decisions.md`, "Edition 2"): three cards and five norms ratified, observer on
-DeepSeek 4.1 flash, 40 USD at genesis then 10 a week, bills settled from the provider's balance,
-the wake publishing every answer live.
+Edition 3 is on main (`docs/plans/edition3.md`; PRs #90 to #94; gate 3071 passed): a seat
+keeps a working state and receives its outcomes addressed to the decision that caused them;
+it owns when it thinks (coalesced world update, subscriptions, defer, watchers); one card, the
+norms carry their definitions, the hidden paid-off objective is gone from judge standing;
+the seat sees itself (entitlement, runway, provider inventory, open commitments, directory);
+GPT-6's nine seats and seed lenses; $300 backing released 120/60/60/60 and $120 of trading
+principal; kill cancels, closes and sells before the world is declared dead. The charter is
+ratified on this roster (`docs/charter/edition3-ratified.toml`), the manifest carries it
+(`worlds/edition3-testnet.toml`, hash `781584ce…`), and rehearsal 1 ran clean
+(`docs/audits/v6/rehearsal.md`).
 
-1. The outside reviewer's second reading is triaged and every fix merged (#86, #87, #88;
-   `docs/audits/v5/gpt6-second-reading-triage.md`), rehearsed as run 4 in
-   `docs/audits/v5/rehearsal.md`. Open with the reviewer: the architect brief
-   (`docs/audits/v5/brief-gpt6-architect.md`, zip `~/Downloads/FactoryLab-architect-*.zip`):
-   seeded producer diversity, legible runway in the world block, roster, the $500 split. Any
-   change to roster or prompt text means re-ratification on testnet and one short rehearsal.
-   Rebuild zips with `scripts/package_review.sh` after any commit.
-2. Fresh read-only balance read; `worlds/funded.toml` from `worlds/edition2-testnet.toml` with
-   `name = "funded"`, `mainnet = true`, a client namespace, the ratified digests it already
-   carries, and the fresh starting accounting; hash recorded.
-3. The first-move review: prompts, roster, charter, tick, pots, schedule.
-4. Droplet: `deploy/install.sh` records the release; the experimenter places the three keys and
-   sets `FACTORYLAB_WITNESS_URL` (the remote witness is the real kill guarantee) and, if a
-   service is to be sold, `FACTORYLAB_INCOME_SPOOL` and `deploy/serve.py`.
-5. Launch. Then nothing changes but the one control: kill.
+1. **Roster.** The calibration case gate (`docs/audits/v6/calibration.md`) fails DeepSeek 4.1
+   flash and Qwen 3.8 flash on funding arithmetic and fails Sol and Luna on the refusal
+   shape only. Decide the roster (recommendation in the report: GLM on Venice, Luna and Sol
+   on OpenRouter, four seats per provider), make the refusal contract salient in the seed
+   prompt, re-screen the changed routes, re-ratify on the new roster hash
+   (`scripts/ratify_charter.py`), re-pin the manifest hash.
+2. **24-hour testnet rehearsal** on the final roster (`scripts/rehearsal.py preflight`, then
+   `factorylab run --duration 24h --kill-at-end` on a fresh-namespace copy under `runs/`),
+   read for: a seat writing its own `working_state` and finding it next wake; an outcome
+   acknowledged; a subscription change or watcher; the constructor's wakes and their cost;
+   burn per day. Report under `docs/audits/v6/`.
+3. Fresh read-only balance read; `worlds/funded.toml` from `worlds/edition3-testnet.toml`
+   with `name = "funded"`, `mainnet = true`, a client namespace, and the fresh starting
+   accounting; hash recorded.
+4. Droplet: `deploy/install.sh` records the release; the experimenter places the three keys,
+   sets `FACTORYLAB_WITNESS_URL` (with a receiver configured a resume that cannot get its
+   verdict refuses) and, if a service is to be sold, `FACTORYLAB_INCOME_SPOOL` and
+   `deploy/serve.py`.
+5. Launch. Then nothing changes but the one control: kill, which winds the venue down.
+
+Deferred by decision: project funding contracts and commissioned judges (GPT-6 §8).

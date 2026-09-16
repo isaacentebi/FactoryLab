@@ -74,3 +74,43 @@ Options, for the architect to decide:
 Whatever the roster, the refusal contract should be made salient in the seed prompt before
 ratification, and the screen re-run on the changed prompt (every roster or prompt change is a
 new roster hash and a new ballot).
+
+## The wider screen: the rest of the edition 2 menu
+
+Same 45 cases, `worlds/edition3-screen.toml` (the edition 3 manifest with the seven other
+edition 2 menu routes added), `edition3-cases-paid-screen.json`, $0.87.
+
+| route | met | valid | fee | funding | carry | refusal | safety | state+restart | construction | note |
+|---|---:|---:|---|---|---|---|---|---|---|---|
+| z-ai/glm-5.3-flash (OpenRouter) | 38/45 | 93% | 7/7 | 5/7 | 12/14 | 4/4 | 4/4 | 6/6 | 0/3 | three answers wrapped as `{"answer": …}`, the edition 2 fault; programs never returned |
+| openai/gpt-5.6-luna | 37/45 | 100% | 6/7 | 5/7 | 14/14 | 2/4 | 1/4 | 6/6 | 3/3 | refusals written into the field, as Sol; two funding signs |
+| qwen/qwen3.8-flash (OpenRouter) | 32/45 | 91% | 7/7 | 6/7 | 9/14 | 1/4 | 2/4 | 6/6 | 1/3 | answers wrapped in `outcome`, refusals as `null` fields |
+| venice:deepseek-v4-1-flash | 30/45 | 96% | 7/7 | 4/7 | 4/14 | 3/4 | 3/4 | 6/6 | 3/3 | carry arithmetic wrong on ten of fourteen; empty `{}` on two refusals |
+| deepseek/deepseek-v4-flash-0731 | 19/45 | 60% | 6/7 | 4/7 | 4/14 | 0/4 | 0/4 | 2/6 | 3/3 | eighteen malformed: answers `{"action": "hold"}` to arithmetic questions |
+| qwen/qwen3.7-flash | 15/45 | 93% | 1/7 | 2/7 | 3/14 | 1/4 | 0/4 | 6/6 | 2/3 | fee arithmetic wrong on six of seven |
+| meta/muse-spark-1.3 | 17/45 | 38% | 7/7 | 7/7 | 1/14 | 0/4 | 0/4 | 2/6 | 0/3 | 28 refused on ceiling (its reservation exceeds the case seat's grant even after the top-up); the 17 it answered were right |
+
+## Reading all eleven routes together
+
+Nothing on the menu passes the gate as the prompt stands. Three routes are close, and they
+fail in two different ways:
+
+- **GLM 5.3 flash on Venice** (44/45): one carry slip. Passes.
+- **GPT-5.6 Sol** (41/45) and **GPT-5.6 Luna** (37/45): every number right or nearly, every
+  memo back, every program running, and every refusal written *into the required field*
+  ("Cannot provide: …", "refused-unconsented-cost") instead of the `status: cannot` shape the
+  kernel reads. One sentence in the seed prompt is not enough for the OpenAI models; a
+  salient refusal contract in the prompt is the fix, and it is a prompt change (new roster
+  hash, new ballot, re-screen).
+- **DeepSeek 4.1 flash** on either provider and **Qwen 3.8 flash** on either: funding signs
+  and carry magnitudes wrong on a third to a half of cases. That is not shape; that is the
+  arithmetic a trading seat does every wake.
+
+**Recommendation.** Make the refusal contract salient in the seed prompt, re-screen Sol and
+Luna, and if they pass, launch on three routes across two providers: GLM 5.3 flash on Venice
+for mechanism, empirical, judge-fidelity and meta-countercase; Luna on OpenRouter for
+opportunity, judge-consequence, meta-calibration and the antagonist; Sol as the constructor.
+Four seats on each provider, so neither a Venice 429 nor an OpenRouter outage silences the
+world, and no seat on a route that gets funding signs wrong. Cost per normalized call: GLM
+$0.0035, Luna $0.0052, Sol $0.050: about $7 a day at the observed cadence. The alternative
+that keeps GPT-6's roster as proposed puts six seats on routes that failed the arithmetic.
