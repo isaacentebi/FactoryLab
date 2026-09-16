@@ -1,4 +1,4 @@
-# roster_sha256 = fc5a7f24a71a1821ecab8bd73c15739d60dd8d544ea40009d65f6a7bdb33a291
+# roster_sha256 = 78ad54b1b438b0d833a3a6aca49027d778ea0209f1ee1873fd947974e9d9dbee
 # charter_sha256 = c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712
 # Edition 3 charter, architect's draft. Not ratified. Hashes are added by
 # scripts/ratify_charter.py after the testnet committee vote.
