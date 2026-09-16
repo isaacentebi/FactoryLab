@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from copy import deepcopy
 from decimal import Decimal
+from time import time_ns
 from typing import Any
 
 from factorylab.kernel.money import money_to_usd, usd_to_money
@@ -25,7 +26,7 @@ INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_mic
 
 def _fresh_income() -> dict:
     return {"earned_micro": 0, "subsidy_micro": None, "converted_from_principal_micro": 0,
-            "spool_offset": 0, "receipts": {}}
+            "spool_offset": 0, "receipts": {}, "claims": {}, "claimed_micro": 0}
 
 
 def _seed_credits(provider: Any) -> int | None:
@@ -94,8 +95,13 @@ class Treasury:
         max_venice_per_window=10_000_000,
         max_forward_fees_per_window=1_000_000,
         forward_wait_windows=2,
+        clock_ns=None,
     ):
         self.ledger, self.wallet, self.rail, self.provider = ledger, wallet, rail, provider
+        # Custody without freshness is a rumour: every pot observation is stamped
+        # with the moment it was read, and the custody view reports that stamp.
+        self.clock_ns = clock_ns if callable(clock_ns) else time_ns
+        self.pots_observed_ns: int | None = None
         if type(forward_wait_windows) is not int or forward_wait_windows < 1:
             raise ValueError("forward_wait_windows must be a positive integer")
         self.forward_wait_windows = forward_wait_windows
@@ -164,29 +170,137 @@ class Treasury:
         result["complete"] = not pending and all(type(v) is int for v in values)
         result["total_micro"] = sum(values) if result["complete"] else None
         result.update({k: self.income[k] for k in INCOME_CLASSES})
+        result["claimed_micro"] = self.income.get("claimed_micro", 0)
+        result["observed_at_ns"] = self.pots_observed_ns
+        # The compute wallet is not a pot. It is the constitutional ceiling on
+        # what may be spent -- authority, not cash -- and the assets above are
+        # what back it. Labelling it here keeps a reader from adding it to them.
+        result["authority"] = {"role": "authority", "unlocked_micro": self.wallet.unlocked,
+                               "locked_micro": self.wallet.locked,
+                               "balance_micro": self.wallet.balance}
         return result
 
-    def earn(self, service: str, micro: int, tx: str, **detail) -> dict | None:
-        """Book one paid service call: ledgered first, then counted as earned income."""
+    def earn(self, service: str, micro: int, tx: str, *, claim: bool = False,
+             **detail) -> dict | None:
+        """Book one paid service call, idempotent on the receipt's own identity.
+
+        The identity is chain, transaction, log index, asset and recipient
+        (``receipt_identity``), not the transaction hash alone. The same payment
+        presented twice books once and returns ``None``. A *different* payment
+        presented under the same identity is a contradiction about one fact, and
+        this fails closed: an ``income.conflict`` item is written, nothing is
+        booked, and the caller is told. Minting internal authority from a
+        repeated reference is how a bookkeeping defect becomes an institution.
+
+        ``claim=True`` records the receipt as a claim rather than as income. The
+        seller's spool is a file the wake host writes; until the treasury's own
+        chain read confirms the transfer, it is a statement that money arrived,
+        not the arrival. ``verify_receipt`` promotes a confirmed claim to income.
+        """
         if not isinstance(service, str) or not service:
             raise ValueError("service id is required")
         if type(micro) is not int or micro <= 0:
             raise ValueError("earned amount must be positive integer micro-USD")
         if not isinstance(tx, str) or not tx:
             raise ValueError("a settlement reference is required")
-        receipt_id = tx.lower() if tx.startswith("0x") else tx
+        # A payment's identity is chain, transaction, log index, asset and
+        # recipient -- not the transaction hash alone. One transaction can carry
+        # several transfers, of different assets, to different recipients, and
+        # the seller reports the one it was paid by. The defaults name the route
+        # this factory sells over, USDC on Base to the reserve, so a receipt
+        # without an explicit chain is still a complete identity and two
+        # spellings of the same transfer collide.
+        receipt_id = ":".join((
+            str(detail.get("chain") or "base").lower(),
+            tx.lower() if tx.startswith("0x") else tx,
+            str(detail.get("log_index")),
+            str(detail.get("asset") or "USDC").upper(),
+            str(detail.get("recipient") or detail.get("pay_to") or "").lower(),
+        ))
         signature = {"service": service, "micro": micro,
                      **{k: detail.get(k) for k in ("payer", "program", "version")}}
         receipts = self.income.get("receipts", {})
-        if receipt_id in receipts:
-            if receipts[receipt_id] != signature:
+        claims = self.income.get("claims", {})
+        known = receipts.get(receipt_id)
+        if known is None and receipt_id in claims:
+            known = claims[receipt_id]["signature"]
+        if known is not None:
+            if known != signature:
+                self.ledger.append({"kind": "income.conflict", "receipt_id": receipt_id,
+                                    "tx": tx, "booked": known, "presented": signature})
                 raise ValueError("settlement reference reused with conflicting payment")
             return None
-        item = {**detail, "kind": "income.earned", "service": service, "micro": micro, "tx": tx}
+        if claim:
+            item = {**detail, "kind": "income.claimed", "service": service, "micro": micro,
+                    "tx": tx, "receipt_id": receipt_id}
+            self.ledger.append(item)
+            self.income = {
+                **self.income, "claimed_micro": self.income.get("claimed_micro", 0) + micro,
+                "claims": {**claims, receipt_id: {"signature": signature, "service": service,
+                                                  "micro": micro, "tx": tx,
+                                                  "detail": dict(detail)}},
+            }
+            return None
+        item = {**detail, "kind": "income.earned", "service": service, "micro": micro, "tx": tx,
+                "receipt_id": receipt_id}
         self.ledger.append(item)
         self.income = {**self.income, "earned_micro": self.income["earned_micro"] + micro,
                        "receipts": {**receipts, receipt_id: signature}}
         return item
+
+    def verify_receipt(self, receipt_id: str) -> dict | None:
+        """Confirm one claimed receipt against the rail's chain read, or leave it a claim.
+
+        A rail that can read the chain answers ``{"confirmed": True}`` for a
+        transfer it found with the claimed identity and amount, ``False`` with a
+        reason for a fact that contradicts the claim, and ``None`` while it
+        cannot tell. Only the first books income; the second is a conflict, is
+        ledgered as one, and the claim is dropped; the third leaves the claim
+        standing, because an unread chain is not evidence of anything.
+
+        A rail with no chain read leaves every claim standing. That is the
+        fail-closed direction: a world that cannot verify its income does not get
+        to count it.
+        """
+        claim = self.income.get("claims", {}).get(receipt_id)
+        if claim is None:
+            return None
+        verify = getattr(self.rail, "verify_receipt", None)
+        if verify is None:
+            return None
+        args = ({"receipt_id": receipt_id, "service": claim["service"],
+                 "micro": claim["micro"], "tx": claim["tx"], **claim["detail"]},)
+        try:
+            if hasattr(self.ledger, "call"):
+                # ``lookup`` classifies the read-only call for deterministic replay.
+                outcome = self.ledger.call("treasury.receipt.lookup", verify, args, {})
+            else:
+                outcome = verify(*args)
+        except Exception as exc:  # noqa: BLE001 - an unreachable chain is not a verdict
+            self._write("receipt_unverified", receipt_id=receipt_id,
+                        reason=type(exc).__name__)
+            return None
+        if outcome is None or outcome.get("confirmed") is None:
+            return None
+        claims = {k: v for k, v in self.income["claims"].items() if k != receipt_id}
+        self.income = {**self.income, "claims": claims,
+                       "claimed_micro": max(0, self.income.get("claimed_micro", 0)
+                                            - claim["micro"])}
+        if not outcome["confirmed"]:
+            self.ledger.append({"kind": "income.conflict", "receipt_id": receipt_id,
+                                "tx": claim["tx"], "claimed": claim["signature"],
+                                "reason": str(outcome.get("reason", "chain contradicts claim"))})
+            return None
+        return self.earn(claim["service"], claim["micro"], claim["tx"], **claim["detail"])
+
+    def verify_receipts(self) -> list[dict]:
+        """Verify every standing claim once; return the receipts that became income."""
+        booked = []
+        for receipt_id in list(self.income.get("claims", {})):
+            item = self.verify_receipt(receipt_id)
+            if item is not None:
+                booked.append(item)
+        return booked
 
     def collect_income(self) -> list[dict]:
         """Read the seller's receipt spool through the journal and ledger each new receipt.
@@ -208,13 +322,15 @@ class Treasury:
             observed = read_income_spool(*args)
         booked = []
         for receipt in observed["receipts"]:
-            item = self.earn(
-                receipt["service"], receipt["micro"], receipt["tx"],
+            # A spool row is a claim, never income: the wake host wrote it, and
+            # only the treasury's own chain read can confirm that money arrived.
+            self.earn(
+                receipt["service"], receipt["micro"], receipt["tx"], claim=True,
                 payer=receipt.get("payer"), program=receipt.get("program"),
                 version=receipt.get("version"), served_ns=receipt.get("ts"),
+                chain=receipt.get("chain"), log_index=receipt.get("log_index"),
+                asset=receipt.get("asset"), recipient=receipt.get("recipient"),
             )
-            if item is not None:
-                booked.append(item)
         self.income = {**self.income, "spool_offset": observed["offset"]}
         return booked
 
@@ -266,6 +382,7 @@ class Treasury:
             self.income = {**self.income, "subsidy_micro": subsidy}
         self._write("pots", pots=pots)
         self._pots = pots
+        self.pots_observed_ns = self.clock_ns()
         return self.pots()
 
     def transfer(
@@ -469,9 +586,22 @@ class Treasury:
             self._write("confirmed", state=finished, tx_refs=finished["receipts"], ts=now_ns)
             self.state = finished
             if finished["direction"] == "to_venice":
+                # The bridge, stated as what it is (edition 3, C5): reserve USDC
+                # left ``base_reserve`` and Venice credit arrived. Principal
+                # converted into compute is *financing* -- the factory funding
+                # itself from its own capital -- and is never income, which is
+                # money from outside. Nothing here replenishes OpenRouter: the
+                # two provider accounts are separate custodians and the Venice
+                # route reaches only one of them.
                 self.income = {**self.income, "converted_from_principal_micro":
                                self.income["converted_from_principal_micro"]
                                + finished["received_micro"]}
+                self._write("financing", transfer_id=finished["id"], **{
+                    "class": "financing", "source": "base_reserve",
+                    "destination": "venice_credit",
+                    "principal_micro": finished["amount_micro"],
+                    "credit_micro": finished["received_micro"],
+                    "implies_openrouter_replenishment": False, "ts": now_ns})
             self.wallet.release(self.principal_hold)
             if self.fee_hold is not None:
                 self.wallet.release(self.fee_hold)
@@ -614,6 +744,7 @@ class Treasury:
 
     def tick(self, now_ns: int) -> list[dict]:
         self.collect_income()
+        self.verify_receipts()
         if self.stranded and not self._blocking():
             self._recover(now_ns)
             return []
@@ -736,17 +867,44 @@ class FakeRail:
         self.venice = 0
 
     def balances(self) -> dict:
-        venue = self.wallet.balance - self.reserve - self.venice
-        result = {"venue": venue, "reserve": self.reserve, "venice": self.venice}
+        """Each pot is read where it is held, and the venue's pot is the venue's.
+
+        This used to derive the venue pot from the compute wallet -- balance less
+        reserve less Venice -- and then adjust the venue's own books to match it.
+        So a trading loss showed up as unchanged venue money and a model call
+        shrank the trading account: the reviewer's "venue effects change compute
+        authority", from the pot side. The venue now answers for itself, and the
+        compute wallet is authority, not one of these pots.
+
+        A scripted world with no exchange has no venue custodian to ask, and the
+        wallet remains the only book there is; it is labelled as such.
+        """
+        result = {"venue": self.wallet.balance - self.reserve - self.venice,
+                  "reserve": self.reserve, "venice": self.venice}
         if self.exchange is not None:
             acct = self.exchange.account()
             spot = int((acct.equity_usd - self.exchange._perp_equity()) * 1_000_000)
-            book = self.exchange._cash + self.exchange._spot_cash + sum(
-                (p.size * p.entry_px for p in self.exchange._spot_positions.values()), Decimal(0))
-            adjustment = money_to_usd(venue) - book
-            perps = int((self.exchange._perp_equity() + adjustment) * 1_000_000)
+            perps = int(self.exchange._perp_equity() * 1_000_000)
             result.update(venue=perps + spot, perps=perps, spot=spot)
         return result
+
+    def receive_income(self, micro: int) -> None:
+        """Verified income lands where the payer sent it: USDC at the reserve address."""
+        if type(micro) is int and micro > 0:
+            self.reserve += micro
+
+    def verify_receipt(self, receipt: dict) -> dict:
+        """The scripted world is its own chain, and confirms what it recorded.
+
+        It is honest about what that is worth: this confirms the receipt the
+        world itself wrote, not a transfer on Base. A live rail's verification
+        reads the chain; this one states that the scripted world has no other
+        record to contradict it.
+        """
+        if type(receipt.get("micro")) is not int or receipt["micro"] <= 0:
+            return {"confirmed": False, "reason": "receipt carries no positive amount"}
+        return {"confirmed": True, "evidence": {"network": "scripted",
+                                                "tx": receipt.get("tx")}}
 
     def plan(self, direction: str) -> tuple[str, ...]:
         return (direction,)
@@ -758,8 +916,6 @@ class FakeRail:
         if direction in ("spot_to_perps", "perps_to_spot"):
             if self.exchange is None:
                 raise RailError("spot exchange unavailable")
-            self.exchange.sync_cash(money_to_usd(
-                self.wallet.balance - self.reserve - self.venice))
             available = (self.exchange._spot_available("USDC") if direction == "spot_to_perps"
                          else self.exchange._perp_withdrawable())
             if amount > int(available * 1_000_000):
@@ -767,8 +923,6 @@ class FakeRail:
             return
         pot = self.balances()["venue" if direction == "to_reserve" else "reserve"]
         if direction == "to_reserve" and self.exchange is not None:
-            self.exchange.sync_cash(money_to_usd(
-                self.wallet.balance - self.reserve - self.venice))
             pot = int(self.exchange._perp_withdrawable() * 1_000_000)
         if amount < 5_000_000:
             raise RailError("amount is below venue minimum")
@@ -793,41 +947,68 @@ class FakeRail:
         }
 
     def confirm(self, state: dict) -> None:
+        """Settlement moves value between custodians; no pot changes by derivation.
+
+        With the venue keeping its own books, a withdrawal has to leave the
+        venue's cash and a deposit has to arrive in it. Before this, both were
+        implied by subtracting the reserve from the wallet, which is why a
+        transfer could appear to happen in two places at once.
+        """
         if state["direction"] in ("spot_to_perps", "perps_to_spot"):
             self.exchange.class_transfer(money_to_usd(state["amount_micro"]),
                                          state["direction"] == "spot_to_perps")
         elif state["direction"] == "to_reserve":
             self.reserve += state["received_micro"]
+            if self.exchange is not None:
+                self.exchange._cash -= money_to_usd(state["amount_micro"])
         else:
             self.reserve -= state["amount_micro"]
             if state["direction"] == "to_venice":
                 self.venice += state["received_micro"]
+            elif self.exchange is not None:
+                self.exchange._cash += money_to_usd(state["received_micro"])
 
 
 class FakeTreasury(Treasury):
     def __init__(self, ledger, wallet, *, fee_micro=10_000, max_venice_per_window=10_000_000,
-                 exchange=None):
+                 exchange=None, clock_ns=None):
         super().__init__(
             ledger, wallet, FakeRail(wallet, fee_micro=fee_micro, exchange=exchange),
             fee_ceiling_micro=fee_micro,
             max_venice_per_window=max_venice_per_window,
+            clock_ns=clock_ns,
         )
         self.refresh_pots()
 
     def pots(self) -> dict:
         result = super().pots()
+        try:
+            self.rail.balances()
+        except Exception:  # noqa: BLE001 - an unreadable custodian is not a zero balance
+            return {**result, "venue": None, "complete": False, "total_micro": None,
+                    "seed": 0, "sellers": {"venice": self.rail.venice},
+                    "reserve": self.rail.reserve}
         if not result["pending"]:
+            # The scripted rail reads its custodians on every call, so this view is
+            # observed now, not at the last refresh.
             result.update(
                 {k: v for k, v in self.rail.balances().items() if k != "venice"},
                 seed=0,
                 sellers={"venice": self.rail.venice},
                 complete=True,
                 total_micro=self.rail.balances()["venue"] + self.rail.reserve + self.rail.venice,
+                observed_at_ns=self.clock_ns(),
             )
         return result
 
     @property
     def venue_balance_usd(self) -> Decimal:
+        """What the compute wallet would have left after the reserve and Venice pots.
+
+        Not a venue balance: the venue keeps its own. This survives as the figure
+        a test or an operator uses to fund the scripted venue deliberately
+        through ``sync_cash``, which is the only thing that moves that cash now.
+        """
         return money_to_usd(self.wallet.balance - self.rail.reserve - self.rail.venice)
 
 

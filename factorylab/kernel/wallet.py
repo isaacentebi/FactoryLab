@@ -256,12 +256,23 @@ class Wallet:
         self.__pots_view = view
 
     def pots(self) -> dict:
-        """Return detached pot observations, with unavailable data explicitly marked unknown."""
+        """Return detached pot observations, with unavailable data explicitly marked unknown.
+
+        The pots are assets and credits held by custodians. This wallet is not
+        one of them: it is the constitutional ceiling on spending, labelled
+        ``authority`` in the view, and venue P&L no longer moves it.
+        """
         from copy import deepcopy
 
         if self.__pots_view is None:
             return {"venue": None, "reserve": None, "seed": None, "sellers": {},
-                    "complete": False, "pending": False, "total_micro": None}
+                    "complete": False, "pending": False, "total_micro": None,
+                    "observed_at_ns": None,
+                    # Not a pot: the wallet is spending authority, and the pots are
+                    # the assets that back it (edition 3, C5).
+                    "authority": {"role": "authority", "unlocked_micro": self.unlocked,
+                                  "locked_micro": self.locked,
+                                  "balance_micro": self.balance}}
         return deepcopy(self.__pots_view())
 
     @property

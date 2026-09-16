@@ -457,15 +457,45 @@ class FeedbackMixin:
             # The seat that decided it is told what it came to, marked or settled,
             # with the money attached (C1). A marked outcome says so, so an estimate
             # at the backstop is never read as realised cash.
+            #
+            # And it is told in parts, not as one number. GPT-6 Pro's third
+            # reading §2: "the request line and the reward line stop learning
+            # from one number". A useful consequence record reads like "incurred
+            # 920 microUSD of provider cost, received 1,200 microUSDC of funding
+            # at Hyperliquid, position still open, committed hypothesis not
+            # settled" -- four facts in different units and different custodies,
+            # which a single net destroys. ``net_micro`` stays because it is
+            # itself a fact: the movement in this seat's entitlement.
+            venue_delta = self.venue_deltas.pop(payoff.handle, {})
             self.outcomes.append(
                 owner, handle=payoff.handle, delta_micro=payoff.net_micro,
                 evidence=payoff.handle,
                 outcome={"return_paid_off": payoff.y, "net_micro": payoff.net_micro,
+                         "provider_cost_micro": payoff.cost_micro,
+                         "venue_delta_micro": venue_delta,
+                         "position_open": self._position_open(payoff),
+                         "commitment_settled": not payoff.marked,
                          "cost_micro": payoff.cost_micro, "earned_micro": payoff.earned_micro,
                          "marked": payoff.marked, "liquidated": payoff.liquidated})
         if payoff.marked or owner is None or owner not in self.assemblies:
             return
         self._book_consequence(owner, payoff.net_micro, "return_paid_off")
+
+    def _position_open(self, payoff: Any) -> bool:
+        """Whether this decision still has exposure at the venue when its outcome is fixed.
+
+        The consequence book knows how many lots the return opened and how many
+        of them are closed; a marked outcome is one whose position outlived its
+        evaluation horizon. Either way the seat is told plainly, rather than
+        being left to infer an open position from a number that looks final.
+        """
+        if payoff.marked:
+            return True
+        try:
+            account = self.consequences.table.account(payoff.handle)
+        except (AttributeError, KeyError):
+            return False
+        return account.opened_lots > account.closed_lots
 
     def _book_consequence(self, owner: str, micro: int, reason: str) -> None:
         if micro > 0:
@@ -491,16 +521,23 @@ class FeedbackMixin:
                                  outcome={"late_realization_micro": micro})
 
     def _book_income(self, item: dict) -> None:
-        """Earned x402 income is new money: it enters the root wallet and is the
+        """Verified x402 income is new money: it arrives in ``base_reserve`` and is the
         owning seat's (C11, C10).
 
-        A paid call settled USDC to the reserve, so the wallet books the receipt
-        like venue P&L (``income``) and ``unlocked`` rises by it; the seat that owns
-        the service's program is credited from that new money, never from the
-        pool, so an empty pool still pays the seller. A service whose program has
-        no live owner (retired, or seeded without one) leaves the receipt in the
-        pool. The receipt is also the economic consequence of the return that
-        registered the service, while that outcome is open.
+        A paid call settles USDC to the reserve address on Base, so the money
+        itself lands in the ``base_reserve`` custody account -- never in
+        OpenRouter or Venice credit, which the x402 route does not touch. The
+        compute wallet rises by the same amount as *authority*: new assets back
+        new spending permission, and the seat that owns the service's program is
+        credited from that new money rather than from the pool, so an empty pool
+        still pays the seller.
+
+        What reaches here has already been verified: the treasury books a spool
+        receipt as a claim and only a confirmed chain read promotes it to income
+        (``Treasury.verify_receipt``). A service whose program has no live owner
+        (retired, or seeded without one) leaves the receipt in the pool. The
+        receipt is also the economic consequence of the return that registered
+        the service, while that outcome is open.
         """
         program = item.get("program") or item.get("service")
         service = item.get("service")
@@ -515,6 +552,16 @@ class FeedbackMixin:
             self.ledger.append({"kind": "income.unbooked", "service": service, "micro": micro,
                                 "tx": item.get("tx"), "reason": "wallet is dead"})
             return
+        # The asset itself is USDC at the reserve address. A scripted rail has no
+        # chain to read it back from, so it is credited to its pot here; a live
+        # rail reads the reserve's own balance and must not be told twice.
+        receive = getattr(getattr(self.treasury, "rail", None), "receive_income", None)
+        if receive is not None:
+            receive(micro)
+        self.ledger.append({"kind": "income.custody", "service": service, "micro": micro,
+                            "tx": item.get("tx"), "custody": "base_reserve",
+                            "asset": item.get("asset") or "USDC",
+                            "chain": item.get("chain") or "base"})
         if owner in self.assemblies:
             self.budget.earn(owner, micro, f"income.earned:{service}")
         self.consequences.income(service, micro, self.n)
@@ -526,6 +573,9 @@ class FeedbackMixin:
         this: the consumed offset is part of the treasury snapshot.
         """
         for item in self.treasury.collect_income():
+            self._book_income(item)
+        # A spool row is a claim; only a confirmed chain read makes it income.
+        for item in self.treasury.verify_receipts():
             self._book_income(item)
 
     def _settle_due_forecasts(self) -> None:

@@ -37,7 +37,6 @@ from factorylab.cortex.request import Request, Return, public_return
 from factorylab.cortex.sandbox import NoJail, jail_probe
 from factorylab.cortex.schematics import SchematicsMixin
 from factorylab.kernel.events import Event, EventKind
-from factorylab.kernel.money import money_to_usd
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.termination import DORMANT
 from factorylab.learners.router import Sample
@@ -759,11 +758,13 @@ class Runtime(
                         for p in acct.positions
                     ],
                 }
-            except RuntimeError:  # read-only live venue: no account yet
-                payload["account"] = {
-                    "equity_usd": str(money_to_usd(self.wallet.balance)),
-                    "positions": [],
-                }
+            except RuntimeError as exc:
+                # Not "no account yet": an account nobody could read. Filling it
+                # with the compute wallet's balance and an empty position list
+                # invented equity and denied positions in the same breath
+                # (GPT-6 Pro, third reading). It is reported as unavailable, like
+                # the mids read below.
+                payload["account"] = {"status": "unavailable", "reason": type(exc).__name__}
             try:
                 payload["mids"] = {c: str(m) for c, m in self._tick_mids().items()}
             except RuntimeError as exc:  # VenueUnavailable and friends

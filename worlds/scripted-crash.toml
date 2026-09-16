@@ -1,8 +1,9 @@
 # The scripted world plus four 50% BTC drops on ticks where the scripted trader
 # holds a leveraged long (it buys on tick 4k+2 after the venue moves; the drop lands on 4k+3). The
 # venue liquidates when equity falls below maintenance margin and the realised
-# loss lands in the wallet.
-# Used to demonstrate death by world event: the wallet reaches zero.
+# loss lands on the venue account, gapping it below zero.
+# Used to demonstrate a venue blowup: from edition 3 C5 the loss settles on the
+# venue accounts and does not spend the compute wallet, which is authority.
 name = "scripted-crash"
 seed = 2
 initial_balance_usd = "20"

@@ -1552,3 +1552,119 @@ Repetition requires a new preparation, not reuse of old client order IDs.
 The public world exposes actual proposal refusals in `registration_feedback` and
 judgement, propensity and order refusals in `return_feedback`. Existing checkpoint
 buffers remain readable; legacy prefix-only entries are classified on disclosure.
+
+## Edition 3 R3-B: typed custody, and what may move the compute wallet
+
+From GPT-6 Pro's third reading §2 and §3 (`docs/audits/v6/gpt6-third/reading.md`)
+and `docs/plans/edition3-r3.md`. Three quantities are kept apart and never
+conflated: the **learning score** (evidence for a rule), the **seat entitlement**
+(permission to spend inside the compute budget) and the **assets and credits**
+held by a custodian, which change only by a verified transaction, a provider
+charge, a refund or a purchase — never by an internal reclassification.
+
+### The custody accounts
+
+`factorylab/runtime/custody.py` builds one view, `custody_view(rt)`, with six
+accounts, each carrying `status` (`observed` or `unavailable`), a `reason` when
+unavailable, and `observed_at_ns`:
+
+| Account | What it holds | Read from |
+| --- | --- | --- |
+| `openrouter_credit` | prepaid model credit at OpenRouter | treasury pots (`seed`) |
+| `venice_credit` | prepaid model credit at Venice | treasury pots (`sellers.venice`) |
+| `venue_perps` | perps equity, cash, margin used, positions | the tick's account read |
+| `venue_spot` | the venue's spot balances | the tick's account read |
+| `base_reserve` | USDC at the reserve address on Base | treasury pots (`reserve`) |
+| `pending_conversions` | transfers in flight: a held source and a claim at the destination | `treasury.state` and its strands |
+
+Beside them, `authority` — the compute wallet — labelled as what it is: the
+constitutional ceiling on spending, not an asset, and not a seventh pot to add
+to the others. `Wallet.pots()` and `Treasury.pots()` carry the same label.
+
+Nothing in the view is invented. A venue read that fails renders
+`venue_perps` and `venue_spot` `unavailable` with the exception that caused it;
+the old fallback, which answered an unreachable venue with the compute wallet's
+balance and an empty position list, is gone from `_world_block`, from the tick
+payload in `_producer_step`, from `_equity_micro` (which now returns `None`, so
+every ratio measured against window equity is honestly unmeasured) and from
+`_world_resources` (`trading_equity_usd` is `null`, never the reserve pot).
+`_tick_account_observation` memoises the failure as well as the answer, so a
+tick's hundred prompts ask an unreachable venue once.
+
+### What moves the compute wallet
+
+Model, tool and program charges; rent, as authority; releases; transfers between
+seats; verified income; and confirmed conversions into provider credit. That is
+the whole list.
+
+Venue P&L, fees and funding are not on it. They settle on the venue accounts,
+which are the record of them, and the diary carries one `venue.settled {custody,
+amount, reference, reason, handle, event}` item per effect — `custody` being
+`venue_perps` or `venue_spot`. The wake reports the same figures it always did
+in `money.in_by_class` / `out_by_class` and now says where each class moved:
+`money.custody_of_class` names `venue` for `exchange_pnl` and `funding` and
+`authority` for the rest, and `money.venue_by_custody` totals the venue effects
+by account. The scripted rail's venue pot is read from the venue rather than
+derived from the wallet, and a scripted transfer moves the venue's own cash.
+
+### The bridge
+
+A confirmed `to_venice` transfer decreases `base_reserve` by the principal and
+increases `venice_credit` by what arrived, and does nothing else: it implies no
+OpenRouter replenishment, and the ledger says so in
+`treasury.financing {class: "financing", source, destination, principal_micro,
+credit_micro, implies_openrouter_replenishment: false}`. Principal converted
+into compute is financing and is counted in `converted_from_principal_micro`,
+never in `earned_micro`. While the transfer is in flight it is a held source and
+a pending claim in `pending_conversions`, never a balance in two places.
+
+### Income receipts
+
+A receipt's identity is chain, transaction hash, log index, asset and recipient
+(defaults: `base`, `USDC`, the reserve). `Treasury.earn` is idempotent on that
+identity: the same payment twice books once, and a *different* payment presented
+under one identity fails closed with `income.conflict` and books nothing.
+
+The seller's spool is the wake host's word, not a payment. `collect_income`
+books each spool row as a **claim** (`income.claimed`, counted in
+`pots.claimed_micro`), and `Treasury.verify_receipt` promotes it to income only
+when the rail's chain read confirms the transfer: `LiveRail.verify_receipt`
+reads the Base transaction and looks for a USDC transfer to the reserve of
+exactly the claimed amount, at the claimed log index when one is given. It
+answers confirmed, contradicted (`income.conflict`, nothing booked) or unknown,
+and an unknown leaves the claim standing. A rail with no chain read confirms
+nothing. Verified income lands in `base_reserve` (`income.custody`) and raises
+the authority it backs. A paid call settled in process, through the facilitator,
+on an authorization the runtime verified itself, books directly.
+
+### Collateral
+
+Both adapters expose `collateral_view(coin, market)`: `account_mode`,
+`collateral_asset`, `eligible_equity_usd` (the perps account alone — spot marks
+are not collateral for a perp), `margin_used_usd`, `open_order_holds_usd`,
+`holds_included_in_margin_used`, `leverage_for_instrument`, `position_size`,
+`spot_available` and `observed_at_ns`. `AccountState` now states
+`perps_equity_usd` beside `equity_usd` so the split is read, not derived.
+
+`_order_collateral` checks incremental margin, plus holds not already reflected
+in margin used, plus the manifest's precommitted headroom, against eligible
+equity minus margin used. Spot is checked separately and against its own
+balances: a buy needs the USDC (`spot buy exceeds venue USDC balance`), a sell
+needs the base coin (`spot sell exceeds venue base balance`). Unknown collateral
+(`order collateral unavailable: <exception>`) and stale collateral (`order
+collateral is stale: venue account older than one tick`, which is how
+Hyperliquid's fallback to its last complete snapshot reads) block new risk, and
+neither ever blocks a cancellation or a `reduce_only` reduction.
+
+`[venue] collateral_headroom_usd` is an exact nonnegative decimal string,
+default `"0"`: free collateral the world precommits to leaving unused, declared
+before the orders that would want it. It is not `[kill] dust_micro`, which is a
+different setting for a different thing. At its default the key is dropped from
+the canonical manifest JSON, so no world that predates it changes hash.
+
+### The reward line
+
+`_credit_consequence` books the consequence in parts rather than as one number:
+`provider_cost_micro`, `venue_delta_micro` (a map by custody), `position_open`,
+`commitment_settled`, alongside the entitlement movement `net_micro`. The
+inbox item carries them.

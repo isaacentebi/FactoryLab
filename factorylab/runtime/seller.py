@@ -375,8 +375,19 @@ def seller_from_runtime(rt, **options) -> Seller:
         raise ValueError("the manifest names no reserve address to be paid at")
 
     def earn(service: Service, micro: int, tx: str, payer: str, served_ns: int):
+        """Book one paid call with the payment's full identity, in process.
+
+        The receipt carries chain, asset and recipient as well as the
+        transaction, so it deduplicates against the same payment arriving by any
+        other route (the host's spool, say) rather than only against itself. This
+        path books directly: the runtime performed the settlement itself, through
+        the facilitator, on an authorization it verified against the quoted
+        amount and the reserve address. The spool path has no such evidence and
+        books a claim instead.
+        """
         item = rt.treasury.earn(service.id, micro, tx, payer=payer, program=service.program_id,
-                                version=service.version, served_ns=served_ns)
+                                version=service.version, served_ns=served_ns,
+                                chain="base", asset="USDC", recipient=pay_to)
         if item is not None:
             rt._book_income(item)  # A repeated receipt never credits money twice.
         return item
@@ -385,12 +396,18 @@ def seller_from_runtime(rt, **options) -> Seller:
                   earn=earn, clock_ns=lambda: rt.clock.now_ns, **options)
 
 
-def spool_earn(spool: IncomeSpool) -> Earn:
-    """An ``earn`` that leaves a receipt for the runtime instead of touching its ledger."""
+def spool_earn(spool: IncomeSpool, *, pay_to: str | None = None) -> Earn:
+    """An ``earn`` that leaves a receipt for the runtime instead of touching its ledger.
+
+    The receipt carries the payment's identity -- chain, asset and the recipient
+    it was paid to -- so the runtime can ask the chain about it rather than
+    taking the file's word. Until it does, the runtime books it as a claim.
+    """
     def earn(service: Service, micro: int, tx: str, payer: str, served_ns: int):
         return spool.append({"service": service.id, "micro": micro, "tx": tx, "payer": payer,
                              "program": service.program_id, "version": service.version,
-                             "ts": served_ns})
+                             "ts": served_ns, "chain": "base", "asset": "USDC",
+                             "recipient": pay_to})
     return earn
 
 

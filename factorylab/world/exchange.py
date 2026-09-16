@@ -136,6 +136,10 @@ class AccountState:
     positions: tuple[Position, ...]
     margin_used_usd: Decimal
     spot_balances: tuple[SpotBalance, ...] = ()
+    # The perpetuals account on its own: ``equity_usd`` also carries the spot book,
+    # marked, and spot marks are not collateral for a perp. Custody keeps the two
+    # apart, so the venue states the split rather than leaving it to be derived.
+    perps_equity_usd: Decimal | None = None
 
 
 class Exchange(Protocol):
@@ -162,6 +166,7 @@ class Exchange(Protocol):
               client_id: str | None = None, market: str = "perp") -> OrderResult: ...
     def instruments(self) -> dict: ...
     def set_leverage(self, coin: str, leverage: int, *, market: str = "perp") -> dict: ...
+    def collateral_view(self, coin: str, market: str = "perp") -> dict: ...
 
 
 # --------------------------------------------------------------------------- fake
@@ -311,6 +316,7 @@ class FakeExchange:
         return AccountState(
             equity_usd=self._cash + unrealized + self._spot_cash + sum(
                 (p.size * self._mids[p.coin] for p in self._spot_positions.values()), Decimal(0)),
+            perps_equity_usd=self._cash + unrealized,
             cash_usd=self._cash,
             positions=tuple(self._positions.values()),
             margin_used_usd=margin,
@@ -318,6 +324,48 @@ class FakeExchange:
                 SpotBalance(p.coin.split("/")[0], p.size, self._spot_available(p.coin))
                 for p in self._spot_positions.values())),
         )
+
+    def collateral_view(self, coin: str, market: str = "perp") -> dict:
+        """The pool this venue would actually charge an order's margin against.
+
+        GPT-6 Pro's third reading §2: a collateral check against ``equity_usd``
+        is too broad, because equity includes spot marks that are not eligible
+        collateral for a perp. So the venue says what it holds, by class, and
+        the runtime does the arithmetic on the right pool:
+
+        ``eligible_equity_usd`` for a perp is the perps account alone -- cash
+        plus unrealised P&L -- and never the spot book. ``open_order_holds_usd``
+        is the margin resting orders are holding, and
+        ``holds_included_in_margin_used`` says whether that is already inside
+        ``margin_used_usd``; here it is not, because the fake charges margin for
+        open positions only, so the caller must add it.
+
+        The fake answers honestly about being a fake: these are its own books,
+        read at its own clock, and its ``account_mode`` is the cross margin it
+        actually implements.
+        """
+        spot = "/" in coin or market == "spot"
+        resting = sum((o.size * o.limit_px / self._leverage.get(o.coin, self.max_leverage)
+                       for o in self._resting.values()
+                       if o.market == "perp" and not o.reduce_only), Decimal(0))
+        return {
+            "account_mode": "cross",
+            "collateral_asset": "USDC",
+            "eligible_equity_usd": self._perp_equity(),  # never the spot book
+            "margin_used_usd": self.account().margin_used_usd,
+            "open_order_holds_usd": resting,
+            "holds_included_in_margin_used": False,
+            "leverage_for_instrument": (Decimal(1) if spot
+                                        else self._leverage.get(coin, self.max_leverage)),
+            "position_size": (Decimal(0) if spot else
+                              (self._positions[coin].size if coin in self._positions
+                               else Decimal(0))),
+            "spot_available": {
+                "USDC": self._spot_available("USDC"),
+                **({coin.split("/")[0]: self._spot_available(coin)} if spot else {}),
+            },
+            "observed_at_ns": self._now_ns,
+        }
 
     def place(self, order: Order) -> OrderResult:
         """A stable client id admits at most one order, including after a lost acknowledgement."""
@@ -770,6 +818,12 @@ class HyperliquidExchange:
         self.account_fallbacks = 0
         self._last_mids: dict[str, Decimal] | None = None
         self._last_account: AccountState | None = None
+        self._last_account_ns: int | None = None
+        # Leverage this account has acknowledged, by coin; set_leverage records it.
+        self._leverage: dict[str, Decimal] = {}
+        # Hyperliquid accounts are cross-margin unless an instrument was switched
+        # to isolated; nothing here switches one, and the mode is reported as read.
+        self._account_mode = "cross"
 
     def _configure_spot(self, meta: dict) -> None:
         """Record the venue's whole spot universe, and the wire names of traded pairs."""
@@ -884,6 +938,8 @@ class HyperliquidExchange:
         return out
 
     def account(self) -> AccountState:
+        import time
+
         if not self._address:
             raise RuntimeError("account() needs an address or a private key")
         spot = mids = None
@@ -895,7 +951,9 @@ class HyperliquidExchange:
                 mids = self._guarded("spot_mids", self._info.all_mids)
         except VenueUnavailable:
             # Half an account is not an account: perps and spot fall back together,
-            # so a spot endpoint outage returns the last complete snapshot.
+            # so a spot endpoint outage returns the last complete snapshot. Its
+            # observation time is not refreshed: a stale account is stale, and the
+            # collateral check refuses to open new risk on it.
             if self._last_account is None:
                 raise
             self.account_fallbacks = getattr(self, "account_fallbacks", 0) + 1
@@ -926,14 +984,72 @@ class HyperliquidExchange:
                     if not mark.is_finite() or mark <= 0:
                         raise VenueUnavailable("invalid spot USD mid")
                     spot_value += total * mark
+        self.__dict__["_last_account_ns"] = time.time_ns()
         self._last_account = AccountState(
             equity_usd=Decimal(str(summary["accountValue"])) + spot_value,
+            perps_equity_usd=Decimal(str(summary["accountValue"])),
             cash_usd=Decimal(str(st.get("withdrawable", summary["accountValue"]))),
             positions=tuple(positions),
             margin_used_usd=Decimal(str(summary["totalMarginUsed"])),
             spot_balances=tuple(balances),
         )
         return self._last_account
+
+    def collateral_view(self, coin: str, market: str = "perp") -> dict:
+        """What Hyperliquid would charge this instrument's margin against, and when it was read.
+
+        ``eligible_equity_usd`` is the perps account value alone. The spot book
+        is reported separately in ``spot_available`` and is not collateral for a
+        perp: counting it was the reviewer's "too broad if equity_usd includes
+        spot marks that are not eligible collateral".
+
+        ``margin_used_usd`` is ``totalMarginUsed``, which covers open positions
+        and not resting orders, so ``holds_included_in_margin_used`` is False and
+        ``open_order_holds_usd`` is the margin those resting orders hold, at the
+        leverage this account has acknowledged for each coin.
+
+        ``observed_at_ns`` is the moment of the account read this view is built
+        from -- including a fallback to the last complete snapshot when the spot
+        endpoint was out -- so a caller can refuse to open new risk on a stale
+        answer rather than treating an old number as current.
+        """
+        account = self.account()
+        spot = "/" in coin or market == "spot"
+        leverage = self._acknowledged_leverage(coin)
+        holds = Decimal(0)
+        for order in self.open_orders():
+            if "/" in order["coin"]:
+                continue
+            holds += (Decimal(str(order["size"])) * Decimal(str(order["price"]))
+                      / self._acknowledged_leverage(order["coin"]))
+        usdc = next((b.available for b in account.spot_balances if b.coin == "USDC"), Decimal(0))
+        base = coin.split("/")[0] if spot else None
+        available = {"USDC": usdc}
+        if base is not None:
+            available[base] = next(
+                (b.available for b in account.spot_balances if b.coin == base), Decimal(0))
+        return {
+            "account_mode": getattr(self, "_account_mode", "cross"),
+            "collateral_asset": "USDC",
+            # Perps equity: the venue's account value without the spot book.
+            "eligible_equity_usd": account.perps_equity_usd,
+            "margin_used_usd": account.margin_used_usd,
+            "open_order_holds_usd": holds,
+            "holds_included_in_margin_used": False,
+            "leverage_for_instrument": Decimal(1) if spot else leverage,
+            "position_size": (Decimal(0) if spot else next(
+                (p.size for p in account.positions if p.coin == coin), Decimal(0))),
+            "spot_available": available,
+            "observed_at_ns": getattr(self, "_last_account_ns", None),
+        }
+
+    def _acknowledged_leverage(self, coin: str) -> Decimal:
+        """The leverage this account has actually set for a coin; unknown means one.
+
+        A discount for leverage the venue has not confirmed is a discount on a
+        promise, so an unread leverage charges full notional.
+        """
+        return self.__dict__.get("_leverage", {}).get(coin, Decimal(1))
 
     def funding_payments(self, since_ns: int) -> list[FundingPayment]:
         """Read inclusive, paginated user cash flows; never infer payments from funding rates.
@@ -1362,6 +1478,9 @@ class HyperliquidExchange:
         try:
             resp = self._exchange.update_leverage(leverage, coin, is_cross=True)
             if resp.get("status") == "ok":
+                # The collateral view discounts margin only at leverage the venue
+                # has acknowledged; this is where it becomes acknowledged.
+                self.__dict__.setdefault("_leverage", {})[coin] = Decimal(leverage)
                 return {"status": "ok", "coin": coin, "leverage": leverage}
             return {"status": "rejected", "error": str(resp)}
         except Exception as exc:

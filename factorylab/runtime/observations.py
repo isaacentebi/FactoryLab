@@ -64,8 +64,13 @@ class Observation:
         return self.code is not None
 
 
-def _ratio(numerator: int, denominator: int) -> float | None:
-    return numerator / denominator if denominator > 0 else None
+def _ratio(numerator: int, denominator: int | None) -> float | None:
+    """An unknown denominator leaves the ratio unmeasured rather than inventing one.
+
+    A window whose venue equity could not be read opens with ``None``, not with
+    the compute wallet's balance: every ratio against it is honestly unmeasured.
+    """
+    return numerator / denominator if denominator is not None and denominator > 0 else None
 
 
 def _mean(values: list[float] | list[int]) -> float | None:

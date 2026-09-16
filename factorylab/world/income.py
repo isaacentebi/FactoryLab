@@ -24,8 +24,12 @@ def _receipt(value: Any) -> dict | None:
     if (not isinstance(service, str) or not service or type(micro) is not int or micro <= 0
             or not isinstance(tx, str) or not tx):
         return None
+    # The payment's identity travels with it: chain, log index, asset and
+    # recipient, alongside the service it paid for. A receipt that names only a
+    # transaction hash is not an identity the chain can be asked about.
     return {k: value.get(k) for k in ("service", "micro", "tx", "payer", "program",
-                                      "version", "ts")}
+                                      "version", "ts", "chain", "log_index", "asset",
+                                      "recipient")}
 
 
 def read_income_spool(path: str, offset: int) -> dict:

@@ -65,11 +65,20 @@ RETURNS_PAGE = "returns-{window}.json"
 ROLES = ("producer", "evaluator", "meta", "antagonist")
 RAILS = ("openrouter", "venice", "x402")
 INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_micro")
-#: Money that entered the wallet, by class, and money that left it, by the reason it left.
+#: Money that entered this factory, by class, and money that left, by the reason.
 IN_CLASSES = ("initial", "drip", "release", "subsidy", "earned", "converted_from_principal",
               "exchange_pnl", "funding")
 OUT_CLASSES = ("model", "tool", "connector", "treasury", "registration", "exchange_pnl",
                "funding", "transfer_fees", "other")
+#: Which custodian each class moves money at. Venue P&L and funding are reported
+#: here as they always were, but under the venue's custody: they are not, and
+#: never were, movements of the compute wallet, which is authority (edition 3, C5).
+CUSTODY_OF_CLASS = {"exchange_pnl": "venue", "funding": "venue"}
+
+
+def _custody_headings(classes: tuple[str, ...]) -> dict[str, str]:
+    """Name the custodian behind each money class, so no reader adds two pots."""
+    return {name: CUSTODY_OF_CLASS.get(name, "authority") for name in classes}
 
 
 def rail_for_model(model_id: str) -> str:
@@ -228,6 +237,9 @@ class _Observatory:
         # dormancy and termination.
         self.money_in: Counter = Counter()
         self.money_out: Counter = Counter()
+        # Venue effects by the venue account they landed in, kept apart from the
+        # compute wallet's own movements.
+        self.venue_by_custody: dict[str, Counter] = {}
         self.current_window = 0
         self.deliveries: dict[int, dict[str, Counter]] = {}
         self.open_handles: dict[str, dict] = {}
@@ -372,12 +384,30 @@ class _Observatory:
         self._money_in("drip", item.get("amount"))
 
     def _on_wallet_settle(self, item: dict) -> None:
-        # Signed venue effects: a gain is money in, a loss is money out, by source.
-        # Earned income enters the wallet the same way and is already counted as
-        # money in by its ``income.earned`` item.
+        # Earned income enters the wallet as authority and is already counted as
+        # money in by its ``income.earned`` item. Venue effects no longer arrive
+        # here at all: they are ``venue.settled`` items, below.
         reason, amount = str(item.get("reason", "")), item.get("amount")
         if reason not in ("exchange_pnl", "funding") or type(amount) is not int:
             return
+        if amount >= 0:
+            self.money_in[reason] += amount
+        else:
+            self.money_out[reason] += -amount
+
+    def _on_venue_settled(self, item: dict) -> None:
+        """Venue P&L, fees and funding, reported under the venue's own custody.
+
+        The figures are the same ones this page always showed; what changed is
+        where they are said to have happened. They settle on the venue accounts
+        and never moved the compute wallet, so counting them as wallet movement
+        told a reader that a trading loss had spent thinking money.
+        """
+        reason, amount = str(item.get("reason", "")), item.get("amount")
+        if reason not in ("exchange_pnl", "funding") or type(amount) is not int:
+            return
+        self.venue_by_custody.setdefault(str(item.get("custody") or "venue"), Counter())[
+            reason] += amount
         if amount >= 0:
             self.money_in[reason] += amount
         else:
@@ -762,6 +792,13 @@ class _Observatory:
             "money": {
                 "in_by_class": {name: self.money_in.get(name, 0) for name in IN_CLASSES},
                 "out_by_class": {name: self.money_out.get(name, 0) for name in OUT_CLASSES},
+                # Every class named with the custodian it moved at: the compute
+                # wallet is authority, the venue accounts are the venue's.
+                "custody_of_class": {**_custody_headings(IN_CLASSES),
+                                     **_custody_headings(OUT_CLASSES)},
+                "venue_by_custody": {custody: dict(sorted(counts.items()))
+                                     for custody, counts in sorted(
+                                         self.venue_by_custody.items())},
             },
             "deliveries": {
                 # Rows, not keys: a channel name such as "verdict" is a sealed key

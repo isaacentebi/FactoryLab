@@ -293,6 +293,7 @@ class SchematicsMixin:
     def _world_block(self) -> dict[str, Any]:
         """Facts about the world any assembly may see. No rules, no goals, no private state."""
         self._ensure_connector_tool()
+        from factorylab.runtime.custody import custody_view
         from factorylab.runtime.notes import counts
         try:
             acct = self._tick_account()
@@ -307,11 +308,17 @@ class SchematicsMixin:
                 "spot_balances": [{"coin": b.coin, "total": str(b.total),
                                    "available": str(b.available)} for b in acct.spot_balances],
             }
-        except RuntimeError:
-            account = {"equity_usd": str(money_to_usd(self.wallet.balance)), "positions": []}
+        except RuntimeError as exc:
+            # A failed venue read is reported as one. It used to be answered with
+            # the compute wallet's balance and an empty position set, which told
+            # the population it held equity it did not hold and had no positions
+            # it may well have had: GPT-6 Pro's third reading, "the account-read
+            # fallback invents financial facts". Missing data stays unavailable.
+            account = {"status": "unavailable", "reason": type(exc).__name__}
         # One mechanics block answers both disclosures; building it twice per request
         # only re-reads the same committed parameters.
         mechanics = self._mechanics_block()
+        account["custody"] = custody_view(self)
         account["realized_pnl_usd_to_date"] = str(money_to_usd(self.realized_to_date))
         account["fees_usd_to_date"] = str(money_to_usd(self.fees_to_date))
         account["funding_usd_to_date"] = str(money_to_usd(self.funding_to_date))
@@ -717,10 +724,12 @@ class SchematicsMixin:
         """The factory's money, by class, with principal and income kept apart."""
         pots = self.wallet.pots()
         try:
-            equity = self._tick_account().equity_usd
-            trading = str(equity)
+            trading = str(self._tick_account().equity_usd)
         except RuntimeError:
-            trading = _usd(pots.get("venue"))
+            # The venue would not say. The reserve's pot is not the venue's equity,
+            # so nothing is substituted for it; the custody block carries the
+            # unavailable account and its reason.
+            trading = None
         return {
             "root_unlocked_usd": _usd(self.wallet.unlocked),
             "root_locked_usd": _usd(self.wallet.locked),

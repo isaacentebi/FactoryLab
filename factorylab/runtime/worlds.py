@@ -66,6 +66,11 @@ class ExchangeSpec:
     start_cash_usd: str = "100"
     shocks: tuple[Shock, ...] = ()
     client_namespace: str | None = None
+    # Free collateral this world precommits to leaving unused at the venue, on top
+    # of the margin an order needs. A buffer declared before the orders exist, so
+    # it cannot be reasoned away by the order that wants it. Zero by default: a
+    # world that wants a cushion says so.
+    collateral_headroom_usd: str = "0"
 
 
 @dataclass(frozen=True)
@@ -458,6 +463,10 @@ class WorldManifest:
         # Preserve historical manifest identities while the program call price is its default.
         if payload["prices"].get("program_micro_per_call") == 50:
             payload["prices"].pop("program_micro_per_call")
+        # A world that precommits no collateral headroom hashes as it did before
+        # the key existed: an added key may not rename a world that predates it.
+        if payload["exchange"].get("collateral_headroom_usd") == "0":
+            payload["exchange"].pop("collateral_headroom_usd")
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -852,7 +861,16 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             end_ns=duration_ns(dd["end"]),
         )
     ex = d.get("exchange", {})
-    spot_pairs = d.get("venue", {}).get("spot_pairs", [])
+    venue = d.get("venue", {})
+    spot_pairs = venue.get("spot_pairs", [])
+    headroom = str(venue.get("collateral_headroom_usd", "0"))
+    try:
+        if Decimal(headroom) < 0 or not Decimal(headroom).is_finite():
+            raise ValueError
+    except (ArithmeticError, ValueError):
+        raise ValueError(
+            "venue.collateral_headroom_usd must be a nonnegative exact decimal string"
+        ) from None
     if (not isinstance(spot_pairs, list) or any(
             not isinstance(p, str) or p.count("/") != 1 or not p.endswith("/USDC")
             or not p.split("/")[0] for p in spot_pairs)
@@ -866,6 +884,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         spot_pairs=tuple(spot_pairs),
         seed=int(ex.get("seed", d.get("seed", 0))),
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
+        collateral_headroom_usd=headroom,
         shocks=tuple(
             Shock(int(sh["step"]), str(sh["coin"]), str(sh["multiplier"]))
             for sh in ex.get("shocks", [])
