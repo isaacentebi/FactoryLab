@@ -137,3 +137,16 @@ Nobody acknowledged an outcome: `ack_through` is documented but not salient.
 **Costs.** $0.020 per tick. At the ten-minute tick that is about $2.90 a day, half of edition
 2's burn, because 78 of 101 producer answers were defers and 482 draws reached nobody; the
 seats are already spending less than the router offers them.
+
+## Run 4: forty minutes with web search available
+
+`worlds/edition3-rehearsal-4.toml`, two-minute tick, the roster and prompts of run 3 plus the
+`web.search` tool (PR #96: a cent a query, results recorded and protected like fetched text, a
+continuation round after a search). Twenty ticks, 94 invocations, $0.48. Eight tool calls, all
+venue reads (funding history, funding, positions, order book). **Zero searches.** Nobody opened
+the door the run was built to test. The same population that reads funding history every
+wake did not look outside the venue once, at a cent a look. That is the design fact GPT-6's
+third reading names: the tools are an index entry, the lenses point at the market, and
+deferring is the cheapest competent-looking answer. The R3 workstreams (prompts and the
+evaluation commission in particular) are the response; run 5 tests it again.
+
