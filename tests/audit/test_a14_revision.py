@@ -72,7 +72,11 @@ def test_cascade_siblings_settle_at_the_sibling_share_with_ledger_evidence():
     rt = _recursive_runtime(events=0)
     rt.m = replace(rt.m, timing=replace(rt.m.timing, jitter_fraction=0))
     handles = [_pending_meta(rt) for _ in range(3)]
-    events = [Event(f"meta-{i}", EventKind.META_VERDICT, 0,
+    # Restated for R3-D: a tier's separation is a duration (GPT-6 third reading §6.C),
+    # so the arrivals are spread across the window the manifest precommits instead of
+    # sharing one timestamp. What the sibling share pays out is unchanged.
+    step = rt.m.timing.min_ratio * rt.tick_clock.interval_ns // 2
+    events = [Event(f"meta-{i}", EventKind.META_VERDICT, i * step,
                     {"by": h, "about": "lower", "tier": 2, "score": 0.5}, "runtime")
               for i, h in enumerate(handles)]
     assert all(rt._cascade_arrival(e) is None for e in events[:2])
@@ -111,7 +115,7 @@ def test_top_meta_is_graded_by_brier_against_the_verdicts_consequence():
     # Known outcome: the judge blessed a no-fill return (payoff 0.9 against y = 0) and
     # scored below the baseline, so a conformity of 0.8 was wrong: 1 - 0.8^2 = 0.36.
     rt = _consequence_runtime(provider=Judge(0.9))
-    _, event = _consequence_produce(rt, "NOOP")
+    _, event = _consequence_produce(rt)
     _consequence_judge(rt, event, "eval-a")
     verdict = next(e for e in rt.internal if e.kind is EventKind.VERDICT)
     meta = _meta_step(rt, verdict)
@@ -150,7 +154,7 @@ def test_top_meta_is_graded_by_brier_against_the_verdicts_consequence():
 
 def test_top_meta_decisions_live_as_long_as_the_backstop():
     rt = _consequence_runtime(provider=Judge(0.5))
-    _, event = _consequence_produce(rt, "NOOP")
+    _, event = _consequence_produce(rt)
     _consequence_judge(rt, event, "eval-a")
     verdict = next(e for e in rt.internal if e.kind is EventKind.VERDICT)
     state = rt.routers["Verdict"][0]
@@ -247,7 +251,7 @@ def test_the_only_recursive_meta_is_terminal_on_the_tier_it_judges():
     # its fake-opus ceiling is covered and the router can draw it.
     rt.budget.grant("recursive-meta", 2_000_000, "fixture: the recursive tier's trial")
     rt._open_epoch("MetaVerdict")
-    _, produced = _consequence_produce(rt, "NOOP")
+    _, produced = _consequence_produce(rt)
     _consequence_judge(rt, produced, "eval-a")
     verdict = next(e for e in rt.internal if e.kind is EventKind.VERDICT)
     rt.n += 1

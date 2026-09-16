@@ -38,25 +38,95 @@ class _Unobservable:
 UNOBSERVABLE = _Unobservable()
 
 
+#: An evaluation that could not be made. It is not a low score and not a
+#: censored decision: the commission was answered, and the answer is that the
+#: subject carries nothing this evaluator can measure (GPT-6 third reading,
+#: §6.B: an evaluation "may conclude unmeasured").
+#: Why a judging contract cannot be bought as a child. It is stated here, with
+#: the rest of what a judge may be asked, so the one line in the catalogue's
+#: addressing text and the runtime's refusal say the same thing.
+COMMISSIONED_JUDGE_REFUSAL = (
+    "a judging contract cannot be commissioned as a child: a requested judge may only "
+    "address the chain that requested it, and nothing judges its own output or its "
+    "ancestors', so the route has nothing it could execute. Judging work reaches a seat "
+    "through the router's sampling, the adversarial share and the cascade"
+)
+
+UNMEASURED = "unmeasured"
+UNMEASURED_DEFINITION = "unmeasured-v1"
+#: A seat declining a commission. Paid work may be declined; the call is the
+#: only cost (§6.B, and the deferral contract).
+DECLINED_DEFINITION = "declined-v1"
+
+
+def commission_block(*, subject: str | None, scope: str, horizon: int, budget_micro: int) -> dict:
+    """What one evaluation commission buys: a subject, a scope, a horizon and a budget.
+
+    Evaluation is work someone pays for, not an obligation a seat owes the
+    world. The commission says what is being asked about, over what evidence, by
+    when, and for how much; the answer may be a verdict, ``unmeasured``, or a
+    refusal of the commission itself. Nothing here is a quota: a seat that keeps
+    answering ``cannot`` is not penalised for it.
+    """
+    return {
+        "subject": subject,
+        "scope": scope,
+        "horizon_events": int(horizon),
+        "budget_micro": int(budget_micro),
+        "you_may": (
+            'answer the commission, answer {"status": "unmeasured", "reason": ...} when the '
+            "subject carries no commitment this evidence can measure, or decline it with "
+            '{"status": "cannot", "reason": ...}; declining costs the call and nothing else'
+        ),
+    }
+
+
+def finding_schema() -> dict:
+    """A fresh schema fragment for an independent finding on a queued adjudication."""
+    return {
+        "type": "object",
+        "description": (
+            "Only when the request carries an adjudication: your independent finding on "
+            "another judge's fidelity objection. You did not write the verdict it rides on "
+            "and you do not own the measurement it challenges."
+        ),
+        "properties": {
+            "upheld": {"type": "boolean"},
+            "reason": {"type": "string"},
+        },
+        "required": ["upheld", "reason"],
+    }
+
+
 def evaluator_answer_schema(forecasts: dict, register: dict) -> dict:
     """The evaluator answer schema, including edition 3's structured fidelity objection.
 
     It lives here rather than inline in ``runtime.loop`` so the charter's own
     vocabulary owns what a judge is asked to say, and the loop names it once.
+
+    Edition 3's third round removes the last payoff privilege: ``payoff`` is an
+    optional field like any other forecast, so a judge with nothing to say about
+    the kernel's consequence predicate is not forced to invent a number for it
+    and is not penalised for leaving it out (§7: "Remove the remaining mandatory
+    payoff privilege"). ``status`` lets the same answer conclude that the
+    subject is unmeasured, or decline the commission outright.
     """
     return {
         "type": "object",
         "properties": {
             "verdict": {"type": "number", "minimum": 0, "maximum": 1},
             "payoff": {"type": "number", "minimum": 0, "maximum": 1},
+            "status": {"enum": [UNMEASURED, "cannot"]},
+            "reason": {"type": "string"},
             "rationale": {"type": "string"},
             "propensity": {"type": "object"},
             "forecasts": forecasts,
             "register": register,
             "about_handle": {"type": "string"},
             "fidelity_objection": objection_schema(),
+            "fidelity_finding": finding_schema(),
         },
-        "required": ["verdict", "payoff", "rationale", "forecasts"],
+        "required": ["rationale"],
     }
 
 

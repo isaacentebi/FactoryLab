@@ -8,6 +8,7 @@ from factorylab.kernel.registry import _freeze
 from factorylab.settlement.fidelity import FidelityObjection, parse_objection
 from factorylab.settlement.forecast import Forecast, ForecastBook
 from factorylab.settlement.lots import Payoff
+from factorylab.settlement.receipts import Adjudication, LearningReceipt, ReceiptBook
 from factorylab.settlement.scoring import PrevalenceBaseline, _require_probability, brier
 from factorylab.settlement.standing import ConsequenceStanding
 from factorylab.settlement.vocabulary import (
@@ -21,6 +22,11 @@ from factorylab.settlement.vocabulary import (
 
 # The verdict's own outside anchor: the base rate of returns the charter did not blame.
 VERDICT_NOT_BLAMED = "verdict_not_blamed"
+
+# A commitment whose question its own base rate already answers settles under this
+# definition: observed, recorded in the base rate, and worth no standing.
+UNINFORMATIVE_DEFINITION = "uninformative-baseline-v1"
+UNINFORMATIVE_REASON = "uninformative_baseline"
 
 
 @dataclass(frozen=True)
@@ -65,6 +71,9 @@ class Settled:
     # The documented reason this due commitment is not an eligible sample for
     # ``avoidably_unresolved_share``: never a silent zero, always a reason.
     excluded: str | None = None
+    # The learning receipt this settlement wrote (§6.A): one assessment of one
+    # decision, addressable on its own.
+    receipt: str | None = None
 
 
 @dataclass(frozen=True)
@@ -124,8 +133,12 @@ class Settler:
         baseline: PrevalenceBaseline,
         observer: Observer,
         weight_for: Callable[[Forecast], float] | None = None,
+        receipts: ReceiptBook | None = None,
     ) -> None:
         self.__book = book
+        # Where the four settlement objects are written. A settler built without
+        # a book (a unit test scoring one verdict) simply records nothing.
+        self.__receipts = receipts if receipts is not None else getattr(book, "receipts", None)
         self.__queue = queue
         self.__standing = standing
         self.__baseline = baseline
@@ -167,21 +180,32 @@ class Settler:
                                                 version=forecast.predicate.version)
                 else:
                     y = self.__observer.observe(forecast.predicate_id, forecast.params, facts)
-            if y is not None:
-                baseline_score = self.__baseline.baseline_brier(baseline_key(forecast), y)
+            key = baseline_key(forecast)
+            # Easy questions do not pay. A predicate the world has already
+            # answered — a base rate at or beyond the bound over real support —
+            # is not a claim anyone can be right about, so it is observed,
+            # recorded in the base rate, and worth no standing at all.
+            uninformative = y is not None and self.__baseline.uninformative(key)
+            definition = "brier-v1"
+            if y is not None and not uninformative:
+                baseline_score = self.__baseline.baseline_brier(key, y)
                 score = brier(forecast.q, y)
                 status = SettleStatus.SETTLED
+            elif uninformative:
+                status, definition = SettleStatus.INAPPLICABLE, UNINFORMATIVE_DEFINITION
+                excluded = UNINFORMATIVE_REASON
             # A rejected queue/ledger write must not contaminate history on a later retry.
             self.__queue.settle(
                 forecast.handle,
                 channel="consequence",
                 score=0.0 if score is None else score,
                 status=status,
-                definition_version="brier-v1",
+                definition_version=definition,
                 sampling_ref=None,
             )
             if y is not None:
-                self.__baseline.record(baseline_key(forecast), y)
+                self.__baseline.record(key, y)
+            if score is not None:
                 # No predicate is privileged: this claim trains the judge's
                 # standing at the charter's weight, like any other.
                 self.__standing.record(forecast.evaluator_id, score, baseline_score,
@@ -189,6 +213,11 @@ class Settler:
                 self.__standing.set_requested(
                     forecast.evaluator_id, self.__book.requested(forecast.evaluator_id))
             self.__book.mark_settled(forecast.handle)
+            receipt = self.__learning_receipt(
+                forecast, y=y, score=score, baseline=baseline_score, definition=definition,
+                reason=(UNINFORMATIVE_REASON if uninformative else
+                        excluded if score is None else None),
+            )
             results.append(
                 Settled(
                     forecast.handle,
@@ -200,11 +229,34 @@ class Settler:
                     baseline_score,
                     status,
                     excluded=excluded,
+                    receipt=receipt,
                 )
             )
             if excluded is not None:
                 self.__excluded[forecast.handle] = excluded
         return results
+
+    def __learning_receipt(self, forecast: Forecast, *, y, score, baseline, definition,
+                           reason: str | None, sampling_ref: str | None = None) -> str | None:
+        """Write this settlement's assessment as its own addressable object (§6.A)."""
+        if self.__receipts is None:
+            return None
+        return self.__receipts.record(LearningReceipt(
+            handle=forecast.handle,
+            assessed=forecast.evaluator_id,
+            scoring_rule="brier",
+            rule_version=definition,
+            horizon=forecast.due_at_event - forecast.made_at_event,
+            outcome=y,
+            score=score,
+            baseline=baseline,
+            sampling_ref=sampling_ref,
+            reason=(reason or "no observed fact") if score is None else None,
+        ))
+
+    def receipts(self) -> ReceiptBook | None:
+        """The book the four settlement objects are written to, if this settler has one."""
+        return self.__receipts
 
     def excluded(self, handle: str) -> str | None:
         """Take the documented exclusion recorded for one settlement, once.
@@ -267,7 +319,11 @@ class Settler:
                 results.append(
                     Settled(forecast.handle, forecast.evaluator_id, forecast.about_handle,
                             forecast.predicate_id, payoff.y, score, baseline,
-                            SettleStatus.SETTLED, payoff.marked)
+                            SettleStatus.SETTLED, payoff.marked,
+                            receipt=self.__learning_receipt(
+                                forecast, y=payoff.y, score=score, baseline=baseline,
+                                definition="brier-v1", reason=None,
+                                sampling_ref=payoff.handle))
                 )
         finally:
             # Scored outcomes reach the base rate even if a later forecast's write fails:
@@ -310,7 +366,53 @@ class Settler:
             return None
         self.__book.record_objection({**common, "accepted": True, **objection.as_dict()})
         self.__objections[judge_handle] = objection
+        # An accepted objection is an open adjudication from the moment it is
+        # made: a contestable interpretation with no finding on it yet. The
+        # challenged proxy never scores it (§7); an independent adjudicator does.
+        if self.__receipts is not None and evaluator_id and about_handle:
+            self.__receipts.record(Adjudication(
+                value=objection.value, measurement=objection.measurement,
+                evidence=objection.evidence, objector=evaluator_id,
+                objection_handle=judge_handle, about_handle=about_handle,
+                uncertainty=objection.uncertainty,
+            ))
         return objection
+
+    def adjudication_for(self, judge_handle: str) -> Adjudication | None:
+        """The open or resolved adjudication this judge's objection became, if any."""
+        if self.__receipts is None:
+            return None
+        return next((a for a in self.__receipts.all("adjudication")
+                     if a.objection_handle == judge_handle), None)
+
+    def resolve_adjudication(self, adjudication: Adjudication, *, adjudicator: str,
+                             upheld: bool, finding: str) -> tuple[Adjudication, str | None]:
+        """Record an independent finding and the objector's own learning receipt.
+
+        The objector stated a probability that its objection was right; the
+        adjudicator's finding is the fact that claim is scored against, by the
+        same proper score every other claim is scored by. It trains nothing by
+        itself: the receipt is the assessment, and what the card is worth is the
+        population's to decide through a challenge.
+        """
+        resolved = adjudication.resolved(adjudicator=adjudicator, upheld=upheld, finding=finding)
+        if self.__receipts is None:
+            return resolved, None
+        self.__receipts.record(resolved)
+        outcome = 1 if upheld else 0
+        receipt = self.__receipts.record(LearningReceipt(
+            handle=adjudication.objection_handle,
+            assessed=adjudication.objector,
+            scoring_rule="brier",
+            rule_version="adjudication-v1",
+            horizon=None,
+            outcome=outcome,
+            score=brier(adjudication.confidence, outcome),
+            baseline=None,
+            sampling_ref=resolved.id,
+            reason=None,
+        ))
+        return resolved, receipt
 
     def objection(self, judge_handle: str) -> FidelityObjection | None:
         """The accepted objection this judge's return carried, if it carried one."""

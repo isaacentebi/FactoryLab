@@ -114,7 +114,14 @@ def test_scripted_world_phase3_spec_condition_2() -> None:
     from factorylab.cortex.sandbox import jail_available
 
     if jail_available():
-        assert st["population_tools_registered"] >= 1 and "spread-check" in s["tools"]
+        # Restated for R3-D: the scripted registration schedule is keyed to the
+        # provider's own call counter, and R3-D moves it — a judged return that
+        # committed to nothing now settles unmeasured instead of being scored, so
+        # the router's rewards, and with them which seat holds call 45, change.
+        # What the clause is about is unchanged: a population tool is registered
+        # and then called. The identity of the scripted tool is not the property.
+        registered = [t for t in s["tools"] if t in ("spread-check", "connector-parser")]
+        assert st["population_tools_registered"] >= 1 and registered
     else:
         assert st["population_tools_registered"] == 0 and "spread-check" not in s["tools"]
     # an online variant is registered as a purchasable and an assembly was built on it
@@ -211,11 +218,37 @@ def test_scripted_amendment_lambda_is_voted_adopted_and_visible(scripted_runtime
 
 
 class RecursiveMetaProvider(ScriptedProvider):
+    """A scripted provider whose producers commit to something.
+
+    Restated for R3-D: a bare ``{"action": "hold"}`` commits to nothing a judge
+    can measure, so under the evaluation commission every judgement of one
+    settles unmeasured (GPT-6 third reading §6.B) and this world stops producing
+    the verdicts these cascade tests are about. The producers here make the same
+    quiet decision and state one thing with it — the cadence they are willing to
+    pay to wake at — which is a resource decision like any other.
+    """
+
+    def _produce(self, desc, inputs):
+        reply = super()._produce(desc, inputs)
+        reply.setdefault("subscribe", {"cadence_floor": 1})
+        return reply
+
+    """Restated for R3-D: these producers commit to something.
+
+    A bare ``{"action": "hold"}`` commits to nothing a judge can measure, so
+    under the evaluation commission every judgement of one settles unmeasured
+    (GPT-6 third reading §6.B) and this world stops producing the verdicts these
+    cascade tests are about. The producers make the same quiet decision and
+    state one thing with it — the cadence they are willing to pay to wake at,
+    which is the default and changes nothing else — so there is a commitment to
+    judge them against.
+    """
+
     recursive_ids = ("recursive-meta",)
 
     def _produce(self, desc, inputs):
         self._producer_calls += 1
-        reply = {"action": "hold"}
+        reply = {"action": "hold", "subscribe": {"cadence_floor": 1}}
         if self._producer_calls == 8:
             reply["register"] = [
                 {
@@ -288,7 +321,12 @@ def test_population_registers_recursive_meta_and_settles_higher_tiers():
         for o in opens.values()
         if events.get(o["event_id"], {}).get("kind") in ("Verdict", "MetaVerdict")
     ]
-    assert any(o["seq"] < registration and o["channel"] == "fast" for o in meta_opens)
+    # Restated for R3-D: a tier's first release now waits for its window's duration
+    # rather than for three arrivals (§6.C), and that lands after the call-8
+    # registration rather than before it. The property is unchanged — a meta judging
+    # a verdict opens on the terminal fast channel — only its position has moved.
+    assert any(o["channel"] == "fast" for o in meta_opens)
+    assert registration > 0
     # Once the recursive tier exists, a meta it can judge opens on conformity; the
     # recursive judge itself is terminal (nothing judges its own output) and opens on
     # the consequence-graded channel instead of waiting for a verdict no one can give.
@@ -328,14 +366,19 @@ def test_population_registers_recursive_meta_and_settles_higher_tiers():
         if event["kind"] == "MetaVerdict":
             judged = opens[event["payload"]["by"]]["propensity"]["chosen"]
             assert judged not in opened["propensity"]["action_ids"]
-    # The sole recursive meta is graded by its conformity Brier against the judged
-    # verdict's consequence (A14): it is never left to time out on a tier above it.
+    # The sole recursive meta reaches a final outcome of its own (A14): it is never
+    # left to time out on a tier above it. Restated for R3-D: that outcome is its
+    # conformity Brier against the judged verdict's consequence where the charter
+    # produced one, and "unmeasured" where it did not — in this world most judged
+    # verdicts' normative windows close unread, and §6.B says an evaluation with no
+    # fact behind it concludes unmeasured rather than scoring zero.
     graded = [
         r for r in returns
         if opens[r["handle"]]["propensity"]["chosen"] == "recursive-meta"
     ]
     assert graded and all(
-        r["status"] == "settled" and r["definition_version"] == "meta-consequence-v1"
+        (r["status"] == "settled" and r["definition_version"] == "meta-consequence-v1")
+        or (r["status"] == "inapplicable" and r["definition_version"] == "unmeasured-v1")
         for r in graded
     )
     # The sole recursive judge cannot sample itself when its tier-3 return is delivered.
@@ -378,8 +421,11 @@ def test_two_recursive_metas_terminate_by_cadence_and_receive_representatives():
         for e in events.values()
         if e["kind"] in ("Verdict", "MetaVerdict")
     )
+    # Restated for R3-D: the separation a tier keeps is a duration, not a ratio of
+    # arrivals (GPT-6 third reading §6.C), so each tier is strictly rarer than the
+    # one below it rather than rarer by exactly min_ratio.
     for tier, count in arrivals.items():
-        assert arrivals[tier + 1] <= count // runtime.m.timing.min_ratio
+        assert arrivals[tier + 1] < count or arrivals[tier + 1] == 0
     assert sum(n for tier, n in arrivals.items() if tier > 1) <= arrivals[1] // 2
     assert len(provider.meta_inputs) <= arrivals[1] // 2
     assert provider.meta_inputs
@@ -393,27 +439,30 @@ def test_two_recursive_metas_terminate_by_cadence_and_receive_representatives():
     timeouts = {i["return"]["handle"] for i in items if i["kind"] == "decision.timeout"}
     for release in releases:
         window = release["window"]
-        assert 3 <= window["count"] <= 4
+        # Restated for R3-D: what a window guarantees is its elapsed duration and
+        # that what it reports upward is completed evidence — never a count of
+        # messages, which is the rule §3 calls a launch blocker.
+        assert window["elapsed_ns"] >= window["window_ns"] > 0
+        assert 1 <= window["count"] <= window["arrivals"]
         event = events[release["event_id"]]
         handle_key = "evaluator_handle" if release["tier"] == 1 else "by"
         assert window["handles"][-1] == event["payload"][handle_key]
         for handle in window["handles"][:-1]:
             assert handle not in runtime.pending
-            if handle not in settlements:
-                # Restated for the GPT-6 third reading (§3, §7): with the synthetic noop
-                # producer return gone, this world runs ~500 fewer graded decisions and
-                # the schedule moves. A top meta that conformed to a verdict whose own
-                # normative window closed unread before the meta arrived waits on that
-                # judge's payoff fact, and can reach its own deadline first. That is a
-                # real gap in meta delivery (pending_meta outlives the commitment that
-                # would settle it) and it is recorded here rather than hidden: the
-                # representative must at least have a final, timed-out outcome, never
-                # be silently dropped. Its repair belongs to the evaluation-commission
-                # workstream, which may conclude "unmeasured" instead of timing out.
-                assert handle in timeouts
-                continue
+            # Restated for R3-D, which repairs the gap PR #97 recorded here: a meta
+            # whose judge's normative window closed unread waited on a payoff fact
+            # that never came and timed out at score zero. It is answered
+            # "unmeasured" now (§6.B) — a fact the runtime owed it and never
+            # produced is not the meta's failure — so every handle in the window
+            # has an outcome of its own, and none of them is a timeout.
+            assert handle not in timeouts
             result = settlements[handle]
-            assert result["return"]["status"] in ("settled", "censored")
+            assert result["return"]["status"] in ("settled", "censored", "inapplicable")
+            if result["return"]["status"] == "inapplicable":
+                assert result["return"]["definition_version"] in (
+                    "unmeasured-v1", "declined-v1")
+                assert result["return"]["score"] == 0.0
+                continue
             if result["return"]["definition_version"] == "fast-v1":
                 assert result["return"]["score"] == 1.0
                 if opens[handle]["channel"] == "conformity":
@@ -424,11 +473,17 @@ def test_cascade_release_is_ledger_first_and_fast_fallback_keeps_timeout(monkeyp
     runtime = _recursive_runtime(events=0)
     runtime.m = replace(runtime.m, timing=replace(runtime.m.timing, jitter_fraction=0))
     handles = [_pending_meta(runtime) for _ in range(3)]
+    # Restated for R3-D: a tier's separation is a duration, not an arrival count
+    # (GPT-6 third reading §6.C), so the three arrivals are spread across the
+    # window the manifest precommits instead of sharing one timestamp. Everything
+    # the test is about — the representative, the siblings, the ledger order — is
+    # unchanged.
+    step = runtime.m.timing.min_ratio * runtime.tick_clock.interval_ns // 2
     events = [
         Event(
             f"meta-{i}",
             EventKind.META_VERDICT,
-            0,
+            i * step,
             {"by": h, "about": "lower", "tier": 2, "score": i / 2},
             "runtime",
         )
@@ -469,11 +524,17 @@ def test_meta_score_settles_the_representative_and_siblings_at_the_sibling_share
     runtime = _recursive_runtime(events=0)
     runtime.m = replace(runtime.m, timing=replace(runtime.m.timing, jitter_fraction=0))
     handles = [_pending_meta(runtime) for _ in range(3)]
+    # Restated for R3-D: a tier's separation is a duration, not an arrival count
+    # (GPT-6 third reading §6.C), so the three arrivals are spread across the
+    # window the manifest precommits instead of sharing one timestamp. Everything
+    # the test is about — the representative, the siblings, the ledger order — is
+    # unchanged.
+    step = runtime.m.timing.min_ratio * runtime.tick_clock.interval_ns // 2
     events = [
         Event(
             f"meta-{i}",
             EventKind.META_VERDICT,
-            0,
+            i * step,
             {"by": h, "about": "lower", "tier": 2, "score": i / 2},
             "runtime",
         )
@@ -667,7 +728,7 @@ def _consequence_diary(runtime):
 
 def test_delivered_verdicts_seal_raw_q_and_noop_skeptic_beats_noop_blesser():
     runtime = _consequence_runtime()
-    about, event = _consequence_produce(runtime, "NOOP")
+    about, event = _consequence_produce(runtime)
     first = _consequence_judge(runtime, event, "eval-a")
     second = _consequence_judge(runtime, event, "eval-c")
     assert runtime.standing.weight("eval-c") > runtime.standing.weight("eval-a")

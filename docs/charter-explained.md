@@ -202,14 +202,20 @@ Four things are true of it, and they are the point:
   ledgered with its reason. It cannot be a gesture.
 - **It is ledgered** (`fidelity.objection`) with the judge, the return it judged, and its four
   fields, before anything scores it.
-- **It is scored like any verdict.** Its stated confidence (`1 - uncertainty`) is a claim that
-  the charter's blame will land on that return, scored by the same proper score, against the
-  same realised blame share, into the same judge standing. A judge that cries foul on returns
-  the charter does not blame loses standing for it.
+- **It is adjudicated, not self-scored.** The proxy a judge challenges cannot certify or
+  refute its own fidelity, so the objection is not scored against it. It becomes an open
+  **adjudication** and is queued for an adjudicator that did not write the verdict it rides on
+  and does not own the measurement it challenges — the other judge, or a meta seat; the
+  antagonist's evidence route may supply the counter-case. If nobody independent exists, the
+  claim simply stays open. The adjudicator answers `fidelity_finding: {upheld, reason}` on its
+  own judging return, and the finding produces a learning receipt for the objector: its stated
+  confidence (`1 - uncertainty`) is scored against the finding by the same proper score as any
+  other claim. A judge that cries foul and is found wrong answers for having said so.
 - **It is never a kernel verdict on its own.** It settles no decision, moves no money and
-  blames no card. The measurement it names is contestable through the existing challenge
-  route: a challenge names a live card, gives evidence, offers a replacement, and buys a trial
-  in which both are measured side by side before the committee votes.
+  blames no card. An upheld objection opens a `challenge` proposal for the card through the
+  population's own route: a challenge names a live card, gives evidence, offers a replacement,
+  and buys a trial in which both are measured side by side before the committee votes. The
+  card's price moves when the committee moves it, and at no other time.
 
 ## Why the paid-off card and the forecast floor went
 

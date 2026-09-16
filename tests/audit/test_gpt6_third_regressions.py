@@ -702,14 +702,25 @@ def test_a_non_payoff_forecast_reaches_the_seat_that_made_it():
     assert kwargs["outcome"]["your_brier"] == 0.09 and kwargs["outcome"]["resolved"] == 1
 
 
-def test_characterize_cascade_counts_arrivals_not_elapsed_time():
+def test_cascade_separation_is_time_and_completed_evidence():
+    """Converted by R3-D. Finding: "Cascade separation counts arrivals, not time" — the
+    reviewer's characterization asserted that three messages arriving in the same
+    nanosecond released a window. It is a duration now (§6.C), so they release nothing;
+    the same window releases once its time has passed."""
     from factorylab.kernel.events import Event, EventKind
-    from factorylab.runtime.cascade import CascadeGate
-    gate = CascadeGate(3)
+    from factorylab.runtime.cascade import CascadeGate, release_window_ns
+
+    window_ns = release_window_ns(3, 0.0, 0.0, 10)
+    gate = CascadeGate(window_ns, opened_ns=100)
+
+    def arrive(gate, i, ts_ns):
+        return gate.add(Event(f"verdict-{i}", EventKind.VERDICT, ts_ns,
+                              {"verdict": 1.0, "evaluator_handle": f"judge-{i}"}, "judge"))
+
     for i in range(3):
-        event = Event(f"verdict-{i}", EventKind.VERDICT, 100,
-                      {"verdict": 1.0, "evaluator_handle": f"judge-{i}"}, "judge")
-        gate, released = gate.add(event)
+        gate, released = arrive(gate, i, 100)
+        assert released is None
+    assert len(gate.arrivals) == 3
+    _, released = arrive(gate, 3, 100 + window_ns)
     assert released is not None
-    assert released.ts_ns == 100
-    assert released.payload["window"]["count"] == 3
+    assert released.payload["window"]["count"] == 4

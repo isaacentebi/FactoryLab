@@ -149,9 +149,9 @@ def test_a_chosen_target_whose_consequence_is_fixed_seals_no_payoff_forecast():
     from tests.runtime.test_loop import _consequence_produce
 
     runtime = _consequence_runtime()
-    stale, _stale_event = _consequence_produce(runtime, "NOOP")
+    stale, _stale_event = _consequence_produce(runtime)
     assert runtime.consequences.payoff(stale) is not None  # resolved before any judge saw it
-    _fresh, event = _consequence_produce(runtime, "NOOP")
+    _fresh, event = _consequence_produce(runtime)
 
     runtime.n += 1
     handle = _judge_handle(runtime)
@@ -177,13 +177,20 @@ def test_a_chosen_target_with_an_open_consequence_is_judged_and_sealed():
     from tests.runtime.test_loop import _consequence_produce
 
     runtime = _consequence_runtime()
-    _about, event = _consequence_produce(runtime, "NOOP")
+    _about, event = _consequence_produce(runtime)
     # A second return whose consequence has not been resolved yet.
     runtime.n += 1
-    open_handle = _consequence_decision(runtime, "NOOP", CH_VERDICT)
+    # Restated for R3-D: the chosen target has to have committed to something, or the
+    # judgement of it concludes unmeasured however open its consequence is (GPT-6 third
+    # reading §6.B). It makes the same quiet decision and states the cadence it is
+    # willing to pay to wake at, which is a resource decision like any other.
+    open_handle = _consequence_decision(runtime, "seed-decider", CH_VERDICT)
     runtime._producer_step(
         Event(f"tick-{runtime.n}", EventKind.TICK, runtime.clock.now_ns, {"index": 0}, "test"),
-        open_handle, SimpleNamespace(chosen="NOOP"), runtime.queue.get(open_handle).deadline_ns)
+        open_handle, SimpleNamespace(chosen="seed-decider"),
+        runtime.queue.get(open_handle).deadline_ns,
+        returned=Return(open_handle, {"action": "hold", "subscribe": {"cadence_floor": 1}},
+                        0, "ok"))
     assert runtime.consequences.payoff(open_handle) is None
 
     runtime.n += 1

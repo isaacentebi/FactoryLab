@@ -60,6 +60,9 @@ def test_three_forecasts_two_evaluators_settle_at_due_events_with_ledger_first(
     assert seen == []
     clock.now = 102
     first_results = settler.settle_due(2, facts_for)
+    # Restated for R3-D: a settlement now also writes its own learning receipt
+    # (GPT-6 third reading §6.A), whose id rides on the result. The scored fields
+    # are unchanged; the assertion names the receipt instead of pinning it to None.
     assert first_results == [
         Settled(
             first.handle,
@@ -70,8 +73,10 @@ def test_three_forecasts_two_evaluators_settle_at_due_events_with_ledger_first(
             pytest.approx(0.96),
             0.75,
             SettleStatus.SETTLED,
+            receipt=first_results[0].receipt,
         )
     ]
+    assert book.receipts.get(first_results[0].receipt).score == pytest.approx(0.96)
     assert baseline.baseline_q("wallet_up") == 1.0
     # Edition 3 (C3): every registered predicate trains standing, equally while no
     # card names a scope. A16's privilege for return_paid_off is gone.
@@ -124,6 +129,9 @@ def test_censored_forecast_has_no_outcome_or_score_and_does_not_train(
 ):
     forecast = seal_forecast()
     (result,) = settler.settle_due(10, lambda forecast: None)
+    # Restated for R3-D: the censored settlement writes a learning receipt too,
+    # with a null score and the reason there is none — an assessment that could
+    # not be made is recorded as such rather than as a zero.
     assert result == Settled(
         forecast.handle,
         forecast.evaluator_id,
@@ -133,7 +141,10 @@ def test_censored_forecast_has_no_outcome_or_score_and_does_not_train(
         None,
         None,
         SettleStatus.CENSORED,
+        receipt=result.receipt,
     )
+    receipt = book.receipts.get(result.receipt)
+    assert receipt.score is None and receipt.reason == "no observed fact"
     assert queue.history(forecast.handle) == (
         LearningReturn(
             forecast.handle, "consequence", 0.0, "brier-v1", SettleStatus.CENSORED, None

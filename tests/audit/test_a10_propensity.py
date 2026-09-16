@@ -134,7 +134,7 @@ def test_the_request_itself_declares_the_propensity_and_renders_it():
 def test_a_judges_own_verdict_bucket_is_its_declared_action():
     provider = Decider(judge_propensity={"verdict:0.9": 0.8, "verdict:0.1": 0.2})
     runtime = _consequence_runtime(provider=provider)
-    _handle, event = _consequence_produce(runtime, "NOOP")
+    _handle, event = _consequence_produce(runtime)
     judge = _consequence_judge(runtime, event, "eval-a")
     declared = _declared(runtime, judge)
     assert declared.chosen == "verdict:0.9"  # eval-a blesses a noop at 0.9

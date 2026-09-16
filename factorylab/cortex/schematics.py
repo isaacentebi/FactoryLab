@@ -14,6 +14,7 @@ from factorylab.runtime.observations import window_fact_names
 from factorylab.runtime.propensity import MIN_DECLARED_MASS, action_vocabulary
 from factorylab.runtime.shared import work_disclosure
 from factorylab.runtime.summary import _duration_str, _price_str
+from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 
 NS_PER_DAY = 86_400 * 1_000_000_000
 NS_PER_HOUR = 3_600 * 1_000_000_000
@@ -438,7 +439,8 @@ class SchematicsMixin:
             "addressing": (
                 "inputs.you is your own assembly id. catalogue lists every live assembly "
                 "as {id, version, accepts, emits}; those ids are what requests[].target, "
-                "a retire proposal's assembly_id and a learner proposal's assembly_id name"
+                "a retire proposal's assembly_id and a learner proposal's assembly_id name. "
+                + COMMISSIONED_JUDGE_REFUSAL
             ),
             "event_schemas": dict(self.event_schemas),
             "routers": [
