@@ -64,11 +64,18 @@ to BTC and raised its own cadence floor; GLM cut off 28 answers at its output li
 since); seats wrote `cadence_floor: "2m"` where an integer of ticks was wanted (stated in the
 prompt since).
 
-Three defects the run exposed: orders were checked against the thinking pot instead of the
-venue's free collateral (that is why a $383 short was refused on an account with $851 of perps
-cash), the diary was 194 MB because every full-venue mids map was recorded on every prompt
-build, and GLM's output limit. The first two are being repaired in a pull request that may or
-may not be in this zip; the triage says so.
+Three defects the run exposed, all repaired in this snapshot: orders were checked against
+the thinking pot instead of the venue's free collateral (that is why a $383 short was refused
+on an account with $851 of perps cash; now weighed against equity minus margin used, PR #95),
+the diary was 194 MB because every full-venue mids map was recorded on every prompt build (now
+one read a tick, as the instrument listing already was), and GLM's output limit (4,096 now).
+
+One the repair left open, and we want your answer on it: a fill's fee and every trading loss
+still settle against the compute wallet, so a bad trade draws the thinking pot down, and in
+the funded world that is fiction, because a loss on Hyperliquid cannot reduce OpenRouter
+credit. Should venue P&L settle on the venue pot only, with the thinking pot touched by
+nothing but thoughts, rent and the bridge? What does that do to the request line and the
+reward line, which today learn from the same number?
 
 ## 3. What we want from you, all of it
 
