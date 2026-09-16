@@ -25,6 +25,14 @@ from typing import Any
 Money = int
 
 
+def public_return(outputs: Any) -> dict[str, Any]:
+    """Project a return across a contract boundary, excluding continuity internals."""
+    if not isinstance(outputs, dict):
+        return {"invalid_return": True}
+    return {k: v for k, v in outputs.items()
+            if k not in {"working_state", "ack_through", "raw"}}
+
+
 def _utc(ns: Any) -> str | None:
     """A whole-second UTC stamp for integer nanoseconds, or None."""
     if type(ns) is not int or ns < 0:
@@ -318,7 +326,8 @@ class Request:
         then this seat's own account of itself; then the work.
         """
         stable, moving = self._world_split()
-        inputs = {**self.inputs, "world": moving} if stable else self.inputs
+        inputs = ({**self.inputs, "world": moving}
+                  if isinstance(self.inputs.get("world"), dict) else self.inputs)
         # The continuity inputs are rendered in ``YOU``, where continuity belongs.
         # Carrying them here too would put a second copy of a working state — up
         # to 64 KiB of it — in front of every decision, for no reader.

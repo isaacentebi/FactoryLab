@@ -37,6 +37,7 @@ from pathlib import Path
 
 from cryptography.fernet import InvalidToken
 
+from factorylab.cortex.request import public_return
 from factorylab.kernel.ledger import Ledger, LedgerIntegrityError, canonical
 from factorylab.runtime.worlds import WORLDS_DIR, load_manifest
 
@@ -730,17 +731,13 @@ class _Observatory:
 
 
 def _outputs(value):
-    """The outputs as written: the diary keeps them as JSON text, capped at 4000 characters.
-
-    A return short enough to fit is published as the object it was; one the cap
-    cut is published as the text that survived, so nothing is invented.
-    """
-    if not isinstance(value, str):
-        return value
-    try:
-        return json.loads(value)
-    except ValueError:
-        return {"truncated_text": value}
+    """Publish the contract result, never private state or an unparseable raw prefix."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return {"outputs_unavailable": "unparseable_or_truncated"}
+    return public_return(value)
 
 
 def _norm_definitions(norms) -> dict[str, str]:

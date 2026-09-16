@@ -665,6 +665,14 @@ def restore_runtime(rt, state: dict) -> None:
     saved_runtime = decode(state["runtime"])
     running_digest = getattr(rt, "release_digest", None)  # read before the saved fields land
     running_facilitator = getattr(rt, "facilitator_url", None)
+    # Identity validation precedes every mutation of the destination runtime.
+    saved_digest = saved_runtime.get("release_digest")
+    if saved_digest is not None and saved_digest != running_digest:
+        raise ResumeError("release digest differs from the saved world", code="release_mismatch")
+    saved_facilitator = saved_runtime.get("facilitator_url")
+    if saved_facilitator is not None and saved_facilitator != running_facilitator:
+        raise ResumeError("x402 facilitator differs from the saved world",
+                          code="facilitator_mismatch")
     # A checkpoint cannot revive a killed runtime. The runtime restored into may
     # already be final (its own Termination, or a Terminated event in its ledger),
     # or the identity the checkpoint names may be recorded as killed in this

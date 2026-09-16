@@ -25,7 +25,7 @@ INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_mic
 
 def _fresh_income() -> dict:
     return {"earned_micro": 0, "subsidy_micro": None, "converted_from_principal_micro": 0,
-            "spool_offset": 0}
+            "spool_offset": 0, "receipts": {}}
 
 
 def _seed_credits(provider: Any) -> int | None:
@@ -166,7 +166,7 @@ class Treasury:
         result.update({k: self.income[k] for k in INCOME_CLASSES})
         return result
 
-    def earn(self, service: str, micro: int, tx: str, **detail) -> dict:
+    def earn(self, service: str, micro: int, tx: str, **detail) -> dict | None:
         """Book one paid service call: ledgered first, then counted as earned income."""
         if not isinstance(service, str) or not service:
             raise ValueError("service id is required")
@@ -174,9 +174,18 @@ class Treasury:
             raise ValueError("earned amount must be positive integer micro-USD")
         if not isinstance(tx, str) or not tx:
             raise ValueError("a settlement reference is required")
-        item = {"kind": "income.earned", "service": service, "micro": micro, "tx": tx, **detail}
+        receipt_id = tx.lower() if tx.startswith("0x") else tx
+        signature = {"service": service, "micro": micro,
+                     **{k: detail.get(k) for k in ("payer", "program", "version")}}
+        receipts = self.income.get("receipts", {})
+        if receipt_id in receipts:
+            if receipts[receipt_id] != signature:
+                raise ValueError("settlement reference reused with conflicting payment")
+            return None
+        item = {**detail, "kind": "income.earned", "service": service, "micro": micro, "tx": tx}
         self.ledger.append(item)
-        self.income = {**self.income, "earned_micro": self.income["earned_micro"] + micro}
+        self.income = {**self.income, "earned_micro": self.income["earned_micro"] + micro,
+                       "receipts": {**receipts, receipt_id: signature}}
         return item
 
     def collect_income(self) -> list[dict]:
@@ -199,11 +208,13 @@ class Treasury:
             observed = read_income_spool(*args)
         booked = []
         for receipt in observed["receipts"]:
-            booked.append(self.earn(
+            item = self.earn(
                 receipt["service"], receipt["micro"], receipt["tx"],
                 payer=receipt.get("payer"), program=receipt.get("program"),
                 version=receipt.get("version"), served_ns=receipt.get("ts"),
-            ))
+            )
+            if item is not None:
+                booked.append(item)
         self.income = {**self.income, "spool_offset": observed["offset"]}
         return booked
 

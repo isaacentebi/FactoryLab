@@ -340,16 +340,10 @@ class Settler:
         score = normative_brier(q, outcome)
         baseline_score = normative_brier(baseline_q, outcome)
         self.__standing.record_verdict(evaluator_id, score, baseline_score)
-        # A fidelity objection is scored like the verdict it rode in on: its
-        # stated confidence is a claim that the charter's blame will land on
-        # this return, scored by the same proper score against the same fact,
-        # into the same standing. It settles no decision and blames no card.
+        # The challenged proxy cannot certify or refute its own fidelity.
+        # Keep the claim in the returned evidence; await independent adjudication.
         objection = self.__objections.pop(judge_handle, None) if judge_handle else None
         objection_score = objection_baseline = None
-        if objection is not None:
-            objection_score = normative_brier(objection.confidence, share)
-            objection_baseline = normative_brier(1.0 - baseline_q, share)
-            self.__standing.record_verdict(evaluator_id, objection_score, objection_baseline)
         if key not in self.__recorded:
             self.__recorded[key] = outcome
             self.__baseline.record_fraction(VERDICT_NOT_BLAMED, outcome)

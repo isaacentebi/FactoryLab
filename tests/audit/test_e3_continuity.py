@@ -264,16 +264,26 @@ def test_the_cursor_advances_only_to_a_handle_the_seat_was_addressed_on():
 
 
 def test_an_unacknowledged_item_stays_however_many_arrive_after_it():
+    """Restated for the GPT-6 third reading (§3, §4: "a handle retrieves only its latest
+    outcome", "acknowledging a handle can acknowledge unseen items").
+
+    This test used to pin newest-first delivery. Newest-first plus a cursor-based
+    acknowledgement is how an unread item is acknowledged without ever being shown: the
+    seat sees the newest eight, acknowledges the newest, and the cursor passes over the
+    older ones it never read. Delivery is now oldest-first, and every delivered item
+    carries an exact ``outcome_id`` the seat can acknowledge by itself.
+    """
     rt = _consequence_runtime(provider=ScriptedProvider(), exchange=FakeExchange())
     inbox = _inbox(rt)
     for n in range(INLINE_OUTCOMES + 5):
         inbox.append(SEAT, handle=f"h{n}", outcome={"verdict": 0.5})
     unread = inbox.unread(SEAT)
     assert unread["count"] == INLINE_OUTCOMES + 5          # every one counted
-    assert len(unread["items"]) == INLINE_OUTCOMES         # the newest eight inline
-    assert unread["items"][0]["handle"] == f"h{INLINE_OUTCOMES + 4}"  # newest first
-    # The oldest is not inline and is not lost: outcome.get still returns it.
-    assert inbox.get(SEAT, "h0")["handle"] == "h0"
+    assert len(unread["items"]) == INLINE_OUTCOMES         # the oldest eight inline
+    assert unread["items"][0]["handle"] == "h0"            # oldest first
+    assert unread["items"][0]["outcome_id"] == "outcome:1"
+    # The newest is not inline and is not lost: outcome.get still returns it.
+    assert inbox.get(SEAT, f"h{INLINE_OUTCOMES + 4}")["handle"] == f"h{INLINE_OUTCOMES + 4}"
 
 
 def test_outcome_get_is_a_free_ledgered_kernel_read_of_the_seats_own_inbox():
@@ -369,24 +379,46 @@ def test_working_state_is_content_addressed_and_idempotent_by_content():
     assert state.render(SEAT) == {"sha": first["sha"], "bytes": first["bytes"], "state": {"a": 1}}
 
 
-def test_an_inbox_body_that_lost_its_bytes_is_reported_absent_not_fatal():
+def test_an_inbox_body_that_lost_its_bytes_fails_closed_rather_than_reporting_no_facts():
+    """Restated for the GPT-6 third reading (§3: "missing blobs become 'no state'").
+
+    This test used to pin the fail-open reading: an item whose bytes were gone was
+    reported as absent, so an inbox that had lost its storage was indistinguishable from
+    an inbox with nothing in it, and the seat learned a falsehood about its own world.
+    The repair raises instead: an addressed outcome that exists and cannot be read is an
+    unavailable fact, not the absence of one.
+    """
     store, _ledger = _bare()
     inbox = OutcomeInbox(store, _FakeLedger(), lambda: 1)
     record = inbox.append(SEAT, handle="h0", outcome={"verdict": 1.0})
     store._memory.pop(record["sha"])
-    assert inbox.body(record["sha"]) is None
-    assert inbox.unread(SEAT) == {"count": 1, "items": []}
-    assert "error" in inbox.get(SEAT, "h0")
+    with pytest.raises(RuntimeError, match="unavailable"):
+        inbox.body(record["sha"])
+    with pytest.raises(RuntimeError, match="unavailable"):
+        inbox.unread(SEAT)
+    with pytest.raises(RuntimeError, match="unavailable"):
+        inbox.get(SEAT, "h0")
+    # The item itself is still counted and addressed: only its body is unreadable.
+    assert inbox.items[SEAT][0]["handle"] == "h0"
 
 
-def test_the_said_record_is_bounded():
+def test_the_said_record_keeps_every_handle_a_delayed_consequence_can_reference():
+    """Restated for the GPT-6 third reading (§3: "MAX_SAID can evict decision-linked
+    material before a delayed consequence").
+
+    This test used to pin the bound: the oldest ``said`` entry was dropped once the cap
+    was reached. Unrelated traffic could therefore evict the rationale of a decision
+    whose consequence had not settled yet, and the seat was then told the outcome of a
+    decision it could no longer be shown the reasons for. Eviction is gone until an
+    archive-backed collector can prove no open consequence references a handle.
+    """
     from factorylab.runtime.continuity import MAX_SAID
 
     inbox = OutcomeInbox(None, _FakeLedger(), lambda: 1)
     for n in range(MAX_SAID + 10):
         inbox.record_said(SEAT, f"h{n}", {"rationale": str(n)})
-    assert len(inbox.said) == MAX_SAID
-    assert inbox.seat_of("h0") is None and inbox.seat_of(f"h{MAX_SAID + 9}") == SEAT
+    assert len(inbox.said) == MAX_SAID + 10
+    assert inbox.seat_of("h0") == SEAT and inbox.seat_of(f"h{MAX_SAID + 9}") == SEAT
 
 
 # ---- the deque is gone ------------------------------------------------------------------

@@ -1,0 +1,640 @@
+--- a/factorylab/cortex/request.py
++++ b/factorylab/cortex/request.py
+@@ -23,6 +23,14 @@
+ from typing import Any
+ 
+ Money = int
++
++
++def public_return(outputs: Any) -> dict[str, Any]:
++    """Project a return across a contract boundary, excluding continuity internals."""
++    if not isinstance(outputs, dict):
++        return {"invalid_return": True}
++    return {k: v for k, v in outputs.items()
++            if k not in {"working_state", "ack_through", "raw"}}
+ 
+ 
+ def _utc(ns: Any) -> str | None:
+@@ -318,7 +326,8 @@
+         then this seat's own account of itself; then the work.
+         """
+         stable, moving = self._world_split()
+-        inputs = {**self.inputs, "world": moving} if stable else self.inputs
++        inputs = ({**self.inputs, "world": moving}
++                  if isinstance(self.inputs.get("world"), dict) else self.inputs)
+         # The continuity inputs are rendered in ``YOU``, where continuity belongs.
+         # Carrying them here too would put a second copy of a working state — up
+         # to 64 KiB of it — in front of every decision, for no reader.
+--- a/factorylab/cortex/schematics.py
++++ b/factorylab/cortex/schematics.py
+@@ -818,7 +818,8 @@
+         decisions = [
+             {"handle": d.handle, "channel": d.channel, "deadline_utc": _utc(d.deadline_ns),
+              "opened_utc": _utc(d.opened_ns), "cost_ceiling_usd": _usd(d.cost_ceiling)}
+-            for d in self.queue.outstanding(seat)
++            for d in self.queue.outstanding()
++            if d.actor == seat or self.handle_to_assembly.get(d.handle) == seat
+         ]
+         forecasts = [
+             {"handle": f.handle, "about_handle": f.about_handle, "predicate": f.predicate_id,
+--- a/factorylab/kernel/artifacts.py
++++ b/factorylab/kernel/artifacts.py
+@@ -72,6 +72,7 @@
+         data = bytes(data)
+         sha = hashlib.sha256(data).hexdigest()
+         ts = self.clock()
++        self._write(sha, data)  # Durable bytes before any authenticated reference.
+         self.ledger.append({"kind": "artifact.put", "sha": sha, "owner": owner,
+                             "artifact_kind": kind, "bytes": len(data), "public": bool(public),
+                             "ts": ts})
+@@ -79,7 +80,9 @@
+         # reader of the first's artifact, not a new liability for the same file.
+         self.index.setdefault(sha, {"owner": owner, "kind": kind, "bytes": len(data), "ts": ts,
+                                     "public": bool(public)})
+-        self._write(sha, data)
++        record = self.index[sha]
++        record["readers"] = sorted(set(record.get("readers", [record["owner"]])) | {owner})
++        record["public"] = bool(record.get("public") or public)
+         return sha
+ 
+     def get(self, sha: str) -> bytes:
+@@ -88,7 +91,10 @@
+         if self.root is None:
+             if sha not in self._memory:
+                 raise ArtifactError("unknown artifact")
+-            return self._memory[sha]
++            data = self._memory[sha]
++            if hashlib.sha256(data).hexdigest() != sha:
++                raise ArtifactError("artifact bytes do not match their hash")
++            return data
+         path = self.root / sha
+         try:
+             data = path.read_bytes()
+@@ -101,7 +107,7 @@
+     def list(self, *, owner: str | None = None) -> list[dict[str, Any]]:
+         """Return detached records in put order, optionally those of one owner."""
+         return [{"sha": sha, **record} for sha, record in self.index.items()
+-                if owner is None or record["owner"] == owner]
++                if owner is None or owner in record.get("readers", [record["owner"]])]
+ 
+     def entries(self) -> list[tuple[str, str, bool, int, int]]:
+         """Every record as ``(sha, owner, public, bytes, created_ns)``, in put order.
+@@ -123,9 +129,11 @@
+         path says so instead.
+         """
+         record = self.index.get(sha)
+-        if record is None or reader is None:
+-            return True
+-        if record["owner"] == reader or record.get("public"):
++        if record is None:
++            return False  # Unindexed durable bytes confer no read authority.
++        if reader is None:
++            return True  # Kernel-only inspection retains its existing contract.
++        if reader in record.get("readers", [record["owner"]]) or record.get("public"):
+             return True
+         if record["kind"] == "program.state" and lineage_of is not None:
+             return lineage_of(record["owner"]) == lineage_of(reader)
+@@ -166,11 +174,15 @@
+ 
+     def _write(self, sha: str, data: bytes) -> None:
+         if self.root is None:
++            existing = self._memory.get(sha)
++            if existing is not None and existing != data:
++                raise ArtifactError("artifact bytes do not match their hash")
+             self._memory.setdefault(sha, data)
+             return
+         path = self.root / sha
+         if path.exists():
+-            return  # content-addressed: the same bytes are already there
++            self.get(sha)  # Verify an existing file instead of blessing corruption.
++            return
+         self.root.mkdir(parents=True, exist_ok=True)
+         fd, temporary = tempfile.mkstemp(prefix=f".{sha[:12]}-", dir=self.root)
+         try:
+@@ -180,6 +192,11 @@
+                 os.fsync(stream.fileno())
+             os.chmod(temporary, 0o600)
+             os.replace(temporary, path)
++            directory_fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
++            try:
++                os.fsync(directory_fd)
++            finally:
++                os.close(directory_fd)
+         except BaseException:
+             try:
+                 os.unlink(temporary)
+--- a/factorylab/kernel/budget.py
++++ b/factorylab/kernel/budget.py
+@@ -197,6 +197,10 @@
+         """
+         seat = self._seat(assembly_id)
+         require_money(amount, nonnegative=True)
++        if seat in self.__retired:
++            self._log("retired_earn", assembly_id=seat, amount=amount, reason=reason,
++                      unallocated_after=self.unallocated())
++            return None
+         after = self.__gross.get(seat, 0) + amount
+         self._log("income", assembly_id=seat, amount=amount, reason=reason,
+                   entitlement_after={seat: after - self.held_by(seat)},
+@@ -226,6 +230,10 @@
+         """
+         seat = self._seat(assembly_id)
+         require_money(amount, nonnegative=True)
++        if seat in self.__retired:
++            self._log("retired_credit", assembly_id=seat, amount=amount, reason=reason,
++                      unallocated_after=self.unallocated())
++            return 0
+         credited = max(0, min(amount, self.unallocated()))
+         after = self.__gross.get(seat, 0) + credited
+         self._log("credit", assembly_id=seat, amount=credited, requested=amount, reason=reason,
+--- a/factorylab/runtime/compute.py
++++ b/factorylab/runtime/compute.py
+@@ -10,7 +10,7 @@
+ from typing import Any
+ 
+ from factorylab.cortex.assembly import Assembly, AssemblySpec
+-from factorylab.cortex.request import ChildRequest, Request, Return
++from factorylab.cortex.request import ChildRequest, Request, Return, public_return
+ from factorylab.kernel.artifacts import PRIVATE_REFUSAL
+ from factorylab.kernel.budget import SeatWallet
+ from factorylab.kernel.events import Event, EventKind
+@@ -1383,7 +1383,7 @@
+                               status=SettleStatus.CENSORED,
+                               definition_version="unselected-return-v1", sampling_ref=None)
+             return {"tool": f"assembly:{target}", "args": item.inputs,
+-                    "result": {"outputs": ret.outputs, "status": ret.status,
++                    "result": {"outputs": public_return(ret.outputs), "status": ret.status,
+                                "cost_micro": ret.cost}}, ret.cost
+         if emitted in ("Verdict", "MetaVerdict"):
+             sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
+@@ -1410,14 +1410,14 @@
+                 self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
+             self.stats.producer_returns += 1
+             payload = {"about_handle": handle, "description": item.description,
+-                       "inputs": item.inputs, "outputs": ret.outputs,
++                       "inputs": item.inputs, "outputs": public_return(ret.outputs),
+                        "cost": ret.cost, "status": ret.status,
+                        "propensity": self._public_propensity(handle)}
+             self._emit("ProducerReturn" if emitted == "Exposure" else emitted, payload)
+             if emitted == "Exposure" and self.routers.get("Exposure"):
+                 self._emit("Exposure", payload)
+         return {"tool": f"assembly:{target}", "args": item.inputs,
+-                "result": {"outputs": ret.outputs, "status": ret.status,
++                "result": {"outputs": public_return(ret.outputs), "status": ret.status,
+                            "cost_micro": ret.cost}}, ret.cost
+ 
+     def _check_compute_return(self, handle: str, ret: Return) -> None:
+--- a/factorylab/runtime/continuity.py
++++ b/factorylab/runtime/continuity.py
+@@ -33,6 +33,7 @@
+ 
+ from __future__ import annotations
+ 
++import hashlib
+ import json
+ from typing import Any
+ 
+@@ -91,18 +92,21 @@
+         sha = self.artifacts.put(data, owner=seat, kind=kind)
+         now = self.clock()
+         previous = self.heads.get(seat)
+-        self.heads[seat] = {
++        successor = {
+             "sha": sha, "bytes": len(data), "ns": now, "handle": handle,
+             # Accrual continues from the last boundary this seat was accounted to:
+             # rewriting a state forgives no rent the old bytes already owed.
+-            "rent_ns": previous.get("rent_ns", now) if previous else now,
++            "rent_ns": now,
++            "rent_byte_ns": (previous.get("rent_byte_ns", 0) + previous["bytes"] *
++                             max(0, now - previous.get("rent_ns", now))) if previous else 0,
+             "rent_carry": previous.get("rent_carry", 0) if previous else 0,
+             "rent_due": previous.get("rent_due", 0) if previous else 0,
+         }
+         self.ledger.append({"kind": "state.put", "assembly_id": seat, "sha": sha,
+                             "bytes": len(data), "handle": handle,
+                             "over_soft": len(data) > SOFT_STATE_BYTES, "ts": now})
+-        return self.heads[seat]
++        self.heads[seat] = successor
++        return successor
+ 
+     def render(self, seat: str) -> dict[str, Any] | None:
+         """The head as the seat is shown it: ``{sha, bytes, state}``, verbatim, or None."""
+@@ -111,8 +115,8 @@
+             return None
+         try:
+             state = json.loads(self.artifacts.get(record["sha"]).decode("utf-8"))
+-        except Exception:  # noqa: BLE001 - a head whose bytes are gone shows as absent
+-            return None
++        except Exception as exc:
++            raise RuntimeError("working state is present but unavailable") from exc
+         return {"sha": record["sha"], "bytes": record["bytes"], "state": state}
+ 
+ 
+@@ -151,8 +155,8 @@
+             # reads it back from here when the verdict's consequence settles.
+             "fidelity_objection": outputs.get("fidelity_objection"),
+         }
+-        while len(self.said) > MAX_SAID:
+-            self.said.pop(next(iter(self.said)))
++        # Do not evict addressability by unrelated traffic. A future archive-backed
++        # GC must prove that no delayed consequence can reference a removed handle.
+ 
+     def entry_for(self, handle: str) -> dict[str, Any]:
+         """The ``{"handle", "outputs"}`` view of one retained return, for the settler."""
+@@ -180,6 +184,13 @@
+         """Address one settled consequence to the seat that decided it; return its record."""
+         if not seat or not handle:
+             return None
++        fact = (hashlib.sha256(canonical({"handle": handle, "outcome": outcome,
++                    "delta_micro": int(delta_micro), "evidence": evidence})).hexdigest()
++                if evidence is not None else None)
++        if fact is not None:
++            for existing in self.items.get(seat, ()):
++                if existing.get("fact") == fact:
++                    return existing
+         observed = self.clock() if observed_at_ns is None else observed_at_ns
+         body = {
+             "handle": handle,
+@@ -190,37 +201,43 @@
+             "evidence": evidence,
+         }
+         sha = self.artifacts.put(canonical(body), owner=seat, kind="outcome.item")
+-        self.seq += 1
+-        record = {"seq": self.seq, "handle": handle, "sha": sha, "observed_at_ns": observed}
++        next_seq = self.seq + 1
++        record = {"seq": next_seq, "handle": handle, "sha": sha,
++                  "observed_at_ns": observed, "fact": fact}
++        self.ledger.append({"kind": "outcome.addressed", "assembly_id": seat, "handle": handle,
++                            "sha": sha, "item": next_seq, "delta_micro": int(delta_micro),
++                            "evidence": evidence, "ts": observed})
++        self.seq = next_seq
+         self.items.setdefault(seat, []).append(record)
+-        self.ledger.append({"kind": "outcome.addressed", "assembly_id": seat, "handle": handle,
+-                            "sha": sha, "item": self.seq, "delta_micro": int(delta_micro),
+-                            "evidence": evidence, "ts": observed})
+         return record
+ 
+     def body(self, sha: str) -> dict[str, Any] | None:
+         """The stored body of one item, or None when its bytes are not there."""
+         try:
+             return json.loads(self.artifacts.get(sha).decode("utf-8"))
+-        except Exception:  # noqa: BLE001 - a body whose bytes are gone is reported absent
+-            return None
++        except Exception as exc:
++            raise RuntimeError("addressed outcome is unavailable") from exc
+ 
+     def unread(self, seat: str) -> dict[str, Any]:
+-        """``{count, items}``: every unread item counted, the newest few carried inline."""
++        """Deliver oldest-first, with unambiguous item addresses, until acknowledged."""
+         cursor = self.cursors.get(seat, 0)
+-        unread = [r for r in self.items.get(seat, ()) if r["seq"] > cursor]
+-        bodies = [self.body(r["sha"]) for r in unread[-INLINE_OUTCOMES:]]
+-        return {"count": len(unread),
+-                "items": [b for b in reversed(bodies) if b is not None]}
++        rows = [r for r in self.items.get(seat, ()) if r["seq"] > cursor]
++        return {"count": len(rows), "items": [
++            {**self.body(r["sha"]), "outcome_id": f"outcome:{r['seq']}"}
++            for r in rows[:INLINE_OUTCOMES]]}
+ 
+     def get(self, seat: str, handle: Any) -> dict[str, Any]:
+         """One item by handle, read or unread — the ``outcome.get`` view."""
+         if isinstance(handle, str):
+             for record in reversed(self.items.get(seat, ())):
+-                if record["handle"] == handle:
++                if record["handle"] == handle or handle == f"outcome:{record['seq']}":
+                     body = self.body(record["sha"])
+                     if body is not None:
+                         return {**body, "sha": record["sha"],
++                                "outcome_id": f"outcome:{record['seq']}",
++                                "related_outcomes": [f"outcome:{r['seq']}"
++                                    for r in self.items.get(seat, ())
++                                    if r["handle"] == record["handle"]],
+                                 "read": record["seq"] <= self.cursors.get(seat, 0)}
+         return {"error": OUTCOME_UNKNOWN}
+ 
+@@ -229,11 +246,11 @@
+         if not isinstance(handle, str):
+             return None
+         for record in reversed(self.items.get(seat, ())):
+-            if record["handle"] == handle:
++            if record["handle"] == handle or handle == f"outcome:{record['seq']}":
+                 cursor = max(self.cursors.get(seat, 0), record["seq"])
+-                self.cursors[seat] = cursor
+                 self.ledger.append({"kind": "outcome.ack", "assembly_id": seat,
+                                     "handle": handle, "cursor": cursor, "ts": self.clock()})
++                self.cursors[seat] = cursor
+                 return cursor
+         return None
+ 
+@@ -256,6 +273,7 @@
+         micro, carry = accrue(head, now_ns, rt.m.notes)
+         price = head.get("rent_due", 0) + micro
+         head["rent_ns"], head["rent_carry"] = now_ns, carry
++        head["rent_byte_ns"] = 0
+         if not price:
+             continue
+         handle = head.get("handle")
+--- a/factorylab/runtime/loop.py
++++ b/factorylab/runtime/loop.py
+@@ -33,7 +33,7 @@
+ from typing import Any
+ 
+ from factorylab.cortex.registration import measured_role
+-from factorylab.cortex.request import Request, Return
++from factorylab.cortex.request import Request, Return, public_return
+ from factorylab.cortex.sandbox import NoJail, jail_probe
+ from factorylab.cortex.schematics import SchematicsMixin
+ from factorylab.kernel.events import Event, EventKind
+@@ -583,14 +583,12 @@
+         """Only an assembly's declared output contract chooses its request and reward path."""
+         self._start_return(handle)
+         if sample.chosen == NOOP:
+-            if self._event_subject(ev) is not None:
+-                self.stats.noops += 1
+-                self.consequences.finish(handle, 0)
+-                self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
+-                                  status=SettleStatus.INAPPLICABLE,
+-                                  definition_version=DEF_VERDICT, sampling_ref=None)
+-            else:
+-                self._producer_step(ev, handle, sample, deadline)
++            # A router abstention is not an authored producer return.
++            self.stats.noops += 1
++            self.consequences.finish(handle, 0)
++            self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
++                              status=SettleStatus.INAPPLICABLE,
++                              definition_version=DEF_VERDICT, sampling_ref=None)
+             return
+         self.handle_to_assembly[handle] = sample.chosen
+         subject = self._event_subject(ev)
+@@ -877,7 +875,7 @@
+                 # Judges see the event the producer answered, never the producer's own
+                 # state, its inbox or its copy of the world block, and never its name.
+                 "inputs": {"kind": inputs["kind"], "payload": inputs["payload"]},
+-                "outputs": ret.outputs,
++                "outputs": public_return(ret.outputs),
+                 "cost": ret.cost,
+                 "status": ret.status,
+                 # The one private thing the essay directs forward (II.I.b), so the
+@@ -899,7 +897,7 @@
+             ret.outputs.get("forecasts") if ret.status == "ok" else None)
+         self.forecast_returns[handle] = {"handles": forecasts, "results": {}}
+         self._settle_forecast_returns()
+-        self._emit(emitted, {"about_handle": handle, "outputs": ret.outputs,
++        self._emit(emitted, {"about_handle": handle, "outputs": public_return(ret.outputs),
+                              "cost": ret.cost, "status": ret.status,
+                              "propensity": self._public_propensity(handle)})
+ 
+@@ -946,7 +944,7 @@
+         sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
+         self._producer_step(event, handle, sample, parent.deadline_ns, returned=ret)
+         return {"tool": f"assembly:{target}", "args": item.inputs,
+-                "result": {"outputs": ret.outputs, "status": ret.status,
++                "result": {"outputs": public_return(ret.outputs), "status": ret.status,
+                            "cost_micro": ret.cost}}, ret.cost
+ 
+     def _evaluator_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
+--- a/factorylab/runtime/notes.py
++++ b/factorylab/runtime/notes.py
+@@ -187,7 +187,8 @@
+     if since is None:
+         return 0, entry.get("rent_carry", 0)
+     numerator, denominator = bounds.rate()
+-    owed = entry["bytes"] * max(0, now_ns - since) * numerator + entry.get("rent_carry", 0)
++    byte_ns = entry.get("rent_byte_ns", 0) + entry["bytes"] * max(0, now_ns - since)
++    owed = byte_ns * numerator + entry.get("rent_carry", 0)
+     return divmod(owed, denominator)
+ 
+ 
+--- a/factorylab/runtime/resume.py
++++ b/factorylab/runtime/resume.py
+@@ -665,6 +665,14 @@
+     saved_runtime = decode(state["runtime"])
+     running_digest = getattr(rt, "release_digest", None)  # read before the saved fields land
+     running_facilitator = getattr(rt, "facilitator_url", None)
++    # Identity validation precedes every mutation of the destination runtime.
++    saved_digest = saved_runtime.get("release_digest")
++    if saved_digest is not None and saved_digest != running_digest:
++        raise ResumeError("release digest differs from the saved world", code="release_mismatch")
++    saved_facilitator = saved_runtime.get("facilitator_url")
++    if saved_facilitator is not None and saved_facilitator != running_facilitator:
++        raise ResumeError("x402 facilitator differs from the saved world",
++                          code="facilitator_mismatch")
+     # A checkpoint cannot revive a killed runtime. The runtime restored into may
+     # already be final (its own Termination, or a Terminated event in its ledger),
+     # or the identity the checkpoint names may be recorded as killed in this
+--- a/factorylab/runtime/seller.py
++++ b/factorylab/runtime/seller.py
+@@ -377,7 +377,8 @@
+     def earn(service: Service, micro: int, tx: str, payer: str, served_ns: int):
+         item = rt.treasury.earn(service.id, micro, tx, payer=payer, program=service.program_id,
+                                 version=service.version, served_ns=served_ns)
+-        rt._book_income(item)  # C10: the owning seat's entitlement grows with its income
++        if item is not None:
++            rt._book_income(item)  # A repeated receipt never credits money twice.
+         return item
+ 
+     return Seller(services_from_runtime(rt), pay_to=pay_to, runner=rt.tool_runner,
+--- a/factorylab/runtime/subscriptions.py
++++ b/factorylab/runtime/subscriptions.py
+@@ -219,7 +219,7 @@
+             if crossed:
+                 fact = {"kind": kind, "level": str(level),
+                         "previous": str(before), "observed": str(now)}
+-    return fact, seen
++    return fact, seen if now is not None else dict(last or {})
+ 
+ 
+ @dataclass
+--- a/factorylab/runtime/venue.py
++++ b/factorylab/runtime/venue.py
+@@ -40,7 +40,8 @@
+             result = {"status": "failed", "error": type(exc).__name__}
+         # The diary takes plain JSON; a venue answers in Decimals and its own types.
+         result = json.loads(json.dumps(result, default=str))
+-        ok = result.get("status") in ("filled", "cancelled", "resting", "ok")
++        ok = result.get("status") in (
++            ("cancelled", "ok") if kind == "cancelled" else ("filled",))
+         if ok:
+             report[kind] += 1
+         else:
+@@ -115,20 +116,27 @@
+         """
+         from factorylab.runtime import witness
+ 
+-        report = {"attempted": False, "orders": 0}
++        if self.termination.final:
++            return getattr(self, "wind_down_report", {"attempted": False, "orders": 0,
++                                                      "exposure_status": "unknown"})
++        report = {"attempted": False, "orders": 0, "exposure_status": "unknown"}
+         exchange = getattr(self, "exchange", None)
+-        # Every exchange, the deterministic fake included: a world that precommitted a
+-        # wind-down leaves its book empty whether or not the book was ever real, so the
+-        # contract is exercised by the same path a live world will take.
+-        if self.m.kill.wind_down and exchange is not None:
+-            report = wind_down(exchange, self.ledger, dust_micro=self.m.kill.dust_micro)
+-        elif self.m.kill.wind_down:
+-            self.ledger.append({"kind": "kill.wind_down", "step": "skipped",
+-                                "reason": "world has no exchange"})
+-        witness.note_wind_down(wind_down=bool(self.m.kill.wind_down),
+-                               orders=report["orders"])
+-        self.wind_down_report = report
+-        self.termination.kill(reason)
++        try:
++            if self.m.kill.wind_down and exchange is not None:
++                report = wind_down(exchange, self.ledger, dust_micro=self.m.kill.dust_micro)
++            elif self.m.kill.wind_down:
++                report["error"] = "world has no exchange"
++        except Exception as exc:
++            report["error"] = type(exc).__name__
++        finally:
++            # An acknowledgement is not a reconciled flat account.
++            report.setdefault("exposure_status", "unknown")
++            self.wind_down_report = report
++            try:
++                witness.note_wind_down(wind_down=bool(self.m.kill.wind_down),
++                                       orders=report.get("orders", 0))
++            finally:
++                self.termination.kill(reason)
+         return report
+ 
+     def _finish_budget(self) -> None:
+@@ -224,6 +232,12 @@
+                             **extra, "ts": self.clock.now_ns})
+         self.registration_feedback.append({"kind": kind,
+                                            "reason": f"order: {reason}"})
++        owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
++        if owner is not None:
++            self.outcomes.append(owner, handle=handle,
++                outcome={"kind": "order_refused", "status": "rejected", "reason": reason,
++                         **extra}, delta_micro=0,
++                evidence={"kind": kind, "handle": handle, "ts": self.clock.now_ns})
+         return {"status": "rejected", "error": reason}
+ 
+     def _equity_micro(self) -> int:
+--- a/factorylab/runtime/wake.py
++++ b/factorylab/runtime/wake.py
+@@ -37,6 +37,7 @@
+ 
+ from cryptography.fernet import InvalidToken
+ 
++from factorylab.cortex.request import public_return
+ from factorylab.kernel.ledger import Ledger, LedgerIntegrityError, canonical
+ from factorylab.runtime.worlds import WORLDS_DIR, load_manifest
+ 
+@@ -730,17 +731,13 @@
+ 
+ 
+ def _outputs(value):
+-    """The outputs as written: the diary keeps them as JSON text, capped at 4000 characters.
+-
+-    A return short enough to fit is published as the object it was; one the cap
+-    cut is published as the text that survived, so nothing is invented.
+-    """
+-    if not isinstance(value, str):
+-        return value
+-    try:
+-        return json.loads(value)
+-    except ValueError:
+-        return {"truncated_text": value}
++    """Publish the contract result, never private state or an unparseable raw prefix."""
++    if isinstance(value, str):
++        try:
++            value = json.loads(value)
++        except ValueError:
++            return {"outputs_unavailable": "unparseable_or_truncated"}
++    return public_return(value)
+ 
+ 
+ def _norm_definitions(norms) -> dict[str, str]:
+--- a/factorylab/settlement/fidelity.py
++++ b/factorylab/settlement/fidelity.py
+@@ -46,8 +46,9 @@
+         "description": (
+             "Optional. A measurement is favourable and the value it stands for is not served. "
+             "Name the value (a charter norm), the measurement (a card id or observation), the "
+-            "evidence, and your uncertainty that the objection is right. It is scored like your "
+-            "verdict and it is open to challenge; it is not a verdict on its own."
++            "evidence, and your uncertainty that the objection is right. It remains an "
++            "open, contestable claim pending independent evidence; the challenged proxy "
++            "does not score its own fidelity."
+         ),
+         "properties": {
+             "value": {"type": "string"},
+--- a/factorylab/settlement/settle.py
++++ b/factorylab/settlement/settle.py
+@@ -340,16 +340,10 @@
+         score = normative_brier(q, outcome)
+         baseline_score = normative_brier(baseline_q, outcome)
+         self.__standing.record_verdict(evaluator_id, score, baseline_score)
+-        # A fidelity objection is scored like the verdict it rode in on: its
+-        # stated confidence is a claim that the charter's blame will land on
+-        # this return, scored by the same proper score against the same fact,
+-        # into the same standing. It settles no decision and blames no card.
++        # The challenged proxy cannot certify or refute its own fidelity.
++        # Keep the claim in the returned evidence; await independent adjudication.
+         objection = self.__objections.pop(judge_handle, None) if judge_handle else None
+         objection_score = objection_baseline = None
+-        if objection is not None:
+-            objection_score = normative_brier(objection.confidence, share)
+-            objection_baseline = normative_brier(1.0 - baseline_q, share)
+-            self.__standing.record_verdict(evaluator_id, objection_score, objection_baseline)
+         if key not in self.__recorded:
+             self.__recorded[key] = outcome
+             self.__baseline.record_fraction(VERDICT_NOT_BLAMED, outcome)
+--- a/factorylab/world/treasury.py
++++ b/factorylab/world/treasury.py
+@@ -25,7 +25,7 @@
+ 
+ def _fresh_income() -> dict:
+     return {"earned_micro": 0, "subsidy_micro": None, "converted_from_principal_micro": 0,
+-            "spool_offset": 0}
++            "spool_offset": 0, "receipts": {}}
+ 
+ 
+ def _seed_credits(provider: Any) -> int | None:
+@@ -166,7 +166,7 @@
+         result.update({k: self.income[k] for k in INCOME_CLASSES})
+         return result
+ 
+-    def earn(self, service: str, micro: int, tx: str, **detail) -> dict:
++    def earn(self, service: str, micro: int, tx: str, **detail) -> dict | None:
+         """Book one paid service call: ledgered first, then counted as earned income."""
+         if not isinstance(service, str) or not service:
+             raise ValueError("service id is required")
+@@ -174,9 +174,18 @@
+             raise ValueError("earned amount must be positive integer micro-USD")
+         if not isinstance(tx, str) or not tx:
+             raise ValueError("a settlement reference is required")
+-        item = {"kind": "income.earned", "service": service, "micro": micro, "tx": tx, **detail}
++        receipt_id = tx.lower() if tx.startswith("0x") else tx
++        signature = {"service": service, "micro": micro,
++                     **{k: detail.get(k) for k in ("payer", "program", "version")}}
++        receipts = self.income.get("receipts", {})
++        if receipt_id in receipts:
++            if receipts[receipt_id] != signature:
++                raise ValueError("settlement reference reused with conflicting payment")
++            return None
++        item = {**detail, "kind": "income.earned", "service": service, "micro": micro, "tx": tx}
+         self.ledger.append(item)
+-        self.income = {**self.income, "earned_micro": self.income["earned_micro"] + micro}
++        self.income = {**self.income, "earned_micro": self.income["earned_micro"] + micro,
++                       "receipts": {**receipts, receipt_id: signature}}
+         return item
+ 
+     def collect_income(self) -> list[dict]:
+@@ -199,11 +208,13 @@
+             observed = read_income_spool(*args)
+         booked = []
+         for receipt in observed["receipts"]:
+-            booked.append(self.earn(
++            item = self.earn(
+                 receipt["service"], receipt["micro"], receipt["tx"],
+                 payer=receipt.get("payer"), program=receipt.get("program"),
+                 version=receipt.get("version"), served_ns=receipt.get("ts"),
+-            ))
++            )
++            if item is not None:
++                booked.append(item)
+         self.income = {**self.income, "spool_offset": observed["offset"]}
+         return booked
+ 

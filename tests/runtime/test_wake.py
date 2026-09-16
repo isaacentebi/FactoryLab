@@ -608,11 +608,15 @@ def test_returns_publish_every_answer_live_with_its_verdicts(world, tmp_path):
                               ts_ns=late + 4))
     row = collect_wake(world)["returns"]["rows"][-1]
     assert row["handle"] == "decision-early" and row["verdicts"][0]["rationale"] == "early"
-    # A return the diary's cap cut is published as the text that survived, never invented.
+    # A return the diary's cap cut is published as unavailable, not as the raw prefix.
+    # Restated for the GPT-6 third reading (§3, "private state reaches evaluators"): the
+    # 4,000-character diary text is the seat's whole return, working state included, so
+    # publishing the surviving prefix verbatim published private continuity through the
+    # wake. The public projection refuses it rather than guessing where the cut fell.
     writer.append({**_invocation("decision-cut", "seed-decider", "producer", {}, ts_ns=late + 5),
                    "outputs": '{"action": "hold", "rationale": "cut off he'})
     row = collect_wake(world)["returns"]["rows"][-1]
-    assert row["outputs"] == {"truncated_text": '{"action": "hold", "rationale": "cut off he'}
+    assert row["outputs"] == {"outputs_unavailable": "unparseable_or_truncated"}
     # The page renders the rationale as readable, escaped prose, not only as JSON.
     page = render_wake(collect_wake(world))
     assert "<h2>returns</h2>" in page

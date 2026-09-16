@@ -219,7 +219,7 @@ def evaluate_trigger(trigger: dict[str, Any], observed: dict[str, Any],
             if crossed:
                 fact = {"kind": kind, "level": str(level),
                         "previous": str(before), "observed": str(now)}
-    return fact, seen
+    return fact, seen if now is not None else dict(last or {})
 
 
 @dataclass

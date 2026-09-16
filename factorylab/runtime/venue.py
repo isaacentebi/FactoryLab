@@ -40,7 +40,8 @@ def wind_down(exchange, ledger, *, dust_micro: int = 1_000_000) -> dict:
             result = {"status": "failed", "error": type(exc).__name__}
         # The diary takes plain JSON; a venue answers in Decimals and its own types.
         result = json.loads(json.dumps(result, default=str))
-        ok = result.get("status") in ("filled", "cancelled", "resting", "ok")
+        ok = result.get("status") in (
+            ("cancelled", "ok") if kind == "cancelled" else ("filled",))
         if ok:
             report[kind] += 1
         else:
@@ -115,20 +116,27 @@ class VenueMixin:
         """
         from factorylab.runtime import witness
 
-        report = {"attempted": False, "orders": 0}
+        if self.termination.final:
+            return getattr(self, "wind_down_report", {"attempted": False, "orders": 0,
+                                                      "exposure_status": "unknown"})
+        report = {"attempted": False, "orders": 0, "exposure_status": "unknown"}
         exchange = getattr(self, "exchange", None)
-        # Every exchange, the deterministic fake included: a world that precommitted a
-        # wind-down leaves its book empty whether or not the book was ever real, so the
-        # contract is exercised by the same path a live world will take.
-        if self.m.kill.wind_down and exchange is not None:
-            report = wind_down(exchange, self.ledger, dust_micro=self.m.kill.dust_micro)
-        elif self.m.kill.wind_down:
-            self.ledger.append({"kind": "kill.wind_down", "step": "skipped",
-                                "reason": "world has no exchange"})
-        witness.note_wind_down(wind_down=bool(self.m.kill.wind_down),
-                               orders=report["orders"])
-        self.wind_down_report = report
-        self.termination.kill(reason)
+        try:
+            if self.m.kill.wind_down and exchange is not None:
+                report = wind_down(exchange, self.ledger, dust_micro=self.m.kill.dust_micro)
+            elif self.m.kill.wind_down:
+                report["error"] = "world has no exchange"
+        except Exception as exc:
+            report["error"] = type(exc).__name__
+        finally:
+            # An acknowledgement is not a reconciled flat account.
+            report.setdefault("exposure_status", "unknown")
+            self.wind_down_report = report
+            try:
+                witness.note_wind_down(wind_down=bool(self.m.kill.wind_down),
+                                       orders=report.get("orders", 0))
+            finally:
+                self.termination.kill(reason)
         return report
 
     def _finish_budget(self) -> None:
@@ -224,6 +232,12 @@ class VenueMixin:
                             **extra, "ts": self.clock.now_ns})
         self.registration_feedback.append({"kind": kind,
                                            "reason": f"order: {reason}"})
+        owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+        if owner is not None:
+            self.outcomes.append(owner, handle=handle,
+                outcome={"kind": "order_refused", "status": "rejected", "reason": reason,
+                         **extra}, delta_micro=0,
+                evidence={"kind": kind, "handle": handle, "ts": self.clock.now_ns})
         return {"status": "rejected", "error": reason}
 
     def _equity_micro(self) -> int:

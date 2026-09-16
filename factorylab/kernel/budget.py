@@ -197,6 +197,10 @@ class BudgetBook:
         """
         seat = self._seat(assembly_id)
         require_money(amount, nonnegative=True)
+        if seat in self.__retired:
+            self._log("retired_earn", assembly_id=seat, amount=amount, reason=reason,
+                      unallocated_after=self.unallocated())
+            return None
         after = self.__gross.get(seat, 0) + amount
         self._log("income", assembly_id=seat, amount=amount, reason=reason,
                   entitlement_after={seat: after - self.held_by(seat)},
@@ -226,6 +230,10 @@ class BudgetBook:
         """
         seat = self._seat(assembly_id)
         require_money(amount, nonnegative=True)
+        if seat in self.__retired:
+            self._log("retired_credit", assembly_id=seat, amount=amount, reason=reason,
+                      unallocated_after=self.unallocated())
+            return 0
         credited = max(0, min(amount, self.unallocated()))
         after = self.__gross.get(seat, 0) + credited
         self._log("credit", assembly_id=seat, amount=credited, requested=amount, reason=reason,

@@ -46,8 +46,9 @@ def objection_schema() -> dict:
         "description": (
             "Optional. A measurement is favourable and the value it stands for is not served. "
             "Name the value (a charter norm), the measurement (a card id or observation), the "
-            "evidence, and your uncertainty that the objection is right. It is scored like your "
-            "verdict and it is open to challenge; it is not a verdict on its own."
+            "evidence, and your uncertainty that the objection is right. It remains an "
+            "open, contestable claim pending independent evidence; the challenged proxy "
+            "does not score its own fidelity."
         ),
         "properties": {
             "value": {"type": "string"},
