@@ -1226,6 +1226,48 @@ A state the archive cannot read arrives as null with `state_error` on the
 return. The spec (code included) and the current `state_sha` are checkpointed;
 resume restores the state by hash from the archive.
 
+### Attention: what wakes a seat, and what it may decline
+
+`runtime/subscriptions.py` (contract C2) owns what wakes a seat. A seat's own
+answer carries `subscribe {kinds, coins, cadence_floor}` and `defer: <n ticks>`;
+both are the seat's own money and neither needs a ballot. `subscribe` narrows and
+never widens — a kind outside the seat's registered `accepts` is refused with a
+reason (`subscription.refused`), and an adopted change is ledgered
+`subscription.changed`.
+
+**Deferral's contract, exactly** (edition 3, R3-F; the seat prompt's common
+contract states the same words). `defer` and `cadence_floor` silence **routine
+world wakes** and nothing else: `Tick`, `Drip`, `MarketMid`, `Funding` and the
+coalesced `WorldUpdate`. They do **not** silence a `Fill`, an `OrderRejected` or
+a `WatcherFired`, which reach the affected seat whatever it deferred. They also
+do not silence a **judge or meta commission**: that is somebody else's paid
+request arriving, and a seat that stopped reading the market has not resigned
+from the cascade. A commission is declined the only way paid work can be — by
+answering `{"status": "cannot", "reason": ...}`. That costs the call and nothing
+beyond it, is **not** malformed (its propensity label is `declined`, an arm a
+learner can hold), is ledgered `commission.declined {assembly_id, handle,
+reason}`, and R3-D settles it `unmeasured`.
+
+**The fold has three durable states, per seat.** *Offered*: world events folded
+in — first, last, high, low, the funding prints, the counts — and not yet
+delivered. *Delivered*: rendered into a request that was invoked, and held.
+*Acknowledged*: that invocation returned `ok`, and it is dropped
+(`fold.acknowledged`). An invocation that **fails or comes back malformed showed
+the seat nothing**, so its fold returns to offered — merged under whatever
+accumulated meanwhile, oldest values first — and the next wake sees it
+(`fold.offered`). All three states are checkpointed inside `subscriptions`, so a
+restore between a request and its answer still owes the seat that world.
+
+**Coin filters apply to the delivered fold**, not only to admission: a seat
+subscribed to BTC reads BTC prints and BTC funding, and the counts it is shown
+are the counts of what it is shown. A watcher's `equity_below`/`equity_above`
+trigger is settled against the **venue's** equity; a failed account read leaves
+equity simply absent and the watcher keeps the last value it actually saw, rather
+than firing on the compute wallet's balance, which is spending authority and not
+venue equity. For the same reason a failed account read on a tick renders
+`account_unavailable: <reason>` and no `account` block at all: no fabricated
+equity, no empty position set.
+
 ### The artifact archive
 
 `kernel/artifacts.py` is a content-addressed store (contract C9): an
@@ -1235,15 +1277,31 @@ exist, so a crash between the two leaves a record without bytes rather than
 bytes without a record; the bytes live beside the ledger under
 `runs/<world>.artifacts/<sha>` (mode 0600, written through a temporary file
 and an atomic replace), or in memory for a world without a ledger path. A put
-is idempotent by content, the first owner of a hash stays its owner (a second
-owner of identical bytes is a reader of the first's artifact), `get` verifies
-the hash it was asked for and refuses a tampered file, and nothing deletes:
-retirement of an owner leaves its artifacts readable. The index (hash to
-owner, kind, size, time) is checkpointed; a checkpoint from before the archive
-restores it empty.
+is idempotent by content, `get` verifies the hash it was asked for and refuses
+a tampered file, and retirement of an owner leaves its artifacts readable. The
+index (hash to owner, kind, size, time, published, references) is checkpointed;
+a checkpoint from before the archive restores it empty.
+
+**Ownership is a (sha, owner) reference** (edition 3, R3-F). One blob carries a
+reference per writer, each with its own kind, its own moment and its own
+published flag, so a second writer of identical bytes owns what it wrote and can
+read it rather than being told the first writer's bytes are private; putting an
+existing sha with `public: true` publishes the blob. The **first** reference
+stays the owner of record — `owner_for(sha)`, one payer of rent and one subject
+of retirement. `entries()` and therefore `artifact.list` return one row per
+reference, with that reference's owner and published flag.
+
+**Collection.** `ArtifactStore.collect()` is the one thing that deletes, and it
+can only reach blobs **no reference names and nothing published** — what a crash
+between the durable write and its ledger item leaves behind. Each removal is
+ledgered `artifact.collected {sha, ts}`. The runtime calls it at each
+reserve-window boundary (`continuity.charge_window`). An owned blob and a public
+blob are never candidates, so collection can never take a seat's working state,
+an inbox body, an archived rationale or anything the population published.
 
 `artifact.get {sha}` is a seed tool, version 1, priced at zero and available
-to every seat: it returns `sha`, `owner`, `kind`, `bytes` and the content as
+to every seat: it returns `sha`, `owner`, `kind` (the reader's own reference's
+kind when it has one), `public`, `bytes` and the content as
 `text` (or `base64` for bytes that are not UTF-8) up to 65,536 bytes, an
 `error` above that or for an unknown or malformed hash, and ledgers
 `artifact.get {sha, handle, assembly_id, found, ts}`. The read is **scoped**
@@ -1277,15 +1335,37 @@ same accrual arithmetic the notebook uses; there is no transfer toll.
 `{handle, said: {rationale, payoff, forecasts}, outcome, observed_at_ns,
 delta_micro, evidence}`, the body an artifact owned by that seat, ledgered as
 `outcome.addressed {assembly_id, handle, sha, item, delta_micro, evidence}`.
-Items arrive from the verdict on a return, its payoff (with the money), a
-forecast's Brier, a judge's verdict consequence, and a late realisation. The
-next request carries `unread_outcomes: {count, items}` — every unread item
-counted, the newest eight inline, newest first. `outcome.get {handle}` is a seed
-tool, version 1, priced at zero: a kernel read of the seat's own inbox, never
-another seat's, ledgered as `outcome.get`. An answer's `ack_through: <handle>`
-advances that seat's cursor to that item and is ledgered as `outcome.ack`;
-everything after it stays unread. Heads, item indexes, cursors and the bounded
-record of what each handle said are checkpointed; the bodies are artifacts, and
+**Every consequence reaches its owner** (edition 3, R3-F), each as its own item
+with an exact `outcome_id`: the verdict on a return; its payoff, with the money;
+a **fill**, addressed through the lot table to the seat whose order it was; a
+**refusal**, addressed to the seat whose order was refused; a settled forecast on
+**any** predicate, not only `return_paid_off`; a **program result**, addressed to
+the lineage that registered the program, since a program has no model to read an
+inbox; a **late realisation**; and a judge's verdict consequence. A consequence
+with no owner to address is a **failed delivery** and is ledgered
+`outcome.undeliverable {consequence, handle, reason}` rather than dropped.
+
+The next request carries `unread_outcomes: {count, more, items}` — `count` is
+every unread item, `items` is the **oldest** eight, oldest first, and `more` is
+how many unread items the window did not carry, so the window is never mistaken
+for the queue. `outcome.get {outcome_id}` is a seed tool, version 1, priced at
+zero: a kernel read of the seat's own inbox, never another seat's, ledgered as
+`outcome.get`. `handle` is a **fallback** and returns the oldest item of that
+decision the seat has not read, with a `note` saying so, because one decision can
+settle into several outcomes; the view carries `related_outcomes`, the ids of the
+rest. An answer's `ack_through: <outcome_id>` advances that seat's cursor and is
+ledgered `outcome.ack {through, handle, cursor}`; it acknowledges only items
+**delivered** at or before it — an id the seat learned from `related_outcomes`
+but was never shown acknowledges only as far as its last delivery — and
+everything after stays unread.
+
+What a seat **said** is retained until that decision's last consequence settles
+or the seat retires. Only then, and only over `MAX_SAID`, is the oldest such
+record archived as an artifact (`said.archived {assembly_id, handle, sha}`) and
+dropped from the table; `outcome.get` and the settler read it back from the
+archive, so no decision with open consequences can lose its rationale. Heads,
+item indexes, cursors, how far each seat was delivered, the archived-rationale
+index and what each handle said are checkpointed; the bodies are artifacts, and
 `_verify_artifacts` refuses to continue a world whose head or inbox body is
 missing.
 

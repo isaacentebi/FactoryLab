@@ -263,6 +263,54 @@ class _Fold:
             prints.append({"t_s": ts_ns // 1_000_000_000, "rate": str(rate)})
             del prints[:-MAX_FUNDING_PRINTS]
 
+    def absorb(self, older: _Fold) -> None:
+        """Take an older fold back in, so nothing it held is lost (R3-F).
+
+        Used when a delivery failed: the fold that was rendered into the failed
+        request is merged back under the fold that accumulated while the request
+        was out. The older fold's prints came first, so its ``first`` and its
+        ``from_tick`` win, its ``last`` loses, and the extremes are the extremes
+        of both. Funding prints interleave by time and keep the same bound.
+        """
+        self.from_tick = min(self.from_tick, older.from_tick)
+        self.prints += older.prints
+        for kind, count in older.kinds.items():
+            self.kinds[kind] = self.kinds.get(kind, 0) + count
+        for coin, old in older.coins.items():
+            row = self.coins.get(coin)
+            if row is None:
+                self.coins[coin] = dict(old)
+                continue
+            row["first"], row["first_t_s"] = old["first"], old["first_t_s"]
+            row["prints"] += old["prints"]
+            row["high"] = str(max(Decimal(row["high"]), Decimal(old["high"])))
+            row["low"] = str(min(Decimal(row["low"]), Decimal(old["low"])))
+        for coin, prints in older.funding.items():
+            merged = sorted([*prints, *self.funding.get(coin, ())], key=lambda p: p["t_s"])
+            self.funding[coin] = merged[-MAX_FUNDING_PRINTS:]
+
+    def filtered(self, coins: frozenset[str] | None) -> _Fold:
+        """This fold as a seat subscribed to ``coins`` reads it (R3-F).
+
+        A coin filter used to decide only whether a seat was in the draw; the
+        fold it was then handed carried every coin the world printed. A seat
+        subscribed to BTC sees BTC, and the event counts it is shown are the
+        counts of what it is shown.
+        """
+        if coins is None:
+            return self
+        kept = {c: dict(row) for c, row in self.coins.items() if c in coins}
+        funding = {c: [dict(p) for p in prints]
+                   for c, prints in self.funding.items() if c in coins}
+        prints = sum(row["prints"] for row in kept.values())
+        kinds = dict(self.kinds)
+        if "MarketMid" in kinds:
+            kinds["MarketMid"] = prints
+        if "Funding" in kinds:
+            kinds["Funding"] = sum(len(p) for p in funding.values())
+        return _Fold(self.from_tick, prints, kept, funding,
+                     {k: c for k, c in kinds.items() if c})
+
     def rendered(self, to_tick: int) -> dict[str, Any]:
         """The block a seat reads: one object for everything it slept through."""
         return {
@@ -305,6 +353,10 @@ class SubscriptionBook:
         self.deferred_until: dict[str, int] = {}
         self.last_wake: dict[str, int] = {}
         self.folds: dict[str, _Fold] = {}
+        # seat -> the fold rendered into a request that was invoked and has not yet
+        # come back ok. Its presence is the ``delivered`` state (R3-F); ``offered``
+        # is a fold in ``folds`` with nothing here; ``acknowledged`` is neither.
+        self.delivering: dict[str, _Fold] = {}
         self.watchers: dict[str, dict[str, Any]] = {}
         self.funding: dict[str, str] = {}  # the latest funding rate per coin
 
@@ -373,16 +425,52 @@ class SubscriptionBook:
         fold = self.folds.get(seat)
         return frozenset(fold.coins) | frozenset(fold.funding) if fold else frozenset()
 
+    def fold_state(self, seat: str) -> str:
+        """``offered``, ``delivered`` or ``acknowledged`` for this seat's fold (R3-F)."""
+        if seat in self.delivering:
+            return "delivered"
+        fold = self.folds.get(seat)
+        holds = fold is not None and (fold.prints or fold.coins or fold.funding or fold.kinds)
+        return "offered" if holds else "acknowledged"
+
     def take(self, seat: str, *, now: int) -> dict[str, Any]:
-        """Render this seat's unread world and start the next one from here."""
+        """Render this seat's unread world for delivery, and hold it until it lands.
+
+        The fold moves from ``offered`` to ``delivered``: it is rendered into the
+        request about to be invoked and *kept* here, because a request that fails
+        or comes back malformed never showed the seat anything. ``acknowledge``
+        drops it; ``return_to_offered`` folds it back under whatever arrived in the
+        meantime, so the next wake sees the world it slept through (R3-F).
+
+        A delivery still outstanding when a second one starts — a step that raised
+        between the two — is returned to offered first rather than discarded.
+        """
+        self.return_to_offered(seat)
         fold = self.folds.pop(seat, None) or _Fold(from_tick=now)
         self.folds[seat] = _Fold(from_tick=now)
-        return fold.rendered(now)
+        self.delivering[seat] = fold
+        return fold.filtered(self.subscription(seat).coins).rendered(now)
+
+    def acknowledge(self, seat: str) -> bool:
+        """The invocation returned ok: what was delivered is read. True when one was."""
+        return self.delivering.pop(seat, None) is not None
+
+    def return_to_offered(self, seat: str) -> bool:
+        """The invocation failed: the delivered fold is unread again. True when one was."""
+        pending = self.delivering.pop(seat, None)
+        if pending is None:
+            return False
+        current = self.folds.get(seat)
+        if current is None:
+            self.folds[seat] = pending
+        else:
+            current.absorb(pending)
+        return True
 
     def peek(self, seat: str, *, now: int) -> dict[str, Any]:
         """Render this seat's unread world without consuming it (for a judge or a test)."""
         fold = self.folds.get(seat) or _Fold(from_tick=now)
-        return fold.rendered(now)
+        return fold.filtered(self.subscription(seat).coins).rendered(now)
 
     # -- watchers ----------------------------------------------------------
     def watch(self, seat: str, *, owner: str | None, trigger: dict[str, Any]) -> None:
@@ -408,6 +496,11 @@ class SubscriptionBook:
             "deferred_until": dict(sorted(self.deferred_until.items())),
             "last_wake": dict(sorted(self.last_wake.items())),
             "folds": {seat: fold.state() for seat, fold in sorted(self.folds.items())},
+            # The fold a request is carrying right now (R3-F): checkpointed, so a
+            # restore between the request and its answer resumes with that world
+            # still owed to the seat rather than silently consumed.
+            "delivering": {seat: fold.state()
+                           for seat, fold in sorted(self.delivering.items())},
             "watchers": {seat: {"owner": w["owner"], "trigger": dict(w["trigger"]),
                                 "last": None if w["last"] is None else dict(w["last"])}
                          for seat, w in sorted(self.watchers.items())},
@@ -421,6 +514,8 @@ class SubscriptionBook:
         self.deferred_until = {k: int(v) for k, v in (state.get("deferred_until") or {}).items()}
         self.last_wake = {k: int(v) for k, v in (state.get("last_wake") or {}).items()}
         self.folds = {seat: _Fold.restore(f) for seat, f in (state.get("folds") or {}).items()}
+        self.delivering = {seat: _Fold.restore(f)
+                           for seat, f in (state.get("delivering") or {}).items()}
         self.watchers = {seat: {"owner": w.get("owner"), "trigger": dict(w["trigger"]),
                                 "last": None if w.get("last") is None else dict(w["last"])}
                          for seat, w in (state.get("watchers") or {}).items()}
@@ -455,9 +550,43 @@ class ThinkingMixin:
     def _live_seats(self) -> list[str]:
         return [aid for aid in self.assemblies if aid not in self.retired_assemblies]
 
+    @property
+    def inbox_delivery(self) -> dict[str, Any]:
+        """The inbox's delivery and retention bookkeeping, as plain checkpoint data."""
+        return self.outcomes.delivery_state()
+
+    @inbox_delivery.setter
+    def inbox_delivery(self, state: dict[str, Any]) -> None:
+        self.outcomes.restore_delivery(state if isinstance(state, dict) else {})
+
+    def _settle_fold_delivery(self, seat: str, ret) -> None:
+        """Acknowledge the delivered fold, or return it to offered (R3-F).
+
+        The fold this seat was handed counts as read only when the invocation it
+        rode on came back ok. A failed or malformed invocation showed the seat
+        nothing, so its world goes back under the fold that accumulated since and
+        the next wake sees it; a ledger item records which happened, because a
+        seat that silently lost a window of prices cannot tell that it did.
+        """
+        book = self.subscription_book
+        if getattr(ret, "status", None) == "ok":
+            if book.acknowledge(seat):
+                self.ledger.append({"kind": "fold.acknowledged", "assembly_id": seat,
+                                    "handle": ret.handle, "ts": self.clock.now_ns})
+            return
+        if book.return_to_offered(seat):
+            self.ledger.append({"kind": "fold.offered", "assembly_id": seat,
+                                "handle": ret.handle, "status": getattr(ret, "status", None),
+                                "ts": self.clock.now_ns})
+
     def _fold_world_event(self, ev) -> None:
         """Fold one world event into every live seat's unread world."""
         kind = str(ev.kind)
+        if kind == "Fill":
+            # A fill is the consequence of one seat's order, and R3-F addresses it
+            # to that seat's inbox with its own id rather than leaving it in the
+            # public stream (§3: "fills not consistently addressed").
+            self._address_fill_to_inbox(dict(ev.payload))
         if kind not in ROUTINE_KINDS or kind == "WorldUpdate":
             return
         self.subscription_book.observe(
@@ -495,18 +624,22 @@ class ThinkingMixin:
 
     def _observed_world(self) -> dict[str, Any]:
         """What a trigger is settled against: mids, funding rates and equity."""
-        from factorylab.kernel.money import money_to_usd
-
         try:
             mids = {c: str(m) for c, m in self.exchange.mids().items()}
         except Exception:
             mids = {}
+        observed: dict[str, Any] = {"mids": mids,
+                                    "funding": dict(self.subscription_book.funding)}
         try:
-            equity = str(self.exchange.account().equity_usd)
+            observed["equity_usd"] = str(self.exchange.account().equity_usd)
         except Exception:
-            equity = str(money_to_usd(self.wallet.balance))
-        return {"mids": mids, "funding": dict(self.subscription_book.funding),
-                "equity_usd": equity}
+            # R3-F: a failed account read is not the compute wallet's balance. The
+            # wallet is spending authority, not venue equity, and substituting it
+            # would fire an ``equity_below`` watcher on a number the venue never
+            # reported. An unread equity is simply absent, and ``evaluate_trigger``
+            # keeps the last value it actually saw.
+            pass
+        return observed
 
     def _evaluate_watchers(self) -> None:
         """Settle every watcher once this tick, at the program price and no model call.
@@ -549,6 +682,16 @@ class ThinkingMixin:
         No ballot: a seat's subscription is the seat's own money. A refusal
         reaches the population the way a refused propensity does, because a
         refusal nobody can read is repeated.
+
+        What deferral covers, exactly (R3-F, and the common contract says the
+        same words to the seat): ``defer`` and ``cadence_floor`` silence *routine
+        world wakes* — the heartbeat, the drip, the price and funding prints and
+        the coalesced update. They do not silence a fill, an order rejection or a
+        fired watcher, and they do not silence a judge or meta commission, which
+        is somebody else's paid request arriving. A commission is declined the
+        only way paid work can be: by answering ``{"status": "cannot", "reason":
+        ...}``, which costs the call and nothing else, is not malformed, and is
+        ledgered ``commission.declined``.
         """
         outputs = ret.outputs if isinstance(ret.outputs, dict) else {}
         if ret.status != "ok" or seat not in self.assemblies:

@@ -763,7 +763,8 @@ class Runtime(
                 # with the compute wallet's balance and an empty position list
                 # invented equity and denied positions in the same breath
                 # (GPT-6 Pro, third reading). It is reported as unavailable, like
-                # the mids read below.
+                # the mids read below. R3-B landed this shape; R3-F's item 5 is
+                # that nothing here substitutes wallet equity, and nothing does.
                 payload["account"] = {"status": "unavailable", "reason": type(exc).__name__}
             try:
                 payload["mids"] = {c: str(m) for c, m in self._tick_mids().items()}
@@ -829,6 +830,10 @@ class Runtime(
                                 self.queue.get(handle).channel)
             ret = (returned if returned is not None
                    else self._invoke(sample.chosen, req, "producer"))
+            # R3-F: the fold this seat was handed is read only if the invocation
+            # returned ok. This runs before every branch below, because a verdict,
+            # a forecast and a meta all leave by their own door.
+            self._settle_fold_delivery(sample.chosen, ret)
             emitted = self.return_kinds.get(handle, kinds[0] if len(kinds) == 1 else None)
             if emitted == "Verdict":
                 self._evaluator_step(ev, handle, sample, deadline, returned=ret)

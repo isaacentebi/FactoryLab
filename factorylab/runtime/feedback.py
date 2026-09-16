@@ -303,10 +303,62 @@ class FeedbackMixin:
         """
         owner = self.handle_to_assembly.get(about) or self.outcomes.seat_of(about)
         if owner is None:
-            return
+            return self._undeliverable("verdict", about, "no seat owns that decision")
         self.outcomes.append(owner, handle=about, evidence=judge_handle,
                              outcome={"verdict": (round(float(score), 4)
                                                   if score is not None else None)})
+
+    def _undeliverable(self, what: str, handle: str | None, why: str) -> None:
+        """Record a consequence that reached nobody, rather than dropping it (R3-F)."""
+        self.ledger.append({"kind": "outcome.undeliverable", "consequence": what,
+                            "handle": handle, "reason": why, "ts": self.clock.now_ns})
+
+    def _deliver_program_result_to_inbox(self, seat: str, handle: str, ret: Any) -> None:
+        """A program seat's result is the lineage that registered it (R3-F).
+
+        A program has no model to read its own inbox, so the seat that put it in
+        the world is the one that must learn what it produced and what it cost.
+        A program that is its own lineage root keeps the item itself, which is the
+        same rule with nobody above it.
+        """
+        owner = self.budget.lineage(seat)
+        if owner not in self.assemblies:
+            owner = seat if seat in self.assemblies else None
+        if owner is None:
+            return self._undeliverable("program_result", handle, "no live owner")
+        outputs = ret.outputs if isinstance(ret.outputs, dict) else {}
+        self.outcomes.append(
+            owner, handle=handle, evidence=f"program:{handle}",
+            outcome={"kind": "program_result", "program": seat, "status": ret.status,
+                     "cost_micro": ret.cost,
+                     "emitted": self.return_kinds.get(handle),
+                     "reason": str(outputs.get("reason"))[:200] if "reason" in outputs else None})
+
+    def _address_fill_to_inbox(self, payload: dict[str, Any]) -> None:
+        """A fill is the ordering seat's news, addressed to it with an id (R3-F).
+
+        The order's own decision handle is on the lot table, so the fill reaches
+        the seat that placed it rather than whoever the router happened to wake.
+        A fill nobody with an open account ordered — the venue's own, a fill
+        arriving before its intent is acknowledged — is a failed delivery and is
+        ledgered as one by the inbox rather than addressed to a stranger.
+        """
+        order_id = str(payload.get("order_id", ""))
+        orders = getattr(getattr(self.consequences, "table", None), "orders", ())
+        handle = next((o.handle for o in orders if o.order_id == order_id), None)
+        if handle is None:
+            return self._undeliverable("fill", None, f"no decision owns order {order_id}")
+        owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+        if owner is None:
+            return self._undeliverable("fill", handle, "no seat owns that decision")
+        self.outcomes.append(
+            owner, handle=handle, evidence=f"fill:{order_id}",
+            outcome={"kind": "fill", "status": "settled", "order_id": order_id,
+                     "coin": payload.get("coin"), "market": payload.get("market", "perp"),
+                     "is_buy": payload.get("is_buy"), "size": str(payload.get("size")),
+                     "px": str(payload.get("px")), "fee_usd": str(payload.get("fee_usd")),
+                     "realized_usd": str(payload.get("realized_usd")),
+                     "liquidation": bool(payload.get("liquidation", False))})
 
     def _deliver_consequence_to_inbox(self, s: Any) -> None:
         """The reward line must reach the primitive that acted, not only its router (essay
@@ -319,7 +371,11 @@ class FeedbackMixin:
         seat's last three returns; an inbox item is addressed by handle and waits.
         """
         if s.predicate_id != "return_paid_off":
-            return
+            # R3-F: a forecast on any other predicate settles too, and its
+            # forecaster used to learn the result only through a standing number
+            # nobody addressed. The seat that made the claim is told what happened
+            # to it, on the decision that carried it.
+            return self._deliver_forecast_to_inbox(s)
         event_id = self.queue.get(s.handle).event_id
         prefix = "verdict-" if event_id.startswith("verdict-") else "self-"
         # The producer's own payoff is not delivered here: it arrives with its money
@@ -332,7 +388,8 @@ class FeedbackMixin:
         forecaster = (self.handle_to_assembly.get(forecaster_handle)
                       or self.outcomes.seat_of(forecaster_handle))
         if forecaster is None:
-            return
+            return self._undeliverable("payoff_forecast", forecaster_handle,
+                                       "no seat owns that decision")
         outcome = {"your_payoff_brier": round(float(s.brier), 4),
                    "baseline_brier": (round(float(s.baseline_brier), 4)
                                       if s.baseline_brier is not None else None)}
@@ -340,6 +397,30 @@ class FeedbackMixin:
             outcome["judged_return_paid_off"] = s.y
         self.outcomes.append(forecaster, handle=forecaster_handle, evidence=s.handle,
                              outcome=outcome)
+
+    def _deliver_forecast_to_inbox(self, s: Any) -> None:
+        """A settled non-payoff forecast reaches the seat that made it (R3-F).
+
+        The claim rode on a decision — the forecast's parent handle — so the item
+        is addressed there, beside whatever else that decision came to. Nothing is
+        scored here; this is the delivery of a fact the seat had no other way to
+        read (§3: "non-payoff forecasts miss the inbox").
+        """
+        try:
+            parent = self.queue.get(s.handle).parent_handle
+        except KeyError:
+            parent = None
+        handle = parent or s.handle
+        owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+        if owner is None:
+            return self._undeliverable("forecast_settled", handle, "no seat owns that decision")
+        self.outcomes.append(
+            owner, handle=handle, evidence=s.handle,
+            outcome={"kind": "forecast_settled", "predicate": s.predicate_id,
+                     "resolved": s.y, "your_brier": round(float(s.brier), 4),
+                     "baseline_brier": (round(float(s.baseline_brier), 4)
+                                        if s.baseline_brier is not None else None),
+                     "status": str(s.status)})
 
     def _exposure_evidence(self, handle: str) -> dict[str, bool]:
         """The three facts that can expose a judge on this return, each False until it lands."""
@@ -453,6 +534,8 @@ class FeedbackMixin:
         later is booked to the owner as a late consequence (``_settle_late``).
         """
         owner = self.handle_to_assembly.get(payoff.handle) or self.outcomes.seat_of(payoff.handle)
+        if owner is None:
+            self._undeliverable("return_paid_off", payoff.handle, "no seat owns that decision")
         if owner is not None:
             # The seat that decided it is told what it came to, marked or settled,
             # with the money attached (C1). A marked outcome says so, so an estimate
@@ -514,6 +597,7 @@ class FeedbackMixin:
         for handle, micro in self.consequences.settle_late(self.n).items():
             owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
             if owner is None or owner not in self.assemblies:
+                self._undeliverable("late_realization", handle, "no live seat owns that decision")
                 continue
             self._book_consequence(owner, micro, "late_consequence")
             # A realisation after the outcome was fixed is still this seat's news (C1).

@@ -19,10 +19,19 @@ field is refused, ledgered, and the head is left exactly as it was.
 item addressed to that seat is appended: the original handle, what the seat
 said then, the outcome, when it was observed, the financial delta, and an
 evidence pointer into the diary. The body is an artifact; the inbox holds the
-index. The newest unread items ride on the next request under
-``unread_outcomes``; ``outcome.get`` fetches any of them by handle; an answer's
-``ack_through`` advances the cursor. An unacknowledged item stays. Nothing is
-lost.
+index. The oldest unread items ride on the next request under
+``unread_outcomes``, with ``more`` counting the ones the window did not carry;
+``outcome.get`` fetches any of them by ``outcome_id`` (a handle is a fallback
+that answers with the oldest unread item of that decision, and says so); an
+answer's ``ack_through`` takes an id and advances the cursor only as far as this
+seat was actually delivered. An unacknowledged item stays. Nothing is lost.
+
+What the seat said is retained until its decision's last consequence settles or
+the seat retires; only then, and only over ``MAX_SAID``, is the oldest such
+record archived as an artifact and dropped from the table — ``outcome.get`` and
+the settler still read it back. A decision with open consequences is never
+evictable (R3-F; GPT-6 third reading §3, "MAX_SAID can evict decision-linked
+material before a delayed consequence").
 
 Rent is by byte-time at the world's ``notes.micro_per_byte_day`` rate (C3),
 accrued on the head's bytes from the moment it is written and collected at each
@@ -143,6 +152,17 @@ class OutcomeInbox:
         self.cursors: dict[str, int] = {}          # seat -> highest acknowledged seq
         self.said: dict[str, dict[str, Any]] = {}  # handle -> what its seat said then
         self.seq = 0
+        # seat -> the highest seq this seat was actually shown, inline or by a
+        # fetch. ``ack_through`` can never advance past it (R3-F, §4: "acknowledging
+        # a handle can acknowledge unseen items").
+        self.delivered_through: dict[str, int] = {}
+        # handle -> the sha of a ``said`` record evicted under MAX_SAID. Nothing is
+        # lost: the rationale is an artifact and is read back on demand.
+        self.archived_said: dict[str, str] = {}
+        # Set by the runtime to ``lambda handle: <the decision still has an open
+        # consequence>``. Until it is set nothing is evictable, which is the
+        # conservative reading and the behaviour that preceded R3-F.
+        self.consequences_open: Any = None
 
     # -- what the seat said, kept so an outcome can be addressed to a reason ------------
 
@@ -159,24 +179,71 @@ class OutcomeInbox:
             # reads it back from here when the verdict's consequence settles.
             "fidelity_objection": outputs.get("fidelity_objection"),
         }
-        # Do not evict addressability by unrelated traffic. A future archive-backed
-        # GC must prove that no delayed consequence can reference a removed handle.
+        self.archived_said.pop(handle, None)
+        self._evict_said()
+
+    def _open(self, handle: str) -> bool:
+        """Whether a decision may still receive a consequence, conservatively."""
+        if self.consequences_open is None:
+            return True
+        try:
+            return bool(self.consequences_open(handle))
+        except Exception:
+            return True
+
+    def _evict_said(self) -> None:
+        """Keep ``said`` bounded without losing a decision that can still settle (R3-F).
+
+        A record is retained until its decision's last consequence settles or its
+        seat retires. Only then, and only once the table is over ``MAX_SAID``, is
+        the oldest such record evicted — and it is archived as an artifact first,
+        so ``what_was_said`` and ``outcome.get`` still answer for it. The reviewer's
+        finding was that ``MAX_SAID`` could drop a decision with open consequences;
+        here it can drop nothing at all, only move it.
+        """
+        if len(self.said) <= MAX_SAID:
+            return
+        for handle in list(self.said):
+            if len(self.said) <= MAX_SAID:
+                return
+            if self._open(handle):
+                continue
+            record = self.said[handle]
+            sha = self.artifacts.put(canonical(record), owner=record["seat"],
+                                     kind="said.archived")
+            self.ledger.append({"kind": "said.archived", "assembly_id": record["seat"],
+                                "handle": handle, "sha": sha, "ts": self.clock()})
+            self.archived_said[handle] = sha
+            del self.said[handle]
+
+    def _said(self, handle: str) -> dict[str, Any]:
+        """One retained return, from the table or from the artifact it was archived to."""
+        record = self.said.get(handle)
+        if record is not None:
+            return record
+        sha = self.archived_said.get(handle)
+        if sha is None:
+            return {}
+        try:
+            return json.loads(self.artifacts.get(sha).decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError("an archived rationale is unavailable") from exc
 
     def entry_for(self, handle: str) -> dict[str, Any]:
         """The ``{"handle", "outputs"}`` view of one retained return, for the settler."""
-        record = self.said.get(handle, {})
+        record = self._said(handle)
         outputs = {k: record[k] for k in ("rationale", "payoff", "forecasts",
                                           "fidelity_objection") if k in record}
         return {"handle": handle, "outputs": outputs}
 
     def seat_of(self, handle: str) -> str | None:
         """The seat that made a decision, as the inbox recorded it."""
-        record = self.said.get(handle)
-        return None if record is None else record["seat"]
+        record = self._said(handle)
+        return record.get("seat") or None
 
     def what_was_said(self, handle: str) -> dict[str, Any]:
         """The ``said`` block of an item: the three fields, empty when nothing was retained."""
-        record = self.said.get(handle, {})
+        record = self._said(handle)
         return {"rationale": record.get("rationale"), "payoff": record.get("payoff"),
                 "forecasts": record.get("forecasts", [])}
 
@@ -185,8 +252,16 @@ class OutcomeInbox:
     def append(self, seat: str, *, handle: str, outcome: dict[str, Any],
                delta_micro: int = 0, evidence: Any = None,
                observed_at_ns: int | None = None) -> dict[str, Any] | None:
-        """Address one settled consequence to the seat that decided it; return its record."""
+        """Address one settled consequence to the seat that decided it; return its record.
+
+        A consequence with no owner to address is a **failed delivery** and is
+        ledgered as one rather than dropped: the operator can find every fact the
+        world settled that reached nobody (R3-F).
+        """
         if not seat or not handle:
+            self.ledger.append({"kind": "outcome.undeliverable", "assembly_id": seat or None,
+                                "handle": handle or None, "outcome": outcome,
+                                "delta_micro": int(delta_micro), "ts": self.clock()})
             return None
         fact = (hashlib.sha256(canonical({"handle": handle, "outcome": outcome,
                     "delta_micro": int(delta_micro), "evidence": evidence})).hexdigest()
@@ -222,41 +297,94 @@ class OutcomeInbox:
         except Exception as exc:
             raise RuntimeError("addressed outcome is unavailable") from exc
 
+    def _mark_delivered(self, seat: str, seq: int) -> None:
+        """Record that this seat was actually shown this item, so it can acknowledge it."""
+        if seq > self.delivered_through.get(seat, 0):
+            self.delivered_through[seat] = seq
+
+    def _find(self, seat: str, ident: Any) -> dict[str, Any] | None:
+        """One item by ``outcome:<n>``, or the oldest unread item for a handle (R3-F).
+
+        An id names exactly one item. A handle names a decision, which can carry
+        several consequences, so it is a fallback and it resolves to the *oldest
+        unread* item of that handle — the next thing the seat has not read —
+        rather than the latest, which is what hid the earlier facts before.
+        """
+        if not isinstance(ident, str):
+            return None
+        rows = self.items.get(seat, ())
+        for record in rows:
+            if ident == f"outcome:{record['seq']}":
+                return record
+        cursor = self.cursors.get(seat, 0)
+        matching = [r for r in rows if r["handle"] == ident]
+        unread = [r for r in matching if r["seq"] > cursor]
+        return (unread or matching or [None])[0]
+
     def unread(self, seat: str) -> dict[str, Any]:
-        """Deliver oldest-first, with unambiguous item addresses, until acknowledged."""
+        """Deliver oldest-first, with unambiguous item addresses, until acknowledged.
+
+        The inline window is the oldest ``INLINE_OUTCOMES`` unread items and
+        ``more`` is how many unread items it did not carry, so a seat can tell the
+        window from the queue (§4: "the inline window is a subset").
+        """
         cursor = self.cursors.get(seat, 0)
         rows = [r for r in self.items.get(seat, ()) if r["seq"] > cursor]
-        return {"count": len(rows), "items": [
-            {**self.body(r["sha"]), "outcome_id": f"outcome:{r['seq']}"}
-            for r in rows[:INLINE_OUTCOMES]]}
+        window = rows[:INLINE_OUTCOMES]
+        for record in window:
+            self._mark_delivered(seat, record["seq"])
+        return {"count": len(rows), "more": len(rows) - len(window), "items": [
+            {**self.body(r["sha"]), "outcome_id": f"outcome:{r['seq']}"} for r in window]}
 
-    def get(self, seat: str, handle: Any) -> dict[str, Any]:
-        """One item by handle, read or unread — the ``outcome.get`` view."""
-        if isinstance(handle, str):
-            for record in reversed(self.items.get(seat, ())):
-                if record["handle"] == handle or handle == f"outcome:{record['seq']}":
-                    body = self.body(record["sha"])
-                    if body is not None:
-                        return {**body, "sha": record["sha"],
-                                "outcome_id": f"outcome:{record['seq']}",
-                                "related_outcomes": [f"outcome:{r['seq']}"
-                                    for r in self.items.get(seat, ())
-                                    if r["handle"] == record["handle"]],
-                                "read": record["seq"] <= self.cursors.get(seat, 0)}
-        return {"error": OUTCOME_UNKNOWN}
+    def get(self, seat: str, ident: Any) -> dict[str, Any]:
+        """One item by ``outcome_id``, or by handle as a fallback — the ``outcome.get`` view."""
+        record = self._find(seat, ident)
+        if record is None:
+            return {"error": OUTCOME_UNKNOWN}
+        body = self.body(record["sha"])
+        if body is None:
+            return {"error": OUTCOME_UNKNOWN}
+        self._mark_delivered(seat, record["seq"])
+        view = {**body, "sha": record["sha"], "outcome_id": f"outcome:{record['seq']}",
+                "related_outcomes": [f"outcome:{r['seq']}" for r in self.items.get(seat, ())
+                                     if r["handle"] == record["handle"]],
+                "read": record["seq"] <= self.cursors.get(seat, 0)}
+        if ident != view["outcome_id"]:
+            view["note"] = ("a handle can carry several outcomes; this is the oldest you "
+                            "have not read. Address one exactly by its outcome_id.")
+        return view
 
-    def ack_through(self, seat: str, handle: Any) -> int | None:
-        """Advance the seat's cursor to the named item; return the new cursor, or None."""
-        if not isinstance(handle, str):
+    def ack_through(self, seat: str, ident: Any) -> int | None:
+        """Acknowledge every item delivered at or before ``ident``; return the new cursor.
+
+        Two bounds (R3-F, §4). The cursor never moves backwards, and it never moves
+        past what this seat was actually shown: acknowledging an id it learned from
+        ``related_outcomes`` but was never delivered acknowledges only up to its
+        last delivery, and everything after that stays unread.
+        """
+        record = self._find(seat, ident)
+        if record is None:
             return None
-        for record in reversed(self.items.get(seat, ())):
-            if record["handle"] == handle or handle == f"outcome:{record['seq']}":
-                cursor = max(self.cursors.get(seat, 0), record["seq"])
-                self.ledger.append({"kind": "outcome.ack", "assembly_id": seat,
-                                    "handle": handle, "cursor": cursor, "ts": self.clock()})
-                self.cursors[seat] = cursor
-                return cursor
-        return None
+        cursor = max(self.cursors.get(seat, 0),
+                     min(record["seq"], self.delivered_through.get(seat, 0)))
+        self.ledger.append({"kind": "outcome.ack", "assembly_id": seat,
+                            "through": f"outcome:{record['seq']}", "handle": record["handle"],
+                            "cursor": cursor, "ts": self.clock()})
+        self.cursors[seat] = cursor
+        return cursor
+
+    # -- the delivery and retention bookkeeping a checkpoint carries -------------------
+
+    def delivery_state(self) -> dict[str, Any]:
+        """Plain data: how far each seat was delivered, and what ``said`` was archived."""
+        return {"delivered_through": dict(sorted(self.delivered_through.items())),
+                "archived_said": dict(sorted(self.archived_said.items()))}
+
+    def restore_delivery(self, state: dict[str, Any]) -> None:
+        """Adopt a checkpoint's delivery bookkeeping; a world without one starts empty."""
+        self.delivered_through = {k: int(v)
+                                  for k, v in (state.get("delivered_through") or {}).items()}
+        self.archived_said = dict(state.get("archived_said") or {})
 
 
 def charge_window(rt) -> None:
@@ -273,6 +401,13 @@ def charge_window(rt) -> None:
     from factorylab.world.metering import Infeasible
 
     now_ns = rt.clock.now_ns
+    # The window boundary is also where the archive collects (R3-F): blobs no
+    # reference names and nothing published — what a crash between the durable
+    # write and its ledger item leaves — are removed and ledgered. An owned or
+    # published blob is never a candidate, so this can take nothing a seat holds.
+    collect = getattr(rt.artifacts, "collect", None)
+    if collect is not None:
+        collect()
     for seat, head in rt.working_state.heads.items():
         micro, carry = accrue(head, now_ns, rt.m.notes)
         price = head.get("rent_due", 0) + micro

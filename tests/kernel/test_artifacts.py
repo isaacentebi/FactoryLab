@@ -42,8 +42,9 @@ def test_put_writes_bytes_before_ledgering_and_get_returns_the_same_bytes(tmp_pa
     The write-ahead repair reversed it on purpose, because a record without bytes is an
     authenticated reference to something unreadable, and every reader of the diary — a
     continuity head, an inbox item, a checkpoint — treats such a reference as real. The
-    ``readers`` grant on the record is the same repair's second half: the second writer
-    of identical bytes is a reader of the first's artifact rather than a new owner.
+    ``readers`` grant on the record is the same repair's second half; R3-F turned it
+    into a (sha, owner) reference, so the second writer of identical bytes owns its own
+    reference and the first stays the owner of record.
     """
     archive, ledger = store(tmp_path)
     data = b'{"n": 1}'
@@ -61,7 +62,9 @@ def test_put_writes_bytes_before_ledgering_and_get_returns_the_same_bytes(tmp_pa
     assert archive.owner_for(sha) == "prog-a"
     assert archive.list() == [{"sha": sha, "owner": "prog-a", "kind": "program.state",
                                "bytes": len(data), "ts": 8, "public": False,
-                               "readers": ["prog-a"]}]
+                               "readers": ["prog-a"],
+                               "refs": {"prog-a": {"kind": "program.state", "ts": 8,
+                                                   "public": False}}}]
     assert archive.entries() == [(sha, "prog-a", False, len(data), 8)]
 
 
@@ -123,7 +126,7 @@ def test_read_view_is_bounded_and_marks_binary(tmp_path):
     archive, _ = store(tmp_path)
     text = archive.put(b'{"n": 2}', owner="prog-a", kind="program.state")
     assert archive.read(text) == {"sha": text, "owner": "prog-a", "kind": "program.state",
-                                  "bytes": 8, "text": '{"n": 2}'}
+                                  "bytes": 8, "public": False, "text": '{"n": 2}'}
     binary = archive.put(b"\xff\xfe\x00", owner="a", kind="blob")
     assert archive.read(binary)["base64"] == "//4A"
     big = archive.put(b"x" * (MAX_TOOL_READ_BYTES + 1), owner="a", kind="blob")
@@ -134,8 +137,15 @@ def test_read_view_is_bounded_and_marks_binary(tmp_path):
 
 
 def test_retirement_is_not_the_archives_business(tmp_path):
-    """Nothing here deletes: the archive has no remove, and a file survives its owner."""
+    """The archive has no remove, and a file survives its owner.
+
+    R3-F added the one exception, ``collect()``, and it is not one: it removes only
+    blobs no reference names and nothing published, so a retired seat's artifact —
+    still referenced — is never a candidate.
+    """
     archive, _ = store(tmp_path)
     sha = archive.put(b"machinery", owner="retired-seat", kind="program.state")
     assert not any(name.startswith(("delete", "remove", "retire")) for name in dir(archive))
     assert archive.get(sha) == b"machinery" and archive.owner_for(sha) == "retired-seat"
+    assert archive.collect() == []
+    assert archive.get(sha) == b"machinery"
