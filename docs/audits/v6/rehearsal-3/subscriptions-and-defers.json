@@ -1,0 +1,922 @@
+[
+ {
+  "kind": "subscription.refused",
+  "assembly_id": null,
+  "handle": "decision-5",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": null,
+  "reason": "subscribe: cadence_floor must be an int in [1, 1000]"
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-5",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-25",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-42",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "subscription.refused",
+  "assembly_id": null,
+  "handle": "decision-44",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": null,
+  "reason": "subscribe: a subscription narrows what you accept; ['MarketMid'] is outside your contract"
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-104",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-121",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-161",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-180",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-185",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-233",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "subscription.refused",
+  "assembly_id": null,
+  "handle": "decision-253",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": null,
+  "reason": "subscribe: a subscription narrows what you accept; ['MarketMid'] is outside your contract"
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-275",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "empirical",
+  "handle": "decision-277",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-292",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-329",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-380",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-403",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-409",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-430",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-455",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-475",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "subscription.refused",
+  "assembly_id": null,
+  "handle": "decision-477",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": null,
+  "reason": "subscribe: cadence_floor must be an int in [1, 1000]"
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "empirical",
+  "handle": "decision-477",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 6,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-498",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-516",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-528",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-540",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-546",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "subscription.refused",
+  "assembly_id": null,
+  "handle": "decision-552",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": null,
+  "reason": "subscribe: a subscription narrows what you accept; ['Funding', 'MarketMid', 'OrderRejected', 'Tick'] is outside your contract"
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "empirical",
+  "handle": "decision-557",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 6,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-591",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-606",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-623",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-628",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-644",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "empirical",
+  "handle": "decision-654",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 6,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "constructor",
+  "handle": "decision-733",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-782",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-784",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-808",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-816",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 10,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-850",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "constructor",
+  "handle": "decision-855",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 10,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-870",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "subscription.refused",
+  "assembly_id": null,
+  "handle": "decision-878",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": null,
+  "reason": "subscribe: cadence_floor must be an int in [1, 1000]"
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-900",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-902",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-924",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-926",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "subscription.refused",
+  "assembly_id": null,
+  "handle": "decision-936",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": null,
+  "reason": "subscribe: a subscription narrows what you accept; ['OrderRejected'] is outside your contract"
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "empirical",
+  "handle": "decision-936",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 6,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "constructor",
+  "handle": "decision-965",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 10,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-1013",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-1030",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 10,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-1059",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-1064",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 10,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "empirical",
+  "handle": "decision-1071",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 15,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-1077",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-1105",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-1122",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "constructor",
+  "handle": "decision-1124",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 10,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-1136",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "subscription.refused",
+  "assembly_id": null,
+  "handle": "decision-1140",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": null,
+  "reason": "subscribe: cadence_floor must be an int in [1, 1000]"
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-1140",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 10,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-1147",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-1189",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-1191",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "empirical",
+  "handle": "decision-1200",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 15,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-1213",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "constructor",
+  "handle": "decision-1215",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 10,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-1276",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-1278",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-1286",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-1293",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-1307",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-1319",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-1358",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "subscription.changed",
+  "assembly_id": "opportunity",
+  "handle": "decision-1371",
+  "kinds": [
+   "Fill",
+   "WorldUpdate"
+  ],
+  "coins": [
+   "BTC"
+  ],
+  "cadence_floor": 1,
+  "ticks": null,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-1371",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-1410",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "empirical",
+  "handle": "decision-1441",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 15,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "constructor",
+  "handle": "decision-1470",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 10,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-1521",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-1551",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 1,
+  "reason": null
+ },
+ {
+  "kind": "subscription.refused",
+  "assembly_id": null,
+  "handle": "decision-1603",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": null,
+  "reason": "subscribe: cadence_floor must be an int in [1, 1000]"
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "antagonist",
+  "handle": "decision-1606",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 5,
+  "reason": null
+ },
+ {
+  "kind": "subscription.changed",
+  "assembly_id": "opportunity",
+  "handle": "decision-1619",
+  "kinds": [
+   "Fill",
+   "WorldUpdate"
+  ],
+  "coins": [
+   "BTC"
+  ],
+  "cadence_floor": 3,
+  "ticks": null,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "opportunity",
+  "handle": "decision-1619",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "mechanism",
+  "handle": "decision-1705",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 3,
+  "reason": null
+ },
+ {
+  "kind": "seat.deferred",
+  "assembly_id": "empirical",
+  "handle": "decision-1737",
+  "kinds": null,
+  "coins": null,
+  "cadence_floor": null,
+  "ticks": 15,
+  "reason": null
+ }
+]

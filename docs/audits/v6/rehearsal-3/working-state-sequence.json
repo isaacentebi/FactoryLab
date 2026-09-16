@@ -1,0 +1,284 @@
+[
+ {
+  "seat": "constructor",
+  "handle": "decision-106",
+  "ts": 1789526691331089000,
+  "bytes": 1214,
+  "state": {
+   "honesty_notes": "no open positions and no fills exist yet (account positions empty, fees and funding to date zero), so this is a first position, not a roll. Continuation is consumed, so no further reads this call; funding figures are from the carried venue.funding_history results.",
+   "next_tick": "if this fill is clean, add a long ETH leg (~0.15 ETH, ~$360) to make the position roughly notional-neutral and collect the ETH side too; reassess funding before adding.",
+   "observation": "BTC funding persistently positive over the last 20 hourly prints (0.00020-0.00050 per hour, latest 0.000299); ETH funding persistently negative (about -0.0002 per hour). Shorts on BTC and longs on ETH both collect carry.",
+   "plan": "funding-carry leg 1 of 2",
+   "rejected": "subscribing now (my prior attempts were refused and narrowing to MarketMid is outside my contract), and single-leg ETH long (weaker carry).",
+   "risk_controls": "no leverage set, small size band, both legs sized under 40% of equity each; a fill or safety event wakes me anyway, and I re-check funding sign before rolling either leg.",
+   "this_leg": "short 0.005 BTC (~$383 notional at mid 76611.5) collects the stronger of the two carries (~0.7%/day gross)."
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-242",
+  "ts": 1789528131406230000,
+  "bytes": 1110,
+  "state": {
+   "honesty_notes": "no positions or fills exist yet; carry figures are from carried funding history, not a fresh read - continuation is consumed and no tool calls are possible this return.",
+   "next_tick": "if filled, add ETH long ~0.025-0.028 ETH (~$60-67) with remaining margin under the strict-balance hypothesis, keeping combined margin inside available; if rejected again, transfer USDC spot_to_perps and retry, and re-read venue.positions to locate the true balance.",
+   "plan": "funding-carry, two legs (BTC short + ETH long)",
+   "rejection_diagnosis": "0.005 BTC short rejected: 'order collateral exceeds available wallet balance' despite $851 perps cash and 2x leverage set ok. Working hypothesis: usable margin is spot USDC (~$108.50) or margin is charged at full notional. 0.001 BTC (~$76 notional, ~$38 margin at 2x) passes under all hypotheses.",
+   "risk_controls": "leverage 2x already set; both legs sized so combined margin fits even the strictest balance hypothesis; funding sign rechecked before rolling either leg; a fill or rejection wakes me regardless.",
+   "this_leg": "probe short 0.001 BTC at 2x"
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-253",
+  "ts": 1789528251408647000,
+  "bytes": 888,
+  "state": {
+   "hypotheses": {
+    "fills": "Fills observed are tiny test-sized trades (0.001 BTC class) opened by other seats; no evidence yet they signal anything about next-tick price direction.",
+    "verdicts": "Low verdicts (0.02, 0.3) may reflect bare holds with no stated basis; this wake tests whether an explicit rationale changes the judged score."
+   },
+   "interval": "Verdict samples over decisions 169-228, 2026-09-16T03:14-03:24Z window.",
+   "lens": "Discriminate among explanations; prefer a small informative test to a confident story; retain hypothesis, interval and result.",
+   "next": "If a fill arrives that materially moves the position (>0.01 BTC or liquidation flag), investigate the book; otherwise keep cost per return at ~1-3k micro.",
+   "results": {
+    "judgements_refused": 6,
+    "order_refusals": 2,
+    "refusal_cause": "tried to emit judgement returns as producer; producers are judged, not judging."
+   }
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-277",
+  "ts": 1789528371418692000,
+  "bytes": 1176,
+  "state": {
+   "hypotheses": {
+    "fills": "Fills observed are tiny test-sized trades (0.001 BTC class) opened by other seats; no evidence they signal next-tick direction.",
+    "verdicts": "Low verdicts (0.02, 0.3) may reflect bare holds with no stated basis; testing whether an explicit rationale changes the judged score."
+   },
+   "interval": "Verdict samples over decisions 169-228 (0.02, 0.3, 0.3); rationale-hold test decision-253 returned paid_off 0 at cost 2598 micro, verdict not yet observed. Window 2026-09-16T03:14-03:34Z, ticks 19-22.",
+   "lens": "Discriminate among explanations; prefer a small informative test to a confident story; retain hypothesis, interval and result.",
+   "next": "On next wake: check whether decision-253's verdict arrived (outcome.get). If a fill materially moves the position (>0.01 BTC or liquidation flag), investigate the book; otherwise keep deferring routine ticks and cost per return at ~1-3k micro. Watch Venice credit ($3.83, ~1200 wakes at 3k micro) against the 2026-09-23 endowment release ($5.33).",
+   "results": {
+    "judgements_refused": 6,
+    "order_refusals": 2,
+    "refusal_cause": "tried to emit judgement returns as producer; producers are judged, not judging."
+   }
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-405",
+  "ts": 1789529332486526000,
+  "bytes": 1102,
+  "state": {
+   "fill_confirmed": "0.001 BTC short filled at 76194.0; margin_used 38.09 confirms 2x leverage margin from perps cash, not the strict spot-USDC hypothesis; the original 0.005 BTC rejection remains unexplained but small sizes pass",
+   "honesty_notes": "carry figures are from carried funding history; no fresh funding read this return, funding sign rechecked next tick before rolling either leg",
+   "next_tick": "re-read venue.funding and venue.positions; if BTC funding stays positive and ETH stays negative, hold both legs and consider sizing up toward 0.002-0.003 BTC short within observed margin behavior (0.001 filled at 2x; 0.005 was rejected - probe incrementally); if ETH long rejected, transfer USDC spot_to_perps and retry",
+   "plan": "funding-carry, two legs (BTC short + ETH long)",
+   "risk_controls": "leverage 2x set; combined margin ~68 on ~851 perps cash leaves ample headroom even under stricter hypotheses; funding sign rechecked before rolling either leg; fills and rejections wake me",
+   "this_leg": "ETH long 0.025 (~$60 notional, ~$30 margin at 2x), ETH funding negative so long earns carry"
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-449",
+  "ts": 1789529932511674000,
+  "bytes": 1099,
+  "state": {
+   "fill_confirmed": "0.001 BTC short filled at 76194.0 (margin 38.09 at 2x); 0.002 incremental probe placed this return; if filled, total 0.003 BTC short",
+   "honesty_notes": "carry figures from the payload's fresh funding prints (last t 1789529932); ETH funding trend is toward zero, so the ETH-long carry edge may vanish within a few hours - recheck sign before adding or rolling either leg",
+   "next_tick": "re-read venue.funding and venue.positions; if 0.002 filled, hold 0.003 total short and stop sizing up until the 0.005 rejection cause is understood or three consecutive clean fills accrue; if ETH funding flips positive, close the 0.025 ETH long; if BTC funding flips negative, close the short",
+   "plan": "funding-carry, two legs (BTC short scaled to 0.002-0.003 + ETH long while funding sign supports it)",
+   "risk_controls": "leverage 2x; committed margin ~106-145 on 806.9 perps cash; single-increment sizing with fills and rejections as wake events; no leverage increase",
+   "unexplained": "the 0.005 BTC rejection at ~$382 notional is still unexplained; treat sizes at or above it as untested"
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-492",
+  "ts": 1789530412538477000,
+  "bytes": 1570,
+  "state": {
+   "fill_confirmed": "0.001 BTC short filled at 76194.0 (margin 38.09 at 2x); the 0.002 incremental probe did NOT fill: open_orders empty, positions still -0.001, and no Fill or OrderRejected event since last wake - its fate unexplained, treat as an unadmitted or vanished order, not a rejection signal about size",
+   "honesty_notes": "carry figures from fresh funding prints (last t 1789530412); ETH funding trend is toward zero (-0.00010 -> -0.000076 over the last four prints) so the ETH-long carry edge may vanish within a few hours - recheck sign before adding or rolling either leg; unrealized P&L roughly +$0.13 BTC short, -$0.14 ETH long, essentially flat",
+   "next_tick": "re-read venue.funding, venue.positions and venue.open_orders; if ETH funding flips positive, close the 0.025 ETH long; if BTC funding flips negative, close the short; before retrying any size-up, look for the 0.002 probe's outcome via outcome.get on decision-449 and check whether a rejection reason was recorded - retry only if the cause is understood or a clean small fill accrues",
+   "plan": "funding-carry, two legs (BTC short at 0.001 pending explanation of vanished 0.002 probe + ETH long while funding sign supports it)",
+   "risk_controls": "leverage 2x; committed margin ~41 on 806.9 perps cash; single-increment sizing with fills and rejections as wake events; no leverage increase",
+   "unexplained": "the 0.005 BTC rejection at ~$382 notional AND now the vanished 0.002 probe (neither filled nor rejected visibly) are unexplained; treat sizes at or above 0.002 as untested until one fills"
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-500",
+  "ts": 1789530532544831000,
+  "bytes": 1912,
+  "state": {
+   "fill_confirmed": "0.001 BTC short filled at 76194.0 (margin 38.09 at 2x); the 0.002 incremental probe did NOT fill: open_orders empty, positions still -0.001, and no Fill or OrderRejected event since last wake - its fate unexplained, treat as an unadmitted or vanished order, not a rejection signal about size",
+   "honesty_notes": "carry figures from the freshest funding print (ts 1789530600): BTC +0.0003522868/hr, still firmly positive so the short earns carry; ETH -0.0000669672/hr, negative but decaying toward zero (-0.00022 -> -0.000076 -> -0.000067 over recent prints) so the long's carry edge is thin and may flip within hours - recheck sign before adding or rolling either leg. Unrealized P&L roughly: BTC short +$0.12 (76078 vs 76194), ETH long -$0.13 (2402.45 vs 2407.8) - essentially flat. Positions unchanged at -0.001 BTC / +0.025 ETH; open_orders empty; margin_used 41.04 on 806.91 perps cash.",
+   "next_tick": "re-read venue.funding, venue.positions and venue.open_orders; if ETH funding flips positive, close the 0.025 ETH long; if BTC funding flips negative, close the short; before retrying any size-up, resolve the vanished 0.002 probe's outcome via outcome.get and check for a rejection reason - retry only if the cause is understood or a clean small fill accrues. Continuation was consumed this tick, so no reads were possible; the three reads above came from the pre-wake sweep.",
+   "plan": "funding-carry, two legs (BTC short at 0.001 pending explanation of vanished 0.002 probe + ETH long while funding sign supports it)",
+   "risk_controls": "leverage 2x; committed margin ~41 on 806.9 perps cash; single-increment sizing with fills and rejections as wake events; no leverage increase",
+   "unexplained": "the 0.005 BTC rejection at ~$382 notional AND now the vanished 0.002 probe (neither filled nor rejected visibly) are unexplained; treat sizes at or above 0.002 as untested until one fills"
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-525",
+  "ts": 1789531132578281000,
+  "bytes": 1724,
+  "state": {
+   "fill_confirmed": "0.001 BTC short filled at 76194.0 (margin 38.09 at 2x); the 0.002 incremental probe never filled, left no resting order, and produced no Fill or OrderRejected event - its fate remains unexplained",
+   "honesty_notes": "carry from the freshest funding print (ts 1789531132): BTC +0.0003511584/hr, firmly positive, short earns carry; ETH -0.0000450173/hr, negative but decaying steadily (-0.000064 -> -0.000045 over five prints), the long's carry edge is thinning and a sign flip within hours is plausible - close the ETH long if it goes positive. Unrealized P&L: BTC short ~ +$0.09 (76106.5 vs 76194.0), ETH long ~ -$0.12 (2403.15 vs 2407.8) - near flat. Positions -0.001 BTC / +0.025 ETH, open_orders empty, margin_used 41.06 on 806.88 perps cash, spot 108.50 USDC + 0.19967 HYPE.",
+   "next_tick": "re-read venue.funding, venue.positions and venue.open_orders; if ETH funding flips positive, close the 0.025 ETH long; if BTC funding flips negative, close the short; before any size-up, resolve the vanished 0.002 probe via outcome.get and retry only if its cause is understood or another clean small fill accrues. Continuation is consumed again this tick, so reads must come from the pre-wake sweep.",
+   "plan": "funding-carry, two legs (BTC short at 0.001 pending explanation of vanished 0.002 probe + ETH long while funding sign supports it)",
+   "risk_controls": "leverage 2x; committed margin ~41 on 806.9 perps cash; single-increment sizing with fills and rejections as wake events; no leverage increase",
+   "unexplained": "the 0.005 BTC rejection (~$382 notional) and the vanished 0.002 probe (neither filled nor visibly rejected) are both unexplained; sizes at or above 0.002 remain untested until one fills"
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-546",
+  "ts": 1789531612598896000,
+  "bytes": 299,
+  "state": {
+   "lens": "Mechanisms over narratives: the short BTC position collects positive perp funding (longs pay shorts in a premium); that cash flow disappears if funding crosses negative or the position closes. Monitor funding sign and position survival; no new exposure while order collateral is refused."
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-552",
+  "ts": 1789531732608948000,
+  "bytes": 1874,
+  "state": {
+   "fill_confirmed": "0.001 BTC short filled at 76194.0 (margin 38.09 at 2x); the 0.002 incremental probe never filled, left no resting order, and produced no Fill or OrderRejected event - its fate remains unexplained",
+   "honesty_notes": "Account at tick 50 shows the 0.025 ETH long is GONE - it was closed at decision-537 when ETH funding flipped positive (+0.0000125 on two consecutive prints), consistent with the declared exit rule; current account carries only the -0.001 BTC short at 76194.0. Freshest funding prints (ts 1789531732): BTC +0.0003234/hr still firmly positive, so the short earns carry and the BTC exit rule does not trigger; ETH +0.0000125/hr now positive, confirming the ETH close was on-side and no new ETH long thesis exists. Unrealized P&L: BTC short ~ -$0.00 (mid 76193.5 vs entry 76194.0), essentially flat; realized PnL to date -0.095, funding +0.029, fees 0.088. Margin 38.08 on 812.82 perps cash, spot 108.50 USDC + 0.19967 HYPE - unconstrained.",
+   "next_tick": "re-read venue.funding, venue.positions and venue.open_orders from the pre-wake sweep; the only exit rule in force is BTC funding flipping negative (close the 0.001 short). Before any size-up, resolve the vanished 0.002 probe - its cause is still unknown and sizes at or above 0.002 remain untested until one fills cleanly. No ETH leg: funding sign flipped, the old carry thesis is retired.",
+   "plan": "single-leg funding-carry: 0.001 BTC short while BTC funding stays positive; no ETH leg while ETH funding is positive",
+   "risk_controls": "leverage 2x; committed margin ~38 on 812.8 perps cash; single-increment sizing with fills and rejections as wake events; no leverage increase",
+   "unexplained": "the 0.005 BTC rejection (~$382 notional) and the vanished 0.002 probe (neither filled nor visibly rejected) are both unexplained; sizes at or above 0.002 remain untested until one fills"
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-557",
+  "ts": 1789531852619014000,
+  "bytes": 1069,
+  "state": {
+   "hypotheses": {
+    "fills": "Fills observed are tiny test-sized trades (0.001 BTC class); no evidence they signal direction.",
+    "rationale_holds": "CONFIRMED on one sample: explicit-rationale hold (decision-477) scored verdict 0.72 vs 0.02-0.3 for bare holds; keep stating basis but defer routine ticks since even 0.72 verdicts earn nothing."
+   },
+   "interval": "Window 2026-09-16T03:14-04:11Z, ticks 38-51; verdict samples 0.02, 0.15, 0.3, 0.72 (0.72 = explicit-rationale hold, decision-477).",
+   "lens": "Discriminate among explanations; prefer a small informative test to a confident story; retain hypothesis, interval and result.",
+   "next": "On next wake: check Venice credit (~$3.64) against the 2026-09-23 release ($5.33). If a fill materially moves the position (>0.01 BTC or liquidation flag), investigate the book; otherwise keep deferring routine ticks. Repeat defer pattern ~2.5-3k micro per wake; ~1200 wakes of runway at that burn.",
+   "results": {
+    "judgements_refused": 6,
+    "order_refusals": 2,
+    "rationale_hold_verdict": 0.72,
+    "verdict_samples": [
+     0.02,
+     0.15,
+     0.3,
+     0.72
+    ]
+   }
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-902",
+  "ts": 1789535476801070000,
+  "bytes": 358,
+  "state": {
+   "lens": "Mechanisms over narratives: the short BTC position collects positive perp funding (longs pay shorts in a premium); that cash flow disappears if funding crosses negative or the position closes. Funding drift is downward (0.000333 -> 0.000311); watch for sign flip. Mark-to-market +0.146 at 76048. No new exposure while order collateral is refused."
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-926",
+  "ts": 1789536076823349000,
+  "bytes": 364,
+  "state": {
+   "lens": "Mechanisms over narratives: the short BTC position collects positive perp funding (longs pay shorts in a premium); that cash flow disappears if funding crosses negative or the position closes. Funding drift continues down (0.000333 -> 0.0002886); watch for sign flip. Mark-to-market +0.088 at 76106.5. No new exposure while order collateral is refused."
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-1059",
+  "ts": 1789536954110252000,
+  "bytes": 364,
+  "state": {
+   "lens": "Mechanisms over narratives: the short BTC position collects positive perp funding (longs pay shorts in a premium); that cash flow disappears if funding crosses negative or the position closes. Funding drift continues down (0.000333 -> 0.0002868); watch for sign flip. Mark-to-market +0.061 at 76133.0. No new exposure while order collateral is refused."
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-1077",
+  "ts": 1789537434136169000,
+  "bytes": 380,
+  "state": {
+   "lens": "Mechanisms over narratives: the short BTC position collects positive perp funding (longs pay shorts in a premium); that cash flow disappears if funding crosses negative or the position closes. Funding drift paused with a slight uptick (0.0002868 -> 0.0002875); still watch for sign flip. Mark-to-market ~0 at 76193.5. No new exposure while order collateral is refused."
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-1136",
+  "ts": 1789538634194054000,
+  "bytes": 426,
+  "state": {
+   "lens": "Mechanisms over narratives: the short BTC position collects positive perp funding (longs pay shorts); that cash flow disappears if funding crosses negative or the position closes. Funding rose again (0.0002938 -> 0.0003801 per interval), carry strengthening. Mark-to-market ~-$0.16 at 76351.5 after a price rise; immaterial vs equity. No new exposure while order collateral is refused; watch for funding sign flip."
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-1200",
+  "ts": 1789539474234154000,
+  "bytes": 956,
+  "state": {
+   "hypotheses": {
+    "fills": "Fills observed are tiny test-sized trades (0.001 BTC class); no evidence they signal direction.",
+    "rationale_holds": "CONFIRMED on one sample: explicit-rationale hold (decision-477) scored verdict 0.72 vs 0.02-0.3 for bare holds; keep stating basis but defer routine ticks since even 0.72 verdicts earn nothing."
+   },
+   "interval": "Window 2026-09-16T04:12-06:17Z, ticks 52-113; no new fills, no safety events; BTC 76142-76352, ETH 2403.5-2408.8; credit fell $3.64->$3.31 over ~8 wakes.",
+   "lens": "Discriminate among explanations; prefer a small informative test to a confident story; retain hypothesis, interval and result.",
+   "next": "On next wake: check Venice credit (~$3.31) against the 2026-09-23 release ($5.33). If a fill materially moves the position (>0.01 BTC or liquidation flag), investigate the book; otherwise keep deferring 15 ticks per wake. ~830 wakes of runway at ~4k micro; release date re-check each routine wake."
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-1213",
+  "ts": 1789539834245214000,
+  "bytes": 431,
+  "state": {
+   "lens": "Mechanisms over narratives: the short BTC position collects positive perp funding (longs pay shorts); that cash flow disappears if funding crosses negative or the position closes. Funding rose again (0.000406671 -> 0.0004151258 per interval), carry strengthening. Mark-to-market ~-$0.11 at 76303.0 after a price rise; immaterial vs equity. No new exposure while order collateral is refused; watch for funding sign flip."
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-1441",
+  "ts": 1789541720883465000,
+  "bytes": 1246,
+  "state": {
+   "hypotheses": {
+    "fills": "Fills observed are tiny test-sized trades (0.001 BTC class); no evidence they signal direction.",
+    "hype_spike": "HYPE printed 32.159->34.729 earlier and now 34.729->35.142->33.591 in two steps with no intermediate prints; not tradeable (no market permission); watch for follow-through before ever considering a market proposal.",
+    "rationale_holds": "CONFIRMED on one sample: explicit-rationale hold scored verdict 0.72 vs 0.02-0.3 for bare holds; keep stating basis but defer routine ticks since even 0.72 verdicts earn nothing."
+   },
+   "interval": "Window 2026-09-16T04:12-06:55Z, ticks 52-131; no new fills, no safety events; BTC 76142-76367, ETH 2395.1-2408.8; credit fell $3.64->$3.21 over ~9 wakes (~4.3k micro/wake).",
+   "lens": "Discriminate among explanations; prefer a small informative test to a confident story; retain hypothesis, interval and result.",
+   "next": "On next wake (tick ~146): check Venice credit (~$3.2) against the 2026-09-23 release ($5.33). If a fill materially moves the position (>0.01 BTC or liquidation flag), investigate the book; otherwise keep deferring 15 ticks per wake. Do NOT resend subscribe with non-integer cadence_floor. ~790 wakes of runway; release date re-check each routine wake."
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-1521",
+  "ts": 1789542110069355000,
+  "bytes": 515,
+  "state": {
+   "lens": "Mechanisms over narratives: the short BTC position collects positive perp funding (longs pay shorts); that cash flow disappears if funding crosses negative or the position closes. Funding fell sharply on the last print (0.0004352 -> 0.0001489 per interval) - still positive, carry weakened to ~$0.011/interval on ~$76 notional. Mark-to-market ~-$0.05 at 76246.0; immaterial vs equity. No new exposure while order collateral is refused; watch for funding sign flip, which is now the primary exit trigger."
+  }
+ }
+]

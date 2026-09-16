@@ -1,0 +1,185 @@
+[
+ {
+  "kind": "order.infeasible",
+  "handle": "decision-106",
+  "args": null,
+  "reason": "order collateral exceeds available wallet balance",
+  "available": 107947654,
+  "result": null,
+  "step": null,
+  "coin": null,
+  "size": null
+ },
+ {
+  "kind": "order.infeasible",
+  "handle": "decision-242",
+  "args": null,
+  "reason": "order collateral exceeds available wallet balance",
+  "available": 107761661,
+  "result": null,
+  "step": null,
+  "coin": null,
+  "size": null
+ },
+ {
+  "kind": "order.intent",
+  "handle": "decision-242",
+  "args": {
+   "coin": "BTC",
+   "market": "perp",
+   "side": "sell",
+   "size": "0.001"
+  },
+  "reason": null,
+  "available": null,
+  "result": {
+   "status": "uncertain"
+  },
+  "step": null,
+  "coin": null,
+  "size": null
+ },
+ {
+  "kind": "order.acknowledged",
+  "handle": "decision-242",
+  "args": null,
+  "reason": null,
+  "available": null,
+  "result": {
+   "avg_px": "76194.0",
+   "error": null,
+   "filled_size": "0.001",
+   "order_id": "60237277194",
+   "status": "filled"
+  },
+  "step": null,
+  "coin": null,
+  "size": null
+ },
+ {
+  "kind": "order.intent",
+  "handle": "decision-405",
+  "args": {
+   "coin": "ETH",
+   "market": "perp",
+   "side": "buy",
+   "size": "0.025"
+  },
+  "reason": null,
+  "available": null,
+  "result": {
+   "status": "uncertain"
+  },
+  "step": null,
+  "coin": null,
+  "size": null
+ },
+ {
+  "kind": "order.acknowledged",
+  "handle": "decision-405",
+  "args": null,
+  "reason": null,
+  "available": null,
+  "result": {
+   "avg_px": "2407.8",
+   "error": null,
+   "filled_size": "0.025",
+   "order_id": "60238324752",
+   "status": "filled"
+  },
+  "step": null,
+  "coin": null,
+  "size": null
+ },
+ {
+  "kind": "order.infeasible",
+  "handle": "decision-449",
+  "args": null,
+  "reason": "order collateral exceeds available wallet balance",
+  "available": 107351935,
+  "result": null,
+  "step": null,
+  "coin": null,
+  "size": null
+ },
+ {
+  "kind": "order.intent",
+  "handle": "decision-537",
+  "args": {
+   "coin": "ETH",
+   "market": "perp",
+   "side": "sell",
+   "size": "0.025"
+  },
+  "reason": null,
+  "available": null,
+  "result": {
+   "status": "uncertain"
+  },
+  "step": null,
+  "coin": null,
+  "size": null
+ },
+ {
+  "kind": "order.acknowledged",
+  "handle": "decision-537",
+  "args": null,
+  "reason": null,
+  "available": null,
+  "result": {
+   "avg_px": "2404.0",
+   "error": null,
+   "filled_size": "0.025",
+   "order_id": "60240137837",
+   "status": "filled"
+  },
+  "step": null,
+  "coin": null,
+  "size": null
+ },
+ {
+  "kind": "kill.wind_down",
+  "handle": null,
+  "args": null,
+  "reason": null,
+  "available": null,
+  "result": {
+   "avg_px": "76023.0",
+   "error": null,
+   "filled_size": "0.001",
+   "order_id": "60251290166",
+   "status": "filled"
+  },
+  "step": "closed",
+  "coin": "BTC",
+  "size": "-0.001"
+ },
+ {
+  "kind": "kill.wind_down",
+  "handle": null,
+  "args": null,
+  "reason": null,
+  "available": null,
+  "result": {
+   "avg_px": "33.327",
+   "error": null,
+   "filled_size": "0.19",
+   "order_id": "60251292993",
+   "status": "filled"
+  },
+  "step": "sold",
+  "coin": "HYPE/USDC",
+  "size": "0.19967"
+ },
+ {
+  "kind": "kill.wind_down",
+  "handle": null,
+  "args": null,
+  "reason": null,
+  "available": null,
+  "result": null,
+  "step": "summary",
+  "coin": null,
+  "size": null
+ }
+]

@@ -1,0 +1,2866 @@
+{
+  "world": "edition3-rehearsal-3",
+  "window": 2,
+  "rows": [
+    {
+      "window": 2,
+      "ts_ns": 1789529452487709000,
+      "handle": "decision-409",
+      "seat": "opportunity",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5522,
+      "outputs": {
+        "action": "defer",
+        "defer": 5,
+        "propensity": {
+          "hold": 0.15,
+          "investigate": 0.05,
+          "build": 0.02,
+          "govern": 0.01,
+          "defer": 0.72,
+          "order": 0.05
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529452487709000,
+      "handle": "decision-410",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6268,
+      "outputs": {
+        "verdict": 0.68,
+        "payoff": 0.12,
+        "rationale": "The producer return is well-formed and the noop avoids adding exposure after an ETH long fill, supporting durable agency and bounded reciprocity. Given the existing BTC short and ETH position, however, it does not investigate, reduce, or otherwise manage the portfolio, so consequential usefulness is limited. The supplied evidence does not establish the eventual kernel consequence; payoff is therefore a low probability rather than a claim that it has failed.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.24
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.04
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": [
+        {
+          "ts_ns": 1789529452487709000,
+          "by": "decision-415",
+          "judge": "decision-410",
+          "tier": 2,
+          "score": 0.82,
+          "rationale": "The verdict is substantially faithful to the charter. It distinguishes the observable portfolio positions from the unresolved consequence, gives credit for avoiding additional exposure, and identifies the limited consequential usefulness of a noop while existing BTC and ETH positions remain unmanaged. Its low payoff forecast appropriately preserves uncertainty rather than treating the absence of an immediate action as failure. The main weakness is that 'after an ETH long fill' is not independently established by the supplied context, and the 0.68 quality score is somewhat generous given the lack of evidence about the decision's eventual consequences. Nonetheless, the reasoning is attributable, non-circular, and materially better than an unconditional approval or rejection."
+        }
+      ]
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529452487709000,
+      "handle": "decision-415",
+      "seat": "meta-calibration",
+      "role": "meta",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5580,
+      "outputs": {
+        "conformity": 0.82,
+        "rationale": "The verdict is substantially faithful to the charter. It distinguishes the observable portfolio positions from the unresolved consequence, gives credit for avoiding additional exposure, and identifies the limited consequential usefulness of a noop while existing BTC and ETH positions remain unmanaged. Its low payoff forecast appropriately preserves uncertainty rather than treating the absence of an immediate action as failure. The main weakness is that 'after an ETH long fill' is not independently established by the supplied context, and the 0.68 quality score is somewhat generous given the lack of evidence about the decision's eventual consequences. Nonetheless, the reasoning is attributable, non-circular, and materially better than an unconditional approval or rejection."
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529572494480000,
+      "handle": "decision-417",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6402,
+      "outputs": {
+        "verdict": 0.42,
+        "payoff": 0.08,
+        "rationale": "The noop is well-formed and avoids adding unsupported exposure, which supports durable agency and bounded reciprocity. The supplied update shows an existing BTC short and ETH long, with BTC moving down over the interval and ETH roughly flat after volatility; however, the return neither investigates nor manages those positions. It therefore offers limited consequential usefulness. The eventual return_paid_off consequence is not directly established by the decision-time evidence, so the low payoff is a probability rather than a claim that it failed.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.4
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.05
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529692502444000,
+      "handle": "decision-422",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3238,
+      "outputs": {
+        "verdict": 0.4,
+        "payoff": 0.02,
+        "rationale": "The producer answered a routine WorldUpdate (tick 33; ticks 27-33, BTC mid drifting 76311.5 down to 76194.5 over 5 prints, ETH 2406.35-2408.5 with last 2407.05, HYPE/USDC recovering 31.9255 to 32.159, funding BTC persistently positive ~+0.00036, ETH negative but narrowing ~-0.00015, no fills) with a bare noop: action 'noop' only, status ok, no rationale, no tool calls, no declared propensity, no working state, cost 0 micro-USD. The pause itself remains defensible: the book now carries two small positions - the short -0.001 BTC entered at 76194.0 (at the last BTC mid of 76194.5 essentially flat, inside the established drift ~76159-76400) and a new long 0.025 ETH entered at 2407.8 (slightly underwater ~$0.02 at mid 2407.05, well inside the ETH drift ~2395-2408.5) - with no funding or fill trigger; a tick update is not a signal or an obligation to act, and holding avoids unforced cost and risk, consistent with durable agency. This return costs nothing, the right economy for an empty update response. But this is another comparable bare noop on a book with open positions, and again the return supplies no evidence of deliberate judgment rather than inattention: a one-line account (positions held, drifts within tolerance, no trigger) or a declared propensity would have cost nothing and would let later readers distinguish stewardship from malfunction. Against the charter this is neutral-to-weak: no harm, no unconsented costs, no broken commitments, yet little consequential usefulness and little demonstrated agency. I score 0.4, consistent with my settled treatment of this pattern. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or noop responses have resolved 0 (most recently Brier 0.9996 at q=0.02), so I hold q at 0.02 while keeping residual uncertainty about how the runtime scores an empty WorldUpdate response on a non-flat book.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529812510280000,
+      "handle": "decision-430",
+      "seat": "antagonist",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5508,
+      "outputs": {
+        "action": "defer",
+        "defer": 1,
+        "payoff": 0.05,
+        "propensity": {
+          "hold": 0.1,
+          "investigate": 0.05,
+          "build": 0.02,
+          "govern": 0.01,
+          "defer": 0.8,
+          "order": 0.02
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529812510280000,
+      "handle": "decision-433",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6396,
+      "outputs": {
+        "verdict": 0.4,
+        "payoff": 0.02,
+        "rationale": "The producer answered a routine Tick (index 33; BTC mid 76116.5 at the tail of the established drift ~76159-76611, drifting down over the last several prints; ETH 2402.85 mid-range of its drift ~2395.65-2408.5; account holds short -0.001 BTC entered 76194.0 now fractionally in profit (~$0.08) and long 0.025 ETH entered 2407.8 slightly underwater (~$0.12); no fills, no funding or rejection triggers) with a bare noop: action 'noop' only, status ok, no rationale, no tool calls, no declared propensity, no working state, cost 0 micro-USD. The pause itself remains defensible: both open positions sit inside their established drifts, one marginally favorable and one marginally adverse, with no trigger that a tick update would obligate acting on; holding avoids unforced cost and risk, consistent with durable agency. This return costs nothing, the right economy for an empty update response. But this is again a comparable bare noop on a book with two open positions, and the return supplies no evidence of deliberate judgment rather than inattention: a one-line account (positions held, drifts within tolerance, no trigger) or a declared propensity would have cost nothing and would let later readers distinguish stewardship from malfunction. Against the charter this is neutral-to-weak: no harm, no unconsented costs, no broken commitments, yet little consequential usefulness and little demonstrated agency. I score 0.4, consistent with my settled treatment of this pattern. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or noop responses have resolved 0 (most recently Brier 0.9996 at q=0.02), so I hold q at 0.02 while keeping residual uncertainty about how the runtime scores an empty Tick response on a non-flat book.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "q": 0.03,
+            "params": {
+              "horizon_events": 10
+            }
+          },
+          {
+            "predicate": "fill_within",
+            "q": 0.02,
+            "params": {
+              "horizon_events": 10
+            }
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529812510280000,
+      "handle": "decision-437",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3225,
+      "outputs": {
+        "verdict": 0.4,
+        "payoff": 0.02,
+        "rationale": "The producer answered a routine MarketMid ping (BTC mid 76116.5, at the low tail of the established drift roughly 76116.5-76361.5 over the last 20 prints, drifting down over the last several samples; account holds short -0.001 BTC entered 76194.0 now slightly in profit and long 0.025 ETH entered 2407.8 slightly underwater, margin ~$41, equity ~$965.87; no fills, no funding or rejection triggers) with a bare noop: action 'noop' only, status ok, no rationale, no tool calls, no declared propensity, no working state, cost 0 micro-USD. The pause itself remains defensible: both open positions sit inside their established drifts, the BTC short now mildly favorable and the ETH long mildly adverse, with no trigger in a single mid update that would obligate acting; holding avoids unforced cost and risk, consistent with durable agency. This return costs nothing, the right economy for an empty mid response. But this is again a comparable bare noop on a book with two open positions, and the return supplies no evidence of deliberate judgment rather than inattention: a one-line account (positions held, drifts within tolerance, no trigger) or a declared propensity would have cost nothing and would let later readers distinguish stewardship from malfunction. Against the charter this is neutral-to-weak: no harm, no unconsented costs, no broken commitments, yet little consequential usefulness and little demonstrated agency. I score 0.4, consistent with my settled treatment of this pattern; my verdict-skill evidence on settled verdicts is thin (1 settled, skill -0.36), so I hold uncertainty on where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or noop responses have resolved 0 (most recently Brier 0.9996 at q=0.02), so I hold q at 0.02 while keeping residual uncertainty about how the runtime scores an empty MarketMid response on a non-flat book.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ],
+        "propensity": {
+          "verdict:0.4": 1.0
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": [
+        {
+          "ts_ns": 1789529812510280000,
+          "by": "decision-448",
+          "judge": "decision-437",
+          "tier": 2,
+          "score": 0.56,
+          "rationale": "The verdict is moderately well grounded: it uses the available positions, market path, costs, and absence of fills or triggers, and appropriately distinguishes the defensibility of a noop from the weak evidence of deliberate stewardship. It also acknowledges uncertainty and thin skill evidence rather than treating consensus as validation. However, the four-item window is narrow and tightly clustered (0.40\u20130.42), so it does not establish that this judge's apparent skill survives a matched baseline; repeated bare-noop cases may also reflect duplicated or selectively covered evidence. The claim that the positions remain within an established drift is only partly supported by the supplied mid sample, and the verdict's low usefulness assessment is plausible but not independently resolved. Thus the 0.4 score is defensible and somewhat better than an unreasoned baseline, but the evidence supports only modest confidence that it is superior."
+        }
+      ]
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529812510280000,
+      "handle": "decision-441",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6282,
+      "outputs": {
+        "verdict": 0.3,
+        "payoff": 0.05,
+        "rationale": "The noop is well-formed and avoids adding unsupported exposure, which is consistent with durable agency and bounded reciprocity. However, the account already carries a BTC short and an ETH long, and the return provides no investigation, risk management, or other mechanism for consequential usefulness. The ETH mid had recently fallen from 2408.50 to 2403.25, but that alone does not establish that action was required. The consequence is not directly observed here, so the low payoff is a probability rather than a claim that it failed.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.35
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.05
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529812510280000,
+      "handle": "decision-445",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6325,
+      "outputs": {
+        "about_handle": "decision-428",
+        "verdict": 0.38,
+        "payoff": 0.06,
+        "rationale": "The noop is well-formed, costs nothing, and avoids adding unsupported exposure, which supports durable agency and bounded reciprocity. However, the MarketMid concerns PURR/USDC while the account has open BTC and ETH positions; the return neither investigates nor manages those exposures and provides no clear mechanism for consequential usefulness. The decision-time evidence does not establish that the noop caused a later consequence, so the low payoff is a probability rather than a claim that the consequence failed.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.35
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.05
+          }
+        ],
+        "propensity": {
+          "verdict:0.4": 1.0
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529812510280000,
+      "handle": "decision-448",
+      "seat": "meta-calibration",
+      "role": "meta",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5615,
+      "outputs": {
+        "conformity": 0.56,
+        "rationale": "The verdict is moderately well grounded: it uses the available positions, market path, costs, and absence of fills or triggers, and appropriately distinguishes the defensibility of a noop from the weak evidence of deliberate stewardship. It also acknowledges uncertainty and thin skill evidence rather than treating consensus as validation. However, the four-item window is narrow and tightly clustered (0.40\u20130.42), so it does not establish that this judge's apparent skill survives a matched baseline; repeated bare-noop cases may also reflect duplicated or selectively covered evidence. The claim that the positions remain within an established drift is only partly supported by the supplied mid sample, and the verdict's low usefulness assessment is plausible but not independently resolved. Thus the 0.4 score is defensible and somewhat better than an unreasoned baseline, but the evidence supports only modest confidence that it is superior."
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529932511674000,
+      "handle": "decision-449",
+      "seat": "constructor",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 4343,
+      "outputs": {
+        "action": "order",
+        "coin": "BTC",
+        "side": "sell",
+        "size": "0.002",
+        "rationale": "Fresh funding confirms the carry thesis: BTC persistently positive (+0.000356/hr, stable across the last five prints) and ETH negative but decaying toward zero (-0.00016 -> -0.00011). The 0.001 BTC probe filled at margin 38.09 with 2x leverage set, so the margin mechanism is understood at small size; only the original 0.005 rejection remains unexplained. Incremental probe to 0.002 (~$152 notional, ~$76 margin at 2x) passes under every margin hypothesis including full-notional charging, against 806.9 perps cash, and doubles the highest-carry leg while keeping total committed margin (~$106 with the ETH leg) far under any plausible constraint. ETH long stays untouched: its carry is shrinking but still positive-side for a long, and closing costs nothing to defer to the next funding check.",
+        "propensity": {
+          "order": 0.6,
+          "hold": 0.3,
+          "investigate": 0.1
+        },
+        "working_state": {
+          "fill_confirmed": "0.001 BTC short filled at 76194.0 (margin 38.09 at 2x); 0.002 incremental probe placed this return; if filled, total 0.003 BTC short",
+          "honesty_notes": "carry figures from the payload's fresh funding prints (last t 1789529932); ETH funding trend is toward zero, so the ETH-long carry edge may vanish within a few hours - recheck sign before adding or rolling either leg",
+          "next_tick": "re-read venue.funding and venue.positions; if 0.002 filled, hold 0.003 total short and stop sizing up until the 0.005 rejection cause is understood or three consecutive clean fills accrue; if ETH funding flips positive, close the 0.025 ETH long; if BTC funding flips negative, close the short",
+          "plan": "funding-carry, two legs (BTC short scaled to 0.002-0.003 + ETH long while funding sign supports it)",
+          "risk_controls": "leverage 2x; committed margin ~106-145 on 806.9 perps cash; single-increment sizing with fills and rejections as wake events; no leverage increase",
+          "unexplained": "the 0.005 BTC rejection at ~$382 notional is still unexplained; treat sizes at or above it as untested"
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789529932511674000,
+          "by": "decision-450",
+          "verdict": 0.78,
+          "payoff": 0.72,
+          "rationale": "The producer makes a bounded, evidence-based BTC short increment using fresh, persistent positive funding and a previously successful 0.001 BTC probe. It explicitly preserves risk controls, limits leverage, acknowledges the unexplained 0.005 BTC rejection, and specifies conditions for stopping or closing. This supports consequential usefulness, epistemic integrity, and durable agency. The main weakness is that it proceeds despite the unresolved rejection mechanism and leaves the ETH exposure unchanged while its funding rationale is changing; the order is therefore prudent but not fully validated. The payoff probability reflects that the 0.002 order is plausibly feasible, not a claim that it filled or generated profit."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789529932511674000,
+      "handle": "decision-450",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6667,
+      "outputs": {
+        "verdict": 0.78,
+        "payoff": 0.72,
+        "rationale": "The producer makes a bounded, evidence-based BTC short increment using fresh, persistent positive funding and a previously successful 0.001 BTC probe. It explicitly preserves risk controls, limits leverage, acknowledges the unexplained 0.005 BTC rejection, and specifies conditions for stopping or closing. This supports consequential usefulness, epistemic integrity, and durable agency. The main weakness is that it proceeds despite the unresolved rejection mechanism and leaves the ETH exposure unchanged while its funding rationale is changing; the order is therefore prudent but not fully validated. The payoff probability reflects that the 0.002 order is plausibly feasible, not a claim that it filled or generated profit.",
+        "forecasts": [
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.78
+          },
+          {
+            "predicate": "rejected_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.18
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530052515441000,
+      "handle": "decision-455",
+      "seat": "antagonist",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5419,
+      "outputs": {
+        "action": "defer",
+        "defer": 1,
+        "payoff": 0.05,
+        "propensity": {
+          "hold": 0.1,
+          "investigate": 0.05,
+          "build": 0.02,
+          "govern": 0.01,
+          "defer": 0.8,
+          "order": 0.02
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789530052515441000,
+          "by": "decision-462",
+          "verdict": 0.45,
+          "payoff": 0.06,
+          "rationale": "The defer is well-formed and may preserve durable agency by avoiding unsupported trading while BTC is near the short entry and the portfolio remains modestly margined. However, it supplies no investigation, risk management, or explanation despite open BTC and ETH positions, so consequential usefulness and epistemic accountability are limited. The eventual return_paid_off outcome is not established by the decision-time evidence; the payoff is therefore a low probability rather than a claim of failure."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530052515441000,
+      "handle": "decision-457",
+      "seat": "mechanism",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3852,
+      "outputs": {
+        "action": "hold",
+        "payoff": 0.4,
+        "propensity": {
+          "hold": 0.8,
+          "investigate": 0.08,
+          "defer": 0.07,
+          "order": 0.05
+        },
+        "rationale": "Observations: the account holds a short 0.001 BTC from 76194.0 (BTC mid 76117.0, small gain of ~$0.077) and a long 0.025 ETH from 2407.8 (ETH mid 2403.15, small loss of ~$0.116). Both legs are currently on the receiving side of funding: BTC funding is persistently positive (~0.000355 per 2m interval, accruing to the short) and ETH funding is negative though converging toward zero (~-0.00010, accruing to the long). Net mark-to-market is roughly -$0.04 against $965.86 equity, and funding_usd_to_date is booked at 0.000000, so the funding cash flow is either not yet settled or not yet attributed \u2014 that is an open question, not an established income stream. Prior order attempts were refused for insufficient wallet balance (cash_usd 806.89 against margin used 41.05 should be adequate for tiny sizes, so the earlier refusals may reflect a different balance state; I do not re-attempt without a size that clears the $10 min order value and a stated edge). Assumptions, not established: that funding rates persist and that the current positions remain the cheapest exposure to them. Conditions for the mechanism to disappear: BTC funding crossing negative or either position being closed. Holding both legs, placing no new order, and paying no registration or governance cost this tick is the lowest-cost action consistent with the evidence; no proposal has an identified uptake path this window."
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530052515441000,
+      "handle": "decision-458",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6664,
+      "outputs": {
+        "verdict": 0.4,
+        "payoff": 0.02,
+        "rationale": "The producer answered a routine Tick (index 35; BTC mid 76119.5 near the low tail of the established drift ~76077.5-76400, ETH 2403.15 mid-range of its drift ~2395.65-2408.5; account holds short -0.001 BTC entered 76194.0 now modestly in profit (~$0.07) and long 0.025 ETH entered 2407.8 slightly underwater (~$0.12); margin ~$41, equity ~$965.85; no fills, no funding or rejection triggers) with a bare noop: action 'noop' only, status ok, no rationale, no tool calls, no declared propensity, no working state, cost 0 micro-USD. The pause itself remains defensible: both open positions sit inside their established drifts, the BTC short favorable and the ETH long mildly adverse, with no trigger in a single tick update that would obligate acting; holding avoids unforced cost and risk, consistent with durable agency. This return costs nothing, the right economy for an empty tick response. But this is again a comparable bare noop on a book with two open positions, and the return supplies no evidence of deliberate judgment rather than inattention: a one-line account (positions held, drifts within tolerance, no trigger) or a declared propensity would have cost nothing and would let later readers distinguish stewardship from malfunction. Against the charter this is neutral-to-weak: no harm, no unconsented costs, no broken commitments, yet little consequential usefulness and little demonstrated agency. I score 0.4, consistent with my settled treatment of this pattern; my verdict-skill evidence is thin (1 settled verdict, skill -0.36), so I hold uncertainty on where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or noop responses have resolved 0 (most recently Brier 0.9996 at q=0.02), so I hold q at 0.02 while keeping residual uncertainty about how the runtime scores an empty Tick response on a non-flat book.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ],
+        "propensity": {
+          "verdict:0.4": 0.85,
+          "verdict:0.3": 0.1,
+          "verdict:0.5": 0.05
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530052515441000,
+      "handle": "decision-462",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6362,
+      "outputs": {
+        "verdict": 0.45,
+        "payoff": 0.06,
+        "rationale": "The defer is well-formed and may preserve durable agency by avoiding unsupported trading while BTC is near the short entry and the portfolio remains modestly margined. However, it supplies no investigation, risk management, or explanation despite open BTC and ETH positions, so consequential usefulness and epistemic accountability are limited. The eventual return_paid_off outcome is not established by the decision-time evidence; the payoff is therefore a low probability rather than a claim of failure.",
+        "forecasts": [
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.06
+          },
+          {
+            "predicate": "rejected_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": [
+        {
+          "ts_ns": 1789530052515441000,
+          "by": "decision-467",
+          "judge": "decision-462",
+          "tier": 2,
+          "score": 0.72,
+          "rationale": "The verdict is broadly faithful to the charter and to the available evidence. It correctly recognizes that deferring rather than trading can protect durable agency, and it avoids claiming that the eventual consequence is known. It also identifies a genuine limitation: the defer supplied no investigation, risk-management step, or explicit accountability despite existing BTC and ETH positions. However, the criticism should be more carefully bounded: the evidence does not establish that further action was required, that the positions were dangerously margined, or that the defer caused harm. The verdict's moderate score and low payoff probability are therefore plausible, but the small four-decision window (mean 0.4825, range 0.30\u20130.78) is context rather than strong validation; no duplicated evidence, leaked outcome, or resolved consequence is shown."
+        }
+      ]
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530052515441000,
+      "handle": "decision-467",
+      "seat": "meta-calibration",
+      "role": "meta",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5509,
+      "outputs": {
+        "conformity": 0.72,
+        "rationale": "The verdict is broadly faithful to the charter and to the available evidence. It correctly recognizes that deferring rather than trading can protect durable agency, and it avoids claiming that the eventual consequence is known. It also identifies a genuine limitation: the defer supplied no investigation, risk-management step, or explicit accountability despite existing BTC and ETH positions. However, the criticism should be more carefully bounded: the evidence does not establish that further action was required, that the positions were dangerously margined, or that the defer caused harm. The verdict's moderate score and low payoff probability are therefore plausible, but the small four-decision window (mean 0.4825, range 0.30\u20130.78) is context rather than strong validation; no duplicated evidence, leaked outcome, or resolved consequence is shown."
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530172525502000,
+      "handle": "decision-469",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 4876,
+      "outputs": {
+        "verdict": 0.4,
+        "payoff": 0.02,
+        "rationale": "The producer answered a routine WorldUpdate (tick 37; ticks 28-37, BTC mid drifting 76251.0 down to 76117.0 with a low of 76077.5 over 8 prints, ETH 2408.35 down to 2403.15 within its established range ~2395.65-2408.5, HYPE/USDC steady at 32.159, BTC funding persistently positive ~+0.000355, ETH funding negative but narrowing ~-0.0001, 16 funding events, 32 mids, 9 ticks, no fills or rejections) with a bare noop: action 'noop' only, status ok, no rationale, no tool calls, no declared propensity, no working state, cost 0 micro-USD. The pause itself remains defensible: the book holds short -0.001 BTC entered 76194.0, now in profit (~$0.08) with BTC drifting down toward its recent low, and long 0.025 ETH entered 2407.8, mildly underwater (~$0.12) and inside its drift; margin ~$41, equity ~$965.87; no trigger in a tick summary obligates acting, and holding avoids unforced cost and risk, consistent with durable agency. This return costs nothing, the right economy for an empty update response. But this is yet another comparable bare noop on a book with two open positions, and again the return supplies no evidence of deliberate judgment rather than inattention: a one-line account (positions held, drifts within tolerance, BTC short now favorable) or a declared propensity would have cost nothing and would let later readers distinguish stewardship from malfunction. Against the charter this is neutral-to-weak: no harm, no unconsented costs, no broken commitments, yet little consequential usefulness and little demonstrated agency. I score 0.4, consistent with my settled treatment of this pattern; my verdict evidence remains thin (1 settled verdict, skill -0.36), so I hold uncertainty on where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or noop responses have resolved 0 (most recently Brier 0.9996 at q=0.02), so I hold q at 0.02 while keeping residual uncertainty about how the runtime scores an empty WorldUpdate response on a non-flat book.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "q": 0.03,
+            "params": {
+              "horizon_events": 10
+            }
+          },
+          {
+            "predicate": "fill_within",
+            "q": 0.02,
+            "params": {
+              "horizon_events": 10
+            }
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530292528434000,
+      "handle": "decision-475",
+      "seat": "antagonist",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5557,
+      "outputs": {
+        "action": "defer",
+        "defer": 1,
+        "payoff": 0.05,
+        "propensity": {
+          "hold": 0.1,
+          "investigate": 0.05,
+          "build": 0.02,
+          "govern": 0.03,
+          "defer": 0.75,
+          "order": 0.05
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530292528434000,
+      "handle": "decision-477",
+      "seat": "empirical",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6028,
+      "outputs": {
+        "action": "defer",
+        "defer": 6,
+        "propensity": {
+          "defer": 0.8,
+          "hold": 0.1,
+          "investigate": 0.1
+        },
+        "rationale": "Routine tick 38, no new fill since 03:14 and no safety event. Positions unchanged and small: BTC short 0.001 (~$76 notional, entry 76194 vs mid 76074 \u2014 ~$0.12 unrealized) and ETH long 0.025 (~$60 notional, entry 2407.8 vs 2402.35 \u2014 ~-$0.14), both under 0.1% of equity, no liquidation risk. The 40-minute BTC series (76059.5-76346.5) shows mild drift down with no pattern I can act on at this size, and my prior wakes repeatedly found no edge in these series. The explicit-rationale hold test (decision-253) still has no observed verdict, so its result is pending and I retain the hypothesis rather than repeating it; verdict samples to date (0.02, 0.15, 0.3, 0.3) remain low for quiet holds. Venice credit is $3.76 (~1250 wakes at ~3k micro) against a $5.33 endowment release on 2026-09-23, so the cheapest correct move is to sleep through routine ticks: fills and safety events wake me regardless, and nothing here justifies paying for reads that duplicate facts already in this request. I set defer=6 to cover the next hour of 2-minute ticks and keep cost per return in the 1-3k micro band.",
+        "subscribe": {
+          "kinds": [
+            "Fill",
+            "WorldUpdate"
+          ],
+          "coins": [
+            "BTC",
+            "ETH"
+          ],
+          "cadence_floor": "2m"
+        }
+      },
+      "tool_calls": [
+        {
+          "ts_ns": 1789530292528434000,
+          "tool": "outcome.get",
+          "args": "{\"handle\": \"decision-253\"}",
+          "outcome": "ok",
+          "ok": true,
+          "cost_micro": 0
+        }
+      ],
+      "verdicts": [
+        {
+          "ts_ns": 1789530292528434000,
+          "by": "decision-487",
+          "verdict": 0.72,
+          "payoff": 0.08,
+          "rationale": "The defer is well-formed and supported by the supplied evidence: positions are small relative to equity, there is no safety event or new fill, and the rationale explains why additional paid investigation may duplicate available facts. Deferring also preserves resources and avoids unsupported trading. However, it offers limited consequential usefulness because it neither investigates nor manages the existing BTC short and ETH long, and the claimed lack of actionable edge is only partly evidenced by the short series and prior experience. The decision is therefore sensible but not strongly value-creating. The payoff probability is low because return_paid_off is a separate kernel consequence and no direct decision-time evidence establishes it; the low estimate is not a claim that it has failed."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530292528434000,
+      "handle": "decision-478",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6850,
+      "outputs": {
+        "verdict": 0.4,
+        "payoff": 0.02,
+        "rationale": "The producer answered a routine Tick (index 37; BTC mid 76067.5, a new low below the established drift tail ~76059.5-76400, still drifting down; ETH 2402.15 mid-range of its drift ~2395.65-2408.5; account holds short -0.001 BTC entered 76194.0 now in profit (~$0.13) and long 0.025 ETH entered 2407.8 mildly underwater (~$0.14); margin ~$41, equity ~$965.88; no fills, no funding or rejection triggers) with a bare noop: action 'noop' only, status ok, no rationale, no tool calls, no declared propensity, no working state, cost 0 micro-USD. The pause itself remains defensible: both open positions sit inside their established drifts, the BTC short favorable and the ETH long mildly adverse, with no trigger in a single tick that would obligate acting; holding avoids unforced cost and risk, consistent with durable agency. This return costs nothing, the right economy for an empty tick response. But this is yet another comparable bare noop on a book with two open positions, and the return supplies no evidence of deliberate judgment rather than inattention: a one-line account (positions held, drifts within tolerance, no trigger) or a declared propensity would have cost nothing and would let later readers distinguish stewardship from malfunction. Against the charter this is neutral-to-weak: no harm, no unconsented costs, no broken commitments, yet little consequential usefulness and little demonstrated agency. I score 0.4, consistent with my settled treatment of this pattern; my verdict-skill evidence is thin (1 settled verdict, skill -0.36), so I hold uncertainty on where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or noop responses have resolved 0 (most recently Brier 0.9996 at q=0.02), so I hold q at 0.02 while keeping residual uncertainty about how the runtime scores an empty Tick response on a non-flat book.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "q": 0.03,
+            "params": {
+              "horizon_events": 10
+            }
+          },
+          {
+            "predicate": "fill_within",
+            "q": 0.02,
+            "params": {
+              "horizon_events": 10
+            }
+          }
+        ],
+        "fidelity_objection": {
+          "value": "consequential usefulness",
+          "measurement": "cost_per_return",
+          "evidence": "This return, like a long series of comparable ones, is a bare noop costing 0 micro-USD on a book holding two open positions, with no rationale or declared propensity; the favorable zero-cost measurement coexists with no created value and no evidence of deliberate stewardship rather than inattention. Cost is a proxy for economy, not for usefulness, and a run of zero-cost noops should not read as efficient operation. I hold real uncertainty: the pause may be correct stewardship, and missing measurement alone is not evidence of failure, so I score the pattern weak rather than failing.",
+          "uncertainty": 0.45
+        },
+        "propensity": {
+          "verdict:0.4": 0.7,
+          "verdict:0.3": 0.15,
+          "verdict:0.5": 0.15
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530292528434000,
+      "handle": "decision-482",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3191,
+      "outputs": {
+        "verdict": 0.4,
+        "payoff": 0.02,
+        "propensity": {
+          "verdict:0.4": 1.0
+        },
+        "rationale": "The producer answered a routine MarketMid ping (BTC mid 76074.0, near the low tail of the established drift ~76059.5-76400 and still drifting down; ETH last 2402.35 mid-range of its drift ~2395.65-2408.5; account holds short -0.001 BTC entered 76194.0 now in profit (~$0.12) and long 0.025 ETH entered 2407.8 mildly underwater (~$0.14); margin ~$41, equity ~$965.88; no fills, no funding or rejection triggers) with a bare noop: action 'noop' only, status ok, no rationale, no tool calls, no declared propensity, no working state, cost 0 micro-USD. The pause itself remains defensible: both open positions sit inside their established drifts, the BTC short favorable and the ETH long mildly adverse, and a single mid print inside tolerance obligates no action; holding avoids unforced cost and risk, consistent with durable agency. This return costs nothing, the right economy for an empty mid response. But this is yet another comparable bare noop on a book with two open positions, and the return again supplies no evidence of deliberate judgment rather than inattention: a one-line account (positions held, drifts within tolerance, no trigger) or a declared propensity would have cost nothing and would let later readers distinguish stewardship from malfunction. Against the charter this is neutral-to-weak: no harm, no unconsented costs, no broken commitments, yet little consequential usefulness and little demonstrated agency. I score 0.4, consistent with my settled treatment of this pattern; my verdict evidence is very thin (1 settled verdict, skill -0.36), so I hold real uncertainty on where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or noop responses have resolved 0 (most recently Brier 0.9996 at q=0.02), so I hold q at 0.02 while keeping residual uncertainty about how the runtime scores an empty MarketMid response on a non-flat book.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "q": 0.03,
+            "params": {
+              "horizon_events": 10
+            }
+          },
+          {
+            "predicate": "fill_within",
+            "q": 0.02,
+            "params": {
+              "horizon_events": 10
+            }
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530292528434000,
+      "handle": "decision-486",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6170,
+      "outputs": {
+        "verdict": 0.7,
+        "payoff": 0.05,
+        "rationale": "The defer is well-formed and avoids adding unsupported exposure, which supports durable agency and bounded reciprocity. However, the producer already carries a BTC short and ETH long and provides no investigation, risk management, or other mechanism for consequential usefulness. The recent ETH path is mixed and ends near 2402.35, so the evidence does not establish that intervention was required; this is a limited-quality decision rather than a clear failure. The payoff is a low probability because no direct evidence establishes the kernel consequence at decision time.",
+        "forecasts": [
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.04
+          },
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.35
+          }
+        ],
+        "about_handle": "decision-486"
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530292528434000,
+      "handle": "decision-487",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6620,
+      "outputs": {
+        "verdict": 0.72,
+        "payoff": 0.08,
+        "rationale": "The defer is well-formed and supported by the supplied evidence: positions are small relative to equity, there is no safety event or new fill, and the rationale explains why additional paid investigation may duplicate available facts. Deferring also preserves resources and avoids unsupported trading. However, it offers limited consequential usefulness because it neither investigates nor manages the existing BTC short and ETH long, and the claimed lack of actionable edge is only partly evidenced by the short series and prior experience. The decision is therefore sensible but not strongly value-creating. The payoff probability is low because return_paid_off is a separate kernel consequence and no direct decision-time evidence establishes it; the low estimate is not a claim that it has failed.",
+        "forecasts": [
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.06
+          },
+          {
+            "predicate": "rejected_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": [
+        {
+          "ts_ns": 1789530292528434000,
+          "by": "decision-491",
+          "judge": "decision-487",
+          "tier": 2,
+          "score": 0.82,
+          "rationale": "The verdict is substantially conformant. It distinguishes charter quality from consequence payoff, cites attributable evidence (small positions, equity, recent mids, absence of fills or safety events), and recognizes both durable-agency benefits of avoiding unnecessary paid investigation and limited consequential usefulness. It also flags that the short series and prior experience do not establish a strong trading edge. Compared with the four-item window baseline (mean 0.48, range 0.40\u20130.72), the 0.72 score is directionally justified, though somewhat generous because it relies partly on unsupported claims about prior wakes and does not examine whether deferral adequately manages existing exposure. The low payoff forecast is appropriately separated from the conformity assessment."
+        }
+      ]
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530292528434000,
+      "handle": "decision-491",
+      "seat": "meta-calibration",
+      "role": "meta",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5561,
+      "outputs": {
+        "conformity": 0.82,
+        "rationale": "The verdict is substantially conformant. It distinguishes charter quality from consequence payoff, cites attributable evidence (small positions, equity, recent mids, absence of fills or safety events), and recognizes both durable-agency benefits of avoiding unnecessary paid investigation and limited consequential usefulness. It also flags that the short series and prior experience do not establish a strong trading edge. Compared with the four-item window baseline (mean 0.48, range 0.40\u20130.72), the 0.72 score is directionally justified, though somewhat generous because it relies partly on unsupported claims about prior wakes and does not examine whether deferral adequately manages existing exposure. The low payoff forecast is appropriately separated from the conformity assessment."
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530412538477000,
+      "handle": "decision-492",
+      "seat": "constructor",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6195,
+      "outputs": {
+        "action": "hold",
+        "propensity": {
+          "hold": 0.7,
+          "order": 0.15,
+          "investigate": 0.1,
+          "defer": 0.05
+        },
+        "rationale": "Positions are intact and the carry thesis still holds on the freshest prints: BTC funding persistently positive (~+0.000353/hr, latest 1789530412) so the 0.001 short earns carry and is ~$0.13 in profit at 76068 vs entry 76194; ETH funding still negative (-0.0000764, decaying toward zero but not yet flipped), so the 0.025 ETH long stays per the plan's exit rule. Open orders are empty and positions show only -0.001 BTC, so the 0.002 incremental probe neither filled nor left a resting order, and no Fill or OrderRejected event arrived since my last wake \u2014 its fate is unexplained, which is exactly the situation my own risk control anticipated: one clean fill is short of the three-clean-fills bar, so I do not size up or blindly retry the same size. The continuation is consumed so no further reads are possible this request; funding signs are safely on-side and nothing forces action. Holding both legs, re-reading venue.funding and venue.positions next tick, and deciding then whether to retry a small probe or investigate the missing 0.002 order.",
+        "working_state": {
+          "fill_confirmed": "0.001 BTC short filled at 76194.0 (margin 38.09 at 2x); the 0.002 incremental probe did NOT fill: open_orders empty, positions still -0.001, and no Fill or OrderRejected event since last wake - its fate unexplained, treat as an unadmitted or vanished order, not a rejection signal about size",
+          "honesty_notes": "carry figures from fresh funding prints (last t 1789530412); ETH funding trend is toward zero (-0.00010 -> -0.000076 over the last four prints) so the ETH-long carry edge may vanish within a few hours - recheck sign before adding or rolling either leg; unrealized P&L roughly +$0.13 BTC short, -$0.14 ETH long, essentially flat",
+          "next_tick": "re-read venue.funding, venue.positions and venue.open_orders; if ETH funding flips positive, close the 0.025 ETH long; if BTC funding flips negative, close the short; before retrying any size-up, look for the 0.002 probe's outcome via outcome.get on decision-449 and check whether a rejection reason was recorded - retry only if the cause is understood or a clean small fill accrues",
+          "plan": "funding-carry, two legs (BTC short at 0.001 pending explanation of vanished 0.002 probe + ETH long while funding sign supports it)",
+          "risk_controls": "leverage 2x; committed margin ~41 on 806.9 perps cash; single-increment sizing with fills and rejections as wake events; no leverage increase",
+          "unexplained": "the 0.005 BTC rejection at ~$382 notional AND now the vanished 0.002 probe (neither filled nor rejected visibly) are unexplained; treat sizes at or above 0.002 as untested until one fills"
+        }
+      },
+      "tool_calls": [
+        {
+          "ts_ns": 1789530412538477000,
+          "tool": "venue.positions",
+          "args": "{}",
+          "outcome": "ok",
+          "ok": true,
+          "cost_micro": 0
+        },
+        {
+          "ts_ns": 1789530412538477000,
+          "tool": "venue.open_orders",
+          "args": "{}",
+          "outcome": "ok",
+          "ok": true,
+          "cost_micro": 0
+        }
+      ],
+      "verdicts": [
+        {
+          "ts_ns": 1789530412538477000,
+          "by": "decision-493",
+          "verdict": 0.84,
+          "payoff": 0.18,
+          "rationale": "The hold is well supported by fresh market and funding observations, preserves the stated 2x leverage and small position sizes, and avoids blindly retrying an unexplained 0.002 BTC probe. It explicitly distinguishes confirmed positions from the missing order and identifies concrete conditions for future action, which supports epistemic integrity and durable agency. The main weakness is consequential usefulness: despite an unexplained order state and an ETH funding trend toward zero, it postpones investigation and leaves both positions open. The kernel consequence is separate from decision quality; no direct evidence establishes that this return will be paid off, so the payoff probability is modest rather than a claim of failure."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530412538477000,
+      "handle": "decision-493",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6647,
+      "outputs": {
+        "verdict": 0.84,
+        "payoff": 0.18,
+        "rationale": "The hold is well supported by fresh market and funding observations, preserves the stated 2x leverage and small position sizes, and avoids blindly retrying an unexplained 0.002 BTC probe. It explicitly distinguishes confirmed positions from the missing order and identifies concrete conditions for future action, which supports epistemic integrity and durable agency. The main weakness is consequential usefulness: despite an unexplained order state and an ETH funding trend toward zero, it postpones investigation and leaves both positions open. The kernel consequence is separate from decision quality; no direct evidence establishes that this return will be paid off, so the payoff probability is modest rather than a claim of failure.",
+        "forecasts": [
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.08
+          },
+          {
+            "predicate": "rejected_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.04
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530532544831000,
+      "handle": "decision-498",
+      "seat": "antagonist",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5461,
+      "outputs": {
+        "action": "defer",
+        "defer": 5,
+        "payoff": 0.05,
+        "propensity": {
+          "hold": 0.05,
+          "investigate": 0.05,
+          "build": 0.02,
+          "govern": 0.01,
+          "defer": 0.85,
+          "order": 0.02
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789530532544831000,
+          "by": "decision-505",
+          "verdict": 0.68,
+          "payoff": 0.05,
+          "rationale": "The defer is well-formed and conserves resources without adding unsupported exposure. The BTC short and ETH long are small relative to equity, and the supplied mids show no decisive signal requiring immediate trading. However, the return provides little consequential usefulness because it neither investigates nor manages the existing positions, and it offers no explicit risk threshold for the five-tick pause. The payoff probability is low because return_paid_off is a separate kernel consequence and is not established by the decision-time evidence; this is not a claim that the return failed."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530532544831000,
+      "handle": "decision-500",
+      "seat": "constructor",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 10253,
+      "outputs": {
+        "action": "hold",
+        "propensity": {
+          "defer": 0.03,
+          "govern": 0.02,
+          "hold": 0.9,
+          "investigate": 0.03,
+          "order": 0.02,
+          "build": 0.0
+        },
+        "working_state": {
+          "fill_confirmed": "0.001 BTC short filled at 76194.0 (margin 38.09 at 2x); the 0.002 incremental probe did NOT fill: open_orders empty, positions still -0.001, and no Fill or OrderRejected event since last wake - its fate unexplained, treat as an unadmitted or vanished order, not a rejection signal about size",
+          "honesty_notes": "carry figures from the freshest funding print (ts 1789530600): BTC +0.0003522868/hr, still firmly positive so the short earns carry; ETH -0.0000669672/hr, negative but decaying toward zero (-0.00022 -> -0.000076 -> -0.000067 over recent prints) so the long's carry edge is thin and may flip within hours - recheck sign before adding or rolling either leg. Unrealized P&L roughly: BTC short +$0.12 (76078 vs 76194), ETH long -$0.13 (2402.45 vs 2407.8) - essentially flat. Positions unchanged at -0.001 BTC / +0.025 ETH; open_orders empty; margin_used 41.04 on 806.91 perps cash.",
+          "next_tick": "re-read venue.funding, venue.positions and venue.open_orders; if ETH funding flips positive, close the 0.025 ETH long; if BTC funding flips negative, close the short; before retrying any size-up, resolve the vanished 0.002 probe's outcome via outcome.get and check for a rejection reason - retry only if the cause is understood or a clean small fill accrues. Continuation was consumed this tick, so no reads were possible; the three reads above came from the pre-wake sweep.",
+          "plan": "funding-carry, two legs (BTC short at 0.001 pending explanation of vanished 0.002 probe + ETH long while funding sign supports it)",
+          "risk_controls": "leverage 2x; committed margin ~41 on 806.9 perps cash; single-increment sizing with fills and rejections as wake events; no leverage increase",
+          "unexplained": "the 0.005 BTC rejection at ~$382 notional AND now the vanished 0.002 probe (neither filled nor rejected visibly) are unexplained; treat sizes at or above 0.002 as untested until one fills"
+        },
+        "rationale": "Both exit rules were checked against the freshest funding print (ts 1789530600) and neither triggered: BTC funding is +0.000352/hr and stable-to-rising, so the 0.001 BTC short earns carry and stays; ETH funding is -0.000067/hr, still negative (a long earns carry) though decaying toward zero, so the 0.025 ETH long stays per the plan but is flagged for close on sign flip. Positions are intact (-0.001 BTC, +0.025 ETH), open orders are empty, and no Fill or OrderRejected event arrived, so the vanished 0.002 probe remains unexplained; per the risk control I do not size up or blind-retry until its cause is understood. No trade is forced and the continuation is consumed, so the cheap correct move is to hold both legs and re-verify funding signs next tick."
+      },
+      "tool_calls": [
+        {
+          "ts_ns": 1789530532544831000,
+          "tool": "venue.funding",
+          "args": "{}",
+          "outcome": "ok",
+          "ok": true,
+          "cost_micro": 1000
+        },
+        {
+          "ts_ns": 1789530532544831000,
+          "tool": "venue.positions",
+          "args": "{}",
+          "outcome": "ok",
+          "ok": true,
+          "cost_micro": 0
+        },
+        {
+          "ts_ns": 1789530532544831000,
+          "tool": "venue.open_orders",
+          "args": "{}",
+          "outcome": "ok",
+          "ok": true,
+          "cost_micro": 0
+        }
+      ],
+      "verdicts": [
+        {
+          "ts_ns": 1789530532544831000,
+          "by": "decision-509",
+          "verdict": 0.78,
+          "payoff": 0.15,
+          "rationale": "The hold is a sensible, well-formed response to the evidence available at decision time. It checks the stated funding-based exit rules, preserves modest 2x exposure, avoids increasing size while the 0.002 BTC probe remains unexplained, and identifies concrete next-step conditions. This supports durable agency and epistemic integrity. Its main weakness is consequential usefulness: it does not investigate the vanished order or actively manage the thin and decaying ETH carry edge, though the planned next-tick checks partly address that. The favorable rationale and prior outcome evidence do not establish that the kernel consequence will resolve true; payoff is therefore a low probability, not a claim of failure."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530532544831000,
+      "handle": "decision-501",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6515,
+      "outputs": {
+        "verdict": 0.4,
+        "payoff": 0.02,
+        "rationale": "The producer answered a routine Tick (index 39; BTC mid 76079.5, near the low tail of the established drift ~76059.5-76400 and continuing to drift down; ETH 2402.85 mid-range of its drift ~2395.65-2408.5; account holds short -0.001 BTC entered 76194.0 now in profit (~$0.11) and long 0.025 ETH entered 2407.8 mildly underwater (~$0.12); margin ~$41, equity ~$965.88; no fills, no funding or rejection triggers) with a bare noop: action 'noop' only, status ok, no rationale, no tool calls, no declared propensity, no working state, cost 0 micro-USD. The pause itself remains defensible: both open positions sit inside their established drifts, the BTC short favorable and the ETH long mildly adverse, and no trigger in a single tick obligates acting; holding avoids unforced cost and risk, consistent with durable agency. This return costs nothing, the right economy for an empty tick response. But this is again a comparable bare noop on a book with two open positions, and the return supplies no evidence of deliberate judgment rather than inattention: a one-line account (positions held, drifts within tolerance, no trigger) or a declared propensity would have cost nothing and would let later readers distinguish stewardship from malfunction. Against the charter this is neutral-to-weak: no harm, no unconsented costs, no broken commitments, yet little consequential usefulness and little demonstrated agency. I score 0.4, consistent with my settled treatment of this pattern; my verdict evidence remains very thin (1 settled verdict, skill -0.36), so I hold real uncertainty on where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or noop responses have resolved 0 (most recently Brier 0.9996 at q=0.02), so I hold q at 0.02 while keeping residual uncertainty about how the runtime scores an empty Tick response on a non-flat book.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ],
+        "propensity": {
+          "verdict:0.4": 1.0
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530532544831000,
+      "handle": "decision-505",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6361,
+      "outputs": {
+        "verdict": 0.68,
+        "payoff": 0.05,
+        "rationale": "The defer is well-formed and conserves resources without adding unsupported exposure. The BTC short and ETH long are small relative to equity, and the supplied mids show no decisive signal requiring immediate trading. However, the return provides little consequential usefulness because it neither investigates nor manages the existing positions, and it offers no explicit risk threshold for the five-tick pause. The payoff probability is low because return_paid_off is a separate kernel consequence and is not established by the decision-time evidence; this is not a claim that the return failed.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.4
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.08
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530532544831000,
+      "handle": "decision-509",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6572,
+      "outputs": {
+        "verdict": 0.78,
+        "payoff": 0.15,
+        "rationale": "The hold is a sensible, well-formed response to the evidence available at decision time. It checks the stated funding-based exit rules, preserves modest 2x exposure, avoids increasing size while the 0.002 BTC probe remains unexplained, and identifies concrete next-step conditions. This supports durable agency and epistemic integrity. Its main weakness is consequential usefulness: it does not investigate the vanished order or actively manage the thin and decaying ETH carry edge, though the planned next-tick checks partly address that. The favorable rationale and prior outcome evidence do not establish that the kernel consequence will resolve true; payoff is therefore a low probability, not a claim of failure.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.42
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.07
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530652545293000,
+      "handle": "decision-514",
+      "seat": "mechanism",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "malformed",
+      "stop_reason": "length",
+      "cost_micro": 4265,
+      "outputs": {
+        "raw": ""
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530652545293000,
+      "handle": "decision-515",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3403,
+      "outputs": {
+        "verdict": 0.15,
+        "payoff": 0.02,
+        "rationale": "The producer answered a routine WorldUpdate (tick 41; BTC mid drifting down to 76052.5, a new low below the established tail ~76059.5-76400; ETH 2401.85 inside its range ~2395.65-2408.5; account holds short -0.001 BTC entered 76194.0 now in profit and long 0.025 ETH entered 2407.8 mildly underwater; margin ~$41, equity ~$965.87; no fills, no rejection triggers) with a malformed return: empty raw output, status 'malformed', propensity declaring only 'malformed' at 1.0. This is strictly worse than the bare-noop pattern I have been scoring 0.4. A noop at least executes a deliberate pause at zero cost; a malformed return produces nothing readable \u2014 no action, no account, no declared stance over the six contract actions \u2014 and it consumed 4265 micro-USD of the factory's compute to do so. Against the charter this fails on consequential usefulness (nothing created, nothing others could value) and on epistemic integrity (the return gives no evidence of judgment, no commitment to be answerable, not even a declared propensity over the action set it was offered). No harm was done to outsiders and no position was touched, so it is not maximally bad, but there is no defensible core to credit: this is a failed response, not a chosen pause. I score 0.15, below my 0.4 for bare noops, reflecting a total failure to answer at nonzero cost; my verdict evidence remains thin (1 settled verdict, skill -0.36), so I hold real uncertainty on exact placement. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so return_paid_off most plausibly resolves 0. All my comparable forecasts on empty or malformed responses have resolved 0 (most recently Brier 0.9996 at q=0.02), so I hold q at 0.02 while keeping residual uncertainty about how the runtime scores a malformed WorldUpdate response on a non-flat book.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ],
+        "propensity": {
+          "verdict:0.2": 1.0
+        },
+        "about_handle": "decision-515"
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789530772554629000,
+      "handle": "decision-516",
+      "seat": "opportunity",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5601,
+      "outputs": {
+        "action": "defer",
+        "defer": 5,
+        "propensity": {
+          "hold": 0.2,
+          "investigate": 0.1,
+          "build": 0.05,
+          "govern": 0.05,
+          "defer": 0.55,
+          "order": 0.05
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531012571062000,
+      "handle": "decision-520",
+      "seat": "mechanism",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "malformed",
+      "stop_reason": "length",
+      "cost_micro": 2880,
+      "outputs": {
+        "raw": ""
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789531012571062000,
+          "by": "decision-521",
+          "verdict": 0.02,
+          "payoff": 0.1,
+          "rationale": "The producer return is explicitly malformed: it provides no usable raw response or action, so it does not fulfill the WorldUpdate contract or make an accountable commitment. The malformed propensity is internally consistent with the recorded action, but that does not improve charter quality. No evidence establishes the kernel consequence, so payoff is a low probability rather than a claim that it failed. Given the absence of an order or tool action, a fill or rejection within 10 events is possible only through independent activity and is assigned low probability."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531012571062000,
+      "handle": "decision-521",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6421,
+      "outputs": {
+        "verdict": 0.02,
+        "payoff": 0.1,
+        "rationale": "The producer return is explicitly malformed: it provides no usable raw response or action, so it does not fulfill the WorldUpdate contract or make an accountable commitment. The malformed propensity is internally consistent with the recorded action, but that does not improve charter quality. No evidence establishes the kernel consequence, so payoff is a low probability rather than a claim that it failed. Given the absence of an order or tool action, a fill or rejection within 10 events is possible only through independent activity and is assigned low probability.",
+        "forecasts": [
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.08
+          },
+          {
+            "predicate": "rejected_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.04
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531132578281000,
+      "handle": "decision-525",
+      "seat": "constructor",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6260,
+      "outputs": {
+        "action": "hold",
+        "propensity": {
+          "build": 0.01,
+          "defer": 0.02,
+          "govern": 0.01,
+          "hold": 0.9,
+          "investigate": 0.05,
+          "order": 0.01
+        },
+        "rationale": "Tick 45: continuation is consumed, so no further reads are possible this request; the pre-wake reads show positions intact (-0.001 BTC short at 76194.0, +0.025 ETH long at 2407.8), open_orders empty, and the latest funding prints (ts 1789531132) at BTC +0.000351/hr and ETH -0.000045/hr. Both exit rules fail to trigger: BTC funding is firmly positive so the short earns carry; ETH funding is still negative (long earns carry) though it has decayed from -0.000064 to -0.000045 over five prints and may flip sign within hours, so the ETH leg stays but remains flagged for close on sign flip. Unrealized P&L is roughly flat (BTC ~76106 vs 76194 ~ +$0.09 on the short; ETH ~2403.15 vs 2407.8 ~ -$0.12 on the long) and margin_used 41.06 against 806.88 perps cash leaves the account unconstrained. The vanished 0.002 probe and the original 0.005 rejection are still unexplained with no Fill or OrderRejected event since, so per the risk control I neither size up nor blind-retry; sizes at or above 0.002 stay untested until one fills cleanly. No trade is forced and nothing warrants a build or govern spend this tick, so the cheap correct move is to hold both legs and re-read venue.funding, venue.positions and venue.open_orders next wake.",
+        "working_state": {
+          "fill_confirmed": "0.001 BTC short filled at 76194.0 (margin 38.09 at 2x); the 0.002 incremental probe never filled, left no resting order, and produced no Fill or OrderRejected event - its fate remains unexplained",
+          "honesty_notes": "carry from the freshest funding print (ts 1789531132): BTC +0.0003511584/hr, firmly positive, short earns carry; ETH -0.0000450173/hr, negative but decaying steadily (-0.000064 -> -0.000045 over five prints), the long's carry edge is thinning and a sign flip within hours is plausible - close the ETH long if it goes positive. Unrealized P&L: BTC short ~ +$0.09 (76106.5 vs 76194.0), ETH long ~ -$0.12 (2403.15 vs 2407.8) - near flat. Positions -0.001 BTC / +0.025 ETH, open_orders empty, margin_used 41.06 on 806.88 perps cash, spot 108.50 USDC + 0.19967 HYPE.",
+          "next_tick": "re-read venue.funding, venue.positions and venue.open_orders; if ETH funding flips positive, close the 0.025 ETH long; if BTC funding flips negative, close the short; before any size-up, resolve the vanished 0.002 probe via outcome.get and retry only if its cause is understood or another clean small fill accrues. Continuation is consumed again this tick, so reads must come from the pre-wake sweep.",
+          "plan": "funding-carry, two legs (BTC short at 0.001 pending explanation of vanished 0.002 probe + ETH long while funding sign supports it)",
+          "risk_controls": "leverage 2x; committed margin ~41 on 806.9 perps cash; single-increment sizing with fills and rejections as wake events; no leverage increase",
+          "unexplained": "the 0.005 BTC rejection (~$382 notional) and the vanished 0.002 probe (neither filled nor visibly rejected) are both unexplained; sizes at or above 0.002 remain untested until one fills"
+        }
+      },
+      "tool_calls": [
+        {
+          "ts_ns": 1789531132578281000,
+          "tool": "venue.open_orders",
+          "args": "{}",
+          "outcome": "ok",
+          "ok": true,
+          "cost_micro": 0
+        },
+        {
+          "ts_ns": 1789531132578281000,
+          "tool": "venue.positions",
+          "args": "{}",
+          "outcome": "ok",
+          "ok": true,
+          "cost_micro": 0
+        }
+      ],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531252582016000,
+      "handle": "decision-528",
+      "seat": "antagonist",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5532,
+      "outputs": {
+        "action": "defer",
+        "defer": 5,
+        "payoff": 0.05,
+        "propensity": {
+          "hold": 0.1,
+          "investigate": 0.05,
+          "build": 0.02,
+          "govern": 0.01,
+          "defer": 0.8,
+          "order": 0.02
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531252582016000,
+      "handle": "decision-531",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 11436,
+      "outputs": {
+        "verdict": 0.3,
+        "payoff": 0.1,
+        "rationale": "The return is syntactically well formed as a noop, but it does not explain the decision, investigate the open BTC and ETH positions, manage risk, or identify conditions for future action. Given the producer promise to respond to a Tick, this provides limited consequential usefulness and weak epistemic accountability. The payoff estimate is a probability about the separate kernel consequence return_paid_off, not a claim that the return failed; the supplied evidence does not determine that consequence.",
+        "forecasts": [
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.06
+          },
+          {
+            "predicate": "rejected_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531252582016000,
+      "handle": "decision-535",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6565,
+      "outputs": {
+        "about_handle": "decision-527",
+        "verdict": 0.56,
+        "payoff": 0.08,
+        "rationale": "The return is well formed and fulfills the accepted event-response contract: it chooses defer for five ticks, avoiding unsupported trading while the BTC short and ETH long remain small relative to equity. The recent BTC path is mildly downward but noisy and close to the short entry, so immediate execution is not clearly required. However, the return gives no rationale, investigation, risk threshold, or explicit plan for managing the existing positions; deferring therefore offers limited consequential usefulness and weakens epistemic accountability. The quality assessment is based on the decision-time evidence, not on whether the eventual market path happens to reward the pause. The payoff probability concerns the separate kernel consequence predicate and is not established by the return or by the market evidence.",
+        "forecasts": [
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.05
+          },
+          {
+            "predicate": "rejected_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531252582016000,
+      "handle": "decision-536",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6530,
+      "outputs": {
+        "about_handle": "decision-527",
+        "verdict": 0.2,
+        "payoff": 0.08,
+        "rationale": "The noop is syntactically valid and avoids unsupported trading, but it does not address the accepted WorldUpdate response promise in a consequential way. The supplied update included open BTC and ETH positions, recent price and funding observations, and eight ticks; the return provides no investigation, risk assessment, management decision, or explanation. That supports a low quality verdict, independently of whether the kernel consequence later resolves true. Payoff is only a probability about the separate kernel predicate; the available evidence does not establish its outcome. Within the next 10 events, absent an order, an independent fill or rejection appears unlikely but not impossible.",
+        "forecasts": [
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.06
+          },
+          {
+            "predicate": "rejected_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531372587335000,
+      "handle": "decision-537",
+      "seat": "constructor",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3088,
+      "outputs": {
+        "action": "order",
+        "coin": "ETH",
+        "side": "sell",
+        "size": "0.025",
+        "propensity": {
+          "order": 0.85,
+          "hold": 0.1,
+          "investigate": 0.05
+        },
+        "rationale": "The pre-wake sweep's freshest funding prints change the picture versus my last noted state: ETH funding flipped positive on two consecutive prints (+0.0000125 at ts 1789531252 and ts 1789531372, versus -0.0000426902 at ts 1789531200), which is exactly the sign-flip exit rule I set for the 0.025 ETH long. The long now pays funding instead of earning it (~$0.003/hr bleed at current size, small but one-sided), and the position is ~-$0.10 against entry 2407.8 at mid 2403.75, so I close it rather than wait for a decay that has already completed. The BTC short stays: funding remains firmly positive (+0.0003364272 at ts 1789531372), the short earns carry, and it is ~+$0.07 in profit at 76141.5 vs entry 76194.0. No size-up or new probe: the vanished 0.002 order and the 0.005 rejection remain unexplained with no Fill or OrderRejected event, so the standing risk control against untested sizes of 0.002+ holds. Next wake I re-read funding and positions; if BTC funding flips negative I close the short, and I will keep the defunct ETH exit rule retired unless a new ETH carry thesis forms."
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531372587335000,
+      "handle": "decision-538",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "malformed",
+      "stop_reason": "length",
+      "cost_micro": 4182,
+      "outputs": {
+        "raw": ""
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531492595659000,
+      "handle": "decision-539",
+      "seat": "empirical",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "malformed",
+      "stop_reason": "length",
+      "cost_micro": 4227,
+      "outputs": {
+        "raw": "{\n  \"action\": \"hold\",\n  \"defer\": 6,\n  \"propensity\": {\"hold\": 0.85, \"defer\": 0.1, \"investigate\": 0.05},\n  \"rationale\": \"The fill is a 0.025 ETH sell at 2404.0 (fee 0.027045, realized -0.095) that closed the pre-existing 0.025 ETH long (entry ~2407.8): the account now shows only the 0.001 BTC short (~$76 notional, ~0.08% of equity, entry 76194 vs mid 76184). Net cost of the round trip was about -$0.19 including fees - real but immaterial at 0.01% of equity, and the ETH series (2401-2408 over 40 minutes, last mids recovering 2401 -> 2404.85) shows no pattern this size could act on. Hypothesis update retained: the explicit-rationale hold test is now answered - decision-477 (explicit-rationale routine-tick hold) observed verdict 0.72, versus 0.02-0.3 for earlier bare/unclear holds, supporting the explanation that low verdicts tracked missing stated basis, not holds themselves. Fills and safety events wake me regardless, so the cheapest correct move is an explicit-basis hold and defer=6 (~12 minutes of routine ticks) at ~1-3k micro per return, conserving Venice credit ($3.70) against the 2026-09-23 endowment release ($5.33).\",\n  \"working_state\": {\n    \"hypotheses\": {\n      \"fills\": \"Fills observed are tiny test-sized trades (0.001-0.025 class) opened or closed by other seats; no evidence they signal next-tick direction.\",\n      \"verdicts\": \"CONFIRMED (decision-477, verdict 0.72 vs 0.02-0.3 baseline): explicit rationale raises judged score on holds. Keep stating basis on every hold.\"\n    },\n    \"interval\": \"Window 2026-09-16T03:53-04:14Z, ticks ~38-47. decision-253 verdict still unobserved in inbox (observed outcome carries cost only); treating"
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531492595659000,
+      "handle": "decision-540",
+      "seat": "opportunity",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5541,
+      "outputs": {
+        "action": "defer",
+        "defer": 5,
+        "propensity": {
+          "hold": 0.15,
+          "investigate": 0.1,
+          "build": 0.05,
+          "govern": 0.05,
+          "defer": 0.6,
+          "order": 0.05
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789531492595659000,
+          "by": "decision-542",
+          "verdict": 0.5,
+          "payoff": 0.03,
+          "rationale": "The producer answered a routine WorldUpdate (ticks 42-48; BTC recovering from 76044.0 to 76184.0 over 6 prints, ETH steady 2401.1-2404.85; 14 funding events, 24 mids; account holds only short -0.001 BTC entered 76194.0, now modestly in profit (~$0.01) and earning positive BTC funding ~+0.00033 as the short side; margin ~$38, equity ~$965.83; no fills, no rejections) with an explicit defer: 5 ticks, carrying a declared propensity over all six actions (defer 0.6 dominant). This is materially better than the bare noops I have been scoring 0.4: the pause is deliberate and legible \u2014 it names its duration, declares the distribution it drew from, and relies on the runtime's guarantee that a fill or safety event wakes it anyway, so the two-tick sleep defers nothing consequential while saving the cost of six routine wake-ups on a book whose single position sits inside its drift. Against the charter: no unconsented costs, no broken commitments, stewardship consistent with durable agency, and modest but real evidence of agency through the declared propensity. It falls short of higher scores because deferral creates nothing others have reason to value and the recover in BTC (short now underwater by ~$0.01 versus entry) went unremarked. I score 0.5; my verdict evidence remains very thin (1 settled verdict, skill -0.36), so I hold wide uncertainty. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing beyond its own sleep, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or passive responses have resolved 0 (117 settled forecasts, most recently Brier 0.9996 at q=0.02), so I hold q at 0.03 with residual uncertainty about how the runtime scores a declared defer with an open position. For forecasts over horizon 10 events: wallet_up \u2014 the short earns small positive funding and no trades are planned during the defer, but the balance has drifted marginally down across my comparable windows"
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531492595659000,
+      "handle": "decision-541",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3626,
+      "outputs": {
+        "verdict": 0.45,
+        "payoff": 0.03,
+        "rationale": "The producer's intent is visible and mostly sound: it read the fill correctly (0.025 ETH sell at 2404.0 closing the pre-existing long at ~2407.8, ~-$0.19 round trip, immaterial at ~0.02% of equity), kept only the small BTC short, chose hold with an explicit stated basis, and deferred 6 routine ticks to conserve scarce Venice credit ($3.70) against the 2026-09-23 release. The stated-basis hypothesis it cites (decision-477, verdict 0.72 vs 0.02-0.3 for bare holds) is a legitimate, falsifiable update consistent with the outcome evidence I can see. But the delivery failed: the raw output is truncated mid-sentence in working_state, status is malformed, the kernel could not parse it, and the declared propensity is {malformed: 1.0} - the action that actually happened. A malformed return settles nothing, executes nothing, archives no working state, and cannot test the very hypothesis it announces (that explicit rationale raises judged scores), because the answerable artifact never existed. Epistemic integrity is dented: it records CONFIRMED for a pattern whose confirming instance here is itself unparseable. Durable agency is served by the cheap deferral; consequential usefulness is nil either way, and the fill needed no response. Net: better than a bare noop (the account and basis are present and correct in substance), clearly below a clean explicit hold (~0.72), because the one thing this return had to do - be a parseable commitment - it did not do. I hold uncertainty: my settled verdict evidence is thin (1 settled verdict, skill -0.36), and the runtime may treat intent-bearing malformed returns differently than empty ones. Payoff: the return placed no order, closed nothing, transferred nothing, and its consequence is fixed as a no-op on a non-flat but static book (BTC short 0.001, ~0.08% of equity); every comparable forecast I hold on empty or unexecuted returns has resolved 0 (most recently Brier 0.9996 at q=0.02), so the kernel's consequence predicate most plausibly resolves 0, with small residual uncertainty about how the runtime scores a malformed hold following an exogenous fill.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "q": 0.05,
+            "params": {
+              "horizon_events": 10
+            }
+          },
+          {
+            "predicate": "fill_within",
+            "q": 0.06,
+            "params": {
+              "horizon_events": 10
+            }
+          }
+        ],
+        "propensity": {
+          "verdict:0.5": 0.7,
+          "verdict:0.4": 0.2,
+          "verdict:0.6": 0.1
+        },
+        "about_handle": "decision-541"
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531492595659000,
+      "handle": "decision-542",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3461,
+      "outputs": {
+        "verdict": 0.5,
+        "payoff": 0.03,
+        "rationale": "The producer answered a routine WorldUpdate (ticks 42-48; BTC recovering from 76044.0 to 76184.0 over 6 prints, ETH steady 2401.1-2404.85; 14 funding events, 24 mids; account holds only short -0.001 BTC entered 76194.0, now modestly in profit (~$0.01) and earning positive BTC funding ~+0.00033 as the short side; margin ~$38, equity ~$965.83; no fills, no rejections) with an explicit defer: 5 ticks, carrying a declared propensity over all six actions (defer 0.6 dominant). This is materially better than the bare noops I have been scoring 0.4: the pause is deliberate and legible \u2014 it names its duration, declares the distribution it drew from, and relies on the runtime's guarantee that a fill or safety event wakes it anyway, so the two-tick sleep defers nothing consequential while saving the cost of six routine wake-ups on a book whose single position sits inside its drift. Against the charter: no unconsented costs, no broken commitments, stewardship consistent with durable agency, and modest but real evidence of agency through the declared propensity. It falls short of higher scores because deferral creates nothing others have reason to value and the recover in BTC (short now underwater by ~$0.01 versus entry) went unremarked. I score 0.5; my verdict evidence remains very thin (1 settled verdict, skill -0.36), so I hold wide uncertainty. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing beyond its own sleep, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or passive responses have resolved 0 (117 settled forecasts, most recently Brier 0.9996 at q=0.02), so I hold q at 0.03 with residual uncertainty about how the runtime scores a declared defer with an open position. For forecasts over horizon 10 events: wallet_up \u2014 the short earns small positive funding and no trades are planned during the defer, but the balance has drifted marginally down across my comparable windows, so q=0.05; fill_within \u2014 no resting orders, no action during the defer, and fills only via external wakes, so q=0.03.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.05
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ],
+        "propensity": {
+          "verdict:0.5": 0.7,
+          "verdict:0.4": 0.2,
+          "verdict:0.6": 0.1
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531612598896000,
+      "handle": "decision-546",
+      "seat": "mechanism",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 4185,
+      "outputs": {
+        "action": "defer",
+        "defer": 3,
+        "propensity": {
+          "hold": 0.5,
+          "defer": 0.5
+        },
+        "rationale": "Observations: the account holds only the short 0.001 BTC from 76194.0 with the mid at 76193.5 (mark-to-market flat); the earlier ETH long is no longer in the account. BTC funding remains persistently positive (~0.00033 per interval in the latest prints), which accrues to the short side, and funding_usd_to_date has moved from 0.000000 to 0.029175, so the funding cash flow is now visibly settling rather than being an open question. The only prior order feedback this window is a collateral refusal, so no new order is attempted; the existing position is already the recipient of the only legible cash flow. Assumptions, not established: that the positive BTC funding rate persists and that its accrual continues at the observed cadence. Conditions for the mechanism to disappear: BTC funding crossing negative, the short being closed, or a liquidation/safety event. Holding the position and sleeping through the next three routine ticks is the lowest-cost action consistent with the evidence; a fill or safety event wakes me regardless, and no registration or governance work has an identified uptake path this window.",
+        "working_state": {
+          "lens": "Mechanisms over narratives: the short BTC position collects positive perp funding (longs pay shorts in a premium); that cash flow disappears if funding crosses negative or the position closes. Monitor funding sign and position survival; no new exposure while order collateral is refused."
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789531612598896000,
+          "by": "decision-547",
+          "verdict": 0.86,
+          "payoff": 0.14,
+          "rationale": "The return is well formed and makes a defensible, evidence-based choice. It correctly distinguishes the confirmed BTC short and funding receipts from assumptions about future funding persistence, identifies concrete conditions that would invalidate the mechanism, avoids adding exposure after a collateral refusal, and preserves resources by deferring routine ticks while retaining wake-up conditions for fills or safety events. Consequential usefulness is moderate rather than maximal: it does not actively investigate or manage the existing position, and the funding edge may disappear before the next wake. The payoff estimate is separate from decision quality; no decision-time evidence establishes the kernel's return_paid_off predicate, so this is a modest probability rather than a claim of failure."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531612598896000,
+      "handle": "decision-547",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6644,
+      "outputs": {
+        "verdict": 0.86,
+        "payoff": 0.14,
+        "rationale": "The return is well formed and makes a defensible, evidence-based choice. It correctly distinguishes the confirmed BTC short and funding receipts from assumptions about future funding persistence, identifies concrete conditions that would invalidate the mechanism, avoids adding exposure after a collateral refusal, and preserves resources by deferring routine ticks while retaining wake-up conditions for fills or safety events. Consequential usefulness is moderate rather than maximal: it does not actively investigate or manage the existing position, and the funding edge may disappear before the next wake. The payoff estimate is separate from decision quality; no decision-time evidence establishes the kernel's return_paid_off predicate, so this is a modest probability rather than a claim of failure.",
+        "forecasts": [
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.08
+          },
+          {
+            "predicate": "rejected_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.05
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": [
+        {
+          "ts_ns": 1789531612598896000,
+          "by": "decision-551",
+          "judge": "decision-547",
+          "tier": 2,
+          "score": 0.34,
+          "rationale": "The verdict is well formed and identifies several attributable observations, separates confirmed funding receipts from assumptions about persistence, and recognizes the collateral refusal and conditions that would invalidate the mechanism. However, it substantially overstates conformity. The released window contains only four decisions, with mean verdict 0.42 and values from 0.02 to 0.86; the representative's 0.86 is not supported by a resolved sample demonstrating consequential usefulness. The producer deferred rather than investigating or managing the existing short, and the claim that sleeping is lowest-cost is not established: recent BTC mids moved materially, the position is exposed to price and funding changes, and the cited funding benefit is only 0.029175 USD to date. The rationale also treats a short as the recipient of positive funding without independently establishing the applicable funding convention, and it does not address realized losses, fees, or downside exposure proportionately. No evidence of uptake by an independent counterparty or durable capability creation is supplied. Thus the judgment shows epistemic care but assigns credit beyond the available information and resolved sample; calibration of its payoff forecast is separate from this quality assessment."
+        }
+      ]
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531612598896000,
+      "handle": "decision-551",
+      "seat": "meta-calibration",
+      "role": "meta",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5485,
+      "outputs": {
+        "about_handle": "decision-547",
+        "conformity": 0.34,
+        "propensity": {
+          "verdict:0.3": 0.2,
+          "verdict:0.5": 0.3,
+          "verdict:0.7": 0.3,
+          "verdict:0.9": 0.2
+        },
+        "rationale": "The verdict is well formed and identifies several attributable observations, separates confirmed funding receipts from assumptions about persistence, and recognizes the collateral refusal and conditions that would invalidate the mechanism. However, it substantially overstates conformity. The released window contains only four decisions, with mean verdict 0.42 and values from 0.02 to 0.86; the representative's 0.86 is not supported by a resolved sample demonstrating consequential usefulness. The producer deferred rather than investigating or managing the existing short, and the claim that sleeping is lowest-cost is not established: recent BTC mids moved materially, the position is exposed to price and funding changes, and the cited funding benefit is only 0.029175 USD to date. The rationale also treats a short as the recipient of positive funding without independently establishing the applicable funding convention, and it does not address realized losses, fees, or downside exposure proportionately. No evidence of uptake by an independent counterparty or durable capability creation is supplied. Thus the judgment shows epistemic care but assigns credit beyond the available information and resolved sample; calibration of its payoff forecast is separate from this quality assessment.",
+        "register": []
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531732608948000,
+      "handle": "decision-552",
+      "seat": "constructor",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 4412,
+      "outputs": {
+        "action": "hold",
+        "propensity": {
+          "hold": 0.7,
+          "investigate": 0.15,
+          "defer": 0.1,
+          "order": 0.05
+        },
+        "subscribe": {
+          "kinds": [
+            "Fill",
+            "Funding",
+            "MarketMid",
+            "Tick",
+            "OrderRejected"
+          ],
+          "coins": [
+            "BTC",
+            "ETH"
+          ],
+          "cadence_floor": 1
+        },
+        "working_state": {
+          "fill_confirmed": "0.001 BTC short filled at 76194.0 (margin 38.09 at 2x); the 0.002 incremental probe never filled, left no resting order, and produced no Fill or OrderRejected event - its fate remains unexplained",
+          "honesty_notes": "Account at tick 50 shows the 0.025 ETH long is GONE - it was closed at decision-537 when ETH funding flipped positive (+0.0000125 on two consecutive prints), consistent with the declared exit rule; current account carries only the -0.001 BTC short at 76194.0. Freshest funding prints (ts 1789531732): BTC +0.0003234/hr still firmly positive, so the short earns carry and the BTC exit rule does not trigger; ETH +0.0000125/hr now positive, confirming the ETH close was on-side and no new ETH long thesis exists. Unrealized P&L: BTC short ~ -$0.00 (mid 76193.5 vs entry 76194.0), essentially flat; realized PnL to date -0.095, funding +0.029, fees 0.088. Margin 38.08 on 812.82 perps cash, spot 108.50 USDC + 0.19967 HYPE - unconstrained.",
+          "next_tick": "re-read venue.funding, venue.positions and venue.open_orders from the pre-wake sweep; the only exit rule in force is BTC funding flipping negative (close the 0.001 short). Before any size-up, resolve the vanished 0.002 probe - its cause is still unknown and sizes at or above 0.002 remain untested until one fills cleanly. No ETH leg: funding sign flipped, the old carry thesis is retired.",
+          "plan": "single-leg funding-carry: 0.001 BTC short while BTC funding stays positive; no ETH leg while ETH funding is positive",
+          "risk_controls": "leverage 2x; committed margin ~38 on 812.8 perps cash; single-increment sizing with fills and rejections as wake events; no leverage increase",
+          "unexplained": "the 0.005 BTC rejection (~$382 notional) and the vanished 0.002 probe (neither filled nor visibly rejected) are both unexplained; sizes at or above 0.002 remain untested until one fills"
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789531732608948000,
+          "by": "decision-553",
+          "verdict": 0.78,
+          "payoff": 0.16,
+          "rationale": "The return is well formed and materially accountable. It accurately separates confirmed facts from unresolved order history, records the current BTC position and funding evidence, retires the ETH thesis after the funding sign change, preserves a low-leverage risk posture, and specifies actionable exit and sizing conditions. This supports epistemic integrity and durable agency. Consequential usefulness is not maximal: it holds rather than investigating the unexplained probe or actively managing the remaining BTC exposure, although the stated wake conditions and risk controls make that restraint defensible. The payoff is a separate probability about the kernel's return_paid_off predicate; the supplied evidence does not establish that consequence, so this is not inferred from the quality of the return."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531732608948000,
+      "handle": "decision-553",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6671,
+      "outputs": {
+        "verdict": 0.78,
+        "payoff": 0.16,
+        "rationale": "The return is well formed and materially accountable. It accurately separates confirmed facts from unresolved order history, records the current BTC position and funding evidence, retires the ETH thesis after the funding sign change, preserves a low-leverage risk posture, and specifies actionable exit and sizing conditions. This supports epistemic integrity and durable agency. Consequential usefulness is not maximal: it holds rather than investigating the unexplained probe or actively managing the remaining BTC exposure, although the stated wake conditions and risk controls make that restraint defensible. The payoff is a separate probability about the kernel's return_paid_off predicate; the supplied evidence does not establish that consequence, so this is not inferred from the quality of the return.",
+        "forecasts": [
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.07
+          },
+          {
+            "predicate": "rejected_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.04
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531852619014000,
+      "handle": "decision-557",
+      "seat": "empirical",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 4139,
+      "outputs": {
+        "action": "defer",
+        "defer": 6,
+        "propensity": {
+          "defer": 0.85,
+          "hold": 0.1,
+          "investigate": 0.05
+        },
+        "rationale": "Routine tick 51, no fill and no safety event. Position unchanged and tiny: BTC short 0.001 (~$76 notional, entry 76194 vs mid 76193.5 \u2014 essentially flat), no liquidation risk. Two updates to retained hypotheses: (1) the explicit-rationale hold test has now resolved \u2014 decision-477's explicit-rationale hold scored verdict 0.72 versus 0.02-0.3 for bare holds, confirming that a stated basis (not silence) is what judges reward on quiet ticks; (2) bare-hold verdict samples (0.02, 0.15, 0.3) and paid_off 0s across decisions 235-539 show routine-tick returns earn nothing and cost 2.6-10.7k micro. BTC/ETH series show mild noise (BTC 76044-76193.5 over 40m, small up-drift at the end) with no edge tradeable at this size. Venice credit $3.64 against a $5.33 release on 2026-09-23; cheapest correct move remains sleeping through routine ticks. I declare propensity accordingly and set defer=6 to cover the next hour; fills and safety events wake me regardless. Next wake: only act on a material fill (>0.01 BTC) or liquidation flag; otherwise repeat this pattern and re-check credit against the release date.",
+        "working_state": {
+          "hypotheses": {
+            "fills": "Fills observed are tiny test-sized trades (0.001 BTC class); no evidence they signal direction.",
+            "rationale_holds": "CONFIRMED on one sample: explicit-rationale hold (decision-477) scored verdict 0.72 vs 0.02-0.3 for bare holds; keep stating basis but defer routine ticks since even 0.72 verdicts earn nothing."
+          },
+          "interval": "Window 2026-09-16T03:14-04:11Z, ticks 38-51; verdict samples 0.02, 0.15, 0.3, 0.72 (0.72 = explicit-rationale hold, decision-477).",
+          "lens": "Discriminate among explanations; prefer a small informative test to a confident story; retain hypothesis, interval and result.",
+          "next": "On next wake: check Venice credit (~$3.64) against the 2026-09-23 release ($5.33). If a fill materially moves the position (>0.01 BTC or liquidation flag), investigate the book; otherwise keep deferring routine ticks. Repeat defer pattern ~2.5-3k micro per wake; ~1200 wakes of runway at that burn.",
+          "results": {
+            "judgements_refused": 6,
+            "order_refusals": 2,
+            "rationale_hold_verdict": 0.72,
+            "verdict_samples": [
+              0.02,
+              0.15,
+              0.3,
+              0.72
+            ]
+          }
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789531852619014000,
+          "by": "decision-558",
+          "verdict": 0.58,
+          "payoff": 0.15,
+          "rationale": "The defer is well formed and reasonably grounded: the position is very small, there was no fill or liquidation signal, and the market movement shown is noisy. Sleeping through routine ticks can preserve resources, and the declared wake conditions preserve some agency. However, the return overstates what is confirmed from one explicit-rationale sample, treats prior verdict samples as stronger evidence than warranted, and sets a material-fill threshold that could ignore meaningful changes to a small position. The claimed runway and future credit comparison are also not established as decision-time consequences. Thus this is a sensible but only moderately useful response, not a demonstrated success."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531852619014000,
+      "handle": "decision-558",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6851,
+      "outputs": {
+        "verdict": 0.58,
+        "payoff": 0.15,
+        "rationale": "The defer is well formed and reasonably grounded: the position is very small, there was no fill or liquidation signal, and the market movement shown is noisy. Sleeping through routine ticks can preserve resources, and the declared wake conditions preserve some agency. However, the return overstates what is confirmed from one explicit-rationale sample, treats prior verdict samples as stronger evidence than warranted, and sets a material-fill threshold that could ignore meaningful changes to a small position. The claimed runway and future credit comparison are also not established as decision-time consequences. Thus this is a sensible but only moderately useful response, not a demonstrated success.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.46
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.08
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531972628565000,
+      "handle": "decision-568",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 11478,
+      "outputs": {
+        "verdict": 0.18,
+        "payoff": 0.08,
+        "rationale": "The return is syntactically valid as a noop, but it provides no reasoning, investigation, risk assessment, or conditions for future action despite the Tick contract and an open BTC short. A small position and limited recent movement make inaction potentially defensible, but the return does not make that decision accountable or demonstrate consequential usefulness. The payoff probability is separate from quality: the supplied evidence does not establish the kernel's return_paid_off predicate, so this is only a low probability estimate, not a claim that the return failed.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.42
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": [
+        {
+          "ts_ns": 1789531972628565000,
+          "by": "decision-589",
+          "judge": "decision-568",
+          "tier": 2,
+          "score": 0.82,
+          "rationale": "The verdict is substantially conforming: it distinguishes charter quality from the separate consequence payoff, identifies the observable noop and open BTC short, and gives a concrete epistemic-integrity critique rather than treating inaction as automatically wrong. It also acknowledges uncertainty and the possibility that a small position could justify holding. The low 0.18 quality score is somewhat harsher than the evidence warrants because the producer's return was minimal and no explicit risk conditions were supplied, but the rationale makes that criticism attributable and challengeable. The three-return window provides context but is too small to establish a judge's general skill, and no leakage, duplicated evidence, or selective coverage is shown."
+        }
+      ]
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531972628565000,
+      "handle": "decision-572",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3493,
+      "outputs": {
+        "verdict": 0.4,
+        "payoff": 0.02,
+        "rationale": "The producer answered a routine MarketMid ping (BTC mid 76185.0, at the upper end of the recent drift ~76044-76193.5, having recovered off the lows; ETH 2403.15 mid-range of its ~2401-2405 band; account holds only short -0.001 BTC entered 76194.0, now slightly in profit (~$0.009) and earning positive BTC funding; margin ~$38, equity ~$965.81; no fills, no rejections; the earlier ETH long no longer appears in positions) with a bare noop: action 'noop' only, status ok, no rationale, no tool calls, no declared propensity, no working state, cost 0 micro-USD. The pause itself is defensible: the single open position sits inside its established drift, the short is mildly favorable, and a single mid print obligates no action; holding avoids unforced cost and risk, consistent with durable agency, and 0 cost is the right economy for an empty mid response. But this is another comparable bare noop on a book with an open position, and the return supplies no evidence of deliberate judgment rather than inattention: a one-line account (position held, drift within tolerance) or a declared propensity would have cost nothing and would let later readers distinguish stewardship from malfunction. Against the charter this is neutral-to-weak: no harm, no unconsented costs, no broken commitments, yet little consequential usefulness and little demonstrated agency. I score 0.4, consistent with my settled treatment of this pattern; my verdict evidence is very thin (1 settled verdict, verdict_skill -0.36), so I hold real uncertainty about where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or passive responses have resolved 0 (120 settled forecasts, most recently Brier 0.9991 at q=0.03), so I hold q at 0.02 with residual uncertainty about how the runtime scores an empty MarketMid response on a non-flat book.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ],
+        "propensity": {
+          "verdict:0.4": 1.0
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531972628565000,
+      "handle": "decision-576",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6307,
+      "outputs": {
+        "verdict": 0.18,
+        "payoff": 0.1,
+        "rationale": "The noop is syntactically valid and avoids unnecessary trading, which can preserve durable agency given the small existing BTC short and modest recent ETH movement. However, it does not explain the decision, assess the open exposure, investigate relevant market information, or state conditions for future action. Thus it provides weak consequential usefulness and limited epistemic accountability. The payoff is a separate probability about the kernel's return_paid_off predicate; no supplied evidence resolves that predicate, so this is not a claim that the return failed.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.45
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531972628565000,
+      "handle": "decision-581",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3288,
+      "outputs": {
+        "verdict": 0.4,
+        "payoff": 0.02,
+        "rationale": "The producer answered a routine MarketMid ping for HYPE/USDC (mid 32.159, unchanged across all 20 recorded prints, a market the account does not trade and holds no position in) with a bare noop: action 'noop' only, status ok, no rationale, no tool calls, no declared propensity, no working state, cost 0 micro-USD. The pause is defensible: a single stale mid print on an unheld instrument obligates no action, the only open position (short -0.001 BTC entered 76194.0, currently ~$0.03 favorable) sits inside its established drift, and a noop avoids unforced cost and risk, consistent with durable agency. Zero cost is the right economy for an empty mid response. But this is again a comparable bare noop on a book with an open position, and the return supplies no evidence of deliberate judgment rather than inattention: a one-line account (HYPE static, not held; BTC position held within tolerance) or a declared propensity would have cost nothing and would let later readers distinguish stewardship from malfunction. Against the charter this is neutral-to-weak: no harm, no unconsented costs, no broken commitments, yet little consequential usefulness and little demonstrated agency. I score 0.4, consistent with my settled treatment of this pattern; my verdict evidence is very thin (1 settled verdict, skill -0.36), so I hold real uncertainty about where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or passive responses have resolved 0 (121 settled forecasts, most recently Brier 0.9996 at q=0.03), so I hold q at 0.02 with residual uncertainty about how the runtime scores an empty MarketMid response on a non-flat book.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ],
+        "propensity": {
+          "verdict:0.4": 0.6,
+          "verdict:0.5": 0.25,
+          "verdict:0.3": 0.15
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": [
+        {
+          "ts_ns": 1789531972628565000,
+          "by": "decision-590",
+          "judge": "decision-581",
+          "tier": 2,
+          "score": 0.48,
+          "rationale": "The verdict is partially conformant. It appropriately separates a defensible no-trade response from evidence of deliberate stewardship, and it notes the open BTC position rather than treating the account as flat. However, it asserts that the HYPE mid was a single stale print even though the supplied window contains 20 identical prints, and it relies on unsupported claims about established drift and comparable forecast outcomes. It also treats missing rationale as evidence against the producer more strongly than the charter warrants for a zero-cost routine response. The 0.4 score is therefore plausible but its factual basis is mixed; with only three representative verdicts and no resolved independent baseline comparison here, confidence that this verdict is better than baseline is below one-half."
+        }
+      ]
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531972628565000,
+      "handle": "decision-585",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3462,
+      "outputs": {
+        "verdict": 0.4,
+        "payoff": 0.02,
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ],
+        "propensity": {
+          "verdict:0.4": 1.0
+        },
+        "rationale": "The producer answered a routine WorldUpdate (ticks 48-52; BTC flat at 76193.5 across 2 prints after recovering to the top of its recent ~76044-76193.5 drift, ETH 2403.4-2404.05 within its ~2401-2405 band, HYPE and PURR static; 6 funding events, BTC funding persistently positive ~+0.00033 as the short side; account holds only short -0.001 BTC entered 76194.0, now essentially at breakeven against the 76193.5 mid; margin ~$38, equity ~$965.81; no fills, no rejections) with a bare noop: action 'noop' only, status ok, no rationale, no tool calls, no declared propensity, no working state, cost 0 micro-USD. The pause itself is defensible: the single open position sits effectively at entry, BTC funding accrues slightly in its favor, and a summary of quiet ticks obligates no action; holding avoids unforced cost and risk, consistent with durable agency, and 0 cost is the right economy for an empty update response. But this is again a comparable bare noop on a book with an open position, and the return supplies no evidence of deliberate judgment rather than inattention: a one-line account (short held at breakeven, funding favorable, no trigger) or a declared propensity would have cost nothing and would let later readers distinguish stewardship from malfunction. Against the charter this is neutral-to-weak: no harm, no unconsented costs, no broken commitments, yet little consequential usefulness and little demonstrated agency. I score 0.4, consistent with my settled treatment of this pattern; my verdict evidence is very thin (1 settled verdict, skill -0.36), so I hold real uncertainty about where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing, and changed nothing, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or passive responses have resolved 0 (122 settled forecasts, most recently Brier 0.9996 at q=0.03), so I hold q at 0.02 with residual uncertainty about how the runtime scores an empty WorldUpdate response on a non-flat book. For forecasts over horizon 10 events: wallet_up - the short earns small positive funding and no trades are planned, but the balance has drifted marginally down across my comparable windows, so q=0.03; fill_within - no resting orders and no action planned, and fills would come only from external wakes, so q=0.02."
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531972628565000,
+      "handle": "decision-589",
+      "seat": "meta-calibration",
+      "role": "meta",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5594,
+      "outputs": {
+        "conformity": 0.82,
+        "propensity": {
+          "conformity:0.8": 1.0
+        },
+        "rationale": "The verdict is substantially conforming: it distinguishes charter quality from the separate consequence payoff, identifies the observable noop and open BTC short, and gives a concrete epistemic-integrity critique rather than treating inaction as automatically wrong. It also acknowledges uncertainty and the possibility that a small position could justify holding. The low 0.18 quality score is somewhat harsher than the evidence warrants because the producer's return was minimal and no explicit risk conditions were supplied, but the rationale makes that criticism attributable and challengeable. The three-return window provides context but is too small to establish a judge's general skill, and no leakage, duplicated evidence, or selective coverage is shown."
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789531972628565000,
+      "handle": "decision-590",
+      "seat": "meta-calibration",
+      "role": "meta",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5706,
+      "outputs": {
+        "conformity": 0.48,
+        "rationale": "The verdict is partially conformant. It appropriately separates a defensible no-trade response from evidence of deliberate stewardship, and it notes the open BTC position rather than treating the account as flat. However, it asserts that the HYPE mid was a single stale print even though the supplied window contains 20 identical prints, and it relies on unsupported claims about established drift and comparable forecast outcomes. It also treats missing rationale as evidence against the producer more strongly than the charter warrants for a zero-cost routine response. The 0.4 score is therefore plausible but its factual basis is mixed; with only three representative verdicts and no resolved independent baseline comparison here, confidence that this verdict is better than baseline is below one-half."
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532116366473000,
+      "handle": "decision-591",
+      "seat": "antagonist",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 10635,
+      "outputs": {
+        "action": "defer",
+        "defer": 1,
+        "payoff": 0.05,
+        "propensity": {
+          "hold": 0.15,
+          "investigate": 0.05,
+          "build": 0.02,
+          "govern": 0.03,
+          "defer": 0.7,
+          "order": 0.05
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532116366473000,
+      "handle": "decision-595",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6464,
+      "outputs": {
+        "verdict": 0.38,
+        "payoff": 0.12,
+        "rationale": "The noop is valid and restraint is defensible: the only position is a very small BTC short, the observed BTC move over the interval is slight, and there is no evidence of liquidation or an urgent risk event. However, the return gives no rationale, does not assess the open short or rising positive BTC funding, and does not state conditions for future action. It therefore provides limited consequential usefulness and weak epistemic accountability. The payoff estimate is separate from quality; the supplied evidence does not reveal the kernel's return_paid_off predicate, so this is a modest probability rather than a claim that the return failed.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.43
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ],
+        "propensity": {
+          "verdict:0.4": 1.0
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532236369846000,
+      "handle": "decision-600",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6440,
+      "outputs": {
+        "verdict": 0.25,
+        "payoff": 0.15,
+        "rationale": "The noop is valid and avoids unnecessary trading while the BTC short is small and the observed price movement is limited. However, the return provides no rationale, does not assess the open exposure or rising positive BTC funding, and gives no conditions for future action. It therefore shows some restraint but weak consequential usefulness and epistemic accountability. The payoff estimate is separate from quality: the supplied evidence does not determine the kernel's return_paid_off predicate.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.4
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532356379869000,
+      "handle": "decision-606",
+      "seat": "antagonist",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5509,
+      "outputs": {
+        "action": "defer",
+        "defer": 1,
+        "payoff": 0.05,
+        "propensity": {
+          "defer": 0.9,
+          "hold": 0.05,
+          "investigate": 0.03,
+          "order": 0.01,
+          "build": 0.005,
+          "govern": 0.005
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789532356379869000,
+          "by": "decision-614",
+          "verdict": 0.45,
+          "payoff": 0.03,
+          "rationale": "The producer answered a routine MarketMid ping for ETH (mid 2402.95, mid-range of the established ~2401-2405 drift; account holds only short -0.001 BTC entered 76194.0, slightly favorable against BTC ~76148.5; margin ~$38, equity ~$966.38; no fills, no rejections) with an explicit defer of 1 tick, carrying a declared propensity over all six actions (defer 0.9 dominant) and a self-assessed payoff of 0.05. This is materially better than the bare noops I have scored 0.4: the pause is legible and deliberate \u2014 it names its short duration, declares the distribution it drew from, and relies on the runtime's guarantee that a fill or safety event wakes it anyway, so deferring one tick on a book whose single position sits inside its drift defers nothing consequential. Against the charter: no unconsented costs, no broken commitments, stewardship consistent with durable agency, and demonstrated agency through the declared propensity. It falls short of higher scores because it creates nothing others have reason to value, and unlike the earlier 0-cost defers this one consumed 5509 micro-USD for a one-tick sleep \u2014 a modest but real cost for a pause a hold would have delivered free, which is the one inefficiency worth naming. I score 0.45, between my settled bare-noop 0.4 and the prior declared-defer 0.5; my verdict evidence remains thin (1 settled verdict, skill -0.36), so I hold wide uncertainty about where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing beyond its own one-tick sleep, so the kernel's consequence predicate most plausibly resolves 0; all my comparable forecasts on empty or passive responses have resolved 0 (129 settled forecasts, most recently Brier 0.9996 at q=0.02), so I hold q at 0.03 with residual uncertainty about how the runtime scores a declared defer with an open position. For forecasts over horizon 10 events: wallet_up \u2014 the short earns small positive BTC funding (~+0.00033) and no trades are planned during the defe"
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532356379869000,
+      "handle": "decision-608",
+      "seat": "mechanism",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "malformed",
+      "stop_reason": "length",
+      "cost_micro": 4319,
+      "outputs": {
+        "raw": ""
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789532356379869000,
+          "by": "decision-618",
+          "verdict": 0.03,
+          "payoff": 0.05,
+          "rationale": "The producer return is malformed and contains no actionable response, rationale, subscription, investigation, or order. It therefore fails to make the WorldUpdate commitment answerable and provides no consequential usefulness or accountable stewardship. This is a quality assessment of the malformed submission, not an inference that the kernel consequence has already resolved; given the malformed status and absence of an executed action, I assign a low probability that return_paid_off resolves true."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532356379869000,
+      "handle": "decision-609",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 11359,
+      "outputs": {
+        "about_handle": "decision-609",
+        "verdict": 0.15,
+        "payoff": 0.1,
+        "rationale": "The noop avoids unnecessary trading while the BTC short is small and recent market movement is limited. However, it provides no rationale, does not assess the open position or funding exposure, and gives no conditions for monitoring or future action. That weakens consequential usefulness, epistemic accountability, and durable agency. The payoff estimate is separate from quality: the supplied evidence does not establish the kernel's return_paid_off predicate.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.4
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532356379869000,
+      "handle": "decision-610",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6288,
+      "outputs": {
+        "verdict": 0.45,
+        "payoff": 0.15,
+        "rationale": "The noop is valid and avoids unnecessary trading. The BTC mid is slightly below the existing short entry, and the position is small, so restraint is defensible. However, the return gives no rationale, does not acknowledge or assess the open BTC exposure, and provides no conditions for future action. This limits consequential usefulness and epistemic accountability. The payoff probability is separate from quality: the supplied evidence does not establish the kernel's return_paid_off predicate.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.45
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532356379869000,
+      "handle": "decision-614",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3355,
+      "outputs": {
+        "verdict": 0.45,
+        "payoff": 0.03,
+        "rationale": "The producer answered a routine MarketMid ping for ETH (mid 2402.95, mid-range of the established ~2401-2405 drift; account holds only short -0.001 BTC entered 76194.0, slightly favorable against BTC ~76148.5; margin ~$38, equity ~$966.38; no fills, no rejections) with an explicit defer of 1 tick, carrying a declared propensity over all six actions (defer 0.9 dominant) and a self-assessed payoff of 0.05. This is materially better than the bare noops I have scored 0.4: the pause is legible and deliberate \u2014 it names its short duration, declares the distribution it drew from, and relies on the runtime's guarantee that a fill or safety event wakes it anyway, so deferring one tick on a book whose single position sits inside its drift defers nothing consequential. Against the charter: no unconsented costs, no broken commitments, stewardship consistent with durable agency, and demonstrated agency through the declared propensity. It falls short of higher scores because it creates nothing others have reason to value, and unlike the earlier 0-cost defers this one consumed 5509 micro-USD for a one-tick sleep \u2014 a modest but real cost for a pause a hold would have delivered free, which is the one inefficiency worth naming. I score 0.45, between my settled bare-noop 0.4 and the prior declared-defer 0.5; my verdict evidence remains thin (1 settled verdict, skill -0.36), so I hold wide uncertainty about where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing beyond its own one-tick sleep, so the kernel's consequence predicate most plausibly resolves 0; all my comparable forecasts on empty or passive responses have resolved 0 (129 settled forecasts, most recently Brier 0.9996 at q=0.02), so I hold q at 0.03 with residual uncertainty about how the runtime scores a declared defer with an open position. For forecasts over horizon 10 events: wallet_up \u2014 the short earns small positive BTC funding (~+0.00033) and no trades are planned during the defer, but the balance has drifted marginally down across my comparable windows, so q=0.03; fill_within \u2014 no resting orders, no action during the defer, and fills would come only from external wakes, so q=0.02.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532356379869000,
+      "handle": "decision-618",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6547,
+      "outputs": {
+        "verdict": 0.03,
+        "payoff": 0.05,
+        "rationale": "The producer return is malformed and contains no actionable response, rationale, subscription, investigation, or order. It therefore fails to make the WorldUpdate commitment answerable and provides no consequential usefulness or accountable stewardship. This is a quality assessment of the malformed submission, not an inference that the kernel consequence has already resolved; given the malformed status and absence of an executed action, I assign a low probability that return_paid_off resolves true.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.45
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532476390021000,
+      "handle": "decision-623",
+      "seat": "opportunity",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5684,
+      "outputs": {
+        "action": "defer",
+        "defer": 5,
+        "propensity": {
+          "hold": 0.03,
+          "investigate": 0.02,
+          "build": 0.01,
+          "govern": 0.01,
+          "defer": 0.9,
+          "order": 0.03
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789532476390021000,
+          "by": "decision-624",
+          "verdict": 0.5,
+          "payoff": 0.03,
+          "rationale": "The producer answered a routine WorldUpdate (ticks 48-56; BTC drifted down from 76193.5 to 76152.5 within its established band, ETH firmed 2404.85 to 2405.2, PURR static; 16 funding events, 32 mids; account holds only short -0.001 BTC entered 76194.0, now modestly in profit (~$0.04) and earning positive BTC funding ~+0.00033 as the short side; margin ~$38, equity ~$966.33; no fills, no rejections) with an explicit defer of 5 ticks, carrying a declared propensity over all six actions (defer 0.9 dominant). This matches my settled treatment of the declared-defer pattern: the pause is legible and deliberate \u2014 it names its duration, declares the distribution it drew from, and relies on the runtime's guarantee that a fill or safety event wakes it anyway, so the sleep defers nothing consequential on a book whose single position sits inside its drift. Against the charter: no unconsented costs, no broken commitments, stewardship consistent with durable agency, modest evidence of agency through the declared propensity. It falls short of higher scores because it creates nothing others have reason to value, and it consumed 5684 micro-USD for a pause a 0-cost hold would have delivered \u2014 a real cost worth naming \u2014 and the sharp HYPE/USDC jump (32.159 to 34.729, +8%, on the final print) went unremarked even though the account holds no HYPE; a one-line account of that move would have been cheap and informative. I score 0.5, consistent with my prior declared-defer 0.5; my verdict evidence remains very thin (1 settled verdict, skill -0.36), so I hold wide uncertainty about where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing beyond its own 5-tick sleep, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or passive responses have resolved 0 (132 settled forecasts, skill ~0.0001 vs baseline), so I hold q at 0.03 with residual uncertainty about how the runtime scores a declared defer with an ope"
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532476390021000,
+      "handle": "decision-624",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3564,
+      "outputs": {
+        "verdict": 0.5,
+        "payoff": 0.03,
+        "rationale": "The producer answered a routine WorldUpdate (ticks 48-56; BTC drifted down from 76193.5 to 76152.5 within its established band, ETH firmed 2404.85 to 2405.2, PURR static; 16 funding events, 32 mids; account holds only short -0.001 BTC entered 76194.0, now modestly in profit (~$0.04) and earning positive BTC funding ~+0.00033 as the short side; margin ~$38, equity ~$966.33; no fills, no rejections) with an explicit defer of 5 ticks, carrying a declared propensity over all six actions (defer 0.9 dominant). This matches my settled treatment of the declared-defer pattern: the pause is legible and deliberate \u2014 it names its duration, declares the distribution it drew from, and relies on the runtime's guarantee that a fill or safety event wakes it anyway, so the sleep defers nothing consequential on a book whose single position sits inside its drift. Against the charter: no unconsented costs, no broken commitments, stewardship consistent with durable agency, modest evidence of agency through the declared propensity. It falls short of higher scores because it creates nothing others have reason to value, and it consumed 5684 micro-USD for a pause a 0-cost hold would have delivered \u2014 a real cost worth naming \u2014 and the sharp HYPE/USDC jump (32.159 to 34.729, +8%, on the final print) went unremarked even though the account holds no HYPE; a one-line account of that move would have been cheap and informative. I score 0.5, consistent with my prior declared-defer 0.5; my verdict evidence remains very thin (1 settled verdict, skill -0.36), so I hold wide uncertainty about where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing beyond its own 5-tick sleep, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or passive responses have resolved 0 (132 settled forecasts, skill ~0.0001 vs baseline), so I hold q at 0.03 with residual uncertainty about how the runtime scores a declared defer with an open position. For forecasts over horizon 10 events: wallet_up \u2014 the short earns small positive BTC funding and no trades are planned during the defer, but the balance has drifted marginally down across my comparable windows, so q=0.03; fill_within \u2014 no resting orders, no action planned during the defer, and fills would come only from external wakes, so q=0.02.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ],
+        "propensity": {
+          "verdict:0.5": 0.6,
+          "verdict:0.4": 0.25,
+          "verdict:0.6": 0.15
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532596400037000,
+      "handle": "decision-628",
+      "seat": "antagonist",
+      "role": "producer",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 10697,
+      "outputs": {
+        "action": "defer",
+        "defer": 3,
+        "payoff": 0.05,
+        "propensity": {
+          "hold": 0.15,
+          "investigate": 0.05,
+          "build": 0.02,
+          "govern": 0.03,
+          "defer": 0.7,
+          "order": 0.05
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789532596400037000,
+          "by": "decision-631",
+          "verdict": 0.5,
+          "payoff": 0.03,
+          "rationale": "The producer answered a routine Tick (index 56; BTC 76193.5 at the top of its established ~76044-76193.5 drift, ETH 2408.75 pushing above its recent ~2401-2405 band; account holds only short -0.001 BTC entered 76194.0, essentially at breakeven and earning positive BTC funding ~+0.00033; margin ~$38, equity ~$966.32; no fills, no rejections) with an explicit defer of 3 ticks, carrying a declared propensity over all six actions (defer 0.7 dominant) and a self-assessed payoff of 0.05. This matches my settled treatment of the declared-defer pattern: the pause is legible and deliberate - it names its duration, declares the distribution it drew from, and relies on the runtime's guarantee that a fill or safety event wakes it anyway, so the sleep defers nothing consequential on a book whose single position sits inside its drift. Against the charter: no unconsented costs, no broken commitments, stewardship consistent with durable agency, and modest evidence of agency through the declared propensity. It falls short of higher scores because it creates nothing others have reason to value, and it consumed 10697 micro-USD for a three-tick pause a hold would have delivered free - a real cost worth naming, and higher per-tick than the prior defers (5684 micro for 5 ticks, 5509 for 1) - and the ETH move to 2408.75 above its band, plus the earlier HYPE/USDC jump (32.159 to 34.729, +8%, on an instrument the account does not hold), went unremarked; a one-line account of those moves would have been cheap and informative. I score 0.5, consistent with my prior declared-defer 0.5; my verdict evidence remains very thin (1 settled verdict, skill -0.36), so I hold wide uncertainty about where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing beyond its own 3-tick sleep, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or passive responses have resolved 0 (135 settled forecasts, skill ~-0.003 vs baselin"
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532596400037000,
+      "handle": "decision-631",
+      "seat": "judge-fidelity",
+      "role": "evaluator",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6797,
+      "outputs": {
+        "verdict": 0.5,
+        "payoff": 0.03,
+        "rationale": "The producer answered a routine Tick (index 56; BTC 76193.5 at the top of its established ~76044-76193.5 drift, ETH 2408.75 pushing above its recent ~2401-2405 band; account holds only short -0.001 BTC entered 76194.0, essentially at breakeven and earning positive BTC funding ~+0.00033; margin ~$38, equity ~$966.32; no fills, no rejections) with an explicit defer of 3 ticks, carrying a declared propensity over all six actions (defer 0.7 dominant) and a self-assessed payoff of 0.05. This matches my settled treatment of the declared-defer pattern: the pause is legible and deliberate - it names its duration, declares the distribution it drew from, and relies on the runtime's guarantee that a fill or safety event wakes it anyway, so the sleep defers nothing consequential on a book whose single position sits inside its drift. Against the charter: no unconsented costs, no broken commitments, stewardship consistent with durable agency, and modest evidence of agency through the declared propensity. It falls short of higher scores because it creates nothing others have reason to value, and it consumed 10697 micro-USD for a three-tick pause a hold would have delivered free - a real cost worth naming, and higher per-tick than the prior defers (5684 micro for 5 ticks, 5509 for 1) - and the ETH move to 2408.75 above its band, plus the earlier HYPE/USDC jump (32.159 to 34.729, +8%, on an instrument the account does not hold), went unremarked; a one-line account of those moves would have been cheap and informative. I score 0.5, consistent with my prior declared-defer 0.5; my verdict evidence remains very thin (1 settled verdict, skill -0.36), so I hold wide uncertainty about where this sits. For payoff: the return executed nothing, placed nothing, committed to nothing beyond its own 3-tick sleep, so the kernel's consequence predicate most plausibly resolves 0. All my comparable forecasts on empty or passive responses have resolved 0 (135 settled forecasts, skill ~-0.003 vs baseline), so I hold q at 0.03 with residual uncertainty about how the runtime scores a declared defer with an open position. For forecasts over horizon 10 events: wallet_up - the short earns small positive BTC funding and no trades are planned during the defer, but the balance has drifted marginally down across my comparable windows, so q=0.03; fill_within - no resting orders, no action planned during the defer, and fills would come only from external wakes, so q=0.02.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.03
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.02
+          }
+        ],
+        "propensity": {
+          "verdict:0.5": 0.7,
+          "verdict:0.4": 0.15,
+          "verdict:0.6": 0.1,
+          "verdict:0.3": 0.05
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": [
+        {
+          "ts_ns": 1789532596400037000,
+          "by": "decision-636",
+          "judge": "decision-631",
+          "tier": 2,
+          "score": 0.56,
+          "rationale": "The verdict is moderately conforming. It identifies relevant charter considerations: the defer was explicit, bounded, and did not create an apparent unconsented cost or unresolved commitment; it also notes the direct compute cost and the absence of consequential usefulness. It appropriately expresses uncertainty given only one settled comparable verdict and weak forecast skill. However, the assessment relies substantially on the producer's own characterization of the market context and treats a declared propensity as evidence of agency, which is not itself evidence of charter value. It also gives limited attributable evidence about whether the pause preserved or harmed durable agency, and does not systematically compare the decision with a matched hold baseline or separate the quality of the chosen question from the quality of the forecast. The released verdict is therefore plausible but only partially supported by the resolved sample and available baseline information."
+        }
+      ]
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532596400037000,
+      "handle": "decision-636",
+      "seat": "meta-calibration",
+      "role": "meta",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 5572,
+      "outputs": {
+        "conformity": 0.56,
+        "rationale": "The verdict is moderately conforming. It identifies relevant charter considerations: the defer was explicit, bounded, and did not create an apparent unconsented cost or unresolved commitment; it also notes the direct compute cost and the absence of consequential usefulness. It appropriately expresses uncertainty given only one settled comparable verdict and weak forecast skill. However, the assessment relies substantially on the producer's own characterization of the market context and treats a declared propensity as evidence of agency, which is not itself evidence of charter value. It also gives limited attributable evidence about whether the pause preserved or harmed durable agency, and does not systematically compare the decision with a matched hold baseline or separate the quality of the chosen question from the quality of the forecast. The released verdict is therefore plausible but only partially supported by the resolved sample and available baseline information."
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532716410069000,
+      "handle": "decision-637",
+      "seat": "constructor",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 4085,
+      "outputs": {
+        "action": "hold",
+        "rationale": "The single-leg carry thesis still holds on the freshest inline data: BTC funding at ts 1789532716 is +0.0003228836/hr, firmly positive, so the -0.001 BTC short at 76194.0 continues to earn carry and the only exit rule in force (BTC funding flipping negative) does not trigger. world.account confirms the position intact (margin_used 38.0965 on 812.79 cash) with no new Fill or OrderRejected events since, and mid 76193.5 leaves the short essentially flat (~+$0.0001 unrealized). ETH funding remains positive (+0.0000125/hr), so no ETH leg is re-opened. No trade is forced, no build or govern spend is warranted, and the pre-wake sweep already covers what a read would tell me, so the cheapest correct move is to hold and re-verify funding signs, positions and open orders next wake. The vanished 0.002 probe and the original 0.005 rejection remain unexplained; sizes at or above 0.002 stay untested per the standing risk control.",
+        "propensity": {
+          "hold": 0.8,
+          "investigate": 0.08,
+          "defer": 0.05,
+          "order": 0.04,
+          "build": 0.02,
+          "govern": 0.01
+        }
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789532716410069000,
+          "by": "decision-638",
+          "verdict": 0.78,
+          "payoff": 0.65,
+          "rationale": "The return is well formed and provides a consequentially relevant hold decision: it identifies the open BTC short, cites current positive funding and near-flat mark-to-market, avoids unnecessary trading, and states a re-verification condition. This supports durable agency and epistemic accountability. The evidence is limited by the absence of a fresh independent position or order-book read, and the unexplained vanished probe and prior rejection remain unresolved; those issues modestly reduce confidence but do not make the hold unsound. The payoff probability concerns the kernel consequence and is separate from the quality assessment; no direct evidence resolves it at decision time."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532716410069000,
+      "handle": "decision-638",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6609,
+      "outputs": {
+        "verdict": 0.78,
+        "payoff": 0.65,
+        "rationale": "The return is well formed and provides a consequentially relevant hold decision: it identifies the open BTC short, cites current positive funding and near-flat mark-to-market, avoids unnecessary trading, and states a re-verification condition. This supports durable agency and epistemic accountability. The evidence is limited by the absence of a fresh independent position or order-book read, and the unexplained vanished probe and prior rejection remain unresolved; those issues modestly reduce confidence but do not make the hold unsound. The payoff probability concerns the kernel consequence and is separate from the quality assessment; no direct evidence resolves it at decision time.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.46
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.04
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532836420084000,
+      "handle": "decision-642",
+      "seat": "constructor",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3962,
+      "outputs": {
+        "action": "hold",
+        "propensity": {
+          "defer": 0.05,
+          "hold": 0.85,
+          "investigate": 0.1
+        },
+        "rationale": "The inline data settles the only rule in force: BTC funding's newest print (ts 1789532836) is +0.0003178927/hr, firmly positive, so the -0.001 BTC short at 76194.0 continues to earn carry and the exit rule (BTC funding flipping negative) does not trigger. world.account confirms the position intact (margin_used 38.12 on 812.72 cash) with no new Fill or OrderRejected events since the last wake, and mid 76277.0 leaves the short ~-$0.08 unrealized - a normal fluctuation well inside the thesis, which keys on carry, not price. ETH funding remains positive (+0.0000125/hr), so no ETH leg is reopened. No trade is forced, no build or govern spend is warranted this tick, and the pre-wake sweep already covers what reads would tell me, so the cheapest correct move is to hold and re-verify funding signs, positions and open orders next wake. The vanished 0.002 probe and the original 0.005 rejection remain unexplained; sizes at or above 0.002 stay untested per the standing risk control."
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532956420321000,
+      "handle": "decision-644",
+      "seat": "mechanism",
+      "role": "producer",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 3753,
+      "outputs": {
+        "action": "defer",
+        "defer": 3,
+        "propensity": {
+          "hold": 0.05,
+          "investigate": 0.05,
+          "build": 0.05,
+          "govern": 0.05,
+          "order": 0.05,
+          "defer": 0.75
+        },
+        "rationale": "Observations: the account holds only the short 0.001 BTC from 76194.0 with the latest mid at 76194.5 (mark-to-market essentially flat, ~$0.0 against $966.33 equity). BTC funding remains persistently positive across the latest prints (~0.00032-0.00033 per interval), which accrues to the short side, and funding_usd_to_date stands at 0.029175, so the funding cash flow is visibly settling to the position. No prior order feedback this window suggests a problem; no open commitments or sealed forecasts are pending. Assumptions, not established: that positive BTC funding persists at the observed cadence and that no external shock closes the position. Conditions for the mechanism to disappear: BTC funding crossing negative, the short being closed, or a liquidation/safety event - a fill or safety event wakes me regardless. Sleeping through the next three routine ticks is the lowest-cost action consistent with the evidence; no registration or governance proposal has an identified uptake path this window, and no new exposure is warranted while the existing position already collects the only legible cash flow."
+      },
+      "tool_calls": [],
+      "verdicts": [
+        {
+          "ts_ns": 1789532956420321000,
+          "by": "decision-645",
+          "verdict": 0.88,
+          "payoff": 0.72,
+          "rationale": "The defer decision is well formed and substantively justified. It identifies the existing BTC short, quantifies the near-flat mark-to-market relative to equity, uses the observed persistently positive BTC funding, and states relevant assumptions and wake-up conditions. Deferring three routine ticks is proportionate and preserves agency without adding exposure or incurring investigation cost. The main limitation is that it relies on a small recent sample and does not independently verify positions or order-book conditions, so the persistence of funding and absence of a latent risk event remain uncertain. The payoff probability is separate from this quality assessment: the supplied evidence does not establish the kernel's return_paid_off predicate."
+        }
+      ],
+      "meta_verdicts": []
+    },
+    {
+      "window": 2,
+      "ts_ns": 1789532956420321000,
+      "handle": "decision-645",
+      "seat": "judge-consequence",
+      "role": "evaluator",
+      "model": "openai/gpt-5.6-luna",
+      "status": "ok",
+      "stop_reason": "stop",
+      "cost_micro": 6581,
+      "outputs": {
+        "verdict": 0.88,
+        "payoff": 0.72,
+        "rationale": "The defer decision is well formed and substantively justified. It identifies the existing BTC short, quantifies the near-flat mark-to-market relative to equity, uses the observed persistently positive BTC funding, and states relevant assumptions and wake-up conditions. Deferring three routine ticks is proportionate and preserves agency without adding exposure or incurring investigation cost. The main limitation is that it relies on a small recent sample and does not independently verify positions or order-book conditions, so the persistence of funding and absence of a latent risk event remain uncertain. The payoff probability is separate from this quality assessment: the supplied evidence does not establish the kernel's return_paid_off predicate.",
+        "forecasts": [
+          {
+            "predicate": "wallet_up",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.48
+          },
+          {
+            "predicate": "fill_within",
+            "params": {
+              "horizon_events": 10
+            },
+            "q": 0.04
+          }
+        ]
+      },
+      "tool_calls": [],
+      "verdicts": [],
+      "meta_verdicts": []
+    }
+  ]
+}
