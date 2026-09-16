@@ -77,7 +77,13 @@ def test_unaffordable_committee_vote_counts_toward_insolvency(monkeypatch):
     assert rt.insolvency_count == 1
 
 
-def test_fatal_fill_does_not_drop_later_fills_or_funding():
+def test_a_loss_making_fill_does_not_drop_later_fills_or_funding():
+    """Restated by R3-B. This pinned the settlement of venue effects against the
+    compute wallet -- three ``wallet.settle`` items carrying it from $10 to -$35 and
+    killing the world on a fill. Venue P&L, fees and funding settle on the venue
+    accounts now (edition 3 C5), so the assertions follow them to ``venue.settled``
+    under ``venue_perps``. What this test is actually about is unchanged: one fatal
+    event in a batch drops neither the fills after it nor the funding."""
     rt = make_runtime(balance=10)
     events = [WorldEvent(WorldEventKind.FILL, 1, "test", {
         "order_id": str(i), "coin": "BTC", "is_buy": True, "size": "1", "px": "1",
@@ -87,22 +93,24 @@ def test_fatal_fill_does_not_drop_later_fills_or_funding():
         "coin": "BTC", "paid_usd": "0.000005",
     }))
     rt._settle_exchange_effects(events)
-    assert rt.wallet.balance == -35
+    assert rt.wallet.balance == 10  # authority, untouched by the venue
     assert rt.stats.fills == 2 and rt.funding_to_date == -5
     assert rt.window.fills == 2 and rt.window.notional_micro == 2_000_000
     assert rt.fees_to_date == 40 and rt.realized_to_date == 0
     assert [str(event.kind) for event in rt.internal] == ["Fill", "Fill", "Funding"]
     evidence = rt.ledger._recovery_items()
-    settlements = [item for item in evidence if item["kind"] == "wallet.settle"]
+    assert not [item for item in evidence if item["kind"] == "wallet.settle"]
+    settlements = [item for item in evidence if item["kind"] == "venue.settled"]
     assert [item["amount"] for item in settlements] == [-20, -20, -5]
-    assert [item["balance_after"] for item in settlements] == [-10, -30, -35]
+    assert {item["custody"] for item in settlements} == {"venue_perps"}
+    assert [item["reason"] for item in settlements] == [
+        "exchange_pnl", "exchange_pnl", "funding"]
     # Fills nobody with an open account ordered are refused by the book (A9), yet the
-    # wallet, the stats and the funding observation still see every event.
+    # venue accounts, the stats and the funding observation still see every event.
     assert sum(item["kind"] == "consequence.fill" for item in evidence) == 0
     assert sum(item["kind"] == "consequence.refused" for item in evidence) == 2
     assert sum(item["kind"] == "consequence.funding" for item in evidence) == 1
-    assert rt.wallet.dead and rt.wallet.check_conservation()
-    assert rt._check_termination()
+    assert not rt.wallet.dead and rt.wallet.check_conservation()
 
 
 def test_public_population_tool_is_debited_to_the_caller(monkeypatch):

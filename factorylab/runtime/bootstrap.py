@@ -307,6 +307,7 @@ class BootstrapMixin:
                 self.ledger, self.wallet, exchange=self.exchange,
                 fee_micro=manifest.treasury.fake_fee_micro,
                 max_venice_per_window=manifest.treasury.max_venice_per_window,
+                clock_ns=self.clock,
             )
         else:
             self.treasury = Treasury(
@@ -318,6 +319,7 @@ class BootstrapMixin:
                 max_venice_per_window=manifest.treasury.max_venice_per_window,
                 max_forward_fees_per_window=manifest.treasury.max_forward_fees_per_window,
                 forward_wait_windows=manifest.treasury.forward_wait_windows,
+                clock_ns=self.clock,
             )
         self.wallet.bind_pots(self.treasury.pots)
         self.treasury.rail = JournalProxy(
@@ -648,6 +650,10 @@ class BootstrapMixin:
         self._compute_unaffordable = False
         self.world_consumed = 0
         self.ticks_consumed = 0
+        # Venue effects by custody, per decision, until its outcome is settled: the
+        # consequence line reports provider cost and venue delta separately rather
+        # than one net (edition 3, C5).
+        self.venue_deltas: dict[str, dict[str, int]] = {}
         self.drips_consumed = 0
         # The venue reads prompts are built from, each held for the tick that read it:
         # the listing (#89), the mid prices and the account state. Not resumable

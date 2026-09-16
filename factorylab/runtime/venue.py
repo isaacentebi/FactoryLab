@@ -7,11 +7,22 @@ import sys
 from decimal import Decimal
 
 from factorylab.cortex.request import Return
-from factorylab.kernel.money import money_to_usd, usd_to_micro
+from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.shared import _to_plain
 from factorylab.settlement.lots import LotTable
 from factorylab.world.events import WorldEvent, WorldEventKind
-from factorylab.world.exchange import AccountState, Order, OrderKind, OrderResult
+from factorylab.world.exchange import (
+    AccountState,
+    Order,
+    OrderKind,
+    OrderResult,
+    VenueUnavailable,
+)
+
+
+def _custody_of(market: str) -> str:
+    """Which venue account a fill settles in; a venue keeps spot and perps apart."""
+    return "venue_spot" if market == "spot" else "venue_perps"
 
 
 def wind_down(exchange, ledger, *, dust_micro: int = 1_000_000,
@@ -180,6 +191,24 @@ class VenueMixin:
             self._mids_memo = memo
         return dict(memo[1])
 
+    def _tick_account_observation(self) -> tuple[AccountState | None, str | None, int]:
+        """One account read a tick, its failure included, as ``(account, reason, at_ns)``.
+
+        A failed read is a fact about the tick, not an invitation to ask again:
+        the memo holds the refusal as well as the answer, so a hundred prompts
+        built in one tick ask an unreachable venue once. The caller renders the
+        reason as ``unavailable``; nothing here substitutes a number for it.
+        """
+        tick = self.ticks_consumed
+        memo = getattr(self, "_account_memo", None)
+        if memo is None or memo[0] != tick:
+            try:
+                memo = (tick, self.exchange.account(), None, self.clock.now_ns)
+            except Exception as exc:  # noqa: BLE001 - every read failure is reportable
+                memo = (tick, None, type(exc).__name__, self.clock.now_ns)
+            self._account_memo = memo
+        return memo[1], memo[2], memo[3]
+
     def _tick_account(self) -> AccountState:
         """The venue's account state, read once for the tick that reads it, for prompts only.
 
@@ -191,12 +220,10 @@ class VenueMixin:
         venue directly: a memoised equity or position set is a description of the
         tick, and a consequence must be weighed against the account as it is.
         """
-        tick = self.ticks_consumed
-        memo = getattr(self, "_account_memo", None)
-        if memo is None or memo[0] != tick:
-            memo = (tick, self.exchange.account())
-            self._account_memo = memo
-        return memo[1]
+        account, reason, _at_ns = self._tick_account_observation()
+        if account is None:
+            raise VenueUnavailable(f"venue account unavailable: {reason}")
+        return account
 
     def _refuse_order(self, handle: str, reason: str, *, kind: str = "order.refused",
                       **extra) -> dict:
@@ -219,11 +246,19 @@ class VenueMixin:
                 evidence={"kind": kind, "handle": handle, "ts": self.clock.now_ns})
         return {"status": "rejected", "error": reason}
 
-    def _equity_micro(self) -> int:
+    def _equity_micro(self) -> int | None:
+        """The venue's equity, or ``None`` when the venue would not say (edition 3, C5).
+
+        This used to answer an unreadable venue with the compute wallet's balance.
+        The wallet is authority, not equity held at a venue, and a window that
+        opens on a fabricated figure measures turnover and exposure against a
+        number no custodian ever held. An unknown equity leaves every ratio
+        derived from it unmeasured, which is what it is.
+        """
         try:
             return usd_to_micro(self.exchange.account().equity_usd, rounding="nearest")
-        except RuntimeError:  # read-only live venue: the wallet is the only equity there is
-            return self.wallet.balance
+        except RuntimeError:
+            return None
 
     def _observe_positions(self) -> None:
         """A new peak position notional is recorded before it enters the window."""
@@ -255,6 +290,41 @@ class VenueMixin:
             )
             self.window.max_position_notional_micro = peak
 
+    def _settle_venue(self, settlements: list[tuple]) -> None:
+        """Book venue P&L, fees and funding where they happen: on the venue accounts.
+
+        Edition 3 C5, GPT-6 Pro's third reading §2: "venue P&L, fees and funding
+        settle on the venue accounts only". These effects used to run through
+        ``wallet.settle_batch``, so a trading loss consumed compute authority the
+        venue never touched and could kill a world holding a full OpenRouter
+        balance. The venue's own account state is the record of them; what this
+        writes is the diary evidence -- one item per effect, with the custody it
+        landed in and the decision that owns it -- so the wake, the consequence
+        line and an operator can all read what the venue did without reading it
+        as money leaving the compute wallet.
+
+        The compute wallet moves for model, tool and program charges, rent,
+        releases, transfers between seats and confirmed conversions into provider
+        credit. Nothing here is any of those.
+        """
+        for delta, reference, reason, custody, order_id in settlements:
+            handle = self._order_owner(order_id)
+            self.ledger.append({
+                "kind": "venue.settled", "custody": custody, "amount": delta,
+                "reference": reference, "reason": reason, "handle": handle,
+                "event": self.n, "ts": self.clock.now_ns,
+            })
+            if handle is not None:
+                by_custody = self.venue_deltas.setdefault(handle, {})
+                by_custody[custody] = by_custody.get(custody, 0) + delta
+
+    def _order_owner(self, order_id: str | None) -> str | None:
+        """The decision that placed an order, from the consequence book's own record."""
+        if order_id is None:
+            return None
+        orders = getattr(getattr(self.consequences, "table", None), "orders", None) or ()
+        return next((o.handle for o in orders if o.order_id == str(order_id)), None)
+
     def _settle_exchange_effects(self, evs: list[WorldEvent], *,
                                  observe_positions: bool = True) -> None:
         settlements = []
@@ -280,14 +350,16 @@ class VenueMixin:
                     we.payload["fee_usd"]
                 , rounding="nearest")
                 if delta:
-                    settlements.append((delta, f"fill:{we.payload['order_id']}", "exchange_pnl"))
+                    settlements.append((delta, f"fill:{we.payload['order_id']}", "exchange_pnl",
+                                        _custody_of(we.payload.get("market", "perp")),
+                                        str(we.payload["order_id"])))
             elif we.kind is WorldEventKind.FUNDING:
                 paid = usd_to_micro(we.payload["paid_usd"], rounding="nearest")
                 if paid:
                     settlements.append((-paid, f"funding:{we.payload['coin']}:{we.ts_ns}",
-                                        "funding"))
+                                        "funding", "venue_perps", None))
         if settlements:
-            self.wallet.settle_batch(settlements)
+            self._settle_venue(settlements)
         for we in evs:
             if id(we) not in refused:
                 self.consequences.observe(str(we.kind), dict(we.payload), self.n)
@@ -323,10 +395,10 @@ class VenueMixin:
                 self.funding_to_date -= paid
 
             self.internal.append(self._kernel_event(we))
-        if observe_positions and hasattr(self.exchange, "sync_cash"):
-            self.exchange.sync_cash(
-                getattr(self.treasury, "venue_balance_usd", money_to_usd(self.wallet.balance))
-            )
+        # The venue's cash is no longer pushed here from the compute wallet. That
+        # sync is what made a venue loss spend thinking money and a model call
+        # shrink the trading account: two custodians, one balance. Each keeps its
+        # own now, and ``sync_cash`` survives only as a deliberate funding call.
         if observe_positions:
             self._observe_positions()
 
@@ -512,11 +584,12 @@ class VenueMixin:
                         delta = realized - usd_to_micro(payload["realized_usd"], rounding="nearest")
                         if delta:
                             corrections.append((delta, f"fill:{payload['order_id']}",
-                                                "exchange_pnl"))
+                                                "exchange_pnl", "venue_spot",
+                                                str(payload["order_id"])))
                     self._record_fill_notional(payload)
             if corrections:
-                self.wallet.settle_batch(corrections)
-                delta = sum(change for change, _handle, _reason in corrections)
+                self._settle_venue(corrections)
+                delta = sum(change for change, *_rest in corrections)
                 self.realized_to_date += delta
                 self.window.realized_pnl_micro += delta
         return dict(result)
@@ -531,64 +604,115 @@ class VenueMixin:
         self, handle: str, coin: str, size: Decimal, is_buy: bool,
         price: Decimal | None = None, *, reduce_only: bool = False,
     ) -> str | None:
-        """New exposure is collateralised by the venue's own free collateral, not by thinking money.
+        """New exposure is collateralised by the pot the venue actually charges.
 
-        Edition 3 C5 keeps two pots apart: the compute wallet buys thoughts and the
-        trading principal sits on the venue. This check compared the venue margin an
-        order needs with ``wallet.available`` — the compute wallet net of the
-        protected novelty reserve — and so refused a 0.005 BTC short, about $383 of
-        notional at 2x, on a venue account carrying $851 of perps cash, because the
-        thinking pot had $107 left. Margin is charged by the venue against money that
-        is already on the venue, so that is the pot the requirement is weighed
-        against.
+        Edition 3 C5 keeps three quantities apart: the learning score, the seat's
+        spending entitlement, and the assets a custodian holds. Margin is charged
+        by the venue against money already at the venue, so that is the pot the
+        requirement is weighed against -- never the compute wallet, which is
+        authority to buy thoughts and collateral for nothing.
 
-        The requirement is margin already used, plus the margin resting orders hold,
-        plus the increase this order needs; the pot is the venue's free collateral.
-        Equivalently, and as it is written here: resting margin plus the increase
-        against equity minus margin already used. ``AccountState`` offers
-        ``equity_usd``, ``cash_usd`` and ``margin_used_usd``, and ``equity_usd`` is
-        the honest base of the three. Both adapters compute it the same way — the
-        account marked at mid, unrealised P&L and spot holdings included — whereas
-        ``cash_usd`` is the fake's perps cash but Hyperliquid's ``withdrawable``,
-        which is already net of margin used and of resting orders, so subtracting
-        those from it would count them twice. Equity is read generously across the
-        classes a venue keeps: a perp order is collateralised on testnet by perps
-        cash alone, so this is a ceiling on that account's collateral rather than a
-        promise about it, and the venue's own refusal remains the final word.
+        The pot comes from the venue's own ``collateral_view``, not from a
+        summary figure: GPT-6 Pro's third reading §2 found ``equity_usd`` too
+        broad, because it includes spot marks that are not eligible collateral
+        for a perp. The view states the account mode, the collateral asset, the
+        eligible equity, the margin already used, the margin resting orders hold
+        and whether that is already inside margin used, the leverage acknowledged
+        for this instrument, and when it was observed.
 
-        The leverage wall is untouched and is still the hard cast: ``_order_leverage``
-        gives no discount for leverage this world never acknowledged. Reductions are
-        always allowed, a spot sell needs no collateral, and world-priced losses
-        still settle against the wallet in full.
+        The check is then exactly the reviewer's: incremental margin, plus holds
+        not already reflected in margin used, plus the manifest's precommitted
+        headroom (``[venue] collateral_headroom_usd``; the kill section's
+        ``dust_micro`` is a different thing and is not it), against eligible
+        equity minus margin used.
+
+        Spot and perps are checked separately and against their own balances: a
+        spot buy needs the USDC to pay for it, a spot sell needs the base coin to
+        deliver. Neither borrows the perps account's equity.
+
+        Unknown or stale collateral blocks new risk: a venue that would not say,
+        or that answered from a snapshot older than one tick, cannot be used to
+        justify opening exposure. It never blocks a cancellation or a reduction --
+        ``reduce_only`` returns before any of this -- and the venue's own refusal
+        remains the final word.
         """
-        if "/" in coin and not is_buy:
-            return None
         if reduce_only:
             return None
-        venue_available: Decimal | None = None
+        spot = "/" in coin
+        available: Decimal | None = None
         try:
-            account = self.exchange.account()
+            view = self.exchange.collateral_view(coin, "spot" if spot else "perp")
             mids = self._tick_mids()
             mark = max(mids[coin], price or mids[coin])
-            current = next((p.size for p in account.positions if p.coin == coin), Decimal(0))
-            target = current + (size if is_buy else -size)
-            increase = max(Decimal(0), abs(target) - abs(current)) * mark
-            if increase == 0:
+            headroom = Decimal(str(getattr(self.m.exchange, "collateral_headroom_usd", "0")))
+            stale = self._collateral_stale(view)
+            if stale is not None:
+                reason = stale
+            elif spot:
+                reason = self._spot_collateral(view, coin, size, is_buy, mark, headroom)
+            else:
+                available = view["eligible_equity_usd"] - view["margin_used_usd"]
+                reason = self._perp_collateral(view, coin, size, is_buy, mark, headroom)
+            if reason is None:
                 return None
-            resting = sum((Decimal(str(o["size"])) * Decimal(str(o["price"]))
-                           / self._order_leverage(o["coin"])
-                           for o in self.exchange.open_orders()), Decimal(0))
-            required = increase / self._order_leverage(coin) + resting
-            venue_available = account.equity_usd - account.margin_used_usd
-            if required <= venue_available:
-                return None
-            reason = "order collateral exceeds venue free collateral"
-        except (AttributeError, KeyError, ValueError, ArithmeticError, RuntimeError) as exc:
+        except (AttributeError, KeyError, ValueError, ArithmeticError, RuntimeError,
+                TypeError) as exc:
             reason = f"order collateral unavailable: {type(exc).__name__}"
         self._refuse_order(handle, reason, kind="order.infeasible",
-                           venue_available_usd=None if venue_available is None
-                           else str(venue_available))
+                           venue_available_usd=None if available is None else str(available))
         return reason
+
+    def _collateral_stale(self, view: dict) -> str | None:
+        """An observation older than one tick cannot authorise new risk.
+
+        A deterministic venue computes the view from its own books at the moment
+        it is asked, so there is nothing for it to be stale about. A live venue
+        stamps the account read the view is built from, and Hyperliquid's adapter
+        keeps that stamp when it falls back to its last complete snapshot: the
+        fallback is exactly the case worth refusing.
+        """
+        observed_at = view.get("observed_at_ns")
+        if observed_at is None:
+            return "order collateral unavailable: venue reported no observation time"
+        if getattr(self.exchange, "deterministic", False):
+            return None
+        age = self.clock.now_ns - observed_at
+        if age > self.m.tick_interval_ns:
+            return "order collateral is stale: venue account older than one tick"
+        return None
+
+    def _perp_collateral(self, view: dict, coin: str, size: Decimal, is_buy: bool,
+                         mark: Decimal, headroom: Decimal) -> str | None:
+        """Incremental margin plus unreflected holds plus headroom, against free collateral."""
+        current = Decimal(str(view.get("position_size", 0)))
+        target = current + (size if is_buy else -size)
+        increase = max(Decimal(0), abs(target) - abs(current)) * mark
+        if increase == 0:
+            return None  # a pure reduction releases collateral rather than needing it
+        leverage = min(Decimal(str(view["leverage_for_instrument"])),
+                       self._order_leverage(coin))
+        holds = (Decimal(0) if view["holds_included_in_margin_used"]
+                 else Decimal(str(view["open_order_holds_usd"])))
+        required = increase / leverage + holds + headroom
+        available = view["eligible_equity_usd"] - view["margin_used_usd"]
+        if required <= available:
+            return None
+        return "order collateral exceeds venue free collateral"
+
+    def _spot_collateral(self, view: dict, coin: str, size: Decimal, is_buy: bool,
+                         mark: Decimal, headroom: Decimal) -> str | None:
+        """Spot is delivery, not margin: a buy needs the quote, a sell needs the base."""
+        balances = view.get("spot_available") or {}
+        if is_buy:
+            cost = size * mark + headroom
+            usdc = Decimal(str(balances.get("USDC", 0)))
+            if cost <= usdc:
+                return None
+            return "spot buy exceeds venue USDC balance"
+        held = Decimal(str(balances.get(coin.split("/")[0], 0)))
+        if size <= held:
+            return None
+        return "spot sell exceeds venue base balance"
 
     def _order_leverage(self, coin: str) -> Decimal:
         """Use acknowledged leverage; unknown live leverage receives no collateral discount."""

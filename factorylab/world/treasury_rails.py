@@ -126,6 +126,70 @@ class LiveRail(ClassTransferRail):
         self.cctp = CCTP(testnet=self.testnet, transport=transport)
         self.core = CORE_TEST_WALLET if self.testnet else CORE_WALLET
 
+    def verify_receipt(self, receipt: dict) -> dict | None:
+        """Confirm a claimed x402 receipt against Base itself, or decline to say.
+
+        The seller's spool says a paid call was settled. That is the wake host's
+        word, not a payment: GPT-6 Pro's third reading, "income-spool trust is
+        not payment verification; receipt identity needs chain, transaction,
+        log, asset, recipient". This reads the transaction the receipt names and
+        looks for the transfer it claims -- USDC, on this chain, to the reserve
+        address, for exactly the claimed amount, at the claimed log index when
+        one is given.
+
+        Three answers, and only three. ``confirmed: True`` when the chain shows
+        that transfer. ``confirmed: False`` with a reason when the chain shows
+        something that contradicts the claim -- a reverted transaction, another
+        recipient, another amount -- which the treasury fails closed on. ``None``
+        while it cannot tell: an unfinalized or unfound transaction, or an RPC
+        that would not answer. An unread chain is not evidence of anything, and
+        the claim simply stands until the next tick asks again.
+        """
+        tx_hash = receipt.get("tx")
+        if not isinstance(tx_hash, str) or not tx_hash.startswith("0x"):
+            return {"confirmed": False, "reason": "receipt names no Base transaction"}
+        asset = str(receipt.get("asset") or "USDC").upper()
+        if asset != "USDC":
+            return {"confirmed": False, "reason": f"unsupported settlement asset {asset}"}
+        recipient = receipt.get("recipient") or receipt.get("pay_to") or self.reserve_address
+        if str(recipient).lower() != self.reserve_address.lower():
+            return {"confirmed": False, "reason": "receipt is not addressed to the reserve"}
+        amount = receipt.get("micro")
+        if type(amount) is not int or amount <= 0:
+            return {"confirmed": False, "reason": "receipt carries no positive amount"}
+        try:
+            proof = self.base.proof(tx_hash)
+        except RailError:
+            return None
+        except Exception:  # noqa: BLE001 - an unreachable RPC is not a verdict
+            return None
+        if proof is None:
+            return None  # not finalized, or not on this chain yet
+        if int(proof.get("status", "0x0"), 16) != 1:
+            return {"confirmed": False, "reason": "settlement transaction did not succeed"}
+        topic = event_topic("Transfer(address,address,uint256)")
+        to_word = "0x" + word_address(self.reserve_address).hex()
+        matches = []
+        for index, log in enumerate(proof.get("logs", [])):
+            topics = [t.lower() for t in log.get("topics", [])]
+            if (log.get("address", "").lower() != self.base.chain.usdc.lower()
+                    or len(topics) < 3 or topics[0] != topic.lower()
+                    or topics[2] != to_word.lower() or log.get("removed", False)):
+                continue
+            matches.append((log.get("logIndex", hex(index)), int(log["data"], 16)))
+        claimed_index = receipt.get("log_index")
+        if claimed_index is not None:
+            matches = [m for m in matches if int(str(m[0]), 0) == int(claimed_index)]
+        if not matches:
+            return {"confirmed": False, "reason": "no USDC transfer to the reserve in this "
+                                                  "transaction"}
+        if not any(value == amount for _index, value in matches):
+            return {"confirmed": False, "reason": "transferred amount differs from the receipt"}
+        return {"confirmed": True, "evidence": {"chain": self.base.chain.id, "tx": tx_hash,
+                                                "asset": "USDC",
+                                                "recipient": self.reserve_address,
+                                                "micro": amount}}
+
     def balances(self) -> dict:
         state = self.exchange._info.user_state(self.venue_address)
         spot = self.exchange._info.spot_user_state(self.venue_address)

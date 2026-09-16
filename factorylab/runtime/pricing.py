@@ -23,7 +23,8 @@ class MeasureWindow:
     """Raw material for one reserve window's metric-card observations."""
 
     index: int
-    equity_start_micro: int
+    # None when the venue would not say what its equity was at the window's start.
+    equity_start_micro: int | None
     costs: list[int] = field(
         default_factory=list
     )  # wallet cost of each well-formed producer return

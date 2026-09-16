@@ -26,7 +26,7 @@ import json
 import socket
 from decimal import Decimal
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -583,25 +583,40 @@ def test_characterize_coin_subscription_does_not_filter_delivered_fold():
 # launch identity, so renaming a diary finds the same line.
 
 
-def test_characterize_venue_loss_can_kill_untouched_compute_credit():
+def test_a_venue_loss_no_longer_touches_untouched_compute_credit():
+    """Restated by R3-B. This pinned the defect: a $20 venue loss ran through
+    ``wallet.settle_batch`` and took the compute wallet from $10 to -$10.10, dead,
+    while the provider credit it was supposed to represent had not been spent at
+    all -- "venue losses can consume fictitious compute resources". The finding is
+    repaired rather than characterized now, so the assertion is the repair: the
+    same loss settles on the venue account, is ledgered as ``venue.settled`` under
+    ``venue_perps``, and leaves compute authority and provider inventory where
+    they were."""
     ledger = Ledger()
     wallet = Wallet(10_000_000, ledger)
     untouched_provider_credit = 10_000_000
     rt = SimpleNamespace(
         wallet=wallet, consequences=SimpleNamespace(table=None, observe=lambda *a: None),
-        n=0, stats=SimpleNamespace(fills=0),
+        n=0, stats=SimpleNamespace(fills=0), clock=SimpleNamespace(now_ns=7),
         window=SimpleNamespace(fills=0, notional_micro=0, realized_pnl_micro=0, index=0),
         realized_to_date=0, fees_to_date=0, funding_to_date=0, ledger=ledger,
-        internal=[], _kernel_event=lambda e: e,
+        internal=[], _kernel_event=lambda e: e, venue_deltas={},
     )
+    # The venue-side booking is the production method, bound to this double.
+    rt._settle_venue = MethodType(VenueMixin._settle_venue, rt)
+    rt._order_owner = MethodType(VenueMixin._order_owner, rt)
     fill = WorldEvent(WorldEventKind.FILL, 1, "fake", {
         "order_id": "1", "coin": "BTC", "market": "perp", "realized_usd": "-20",
         "fee_usd": "0.1", "size": "1", "px": "100", "is_buy": False,
     })
     VenueMixin._settle_exchange_effects(rt, [fill], observe_positions=False)
-    assert wallet.balance == -10_100_000 and wallet.dead
+    assert wallet.balance == 10_000_000 and not wallet.dead
     assert untouched_provider_credit == 10_000_000
-    assert wallet.check_conservation()  # arithmetic conservation is not economic truth
+    assert wallet.check_conservation()
+    settled = [i for i in ledger.items() if i.get("kind") == "venue.settled"]
+    assert [(i["custody"], i["amount"]) for i in settled] == [("venue_perps", -20_100_000)]
+    # The venue's own realised P&L still counts, where it happened.
+    assert rt.realized_to_date == -20_000_000 and rt.fees_to_date == 100_000
 
 
 def test_control_payoff_net_excludes_already_paid_compute():

@@ -68,12 +68,18 @@ def test_scripted_world_compute_starvation_is_final_under_phase4() -> None:
     assert s["stats"]["exclusions"] > 0
 
 
-def test_crash_world_dies_and_releases_seal_spec_condition_3() -> None:
+def test_crash_world_wipes_its_venue_without_spending_its_compute_authority() -> None:
+    """Restated by R3-B. The crash world's shocks gap a leveraged long through
+    maintenance margin, and its wallet used to reach zero because the realised loss
+    settled there: "venue losses can consume fictitious compute resources". The loss
+    is as large as it ever was and the venue account still goes negative; what it no
+    longer does is buy thoughts. The world keeps the compute authority it has not
+    spent. Death and seal release are covered above, by compute starvation, which is
+    what actually ends a world that has run out of money to think with."""
     m = load_manifest("scripted-crash")
     s = run_world(m, events=600, seed=2)
-    assert s["terminated"] is True and s["termination_reason"] == "balance_zero"
-    assert s["seal_key_released"] is True
-    assert s["wallet_balance_micro"] <= 0
+    assert s["terminated"] is False and s["termination_reason"] is None
+    assert s["wallet_balance_micro"] > 0  # authority, not spent by the venue
     assert s["wallet_conservation"] is True
 
 
@@ -870,7 +876,13 @@ def test_self_crossing_limit_tools_cannot_manufacture_paid_off_return():
     runtime.consequences.resolve(0)
     payoff = runtime.consequences.payoff(wash)
     assert payoff.net_micro == -70_000 and payoff.y == 0
-    assert runtime.wallet.balance == runtime.initial - 70_000
+    # Restated by R3-B: the two fees are the venue's, not the compute wallet's, so
+    # they are asserted where they settle. The point of the test is unchanged -- a
+    # wash trade costs its maker the fees and pays nothing off.
+    settled = [i for i in runtime.ledger._recovery_items() if i["kind"] == "venue.settled"]
+    assert sum(i["amount"] for i in settled) == -70_000
+    assert {i["custody"] for i in settled} == {"venue_perps"}
+    assert runtime.wallet.balance == runtime.initial
 
 
 def test_resting_limit_fill_and_reduce_only_tool_keep_original_return_attribution():
