@@ -295,7 +295,7 @@ class SchematicsMixin:
         self._ensure_connector_tool()
         from factorylab.runtime.notes import counts
         try:
-            acct = self.exchange.account()
+            acct = self._tick_account()
             account = {
                 "equity_usd": str(acct.equity_usd),
                 "cash_usd": str(acct.cash_usd),
@@ -717,7 +717,7 @@ class SchematicsMixin:
         """The factory's money, by class, with principal and income kept apart."""
         pots = self.wallet.pots()
         try:
-            equity = self.exchange.account().equity_usd
+            equity = self._tick_account().equity_usd
             trading = str(equity)
         except RuntimeError:
             trading = _usd(pots.get("venue"))

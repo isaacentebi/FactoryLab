@@ -334,7 +334,18 @@ def test_immune_adjusts_swap_router_rows_without_losing_delayed_decisions():
 
 
 @pytest.mark.parametrize("mode", ["direct", "market-tool", "limit-tool"])
-def test_orders_cannot_commit_protected_novelty_collateral(mode):
+def test_an_empty_thinking_pot_does_not_stop_an_order_the_venue_can_carry(mode):
+    """Rehearsal 3, defect 1: the protected novelty reserve is not order collateral.
+
+    This test pinned the opposite until edition 3's live rehearsal, where a 0.005
+    BTC short — about $383 of notional at 2x — was refused on a venue account
+    holding $851 of perps cash, because the compute wallet net of the protected
+    reserve had $107 left. C5 keeps the two pots apart by design: the wallet buys
+    thoughts and the trading principal sits on the venue, so an empty wallet is not
+    a reason to refuse an order the venue can collateralise. What refuses one now is
+    the venue's own free collateral; ``tests/audit/test_r1_venue_collateral`` pins
+    that, and the leverage wall below is still the hard cast.
+    """
     from factorylab.cortex.request import Return
 
     rt = runtime()
@@ -343,24 +354,31 @@ def test_orders_cannot_commit_protected_novelty_collateral(mode):
     rt.consequences.start(incumbent, 0)
     hold = rt.wallet.reserve(rt.wallet.available, incumbent, "model:fake-opus")
     rt.wallet.commit(hold, hold.amount)
+    assert rt.wallet.available == 0 and rt.reserve.remaining()
     before = rt.exchange.account().positions
     if mode == "direct":
         rt._execute_outputs(Return(incumbent, {
             "action": "order", "coin": "BTC", "side": "buy", "size": "0.0001",
         }, 0, "ok"))
-        assert rt.stats.orders_rejected == 1
+        assert rt.stats.orders_placed == 1 and rt.stats.orders_rejected == 0
     else:
         args = {"coin": "BTC", "side": "buy", "size": "0.0001"}
         if mode == "limit-tool":
             args["price"] = str(rt.exchange.mids()["BTC"] / 2)
-        result, cost = rt._run_tool("seed-decider", incumbent, {
+        result, _cost = rt._run_tool("seed-decider", incumbent, {
             "tool": "venue.place_limit" if mode == "limit-tool" else "venue.place_market",
             "args": args,
         })
-        assert result["status"] == "rejected" and cost == 0
-    assert rt.exchange.account().positions == before
-    assert rt.exchange.open_orders() == []
-    assert rt.wallet.available == 0
+        assert result["status"] in ("filled", "resting")
+    # A market order takes the position; the limit rests below the mid and waits.
+    assert (rt.exchange.account().positions != before) is (mode != "limit-tool")
+    assert bool(rt.exchange.open_orders()) is (mode == "limit-tool")
+    # The thinking pot is no gate on the order, and no longer fenced off from it
+    # either: a filled order's fee settles against this wallet like every other
+    # world-priced loss, so it ends below zero and into the protected share. The
+    # gate never prevented that — a loss settles whatever the gate allowed — and
+    # separating the two pots for real is the funded world's own question.
+    assert rt.wallet.available <= 0
 
 
 def test_learning_death_cannot_be_hidden_by_naming_a_card_registrations():
@@ -412,8 +430,11 @@ def test_sortition_threshold_counts_settled_decisions_only():
 
 
 def test_order_protection_uses_acknowledged_leverage_not_the_maximum():
-    from decimal import Decimal
+    """The leverage wall is unchanged by defect 1: only the pot it guards moved.
 
+    The notional is sized from the venue's free collateral now rather than from the
+    compute wallet, because that is what an order is collateralised by.
+    """
     rt = runtime()
     rt._manage_reserve_window()
     handle = decision(rt, "seed-decider", settled=True)
@@ -422,8 +443,10 @@ def test_order_protection_uses_acknowledged_leverage_not_the_maximum():
         "tool": "venue.set_leverage", "args": {"coin": "BTC", "leverage": 1},
     })
     assert result["status"] == "ok"
-    # At 1x this exceeds ordinary collateral, although the same notional fits at 3x.
-    notional = Decimal(rt.wallet.available + rt.reserve.remaining() // 2) / 1_000_000
+    account = rt.exchange.account()
+    # At 1x this exceeds the venue's free collateral, although the same notional
+    # fits three times over at the venue's maximum 3x.
+    notional = (account.equity_usd - account.margin_used_usd) * 2
     size = notional / rt.exchange.mids()["BTC"]
     result, _ = rt._run_tool("seed-decider", handle, {
         "tool": "venue.place_market", "args": {"coin": "BTC", "side": "buy", "size": str(size)},

@@ -342,12 +342,15 @@ class Runtime(
         self.ledger.append(
             {"kind": "snapshot", "boundary": boundary, "n": self.n, "state": state}
         )
-        # The held venue listing is not in the checkpoint — it is 260 KB of the venue's
-        # own facts, and a checkpoint is a continuation, not a cache. Dropping it here
-        # is what makes it safe to leave out: a resume restores this checkpoint with no
-        # listing held, and the run that wrote it holds none from this point either, so
-        # the replayed tail asks the venue exactly where the recorded tail did.
+        # The held venue reads are not in the checkpoint — the listing, the mids and
+        # the account state are the venue's own facts, and a checkpoint is a
+        # continuation, not a cache. Dropping them here is what makes it safe to leave
+        # them out: a resume restores this checkpoint holding none of them, and the run
+        # that wrote it holds none from this point either, so the replayed tail asks
+        # the venue exactly where the recorded tail did.
         self._instruments_memo = None
+        self._mids_memo = None
+        self._account_memo = None
         return True
 
     def _resume_at(self, now_ns: int) -> None:
@@ -744,7 +747,7 @@ class Runtime(
         payload = _to_plain(ev.payload)
         if ev.kind is EventKind.TICK:
             try:
-                acct = self.exchange.account()
+                acct = self._tick_account()
                 payload["account"] = {
                     "equity_usd": str(acct.equity_usd),
                     "positions": [
@@ -757,7 +760,7 @@ class Runtime(
                     "equity_usd": str(money_to_usd(self.wallet.balance)),
                     "positions": [],
                 }
-            payload["mids"] = {c: str(m) for c, m in self.exchange.mids().items()}
+            payload["mids"] = {c: str(m) for c, m in self._tick_mids().items()}
         if ev.kind is EventKind.WORLD_UPDATE and sample.chosen != NOOP:
             # C2: the event carries the world every subscriber could have read; the
             # seat that was drawn reads its own fold, which reaches back to the last

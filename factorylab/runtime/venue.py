@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import json
-from decimal import ROUND_CEILING, Decimal
+from decimal import Decimal
 
 from factorylab.cortex.request import Return
 from factorylab.kernel.money import money_to_usd, usd_to_micro
 from factorylab.runtime.shared import _to_plain
 from factorylab.settlement.lots import LotTable
 from factorylab.world.events import WorldEvent, WorldEventKind
-from factorylab.world.exchange import Order, OrderKind, OrderResult
+from factorylab.world.exchange import AccountState, Order, OrderKind, OrderResult
 
 
 def wind_down(exchange, ledger, *, dust_micro: int = 1_000_000) -> dict:
@@ -167,6 +167,50 @@ class VenueMixin:
             return (*self.m.exchange.coins, *self.m.exchange.spot_pairs)
         return (*tools.coins, *tools.spot_pairs)
 
+    def _tick_mids(self) -> dict[str, Decimal]:
+        """The venue's mid prices, read once for the tick that reads them.
+
+        The same memo #89 gave the venue's instrument listing, for the same reason.
+        A live venue prices every coin it lists, about 58 KB a read, and every read
+        through the recorded-I/O layer is written into the diary in full: rehearsal 3
+        read mids 860 times in five hours and wrote 50 MB of the 194 MB diary doing
+        it. A tick's prompts are all built from one price, so they read one.
+
+        The memo sits here, above the recorder, so a replayed diary sees exactly the
+        calls that were recorded, and ``_snapshot`` drops it at every checkpoint so a
+        replayed tail asks the venue where the recorded tail did. It is never saved:
+        the first prompt after a resume reads afresh and records that read.
+
+        Only prompt building and the pre-submission collateral check read through
+        here. Everything a price has a consequence for — the tick broadcast, fills,
+        funding, marking positions at a window boundary, a watcher's trigger, and the
+        population's own paid ``venue.mids`` call — reads the venue itself.
+        """
+        tick = self.ticks_consumed
+        memo = getattr(self, "_mids_memo", None)
+        if memo is None or memo[0] != tick:
+            memo = (tick, self.exchange.mids())
+            self._mids_memo = memo
+        return dict(memo[1])
+
+    def _tick_account(self) -> AccountState:
+        """The venue's account state, read once for the tick that reads it, for prompts only.
+
+        Rehearsal 3 read the account 4,198 times in five hours, 3.5 MB of diary, for
+        the world block and the tick payload of every prompt in the tick. One read a
+        tick answers all of them, under the same memo discipline as ``_tick_mids``.
+
+        Prompt building only. Order placement and every settlement path read the
+        venue directly: a memoised equity or position set is a description of the
+        tick, and a consequence must be weighed against the account as it is.
+        """
+        tick = self.ticks_consumed
+        memo = getattr(self, "_account_memo", None)
+        if memo is None or memo[0] != tick:
+            memo = (tick, self.exchange.account())
+            self._account_memo = memo
+        return memo[1]
+
     def _refuse_order(self, handle: str, reason: str, *, kind: str = "order.refused",
                       **extra) -> dict:
         """Publish one refusal that happened before any intent, and tell its author why.
@@ -317,7 +361,7 @@ class VenueMixin:
             self._refuse_order(ret.handle,
                                f"order output is not a readable order: {type(exc).__name__}")
             return
-        reason = self._order_exclusion(ret.handle, order.coin, order.size, order.is_buy)
+        reason = self._order_collateral(ret.handle, order.coin, order.size, order.is_buy)
         result = ({"status": "rejected", "error": reason} if reason else self._venue_write(
             ret.handle, "venue.place_market", {"coin": order.coin,
                 "side": "buy" if order.is_buy else "sell", "size": str(order.size),
@@ -490,22 +534,48 @@ class VenueMixin:
             if intent["result"]["status"] == "uncertain":
                 self._recover_order(client_id)
 
-    def _order_exclusion(
+    def _order_collateral(
         self, handle: str, coin: str, size: Decimal, is_buy: bool,
         price: Decimal | None = None, *, reduce_only: bool = False,
     ) -> str | None:
-        """Protected compute is excluded from collateral available for new order exposure.
+        """New exposure is collateralised by the venue's own free collateral, not by thinking money.
 
-        Existing margin and resting orders count before new exposure. Reductions
-        remain available to unwind risk; world-priced losses still settle in full.
+        Edition 3 C5 keeps two pots apart: the compute wallet buys thoughts and the
+        trading principal sits on the venue. This check compared the venue margin an
+        order needs with ``wallet.available`` — the compute wallet net of the
+        protected novelty reserve — and so refused a 0.005 BTC short, about $383 of
+        notional at 2x, on a venue account carrying $851 of perps cash, because the
+        thinking pot had $107 left. Margin is charged by the venue against money that
+        is already on the venue, so that is the pot the requirement is weighed
+        against.
+
+        The requirement is margin already used, plus the margin resting orders hold,
+        plus the increase this order needs; the pot is the venue's free collateral.
+        Equivalently, and as it is written here: resting margin plus the increase
+        against equity minus margin already used. ``AccountState`` offers
+        ``equity_usd``, ``cash_usd`` and ``margin_used_usd``, and ``equity_usd`` is
+        the honest base of the three. Both adapters compute it the same way — the
+        account marked at mid, unrealised P&L and spot holdings included — whereas
+        ``cash_usd`` is the fake's perps cash but Hyperliquid's ``withdrawable``,
+        which is already net of margin used and of resting orders, so subtracting
+        those from it would count them twice. Equity is read generously across the
+        classes a venue keeps: a perp order is collateralised on testnet by perps
+        cash alone, so this is a ceiling on that account's collateral rather than a
+        promise about it, and the venue's own refusal remains the final word.
+
+        The leverage wall is untouched and is still the hard cast: ``_order_leverage``
+        gives no discount for leverage this world never acknowledged. Reductions are
+        always allowed, a spot sell needs no collateral, and world-priced losses
+        still settle against the wallet in full.
         """
         if "/" in coin and not is_buy:
             return None
-        if reduce_only or not self.reserve.remaining():
+        if reduce_only:
             return None
+        venue_available: Decimal | None = None
         try:
             account = self.exchange.account()
-            mids = self.exchange.mids()
+            mids = self._tick_mids()
             mark = max(mids[coin], price or mids[coin])
             current = next((p.size for p in account.positions if p.coin == coin), Decimal(0))
             target = current + (size if is_buy else -size)
@@ -515,15 +585,16 @@ class VenueMixin:
             resting = sum((Decimal(str(o["size"])) * Decimal(str(o["price"]))
                            / self._order_leverage(o["coin"])
                            for o in self.exchange.open_orders()), Decimal(0))
-            required = account.margin_used_usd + increase / self._order_leverage(coin) + resting
-            ceiling = int((required * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
-            if ceiling <= self.wallet.available:
+            required = increase / self._order_leverage(coin) + resting
+            venue_available = account.equity_usd - account.margin_used_usd
+            if required <= venue_available:
                 return None
-            reason = "order collateral exceeds available wallet balance"
+            reason = "order collateral exceeds venue free collateral"
         except (AttributeError, KeyError, ValueError, ArithmeticError, RuntimeError) as exc:
             reason = f"order collateral unavailable: {type(exc).__name__}"
         self._refuse_order(handle, reason, kind="order.infeasible",
-                           available=self.wallet.available)
+                           venue_available_usd=None if venue_available is None
+                           else str(venue_available))
         return reason
 
     def _order_leverage(self, coin: str) -> Decimal:
