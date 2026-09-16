@@ -262,7 +262,10 @@ def test_wind_down_false_leaves_the_venue_exactly_as_it_was():
     before = rt.exchange.account()
     report = rt.kill("explicit_kill:operator")
 
-    assert report == {"attempted": False, "orders": 0}
+    # Restated for the GPT-6 third reading (§3, §6.D): a kill that attempted no wind-down
+    # has not reconciled anything, so the report says the exposure state is unknown rather
+    # than leaving the caller to read "no orders closed" as "flat".
+    assert report == {"attempted": False, "orders": 0, "exposure_status": "unknown"}
     assert len(rt.exchange.open_orders()) == 1
     after = rt.exchange.account()
     assert [(p.coin, p.size) for p in after.positions] == [

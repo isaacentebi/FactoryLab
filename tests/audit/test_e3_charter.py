@@ -314,7 +314,17 @@ def test_an_objection_is_validated_against_the_charter():
                            charter=charter).measurement == "avoidably_unresolved_share"
 
 
-def test_an_objection_is_ledgered_and_scored_like_a_verdict_and_settles_nothing():
+def test_an_objection_is_ledgered_as_an_open_claim_and_scores_and_settles_nothing():
+    """Restated for the GPT-6 third reading (§3, §7: "fidelity objections scored against
+    the proxy they challenge").
+
+    This test used to pin the circular scoring: the objection says the favourable
+    measurement does not serve the value, and the runtime then graded that claim by the
+    very measurement it challenges, so a judge that objected to a good-looking proxy was
+    punished by the proxy. The repair keeps the objection as a recorded, contestable
+    claim — ledgered, returned in the evidence, carried to independent adjudication —
+    and scores nothing with it. The judge's own verdict is scored exactly as before.
+    """
     charter, _prices = edition3_charter()
     ledger = Ledger(clock_ns=lambda: 100)
     queue = DecisionQueue(ledger, clock_ns=lambda: 100)
@@ -328,13 +338,16 @@ def test_an_objection_is_ledgered_and_scored_like_a_verdict_and_settles_nothing(
     assert recorded == FidelityObjection(**objection_payload())
     result = settler.settle_verdict(evaluator_id="judge-a", about_handle="return-1",
                                     q=0.9, share=0.8, judge_handle="judge-1")
-    # The objection claimed blame with confidence 0.75 and blame of 0.8 landed:
-    # scored by the same proper score as the verdict, against the same fact.
+    # The objection claimed blame with confidence 0.75 and blame of 0.8 landed. It is
+    # returned as evidence and scored by nothing: the challenged proxy cannot certify
+    # or refute its own fidelity, so the claim stays open until something independent
+    # adjudicates it. The judge's verdict is still scored, against the same fact.
     assert result.objection == recorded
-    assert result.objection_brier == pytest.approx(1 - (0.75 - 0.8) ** 2)
+    assert result.objection_brier is None
+    assert result.objection_baseline_brier is None
     assert result.brier == pytest.approx(1 - (0.9 - 0.2) ** 2)
-    # It is a verdict score and nothing else: no decision settled, no coverage earned.
-    assert standing.snapshot()["judge-a"]["verdict_n"] == 2
+    # Only the verdict enters standing: the objection adds no score of its own.
+    assert standing.snapshot()["judge-a"]["verdict_n"] == 1
     assert standing.coverage("judge-a") == 0.0
     # One objection is scored once.
     assert settler.objection("judge-1") is None

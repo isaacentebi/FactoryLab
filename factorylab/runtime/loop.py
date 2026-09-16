@@ -758,7 +758,14 @@ class Runtime(
                     "equity_usd": str(money_to_usd(self.wallet.balance)),
                     "positions": [],
                 }
-            payload["mids"] = {c: str(m) for c, m in self._tick_mids().items()}
+            try:
+                payload["mids"] = {c: str(m) for c, m in self._tick_mids().items()}
+            except RuntimeError as exc:  # VenueUnavailable and friends
+                # A price the venue would not give is weather, not death, and it is
+                # reported as unavailable rather than invented: the account read above
+                # has always worked this way, and the mids read is the same kind of
+                # fact. GPT-6 third reading, §11: "missing data stays unavailable".
+                payload["mids_unavailable"] = type(exc).__name__
         if ev.kind is EventKind.WORLD_UPDATE and sample.chosen != NOOP:
             # C2: the event carries the world every subscriber could have read; the
             # seat that was drawn reads its own fold, which reaches back to the last

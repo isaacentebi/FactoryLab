@@ -1,4 +1,4 @@
-"""C9: the artifact archive keeps content-addressed bytes, ledgered first, never deleted."""
+"""C9: the artifact archive keeps content-addressed bytes, written first, never deleted."""
 
 import hashlib
 import os
@@ -35,7 +35,16 @@ def test_artifact_root_sits_beside_the_ledger():
     assert artifact_root(Path("/x/world.jsonl")) == Path("/x/world.artifacts")
 
 
-def test_put_ledgers_before_writing_and_get_returns_the_same_bytes(tmp_path):
+def test_put_writes_bytes_before_ledgering_and_get_returns_the_same_bytes(tmp_path):
+    """Restated for the GPT-6 third reading (§3, "references can precede durable bytes").
+
+    This test used to pin the opposite order: the ledger item first, the bytes after.
+    The write-ahead repair reversed it on purpose, because a record without bytes is an
+    authenticated reference to something unreadable, and every reader of the diary — a
+    continuity head, an inbox item, a checkpoint — treats such a reference as real. The
+    ``readers`` grant on the record is the same repair's second half: the second writer
+    of identical bytes is a reader of the first's artifact rather than a new owner.
+    """
     archive, ledger = store(tmp_path)
     data = b'{"n": 1}'
     sha = archive.put(data, owner="prog-a", kind="program.state")
@@ -51,7 +60,8 @@ def test_put_ledgers_before_writing_and_get_returns_the_same_bytes(tmp_path):
     assert archive.get(sha) == data
     assert archive.owner_for(sha) == "prog-a"
     assert archive.list() == [{"sha": sha, "owner": "prog-a", "kind": "program.state",
-                               "bytes": len(data), "ts": 8, "public": False}]
+                               "bytes": len(data), "ts": 8, "public": False,
+                               "readers": ["prog-a"]}]
     assert archive.entries() == [(sha, "prog-a", False, len(data), 8)]
 
 

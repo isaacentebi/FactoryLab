@@ -6,8 +6,10 @@ ledger under ``runs/<world>.artifacts/<sha>``, so a diary reader can verify what
 a seat kept without the bytes themselves passing through the chain. A world
 without a ledger path (a test runtime) keeps the bytes in memory.
 
-Guarantees: the ledger item precedes the bytes, so a crash between them leaves
-a record without bytes rather than bytes without a record; a put is idempotent
+Guarantees: the bytes are durable before the ledger item names them, so a crash
+between them leaves unreferenced bytes rather than an authenticated reference to
+bytes that are not there (GPT-6 third reading, §3: "references can precede
+durable bytes"); a put is idempotent
 by content, so replay after a crash rewrites nothing; a read verifies the hash
 it was asked for, so a tampered file is refused rather than served; nothing
 here deletes — retirement of an owner is not the archive's business, and the
@@ -52,7 +54,7 @@ def _valid_sha(sha: Any) -> str:
 
 
 class ArtifactStore:
-    """Put, get and list artifacts; every put is a ledger item before it is a file."""
+    """Put, get and list artifacts; every put is a durable file before it is a ledger item."""
 
     def __init__(self, ledger: Any, *, root: str | os.PathLike[str] | None,
                  clock_ns: Callable[[], int]) -> None:
@@ -64,7 +66,7 @@ class ArtifactStore:
         self._memory: dict[str, bytes] = {}
 
     def put(self, data: bytes, *, owner: str, kind: str, public: bool = False) -> str:
-        """Archive ``data`` for ``owner`` and return its hash; the record precedes the bytes."""
+        """Archive ``data`` for ``owner`` and return its hash; the bytes precede the record."""
         if not isinstance(data, (bytes, bytearray)):
             raise TypeError("artifact data must be bytes")
         if not isinstance(owner, str) or not owner or not isinstance(kind, str) or not kind:
@@ -157,6 +159,11 @@ class ArtifactStore:
         """
         try:
             sha = _valid_sha(sha)
+            if sha not in self.index:
+                # Unindexed durable bytes confer no read authority, but a hash the
+                # archive never saw at all is unknown, not private, and says so.
+                self.get(sha)
+                return {"sha": sha, "error": PRIVATE_REFUSAL}
             if not self.visible_to(sha, reader, lineage_of):
                 return {"sha": sha, "error": PRIVATE_REFUSAL}
             data = self.get(sha)

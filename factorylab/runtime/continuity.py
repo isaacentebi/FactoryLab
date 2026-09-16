@@ -109,7 +109,11 @@ class WorkingState:
         return successor
 
     def render(self, seat: str) -> dict[str, Any] | None:
-        """The head as the seat is shown it: ``{sha, bytes, state}``, verbatim, or None."""
+        """The head as the seat is shown it: ``{sha, bytes, state}``, verbatim.
+
+        None means this seat has no head. A head whose bytes cannot be read raises:
+        an unreadable state is an unavailable fact, never the absence of one.
+        """
         record = self.heads.get(seat)
         if record is None:
             return None
@@ -212,7 +216,7 @@ class OutcomeInbox:
         return record
 
     def body(self, sha: str) -> dict[str, Any] | None:
-        """The stored body of one item, or None when its bytes are not there."""
+        """The stored body of one item; an item whose bytes are gone is unavailable, not absent."""
         try:
             return json.loads(self.artifacts.get(sha).decode("utf-8"))
         except Exception as exc:

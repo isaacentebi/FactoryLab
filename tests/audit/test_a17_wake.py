@@ -230,7 +230,13 @@ def test_a17_no_sealed_field_appears_anywhere_in_the_output(scripted, tmp_path):
     folded = {k: v for k, v in data.items() if k != "returns"}
     assert not _keys(folded) & SEALED_KEYS
     assert written not in json.dumps(folded)
-    assert data["returns"]["rows"][-1]["outputs"] == {"truncated_text": written}
+    # Restated for the GPT-6 third reading (§3): an unparseable diary text is no longer
+    # republished verbatim as ``truncated_text``. The seat's own words are exactly what
+    # a public projection must not leak when it cannot tell which fields it is holding,
+    # so the wake says the outputs are unavailable and the written text appears nowhere.
+    assert data["returns"]["rows"][-1]["outputs"] == {
+        "outputs_unavailable": "unparseable_or_truncated"}
+    assert written not in document and written not in page
     assert not _keys(data["returns"]) & {"propensities", "chosen", "weights", "gamma",
                                          "learner", "learner_id", "memory", "memories",
                                          "prompt", "system_prompt", "prompt_text"}
