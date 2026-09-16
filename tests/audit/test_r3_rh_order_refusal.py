@@ -1,6 +1,6 @@
 """Round three, rehearsal row T54: a refused order is public before it is a statistic.
 
-The rehearsal's SOL order was refused by ``_order_exclusion`` before submission,
+The rehearsal's SOL order was refused by ``_order_collateral`` before submission,
 and the report reads "a rejected order leaves no ledger item at all". Half of
 that is a naming mismatch: a collateral exclusion already wrote
 ``order.infeasible``. What was true is that no refusal of any shape reached the
@@ -34,10 +34,17 @@ def decision(rt, owner="seed-decider"):
 
 @pytest.fixture
 def poor():
-    """A world whose novelty reserve is live and whose wallet cannot collateralise an order."""
+    """A world whose venue cannot collateralise the order these tests send.
+
+    Rehearsal 3, defect 1 moved the check from the compute wallet to the venue's
+    own free collateral, so what makes this world poor is the venue: the fake
+    carries $100 and a 0.01 BTC order needs $200 of margin at its 3x. The wallet
+    is small too, and no longer the reason. ``tests/audit/test_r1_venue_collateral``
+    pins the semantics; these tests are about what a refusal publishes.
+    """
     rt = make_runtime(balance=1_000_000)
     rt._manage_reserve_window()
-    assert rt.reserve.remaining()
+    assert rt.exchange.account().equity_usd < Decimal("0.01") * rt.exchange.mids()["BTC"] / 3
     return rt
 
 

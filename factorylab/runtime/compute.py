@@ -790,7 +790,7 @@ class ComputeMixin:
 
                 _validate(args, spec["args_schema"])
                 if tool_id in ("venue.place_market", "venue.place_limit"):
-                    reason = self._order_exclusion(
+                    reason = self._order_collateral(
                         handle, str(args.get("coin")), Decimal(str(args.get("size"))),
                         args.get("side") == "buy",
                         Decimal(str(args["price"])) if "price" in args else None,
