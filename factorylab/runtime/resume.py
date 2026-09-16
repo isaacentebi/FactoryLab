@@ -529,6 +529,12 @@ _RUNTIME_FIELDS = (
     "launch_nonce",
     # The release that launched the world; restore refuses a different one (C4).
     "release_digest",
+    # edition 3, R3-C
+    # The death witness this world launched under: whether a receiver was configured
+    # and which one (the hash of its URL). Restore refuses an environment with no
+    # receiver (``witness_required``) or a different one (``witness_mismatch``), so
+    # the veto belongs to the launched identity and not to a mutable variable.
+    "witness_required", "witness_receiver",
     # edition 3, C2
     # Thinking control: every seat's subscription, its sleep, the world it has not
     # read yet and each watcher's last observation, as one block of plain data
@@ -645,7 +651,16 @@ def runtime_state(rt) -> Checkpoint:
 
 
 def restore_runtime(rt, state: dict) -> None:
-    """Restore only authenticated matching-format state, rebinding dependencies to this process."""
+    """Restore only authenticated matching-format state, rebinding dependencies to this process.
+
+    Transactional (edition 3, R3-C). Every identity constraint — snapshot format
+    and manifest hash, both adapters, the venue account, the release digest, the
+    facilitator, the witness requirement and receiver, the killed identity, and
+    the presence of every artifact the saved state names — is checked against the
+    *saved* state before one field is assigned to ``rt``. A refused restore
+    therefore leaves the runtime exactly as it was, rather than half a dead
+    world's memory inside a live one.
+    """
     from factorylab.runtime.live import LiveClock
     from factorylab.runtime.routing import RouterState
     from factorylab.world.clock import ClockSource
@@ -695,6 +710,19 @@ def restore_runtime(rt, state: dict) -> None:
     if killed(world=rt.m.name, launch_nonce=saved_runtime.get("launch_nonce"),
               diary=diary, ledger_path=witnessed, remote=False) is not None:
         raise ResumeError("the checkpoint names a killed identity", code="identity_killed")
+    # The witness requirement is part of the launch identity, so it is checked
+    # here and not against the environment alone: a world that launched under a
+    # receiver does not continue without one, or under another one (R3-C).
+    check_witness_identity(saved_runtime)
+    # The archive is validated against the saved state, before any of it is
+    # assigned: a world does not continue with a seat's memory or a seat's
+    # outcomes missing, and a refusal must leave this runtime untouched.
+    components = decode(state["components"])
+    _check_artifacts(rt.artifacts,
+                     index=(components.get("artifacts") or {}).get("index") or {},
+                     assemblies=decode(state["assemblies"]),
+                     heads=(components.get("working_state") or {}).get("heads") or {},
+                     outcomes=(components.get("outcomes") or {}).get("items") or {})
     for name, value in saved_runtime.items():
         setattr(rt, name, value)
     rt.diary_id = diary
@@ -741,7 +769,6 @@ def restore_runtime(rt, state: dict) -> None:
     if "budget" in state:  # entitlements restore exactly; older checkpoints predate them
         rt.budget._restore_state(decode(state["budget"]))
     rt.treasury.restore(decode(state["treasury"]))
-    components = decode(state["components"])
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
             if name == "controller" and field == "kappa" and field not in components[name]:
@@ -767,7 +794,6 @@ def restore_runtime(rt, state: dict) -> None:
         restored.memory = assembly["memory"]
         if "state_sha" in assembly:
             restored.state_sha = assembly["state_sha"]
-    _verify_artifacts(rt)
     rt.routers.clear()
     for saved in state["routers"]:
         router = RouterState.restore(saved)
@@ -810,8 +836,37 @@ def restore_runtime(rt, state: dict) -> None:
             rt._admit_market(contract.input_schema["coin"], contract.input_schema["market"])
 
 
-def _verify_artifacts(rt) -> None:
-    """Every sha the restored archive names must have its bytes beside the ledger (P1-02).
+def check_witness_identity(saved_runtime: dict) -> None:
+    """The death witness this world launched under is still the one configured (R3-C).
+
+    A world launched with a receiver has ``witness_required`` in its ``Launch``
+    event and in every checkpoint. Unsetting ``FACTORYLAB_WITNESS_URL`` afterwards
+    therefore removes nothing: the requirement belongs to the launched identity,
+    and a resume without a receiver refuses (``witness_required``). Naming a
+    different receiver refuses too (``witness_mismatch``): the record of this
+    world's death is kept by the receiver it launched under, and another receiver
+    has never heard of it. The URL itself is never compared, printed or stored —
+    only the hash of it.
+
+    A world launched without a receiver is unchanged: the local file decides, and
+    that is the weaker guarantee ``deploy/README.md`` names.
+    """
+    from factorylab.runtime.witness import receiver_identity
+
+    if not saved_runtime.get("witness_required"):
+        return
+    running = receiver_identity()
+    if running is None:
+        raise ResumeError("this world launched under a death witness receiver and the "
+                          "environment names none", code="witness_required")
+    saved = saved_runtime.get("witness_receiver")
+    if saved is not None and saved != running:
+        raise ResumeError("the configured death witness receiver is not the one this "
+                          "world launched under", code="witness_mismatch")
+
+
+def _check_artifacts(store, *, index: dict, assemblies, heads: dict, outcomes: dict) -> None:
+    """Every sha the *saved* state names must have its bytes beside the ledger (P1-02).
 
     The checkpoint carries the index and each program seat's ``state_sha``; the
     bytes live under ``runs/<world>.artifacts/``. A backup that archived the diary
@@ -819,30 +874,32 @@ def _verify_artifacts(rt) -> None:
     that names memory the world no longer has. Continuing would let a program run
     with no state and report ok, so the resume refuses, naming the sha and its
     owner. A memory-only twin (no ledger path) keeps no bytes to check.
+
+    Read from the saved state and not from the runtime, so the refusal happens
+    before anything is assigned and a refused restore changes nothing (R3-C).
     """
-    store = rt.artifacts
     if store.root is None:
         return
     from factorylab.kernel.artifacts import ArtifactError
 
-    referenced = dict(store.index)
-    for assembly in rt.assemblies.values():
-        sha = getattr(assembly, "state_sha", None)
-        if sha is not None and sha not in referenced:
+    for assembly in assemblies:
+        sha = assembly.get("state_sha")
+        if sha is not None and sha not in index:
             raise ResumeError("a program seat names state the archive index does not hold",
-                              code="artifact_missing", sha=sha, owner=assembly.spec.id)
+                              code="artifact_missing", sha=sha,
+                              owner=getattr(assembly.get("spec"), "id", None))
     # Continuity (C1) names artifacts the same way: a head, and every inbox item's
     # body. A world does not continue with a seat's state or its outcomes missing.
-    for seat, head in rt.working_state.heads.items():
-        if head["sha"] not in referenced:
+    for seat, head in heads.items():
+        if head["sha"] not in index:
             raise ResumeError("a seat names a working state the archive index does not hold",
                               code="artifact_missing", sha=head["sha"], owner=seat)
-    for seat, items in rt.outcomes.items.items():
+    for seat, items in outcomes.items():
         for item in items:
-            if item["sha"] not in referenced:
+            if item["sha"] not in index:
                 raise ResumeError("an outcome item's body is not in the archive index",
                                   code="artifact_missing", sha=item["sha"], owner=seat)
-    for sha, record in referenced.items():
+    for sha, record in index.items():
         try:
             store.get(sha)
         except ArtifactError:
@@ -913,6 +970,16 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
             "ts": state["clock_ns"],
         })
         raise ResumeError("the witness records this identity's kill", code="identity_killed")
+    # The witness requirement the world launched under, before any state is
+    # restored or any adapter contacted: unsetting the variable removes no veto.
+    try:
+        check_witness_identity(decode(state["runtime"]))
+    except ResumeError as exc:
+        ledger.append({
+            "kind": "failed_resume", "reason": exc.code, "launch_nonce": launch_nonce,
+            "snapshot_seq": snapshot["seq"], "ts": state["clock_ns"],
+        })
+        raise
     journal = RecoveryJournal(ledger, clock)
     journal.bootstrap = True
     rt = Runtime(manifest, **state["config"], ledger_path=None, provider=provider, market=market,
@@ -973,6 +1040,20 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
                 return rt
             elif item["kind"] == "resume.begin":
                 rt._resume_at(item["now_ns"])
+            elif item["kind"] in ("kill.production", "kill.wind_down", "winddown.op",
+                                  "winddown.op_result", "winddown.reconciliation"):
+                # The diary was killed and its process died inside the wind-down
+                # window: production is dead, the terminal event is simply not
+                # written yet (edition 3, R3-C). A resume does not restart a dead
+                # population. ``factorylab kill`` reconciles the wind-down by
+                # operation id, repeats nothing, and seals the diary.
+                ledger.append({
+                    "kind": "failed_resume", "reason": "identity_killed",
+                    "witness": "production_mark", "launch_nonce": launch_nonce,
+                    "snapshot_seq": snapshot["seq"], "ts": state["clock_ns"],
+                })
+                raise ResumeError("production was killed before this diary was sealed",
+                                  code="identity_killed")
             else:
                 raise _ReplayFault(f"unexpected tail item {item['kind']} at seq {item['seq']}")
         journal.tail = []

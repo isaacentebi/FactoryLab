@@ -213,6 +213,15 @@ class _Observatory:
         # Each time the commons was released because nobody could act (P1-04): when,
         # how much, across how many lineages. No seat id, no position.
         self.commons_releases: list[dict] = []
+        # Retirement is final at the budget layer (R3-C): every late credit to a
+        # retired seat, which became the commons' rather than that seat's. Amount
+        # and source only; the seat id stays out of the page like every other id.
+        self.retired_credits: list[dict] = []
+        # The two states of death, read from the diary: the production mark a kill
+        # writes before it touches a venue, and the executor's final reconciliation.
+        self.production_killed_ns: int | None = None
+        self.production_kill_reason: str | None = None
+        self.exposure: dict | None = None
         # Edition 2 views. Money by class; deliveries per closed window; open
         # decisions and sealed forecasts still waiting (ages only: a handle is a
         # sealed key); the immune organ's own window profiles (for cells);
@@ -384,9 +393,17 @@ class _Observatory:
         self._money_in("earned", item.get("micro"))
 
     def _on_budget(self, item: dict) -> None:
-        # Only the commons release is a fact of the account worth a row here: the
-        # pool went to the seats because none of them could act (P1-04). Every other
+        # Two facts of the account are worth a row here. The commons release: the
+        # pool went to the seats because none of them could act (P1-04). And a late
+        # credit to a retired seat, which creates no entitlement and stays with the
+        # commons (R3-C): retirement is final, and the page says so. Every other
         # budget op is a seat's own movement and stays with the entitlements view.
+        if item.get("op") == "retired_credit_to_commons":
+            self.retired_credits = [*self.retired_credits, {
+                "ts_ns": item.get("ts"), "amount_micro": item.get("amount"),
+                "source": item.get("source"),
+            }][-MAX_ROWS:]
+            return
         if item.get("op") != "commons_release":
             return
         grants = item.get("grants") or {}
@@ -660,12 +677,45 @@ class _Observatory:
             },
         }
 
+    def _on_kill_production(self, item: dict) -> None:
+        """A kill marked production dead here, before any venue operation (R3-C)."""
+        if self.production_killed_ns is None:
+            self.production_killed_ns = item.get("ts")
+            self.production_kill_reason = item.get("reason")
+
+    def _on_winddown_reconciliation(self, item: dict) -> None:
+        """What the account held after the wind-down executor finished. The last read wins."""
+        residual = item.get("residual") or {}
+        self.exposure = {
+            "exposure_state": item.get("exposure_state"),
+            "operations": item.get("operations"),
+            "residual_counts": {name: len(rows) for name, rows in residual.items()
+                                if isinstance(rows, list)},
+            "unreadable": [row.get("read") for row in (item.get("unreadable") or [])
+                           if isinstance(row, dict)],
+        }
+
     def _liveness(self) -> dict:
+        """Alive, dormant or dead — and, when dead, what the venue was left holding.
+
+        ``production_state`` and ``exposure_state`` are two states, never one
+        (edition 3, R3-C). A world can be dead with exposure still pending, and the
+        page says which rather than letting "terminated" imply a flat account.
+        """
         status = ("terminated" if self.terminated_ns is not None
                   else "dormant" if self.dormant_since is not None else "alive")
+        production = ("killed" if self.terminated_ns is not None
+                      or self.production_killed_ns is not None else "alive")
         return {"status": status, "launched_ns": self.launched_ns,
                 "terminated_ns": self.terminated_ns, "dormant_since_ns": self.dormant_since,
-                "dormant_periods": self.dormant_periods}
+                "dormant_periods": self.dormant_periods,
+                "production_state": production,
+                "production_killed_ns": self.production_killed_ns,
+                "production_kill_reason": self.production_kill_reason,
+                "exposure_state": (self.exposure or {}).get(
+                    "exposure_state", "unknown" if production == "killed" else None),
+                "exposure": self.exposure,
+                "retired_credits_to_commons": self.retired_credits}
 
     def result(self, manifest, *, now_ns: int | None = None,
                returns: int = RETURNS_ROWS) -> dict:

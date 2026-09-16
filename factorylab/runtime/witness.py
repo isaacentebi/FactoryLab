@@ -42,6 +42,7 @@ never printed or logged.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -60,6 +61,15 @@ POST_TIMEOUT = 10.0  # seconds; the kill line is sent once
 QUERY_TIMEOUT = 5.0  # seconds; resume waits this long for the remote's verdict
 KILL = "kill"
 QUERY = "query"
+#: The line a kill writes before it touches a venue, and the one it writes after the
+#: wind-down executor has finished. Both are ``kill`` lines: production is dead at both.
+PRODUCTION = "production_kill"
+#: ``production_state`` in a kill line is always this: the line exists because the
+#: population is dead (``runtime/winddown.py`` holds the same word).
+KILLED = "killed"
+#: The four values ``exposure_state`` may take (``runtime/winddown.py``). Repeated here
+#: because this module imports nothing from the runtime it witnesses.
+EXPOSURE_STATES = ("flat", "dust_within_precommitted_bound", "wind_down_pending", "unknown")
 _REASON = re.compile(r"^[a-z_:]{1,40}$")
 _WORLD = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
@@ -83,6 +93,36 @@ def witness_path(ledger_path: str | os.PathLike[str]) -> Path:
     """The witness file for a diary: ``<parent of the diary's directory>/.witness/<stem>.jsonl``."""
     ledger = Path(os.path.abspath(ledger_path))
     return ledger.parent.parent / WITNESS_DIR / f"{ledger.stem}.jsonl"
+
+
+def identity_path(ledger_path: str | os.PathLike[str], world: str | None,
+                  launch_nonce: str | None) -> Path | None:
+    """The witness file keyed by launch identity: ``.witness/<world>-<nonce[:16]>.jsonl``.
+
+    The file named from the diary's stem moves when the diary is renamed; this one
+    does not, because nothing in its name comes from the diary's filename (R3-C).
+    A world with no launch nonce has no identity to key on and keeps the stem file
+    alone. Both files live in the same ``.witness`` directory, so a copy of the
+    diary's directory still carries neither.
+    """
+    if not launch_nonce:
+        return None
+    name = world if isinstance(world, str) and _WORLD.match(world) else "unknown"
+    ledger = Path(os.path.abspath(ledger_path))
+    return ledger.parent.parent / WITNESS_DIR / f"{name}-{launch_nonce[:16]}.jsonl"
+
+
+def receiver_identity() -> str | None:
+    """A stable name for the configured receiver, or None: the URL is never disclosed.
+
+    The hash goes into ``Launch`` and every checkpoint, so a resume can tell "the
+    receiver this world launched under" from "some other receiver" without the
+    address itself ever reaching the diary, the wake or a log line.
+    """
+    url = os.environ.get(URL_ENV, "").strip()
+    if not url:
+        return None
+    return hashlib.sha256(url.encode()).hexdigest()
 
 
 def _now() -> str:
@@ -164,27 +204,44 @@ def _post(url: str, line: dict, *, timeout: float) -> dict | None:
     return parsed if isinstance(parsed, dict) else {}
 
 
-#: What the kill about to happen owed the venue (edition 3, C5): whether the manifest
-#: precommitted a wind-down and how many orders it sent. Set by the kill path just
-#: before ``Termination.kill`` (``runtime/venue.py``, ``runtime/cli.py``) and read once
-#: by ``record_kill``. A kill that never set it is witnessed as ``wind_down: false``
-#: with no orders, which is the truth about every world before the contract existed.
-_pending_wind_down: dict[str, Any] = {"wind_down": False, "orders": 0}
+#: What the kill about to happen owed the venue (edition 3, C5, R3-C): whether the
+#: manifest precommitted a wind-down, how many orders it sent, how many operations the
+#: executor accounted for, what the account said afterwards and how many records the
+#: diary refused while it ran. Set by the kill path (``runtime/venue.py``,
+#: ``runtime/cli.py``) and read once by ``record_kill``. A kill that never set it is
+#: witnessed as ``wind_down: false`` with no orders and an unknown exposure state,
+#: which is the truth about every world before the contract existed.
+_pending_wind_down: dict[str, Any] = {"wind_down": False, "orders": 0, "operations": 0,
+                                      "exposure_state": "unknown", "ledger_failures": 0}
 
 
-def note_wind_down(*, wind_down: bool, orders: int) -> None:
+def note_wind_down(*, wind_down: bool, orders: int, exposure_state: str = "unknown",
+                   operations: int | None = None, ledger_failures: int = 0) -> None:
     """Record what the next kill line should say about the venue. Never raises."""
     _pending_wind_down["wind_down"] = bool(wind_down)
     _pending_wind_down["orders"] = int(orders) if type(orders) is int else 0
+    _pending_wind_down["operations"] = (_pending_wind_down["orders"]
+                                        if type(operations) is not int else operations)
+    _pending_wind_down["exposure_state"] = (exposure_state
+                                            if exposure_state in EXPOSURE_STATES else "unknown")
+    _pending_wind_down["ledger_failures"] = (int(ledger_failures)
+                                             if type(ledger_failures) is int else 0)
 
 
 def kill_line(*, world: str | None, launch_nonce: str | None, release_digest: str | None,
               ledger_head: str | None, diary: str | None, reason: str | None,
-              wind_down: bool = False, wind_down_orders: int = 0) -> dict:
-    """The one line a kill writes: the identity, the release, the diary prefix and the reason."""
+              wind_down: bool = False, wind_down_orders: int = 0, event: str = KILL,
+              exposure_state: str = "unknown", operations: int = 0,
+              ledger_failures: int = 0) -> dict:
+    """The one line a kill writes: the identity, the release, the diary prefix and the reason.
+
+    Two states, never one (R3-C). ``production_state`` is always ``killed`` here:
+    this line exists because the world is dead. ``exposure_state`` is what the venue
+    still held when the line was written, and it is honest about not knowing.
+    """
     line = {
         "world": world if isinstance(world, str) and _WORLD.match(world) else "unknown",
-        "event": KILL, "ts": _now(),
+        "event": event, "ts": _now(),
         "release_digest": release_digest or "unavailable",
         "ledger_head": ledger_head or "absent",
         "launch_nonce": launch_nonce,
@@ -193,20 +250,25 @@ def kill_line(*, world: str | None, launch_nonce: str | None, release_digest: st
         # many orders it actually sent. A reader of a restored copy learns both.
         "wind_down": bool(wind_down),
         "wind_down_orders": int(wind_down_orders) if type(wind_down_orders) is int else 0,
+        # The two states R3-C keeps apart, and what the executor accounted for.
+        "production_state": KILLED,
+        "exposure_state": exposure_state if exposure_state in EXPOSURE_STATES else "unknown",
+        "wind_down_operations": int(operations) if type(operations) is int else 0,
+        "wind_down_ledger_failures": (int(ledger_failures)
+                                      if type(ledger_failures) is int else 0),
     }
     if diary is not None:
         line["diary"] = diary
     return line
 
 
-def record_kill(ledger, reason: str) -> dict | None:
-    """Witness a kill for ``ledger`` in the process, the local file and the receiver.
+def _write(ledger, reason: str, *, stage: str, clear: bool) -> dict | None:
+    """Write one kill line for ``ledger``: process memory, both local files, the receiver.
 
-    Called by ``Termination.kill`` after the terminal event is in the diary. Never
-    raises: the kill is already final on the object and in the ledger, and a
-    witness that cannot be written is logged, not fatal. Returns the line that
-    was written, or None when nothing could be (no identity, or a memory-only
-    ledger, which has no place outside itself to be witnessed).
+    ``stage`` is ``production_kill`` for the line written before the wind-down
+    executor runs and ``kill`` for the one written with the terminal event. Both
+    say the world is dead; only the second can know what the venue was left
+    holding. Never raises.
     """
     try:
         identity = ledger.identity()
@@ -220,10 +282,19 @@ def record_kill(ledger, reason: str) -> dict | None:
                          release_digest=identity.get("release_digest"),
                          ledger_head=ledger.byte_hash(), diary=diary, reason=reason,
                          wind_down=_pending_wind_down["wind_down"],
-                         wind_down_orders=_pending_wind_down["orders"])
-        note_wind_down(wind_down=False, orders=0)  # one note belongs to one kill
-        # Append first: the local file is the record; the receiver holds a copy.
+                         wind_down_orders=_pending_wind_down["orders"],
+                         exposure_state=_pending_wind_down["exposure_state"],
+                         operations=_pending_wind_down["operations"],
+                         ledger_failures=_pending_wind_down["ledger_failures"])
+        line["stage"] = stage
+        if clear:
+            note_wind_down(wind_down=False, orders=0)  # one note belongs to one kill
+        # Append first: the local files are the record; the receiver holds a copy.
+        # The identity-keyed file is the one a renamed diary still resolves to.
         _append(witness_path(path), line)
+        keyed = identity_path(path, identity.get("world"), nonce)
+        if keyed is not None:
+            _append(keyed, line)
         url = _receiver_url()
         if url is not None and _post(url, line, timeout=POST_TIMEOUT) is None:
             log.warning("witness: the receiver did not take the kill line")
@@ -231,6 +302,31 @@ def record_kill(ledger, reason: str) -> dict | None:
     except Exception:  # noqa: BLE001 - nothing may raise into a kill
         log.warning("witness: the kill could not be witnessed")
         return None
+
+
+def record_kill(ledger, reason: str) -> dict | None:
+    """Witness a kill for ``ledger`` in the process, the local files and the receiver.
+
+    Called by ``Termination.kill`` after the terminal event is in the diary. Never
+    raises: the kill is already final on the object and in the ledger, and a
+    witness that cannot be written is logged, not fatal. Returns the line that
+    was written, or None when nothing could be (no identity, or a memory-only
+    ledger, which has no place outside itself to be witnessed).
+    """
+    return _write(ledger, reason, stage=KILL, clear=True)
+
+
+def record_production_kill(ledger, reason: str) -> dict | None:
+    """Witness that production is dead, before the wind-down executor touches a venue.
+
+    The kill path writes this only when the manifest precommitted a wind-down,
+    because only then is there a window between the death of the population and
+    the terminal event. If the process dies inside that window the diary has no
+    ``Terminated`` event, but this line is already outside it: the identity is
+    recorded as killed, no copy of that diary resumes, and the next kill
+    reconciles the wind-down by operation id and seals it.
+    """
+    return _write(ledger, reason, stage=PRODUCTION, clear=False)
 
 
 def killed(*, world: str | None, launch_nonce: str | None, diary: str | None,
@@ -250,9 +346,14 @@ def killed(*, world: str | None, launch_nonce: str | None, diary: str | None,
            for nonce, d in _killed_here):
         return "process"
     if ledger_path is not None:
-        for line in _local_lines(witness_path(ledger_path)):
-            if _matches(line, launch_nonce, diary):
-                return "local"
+        # The identity-keyed file first: it is the one that survives a renamed
+        # diary. The file named from the diary's stem is read as well, so every
+        # world witnessed before identity keying is still found.
+        keyed = identity_path(ledger_path, world, launch_nonce)
+        for path in ([] if keyed is None else [keyed]) + [witness_path(ledger_path)]:
+            for line in _local_lines(path):
+                if _matches(line, launch_nonce, diary):
+                    return "local"
     if not remote or not _configured():
         return None
     url = _receiver_url()

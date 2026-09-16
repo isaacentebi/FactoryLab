@@ -36,6 +36,8 @@ class Reason(StrEnum):
     RELEASE_MISMATCH = "release_mismatch"  # The executing release differs from the launched one.
     IDENTITY_KILLED = "identity_killed"  # The witness records this identity's kill: it stays dead.
     WITNESS_UNAVAILABLE = "witness_unavailable"  # A receiver is configured and gave no verdict.
+    WITNESS_REQUIRED = "witness_required"  # This world launched under a receiver; none is set.
+    WITNESS_MISMATCH = "witness_mismatch"  # The receiver set is not the one it launched under.
     ARTIFACT_MISSING = "artifact_missing"  # The archive index names bytes that are not there.
     ARTIFACT_PRIVATE = "artifact_private"  # The archive holds it; this reader is not scoped to it.
     FACILITATOR_MISMATCH = "facilitator_mismatch"  # The x402 facilitator is not the launched one.
