@@ -135,7 +135,11 @@ def test_a_balance_read_that_fails_keeps_the_ceiling_and_the_bill_uncertain():
     assert not by_kind(rt, "wallet.settle_uncertain")
     assert list(rt.wallet.uncertain_bills) == [b["reservation_id"] for b in uncertain]
     invocations = {i["handle"]: i for i in by_kind(rt, "invocation")}
-    assert all(invocations[b["handle"]]["cost"] == b["provisional_micro"] for b in uncertain)
+    # An invocation's cost is its model bill plus whatever tools that return called;
+    # the uncertain bill is the model call alone, so it is the floor, not the total.
+    # (Restated in R3-D, where the scripted schedule moved and one of these returns
+    # began making priced tool calls.)
+    assert all(invocations[b["handle"]]["cost"] >= b["provisional_micro"] for b in uncertain)
     assert rt.bill_settlement.reference == {} and rt.wallet.check_conservation()
     # The failed reads are journaled as errors, so replay reproduces the refusal.
     errors = [i for i in by_kind(rt, "io.result") if i.get("error") == "OSError"]

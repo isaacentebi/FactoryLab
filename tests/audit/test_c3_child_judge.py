@@ -26,7 +26,14 @@ def test_finding_1_a_parent_can_hire_a_child_judge_to_settle_a_strangers_verdict
     """A producer's child request may target an evaluator and name any pending return in
     ``inputs.about_handle``; the child's verdict settles that return's verdict channel. The
     router, its sampled propensity, the adversarial cap and the meta cascade are all
-    bypassed: whoever pays for a child chooses the judge and the subject."""
+    bypassed: whoever pays for a child chooses the judge and the subject.
+
+    Restated for R3-D: the route is closed rather than guarded. GPT-6 Pro's third
+    reading (§3 further, §7) says the commissioned-child-judge path has incompatible
+    exclusions and the suggestion that it is usable must go, so a judging contract is
+    refused as a child before a decision is opened or a call is made. Nothing is spent
+    and the stranger's reward is untouched, which is what this finding asked for.
+    """
     rt = make_runtime()
     rt._manage_reserve_window()
     victim, _event = _consequence_produce(rt, "seed-observer")
@@ -34,20 +41,26 @@ def test_finding_1_a_parent_can_hire_a_child_judge_to_settle_a_strangers_verdict
     req = parent_request(rt)  # seed-decider's own decision, an open account
     rt.handle_to_assembly[req.handle] = "seed-decider"
     _judge_reply(monkeypatch, rt, verdict=0.0, payoff=0.0)
-    result, _cost = rt._invoke_child("seed-decider", req, ChildRequest(
+    result, cost = rt._invoke_child("seed-decider", req, ChildRequest(
         "eval-a", "judge this", {"about_handle": victim}, {"type": "object"}), req.cost_ceiling)
-    assert result["result"]["status"] == "ok"
-    refused = [i for i in rt.ledger._recovery_items() if i["kind"] == "return.refused"]
+    assert cost == 0
+    assert "cannot be commissioned as a child" in result["result"]["error"]
+    refused = [i for i in rt.ledger._recovery_items() if i["kind"] == "requests.refused"]
+    assert refused and refused[-1]["target"] == "eval-a"
     # The stranger's reward must not be settled by a judge its competitor hired.
-    assert refused or rt.queue.get(victim).status is SettleStatus.PENDING, (
-        rt.queue.history(victim))
+    assert rt.queue.get(victim).status is SettleStatus.PENDING, rt.queue.history(victim)
 
 
 def test_finding_1_the_child_judge_path_skips_the_hindsight_guard(monkeypatch):
     """A9 refuses a payoff forecast on a return whose consequence is already fixed, but only
     when the judge chose the target itself (``about != subject``). A parent that puts the
     fixed return in ``inputs.about_handle`` makes it the subject, so the guard never runs:
-    the child seals a forecast on a known outcome and its standing rises."""
+    the child seals a forecast on a known outcome and its standing rises.
+
+    Restated for R3-D: the hindsight guard is no longer the last line here, because the
+    commissioned child judge never runs at all (§7). The refusal is a ``requests.refused``
+    row rather than a ``return.refused`` one, and nothing is sealed either way.
+    """
     rt = make_runtime()
     rt._manage_reserve_window()
     stale, _event = _consequence_produce(rt, "NOOP")
@@ -59,7 +72,8 @@ def test_finding_1_the_child_judge_path_skips_the_hindsight_guard(monkeypatch):
     rt._invoke_child("seed-decider", req, ChildRequest(
         "eval-a", "judge", {"about_handle": stale}, {"type": "object"}), req.cost_ceiling)
     rt._settle_due_forecasts()
-    refused = [i for i in rt.ledger._recovery_items() if i["kind"] == "return.refused"]
+    refused = [i for i in rt.ledger._recovery_items()
+               if i["kind"] in ("return.refused", "requests.refused")]
     assert refused, "a payoff forecast was sealed on a return whose outcome was already fixed"
     assert rt.stats.forecasts_sealed == 0
     assert rt.standing.snapshot().get("eval-a") is None

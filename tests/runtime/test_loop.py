@@ -114,14 +114,7 @@ def test_scripted_world_phase3_spec_condition_2() -> None:
     from factorylab.cortex.sandbox import jail_available
 
     if jail_available():
-        # Restated for R3-D: the scripted registration schedule is keyed to the
-        # provider's own call counter, and R3-D moves it — a judged return that
-        # committed to nothing now settles unmeasured instead of being scored, so
-        # the router's rewards, and with them which seat holds call 45, change.
-        # What the clause is about is unchanged: a population tool is registered
-        # and then called. The identity of the scripted tool is not the property.
-        registered = [t for t in s["tools"] if t in ("spread-check", "connector-parser")]
-        assert st["population_tools_registered"] >= 1 and registered
+        assert st["population_tools_registered"] >= 1 and "spread-check" in s["tools"]
     else:
         assert st["population_tools_registered"] == 0 and "spread-check" not in s["tools"]
     # an online variant is registered as a purchasable and an assembly was built on it

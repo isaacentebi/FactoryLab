@@ -54,24 +54,43 @@ def routed(rt, monkeypatch):
     return seen
 
 
+def windows_of(rt, tier):
+    """How many observation windows this tier's open gate covers.
+
+    Restated for R3-D: a tier's separation is a duration, not a count of
+    arrivals (GPT-6 third reading §6.C). The gate's window is the jittered
+    ``timing.min_ratio`` counted in tick intervals, so an arrival per interval
+    reaches the release at the same place the old arrival count did.
+    """
+    return rt.cascade[tier].window_ns // rt.tick_clock.interval_ns
+
+
+def tick(rt):
+    """Advance the world's clock by one observation window."""
+    rt.clock.now_ns += rt.tick_clock.interval_ns
+
+
 def test_custom_conformity_arrivals_cannot_invoke_the_next_tier_early(monkeypatch):
     rt = make_runtime()
     chain(rt)
     seen = routed(rt, monkeypatch)
     rt._route(arrival(rt, 0))
-    threshold = rt.cascade[2].threshold
-    assert threshold >= rt.m.timing.min_ratio >= 3
+    windows = windows_of(rt, 2)
+    assert windows >= rt.m.timing.min_ratio >= 3
     assert seen == []
-    for index in range(1, threshold - 1):
+    for index in range(1, windows):
+        tick(rt)
         rt._route(arrival(rt, index))
-        assert seen == []
-    rt._route(arrival(rt, threshold - 1))
+        assert seen == []  # however many arrive, nothing releases before the time is up
+    tick(rt)
+    rt._route(arrival(rt, windows))
     assert len(seen) == 1
     window = seen[0].payload["window"]
-    assert window["count"] == threshold
-    assert list(window["handles"]) == [f"checker-{i}" for i in range(threshold)]
-    assert rt.cascade_windows[f"checker-{threshold - 1}"] == [
-        f"checker-{i}" for i in range(threshold - 1)]
+    assert window["count"] == windows + 1
+    assert window["elapsed_ns"] >= window["window_ns"]
+    assert list(window["handles"]) == [f"checker-{i}" for i in range(windows + 1)]
+    assert rt.cascade_windows[f"checker-{windows}"] == [
+        f"checker-{i}" for i in range(windows)]
 
 
 def test_custom_conformity_buffer_survives_a_checkpoint(monkeypatch):
@@ -79,19 +98,24 @@ def test_custom_conformity_buffer_survives_a_checkpoint(monkeypatch):
     chain(rt)
     seen = routed(rt, monkeypatch)
     rt._route(arrival(rt, 0))
-    threshold = rt.cascade[2].threshold
-    for index in range(1, threshold - 1):
+    windows = windows_of(rt, 2)
+    for index in range(1, windows):
+        tick(rt)
         rt._route(arrival(rt, index))
     assert seen == []
 
     restored = _plain_runtime()
     restore_runtime(restored, runtime_state(rt))
-    assert restored.cascade[2].threshold == threshold
+    # The window's duration and the moment it opened both survive the checkpoint,
+    # so a restored runtime neither redraws its jitter nor restarts its clock.
+    assert restored.cascade[2].window_ns == rt.cascade[2].window_ns
+    assert restored.cascade[2].opened_ns == rt.cascade[2].opened_ns
     after = routed(restored, monkeypatch)
     assert restored.routers.get("CheckA")
-    restored._route(arrival(restored, threshold - 1))
+    restored.clock.now_ns = rt.clock.now_ns + restored.tick_clock.interval_ns
+    restored._route(arrival(restored, windows))
     assert len(after) == 1
-    assert after[0].payload["window"]["count"] == threshold
+    assert after[0].payload["window"]["count"] == windows + 1
 
 
 def test_each_custom_tier_buffers_separately_and_keeps_its_own_kind(monkeypatch):
@@ -99,14 +123,18 @@ def test_each_custom_tier_buffers_separately_and_keeps_its_own_kind(monkeypatch)
     chain(rt)
     seen = routed(rt, monkeypatch)
     rt._route(arrival(rt, 0, kind="CheckA", tier=2))
-    threshold_two = rt.cascade[2].threshold
+    windows_two = windows_of(rt, 2)
     rt._route(arrival(rt, 0, kind="CheckB", tier=3))
-    threshold_three = rt.cascade[3].threshold
+    windows_three = windows_of(rt, 3)
     assert seen == []
-    for index in range(1, threshold_two):
+    for index in range(1, windows_two + 1):
+        tick(rt)
         rt._route(arrival(rt, index, kind="CheckA", tier=2))
     assert [str(ev.kind) for ev in seen] == ["CheckA"]
-    for index in range(1, threshold_three):
+    # Each tier keeps its own duration and its own kind: the CheckB window opened
+    # at the same moment and releases only when its own time is up.
+    for index in range(1, windows_three + 1):
+        tick(rt)
         rt._route(arrival(rt, index, kind="CheckB", tier=3))
     assert [str(ev.kind) for ev in seen] == ["CheckA", "CheckB"]
 
@@ -149,13 +177,15 @@ def test_a_real_chain_pays_the_next_tier_only_at_the_release_threshold(monkeypat
     paid, decisions = len(items(rt, "invocation")), rt.stats.decisions
 
     rt._route(arrival(rt, 0))
-    threshold = rt.cascade[2].threshold
-    for index in range(1, threshold - 1):
+    windows = windows_of(rt, 2)
+    for index in range(1, windows):
+        tick(rt)
         rt._route(arrival(rt, index))
     assert len(items(rt, "invocation")) == paid
     assert rt.stats.decisions == decisions
 
-    rt._route(arrival(rt, threshold - 1))
+    tick(rt)
+    rt._route(arrival(rt, windows))
     assert rt.stats.decisions == decisions + 1
     invocation = items(rt, "invocation")[paid:]
     assert len(invocation) == 1
