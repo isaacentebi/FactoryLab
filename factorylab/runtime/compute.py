@@ -979,6 +979,11 @@ class ComputeMixin:
                     result, cost = {"error": "request cost ceiling exhausted"}, 0
                     if call["tool"] == "connector.fetch":
                         self._connector_refused(req.handle, result["error"])
+                    elif call["tool"] == "web.search":
+                        self.ledger.append({
+                            "kind": "web.refused", "handle": req.handle,
+                            "assembly_id": action_id, "reason": result["error"],
+                            "ts": self.clock.now_ns})
                 else:
                     result, cost = self._run_tool(action_id, req.handle, call, slot=slot)
                 tool_cost += cost
@@ -991,7 +996,10 @@ class ComputeMixin:
                 # error is a failure.
                 ok = uncertain or not (isinstance(result, dict)
                                        and result.get("error") is not None)
-                if call["tool"] == "connector.fetch" and ok:
+                # Text reached from outside — fetched or searched — earns one more
+                # round of ordinary jailed tools, so a seat can read and then act
+                # within the same wake instead of spending another decision on it.
+                if call["tool"] in ("connector.fetch", "web.search") and ok:
                     round_limit = 2
                 self.stats.tool_calls += 1
                 if not ok:

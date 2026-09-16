@@ -110,6 +110,26 @@ def _model_cost(prices, price: TokenPrice, response: ModelResponse) -> int:
     return serving.cost(response.input_tokens, response.output_tokens)
 
 
+def protect(rt, results: list[dict[str, str]]) -> None:
+    """Keep searched text off every durable surface, exactly as a fetched body is.
+
+    The posture is the connector's (``runtime/compute.py``, ``MIN_PROTECTED_BODY_CHARS``):
+    what a seat read outside the venue is data it may reason from, never text the
+    population re-publishes into its own institutions, so a title or snippet long
+    enough to be prose is redacted from the ledger and refuses a final return that
+    carries it verbatim. URLs and anything shorter are repeatable facts — a date, a
+    ticker, a headline of four words — and protecting them would refuse every later
+    return that merely mentions what was searched for.
+    """
+    from factorylab.runtime.compute import MIN_PROTECTED_BODY_CHARS
+
+    for row in results:
+        for name in ("title", "snippet"):
+            text = row.get(name) or ""
+            if len(text) >= MIN_PROTECTED_BODY_CHARS:
+                rt.ledger.protect_connector_body(text)
+
+
 def _refused(rt, action_id: str, handle: str, reason: str, **fields) -> tuple[dict, int]:
     """Refusals are ledgered before their public reason is returned."""
     rt.ledger.append({"kind": "web.refused", "handle": handle, "assembly_id": action_id,
@@ -192,8 +212,11 @@ def run(rt, action_id: str, handle: str, args: dict) -> tuple[dict, int]:
             settlement.charged(model_id, metered.cost)
         _, results = metered.result
         cost = metered.cost
-        result = ({"error": REFUSALS["malformed"]} if results is None else
-                  {"results": results, "as_of_ns": rt.clock.now_ns})
+        if results is None:
+            result = {"error": REFUSALS["malformed"]}
+        else:
+            protect(rt, results)
+            result = {"results": results, "as_of_ns": rt.clock.now_ns}
     if "error" not in result:
         result["cost_micro"] = cost
     rt.ledger.append({"kind": "web.call", "handle": handle, "assembly_id": action_id,

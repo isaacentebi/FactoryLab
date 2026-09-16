@@ -867,6 +867,16 @@ proxy, so a resumed diary replays the same results from its `io.call`/`io.result
 instead of searching again, and every call and refusal is ledgered as `web.call` and
 `web.refused` beside the `tool.call` row.
 
+Searched text carries the connector's posture. Every title and snippet of at least
+`MIN_PROTECTED_BODY_CHARS` (`32`, fixed in `runtime/compute.py`) is protected exactly as a
+fetched body is: verbatim and JSON-escaped copies are redacted from the public ledger
+surfaces and a final output carrying one is refused. Urls and shorter strings are
+repeatable facts and stay readable, and the protection is transient — it lasts the
+invocation, like a fetch's. A successful `web.search` also permits one additional tool
+round, the same one a successful `connector.fetch` permits: ordinary population, note,
+artifact and outcome tools, then a final model answer, so a seat can search and act within
+one wake. A search that returned no results buys no extra round.
+
 ## New kinds of work: reward shapes and predicates
 
 A registration declares which one of the four reward shapes — `judged`,

@@ -247,6 +247,102 @@ def test_a_provider_failure_proved_unbilled_costs_the_seat_nothing(monkeypatch):
     assert rt.wallet.balance == before and rt.wallet.check_conservation()
 
 
+# --- searched text is data, not something to republish -----------------------------------
+
+
+SENTINEL = [
+    {"title": "SENTINEL-TITLE, the whole headline as that page wrote it",
+     "url": "https://example.org/SHORT-URL",
+     "snippet": "SENTINEL-BODY, the paragraph the page actually printed."},
+    {"title": "short title", "url": "https://example.org/b", "snippet": "brief"},
+]
+
+
+def test_searched_text_is_kept_off_durable_surfaces_like_a_fetched_body():
+    """Outside text is data a seat reasons from, never text the population republishes.
+
+    Mirrors the connector's posture and its journal test: a title or snippet long
+    enough to be prose is protected; a url, a short title and a four-word snippet are
+    repeatable facts and stay readable.
+    """
+    from factorylab.runtime.compute import MIN_PROTECTED_BODY_CHARS
+
+    rt = web_runtime(provider=SearchProvider(text=json.dumps({"results": SENTINEL})))
+    handle = decision(rt)
+    result, _ = search(rt, handle, query="what did that page say")
+    prose, brief = result["results"]
+    assert len(prose["snippet"]) >= MIN_PROTECTED_BODY_CHARS > len(brief["snippet"])
+    assert rt.ledger.connector_bodies == [prose["title"], prose["snippet"]]
+    # Verbatim and JSON-escaped copies both leave a durable surface.
+    redacted = json.dumps(rt.ledger.without_connector_bodies(
+        {"outputs": {"text": json.dumps(result)}}))
+    assert "SENTINEL-TITLE" not in redacted and "SENTINEL-BODY" not in redacted
+    assert "SHORT-URL" in redacted and "short title" in redacted and "brief" in redacted
+    # The ledger row for the call names the query and the count, never the text.
+    assert "SENTINEL" not in json.dumps(ledger_items(rt), default=str)
+
+
+# --- searching and acting inside one wake ------------------------------------------------
+
+
+def one_wake(rt, monkeypatch, answer, *, compose=True):
+    """Drive one decision: search, compose in the continuation, then return an order."""
+    requests = []
+    order = {"action": "order", "coin": "BTC", "side": "buy", "size": "0.01"}
+
+    def complete(req):
+        if req.model_id.endswith(":online"):  # the search route, not the seat's own
+            return ModelResponse(req.model_id, answer, 1, 1, "end_turn")
+        requests.append(req)
+        if len(requests) == 1:
+            reply = {"tool_calls": [{"tool": "web.search", "args": {"query": "hype funding"}}]}
+        elif len(requests) == 2 and compose:
+            # The continuation carries what was searched, and one more round of the
+            # ordinary jailed tool kinds to compose it with.
+            assert "SENTINEL-BODY" in str(req.messages)
+            assert "seen_tool_results" in str(req.messages)
+            assert "population tools once more" in str(req.messages)
+            reply = {"tool_calls": [{"tool": "note.list", "args": {}}]}
+        else:
+            reply = order
+        return ModelResponse(req.model_id, json.dumps(reply), 1, 1, "end_turn")
+
+    monkeypatch.setattr(rt.provider.target, "complete", complete)
+    rt.ledger.active = True
+    handle = decision(rt)
+    req = rt._request(handle, "Produce a return", {}, {
+        "type": "object", "properties": {"action": {"type": "string"}}, "required": ["action"]},
+        10**15, "verdict")
+    return rt._invoke("seed-decider", req, "producer"), requests
+
+
+def test_a_successful_search_opens_the_extra_round_so_one_wake_can_search_and_act(monkeypatch):
+    """A search earns the round a fetch earns: read outside, compose, then act."""
+    rt = web_runtime()
+    ret, requests = one_wake(rt, monkeypatch, json.dumps({"results": SENTINEL}))
+    assert len(requests) == 3
+    assert ret.status == "ok" and ret.outputs["action"] == "order" and ret.outputs["coin"] == "BTC"
+    rows = ledger_items(rt)
+    assert [row["tool"] for row in rows if row["kind"] == "tool.call"] == [
+        "web.search", "note.list"]
+    # The search's own evidence is there; the text it returned is not, anywhere public.
+    assert [row["ok"] for row in rows if row["kind"] == "web.call"] == [True]
+    public = [row for row in rows if row["kind"] not in ("io.call", "io.result")]
+    assert "SENTINEL" not in json.dumps(public, default=str)
+    # Protection is transient, exactly as a fetched body's is.
+    assert not rt.ledger.connector_bodies
+    assert rt.wallet.check_conservation()
+
+
+def test_a_failed_search_earns_no_extra_round(monkeypatch):
+    """The round is bought by text actually retrieved, not by having asked for it."""
+    rt = web_runtime()
+    _, requests = one_wake(rt, monkeypatch, "no idea, sorry", compose=False)
+    assert len(requests) == 2  # the search, then the final answer; no composing round
+    assert [row["tool"] for row in ledger_items(rt) if row["kind"] == "tool.call"] == [
+        "web.search"]
+
+
 # --- replay -----------------------------------------------------------------------------
 
 
