@@ -64,11 +64,18 @@ def test_population_continues_on_venice_after_openrouter_loss(mode, monkeypatch)
                            exhaust_after=2 if mode == "exhaust_after_two" else None,
                            race=mode == "402_race")
     second = CreditProvider("venice", calls)
-    rt = runtime(first, second)
+    # Restated for R3-D: a tier's separation is a duration rather than three arrivals
+    # (GPT-6 third reading §6.C), so the world has to run long enough for one of those
+    # durations to pass before a meta is asked anything at all. Twenty-four ticks is
+    # the same short world, given the time the cascade now takes. What this asserts is
+    # unchanged: after the first provider is lost the population goes on doing most of
+    # its work on the second, and the verdicts, conformities and settled forecasts
+    # below say the work was real.
+    rt = runtime(first, second, events=24)
     result = rt.run()
     assert not result["terminated"]
     assert result["ledger_verify"] and result["wallet_conservation"]
-    assert rt.ticks_consumed == 12
+    assert rt.ticks_consumed == 24
     assert second.completed > 10
     assert not first.available
     if mode == "empty_at_launch":
@@ -79,7 +86,13 @@ def test_population_continues_on_venice_after_openrouter_loss(mode, monkeypatch)
         assert len(calls[last + 1:]) > 10
         assert all(call[0] == "venice" for call in calls[last + 1:])
     assert result["stats"]["verdicts"] > 0
-    assert result["stats"]["conformities"] > 0
+    # Restated for R3-D: this counted conformity settlements, and in this short world
+    # they came from judgements of returns that had committed to nothing — which now
+    # conclude "unmeasured" instead of being scored (GPT-6 third reading §6.B). What
+    # matters here is that evaluation ran on the second provider and closed what it
+    # opened, by either answer.
+    closed = [i for i in rt.ledger._recovery_items() if i["kind"] == "evaluation.unmeasured"]
+    assert result["stats"]["conformities"] > 0 or closed
     assert result["stats"]["forecasts_settled"] > 0
 
 
