@@ -167,3 +167,41 @@ physics (`docs/plans/edition3.md`, C5). Decisions taken:
   (`scripts/calibrate_seats.py --cases`), every safety and accounting case passing and at
   least 95% valid returns. The gate is an initial screen, not a reliability certificate;
   fourteen successes never established production reliability and forty do not either.
+
+### Edition 3, third round (16 September)
+
+GPT-6 Pro's third reading (`docs/audits/v6/gpt6-third/reading.md`) would not launch the edition
+as it stood, for physics, not behaviour: venue losses drained the thinking pot, private state
+reached judges, some consequences never reached their owners, the router manufactured judge
+work when nobody acted, and kill did not establish finality. The architect's instruction was to
+follow the reading in full (`docs/plans/edition3-r3.md`). Decisions that supersede lines above:
+
+- **Death is two states.** Kill sets `production_state = killed` first and irrevocably
+  (`kill.production` in the diary and a witness line outside it); only then does a narrowly
+  authorized wind-down executor run, with durable operation ids (`winddown.op` /
+  `winddown.op_result`), reconciling by id on a repeated kill or a restart so no close is ever
+  sent twice, and it can only cancel, reduce, close and reconcile. `exposure_state` is what the
+  final account read says: `flat`, `dust_within_precommitted_bound`, `wind_down_pending` (a
+  resting or partly filled close is not flat), or `unknown` (a failed read). A diary failure
+  during the wind-down never prevents death. The witness line carries both states and the
+  operation count. `Terminated` is written last, because the kernel refuses appends after it.
+- **The witness is bound to the launch identity.** Whether a receiver was required and the
+  hash of its address are in `Launch`; unsetting the variable or naming another receiver
+  refuses a resume; the local record is keyed by launch nonce, so renaming a diary changes
+  nothing.
+- **Money is three quantities.** Learning scores, spending authority (the compute wallet,
+  now labeled `authority`) and assets by custody (OpenRouter credit, Venice credit, venue
+  perps, venue spot, Base reserve, pending conversions) are never conflated: venue P&L, fees
+  and funding settle on the venue only; the bridge credits only its destination and is
+  shown as financing; income receipts are idempotent on chain identity and verified before
+  they count; collateral is checked from the venue's own collateral view; a failed venue read
+  renders `unavailable`, never a fabricated account.
+- **Evaluation is a commission** that may answer `unmeasured`; nothing is graded that nobody
+  authored; holds are judged only against a commitment; easy forecasts pay nothing; fidelity
+  objections are adjudicated by a different judge; cascades are separated by time and
+  completed evidence, not arrival count.
+- **The lens is working state, not the system prompt.** Every seat's system prompt is GPT-6's
+  common contract verbatim; the stable prefix is the world contract with the norms and a
+  compact capability index; the seat's own facts are in one `YOU` block; a deterministic
+  `calc` tool does the arithmetic the calibration screen showed the cheap models getting
+  wrong. Prompt changes mean a new roster hash and a new ballot.
