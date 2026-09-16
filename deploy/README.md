@@ -287,10 +287,18 @@ kill): `Termination.kill` appends
 
 `wind_down` is what the manifest owed the venue and `wind_down_orders` how many
 orders the kill actually sent it ("What a kill owes the venue", below); a world
-that precommitted nothing is witnessed as `false` with no orders.
+that precommitted nothing is witnessed as `false` with no orders. The line also
+carries `production_state` (always `killed`: the line exists because the world is
+dead), `exposure_state`, `wind_down_operations` and `wind_down_ledger_failures`,
+and a `stage` of `production_kill` or `kill` — a world that owed a wind-down
+writes one line at each end of it.
 
-to the same file (`factorylab/runtime/witness.py`, standard library only, never
-raising into the kill) and POSTs it to the receiver when the URL is set. That
+to that file and to a second one keyed by launch identity,
+`.witness/<world>-<launch_nonce[:16]>.jsonl` (`factorylab/runtime/witness.py`,
+standard library only, never raising into the kill), and POSTs it to the receiver
+when the URL is set. The identity-keyed file is the one that takes nothing from the
+diary's filename: renaming a restored copy of a diary moves it away from
+`.witness/<stem>.jsonl`, and the identity file still answers for it (R3-C). That
 line is the death record the diary itself cannot carry. A killed diary refuses
 to reopen, but an *earlier copy* of it (a backup restored beside the original,
 a `cp -r` taken before the kill) has a valid chain, the right key and the right
@@ -314,13 +322,25 @@ one whose identity this process or the local witness records as killed, is
 refused the same way (`restore_runtime`, `identity_killed`);
 `Termination.kill` stays irreversible on the object.
 
+The requirement is part of the launch identity, not of the environment (R3-C).
+Whether a receiver was configured when the world launched, and which one (the
+SHA-256 of its URL; the address itself never enters the diary, the wake or a log
+line), is ledgered in the `Launch` event and carried in every checkpoint. So
+unsetting `FACTORYLAB_WITNESS_URL` afterwards removes no veto: a resume of a world
+that launched under a receiver refuses with `witness_required` when the environment
+names none, and with `witness_mismatch` when it names a different one. Both are
+exit 1 with a `failed_resume` item in the diary. A world launched *without* a
+receiver is unaffected and keeps the weaker guarantee below.
+
 The two guarantees, plainly: with `FACTORYLAB_WITNESS_URL` set, a kill is final
 wherever the diary is copied, as long as the receiver keeps its lines; the host,
 its `.witness/` directory and its memory can all be lost. Without it, a kill is
-final only as far as `.witness/funded.jsonl` on this host survives: an operator
-who deletes it, or a host lost with it, leaves an earlier copy of the diary
-with nothing to refuse it. That is the weaker guarantee, and the funded host
-should not run under it.
+final only as far as the local files on this host survive
+(`.witness/funded.jsonl` and `.witness/funded-<launch_nonce[:16]>.jsonl`): an
+operator who deletes them, or a host lost with them, leaves an earlier copy of the
+diary with nothing to refuse it. **That is the weaker guarantee**, and the funded
+host should not run under it: a world launched with a receiver cannot be talked out
+of needing one, and a world launched without one has only this file to rely on.
 
 Both units bind `.witness/` writable (`ReadWritePaths` in `factorylab.service`
 and `factorylab-wake.service`, beside `runs/` and `www/`): under
@@ -448,30 +468,67 @@ dust_usd = "1"
 With `wind_down = true`, every kill path — `factorylab kill` and the end-of-budget
 kill alike — empties the account before `Terminated`, in three passes: cancel every
 resting order, close every open perp position at market, sell every spot balance
-worth more than `dust_usd` at market. Each order and the venue's own answer is one
-`kill.wind_down` item in the diary, followed by a `kill.wind_down` `summary`
-counting what was sent, cancelled, closed, sold and failed. All of it is in the
-diary before the `Terminated` event, so the record of the exit is inside the thing
-the exit seals. Dust is left where it is: selling a dollar of PURR costs more than
-the dollar.
+worth more than `dust_usd` at market. Dust is left where it is: selling a dollar of
+PURR costs more than the dollar. All of it is in the diary before the `Terminated`
+event, so the record of the exit is inside the thing the exit seals.
 
-A venue may never block a kill. Every step is individually guarded: an unreachable
-API, a missing credential, a refused order or a venue that answers nothing at all
-is ledgered as a failed step and the kill proceeds to `Terminated` regardless. A
-partial wind-down is therefore possible and is visible as `failed` in the summary;
-check it against the venue by hand afterwards. This is the one thing `factorylab
-kill` reaches the network for, and it is why the kill loads the venue credential
-when — and only when — the manifest precommitted a wind-down.
+**Two states, never one** (edition 3, R3-C, from GPT-6's third reading §6.D). Death
+and liquidation are separate facts and are ledgered separately:
+
+| State | Values | Decided by |
+| --- | --- | --- |
+| `production_state` | `alive`, `killed` | the kill, first and irrevocably |
+| `exposure_state` | `flat`, `dust_within_precommitted_bound`, `wind_down_pending`, `unknown` | a final account reconciliation, afterwards |
+
+A kill writes `kill.production` to the diary — and, when a wind-down is owed, a
+witness line outside it — **before** it sends a single venue operation. Only then
+does the **wind-down executor** run, and its whole authority is to cancel, reduce,
+close and reconcile: it cannot open a position and it cannot resume the population.
+Each operation has a durable identity derived from the launch nonce, the coin, the
+market, the side and the target, ledgered as `winddown.op` before submission and
+`winddown.op_result` after it, and carried to the venue as the client order id. A
+repeated kill, or a kill after a restart, derives the same identities and finds the
+answers already in the diary: it never sends an operation twice. An operation that
+was submitted with no recorded answer — a dropped acknowledgement, a process that
+died between the two records — is reconciled by *reading* the venue, never by
+sending it again.
+
+The executor ends with one more account read, ledgered as
+`winddown.reconciliation` with the residual (resting orders, positions, balances
+above the dust bound) and the `exposure_state` those imply. An acknowledgement is
+not a flat account: `resting` is not flat, a partial fill is not flat, and a read
+that failed is `unknown` rather than an empty account. `kill.wind_down` keeps the
+`summary`, the `dust` notes and the `read_failed` notes.
+
+A venue may never block a kill, and neither may the diary. Every step is
+individually guarded: an unreachable API, a missing credential, a refused order or a
+venue that answers nothing at all is ledgered as a failed step, and a diary that
+refuses a record is counted, printed on stderr and carried to the witness line. The
+kill proceeds to `Terminated` regardless. A partial wind-down is therefore possible
+and is visible as `failed` in the summary and as `wind_down_pending` in the witness
+line; check it against the venue by hand afterwards. This is the one thing
+`factorylab kill` reaches the network for, and it is why the kill loads the venue
+credential when — and only when — the manifest precommitted a wind-down.
+
+If the process dies between the production mark and the terminal event, the diary
+has no `Terminated` in it but the world is dead all the same: the witness already
+says so, `resume` refuses it (`identity_killed`), and running `factorylab kill`
+again reconciles the wind-down by operation id — repeating nothing — and seals the
+diary.
 
 With `wind_down = false` or no `[kill]` table at all, the behaviour is the old one:
 the kill loads no credential, reaches no network, and residual exposure survives the
-world. That is a choice a manifest may make; it is not this one's.
+world. That is a choice a manifest may make; it is not this one's. Such a kill
+reports `exposure_state: unknown`, because it reconciled nothing.
 
-The witness line outside the diary carries the same contract, so a restored copy of
-a diary can be asked what the dead world owed its venue and what it sent:
+The witness lines outside the diary carry the same contract, so a restored copy of a
+diary can be asked what the dead world owed its venue, what it sent and what was
+left. A world that owed a wind-down writes two: one when production died, one when
+the executor finished.
 
 ```json
-{"world":"funded","event":"kill","ts":"...","wind_down":true,"wind_down_orders":3,"reason":"explicit_kill:operator", "...":"..."}
+{"world":"funded","event":"kill","stage":"production_kill","production_state":"killed","exposure_state":"unknown","wind_down":true,"wind_down_operations":0,"...":"..."}
+{"world":"funded","event":"kill","stage":"kill","production_state":"killed","exposure_state":"flat","wind_down":true,"wind_down_orders":3,"wind_down_operations":3,"wind_down_ledger_failures":0,"reason":"explicit_kill:operator","...":"..."}
 ```
 
 Afterwards `systemctl disable --now factorylab.service` stops systemd from
@@ -486,7 +543,7 @@ Every code the CLI can return, and what a supervisor does with it.
 | Exit | Path | Supervisor behavior |
 | --- | --- | --- |
 | 0 | Resume returns a live summary; any command succeeded | Restart with the same saved budget |
-| 1 | Resume fails authentication, replay, credentials or provider setup; the witness receiver gave no verdict; an archived artifact's bytes are missing; the facilitator differs | Failed-resume webhook; restart with backoff |
+| 1 | Resume fails authentication, replay, credentials or provider setup; the witness receiver gave no verdict, is not configured for a world that launched under one, or is a different one; an archived artifact's bytes are missing; the facilitator differs | Failed-resume webhook; restart with backoff |
 | 2 | A refusal: an unsafe key file mode, a changed tick, a top-up after launch, a missing argument | Do not restart; the operator must act |
 | 3 | Resume finds an authenticated Terminated event, the world terminates while running, or `kill` ends it | Final success; no restart; termination webhook |
 | 4 | Another process already holds the ledger's writer lock | Do not start a second writer; investigate |
@@ -502,7 +559,9 @@ where the code comes from the closed vocabulary in `factorylab/runtime/reasons.p
 (`ledger_integrity`, `manifest_mismatch`, `release_mismatch` for a checkout whose
 release digest is not the one that launched the world, `identity_killed` for a
 diary whose launch identity the witness records as killed, `witness_unavailable`
-for a configured receiver that gave no verdict, `artifact_missing` for an archive
+for a configured receiver that gave no verdict, `witness_required` for a world that
+launched under a receiver resumed with none configured, `witness_mismatch` for one
+resumed under a different receiver, `artifact_missing` for an archive
 index naming bytes that are not beside the ledger, `facilitator_mismatch` for an
 x402 facilitator other than the one the world launched under, `credential_missing` for a
 key the environment lacks, `credential_unsafe` for a key file whose mode or owner is

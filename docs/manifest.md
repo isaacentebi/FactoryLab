@@ -1452,6 +1452,36 @@ ledger_head[, reason]}` for `launch`, `dormant`, `kill` and `failed_resume` to
 an append-only file outside the diary and, when `FACTORYLAB_WITNESS_URL` is
 set, POSTs the same line; `deploy/README.md` says who calls it when.
 
+The witness requirement is part of the launch identity too (edition 3, R3-C).
+Whether a receiver was configured at launch, and which one (the SHA-256 of its
+URL; the address itself never enters the diary), is ledgered in `Launch` beside
+the release digest and carried in every checkpoint. Unsetting
+`FACTORYLAB_WITNESS_URL` afterwards therefore removes no veto: a resume of a
+world that launched under a receiver refuses with `witness_required` when none is
+configured and `witness_mismatch` when a different one is. The runtime's own kill
+lines are written both to `.witness/<stem>.jsonl` and to
+`.witness/<world>-<launch_nonce[:16]>.jsonl`, and the second takes nothing from
+the diary's filename, so renaming a restored copy of a diary does not move it out
+of reach of the record of its death.
+
+### Death and exposure are two states
+
+`production_state ∈ {alive, killed}` and `exposure_state ∈ {flat,
+dust_within_precommitted_bound, wind_down_pending, unknown}` (edition 3, R3-C,
+GPT-6's third reading §6.D). A kill sets production killed first and
+irrevocably — `kill.production` in the diary, a witness line outside it — and
+only then runs the wind-down executor (`factorylab/runtime/winddown.py`), whose
+whole authority is to cancel, reduce, close and reconcile: it cannot open risk
+and cannot resume the population. Every external operation has a durable
+identity derived from (launch nonce, coin, market, side, target), ledgered
+`winddown.op` before submission and `winddown.op_result` after it, so a repeated
+kill or a kill after a restart reconciles by identity and repeats nothing. A
+final account read is ledgered as `winddown.reconciliation` with the residual and
+the `exposure_state` it implies: an acknowledgement is not a flat account, and a
+failed read is `unknown`. Neither a venue nor the diary can prevent death; a
+diary failure during the wind-down is counted, printed on stderr and carried to
+the witness line.
+
 ## Operator controls and recovery
 
 The ledger writer lock and every ledger descriptor are close-on-exec, so no child can inherit one or keep a dead world locked; a jailed run that ends in a timeout, an error or an interrupt kills its confined process group before returning, but `sandbox-exec` has no `--die-with-parent`, so on macOS a confined process can still outlive a runtime that is killed outright.
@@ -1459,8 +1489,10 @@ The ledger writer lock and every ledger descriptor are close-on-exec, so no chil
 `factorylab kill --world W --ledger L` takes the ledger writer lock, reopens
 the original world, records `explicit_kill:operator`, releases the seal and
 exits `3`. Stop the running process first so the lock is available. Stopping
-the process alone does not terminate the world. Kill loads no credentials
-and makes no network call. Failures from `run` and `kill` retain the reason
+the process alone does not terminate the world. Kill loads no credentials and
+makes no network call, unless the manifest precommitted `[kill] wind_down =
+true`: then, and only then, it loads the venue credential and runs the wind-down
+executor after production is already dead (above). Failures from `run` and `kill` retain the reason
 code on the first stderr line and may add the exception class and originating
 `factorylab` module on a second line, without provider exception text.
 

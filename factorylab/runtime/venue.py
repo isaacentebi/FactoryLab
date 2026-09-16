@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from decimal import Decimal
 
 from factorylab.cortex.request import Return
@@ -13,128 +14,106 @@ from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import AccountState, Order, OrderKind, OrderResult
 
 
-def wind_down(exchange, ledger, *, dust_micro: int = 1_000_000) -> dict:
-    """Leave the venue flat before the world dies: cancel, close, sell (edition 3, C5).
+def wind_down(exchange, ledger, *, dust_micro: int = 1_000_000,
+              launch_nonce: str | None = None, reader=None) -> dict:
+    """Leave the venue flat before the world dies, through the wind-down executor.
 
-    Three passes, each ledgered order by order as ``kill.wind_down`` with the venue's
-    own answer: every resting order is cancelled, every open perp position is closed at
-    market, and every spot balance worth more than ``dust_micro`` is sold at market.
-    Dust is left because selling it costs more than it is worth.
+    The three passes are unchanged in what they attempt — cancel every resting
+    order, close every open perp position, sell every spot balance worth more than
+    ``dust_micro`` — and everything else about them is now the executor's
+    (``factorylab/runtime/winddown.py``, edition 3 R3-C): each operation carries a
+    durable identity ledgered before submission and after it, a repeated kill or a
+    kill after a restart reconciles by that identity rather than acting twice, and
+    the report ends with a final account reconciliation rather than with a count of
+    acknowledgements. ``exposure_state`` is what the account says afterwards;
+    ``exposure_status`` is the same value under its first name.
 
-    Nothing here may raise. A kill that a venue can block is not a kill: an unreachable
-    or refusing venue is recorded as a failed step (``status`` ``"failed"`` with the
-    exception type, or the venue's own rejection) and the caller terminates anyway. The
-    returned report is what the witness line and the diary summary are written from.
+    Nothing here may raise. A kill that a venue or a diary can block is not a kill.
     """
-    report = {"attempted": True, "orders": 0, "cancelled": 0, "closed": 0, "sold": 0,
-              "failed": 0, "errors": []}
+    from factorylab.runtime.winddown import execute
 
-    def step(kind: str, detail: dict, call) -> dict | None:
-        report["orders"] += 1
-        try:
-            result = call()
-            result = _to_plain(vars(result)) if isinstance(result, OrderResult) else result
-            if not isinstance(result, dict):
-                result = {"status": "unknown", "acknowledgement": str(result)[:200]}
-        except Exception as exc:  # noqa: BLE001 - a venue may never block a kill
-            result = {"status": "failed", "error": type(exc).__name__}
-        # The diary takes plain JSON; a venue answers in Decimals and its own types.
-        result = json.loads(json.dumps(result, default=str))
-        ok = result.get("status") in (
-            ("cancelled", "ok") if kind == "cancelled" else ("filled",))
-        if ok:
-            report[kind] += 1
-        else:
-            report["failed"] += 1
-            report["errors"].append({**detail, "status": result.get("status"),
-                                     "error": str(result.get("error") or "")[:200]})
-        ledger.append({"kind": "kill.wind_down", "step": kind, **detail, "result": result})
-        return result
+    return execute(exchange, ledger, launch_nonce=launch_nonce, dust_micro=dust_micro,
+                   reader=reader)
 
-    try:
-        resting = list(exchange.open_orders())
-    except Exception as exc:  # noqa: BLE001
-        resting = []
-        report["failed"] += 1
-        report["errors"].append({"step": "open_orders", "error": type(exc).__name__})
-        ledger.append({"kind": "kill.wind_down", "step": "read_failed",
-                       "read": "open_orders", "error": type(exc).__name__})
-    for order in resting:
-        oid, coin = str(order.get("order_id")), str(order.get("coin"))
-        step("cancelled", {"order_id": oid, "coin": coin},
-             lambda oid=oid, coin=coin: exchange.cancel(oid, coin=coin))
 
-    try:
-        account = exchange.account()
-        mids = exchange.mids()
-    except Exception as exc:  # noqa: BLE001
-        account, mids = None, {}
-        report["failed"] += 1
-        report["errors"].append({"step": "account", "error": type(exc).__name__})
-        ledger.append({"kind": "kill.wind_down", "step": "read_failed", "read": "account",
-                       "error": type(exc).__name__})
-    if account is not None:
-        for position in account.positions:
-            if not position.size:
-                continue
-            coin = position.coin
-            step("closed", {"coin": coin, "size": str(position.size)},
-                 lambda coin=coin: exchange.close(coin))
-        for balance in account.spot_balances:
-            base = balance.coin
-            if base == "USDC" or balance.total <= 0:
-                continue
-            pair = f"{base}/USDC"
-            mid = mids.get(pair) or mids.get(base)
-            value = None if mid is None else usd_to_micro(
-                Decimal(str(balance.total)) * Decimal(str(mid)), rounding="nearest")
-            if value is not None and value <= dust_micro:
-                ledger.append({"kind": "kill.wind_down", "step": "dust", "coin": pair,
-                               "size": str(balance.total), "value_micro": value})
-                continue
-            step("sold", {"coin": pair, "size": str(balance.total),
-                          "value_micro": value},
-                 lambda pair=pair, balance=balance: exchange.close(
-                     pair, Decimal(str(balance.total)), market="spot"))
-    ledger.append({"kind": "kill.wind_down", "step": "summary",
-                   **{k: v for k, v in report.items() if k != "errors"}})
-    return report
+def dead_report() -> dict:
+    """What a kill that wound nothing down knows: it is dead, and it reconciled nothing."""
+    from factorylab.runtime.winddown import KILLED, UNKNOWN
+
+    return {"attempted": False, "orders": 0, "operations": 0,
+            "production_state": KILLED, "exposure_state": UNKNOWN,
+            "exposure_status": UNKNOWN}
 
 
 class VenueMixin:
     """Preserve runtime state and behavior for venue operations."""
 
     def kill(self, reason: str) -> dict:
-        """End this world, winding the venue down first when the manifest precommitted it.
+        """End this world: production dies first, and only then is the venue wound down.
 
         The single kill path inside a living runtime: the duration kill through
         ``_finish_budget`` and any other runtime death go through here, and the
-        operator's ``factorylab kill`` runs the same ``wind_down`` against the same
-        manifest. ``kill.wind_down`` and each of its orders are in the diary before
-        ``Terminated``, and the witness line outside the diary carries whether a
-        wind-down was owed and how many orders it sent.
+        operator's ``factorylab kill`` runs the same executor against the same
+        manifest. Two states, in this order (edition 3, R3-C):
+
+        1. ``production_state = killed``, before any external operation: the mark
+           is in the diary (``kill.production``), on this object, and — when a
+           wind-down is owed, so that the window between the mark and the seal can
+           contain venue work — in the witness file outside the diary. Nothing
+           after this point can make the world alive again: a diary carrying the
+           mark without ``Terminated`` never resumes its population; it can only
+           be killed again, which reconciles the wind-down and seals it.
+        2. The wind-down executor, whose whole authority is to cancel, reduce,
+           close and reconcile, and which cannot resume the population or open
+           risk. Its operations and its final reconciliation are in the diary
+           before ``Terminated``, because a sealed diary takes no further record.
+
+        ``Termination.kill`` then publishes ``Terminated``, writes the witness
+        line with ``production_state``, ``exposure_state`` and the operation
+        count, and releases the seal. It runs in a ``finally``: no venue, no
+        diary and no witness can prevent it.
         """
-        from factorylab.runtime import witness
+        from factorylab.runtime import winddown, witness
 
         if self.termination.final:
-            return getattr(self, "wind_down_report", {"attempted": False, "orders": 0,
-                                                      "exposure_status": "unknown"})
-        report = {"attempted": False, "orders": 0, "exposure_status": "unknown"}
-        exchange = getattr(self, "exchange", None)
+            return getattr(self, "wind_down_report", dead_report())
+        owed = bool(self.m.kill.wind_down)
+        report = dead_report()
         try:
-            if self.m.kill.wind_down and exchange is not None:
-                report = wind_down(exchange, self.ledger, dust_micro=self.m.kill.dust_micro)
-            elif self.m.kill.wind_down:
+            self.production_state = winddown.KILLED
+            try:
+                self.ledger.append({"kind": "kill.production",
+                                    "production_state": winddown.KILLED, "reason": reason})
+            except Exception as exc:  # noqa: BLE001 - a diary may never block a kill
+                print(f"factorylab kill: the diary refused the production mark "
+                      f"({type(exc).__name__}); the kill proceeds", file=sys.stderr)
+            if owed:
+                # The window between the mark and the seal is the only time a dead
+                # world touches a venue. It is witnessed at both ends.
+                witness.note_wind_down(wind_down=True, orders=0,
+                                       exposure_state=winddown.UNKNOWN)
+                witness.record_production_kill(self.ledger, reason)
+            exchange = getattr(self, "exchange", None)
+            if owed and exchange is not None:
+                report = wind_down(exchange, self.ledger, dust_micro=self.m.kill.dust_micro,
+                                   launch_nonce=getattr(self, "launch_nonce", None))
+            elif owed:
                 report["error"] = "world has no exchange"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
             report["error"] = type(exc).__name__
         finally:
             # An acknowledgement is not a reconciled flat account.
-            report.setdefault("exposure_status", "unknown")
+            report.setdefault("exposure_state", winddown.UNKNOWN)
+            report["exposure_status"] = report["exposure_state"]
+            report["production_state"] = winddown.KILLED
             self.wind_down_report = report
+            self.exposure_state = report["exposure_state"]
             try:
-                witness.note_wind_down(wind_down=bool(self.m.kill.wind_down),
-                                       orders=report.get("orders", 0))
+                witness.note_wind_down(
+                    wind_down=owed, orders=report.get("orders", 0),
+                    exposure_state=report["exposure_state"],
+                    operations=report.get("operations", report.get("orders", 0)),
+                    ledger_failures=report.get("ledger_failures", 0))
             finally:
                 self.termination.kill(reason)
         return report

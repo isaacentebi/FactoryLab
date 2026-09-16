@@ -400,30 +400,63 @@ def _cmd_order_status(args: argparse.Namespace) -> int:
     return 0
 
 
-def _kill_wind_down(manifest, ledger, wind_down) -> dict:
+def _winddown_reader(manifest, ledger_path: str):
+    """A read-only pass over this diary's earlier wind-down operations, or nothing.
+
+    A writable ledger refuses to be iterated, because its boundary moves under the
+    reader; a second copy opened read-only sees every record that was acknowledged
+    before this kill began. That is what lets a kill after a crashed wind-down
+    reconcile by operation id instead of sending anything twice (R3-C). A diary
+    that cannot be read this way simply knows nothing, and the executor treats
+    every operation as new — so the reader never raises.
+    """
+    def read():
+        from factorylab.kernel.ledger import Ledger
+
+        try:
+            reader = Ledger.open_read_only(ledger_path,
+                                           manifest=json.loads(manifest.canonical_json()))
+            return [item for item in reader.items()
+                    if item.get("kind") in ("winddown.op", "winddown.op_result")]
+        except Exception:  # noqa: BLE001 - a diary that cannot be read knows nothing
+            return []
+
+    return read
+
+
+def _kill_wind_down(manifest, ledger, wind_down, ledger_path: str | None = None) -> dict:
     """Build the world's venue and leave it flat, or ledger why that was impossible.
 
     Separated so the one rule is visible in one place: nothing raised here reaches
     the kill. A world on the deterministic fake venue has no external exposure to
-    unwind, and says so rather than pretending it acted.
+    unwind, and says so rather than pretending it acted. Production is already dead
+    when this runs (``_cmd_kill`` marks it first); what is decided here is only
+    ``exposure_state``, and an exposure nobody could read is ``unknown``.
     """
+    from factorylab.runtime.winddown import KILLED, UNKNOWN
+
+    unwound = {"attempted": False, "orders": 0, "operations": 0,
+               "production_state": KILLED, "exposure_state": UNKNOWN,
+               "exposure_status": UNKNOWN}
+    launch_nonce = (ledger.identity() or {}).get("launch_nonce")
     if manifest.exchange.kind != "hyperliquid":
         ledger.append({"kind": "kill.wind_down", "step": "skipped",
                        "reason": f"no live venue: exchange kind {manifest.exchange.kind}"})
-        return {"attempted": False, "orders": 0,
-                "skipped": f"exchange kind {manifest.exchange.kind}"}
+        return {**unwound, "skipped": f"exchange kind {manifest.exchange.kind}"}
     try:
         from factorylab.world.exchange import live_exchange
 
         _load_dotenv()
-        exchange = live_exchange(manifest.exchange,
-                                 launch_nonce=(ledger.identity() or {}).get("launch_nonce"))
+        exchange = live_exchange(manifest.exchange, launch_nonce=launch_nonce)
     except Exception as exc:  # noqa: BLE001 - the venue may never block a kill
         ledger.append({"kind": "kill.wind_down", "step": "unavailable",
                        "error": type(exc).__name__})
-        return {"attempted": True, "orders": 0, "failed": 1,
+        return {**unwound, "attempted": True, "failed": 1,
                 "errors": [{"step": "venue", "error": type(exc).__name__}]}
-    return wind_down(exchange, ledger, dust_micro=manifest.kill.dust_micro)
+    return wind_down(exchange, ledger, dust_micro=manifest.kill.dust_micro,
+                     launch_nonce=launch_nonce,
+                     reader=None if ledger_path is None
+                     else _winddown_reader(manifest, ledger_path))
 
 
 def _cmd_kill(args: argparse.Namespace) -> int:
@@ -436,36 +469,64 @@ def _cmd_kill(args: argparse.Namespace) -> int:
     steer a world: a world is created once and ended once, and nothing in
     between is the experimenter's to say.
 
-    When the world's manifest precommitted ``[kill] wind_down = true`` (edition 3,
-    C5) the venue is wound down first: every resting order cancelled, every open
-    position closed, every spot balance above dust sold, each ledgered as
-    ``kill.wind_down`` before ``Terminated``. That is the one thing a kill reaches
-    the network for, and it cannot delay finality: an unreachable venue, a missing
-    credential or a refused order is ledgered as a failed wind-down and the kill
-    proceeds regardless. A manifest that says nothing, or says false, keeps the
-    old behaviour and loads no credential at all.
+    Two states, in this order (edition 3, C5 and R3-C). ``production_state`` is
+    killed first: the mark is in the diary as ``kill.production`` and, when the
+    manifest precommitted ``[kill] wind_down = true``, in the witness file outside
+    it, before a single venue operation is sent. Only then does the wind-down
+    executor run — every resting order cancelled, every open position closed, every
+    spot balance above dust sold, each operation identified before submission and
+    answered after it, and a final account reconciliation writing
+    ``exposure_state``. That is the one thing a kill reaches the network for, and it
+    cannot delay finality: an unreachable venue, a missing credential, a refused
+    order or a diary that refuses a record is recorded and the kill proceeds to
+    ``Terminated`` regardless. A manifest that says nothing, or says false, keeps
+    the old behaviour, loads no credential at all, and reports an exposure state of
+    ``unknown``, because it reconciled nothing.
+
+    Running this again on a world whose process died inside the wind-down window
+    reconciles that window by operation id — repeating no operation — and seals it.
     """
     from factorylab.kernel.events import Bus
     from factorylab.kernel.ledger import Ledger, LedgerBusyError, LedgerIntegrityError, LedgerLock
     from factorylab.kernel.termination import Termination
     from factorylab.runtime import witness
     from factorylab.runtime.venue import wind_down
+    from factorylab.runtime.winddown import KILLED, UNKNOWN
 
     try:
         with LedgerLock(args.ledger):
             manifest = load_manifest(args.world)
             ledger = Ledger.reopen(args.ledger, manifest=json.loads(manifest.canonical_json()))
             termination = Termination(ledger=ledger, bus=Bus(ledger))
-            report = {"attempted": False, "orders": 0}
-            if manifest.kill.wind_down:
-                report = _kill_wind_down(manifest, ledger, wind_down)
-            witness.note_wind_down(wind_down=bool(manifest.kill.wind_down),
-                                   orders=report["orders"])
-            termination.kill("explicit_kill:operator")
+            owed = bool(manifest.kill.wind_down)
+            report = {"attempted": False, "orders": 0, "operations": 0,
+                      "production_state": KILLED, "exposure_state": UNKNOWN,
+                      "exposure_status": UNKNOWN}
+            try:
+                # Production dies first, and in that order: the mark is in the diary
+                # and, when a wind-down is owed, outside it, before the executor sends
+                # a single operation. A process killed between the two never resumes
+                # its population; the next kill reconciles by operation id.
+                ledger.append({"kind": "kill.production", "production_state": KILLED,
+                               "reason": "explicit_kill:operator"})
+                if owed:
+                    witness.note_wind_down(wind_down=True, orders=0,
+                                           exposure_state=UNKNOWN)
+                    witness.record_production_kill(ledger, "explicit_kill:operator")
+                    report = _kill_wind_down(manifest, ledger, wind_down, args.ledger)
+            finally:
+                witness.note_wind_down(
+                    wind_down=owed, orders=report.get("orders", 0),
+                    exposure_state=report.get("exposure_state", UNKNOWN),
+                    operations=report.get("operations", report.get("orders", 0)),
+                    ledger_failures=report.get("ledger_failures", 0))
+                termination.kill("explicit_kill:operator")
             print(json.dumps({
                 "world": manifest.name,
                 "terminated": True,
                 "termination_reason": termination.reason,
+                "production_state": KILLED,
+                "exposure_state": report.get("exposure_state", UNKNOWN),
                 "wind_down": report,
                 "seal_key_released": ledger.seal_key_released(),
             }))

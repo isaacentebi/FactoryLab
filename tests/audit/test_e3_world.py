@@ -241,16 +241,33 @@ def test_wind_down_empties_the_venue_and_ledgers_every_order_before_terminated()
     assert [b for b in account.spot_balances if b.coin != "USDC" and b.total > 0] == []
 
     items = list(rt.ledger.items())
+    # R3-C: each operation is its own pair of records, identified before it is sent
+    # and answered after it, and ``kill.wind_down`` keeps the summary and the notes.
+    ops = [i for i in items if i["kind"] == "winddown.op"]
+    results = [i for i in items if i["kind"] == "winddown.op_result"]
+    assert [o["op"] for o in ops] == ["cancel", "close", "sell"]
+    assert [r["op"] for r in results] == ["cancel", "close", "sell"]
+    assert all(r["result"]["status"] in ("cancelled", "filled") for r in results)
+    assert [r["op_id"] for r in results] == [o["op_id"] for o in ops]
+    assert all(o["op_id"].startswith("wd-") for o in ops)
     steps = [i for i in items if i["kind"] == "kill.wind_down"]
-    assert [s["step"] for s in steps] == ["cancelled", "closed", "sold", "summary"]
-    assert all(s["result"]["status"] in ("cancelled", "filled")
-               for s in steps if s["step"] != "summary")
-    assert steps[-1]["orders"] == 3
+    assert [s["step"] for s in steps] == ["summary"]
+    assert steps[-1]["orders"] == 3 and steps[-1]["operations"] == 3
+    # The account was read once more at the end: an acknowledgement is not flat.
+    reconciliation = [i for i in items if i["kind"] == "winddown.reconciliation"]
+    assert len(reconciliation) == 1
+    assert reconciliation[0]["exposure_state"] == "flat"
+    assert report["exposure_state"] == "flat" and report["production_state"] == "killed"
+    # Production died before the first operation and the seal came after the last.
+    mark = [i for i in items if i["kind"] == "kill.production"]
+    assert len(mark) == 1 and mark[0]["production_state"] == "killed"
+    assert mark[0]["seq"] < min(o["seq"] for o in ops)
     # The whole wind-down is in the diary before the event that seals it.
     terminated = [i for i in items
                   if (i.get("event") or {}).get("kind") == "Terminated"]
     assert len(terminated) == 1
-    last_wind_down = max(i["seq"] for i in items if i["kind"] == "kill.wind_down")
+    last_wind_down = max(i["seq"] for i in items
+                         if i["kind"].startswith(("kill.", "winddown.")))
     assert terminated[0]["seq"] > last_wind_down
     assert terminated[0]["seq"] == max(i["seq"] for i in items)
     assert rt.termination.final and rt.termination.reason == "explicit_kill:operator"
@@ -262,10 +279,13 @@ def test_wind_down_false_leaves_the_venue_exactly_as_it_was():
     before = rt.exchange.account()
     report = rt.kill("explicit_kill:operator")
 
-    # Restated for the GPT-6 third reading (§3, §6.D): a kill that attempted no wind-down
-    # has not reconciled anything, so the report says the exposure state is unknown rather
-    # than leaving the caller to read "no orders closed" as "flat".
-    assert report == {"attempted": False, "orders": 0, "exposure_status": "unknown"}
+    # Restated for the GPT-6 third reading (§3, §6.D) and R3-C: a kill that attempted no
+    # wind-down has not reconciled anything, so the report says production is dead and
+    # the exposure state unknown, rather than leaving the caller to read "no orders
+    # closed" as "flat".
+    assert report == {"attempted": False, "orders": 0, "operations": 0,
+                      "production_state": "killed", "exposure_state": "unknown",
+                      "exposure_status": "unknown"}
     assert len(rt.exchange.open_orders()) == 1
     after = rt.exchange.account()
     assert [(p.coin, p.size) for p in after.positions] == [
@@ -298,13 +318,17 @@ def test_an_unreachable_venue_is_ledgered_and_the_world_still_dies():
     report = rt.kill("explicit_kill:operator")
 
     assert rt.termination.final and rt.termination.reason == "explicit_kill:operator"
-    assert report["failed"] == 2 and report["orders"] == 0
-    assert {e["step"] for e in report["errors"]} == {"open_orders", "account"}
+    # Three reads, each guarded on its own (R3-C separates the price read from the
+    # account read, so an unpriceable balance is not mistaken for an absent one).
+    assert report["failed"] == 3 and report["orders"] == 0
+    assert {e["step"] for e in report["errors"]} == {"open_orders", "account", "mids"}
     assert {e["error"] for e in report["errors"]} == {"OSError"}
     failures = [i for i in rt.ledger.items()
-                if i["kind"] == "kill.wind_down" and i["step"] == "read_failed"]
-    assert {f["read"] for f in failures} == {"open_orders", "account"}
+                if i["kind"] == "kill.wind_down" and i.get("step") == "read_failed"]
+    assert {f["read"] for f in failures} == {"open_orders", "account", "mids"}
     assert all(f["error"] == "OSError" for f in failures)
+    # A venue that answers nothing leaves an exposure nobody can describe.
+    assert report["exposure_state"] == "unknown"
 
 
 def test_a_refusing_venue_is_recorded_order_by_order_and_never_raises():
@@ -339,8 +363,15 @@ def test_a_refusing_venue_is_recorded_order_by_order_and_never_raises():
     report = wind_down(Refusing(), ledger)
     assert report["orders"] == 3 and report["failed"] == 3
     assert report["cancelled"] == report["closed"] == report["sold"] == 0
-    assert [i["step"] for i in ledger.rows] == ["cancelled", "closed", "sold", "summary"]
-    assert ledger.rows[0]["result"] == {"status": "failed", "error": "RuntimeError"}
+    assert [i["op"] for i in ledger.rows if i["kind"] == "winddown.op"] == [
+        "cancel", "close", "sell"]
+    results = [i for i in ledger.rows if i["kind"] == "winddown.op_result"]
+    assert results[0]["result"] == {"status": "failed", "error": "RuntimeError"}
+    # Nothing was left flat and the executor says so, from the account and not from
+    # the three refusals: the resting order, the position and the balance are all there.
+    assert report["exposure_state"] == "wind_down_pending"
+    assert [i["exposure_state"] for i in ledger.rows
+            if i["kind"] == "winddown.reconciliation"] == ["wind_down_pending"]
 
 
 def test_dust_is_left_where_it_is():
@@ -367,9 +398,11 @@ def test_dust_is_left_where_it_is():
     ledger = _MemoryLedger()
     report = wind_down(Dusty(), ledger, dust_micro=1_000_000)
     assert report["orders"] == 0 and report["sold"] == 0 and report["failed"] == 0
-    dust = [i for i in ledger.rows if i["step"] == "dust"]
+    dust = [i for i in ledger.rows if i.get("step") == "dust"]
     assert len(dust) == 1 and dust[0]["coin"] == "PURR/USDC"
     assert dust[0]["value_micro"] == 460_000
+    # R3-C names that state rather than calling it flat: the bound was precommitted.
+    assert report["exposure_state"] == "dust_within_precommitted_bound"
 
 
 def test_the_witness_line_carries_the_contract_and_the_count(tmp_path):
@@ -381,10 +414,23 @@ def test_the_witness_line_carries_the_contract_and_the_count(tmp_path):
 
     lines = [json.loads(raw)
              for raw in witness.witness_path(path).read_text().splitlines()]
-    assert len(lines) == 1
-    assert lines[0]["event"] == "kill" and lines[0]["reason"] == "explicit_kill:budget"
-    assert lines[0]["wind_down"] is True
-    assert lines[0]["wind_down_orders"] == _wind_down_orders(path, manifest)
+    # Two lines, because R3-C kills production before it touches a venue: the first
+    # says the population is dead and the exposure not yet known, the second says
+    # what the executor left behind. Both are kill lines; either refuses a resume.
+    assert [line["stage"] for line in lines] == ["production_kill", "kill"]
+    assert all(line["event"] == "kill" and line["production_state"] == "killed"
+               for line in lines)
+    assert lines[0]["exposure_state"] == "unknown"
+    assert lines[-1]["reason"] == "explicit_kill:budget"
+    assert lines[-1]["wind_down"] is True
+    assert lines[-1]["exposure_state"] == "flat"
+    assert lines[-1]["wind_down_orders"] == _wind_down_orders(path, manifest)
+    assert lines[-1]["wind_down_operations"] == _wind_down_orders(path, manifest)
+    assert lines[-1]["wind_down_ledger_failures"] == 0
+    # The same lines are in the file keyed by launch identity, which a renamed
+    # diary still resolves to (R3-C).
+    keyed = witness.identity_path(path, manifest.name, lines[-1]["launch_nonce"])
+    assert [json.loads(raw) for raw in keyed.read_text().splitlines()] == lines
 
 
 def test_a_world_that_precommitted_nothing_is_witnessed_as_owing_nothing(tmp_path):

@@ -26,7 +26,7 @@ from factorylab.kernel.reserve import NoveltyReserve
 from factorylab.kernel.termination import Termination
 from factorylab.kernel.timing import TimingRegistry, UpwardBuffer
 from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Wallet
-from factorylab.runtime import release
+from factorylab.runtime import release, witness
 from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cards import forecast_weight
 from factorylab.runtime.cascade import CascadeGate
@@ -159,6 +159,15 @@ class BootstrapMixin:
         # the Launch event and every checkpoint, compared on restore
         # (``facilitator_mismatch``) and read back from the ledger by the seller.
         self.facilitator_url = configured_facilitator()
+        # One launch, one witness requirement (edition 3, R3-C). Whether a receiver
+        # was configured when this world launched, and which receiver it was (its
+        # URL's hash: the address itself never enters the diary), are part of the
+        # launch identity. Ledgered in ``Launch`` and carried in every checkpoint,
+        # so unsetting the environment variable afterwards cannot remove the
+        # receiver's veto: a resume with no receiver refuses (``witness_required``)
+        # and one naming a different receiver refuses (``witness_mismatch``).
+        self.witness_required = witness.receiver_identity() is not None
+        self.witness_receiver = witness.receiver_identity()
         # The diary this state descends from (the hash of its first sealed record).
         # None until the ledger has one; restore sets it from the checkpoint so a
         # twin restored in memory still names the diary it came from.

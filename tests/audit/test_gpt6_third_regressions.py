@@ -466,8 +466,13 @@ def test_wind_down_ledger_failure_does_not_escape_the_kill():
                          termination=term)
     report = VenueMixin.kill(rt, "explicit_kill")
     assert term.final is True                       # production dies whatever the store did
-    assert report["error"] == "OSError"
-    assert report["exposure_status"] == "unknown"   # and says so, rather than claiming flat
+    assert report["error"] == "OSError"             # and the refused record is counted
+    assert report["ledger_failures"] >= 1
+    # R3-C: the exposure state is the account's answer, not the store's. This venue
+    # acknowledges the close and keeps showing the position, so the honest word for
+    # what is left is "pending", never "flat" and no longer merely "unknown".
+    assert report["exposure_status"] == report["exposure_state"] == "wind_down_pending"
+    assert report["production_state"] == "killed"
 
 
 def test_a_repeated_kill_does_not_repeat_the_external_close():
@@ -571,23 +576,11 @@ def test_characterize_coin_subscription_does_not_filter_delivered_fold():
     assert "ETH" in json.dumps(delivered)
 
 
-def test_characterize_unsetting_remote_witness_removes_its_veto(monkeypatch):
-    monkeypatch.setenv(witness.URL_ENV, "https://witness.invalid/")
-    monkeypatch.setattr(witness, "_post", lambda *a, **kw: {"killed": True})
-    args = dict(world="audit", launch_nonce="nonce", diary="diary", ledger_path=None)
-    assert witness.killed(**args) == "remote"
-    monkeypatch.delenv(witness.URL_ENV)
-    assert witness.killed(**args) is None
-
-
-def test_characterize_renaming_diary_changes_local_witness_location(tmp_path):
-    first = tmp_path / "runs" / "first.jsonl"
-    renamed = tmp_path / "runs" / "renamed.jsonl"
-    line = {"event": "kill", "launch_nonce": "nonce", "diary": "diary"}
-    assert witness._append(witness.witness_path(first), line)
-    args = dict(world="audit", launch_nonce="nonce", diary="diary", remote=False)
-    assert witness.killed(ledger_path=first, **args) == "local"
-    assert witness.killed(ledger_path=renamed, **args) is None
+# The two witness findings this reviewer characterized here are repaired by R3-C, and
+# their regressions live with the rest of the death contract in
+# ``tests/audit/test_r3c_death.py``: the receiver requirement is part of the launch
+# identity, so unsetting the variable removes no veto, and the local record is keyed by
+# launch identity, so renaming a diary finds the same line.
 
 
 def test_characterize_venue_loss_can_kill_untouched_compute_credit():

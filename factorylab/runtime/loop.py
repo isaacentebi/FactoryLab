@@ -230,6 +230,12 @@ class Runtime(
                  # checkpoint from before the pin replays its historical Launch.
                  **({"facilitator_url": self.facilitator_url}
                     if getattr(self, "facilitator_url", None) is not None else {}),
+                 # Whether a death witness receiver was configured at launch, and
+                 # which one (the hash of its URL). Part of the launch identity, so
+                 # it cannot be removed afterwards by unsetting a variable (R3-C);
+                 # a world launched without one ledgers nothing, exactly as before.
+                 **({"witness_required": True, "witness_receiver": self.witness_receiver}
+                    if getattr(self, "witness_required", False) else {}),
                  "manifest": json.loads(self.m.canonical_json())},
                 "kernel",
             )

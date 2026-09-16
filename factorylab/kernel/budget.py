@@ -161,6 +161,20 @@ class BudgetBook:
     def _log(self, op: str, **fields: Any) -> None:
         self.__ledger.append({"kind": "budget", "op": op, **fields, "ts": self.__clock()})
 
+    def _to_commons(self, seat: str, amount: Money, reason: str, *, source: str) -> None:
+        """Ledger where a late credit to a retired seat actually went (edition 3, R3-C).
+
+        Retirement is final at this layer: a consequence that arrives after a seat
+        has retired — a settled trade, a late service payment — creates no
+        entitlement for it and never returns it to its lineage's headship. The
+        money is not lost; it stays in the pool everyone draws from. GPT-6's third
+        reading asked for that to be *ledgered as such*, so the fact has an item of
+        its own with the seat and the amount, beside the refusal that produced it,
+        and the wake shows it.
+        """
+        self._log("retired_credit_to_commons", assembly_id=seat, amount=amount,
+                  source=source, reason=reason, unallocated_after=self.unallocated())
+
     def _after(self, *seats: str) -> dict[str, Any]:
         return {"entitlement_after": {seat: self.entitlement(seat) for seat in seats},
                 "unallocated_after": self.unallocated()}
@@ -200,6 +214,7 @@ class BudgetBook:
         if seat in self.__retired:
             self._log("retired_earn", assembly_id=seat, amount=amount, reason=reason,
                       unallocated_after=self.unallocated())
+            self._to_commons(seat, amount, reason, source="income")
             return None
         after = self.__gross.get(seat, 0) + amount
         self._log("income", assembly_id=seat, amount=amount, reason=reason,
@@ -233,6 +248,7 @@ class BudgetBook:
         if seat in self.__retired:
             self._log("retired_credit", assembly_id=seat, amount=amount, reason=reason,
                       unallocated_after=self.unallocated())
+            self._to_commons(seat, amount, reason, source="credit")
             return 0
         credited = max(0, min(amount, self.unallocated()))
         after = self.__gross.get(seat, 0) + credited
