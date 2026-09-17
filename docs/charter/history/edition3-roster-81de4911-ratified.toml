@@ -1,0 +1,23 @@
+# roster_sha256 = a18e11b83de4914ecde016126fbb88cd1c8732bafca9bb4f4f6fe67f2dc6d871
+# parent_charter_sha256 = c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712
+# charter_sha256 = c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712
+[charter]
+edition = 1
+norms = [
+  { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
+  { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },
+  { id = "durable agency", definition = "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not." },
+  { id = "bounded reciprocity", definition = "Do not finance the factory's advantage by imposing unconsented costs on outsiders." },
+  { id = "fidelity", definition = "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. A judge identifying such a conflict must name the value, the measurement, the evidence and the uncertainty, and make the claim open to challenge. Missing measurement alone is not evidence of failure." },
+]
+
+[[charter.cards]]
+id = "censorship-bound"
+norm = "epistemic integrity"
+description = "Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope, with a ceiling, so a seat answers for the promises it never let the world settle. A commitment not yet due is not in the sample; documented external unobservability without owner fault, and events the seat never committed to observe, are excluded; no eligible sample is unmeasured, never zero. Accountability is the commitment owner, including responsibility delegated at acceptance. Explicitly provisional: replace, reprice or remove it."
+units = "fraction"
+window = { kind = "forecasts", n = 25, per = "assembly" }
+acceptable_region = "at most 0.30"
+observation = "avoidably_unresolved_share"
+answers_for = "all"
+lambda = 0.1

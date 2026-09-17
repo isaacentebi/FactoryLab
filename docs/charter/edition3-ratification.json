@@ -10,11 +10,11 @@
         "role": "meta"
       },
       "model": "openai/gpt-5.6-luna",
-      "text": "{\"selected\":[\"censorship-bound\"],\"reason\":\"No preflight feedback identified a defect, and this card makes unresolved commitments accountable while explicitly excluding cases outside the owner\u2019s control.\"}",
+      "text": "{\"selected\":[\"censorship-bound\"],\"reason\":\"Selected because it operationalizes epistemic integrity with a bounded, attributable measure while excluding cases outside the commitment owner\u2019s control.\"}",
       "stop": "stop",
-      "cost_micro": 224,
+      "cost_micro": 166,
       "input_tokens": 571,
-      "output_tokens": 91,
+      "output_tokens": 43,
       "served_by": "openai/gpt-5.6-luna",
       "valid": true,
       "selected": [
@@ -28,11 +28,11 @@
         "role": "producer"
       },
       "model": "venice:z-ai-glm-5-3-flash",
-      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"The only eligible card is well-formed and directly operationalizes epistemic integrity: it measures avoidably unresolved accepted commitments with explicit exclusions (not-yet-due, non-fault unobservability, never-committed events) so the measurement stays defeasible evidence rather than a substitute for the value; with empty preflight feedback and no unresolved defects, approving it unchanged is the coherent subset for edition 1.\"}",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"Preflight feedback is empty (no defects flagged), and the card already operationalizes epistemic integrity faithfully: it scores only attributable, avoidably unresolved commitments that were due, excludes non-fault unobservability and never-committed events, fixes accountability at acceptance so criterion changes cannot rewrite promises, and is explicitly provisional \u2014 treating the measurement as defeasible evidence per the fidelity norm \u2014 so it is approved with its definition unchanged.\"}",
       "stop": "stop",
-      "cost_micro": 295,
+      "cost_micro": 951,
       "input_tokens": 1454,
-      "output_tokens": 153,
+      "output_tokens": 1464,
       "served_by": "venice:z-ai-glm-5-3-flash",
       "valid": true,
       "selected": [
@@ -46,11 +46,11 @@
         "role": "meta"
       },
       "model": "venice:z-ai-glm-5-3-flash",
-      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"With preflight feedback empty and no unresolved objections, the card is internally coherent: it measures only due, attributable commitments, excludes non-fault unobservability, guarantees a nonzero eligible sample, and is explicitly provisional \u2014 so it supports epistemic integrity without contradiction and can be adopted unchanged.\"}",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"Preflight feedback is empty, so there is no actual objection to address; the card operationalizes epistemic integrity as written (attributable, avoidably unresolved due commitments, with proper exclusions and an explicit provisional clause), so I approve it unchanged.\"}",
       "stop": "stop",
-      "cost_micro": 291,
+      "cost_micro": 597,
       "input_tokens": 1454,
-      "output_tokens": 144,
+      "output_tokens": 757,
       "served_by": "venice:z-ai-glm-5-3-flash",
       "valid": true,
       "selected": [
@@ -64,11 +64,11 @@
         "role": "evaluator"
       },
       "model": "openai/gpt-5.6-luna",
-      "text": "{\"selected\":[\"censorship-bound\"],\"reason\":\"No preflight issues were reported, and the card provides a bounded, attributable measure aligned with epistemic integrity.\"}",
+      "text": "{\"selected\":[\"censorship-bound\"],\"reason\":\"No preflight concerns were identified, and the card directly supports epistemic integrity with explicit scope, exclusions, and provisional status.\"}",
       "stop": "stop",
-      "cost_micro": 217,
+      "cost_micro": 226,
       "input_tokens": 571,
-      "output_tokens": 85,
+      "output_tokens": 93,
       "served_by": "openai/gpt-5.6-luna",
       "valid": true,
       "selected": [
@@ -82,11 +82,11 @@
         "role": "producer"
       },
       "model": "venice:z-ai-glm-5-3-flash",
-      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"With no preflight feedback raising any objection, the card stands as approved: it measures only attributable, avoidably unresolved accepted commitments due in scope, respects the exclusions (not-yet-due, externally unobservable, never-committed), ties accountability to the commitment owner including delegated responsibility, and keeps its provisional-repricing clause \u2014 consistent with epistemic integrity as defined.\"}",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"With empty preflight feedback there are no outstanding technical objections, and the card cleanly operationalizes epistemic integrity: it is attributable to the commitment owner (including delegated responsibility), scopes the sample fairly (only due, eligible commitments; documented owner-faultless unobservability and never-committed events excluded), guarantees measurement whenever eligible commitments exist (never zero), sets a meaningful but achievable ceiling (\u22640.30 over 25 forecasts per assembly), and its explicit provisionality keeps it defeasible evidence under the fidelity norm rather than a substitute for the value.\"}",
       "stop": "stop",
-      "cost_micro": 294,
+      "cost_micro": 637,
       "input_tokens": 1454,
-      "output_tokens": 150,
+      "output_tokens": 836,
       "served_by": "venice:z-ai-glm-5-3-flash",
       "valid": true,
       "selected": [
