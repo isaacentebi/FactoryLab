@@ -29,7 +29,10 @@ from factorylab.world.exchange import Order
 #: Re-pinned by R3-E: every seat's system prompt became the common system contract
 #: and every lens moved into `initial_state`, so the manifest and the roster are new
 #: text. The coordinator re-ratifies the edition 3 charter on this roster digest.
-EDITION3_HASH = "1d7768fe98b9537aa236eb33b9ecb9a94f966413ddd221dfe9c6204803ce2cb5"
+#: Re-pinned again by the R3-G launch gates, which added `[venue] principal_usd = "120"`:
+#: the world's physics changed, the roster text did not, so the ratified charter still
+#: binds to the roster digest below.
+EDITION3_HASH = "a8ba54eebbb2473dc5636ff84e567eb8e2d668712b3778ba70ed564ebb51b483"
 EDITION3_ROSTER = "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434"
 #: The roster the ratified edition 3 charter was voted against, before R3-E.
 RATIFIED_AGAINST_ROSTER = EDITION3_ROSTER  # re-ratified 16 September on the R3-E prompts
