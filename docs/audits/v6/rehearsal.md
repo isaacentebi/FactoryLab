@@ -150,3 +150,73 @@ third reading names: the tools are an index entry, the lenses point at the marke
 deferring is the cheapest competent-looking answer. The R3 workstreams (prompts and the
 evaluation commission in particular) are the response; run 5 tests it again.
 
+## Run 5: five hours on the third-round build, 150 ticks
+
+`worlds/edition3-rehearsal-5.toml`: all six third-round workstreams and the launch gates
+merged (main `069a349`), charter re-ratified on the round-3 roster (`81de4911…`), GPT-6's
+common contract as every seat's system prompt, the lens in working state, `calc` and
+`web.search` on the menu, the declared $120 principal capping collateral. Launched 20:42,
+killed 01:42 (`explicit_kill:budget`).
+
+| | |
+|---|---|
+| Ticks | 150; gaps min 120.000 s, median 120.010 s, max 154.8 s |
+| Ledger | 170 MB, 53,194 items, verify true, conservation true |
+| Model calls | 323: Luna 213 ok / 0 malformed; GLM 52 ok / 58 malformed |
+| Spend | $2.33 on models and tools; $0.0072 per call |
+| Producer answers | 157 ok: hold 84, defer 61, order 4; 13 malformed |
+| Working state | 156 writes by the seats themselves (antagonist 58, opportunity 44, judge-fidelity 15, constructor 11, meta-countercase 11, mechanism 8, empirical 7, judge-consequence 2) |
+| Outcomes | 290 addressed with ids; **37 acknowledged** (none in any earlier run) |
+| Subscriptions | 64 changes accepted, 3 refused; 84 defers; 133 quiet draws |
+| Orders | 4 sent: 1 refused for collateral (venue figure, from the view), 2 filled (BTC short 0.001 at 76,681; 0.00014 at 76,726), 1 uncertain (submit ReadTimeout, never observed) |
+| Venue custody | `venue.settled` on `venue_perps` only: −18,143 µUSD; the compute wallet moved for models and tools only |
+| Evaluation | 6 verdicts answered `unmeasured` on holds with no commitment; 128 learning receipts, 2 execution receipts |
+| Tools | 8 calls, all venue reads plus one `outcome.get`; `calc` 0, `web.search` 0 |
+| Wind-down | production killed first; one close operation with a durable id, submitted; final reconciliation `exposure_state: dust_within_precommitted_bound`; two witness lines |
+
+**What the reviewer asked to see, and what the run shows.**
+
+- *Decisions that change because of evidence.* The constructor's second order opened with "Status
+  correction first: the prior BTC short (decision-28) was not opened — outcome:9 records it
+  rejected ('order collateral exceeds venue free collateral', venue_available_usd 105.73)". In
+  run 3 the same seat narrated a refused order as having "vanished". Now the refusal reached
+  it with an id and it read it. The empirical seat's order "discharges the commitment recorded
+  in working state (from decision-44, sha 18e9bf41…)". The mechanism seat added to the short
+  "per my pre-registered criteria, which are now met", citing sixteen funding prints.
+- *Reliable receipts.* 290 outcomes addressed, 37 acknowledged, one `outcome.get`.
+- *Accurate custody.* Trading P&L settled on the venue account only; the thinking pot moved
+  for thoughts and tools and nothing else; the collateral refusal quoted the venue's own figure
+  under the $120 principal.
+- *No manufactured subjects.* No producer return exists for a quiet draw; six judgements
+  answered `unmeasured`.
+- *Death.* Production killed, then the executor, then reconciliation to dust, in that order.
+
+**Four defects, all in the plumbing, none in the physics the reviewer named.**
+
+1. *A closed verdict is re-closed every event.* 12,672 `verdict.unread` and 12,654
+   `verdict.unmeasured` rows over 47 judge handles (decision-393 alone 960 of each): the
+   per-event window pass and `_finalize_verdict` re-ledger a commitment that never leaves
+   `pending`. Most of the 170 MB diary is this.
+2. *Consequences for nobody.* 197 `outcome.undeliverable` ("no seat owns that decision"): the
+   router's empty draw no longer manufactures a return (PR #97), but `_assembly_step` still
+   finishes a consequence for the handle, so a `return_paid_off` settles for a decision nobody
+   made.
+3. *An uncertain order is polled forever.* One order timed out on submit; "order not observed"
+   was re-ledgered on every later poll, 100 rows.
+4. *GLM answers with reasoning only.* 40 of GLM's 58 malformed answers are `finish_reason:
+   stop` with empty content and a full answer in `reasoning_content`: the tier runs with
+   `reasoning = { effort = "low" }` and the new contract pushes it into thinking that never
+   comes out. Eight more are `length`. Luna: 213 of 213 well formed.
+
+And one cost regression: the prompt rework moved the cacheable prefix from 52 KB to 10 KB but
+left the institutional world block inside the uncached inputs (38 KB of it constant:
+observations catalogue, return contract, scoring, mechanics, work, labels), so requests grew
+to 97 to 118 KB with 55 to 62 KB uncached, and cost per call rose from $0.0056 to $0.0072.
+
+Repairs dispatched: the four defects (`e3/r4a-run5`) and the prefix (`e3/r4b-prefix`). The
+GLM tier change moves the roster hash, so one more ballot follows.
+
+**Still not happening.** No seat used `calc` or `web.search`. No registration, no proposal,
+no note. The population trades small, on stated criteria, from memory, and does not look
+outside the venue or build anything. That is the question that remains open for the funded
+world, and it is a question about the world's affordances, not its physics.
