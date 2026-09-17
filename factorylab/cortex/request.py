@@ -85,7 +85,7 @@ STABLE_WORLD_KEYS = frozenset({
     "connectors", "contracts", "event_kinds", "event_schemas", "mechanics", "meta_input",
     "models", "observation_facts", "observations", "population_tools", "prices",
     "proposal_shapes", "reserved_return_fields", "routers", "scoring", "sellers", "tools",
-    "trading_markets", "venue", "venue_listing", "work",
+    "trading_markets", "venue", "venue_listing", "work", "compute_supply",
 })
 
 # R3-E. The prefix is no longer derived from the world block at render time: it is
@@ -104,7 +104,49 @@ PREFIX_WORLD_KEY = "stable_prefix"
 # the index names, which is the largest thing a compaction can remove without
 # removing a fact. The argument names and proposal skeletons they carried are a
 # ``catalogue.search`` away, retrieved when a seat means to use one.
-PREFIX_SOURCE_KEYS = frozenset({"tools", "proposal_shapes", "addressing"})
+PREFIX_INDEX_KEYS = frozenset({"tools", "proposal_shapes", "addressing"})
+
+# R4-B. The institutional world: every world key that is constant for the life of
+# a runtime — it carries no seat's own facts and no value the runtime moves between
+# two requests of one tick — rendered once in the prefix, after the WORLD CONTRACT
+# and the capability index, by ``SchematicsMixin._institutional_block``.
+#
+# R3-E read §8's "it does not require copying every institutional description into
+# that prefix" as an instruction to move the institutional description *out* of the
+# cached bytes. It shrank the prefix from 52 KB to 10 KB and put the whole world
+# block in ``INPUTS``, where nothing is cached: the sentence permits a small prefix,
+# it does not ask for an expensive one. Bytes that never change are cheapest where
+# a provider can cache them, so they ride here and are suppressed from ``INPUTS``
+# below. Nothing is said twice and nothing is said differently; only the place
+# changed.
+#
+# What stays out, and why:
+#   ``charter``/``charter_edition`` are constant, but WORLD UPDATE already renders
+#   them and a fact is rendered once;
+#   ``venue`` is the venue's own instrument record, re-read once a tick, so it is a
+#   reading of an outside system rather than a constant of this runtime;
+#   everything with an account, a pot, a price, a position, a timestamp, a count or
+#   a queue in it moves by construction and is named nowhere here.
+#
+# A registry key (``catalogue``, ``models``, ``connectors``, ``observations``,
+# ``assemblies``, ``contracts``, ``routers``, ``event_kinds``, ``event_schemas``,
+# ``sellers``, ``trading_markets``, ``work``) changes only when the population
+# ratifies a registration, which happens at a tick boundary and never between two
+# requests of one tick. It is the same bargain ``tools`` already took: one cache
+# miss on the call after a registration, cached bytes for every call before and
+# after it.
+PREFIX_CONSTANT_KEYS = frozenset({
+    "a_return_may_include", "accounting_facts", "action_labels", "assemblies", "catalogue",
+    "clock", "committee", "composition", "compute_supply", "connectors", "contracts",
+    "event_kinds", "event_schemas", "mechanics", "meta_input", "models",
+    "observation_facts", "observations", "population_tools", "prices",
+    "reserved_return_fields", "routers", "scoring", "sellers", "trading_markets",
+    "venue_listing", "work",
+})
+
+# Every world key the prefix renders, and therefore every world key ``INPUTS`` must
+# not render again: the capability index's sources and the institutional block's.
+PREFIX_SOURCE_KEYS = PREFIX_INDEX_KEYS | PREFIX_CONSTANT_KEYS
 
 # The moving world block (§8's WORLD UPDATE). ``world_update`` is the rendered
 # block; the keys beside it are the sources it is built from, and they are
