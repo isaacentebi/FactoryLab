@@ -40,7 +40,11 @@ from pathlib import Path
 import pytest
 
 from factorylab.cortex.calc import FUNDING_CONVENTION, calc
-from factorylab.cortex.request import OUTCOME_CONTRACT, Request
+from factorylab.cortex.request import (
+    OUTCOME_CONTRACT,
+    PREFIX_CONSTANT_KEYS,
+    Request,
+)
 from factorylab.cortex.schematics import (
     WORLD_CONTRACT_CLOSING,
     WORLD_CONTRACT_OPENING,
@@ -73,13 +77,23 @@ def request_for(rt, seat: str = SEAT, handle: str = "decision-r3e",
 # ------------------------------------------------------------------ the stable prefix
 
 
-def test_the_prefix_is_the_world_contract_and_the_base_capability_index_and_nothing_else():
-    """§8's stable prefix, whole and bounded."""
+def test_the_prefix_is_the_contract_the_capability_index_and_the_institutional_world():
+    """§8's stable prefix, whole and bounded: three blocks, in order, and nothing else.
+
+    R4-B adds the third. R3-E read §8's "it does not require copying every
+    institutional description into that prefix" as an instruction to move the
+    institutional description out of the cached bytes, and put the whole world
+    block in ``INPUTS``, where nothing is cached. The sentence permits a small
+    prefix; it does not ask for an expensive one. What holds still for the life of
+    a runtime is cheapest where a provider caches it, so it is rendered here —
+    once, unchanged, and nowhere else in the prompt.
+    """
     rt = scripted_world()
     prefix = request_for(rt).stable_prefix()
     assert prefix.startswith(WORLD_CONTRACT_OPENING)
     assert WORLD_CONTRACT_CLOSING in prefix
-    contract, index = prefix.split("BASE CAPABILITIES\n", 1)
+    contract, rest = prefix.split("BASE CAPABILITIES\n", 1)
+    index, institutions = rest.split("INSTITUTIONS\n", 1)
     # The norms are the charter object's own, so a ratified edition renders what
     # its population voted and never a staler copy of it.
     for norm in rt.charter.norms:
@@ -93,10 +107,22 @@ def test_the_prefix_is_the_world_contract_and_the_base_capability_index_and_noth
                for row in published["tools"])
     assert all("args_schema" not in row for row in published["tools"])
     assert "catalogue.search" in published["schemas"]
+    # The institutional world: exactly the keys named constant, and their values
+    # are the world block's own, not a second rendering of them.
+    block = json.loads(json.dumps(rt._world_block(), default=str))
+    rendered = json.loads(institutions[institutions.index("{"):].strip())
+    assert set(rendered) == set(PREFIX_CONSTANT_KEYS)
+    assert all(rendered[key] == block[key] for key in rendered)
     # And nothing that moves. The cards, their prices and the account are elsewhere.
-    for absent in ('"card_prices"', '"pots"', '"account"', '"seats"', '"recent_mids"',
-                   '"adaptive_scoring"', '"registration_feedback"'):
-        assert absent not in prefix
+    # The check is of what the prefix publishes, not of its characters: the
+    # committee's quorum rule names a count of "seats" and means the delegates it
+    # counts, never the world's per-seat accounts.
+    for absent in ("card_prices", "pots", "account", "seats", "recent_mids",
+                   "adaptive_scoring", "registration_feedback", "governance"):
+        assert absent not in rendered
+        assert absent not in published
+    for card in rt.charter.cards:
+        assert card.description not in prefix
 
 
 def test_the_addressing_reference_line_is_in_the_prefix_exactly_once():
@@ -130,6 +156,84 @@ def test_the_prefix_is_byte_identical_across_two_requests_and_across_a_restore()
     assert request_for(restored, handle="c").stable_prefix() == first.stable_prefix()
     assert (request_for(restored, handle="c").stable_prefix().encode("utf-8")
             == first.stable_prefix().encode("utf-8"))
+
+
+def _after(text: str, header: str) -> str:
+    """The JSON object a prefix block carries, from its header's prose to its end."""
+    tail = text[text.index(header):]
+    return tail[tail.index("{"):].strip()
+
+
+def test_every_constant_key_is_in_the_prefix_once_and_absent_from_inputs():
+    """R4-B: the institutional world is cached, said once, and unchanged by the move.
+
+    The claim is three things at once, and each of them is a way the move could
+    have gone wrong. Every constant key is in the prefix — so it is not silently
+    dropped from what a seat is told. None of them is in ``INPUTS`` — so no seat
+    pays for the same sentence twice, which is the defect: 38 KB of institutional
+    text riding in the uncached section of every call. And the value rendered is
+    the world block's own, byte for byte — so this is a change of place and not
+    of content.
+    """
+    rt = scripted_world()
+    request = request_for(rt)
+    prefix, text = request.stable_prefix(), request.prompt_text()
+    # Round-tripped, because the prefix is JSON and a tuple in the block renders
+    # as a list: the comparison is of what was published, not of Python types.
+    block = json.loads(json.dumps(rt._world_block(), default=str))
+    inputs = json.loads(text.split("\n\nINPUTS\n", 1)[1].split("\n\nOUTCOME SCHEMA\n", 1)[0])
+    institutions = json.loads(_after(prefix, "INSTITUTIONS\n"))
+    for key in sorted(PREFIX_CONSTANT_KEYS):
+        # Present in the world block, and rendered in the prefix from it unchanged.
+        assert key in block, key
+        assert institutions[key] == block[key], key
+        # And absent from INPUTS, which is the uncached part of every call.
+        assert key not in inputs["world"] and key not in inputs, key
+        # Once in the prompt: a top-level entry of the prefix's institutional
+        # block and of no other block. The test is of what each block publishes,
+        # not of the prompt's characters — ``mechanics`` names a committee
+        # ``catalogue`` of its own, and a fact nested inside a constant is part
+        # of that constant, not a second rendering of another key.
+        # Two other blocks name a slot after a key here and mean something else by
+        # it: ``WORLD UPDATE``'s ``catalogue`` is the live version and what changed
+        # under it since the world was seeded, and ``YOU``'s ``clock`` is this
+        # seat's own now and tick index. So what is proved is that no other block
+        # republishes this key's *value*.
+        assert request.seat_block().get(key) != block[key], key
+        assert request.world_update_block().get(key) != block[key], key
+    # The world block keeps every one of them, because the block is the runtime's
+    # own disclosure surface and more than the prompt reads it.
+    assert set(PREFIX_CONSTANT_KEYS) <= set(block)
+    # What is left in INPUTS is the world that moves, and it is small.
+    assert set(inputs["world"]) and not set(inputs["world"]) & set(PREFIX_CONSTANT_KEYS)
+    assert len(json.dumps(inputs).encode("utf-8")) < 12 * 1024
+
+
+def test_the_institutional_prefix_is_byte_identical_across_two_seats_and_a_restore():
+    """The bytes a provider caches do not move between seats, requests or a resume.
+
+    The same property R3-E proved of the contract and the index, now proved of the
+    institutional block that joined them: it is the whole reason those bytes are
+    worth putting in the prefix, and the one way putting them there could cost
+    more than it saves.
+    """
+    rt = scripted_world()
+    first = request_for(rt, handle="a")
+    second = request_for(rt, seat="eval-a", handle="b")
+    marker = "INSTITUTIONS\n"
+    institutions = first.stable_prefix()[first.stable_prefix().index(marker):]
+    assert institutions and institutions == second.stable_prefix()[
+        second.stable_prefix().index(marker):]
+    # Serialised once and reused: one string object heads both prompts.
+    assert first.stable_prefix() is second.stable_prefix()
+
+    restored = make_runtime()
+    restore_runtime(restored, runtime_state(rt))
+    restored.clock.now_ns = NOW_NS
+    restored._manage_reserve_window()
+    third = request_for(restored, handle="c").stable_prefix()
+    assert third.encode("utf-8") == first.stable_prefix().encode("utf-8")
+    assert third[third.index(marker):] == institutions
 
 
 def test_the_prefix_is_never_given_to_the_system_role():

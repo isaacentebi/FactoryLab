@@ -99,7 +99,14 @@ def test_the_listing_leaves_the_prompt_and_the_block_size_stops_following_it():
     assert len(listing) > 100_000  # the listing itself is what used to be copied in
     blocks = [rendered(rt._world_block()) for rt in (small, large)]
     assert len(blocks[1]) - len(blocks[0]) < 1_000
-    assert len(blocks[1]) < len(listing) // 2  # smaller than the listing it left out
+    # What is measured is the prompt, not the block. R4-B renders the institutional
+    # world inside ``stable_prefix``, which the block also carries as its exact
+    # bytes, so the block now holds those facts twice — as it already held the
+    # capability index twice — while the prompt renders each of them once. The
+    # prompt is what a provider bills, and the claim proved here is about the
+    # listing: the whole of one seat's prompt stays smaller than half the listing.
+    prompt = request_for(large, "any", {}).prompt_text()
+    assert len(prompt) < len(listing) // 2  # smaller than the listing it left out
     venue = large._world_block()["venue"]
     assert {market: [row["coin"] for row in rows] for market, rows in venue.items()} == TRADING
     assert all(row["lot_size"] and row["min_order_value_usd"] is not None
@@ -153,28 +160,32 @@ def test_one_assembly_on_two_events_opens_with_a_byte_identical_wire_prefix():
         assert os.path.commonprefix([first, second]).startswith(lead)
         assert len(prefix) > 0
     block = rt._world_block()
-    # R3-E: what the prefix carries is the WORLD CONTRACT with the charter's own
-    # norms, and one line and one price for every capability. The cards, their
-    # prices and the institutional descriptions are outside it, which is GPT-6's
-    # third reading §8 exactly: byte stability "does not require copying every
-    # institutional description into that prefix".
+    # R3-E and R4-B: what the prefix carries is the WORLD CONTRACT with the
+    # charter's own norms, one line and one price for every capability, and the
+    # institutional world — every fact that holds still for the life of this
+    # runtime. What is kept out of it is what moves: the cards and their prices,
+    # the accounts, the observed window, the scoring weights an adaptation shifts.
     assert prefix.startswith("WORLD CONTRACT\n")
     for norm in rt.charter.norms:
         assert str(norm)[1:] in prefix
     assert '"venue.place_market"' in prefix and '"venue.instruments"' in prefix
     assert '"kind": "amendment"' in prefix  # every proposal kind, one line each
-    assert '"recurrence"' not in prefix and '"consequence_mix"' not in prefix
+    # The committed parameters ride here, because a committed parameter is a fact
+    # about the institution; what the runtime's own adaptation moves does not, so
+    # an adaptation cannot cost the prefix.
+    assert '"adaptive_scoring"' not in prefix and '"card_prices"' not in prefix
     for card in rt.charter.cards:
         assert card.description not in prefix
-    stable = {k: v for k, v in block.items() if k in STABLE_WORLD_KEYS}
     # The ratio that matters is the rendered one: what the provider tokenises, not
     # what the world block happens to hold. Edition 3's ``seats`` map carries an
     # entry per live seat and exactly one of them is ever rendered, so measuring
     # the block would count bytes no prompt has ever contained.
-    # And it is now a small fraction of the prompt rather than most of it: the
-    # institutional disclosure is rendered once, with the work.
-    assert len(prefix) < 0.25 * len(first)
-    assert len(prefix) < len(rendered(stable))
+    # R4-B: the prefix is most of the prompt again, and that is the point — it is
+    # the part that repeats byte for byte, so it is the part a provider caches.
+    # What is left outside it is what this call is actually about.
+    moving = {k: v for k, v in block.items() if k not in STABLE_WORLD_KEYS}
+    assert len(prefix) > 0.5 * len(first)
+    assert len(first) - len(prefix) < len(rendered(moving))
 
 
 INJECTION = (
@@ -212,14 +223,23 @@ def test_no_population_authored_text_reaches_the_system_role():
         assert user.startswith(prefix) and INJECTION in user
 
 
-def test_the_prefix_changes_on_the_norms_and_on_a_capability_and_on_nothing_else():
-    """R3-E: the prefix is a function of the norms and the capability index, of those only.
+def test_the_prefix_changes_on_a_registration_and_on_the_norms_and_on_nothing_else():
+    """R4-B: the prefix is a function of the institutions, and of those only.
 
-    A seat registered, a card repriced or a charter edition bumped no longer
+    A card repriced, a charter edition bumped or an adaptation shifted no longer
     breaks every cached prefix in the world. They are all published — in
-    ``WORLD UPDATE``, which is where a thing that moves belongs — and the leading
-    bytes hold still through them. A registered *tool* does change it, because a
-    tool is a capability and the index is what says a capability exists.
+    ``WORLD UPDATE`` and ``INPUTS``, which is where a thing that moves belongs —
+    and the leading bytes hold still through them.
+
+    A ratified *registration* does change it, and R4-B accepts that where R3-E
+    did not. A registration is a change to the institutions and the prefix is
+    what the institutions are: a seat, a tool, a model or an observation added to
+    this world is a new fact about it, and a prefix that did not move would be
+    telling every later call something untrue. The cost is one uncached call
+    after each registration; the alternative R3-E chose was carrying 38 KB of
+    unchanging institutional text uncached on *every* call, which is what this
+    round measured and what it is repairing. Registrations are rare and calls are
+    not, so the trade is not close.
     """
     from factorylab.charter.charter import EDITION3_NORMS
 
@@ -230,7 +250,11 @@ def test_the_prefix_changes_on_the_norms_and_on_a_capability_and_on_nothing_else
     rt._register("author", AssemblyProposal(
         id="new-public", model_id="fake-haiku", role="producer", accepts=("Tick",),
         system_prompt="PRIVATE PROMPT", max_tokens=128, effort="low"))
-    assert request_for(rt, "a", {}).stable_prefix() == before
+    with_seat = request_for(rt, "a", {}).stable_prefix()
+    assert with_seat != before and "new-public" in with_seat
+    # The seat's own prompt is private and never joins the roster it publishes.
+    assert "PRIVATE PROMPT" not in with_seat
+    before = with_seat
     rt.charter = replace(rt.charter, edition=rt.charter.edition + 1)
     assert request_for(rt, "a", {}).stable_prefix() == before
     # The edition is still published, once, where it moves.
@@ -311,14 +335,17 @@ def test_a_live_adaptation_moves_the_values_and_leaves_the_prefix_byte_identical
     assert os.path.commonprefix([wire_text(before_wire), wire_text(after_wire)]).startswith(
         f"system\n{rt.assemblies['seed-decider'].spec.system_prompt}\nuser\n{prefix}")
     assert request_for(rt, "a", {}).stable_prefix() == prefix
-    # The committed parameters are published with the rest of the institutional
-    # disclosure and the live ones beside them; neither is in the prefix, so
-    # neither can cost it.
+    # R4-B: the committed parameters are published with the rest of the
+    # institutional disclosure, which is now inside the prefix — they are what the
+    # population voted and they do not move. The values the adaptation moves are
+    # outside it, and the prefix above is byte-identical across the change, so an
+    # adaptation still costs no cache. That separation is why ``mechanics`` and
+    # ``scoring`` name the moving weight rather than inlining it.
     body = wire_text(after_wire)[len(prefix):]
-    assert f'"consequence_mix": {committed_mix}' in body
-    assert f'"decay": {committed_decay}' in body
-    assert f'"consequence_mix": {committed_mix}' not in prefix
-    assert "world.adaptive_scoring" in body and "world.adaptive_scoring" not in prefix
+    assert f'"consequence_mix": {committed_mix}' in prefix
+    assert f'"decay": {committed_decay}' in prefix
+    assert f'"consequence_mix": {mix}' in body and f'"consequence_mix": {mix}' not in prefix
+    assert "world.adaptive_scoring" in prefix  # named, never inlined
     # The moving part carries what is actually in force.
     user = after_wire[-1]["content"]
     adaptive = json.loads(user.split("INPUTS\n")[1].split("\n\nOUTCOME")[0])["world"][

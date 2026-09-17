@@ -99,12 +99,12 @@ def test_the_rendered_block_is_the_golden_file_for_a_scripted_world():
 def test_the_accounting_facts_are_the_architects_own_sentences_and_reach_every_call():
     """They say what the numbers mean, and they hold for every call in this world.
 
-    R3-E moves where they ride, not whether they arrive. The stable prefix is now
-    the WORLD CONTRACT and the base capability index and nothing else (GPT-6's
-    third reading, §8: byte stability "does not require copying every
-    institutional description into that prefix"), so these sentences are rendered
-    with the rest of the institutional disclosure, in ``INPUTS``. Every request
-    still carries all seven, once.
+    R3-E and R4-B both move where they ride, not whether they arrive. R3-E moved
+    them out of the prefix into ``INPUTS``; R4-B moves them back, because they
+    never change and ``INPUTS`` is the one part of the prompt no provider caches.
+    §8's "it does not require copying every institutional description into that
+    prefix" permits a small prefix, and these seven sentences are seven sentences.
+    Every request still carries all seven, once.
     """
     rt = scripted_world()
     block = rt._world_block()
@@ -114,7 +114,7 @@ def test_the_accounting_facts_are_the_architects_own_sentences_and_reach_every_c
     text, prefix = req.prompt_text(), req.stable_prefix()
     for sentence in ACCOUNTING_FACTS:
         assert text.count(json.dumps(sentence)[1:-1]) == 1
-        assert sentence not in prefix
+        assert json.dumps(sentence)[1:-1] in prefix
     assert "A paid thought consumes the named budget" in text
 
 
@@ -452,11 +452,12 @@ def test_rendered_bytes_per_section_are_recorded_on_every_invocation():
     sections = ledger_items(rt, "invocation")[-1]["sections"]
     assert set(sections) >= {"stable_prefix", "you", "request", "inputs", "total"}
     assert sections["total"] == sum(v for k, v in sections.items() if k != "total")
-    # R3-E: the prefix is the WORLD CONTRACT and the base capability index, and is
-    # no longer the bulk of the prompt. What it is instead is small, whole, and
-    # byte-identical — the institutional disclosure it used to carry is rendered
-    # once, with the work, where it can be read at the moment it matters.
-    assert sections["you"] > 0 and 0 < sections["stable_prefix"] < sections["inputs"]
+    # R4-B: the prefix is the WORLD CONTRACT, the base capability index and the
+    # institutional world, and it is most of the prompt again — but every byte of
+    # it is byte-identical between calls, which is the whole point. What the seat
+    # pays for uncached is what actually moved: ``INPUTS`` is now a fraction of it.
+    assert sections["you"] > 0 and sections["stable_prefix"] > sections["inputs"] > 0
+    assert sections["inputs"] < sections["total"] // 4
     assert sections["world_update"] > 0 and sections["outcome_contract"] > 0
     # The counts are the bytes actually sent, not a model of them.
     req = request_for(rt, handle=handle)
