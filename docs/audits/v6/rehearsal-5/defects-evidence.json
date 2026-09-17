@@ -1,0 +1,127 @@
+{
+ "verdict_loop_top_handles": [
+  [
+   "decision-393",
+   {
+    "first_seq": 11098,
+    "count": 1920
+   }
+  ],
+  [
+   "decision-446",
+   {
+    "first_seq": 12770,
+    "count": 1746
+   }
+  ],
+  [
+   "decision-473",
+   {
+    "first_seq": 13694,
+    "count": 1666
+   }
+  ],
+  [
+   "decision-520",
+   {
+    "first_seq": 15087,
+    "count": 1558
+   }
+  ],
+  [
+   "decision-564",
+   {
+    "first_seq": 16572,
+    "count": 1456
+   }
+  ],
+  [
+   "decision-580",
+   {
+    "first_seq": 17387,
+    "count": 1410
+   }
+  ],
+  [
+   "decision-630",
+   {
+    "first_seq": 19686,
+    "count": 1290
+   }
+  ],
+  [
+   "decision-706",
+   {
+    "first_seq": 23247,
+    "count": 1072
+   }
+  ],
+  [
+   "decision-724",
+   {
+    "first_seq": 24142,
+    "count": 1026
+   }
+  ],
+  [
+   "decision-734",
+   {
+    "first_seq": 25045,
+    "count": 982
+   }
+  ]
+ ],
+ "undeliverable_examples": [
+  {
+   "consequence": "return_paid_off",
+   "handle": "decision-0",
+   "kind": "outcome.undeliverable",
+   "prev_hash": "31ebde358235e3ec29e380ac581cb0a7fa1b860e7fc1af581bc49b188bc09b88",
+   "reason": "no seat owns that decision",
+   "seq": 117,
+   "ts": 1789612962608129000,
+   "hash": "57aa88e2209d2d930e52cefc5cbe6c81286101302bda4f6447f8fd98b45fb908"
+  },
+  {
+   "consequence": "return_paid_off",
+   "handle": "decision-1",
+   "kind": "outcome.undeliverable",
+   "prev_hash": "0bb9357153ad67dfafc383c02ecd6a072e10d25c78eba84688cab857a0268841",
+   "reason": "no seat owns that decision",
+   "seq": 134,
+   "ts": 1789612962608129000,
+   "hash": "8eb9231c133f7b907a01b9d494f84e493b554221e3539d0f4b859407de769b3b"
+  },
+  {
+   "consequence": "return_paid_off",
+   "handle": "decision-2",
+   "kind": "outcome.undeliverable",
+   "prev_hash": "c694789e1595064a6990ae84bca37cd7c6e1f02cba5cb48cde742342ce0c5286",
+   "reason": "no seat owns that decision",
+   "seq": 150,
+   "ts": 1789612962608129000,
+   "hash": "292e7086d24aab7b9e8537f8c0e7bf77d9cc30f2188d7b1411b0afe5fc4f3076"
+  },
+  {
+   "consequence": "return_paid_off",
+   "handle": "decision-3",
+   "kind": "outcome.undeliverable",
+   "prev_hash": "9a4cab6b356160a7f5c078cf586bfcad097af9eb8fac5f978cc0fcd523ae2221",
+   "reason": "no seat owns that decision",
+   "seq": 166,
+   "ts": 1789612962608129000,
+   "hash": "86fc6754090ee4176d171ade9edc3e13b4586dc1da475183bd681a47b134ccc2"
+  },
+  {
+   "consequence": "return_paid_off",
+   "handle": "decision-4",
+   "kind": "outcome.undeliverable",
+   "prev_hash": "aecd526a711bffa89b83cc1ca99d12df122d1bd57e2e2ec7c9bb470c5de6abe2",
+   "reason": "no seat owns that decision",
+   "seq": 182,
+   "ts": 1789612962608129000,
+   "hash": "3a7369896cfc0322861629fa6adf89323db7112a3047bd510e15cfb78fc9fd88"
+  }
+ ],
+ "glm_reasoning_only_examples": []
+}

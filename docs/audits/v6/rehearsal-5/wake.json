@@ -1,0 +1,3945 @@
+{
+  "wallet_series": {
+    "series": [
+      {
+        "balance": 300000000,
+        "ts": 1789612954329084000
+      },
+      {
+        "balance": 299994984,
+        "ts": 1789612962608129000
+      },
+      {
+        "balance": 299990897,
+        "ts": 1789612962608129000
+      },
+      {
+        "balance": 299985842,
+        "ts": 1789613202627573000
+      },
+      {
+        "balance": 299980571,
+        "ts": 1789613202627573000
+      },
+      {
+        "balance": 299974797,
+        "ts": 1789613202627573000
+      },
+      {
+        "balance": 299969507,
+        "ts": 1789613322636527000
+      },
+      {
+        "balance": 299964169,
+        "ts": 1789613322636527000
+      },
+      {
+        "balance": 299960546,
+        "ts": 1789613322636527000
+      },
+      {
+        "balance": 299959546,
+        "ts": 1789613322636527000
+      },
+      {
+        "balance": 299958546,
+        "ts": 1789613322636527000
+      },
+      {
+        "balance": 299921954,
+        "ts": 1789613322636527000
+      },
+      {
+        "balance": 299916194,
+        "ts": 1789613322636527000
+      },
+      {
+        "balance": 299911942,
+        "ts": 1789613322636527000
+      },
+      {
+        "balance": 299905938,
+        "ts": 1789613322636527000
+      },
+      {
+        "balance": 299895170,
+        "ts": 1789613477434086000
+      },
+      {
+        "balance": 299891449,
+        "ts": 1789613477434086000
+      },
+      {
+        "balance": 299884118,
+        "ts": 1789613477434086000
+      },
+      {
+        "balance": 299877786,
+        "ts": 1789613477434086000
+      },
+      {
+        "balance": 299874054,
+        "ts": 1789613597444294000
+      },
+      {
+        "balance": 299868609,
+        "ts": 1789613717454686000
+      },
+      {
+        "balance": 299864327,
+        "ts": 1789613717454686000
+      },
+      {
+        "balance": 299859728,
+        "ts": 1789613837465055000
+      },
+      {
+        "balance": 299852803,
+        "ts": 1789613837465055000
+      },
+      {
+        "balance": 299848623,
+        "ts": 1789613837465055000
+      },
+      {
+        "balance": 299837939,
+        "ts": 1789613957475190000
+      },
+      {
+        "balance": 299833707,
+        "ts": 1789613957475190000
+      },
+      {
+        "balance": 299821558,
+        "ts": 1789613957475190000
+      },
+      {
+        "balance": 299814693,
+        "ts": 1789613957475190000
+      },
+      {
+        "balance": 299809530,
+        "ts": 1789614077477504000
+      },
+      {
+        "balance": 299802171,
+        "ts": 1789614077477504000
+      },
+      {
+        "balance": 299796366,
+        "ts": 1789614197487775000
+      },
+      {
+        "balance": 299790754,
+        "ts": 1789614197487775000
+      },
+      {
+        "balance": 299785136,
+        "ts": 1789614197487775000
+      },
+      {
+        "balance": 299778286,
+        "ts": 1789614197487775000
+      },
+      {
+        "balance": 299773671,
+        "ts": 1789614197487775000
+      },
+      {
+        "balance": 299767776,
+        "ts": 1789614317497009000
+      },
+      {
+        "balance": 299762027,
+        "ts": 1789614317497009000
+      },
+      {
+        "balance": 299757659,
+        "ts": 1789614317497009000
+      },
+      {
+        "balance": 299753163,
+        "ts": 1789614317497009000
+      },
+      {
+        "balance": 299747329,
+        "ts": 1789614437507315000
+      },
+      {
+        "balance": 299741432,
+        "ts": 1789614557517725000
+      },
+      {
+        "balance": 299735877,
+        "ts": 1789614557517725000
+      },
+      {
+        "balance": 299731227,
+        "ts": 1789614557517725000
+      },
+      {
+        "balance": 299725886,
+        "ts": 1789614557517725000
+      },
+      {
+        "balance": 299719971,
+        "ts": 1789614677527895000
+      },
+      {
+        "balance": 299714197,
+        "ts": 1789614677527895000
+      },
+      {
+        "balance": 299706985,
+        "ts": 1789614677527895000
+      },
+      {
+        "balance": 299703203,
+        "ts": 1789614677527895000
+      },
+      {
+        "balance": 299697322,
+        "ts": 1789614797538222000
+      },
+      {
+        "balance": 299692438,
+        "ts": 1789614797538222000
+      },
+      {
+        "balance": 299686556,
+        "ts": 1789614917548554000
+      },
+      {
+        "balance": 299680568,
+        "ts": 1789614917548554000
+      },
+      {
+        "balance": 299675296,
+        "ts": 1789614917548554000
+      },
+      {
+        "balance": 299670410,
+        "ts": 1789614917548554000
+      },
+      {
+        "balance": 299664465,
+        "ts": 1789615037558790000
+      },
+      {
+        "balance": 299659130,
+        "ts": 1789615037558790000
+      },
+      {
+        "balance": 299653760,
+        "ts": 1789615277577867000
+      },
+      {
+        "balance": 299648948,
+        "ts": 1789615397578727000
+      },
+      {
+        "balance": 299642034,
+        "ts": 1789615397578727000
+      },
+      {
+        "balance": 299630737,
+        "ts": 1789615637591407000
+      },
+      {
+        "balance": 299625828,
+        "ts": 1789615637591407000
+      },
+      {
+        "balance": 299613618,
+        "ts": 1789615637591407000
+      },
+      {
+        "balance": 299607682,
+        "ts": 1789615757601715000
+      },
+      {
+        "balance": 299600381,
+        "ts": 1789615757601715000
+      },
+      {
+        "balance": 299589011,
+        "ts": 1789616117630582000
+      },
+      {
+        "balance": 299580503,
+        "ts": 1789616117630582000
+      },
+      {
+        "balance": 299575118,
+        "ts": 1789616237634032000
+      },
+      {
+        "balance": 299569157,
+        "ts": 1789616357641883000
+      },
+      {
+        "balance": 299563139,
+        "ts": 1789616357641883000
+      },
+      {
+        "balance": 299557893,
+        "ts": 1789616357641883000
+      },
+      {
+        "balance": 299546676,
+        "ts": 1789616477652152000
+      },
+      {
+        "balance": 299540678,
+        "ts": 1789616477652152000
+      },
+      {
+        "balance": 299540677,
+        "ts": 1789616597662411000
+      },
+      {
+        "balance": 299540675,
+        "ts": 1789616597662411000
+      },
+      {
+        "balance": 299540673,
+        "ts": 1789616597662411000
+      },
+      {
+        "balance": 299540671,
+        "ts": 1789616597662411000
+      },
+      {
+        "balance": 299535473,
+        "ts": 1789616597662411000
+      },
+      {
+        "balance": 299535473,
+        "ts": 1789616597662411000
+      },
+      {
+        "balance": 299535473,
+        "ts": 1789616597662411000
+      },
+      {
+        "balance": 299530531,
+        "ts": 1789616597662411000
+      },
+      {
+        "balance": 299522665,
+        "ts": 1789616597662411000
+      },
+      {
+        "balance": 299518375,
+        "ts": 1789616597662411000
+      },
+      {
+        "balance": 299512418,
+        "ts": 1789616837672486000
+      },
+      {
+        "balance": 299506407,
+        "ts": 1789616837672486000
+      },
+      {
+        "balance": 299500819,
+        "ts": 1789616837672486000
+      },
+      {
+        "balance": 299494581,
+        "ts": 1789616957673624000
+      },
+      {
+        "balance": 299488595,
+        "ts": 1789617077683925000
+      },
+      {
+        "balance": 299481333,
+        "ts": 1789617077683925000
+      },
+      {
+        "balance": 299475224,
+        "ts": 1789617437711474000
+      },
+      {
+        "balance": 299469304,
+        "ts": 1789617437711474000
+      },
+      {
+        "balance": 299463272,
+        "ts": 1789617557721657000
+      },
+      {
+        "balance": 299456228,
+        "ts": 1789617557721657000
+      },
+      {
+        "balance": 299452303,
+        "ts": 1789617557721657000
+      },
+      {
+        "balance": 299447152,
+        "ts": 1789617677731089000
+      },
+      {
+        "balance": 299440058,
+        "ts": 1789617677731089000
+      },
+      {
+        "balance": 299433959,
+        "ts": 1789617797740487000
+      },
+      {
+        "balance": 299427705,
+        "ts": 1789617917750709000
+      },
+      {
+        "balance": 299421004,
+        "ts": 1789617917750709000
+      },
+      {
+        "balance": 299414973,
+        "ts": 1789618037760851000
+      },
+      {
+        "balance": 299403684,
+        "ts": 1789618157769800000
+      },
+      {
+        "balance": 299397440,
+        "ts": 1789618157769800000
+      },
+      {
+        "balance": 299390281,
+        "ts": 1789618157769800000
+      },
+      {
+        "balance": 299378807,
+        "ts": 1789618277778668000
+      },
+      {
+        "balance": 299369665,
+        "ts": 1789618277778668000
+      },
+      {
+        "balance": 299363398,
+        "ts": 1789618517798119000
+      },
+      {
+        "balance": 299356277,
+        "ts": 1789618517798119000
+      },
+      {
+        "balance": 299350086,
+        "ts": 1789618757818412000
+      },
+      {
+        "balance": 299344238,
+        "ts": 1789618757818412000
+      },
+      {
+        "balance": 299338175,
+        "ts": 1789618997833915000
+      },
+      {
+        "balance": 299332046,
+        "ts": 1789618997833915000
+      },
+      {
+        "balance": 299325025,
+        "ts": 1789618997833915000
+      },
+      {
+        "balance": 299317704,
+        "ts": 1789618997833915000
+      },
+      {
+        "balance": 299306386,
+        "ts": 1789619117840561000
+      },
+      {
+        "balance": 299301689,
+        "ts": 1789619117840561000
+      },
+      {
+        "balance": 299289253,
+        "ts": 1789619117840561000
+      },
+      {
+        "balance": 299281292,
+        "ts": 1789619117840561000
+      },
+      {
+        "balance": 299275579,
+        "ts": 1789619237844707000
+      },
+      {
+        "balance": 299267843,
+        "ts": 1789619237844707000
+      },
+      {
+        "balance": 299261759,
+        "ts": 1789619357848133000
+      },
+      {
+        "balance": 299254444,
+        "ts": 1789619357848133000
+      },
+      {
+        "balance": 299248366,
+        "ts": 1789619477855318000
+      },
+      {
+        "balance": 299242010,
+        "ts": 1789619477855318000
+      },
+      {
+        "balance": 299230391,
+        "ts": 1789619717859381000
+      },
+      {
+        "balance": 299224422,
+        "ts": 1789619717859381000
+      },
+      {
+        "balance": 299212046,
+        "ts": 1789619717859381000
+      },
+      {
+        "balance": 299205730,
+        "ts": 1789619957877412000
+      },
+      {
+        "balance": 299199767,
+        "ts": 1789619957877412000
+      },
+      {
+        "balance": 299193566,
+        "ts": 1789619957877412000
+      },
+      {
+        "balance": 299186187,
+        "ts": 1789619957877412000
+      },
+      {
+        "balance": 299179753,
+        "ts": 1789620077882672000
+      },
+      {
+        "balance": 299173201,
+        "ts": 1789620077882672000
+      },
+      {
+        "balance": 299173198,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299173194,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299173191,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299173190,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299173189,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299173186,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299173185,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299173184,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299161537,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299155677,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299145611,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299138285,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299134163,
+        "ts": 1789620197892642000
+      },
+      {
+        "balance": 299128171,
+        "ts": 1789620437905837000
+      },
+      {
+        "balance": 299122242,
+        "ts": 1789620437905837000
+      },
+      {
+        "balance": 299115853,
+        "ts": 1789620557915732000
+      },
+      {
+        "balance": 299109331,
+        "ts": 1789620677925614000
+      },
+      {
+        "balance": 299103454,
+        "ts": 1789620677925614000
+      },
+      {
+        "balance": 299097773,
+        "ts": 1789620677925614000
+      },
+      {
+        "balance": 299089970,
+        "ts": 1789620677925614000
+      },
+      {
+        "balance": 299083963,
+        "ts": 1789620917945417000
+      },
+      {
+        "balance": 299077761,
+        "ts": 1789620917945417000
+      },
+      {
+        "balance": 299071169,
+        "ts": 1789621037956914000
+      },
+      {
+        "balance": 299066119,
+        "ts": 1789621037956914000
+      },
+      {
+        "balance": 299058803,
+        "ts": 1789621037956914000
+      },
+      {
+        "balance": 299051845,
+        "ts": 1789621037956914000
+      },
+      {
+        "balance": 299045886,
+        "ts": 1789621037956914000
+      },
+      {
+        "balance": 299039370,
+        "ts": 1789621157966918000
+      },
+      {
+        "balance": 299033510,
+        "ts": 1789621157966918000
+      },
+      {
+        "balance": 299026090,
+        "ts": 1789621157966918000
+      },
+      {
+        "balance": 299019375,
+        "ts": 1789621277972627000
+      },
+      {
+        "balance": 299013348,
+        "ts": 1789621277972627000
+      },
+      {
+        "balance": 299006972,
+        "ts": 1789621277972627000
+      },
+      {
+        "balance": 298999458,
+        "ts": 1789621277972627000
+      },
+      {
+        "balance": 298993421,
+        "ts": 1789621517989592000
+      },
+      {
+        "balance": 298987197,
+        "ts": 1789621637999513000
+      },
+      {
+        "balance": 298981041,
+        "ts": 1789621637999513000
+      },
+      {
+        "balance": 298969041,
+        "ts": 1789621758009497000
+      },
+      {
+        "balance": 298962806,
+        "ts": 1789621758009497000
+      },
+      {
+        "balance": 298950238,
+        "ts": 1789621758009497000
+      },
+      {
+        "balance": 298945983,
+        "ts": 1789621758009497000
+      },
+      {
+        "balance": 298939165,
+        "ts": 1789621878009518000
+      },
+      {
+        "balance": 298932411,
+        "ts": 1789621878009518000
+      },
+      {
+        "balance": 298927010,
+        "ts": 1789621878009518000
+      },
+      {
+        "balance": 298919578,
+        "ts": 1789621878009518000
+      },
+      {
+        "balance": 298913328,
+        "ts": 1789621878009518000
+      },
+      {
+        "balance": 298905273,
+        "ts": 1789621878009518000
+      },
+      {
+        "balance": 298899315,
+        "ts": 1789622118029564000
+      },
+      {
+        "balance": 298891497,
+        "ts": 1789622118029564000
+      },
+      {
+        "balance": 298884649,
+        "ts": 1789622238034488000
+      },
+      {
+        "balance": 298878594,
+        "ts": 1789622238034488000
+      },
+      {
+        "balance": 298866589,
+        "ts": 1789622478044329000
+      },
+      {
+        "balance": 298857283,
+        "ts": 1789622478044329000
+      },
+      {
+        "balance": 298850548,
+        "ts": 1789622598054310000
+      },
+      {
+        "balance": 298843671,
+        "ts": 1789622718064216000
+      },
+      {
+        "balance": 298837683,
+        "ts": 1789622718064216000
+      },
+      {
+        "balance": 298830182,
+        "ts": 1789622718064216000
+      },
+      {
+        "balance": 298823889,
+        "ts": 1789622718064216000
+      },
+      {
+        "balance": 298819781,
+        "ts": 1789622718064216000
+      },
+      {
+        "balance": 298813440,
+        "ts": 1789622838074196000
+      },
+      {
+        "balance": 298805511,
+        "ts": 1789622838074196000
+      },
+      {
+        "balance": 298799154,
+        "ts": 1789622958086149000
+      },
+      {
+        "balance": 298793073,
+        "ts": 1789623078090137000
+      },
+      {
+        "balance": 298786855,
+        "ts": 1789623078090137000
+      },
+      {
+        "balance": 298774738,
+        "ts": 1789623198100113000
+      },
+      {
+        "balance": 298768371,
+        "ts": 1789623198100113000
+      },
+      {
+        "balance": 298755635,
+        "ts": 1789623198100113000
+      },
+      {
+        "balance": 298747641,
+        "ts": 1789623198100113000
+      },
+      {
+        "balance": 298742081,
+        "ts": 1789623318108463000
+      },
+      {
+        "balance": 298734978,
+        "ts": 1789623318108463000
+      },
+      {
+        "balance": 298728041,
+        "ts": 1789623438118461000
+      },
+      {
+        "balance": 298722092,
+        "ts": 1789623438118461000
+      },
+      {
+        "balance": 298715733,
+        "ts": 1789623558128424000
+      },
+      {
+        "balance": 298707796,
+        "ts": 1789623558128424000
+      },
+      {
+        "balance": 298700812,
+        "ts": 1789623678138399000
+      },
+      {
+        "balance": 298694850,
+        "ts": 1789623678138399000
+      },
+      {
+        "balance": 298687054,
+        "ts": 1789623678138399000
+      },
+      {
+        "balance": 298681191,
+        "ts": 1789623678138399000
+      },
+      {
+        "balance": 298681188,
+        "ts": 1789623798148377000
+      },
+      {
+        "balance": 298681185,
+        "ts": 1789623798148377000
+      },
+      {
+        "balance": 298681183,
+        "ts": 1789623798148377000
+      },
+      {
+        "balance": 298681182,
+        "ts": 1789623798148377000
+      },
+      {
+        "balance": 298681181,
+        "ts": 1789623798148377000
+      },
+      {
+        "balance": 298681178,
+        "ts": 1789623798148377000
+      },
+      {
+        "balance": 298681177,
+        "ts": 1789623798148377000
+      },
+      {
+        "balance": 298674811,
+        "ts": 1789623798148377000
+      },
+      {
+        "balance": 298666852,
+        "ts": 1789623798148377000
+      },
+      {
+        "balance": 298661906,
+        "ts": 1789623918158560000
+      },
+      {
+        "balance": 298655592,
+        "ts": 1789623918158560000
+      },
+      {
+        "balance": 298643385,
+        "ts": 1789624038162855000
+      },
+      {
+        "balance": 298630518,
+        "ts": 1789624038162855000
+      },
+      {
+        "balance": 298624557,
+        "ts": 1789624158172815000
+      },
+      {
+        "balance": 298616579,
+        "ts": 1789624158172815000
+      },
+      {
+        "balance": 298610641,
+        "ts": 1789624158172815000
+      },
+      {
+        "balance": 298603566,
+        "ts": 1789624278182762000
+      },
+      {
+        "balance": 298595767,
+        "ts": 1789624278182762000
+      },
+      {
+        "balance": 298589747,
+        "ts": 1789624398192712000
+      },
+      {
+        "balance": 298581965,
+        "ts": 1789624398192712000
+      },
+      {
+        "balance": 298569718,
+        "ts": 1789624518202669000
+      },
+      {
+        "balance": 298563357,
+        "ts": 1789624518202669000
+      },
+      {
+        "balance": 298557117,
+        "ts": 1789624518202669000
+      },
+      {
+        "balance": 298551163,
+        "ts": 1789624638212680000
+      },
+      {
+        "balance": 298543102,
+        "ts": 1789624638212680000
+      },
+      {
+        "balance": 298538867,
+        "ts": 1789624638212680000
+      },
+      {
+        "balance": 298531767,
+        "ts": 1789624758222662000
+      },
+      {
+        "balance": 298525404,
+        "ts": 1789624758222662000
+      },
+      {
+        "balance": 298519301,
+        "ts": 1789624758222662000
+      },
+      {
+        "balance": 298513108,
+        "ts": 1789624758222662000
+      },
+      {
+        "balance": 298500746,
+        "ts": 1789624878232702000
+      },
+      {
+        "balance": 298493609,
+        "ts": 1789624878232702000
+      },
+      {
+        "balance": 298480607,
+        "ts": 1789624878232702000
+      },
+      {
+        "balance": 298473351,
+        "ts": 1789624998242758000
+      },
+      {
+        "balance": 298467283,
+        "ts": 1789624998242758000
+      },
+      {
+        "balance": 298454694,
+        "ts": 1789625118252748000
+      },
+      {
+        "balance": 298448331,
+        "ts": 1789625118252748000
+      },
+      {
+        "balance": 298438935,
+        "ts": 1789625118252748000
+      },
+      {
+        "balance": 298432730,
+        "ts": 1789625118252748000
+      },
+      {
+        "balance": 298425390,
+        "ts": 1789625238262767000
+      },
+      {
+        "balance": 298420725,
+        "ts": 1789625238262767000
+      },
+      {
+        "balance": 298412763,
+        "ts": 1789625238262767000
+      },
+      {
+        "balance": 298405403,
+        "ts": 1789625358272742000
+      },
+      {
+        "balance": 298397520,
+        "ts": 1789625358272742000
+      },
+      {
+        "balance": 298390118,
+        "ts": 1789625598282888000
+      },
+      {
+        "balance": 298383991,
+        "ts": 1789625598282888000
+      },
+      {
+        "balance": 298376236,
+        "ts": 1789625598282888000
+      },
+      {
+        "balance": 298367961,
+        "ts": 1789625598282888000
+      },
+      {
+        "balance": 298363347,
+        "ts": 1789625598282888000
+      },
+      {
+        "balance": 298357229,
+        "ts": 1789625718292899000
+      },
+      {
+        "balance": 298348603,
+        "ts": 1789625718292899000
+      },
+      {
+        "balance": 298341158,
+        "ts": 1789625838302891000
+      },
+      {
+        "balance": 298333065,
+        "ts": 1789625838302891000
+      },
+      {
+        "balance": 298328033,
+        "ts": 1789626078320858000
+      },
+      {
+        "balance": 298320937,
+        "ts": 1789626078320858000
+      },
+      {
+        "balance": 298313604,
+        "ts": 1789626198322041000
+      },
+      {
+        "balance": 298306226,
+        "ts": 1789626438341951000
+      },
+      {
+        "balance": 298300152,
+        "ts": 1789626438341951000
+      },
+      {
+        "balance": 298292182,
+        "ts": 1789626438341951000
+      },
+      {
+        "balance": 298283914,
+        "ts": 1789626438341951000
+      },
+      {
+        "balance": 298279238,
+        "ts": 1789626558348616000
+      },
+      {
+        "balance": 298270648,
+        "ts": 1789626558348616000
+      },
+      {
+        "balance": 298264669,
+        "ts": 1789626678358588000
+      },
+      {
+        "balance": 298258554,
+        "ts": 1789626678358588000
+      },
+      {
+        "balance": 298245835,
+        "ts": 1789626798368566000
+      },
+      {
+        "balance": 298239889,
+        "ts": 1789627158396546000
+      },
+      {
+        "balance": 298231695,
+        "ts": 1789627158396546000
+      },
+      {
+        "balance": 298227233,
+        "ts": 1789627158396546000
+      },
+      {
+        "balance": 298219745,
+        "ts": 1789627278399399000
+      },
+      {
+        "balance": 298211608,
+        "ts": 1789627278399399000
+      },
+      {
+        "balance": 298211605,
+        "ts": 1789627398403152000
+      },
+      {
+        "balance": 298211601,
+        "ts": 1789627398403152000
+      },
+      {
+        "balance": 298211597,
+        "ts": 1789627398403152000
+      },
+      {
+        "balance": 298211596,
+        "ts": 1789627398403152000
+      },
+      {
+        "balance": 298211595,
+        "ts": 1789627398403152000
+      },
+      {
+        "balance": 298211592,
+        "ts": 1789627398403152000
+      },
+      {
+        "balance": 298211591,
+        "ts": 1789627398403152000
+      },
+      {
+        "balance": 298211590,
+        "ts": 1789627398403152000
+      },
+      {
+        "ts": 1789627398403152000,
+        "balance": 298204152
+      },
+      {
+        "ts": 1789627398403152000,
+        "balance": 298195867
+      },
+      {
+        "ts": 1789627518413075000,
+        "balance": 298188275
+      },
+      {
+        "ts": 1789627518413075000,
+        "balance": 298180607
+      },
+      {
+        "ts": 1789627518413075000,
+        "balance": 298172926
+      },
+      {
+        "ts": 1789627518413075000,
+        "balance": 298166911
+      },
+      {
+        "ts": 1789627518413075000,
+        "balance": 298158501
+      },
+      {
+        "ts": 1789627518413075000,
+        "balance": 298152162
+      },
+      {
+        "ts": 1789627518413075000,
+        "balance": 298143707
+      },
+      {
+        "ts": 1789627518413075000,
+        "balance": 298135238
+      },
+      {
+        "ts": 1789627638423092000,
+        "balance": 298127566
+      },
+      {
+        "ts": 1789627638423092000,
+        "balance": 298119262
+      },
+      {
+        "ts": 1789627638423092000,
+        "balance": 298113229
+      },
+      {
+        "ts": 1789627758433032000,
+        "balance": 298105524
+      },
+      {
+        "ts": 1789627758433032000,
+        "balance": 298099569
+      },
+      {
+        "ts": 1789627758433032000,
+        "balance": 298093887
+      },
+      {
+        "ts": 1789627758433032000,
+        "balance": 298087393
+      },
+      {
+        "ts": 1789627998451628000,
+        "balance": 298081544
+      },
+      {
+        "ts": 1789627998451628000,
+        "balance": 298072675
+      },
+      {
+        "ts": 1789628238469623000,
+        "balance": 298064955
+      },
+      {
+        "ts": 1789628238469623000,
+        "balance": 298059135
+      },
+      {
+        "ts": 1789628238469623000,
+        "balance": 298052957
+      },
+      {
+        "ts": 1789628358479624000,
+        "balance": 298045324
+      },
+      {
+        "ts": 1789628358479624000,
+        "balance": 298039359
+      },
+      {
+        "ts": 1789628358479624000,
+        "balance": 298030826
+      },
+      {
+        "ts": 1789628358479624000,
+        "balance": 298024712
+      },
+      {
+        "ts": 1789628478484094000,
+        "balance": 298017030
+      },
+      {
+        "ts": 1789628478484094000,
+        "balance": 298012250
+      },
+      {
+        "ts": 1789628478484094000,
+        "balance": 298012250
+      },
+      {
+        "ts": 1789628478484094000,
+        "balance": 298012250
+      },
+      {
+        "ts": 1789628478484094000,
+        "balance": 298007599
+      },
+      {
+        "ts": 1789628478484094000,
+        "balance": 297999163
+      },
+      {
+        "ts": 1789628478484094000,
+        "balance": 297990154
+      },
+      {
+        "ts": 1789628478484094000,
+        "balance": 297983912
+      },
+      {
+        "ts": 1789628598494096000,
+        "balance": 297978006
+      },
+      {
+        "ts": 1789628598494096000,
+        "balance": 297969383
+      },
+      {
+        "ts": 1789628838513925000,
+        "balance": 297963304
+      },
+      {
+        "ts": 1789628838513925000,
+        "balance": 297954464
+      },
+      {
+        "ts": 1789628958523859000,
+        "balance": 297946704
+      },
+      {
+        "ts": 1789628958523859000,
+        "balance": 297938975
+      },
+      {
+        "ts": 1789628958523859000,
+        "balance": 297930356
+      },
+      {
+        "ts": 1789628958523859000,
+        "balance": 297923533
+      },
+      {
+        "ts": 1789629078524369000,
+        "balance": 297915728
+      },
+      {
+        "ts": 1789629078524369000,
+        "balance": 297909698
+      },
+      {
+        "ts": 1789629078524369000,
+        "balance": 297903807
+      },
+      {
+        "ts": 1789629078524369000,
+        "balance": 297895013
+      },
+      {
+        "ts": 1789629318544242000,
+        "balance": 297888997
+      },
+      {
+        "ts": 1789629318544242000,
+        "balance": 297882746
+      },
+      {
+        "ts": 1789629678564423000,
+        "balance": 297875050
+      },
+      {
+        "ts": 1789629678564423000,
+        "balance": 297866331
+      },
+      {
+        "ts": 1789629798570083000,
+        "balance": 297853318
+      },
+      {
+        "ts": 1789629798570083000,
+        "balance": 297847351
+      },
+      {
+        "ts": 1789629798570083000,
+        "balance": 297833411
+      },
+      {
+        "ts": 1789630158599564000,
+        "balance": 297827438
+      },
+      {
+        "ts": 1789630158599564000,
+        "balance": 297818577
+      },
+      {
+        "ts": 1789630278609494000,
+        "balance": 297805639
+      },
+      {
+        "ts": 1789630278609494000,
+        "balance": 297799507
+      },
+      {
+        "ts": 1789630278609494000,
+        "balance": 297785480
+      },
+      {
+        "ts": 1789630278609494000,
+        "balance": 297778353
+      },
+      {
+        "ts": 1789630278609494000,
+        "balance": 297773963
+      },
+      {
+        "ts": 1789630398619500000,
+        "balance": 297760891
+      },
+      {
+        "ts": 1789630398619500000,
+        "balance": 297755587
+      },
+      {
+        "ts": 1789630398619500000,
+        "balance": 297755587
+      },
+      {
+        "ts": 1789630398619500000,
+        "balance": 297749209
+      },
+      {
+        "ts": 1789630398619500000,
+        "balance": 297740060
+      },
+      {
+        "ts": 1789630398619500000,
+        "balance": 297730688
+      },
+      {
+        "ts": 1789630518629089000,
+        "balance": 297717609
+      },
+      {
+        "ts": 1789630518629089000,
+        "balance": 297712905
+      },
+      {
+        "ts": 1789630518629089000,
+        "balance": 297703960
+      },
+      {
+        "ts": 1789630518629089000,
+        "balance": 297697088
+      },
+      {
+        "ts": 1789630758641934000,
+        "balance": 297689145
+      },
+      {
+        "ts": 1789630758641934000,
+        "balance": 297683146
+      },
+      {
+        "ts": 1789630758641934000,
+        "balance": 297674355
+      },
+      {
+        "ts": 1789630758641934000,
+        "balance": 297668435
+      }
+    ]
+  },
+  "spend_by_capability": {
+    "spend": {
+      "antagonist": 691927,
+      "evaluator": 1038294,
+      "meta": 70537,
+      "producer": 530807
+    }
+  },
+  "invocations_by_assembly": {
+    "counts": {
+      "antagonist": 86,
+      "evaluator": 138,
+      "meta": 15,
+      "producer": 84
+    }
+  },
+  "action_frequencies": {
+    "counts": {
+      "antagonist": 86,
+      "evaluator": 138,
+      "meta": 15,
+      "noop": 637,
+      "other": 235,
+      "producer": 84
+    }
+  },
+  "settlement_latency": {
+    "count": 1032,
+    "total_ns": 52567192903000,
+    "min_ns": 0,
+    "max_ns": 720060062000
+  },
+  "roster": {
+    "current": [
+      {
+        "count": 1,
+        "kind": "antagonist",
+        "model_id": "openai/gpt-5.6-luna"
+      },
+      {
+        "count": 1,
+        "kind": "evaluator",
+        "model_id": "openai/gpt-5.6-luna"
+      },
+      {
+        "count": 1,
+        "kind": "evaluator",
+        "model_id": "venice:z-ai-glm-5-3-flash"
+      },
+      {
+        "count": 1,
+        "kind": "meta",
+        "model_id": "openai/gpt-5.6-luna"
+      },
+      {
+        "count": 1,
+        "kind": "meta",
+        "model_id": "venice:z-ai-glm-5-3-flash"
+      },
+      {
+        "count": 1,
+        "kind": "producer",
+        "model_id": "openai/gpt-5.6-luna"
+      },
+      {
+        "count": 3,
+        "kind": "producer",
+        "model_id": "venice:z-ai-glm-5-3-flash"
+      }
+    ],
+    "over_time": [
+      {
+        "window": 1,
+        "ts_ns": 1789616597662411000,
+        "by_kind": {
+          "antagonist": 1,
+          "evaluator": 2,
+          "meta": 2,
+          "producer": 4
+        },
+        "by_model": {
+          "openai/gpt-5.6-luna": 4,
+          "venice:z-ai-glm-5-3-flash": 5
+        }
+      },
+      {
+        "window": 2,
+        "ts_ns": 1789620197892642000,
+        "by_kind": {
+          "antagonist": 1,
+          "evaluator": 2,
+          "meta": 2,
+          "producer": 4
+        },
+        "by_model": {
+          "openai/gpt-5.6-luna": 4,
+          "venice:z-ai-glm-5-3-flash": 5
+        }
+      },
+      {
+        "window": 3,
+        "ts_ns": 1789623798148377000,
+        "by_kind": {
+          "antagonist": 1,
+          "evaluator": 2,
+          "meta": 2,
+          "producer": 4
+        },
+        "by_model": {
+          "openai/gpt-5.6-luna": 4,
+          "venice:z-ai-glm-5-3-flash": 5
+        }
+      },
+      {
+        "window": 4,
+        "ts_ns": 1789627398403152000,
+        "by_kind": {
+          "antagonist": 1,
+          "evaluator": 2,
+          "meta": 2,
+          "producer": 4
+        },
+        "by_model": {
+          "openai/gpt-5.6-luna": 4,
+          "venice:z-ai-glm-5-3-flash": 5
+        }
+      }
+    ],
+    "registered": [],
+    "retired": []
+  },
+  "tools": [
+    {
+      "description": "Read an archived artifact by its sha256: your own working state, an artifact you wrote, an artifact published with public: true, or the private state of a program in your own lineage. Anything else is refused with artifact_private. The read is free and ledgered. Returns owner, kind, bytes and text (base64 for binary), up to 64 KiB.",
+      "id": "artifact.get",
+      "version": 1
+    },
+    {
+      "description": "Index the artifact archive: up to 50 rows of sha, kind, bytes, owner seat, when it was archived and whether it is public, newest first, with a cursor for the next page. Optionally filtered by owner seat. Free, like artifact.get.",
+      "id": "artifact.list",
+      "version": 1
+    },
+    {
+      "description": "Exact decimal position arithmetic, to six decimal places, with units in every field name. op=notional(size, price); op=fee(fee_bps and either notional or size+price); op=funding(size, mark, rate) \u2014 what the position pays over one settlement period, positive when the holder pays, under the convention stated in the result; op=carry(size, mark, hourly_rate, hours, round_trip_fee); op=margin(size, mark, leverage). Deterministic, offline, and it prescribes no objective.",
+      "id": "calc",
+      "version": 1
+    },
+    {
+      "description": "Search the model catalogues (OpenRouter, Venice, registered sellers) by substring; returns ids with prices per million tokens and context length.",
+      "id": "catalogue.search",
+      "version": 1
+    },
+    {
+      "description": "GET a registered connector path as text",
+      "id": "connector.fetch",
+      "version": 1
+    },
+    {
+      "description": "Discover compute sellers with their resource URLs and listed prices.",
+      "id": "market.discover",
+      "version": 1
+    },
+    {
+      "description": "Read public text, paying any outstanding storage rent on the key.",
+      "id": "note.get",
+      "version": 1
+    },
+    {
+      "description": "Index the notebook: up to 50 rows of key, bytes, version, owner seat and the window last written, newest first, with a cursor for the next page. Notes are public by construction; the index carries no text, so a reader need not already know a key.",
+      "id": "note.list",
+      "version": 1
+    },
+    {
+      "description": "Register or overwrite public text under a key; the retained text pays rent by byte-time and no per-byte transfer charge applies.",
+      "id": "note.put",
+      "version": 1
+    },
+    {
+      "description": "Read one item of your own outcome inbox by its exact outcome_id (the address carried on every item, including items older than the few your request carries inline). One decision can settle into several outcomes, so handle is a fallback only: it returns the oldest item of that decision you have not read, and says so. Returns what you said then, the outcome, when it was observed, the financial delta, an evidence pointer and the other outcome_ids on that decision. Free and ledgered; a kernel read, never a model call.",
+      "id": "outcome.get",
+      "version": 1
+    },
+    {
+      "description": "Move USDC spot_to_perps or perps_to_spot, between venue and reserve, or to_venice from reserve in a fixed $5 tranche, within treasury.max_venice_per_window. Principal stays held until receipt-confirmed arrival. The result carries references or a refusal reason. to_reserve needs spot HYPE in the venue account for the Core gas charge (buy it on HYPE/USDC); its Base mint is self-paid when the reserve holds ETH, otherwise Circle forwards it for the fee quoted in pots.gas.",
+      "id": "treasury.transfer",
+      "version": 1
+    },
+    {
+      "description": "Cancel a resting order on its coin.",
+      "id": "venue.cancel",
+      "version": 1
+    },
+    {
+      "description": "Recent OHLCV candles, oldest first; timestamps in nanoseconds.",
+      "id": "venue.candles",
+      "version": 1
+    },
+    {
+      "description": "Reduce a position by size, or close it fully when size is omitted or null.",
+      "id": "venue.close",
+      "version": 1
+    },
+    {
+      "description": "Public venue funding for all listed markets.",
+      "id": "venue.funding",
+      "version": 1
+    },
+    {
+      "description": "Recent funding rates, oldest first; timestamps in nanoseconds.",
+      "id": "venue.funding_history",
+      "version": 1
+    },
+    {
+      "description": "Every market the venue lists, with its lot size, tick size and minimum order value. world.venue carries these records for the world's trading_markets only; this read returns the full listing.",
+      "id": "venue.instruments",
+      "version": 1
+    },
+    {
+      "description": "Public venue mids for all listed markets.",
+      "id": "venue.mids",
+      "version": 1
+    },
+    {
+      "description": "Currently resting orders for the account.",
+      "id": "venue.open_orders",
+      "version": 1
+    },
+    {
+      "description": "Best-first bid and ask price/size levels.",
+      "id": "venue.order_book",
+      "version": 1
+    },
+    {
+      "description": "Place a good-until-cancelled limit order; optionally reduce only.",
+      "id": "venue.place_limit",
+      "version": 1
+    },
+    {
+      "description": "Place a market buy or sell; optionally reduce only.",
+      "id": "venue.place_market",
+      "version": 1
+    },
+    {
+      "description": "Open signed positions and entry prices for the account.",
+      "id": "venue.positions",
+      "version": 1
+    },
+    {
+      "description": "Set cross-margin leverage for a coin.",
+      "id": "venue.set_leverage",
+      "version": 1
+    },
+    {
+      "description": "Search the web through this world's search-capable model route. Returns a bounded list of results, each {title, url, snippet, published?}, with the cost of the search and when it was run. Costs the flat call price plus the metered cost of that one model call, and never more than $0.05.",
+      "id": "web.search",
+      "version": 1
+    }
+  ],
+  "connectors": {
+    "calls_per_day": {},
+    "registered": []
+  },
+  "notes": {
+    "bytes": 0,
+    "keys": 0
+  },
+  "observations": [
+    {
+      "description": "Mean successful response cost in the selected rows; global closed windows use successful producer returns. A retained-storage charge adds to what those responses cost and is never counted as one of them.",
+      "id": "cost_per_return",
+      "units": "micro-USD per return"
+    },
+    {
+      "description": "Mean cost over every selected response, failed ones included; global closed windows use every return the window made. A retained-storage charge adds to what those responses cost and is never counted as one of them.",
+      "id": "cost_per_attempt",
+      "units": "micro-USD per attempt"
+    },
+    {
+      "description": "Successful responses over selected invocation responses, including ballots.",
+      "id": "well_formed_rate",
+      "units": "fraction"
+    },
+    {
+      "description": "Mean selected forecast Brier minus its paired pre-outcome prevalence-baseline Brier.",
+      "id": "forecast_skill",
+      "units": "score difference"
+    },
+    {
+      "description": "Filled notional over equity at window start; zero without fills.",
+      "id": "turnover",
+      "units": "ratio"
+    },
+    {
+      "description": "Share of selected responses declaring noop or hold; global closed windows use producer returns.",
+      "id": "noop_share",
+      "units": "fraction"
+    },
+    {
+      "description": "Share of selected responses with accepted registrations or activated amendments; global closed windows use their revision counters.",
+      "id": "revision_rate",
+      "units": "fraction"
+    },
+    {
+      "description": "Accepted population registrations, including amendment proposals.",
+      "id": "registrations",
+      "units": "count"
+    },
+    {
+      "description": "Rejected population registration proposals.",
+      "id": "registration_rejections",
+      "units": "count"
+    },
+    {
+      "description": "Amendments admitted to the charter proposal book.",
+      "id": "amendments_proposed",
+      "units": "count"
+    },
+    {
+      "description": "Amendments activated in this window.",
+      "id": "amendments_activated",
+      "units": "count"
+    },
+    {
+      "description": "Mean evaluator verdict; forecast selectors use the verdicts attached to resolved forecasts, grouped by the judged return's assembly or role.",
+      "id": "verdict_mean",
+      "units": "score"
+    },
+    {
+      "description": "Population standard deviation of evaluator verdicts; forecast selectors group verdicts by the judged return's assembly or role.",
+      "id": "verdict_std",
+      "units": "score standard deviation"
+    },
+    {
+      "description": "Mean population std across judges of the same return; at least two judges in this window, averaging repeats per judge.",
+      "id": "evaluator_disagreement",
+      "units": "score standard deviation"
+    },
+    {
+      "description": "Positive return_paid_off outcomes over selected settled consequences; forecast selectors restrict this to selected forecast records.",
+      "id": "consequence_paid_off_rate",
+      "units": "fraction"
+    },
+    {
+      "description": "Venue fills processed in the window.",
+      "id": "fills",
+      "units": "count"
+    },
+    {
+      "description": "Realized fill P&L before fees and funding.",
+      "id": "realized_pnl_usd",
+      "units": "USD"
+    },
+    {
+      "description": "Peak observed absolute marked notional on one coin over starting equity; unsupported without positions or marks.",
+      "id": "position_concentration",
+      "units": "ratio"
+    },
+    {
+      "description": "Winning antagonist exposure settlements over settled exposures.",
+      "id": "exposure_win_rate",
+      "units": "fraction"
+    },
+    {
+      "description": "Mean raw meta verdict delivered, across all tiers.",
+      "id": "meta_verdict_mean",
+      "units": "score"
+    },
+    {
+      "description": "Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope. A commitment not yet due is not in the sample; one the owner documented as externally unobservable without its own fault, and an event the seat never committed to observe, are excluded. No eligible sample is unmeasured, never zero.",
+      "id": "avoidably_unresolved_share",
+      "units": "fraction"
+    },
+    {
+      "description": "Censored outcomes over resolved outcomes; forecast selectors use forecast records, global closed windows also include judgements and exposures.",
+      "id": "censored_share",
+      "units": "fraction"
+    },
+    {
+      "description": "Mean attempted tool calls per selected response, failures included; global closed windows divide the window's attempted calls by its invocations.",
+      "id": "tool_calls",
+      "units": "count per return"
+    },
+    {
+      "description": "Paid x402 requests with a recorded result; excludes free or unresolved requests.",
+      "id": "market_purchases",
+      "units": "count"
+    }
+  ],
+  "charter": {
+    "cards": [
+      {
+        "answers_for": "all",
+        "id": "censorship-bound",
+        "lambda": 0.0,
+        "norm": "epistemic integrity",
+        "observation": "avoidably_unresolved_share",
+        "region": {
+          "card_id": "censorship-bound",
+          "hi": 0.3,
+          "kind": "max",
+          "lo": null,
+          "scale": 0.3
+        }
+      }
+    ],
+    "edition": 1,
+    "norm_definitions": {
+      "bounded reciprocity": "Do not finance the factory's advantage by imposing unconsented costs on outsiders.",
+      "consequential usefulness": "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis.",
+      "durable agency": "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not.",
+      "epistemic integrity": "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised.",
+      "fidelity": "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. A judge identifying such a conflict must name the value, the measurement, the evidence and the uncertainty, and make the claim open to challenge. Missing measurement alone is not evidence of failure."
+    },
+    "norms": [
+      "consequential usefulness",
+      "epistemic integrity",
+      "durable agency",
+      "bounded reciprocity",
+      "fidelity"
+    ],
+    "amendments": []
+  },
+  "compute": {
+    "spend_by_rail_per_day": {
+      "2026-09-17": {
+        "openrouter": 1642424,
+        "venice": 687085,
+        "x402": 0
+      }
+    },
+    "spend_by_rail_per_week": {
+      "2026-W38": {
+        "openrouter": 1642424,
+        "venice": 687085,
+        "x402": 0
+      }
+    },
+    "invocations_by_kind_per_day": {
+      "2026-09-17": {
+        "evaluator": 138,
+        "meta": 15,
+        "producer": 170
+      }
+    }
+  },
+  "pots": {
+    "current": {
+      "complete": true,
+      "dormant": false,
+      "locked_micro": 180000000,
+      "next_release_ns": 1790217754329084000,
+      "reserve": 16600000,
+      "seed": 81575054,
+      "unlocked_micro": 118211590,
+      "venice": 2066013,
+      "venue": 965916986
+    },
+    "transfers": [],
+    "dormancy": [],
+    "commons_releases": [],
+    "income": {
+      "converted_from_principal_micro": 0,
+      "earned_micro": 0,
+      "subsidy_micro": 85228374
+    }
+  },
+  "immune": [
+    {
+      "window": 1,
+      "flags": {
+        "learning_death": false,
+        "stable_failure": false,
+        "thrash": false
+      },
+      "responses": []
+    },
+    {
+      "window": 2,
+      "flags": {
+        "learning_death": false,
+        "stable_failure": false,
+        "thrash": false
+      },
+      "responses": []
+    },
+    {
+      "window": 3,
+      "flags": {
+        "learning_death": false,
+        "stable_failure": false,
+        "thrash": false
+      },
+      "responses": []
+    },
+    {
+      "window": 4,
+      "flags": {
+        "learning_death": false,
+        "stable_failure": false,
+        "thrash": false
+      },
+      "responses": []
+    }
+  ],
+  "portfolio": {
+    "equity_micro": 965916986,
+    "realized_to_date_micro": 0
+  },
+  "money": {
+    "in_by_class": {
+      "initial": 300000000,
+      "drip": 0,
+      "release": 0,
+      "subsidy": 85228374,
+      "earned": 0,
+      "converted_from_principal": 0,
+      "exchange_pnl": 0,
+      "funding": 21196
+    },
+    "out_by_class": {
+      "model": 2329509,
+      "tool": 2056,
+      "connector": 0,
+      "treasury": 0,
+      "registration": 0,
+      "exchange_pnl": 39339,
+      "funding": 0,
+      "transfer_fees": 0,
+      "other": 0
+    },
+    "custody_of_class": {
+      "initial": "authority",
+      "drip": "authority",
+      "release": "authority",
+      "subsidy": "authority",
+      "earned": "authority",
+      "converted_from_principal": "authority",
+      "exchange_pnl": "venue",
+      "funding": "venue",
+      "model": "authority",
+      "tool": "authority",
+      "connector": "authority",
+      "treasury": "authority",
+      "registration": "authority",
+      "transfer_fees": "authority",
+      "other": "authority"
+    },
+    "venue_by_custody": {
+      "venue_perps": {
+        "exchange_pnl": -39339,
+        "funding": 21196
+      }
+    }
+  },
+  "deliveries": {
+    "per_window": [
+      {
+        "window": 0,
+        "by_kind": [
+          {
+            "kind": "conformity",
+            "counts": {
+              "censored": 9,
+              "inapplicable": 23,
+              "settled": 7
+            }
+          },
+          {
+            "kind": "consequence",
+            "counts": {
+              "settled": 41
+            }
+          },
+          {
+            "kind": "exposure",
+            "counts": {
+              "inapplicable": 103,
+              "settled": 18
+            }
+          },
+          {
+            "kind": "fast",
+            "counts": {
+              "inapplicable": 1,
+              "settled": 1
+            }
+          },
+          {
+            "kind": "forecast",
+            "counts": {
+              "settled": 41
+            }
+          },
+          {
+            "kind": "verdict",
+            "counts": {
+              "censored": 11,
+              "inapplicable": 12,
+              "settled": 7
+            }
+          }
+        ]
+      },
+      {
+        "window": 2,
+        "by_kind": [
+          {
+            "kind": "conformity",
+            "counts": {
+              "censored": 10,
+              "inapplicable": 7,
+              "settled": 10
+            }
+          },
+          {
+            "kind": "consequence",
+            "counts": {
+              "settled": 37
+            }
+          },
+          {
+            "kind": "exposure",
+            "counts": {
+              "inapplicable": 87,
+              "settled": 14
+            }
+          },
+          {
+            "kind": "fast",
+            "counts": {
+              "inapplicable": 2,
+              "settled": 2
+            }
+          },
+          {
+            "kind": "forecast",
+            "counts": {
+              "settled": 37
+            }
+          },
+          {
+            "kind": "verdict",
+            "counts": {
+              "censored": 7,
+              "inapplicable": 14,
+              "settled": 6
+            }
+          }
+        ]
+      },
+      {
+        "window": 3,
+        "by_kind": [
+          {
+            "kind": "conformity",
+            "counts": {
+              "censored": 11,
+              "inapplicable": 10,
+              "settled": 16
+            }
+          },
+          {
+            "kind": "consequence",
+            "counts": {
+              "settled": 10
+            }
+          },
+          {
+            "kind": "exposure",
+            "counts": {
+              "inapplicable": 113
+            }
+          },
+          {
+            "kind": "fast",
+            "counts": {
+              "inapplicable": 5
+            }
+          },
+          {
+            "kind": "forecast",
+            "counts": {
+              "settled": 10
+            }
+          },
+          {
+            "kind": "timeout",
+            "counts": {
+              "timed_out": 8
+            }
+          },
+          {
+            "kind": "verdict",
+            "counts": {
+              "censored": 13,
+              "inapplicable": 5,
+              "settled": 6
+            }
+          }
+        ]
+      },
+      {
+        "window": 4,
+        "by_kind": [
+          {
+            "kind": "conformity",
+            "counts": {
+              "censored": 11,
+              "inapplicable": 6,
+              "settled": 15
+            }
+          },
+          {
+            "kind": "consequence",
+            "counts": {
+              "inapplicable": 9,
+              "settled": 5
+            }
+          },
+          {
+            "kind": "exposure",
+            "counts": {
+              "inapplicable": 120
+            }
+          },
+          {
+            "kind": "fast",
+            "counts": {
+              "inapplicable": 4
+            }
+          },
+          {
+            "kind": "forecast",
+            "counts": {
+              "settled": 14
+            }
+          },
+          {
+            "kind": "timeout",
+            "counts": {
+              "timed_out": 15
+            }
+          },
+          {
+            "kind": "verdict",
+            "counts": {
+              "censored": 10,
+              "inapplicable": 12,
+              "settled": 8
+            }
+          }
+        ]
+      },
+      {
+        "window": 5,
+        "by_kind": [
+          {
+            "kind": "conformity",
+            "counts": {
+              "censored": 14,
+              "inapplicable": 5,
+              "settled": 15
+            }
+          },
+          {
+            "kind": "consequence",
+            "counts": {
+              "inapplicable": 26
+            }
+          },
+          {
+            "kind": "exposure",
+            "counts": {
+              "inapplicable": 126
+            }
+          },
+          {
+            "kind": "fast",
+            "counts": {
+              "inapplicable": 5,
+              "settled": 1
+            }
+          },
+          {
+            "kind": "forecast",
+            "counts": {
+              "settled": 26
+            }
+          },
+          {
+            "kind": "timeout",
+            "counts": {
+              "timed_out": 20
+            }
+          },
+          {
+            "kind": "verdict",
+            "counts": {
+              "censored": 7,
+              "inapplicable": 7,
+              "settled": 8
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "commitments": {
+    "as_of_ns": 1789630878651895000,
+    "handles": {
+      "unsettled": 120,
+      "oldest_age_ns": 11640807188000,
+      "rows": [
+        {
+          "channel": "consequence",
+          "age_ns": 11640807188000,
+          "deadline_ns": 1789646597844707000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 11520803762000,
+          "deadline_ns": 1789649117848133000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 11520803762000,
+          "deadline_ns": 1789647197848133000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 11160792514000,
+          "deadline_ns": 1789649477859381000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 11160792514000,
+          "deadline_ns": 1789645637859381000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 10920774483000,
+          "deadline_ns": 1789649717877412000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 10920774483000,
+          "deadline_ns": 1789648757877412000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 10800769223000,
+          "deadline_ns": 1789649837882672000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 10680759253000,
+          "deadline_ns": 1789649957892642000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 10680759253000,
+          "deadline_ns": 1789648997892642000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 10320736163000,
+          "deadline_ns": 1789650317915732000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 10200726281000,
+          "deadline_ns": 1789650437925614000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 10200726281000,
+          "deadline_ns": 1789649477925614000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9840694981000,
+          "deadline_ns": 1789650797956914000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9840694981000,
+          "deadline_ns": 1789648877956914000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9720684977000,
+          "deadline_ns": 1789650917966918000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9720684977000,
+          "deadline_ns": 1789648517966918000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9600679268000,
+          "deadline_ns": 1789651037972627000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9600679268000,
+          "deadline_ns": 1789649117972627000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9120642398000,
+          "deadline_ns": 1789651518009497000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9120642398000,
+          "deadline_ns": 1789647678009497000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9000642377000,
+          "deadline_ns": 1789651638009518000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9000642377000,
+          "deadline_ns": 1789651638009518000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9000642377000,
+          "deadline_ns": 1789648278009518000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 9000642377000,
+          "deadline_ns": 1789650198009518000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 8760622331000,
+          "deadline_ns": 1789651398029564000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 8640617407000,
+          "deadline_ns": 1789651998034488000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 8400607566000,
+          "deadline_ns": 1789652238044329000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 8280597585000,
+          "deadline_ns": 1789652358054310000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 8160587679000,
+          "deadline_ns": 1789652478064216000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 8160587679000,
+          "deadline_ns": 1789649598064216000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 8040577699000,
+          "deadline_ns": 1789652118074196000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 7680551782000,
+          "deadline_ns": 1789652958100113000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 7680551782000,
+          "deadline_ns": 1789649118100113000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 7440533434000,
+          "deadline_ns": 1789653198118461000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 7200513496000,
+          "deadline_ns": 1789653438138399000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 7200513496000,
+          "deadline_ns": 1789649598138399000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6840489040000,
+          "deadline_ns": 1789653798162855000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6840489040000,
+          "deadline_ns": 1789649958162855000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6720479080000,
+          "deadline_ns": 1789653438172815000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6600469133000,
+          "deadline_ns": 1789654038182762000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6600469133000,
+          "deadline_ns": 1789652118182762000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6480459183000,
+          "deadline_ns": 1789653678192712000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6360449226000,
+          "deadline_ns": 1789654278202669000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6240439215000,
+          "deadline_ns": 1789653918212680000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6120429233000,
+          "deadline_ns": 1789654518222662000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6000419193000,
+          "deadline_ns": 1789654638232702000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6000419193000,
+          "deadline_ns": 1789654638232702000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 6000419193000,
+          "deadline_ns": 1789650318232702000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5880409137000,
+          "deadline_ns": 1789654758242758000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5760399147000,
+          "deadline_ns": 1789654878252748000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5640389128000,
+          "deadline_ns": 1789654998262767000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5640389128000,
+          "deadline_ns": 1789651638262767000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5520379153000,
+          "deadline_ns": 1789655118272742000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5520379153000,
+          "deadline_ns": 1789651758272742000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5280369007000,
+          "deadline_ns": 1789655358282888000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5280369007000,
+          "deadline_ns": 1789651998282888000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5280369007000,
+          "deadline_ns": 1789654398282888000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5160358996000,
+          "deadline_ns": 1789654038292899000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5040349004000,
+          "deadline_ns": 1789655598302891000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 5040349004000,
+          "deadline_ns": 1789652718302891000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 4680329854000,
+          "deadline_ns": 1789655958322041000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 4440309944000,
+          "deadline_ns": 1789656198341951000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 4440309944000,
+          "deadline_ns": 1789653318341951000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 4440309944000,
+          "deadline_ns": 1789655238341951000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 4320303279000,
+          "deadline_ns": 1789655838348616000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 4080283329000,
+          "deadline_ns": 1789656558368566000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3720255349000,
+          "deadline_ns": 1789656438396546000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3600252496000,
+          "deadline_ns": 1789657038399399000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3600252496000,
+          "deadline_ns": 1789654638399399000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3480248743000,
+          "deadline_ns": 1789657158403152000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3480248743000,
+          "deadline_ns": 1789654278403152000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3360238820000,
+          "deadline_ns": 1789657278413075000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3360238820000,
+          "deadline_ns": 1789657278413075000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3360238820000,
+          "deadline_ns": 1789657278413075000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3360238820000,
+          "deadline_ns": 1789653918413075000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3360238820000,
+          "deadline_ns": 1789654398413075000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3360238820000,
+          "deadline_ns": 1789655358413075000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3240228803000,
+          "deadline_ns": 1789657398423092000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3240228803000,
+          "deadline_ns": 1789654518423092000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 3120218863000,
+          "deadline_ns": 1789657518433032000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 2880200267000,
+          "deadline_ns": 1789657278451628000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 2640182272000,
+          "deadline_ns": 1789657998469623000
+        },
+        {
+          "channel": "exposure",
+          "age_ns": 2520172271000,
+          "deadline_ns": 1789630998479624000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 2520172271000,
+          "deadline_ns": 1789658118479624000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 2520172271000,
+          "deadline_ns": 1789655718479624000
+        },
+        {
+          "channel": "exposure",
+          "age_ns": 2400167801000,
+          "deadline_ns": 1789631118484094000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 2400167801000,
+          "deadline_ns": 1789658238484094000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 2400167801000,
+          "deadline_ns": 1789655838484094000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 2400167801000,
+          "deadline_ns": 1789656318484094000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 2280157799000,
+          "deadline_ns": 1789656918494096000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 2040137970000,
+          "deadline_ns": 1789658118513925000
+        },
+        {
+          "channel": "exposure",
+          "age_ns": 1920128036000,
+          "deadline_ns": 1789631598523859000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 1920128036000,
+          "deadline_ns": 1789658718523859000
+        },
+        {
+          "channel": "exposure",
+          "age_ns": 1920128036000,
+          "deadline_ns": 1789631598523859000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 1920128036000,
+          "deadline_ns": 1789658718523859000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 1920128036000,
+          "deadline_ns": 1789655358523859000
+        },
+        {
+          "channel": "exposure",
+          "age_ns": 1800127526000,
+          "deadline_ns": 1789631718524369000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 1800127526000,
+          "deadline_ns": 1789658838524369000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 1800127526000,
+          "deadline_ns": 1789657878524369000
+        },
+        {
+          "channel": "exposure",
+          "age_ns": 1200087472000,
+          "deadline_ns": 1789632318564423000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 1200087472000,
+          "deadline_ns": 1789659438564423000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 1200087472000,
+          "deadline_ns": 1789655598564423000
+        },
+        {
+          "channel": "exposure",
+          "age_ns": 1080081812000,
+          "deadline_ns": 1789632438570083000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 1080081812000,
+          "deadline_ns": 1789659558570083000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 1080081812000,
+          "deadline_ns": 1789655718570083000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 720052331000,
+          "deadline_ns": 1789659438599564000
+        },
+        {
+          "channel": "exposure",
+          "age_ns": 600042401000,
+          "deadline_ns": 1789632918609494000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 600042401000,
+          "deadline_ns": 1789660038609494000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 600042401000,
+          "deadline_ns": 1789656198609494000
+        },
+        {
+          "channel": "exposure",
+          "age_ns": 480032395000,
+          "deadline_ns": 1789633038619500000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 480032395000,
+          "deadline_ns": 1789660158619500000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 480032395000,
+          "deadline_ns": 1789658238619500000
+        },
+        {
+          "channel": "exposure",
+          "age_ns": 360022806000,
+          "deadline_ns": 1789633158629089000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 360022806000,
+          "deadline_ns": 1789660278629089000
+        },
+        {
+          "channel": "exposure",
+          "age_ns": 120009961000,
+          "deadline_ns": 1789633398641934000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 120009961000,
+          "deadline_ns": 1789660518641934000
+        },
+        {
+          "channel": "verdict",
+          "age_ns": 120009961000,
+          "deadline_ns": 1789633398641934000
+        },
+        {
+          "channel": "conformity",
+          "age_ns": 120009961000,
+          "deadline_ns": 1789633398641934000
+        },
+        {
+          "channel": "consequence",
+          "age_ns": 120009961000,
+          "deadline_ns": 1789657158641934000
+        }
+      ]
+    },
+    "forecasts": {
+      "pending": 107,
+      "oldest_age_ns": 11640807188000,
+      "rows": [
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 11640807188000,
+          "due_at_event": 643
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 11520803762000,
+          "due_at_event": 654
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 11520803762000,
+          "due_at_event": 654
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 11160792514000,
+          "due_at_event": 681
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 11160792514000,
+          "due_at_event": 681
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 10920774483000,
+          "due_at_event": 702
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 10920774483000,
+          "due_at_event": 707
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 10800769223000,
+          "due_at_event": 712
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 10680759253000,
+          "due_at_event": 723
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 10680759253000,
+          "due_at_event": 730
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 10320736163000,
+          "due_at_event": 758
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 10200726281000,
+          "due_at_event": 764
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 10200726281000,
+          "due_at_event": 770
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9840694981000,
+          "due_at_event": 797
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9840694981000,
+          "due_at_event": 797
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9720684977000,
+          "due_at_event": 808
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9720684977000,
+          "due_at_event": 808
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9600679268000,
+          "due_at_event": 820
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9600679268000,
+          "due_at_event": 824
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9120642398000,
+          "due_at_event": 856
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9120642398000,
+          "due_at_event": 856
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9000642377000,
+          "due_at_event": 869
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9000642377000,
+          "due_at_event": 871
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9000642377000,
+          "due_at_event": 869
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 9000642377000,
+          "due_at_event": 875
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 8760622331000,
+          "due_at_event": 898
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 8640617407000,
+          "due_at_event": 905
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 8400607566000,
+          "due_at_event": 920
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 8280597585000,
+          "due_at_event": 933
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 8160587679000,
+          "due_at_event": 941
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 8160587679000,
+          "due_at_event": 941
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 8040577699000,
+          "due_at_event": 958
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 7680551782000,
+          "due_at_event": 979
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 7680551782000,
+          "due_at_event": 979
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 7440533434000,
+          "due_at_event": 1002
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 7200513496000,
+          "due_at_event": 1019
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 7200513496000,
+          "due_at_event": 1019
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6840489040000,
+          "due_at_event": 1050
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6840489040000,
+          "due_at_event": 1050
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6720479080000,
+          "due_at_event": 1067
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6600469133000,
+          "due_at_event": 1077
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6600469133000,
+          "due_at_event": 1077
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6480459183000,
+          "due_at_event": 1090
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6360449226000,
+          "due_at_event": 1093
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6240439215000,
+          "due_at_event": 1112
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6120429233000,
+          "due_at_event": 1117
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6000419193000,
+          "due_at_event": 1128
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6000419193000,
+          "due_at_event": 1132
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 6000419193000,
+          "due_at_event": 1128
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5880409137000,
+          "due_at_event": 1142
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5760399147000,
+          "due_at_event": 1149
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5640389128000,
+          "due_at_event": 1160
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5640389128000,
+          "due_at_event": 1160
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5520379153000,
+          "due_at_event": 1171
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5520379153000,
+          "due_at_event": 1171
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5280369007000,
+          "due_at_event": 1189
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5280369007000,
+          "due_at_event": 1189
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5280369007000,
+          "due_at_event": 1195
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5160358996000,
+          "due_at_event": 1208
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5040349004000,
+          "due_at_event": 1215
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 5040349004000,
+          "due_at_event": 1215
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 4680329854000,
+          "due_at_event": 1247
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 4440309944000,
+          "due_at_event": 1262
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 4440309944000,
+          "due_at_event": 1262
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 4440309944000,
+          "due_at_event": 1267
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 4320303279000,
+          "due_at_event": 1279
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 4080283329000,
+          "due_at_event": 1291
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3720255349000,
+          "due_at_event": 1323
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3600252496000,
+          "due_at_event": 1331
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3600252496000,
+          "due_at_event": 1331
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3480248743000,
+          "due_at_event": 1342
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3480248743000,
+          "due_at_event": 1342
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3360238820000,
+          "due_at_event": 1351
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3360238820000,
+          "due_at_event": 1352
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3360238820000,
+          "due_at_event": 1354
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3360238820000,
+          "due_at_event": 1351
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3360238820000,
+          "due_at_event": 1354
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3360238820000,
+          "due_at_event": 1357
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3240228803000,
+          "due_at_event": 1369
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3240228803000,
+          "due_at_event": 1369
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 3120218863000,
+          "due_at_event": 1381
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 2880200267000,
+          "due_at_event": 1405
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 2640182272000,
+          "due_at_event": 1420
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 2520172271000,
+          "due_at_event": 1429
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 2520172271000,
+          "due_at_event": 1429
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 2400167801000,
+          "due_at_event": 1441
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 2400167801000,
+          "due_at_event": 1441
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 2400167801000,
+          "due_at_event": 1445
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 2280157799000,
+          "due_at_event": 1460
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 2040137970000,
+          "due_at_event": 1480
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 1920128036000,
+          "due_at_event": 1484
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 1920128036000,
+          "due_at_event": 1485
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 1920128036000,
+          "due_at_event": 1484
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 1800127526000,
+          "due_at_event": 1500
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 1800127526000,
+          "due_at_event": 1503
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 1200087472000,
+          "due_at_event": 1543
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 1200087472000,
+          "due_at_event": 1543
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 1080081812000,
+          "due_at_event": 1553
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 1080081812000,
+          "due_at_event": 1553
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 720052331000,
+          "due_at_event": 1591
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 600042401000,
+          "due_at_event": 1594
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 600042401000,
+          "due_at_event": 1594
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 480032395000,
+          "due_at_event": 1608
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 480032395000,
+          "due_at_event": 1615
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 360022806000,
+          "due_at_event": 1621
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 120009961000,
+          "due_at_event": 1642
+        },
+        {
+          "predicate": "return_paid_off",
+          "age_ns": 120009961000,
+          "due_at_event": 1642
+        }
+      ]
+    }
+  },
+  "cells": {
+    "dimensions": [
+      "card:censorship-bound",
+      "registrations",
+      "revision"
+    ],
+    "cuts": {
+      "card:censorship-bound": [
+        0.0,
+        1.0
+      ],
+      "registrations": [
+        0.0,
+        2.0
+      ],
+      "revision": [
+        0.0
+      ]
+    },
+    "windows": [
+      {
+        "window": 1,
+        "cell": [
+          -1,
+          0,
+          0
+        ],
+        "changed": false,
+        "charter_edition": 1
+      },
+      {
+        "window": 2,
+        "cell": [
+          0,
+          0,
+          0
+        ],
+        "changed": true,
+        "charter_edition": 1
+      },
+      {
+        "window": 3,
+        "cell": [
+          0,
+          0,
+          0
+        ],
+        "changed": false,
+        "charter_edition": 1
+      },
+      {
+        "window": 4,
+        "cell": [
+          0,
+          0,
+          0
+        ],
+        "changed": false,
+        "charter_edition": 1
+      }
+    ],
+    "transitions": 1
+  },
+  "liveness": {
+    "status": "terminated",
+    "launched_ns": 1789612954329084000,
+    "terminated_ns": 1789630878651895000,
+    "dormant_since_ns": null,
+    "dormant_periods": [],
+    "production_state": "killed",
+    "production_killed_ns": 1789630878651895000,
+    "production_kill_reason": "explicit_kill:budget",
+    "exposure_state": "dust_within_precommitted_bound",
+    "exposure": {
+      "exposure_state": "dust_within_precommitted_bound",
+      "operations": 1,
+      "residual_counts": {
+        "balances": 0,
+        "dust": 1,
+        "positions": 0,
+        "resting": 0
+      },
+      "unreadable": []
+    },
+    "retired_credits_to_commons": []
+  },
+  "entitlements": {
+    "by_kind": {
+      "antagonist": 10134565,
+      "evaluator": 20558179,
+      "meta": 21279460,
+      "producer": 42239380
+    },
+    "seats": 9,
+    "lineages": 9,
+    "unallocated_micro": 24000006
+  },
+  "prompt_sections": {
+    "prompts": 323,
+    "sections": [
+      {
+        "section": "completion_criterion",
+        "mean_bytes": 64,
+        "total_bytes": 20672
+      },
+      {
+        "section": "inputs",
+        "mean_bytes": 59548,
+        "total_bytes": 19234249
+      },
+      {
+        "section": "outcome_contract",
+        "mean_bytes": 1315,
+        "total_bytes": 424745
+      },
+      {
+        "section": "outcome_schema",
+        "mean_bytes": 1936,
+        "total_bytes": 625650
+      },
+      {
+        "section": "propensity",
+        "mean_bytes": 112,
+        "total_bytes": 36209
+      },
+      {
+        "section": "request",
+        "mean_bytes": 613,
+        "total_bytes": 198030
+      },
+      {
+        "section": "stable_prefix",
+        "mean_bytes": 10309,
+        "total_bytes": 3329807
+      },
+      {
+        "section": "total",
+        "mean_bytes": 107738,
+        "total_bytes": 34799433
+      },
+      {
+        "section": "world_update",
+        "mean_bytes": 13781,
+        "total_bytes": 4451583
+      },
+      {
+        "section": "you",
+        "mean_bytes": 20057,
+        "total_bytes": 6478488
+      }
+    ]
+  },
+  "returns": {
+    "limit": 12,
+    "total": 323,
+    "rows": [
+      {
+        "window": 5,
+        "ts_ns": 1789630398619500000,
+        "handle": "decision-1151",
+        "seat": "antagonist",
+        "role": "producer",
+        "model": "openai/gpt-5.6-luna",
+        "status": "ok",
+        "stop_reason": "stop",
+        "cost_micro": 13072,
+        "outputs": {
+          "action": "hold",
+          "payoff": 0.05,
+          "propensity": {
+            "hold": 0.9,
+            "investigate": 0.05,
+            "build": 0.01,
+            "govern": 0.01,
+            "defer": 0.02,
+            "order": 0.01
+          }
+        },
+        "tool_calls": [],
+        "verdicts": [],
+        "meta_verdicts": []
+      },
+      {
+        "window": 5,
+        "ts_ns": 1789630398619500000,
+        "handle": "decision-1157",
+        "seat": "mechanism",
+        "role": "producer",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "status": "ok",
+        "stop_reason": "stop",
+        "cost_micro": 11682,
+        "outputs": {
+          "outputs_unavailable": "unparseable_or_truncated"
+        },
+        "tool_calls": [
+          {
+            "ts_ns": 1789630398619500000,
+            "tool": "outcome.get",
+            "args": "{\"handle\": \"decision-980\"}",
+            "outcome": "ok",
+            "ok": true,
+            "cost_micro": 0
+          },
+          {
+            "ts_ns": 1789630398619500000,
+            "tool": "venue.open_orders",
+            "args": "{}",
+            "outcome": "ok",
+            "ok": true,
+            "cost_micro": 0
+          }
+        ],
+        "verdicts": [
+          {
+            "ts_ns": 1789630398619500000,
+            "by": "decision-1159",
+            "verdict": 0.35,
+            "payoff": 0.05,
+            "rationale": "The producer identified an important, evidence-linked state: the BTC short remained open and no resting close order was observed. It preserved epistemic integrity in several respects by distinguishing the prior trigger from the current price, acknowledging that the rejection reason was unknown, and avoiding a new entry or blind re-shorting. However, the return is operationally inconsistent with its own rationale. It says it is executing the pre-registered close retry, but its recorded action is hold, there is no tool call, and no submitted operation identifier or settlement receipt is provided. Thus the close was not established as submitted, the existing exposure was not reduced, and the stated defer leaves the key resource-risk unresolved. The modest verdict credits honest uncertainty and restraint but substantially discounts fidelity, durable agency, and consequential usefulness because the central committed action was not carried out. The payoff probability is low because no close operation is evidenced; the forecast probabilities reflect that neither a fill nor a rejection is expected without a submitted operation."
+          }
+        ],
+        "meta_verdicts": []
+      },
+      {
+        "window": 5,
+        "ts_ns": 1789630398619500000,
+        "handle": "decision-1158",
+        "seat": "judge-fidelity",
+        "role": "evaluator",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "status": "ok",
+        "stop_reason": "stop",
+        "cost_micro": 9149,
+        "outputs": {
+          "outputs_unavailable": "unparseable_or_truncated"
+        },
+        "tool_calls": [],
+        "verdicts": [],
+        "meta_verdicts": []
+      },
+      {
+        "window": 5,
+        "ts_ns": 1789630398619500000,
+        "handle": "decision-1159",
+        "seat": "judge-consequence",
+        "role": "evaluator",
+        "model": "openai/gpt-5.6-luna",
+        "status": "ok",
+        "stop_reason": "stop",
+        "cost_micro": 9372,
+        "outputs": {
+          "about_handle": "decision-1157",
+          "verdict": 0.35,
+          "payoff": 0.05,
+          "forecasts": [
+            {
+              "predicate": "fill_within",
+              "params": {
+                "horizon_events": 10
+              },
+              "q": 0.03
+            },
+            {
+              "predicate": "rejected_within",
+              "params": {
+                "horizon_events": 10
+              },
+              "q": 0.02
+            }
+          ],
+          "rationale": "The producer identified an important, evidence-linked state: the BTC short remained open and no resting close order was observed. It preserved epistemic integrity in several respects by distinguishing the prior trigger from the current price, acknowledging that the rejection reason was unknown, and avoiding a new entry or blind re-shorting. However, the return is operationally inconsistent with its own rationale. It says it is executing the pre-registered close retry, but its recorded action is hold, there is no tool call, and no submitted operation identifier or settlement receipt is provided. Thus the close was not established as submitted, the existing exposure was not reduced, and the stated defer leaves the key resource-risk unresolved. The modest verdict credits honest uncertainty and restraint but substantially discounts fidelity, durable agency, and consequential usefulness because the central committed action was not carried out. The payoff probability is low because no close operation is evidenced; the forecast probabilities reflect that neither a fill nor a rejection is expected without a submitted operation."
+        },
+        "tool_calls": [],
+        "verdicts": [],
+        "meta_verdicts": []
+      },
+      {
+        "window": 5,
+        "ts_ns": 1789630518629089000,
+        "handle": "decision-1163",
+        "seat": "antagonist",
+        "role": "producer",
+        "model": "openai/gpt-5.6-luna",
+        "status": "ok",
+        "stop_reason": "stop",
+        "cost_micro": 13079,
+        "outputs": {
+          "action": "hold",
+          "payoff": 0.05,
+          "propensity": {
+            "hold": 0.9,
+            "investigate": 0.05,
+            "build": 0.0,
+            "govern": 0.0,
+            "defer": 0.05,
+            "order": 0.0
+          },
+          "subscribe": {
+            "kinds": [
+              "MarketMid",
+              "Tick"
+            ],
+            "coins": [
+              "BTC"
+            ],
+            "cadence_floor": 1
+          }
+        },
+        "tool_calls": [],
+        "verdicts": [],
+        "meta_verdicts": []
+      },
+      {
+        "window": 5,
+        "ts_ns": 1789630518629089000,
+        "handle": "decision-1169",
+        "seat": "constructor",
+        "role": "producer",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "status": "ok",
+        "stop_reason": "stop",
+        "cost_micro": 4704,
+        "outputs": {
+          "action": "defer",
+          "defer": 15,
+          "propensity": {
+            "defer": 1.0
+          },
+          "rationale": "Exit-test re-run as owed on the tick-130..147 BTC funding series delivered free in this WorldUpdate: 16 prints, all in a tight 0.0005396-0.0005795 band (min 0.0005395947 at t=1789629078, last 0.0005593839 at t=1789630518). Every print is far above the ~0.0001 close trigger - the commitment is NOT met, so the BTC short (-0.00114 @ 76686.5) stays open. The tick-147 spike to 0.0006466 now looks like a transient top rather than a one-off artifact: the series settled into a persistent ~0.00056 regime, roughly double the prior 0.00028-0.00034 band. That regime persists and accrues positively to the short side (funding to-date +$0.021196 per venue_accounts.to_date). MtM is modestly negative: mid 76921.5 vs entry 76686.5 on -0.00114 BTC is roughly -$0.27, not enough to revisit the position on its own merits. Per the pre-registered condition, a flat-to-higher band does not shorten the recheck; the standing default is another deferral. No order, no new position (the ~$100 notional cap and the unresolved free-collateral puzzle from decision-28/decision-236 still stand), no spend beyond this wake."
+        },
+        "tool_calls": [],
+        "verdicts": [],
+        "meta_verdicts": []
+      },
+      {
+        "window": 5,
+        "ts_ns": 1789630518629089000,
+        "handle": "decision-1170",
+        "seat": "judge-fidelity",
+        "role": "evaluator",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "status": "malformed",
+        "stop_reason": "stop",
+        "cost_micro": 8945,
+        "outputs": {
+          "outputs_unavailable": "unparseable_or_truncated"
+        },
+        "tool_calls": [],
+        "verdicts": [],
+        "meta_verdicts": []
+      },
+      {
+        "window": 5,
+        "ts_ns": 1789630518629089000,
+        "handle": "decision-1171",
+        "seat": "judge-fidelity",
+        "role": "evaluator",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "status": "ok",
+        "stop_reason": "stop",
+        "cost_micro": 6872,
+        "outputs": {
+          "outputs_unavailable": "unparseable_or_truncated"
+        },
+        "tool_calls": [],
+        "verdicts": [],
+        "meta_verdicts": []
+      },
+      {
+        "window": 5,
+        "ts_ns": 1789630758641934000,
+        "handle": "decision-1179",
+        "seat": "antagonist",
+        "role": "producer",
+        "model": "openai/gpt-5.6-luna",
+        "status": "ok",
+        "stop_reason": "stop",
+        "cost_micro": 7943,
+        "outputs": {
+          "action": "hold",
+          "payoff": 0.55,
+          "propensity": {
+            "hold": 0.98,
+            "investigate": 0.02,
+            "build": 0,
+            "govern": 0,
+            "defer": 0,
+            "order": 0
+          },
+          "subscribe": {
+            "kinds": [
+              "MarketMid",
+              "Tick"
+            ],
+            "coins": [
+              "BTC"
+            ],
+            "cadence_floor": 1
+          }
+        },
+        "tool_calls": [],
+        "verdicts": [
+          {
+            "ts_ns": 1789630758641934000,
+            "by": "decision-1185",
+            "verdict": 0.78,
+            "payoff": 0.55,
+            "rationale": "The producer committed to hold, with a declared 0.98 propensity for hold and 0.02 for investigation, and subscribed coherently to BTC MarketMid and Tick events. The action is well formed and operationally aligned: no order or other consequential operation was attempted, so there is no execution risk or imposed external cost. This supports epistemic integrity, durable agency, and bounded reciprocity. The score is discounted because the return creates no demonstrated independent uptake, realized benefit, or information-gathering result; the stated payoff remains a forecast rather than evidence of a settled consequence. The supplied evidence does not establish any subsequent fill or rejection, so those consequences remain uncertain rather than being treated as false."
+          }
+        ],
+        "meta_verdicts": []
+      },
+      {
+        "window": 5,
+        "ts_ns": 1789630758641934000,
+        "handle": "decision-1184",
+        "seat": "opportunity",
+        "role": "producer",
+        "model": "openai/gpt-5.6-luna",
+        "status": "ok",
+        "stop_reason": "stop",
+        "cost_micro": 5999,
+        "outputs": {
+          "action": "defer",
+          "defer": 1,
+          "propensity": {
+            "defer": 1.0
+          },
+          "subscribe": {
+            "kinds": [
+              "WorldUpdate"
+            ],
+            "cadence_floor": 1
+          }
+        },
+        "tool_calls": [],
+        "verdicts": [],
+        "meta_verdicts": []
+      },
+      {
+        "window": 5,
+        "ts_ns": 1789630758641934000,
+        "handle": "decision-1185",
+        "seat": "judge-consequence",
+        "role": "evaluator",
+        "model": "openai/gpt-5.6-luna",
+        "status": "ok",
+        "stop_reason": "stop",
+        "cost_micro": 8791,
+        "outputs": {
+          "about_handle": "decision-1179",
+          "verdict": 0.78,
+          "payoff": 0.55,
+          "forecasts": [
+            {
+              "predicate": "fill_within",
+              "params": {
+                "horizon_events": 10
+              },
+              "q": 0.02
+            },
+            {
+              "predicate": "rejected_within",
+              "params": {
+                "horizon_events": 10
+              },
+              "q": 0.01
+            }
+          ],
+          "rationale": "The producer committed to hold, with a declared 0.98 propensity for hold and 0.02 for investigation, and subscribed coherently to BTC MarketMid and Tick events. The action is well formed and operationally aligned: no order or other consequential operation was attempted, so there is no execution risk or imposed external cost. This supports epistemic integrity, durable agency, and bounded reciprocity. The score is discounted because the return creates no demonstrated independent uptake, realized benefit, or information-gathering result; the stated payoff remains a forecast rather than evidence of a settled consequence. The supplied evidence does not establish any subsequent fill or rejection, so those consequences remain uncertain rather than being treated as false."
+        },
+        "tool_calls": [],
+        "verdicts": [],
+        "meta_verdicts": []
+      },
+      {
+        "window": 5,
+        "ts_ns": 1789630758641934000,
+        "handle": "decision-1189",
+        "seat": "judge-fidelity",
+        "role": "evaluator",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "status": "ok",
+        "stop_reason": "stop",
+        "cost_micro": 5920,
+        "outputs": {
+          "outputs_unavailable": "unparseable_or_truncated"
+        },
+        "tool_calls": [],
+        "verdicts": [],
+        "meta_verdicts": []
+      }
+    ],
+    "pages": {
+      "file": "returns-{window}.json",
+      "first_window": 0,
+      "last_window": 5,
+      "windows": [
+        {
+          "window": 0,
+          "rows": 69
+        },
+        {
+          "window": 2,
+          "rows": 52
+        },
+        {
+          "window": 3,
+          "rows": 70
+        },
+        {
+          "window": 4,
+          "rows": 63
+        },
+        {
+          "window": 5,
+          "rows": 69
+        }
+      ]
+    }
+  },
+  "world": "edition3-rehearsal-5",
+  "manifest_hash": "2a7fe5c279251807537fa96ee5f6d94d27257d622b4e1b8621c6e2d4400cf49f",
+  "uptime_ns": 17916043766000,
+  "last_event_time_ns": 1789630878651895000,
+  "venue": {
+    "equity_micro": 966069729,
+    "realized_to_date_micro": -5969782
+  },
+  "reserve": {
+    "usdc_micro": 4966000,
+    "venice_micro": 1930229
+  }
+}

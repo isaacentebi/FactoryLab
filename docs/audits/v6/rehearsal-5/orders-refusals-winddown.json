@@ -1,0 +1,1649 @@
+[
+ {
+  "kind": "order.infeasible",
+  "handle": "decision-28",
+  "args": null,
+  "reason": "order collateral exceeds venue free collateral",
+  "result": null,
+  "venue_available_usd": "105.734970",
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.intent",
+  "handle": "decision-58",
+  "args": {
+   "coin": "BTC",
+   "market": "perp",
+   "side": "sell",
+   "size": "0.001"
+  },
+  "reason": null,
+  "result": {
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.acknowledged",
+  "handle": "decision-58",
+  "args": null,
+  "reason": null,
+  "result": {
+   "avg_px": "76681.0",
+   "error": null,
+   "filled_size": "0.001",
+   "order_id": "60320632374",
+   "status": "filled"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.intent",
+  "handle": "decision-170",
+  "args": {
+   "coin": "BTC",
+   "market": "perp",
+   "side": "sell",
+   "size": "0.00014"
+  },
+  "reason": null,
+  "result": {
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.acknowledged",
+  "handle": "decision-170",
+  "args": null,
+  "reason": null,
+  "result": {
+   "avg_px": "76726.0",
+   "error": null,
+   "filled_size": "0.00014",
+   "order_id": "60321946378",
+   "status": "filled"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.intent",
+  "handle": "decision-392",
+  "args": {
+   "coin": "BTC",
+   "market": "perp",
+   "side": "sell",
+   "size": "0.00015"
+  },
+  "reason": null,
+  "result": {
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "submit: submit exception: ReadTimeout; lookup: order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "lookup exception: ServerError",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "order.uncertain",
+  "handle": "decision-392",
+  "args": null,
+  "reason": null,
+  "result": {
+   "error": "order not observed",
+   "status": "uncertain"
+  },
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "winddown.op",
+  "handle": null,
+  "args": null,
+  "reason": null,
+  "result": null,
+  "venue_available_usd": null,
+  "op": "close",
+  "op_id": "wd-131280f1ccd4fe8cbee92847",
+  "disposition": null,
+  "exposure_state": null
+ },
+ {
+  "kind": "winddown.op_result",
+  "handle": null,
+  "args": null,
+  "reason": null,
+  "result": {
+   "avg_px": "76907.0",
+   "error": null,
+   "filled_size": "0.00114",
+   "order_id": "60336118093",
+   "status": "filled"
+  },
+  "venue_available_usd": null,
+  "op": "close",
+  "op_id": "wd-131280f1ccd4fe8cbee92847",
+  "disposition": "submitted",
+  "exposure_state": null
+ },
+ {
+  "kind": "winddown.reconciliation",
+  "handle": null,
+  "args": null,
+  "reason": null,
+  "result": null,
+  "venue_available_usd": null,
+  "op": null,
+  "op_id": null,
+  "disposition": null,
+  "exposure_state": "dust_within_precommitted_bound"
+ }
+]

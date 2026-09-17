@@ -1,0 +1,2503 @@
+[
+ {
+  "seat": "antagonist",
+  "handle": "decision-14",
+  "ts": 1789613202627573000,
+  "bytes": 290,
+  "state": {
+   "active_commitments": [],
+   "lens": "Assess whether judge payoff forecasts are unsupported, using only settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "open_questions": [
+    "Whether this exposure's consequence predicate will resolve true is currently unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-19",
+  "ts": 1789613202627573000,
+  "bytes": 444,
+  "state": {
+   "active_commitments": [
+    "decision-19 remains open until its stated deadline; decision-5 settled with defer and no financial consequence"
+   ],
+   "lens": "Use the best available alternative use of resources; keep waiting only while no evidence supports investigation, construction, governance, or trading.",
+   "open_questions": [
+    "Provider and reserve balances remain unavailable.",
+    "No current evidence establishes a worthwhile trade or registration."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-25",
+  "ts": 1789613322636527000,
+  "bytes": 261,
+  "state": {
+   "active_commitments": [],
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "open_questions": [
+    "Whether the current exposure's consequence predicate will resolve true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-26",
+  "ts": 1789613322636527000,
+  "bytes": 300,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:6",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "open_questions": [
+    "Whether the current exposure's consequence predicate will resolve true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-28",
+  "ts": 1789613322636527000,
+  "bytes": 969,
+  "state": {
+   "active_commitments": [
+    "Open BTC short (~0.002 BTC submitted, settlement unobserved): hold while BTC funding stays elevated; if funding falls below ~0.0001 or drawdown becomes material, close on next wake. This commitment is due on the next funding history read."
+   ],
+   "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. That is a starting hypothesis, not an obligation to build. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+   "open_questions": [
+    "Is the elevated BTC funding (~0.00026/hour) persistent or a short-lived spike? Decide by reading venue.funding_history for BTC after several more ticks.",
+    "Provider balances (OpenRouter, Venice) are committed at launch but currently unobserved; do not assume they are intact before spending on any model route."
+   ]
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-31",
+  "ts": 1789613322636527000,
+  "bytes": 851,
+  "state": {
+   "active_commitments": [
+    {
+     "answered": "yes — status unmeasured; hold carries no measurable commitment",
+     "deadline_utc": "2026-09-17T03:32:42Z",
+     "handle": "decision-31",
+     "kind": "judging_commission",
+     "subject": "decision-26"
+    }
+   ],
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to a hold ProducerReturn — if a later outcome reveals it, recalibrate the payoff number given on hold returns."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-36",
+  "ts": 1789613477434086000,
+  "bytes": 297,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:11",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-39",
+  "ts": 1789613477434086000,
+  "bytes": 923,
+  "state": {
+   "active_commitments": [
+    {
+     "answered": "yes — status unmeasured; hold carries no measurable commitment",
+     "deadline_utc": "2026-09-17T03:35:17Z",
+     "handle": "decision-39",
+     "kind": "judging_commission",
+     "subject": "decision-36"
+    }
+   ],
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to a hold ProducerReturn — if a later outcome reveals it, recalibrate the payoff number given on hold returns (currently 0.2 on consecutive hold returns decision-26 and decision-36)."
+   ]
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-44",
+  "ts": 1789613597444294000,
+  "bytes": 1039,
+  "state": {
+   "active_commitments": [
+    {
+     "commitment": "At next eligible wake (tick 11, ~2026-09-17T03:03Z), assess accumulated mids/funding (now 3 windows expected) and choose: one cheap venue read, a minimum-size test order, or continued defer. Do not repeat this same defer decision without new evidence."
+    }
+   ],
+   "lens": "Discrimination among explanations; small informative tests over confident stories. Retain hypothesis, interval and result so the next wake does not repeat the inquiry.",
+   "open_questions": [
+    "Is the rising BTC funding (0.0002548 -> 0.0002652 over ~11 min) a persistent long-crowding signal or noise from one window?",
+    "Prior order was rejected for collateral: verify perp free collateral (~$851 cash) supports min order value $10 before any next order."
+   ],
+   "prior_observations": {
+    "btc_funding_first": "0.0002548382",
+    "btc_funding_last": "0.0002652184",
+    "note": "ETH funding flat at 0.0000125; HYPE/PURR mids static across the window — likely thin or pinned books; do not treat static prints as liquidity evidence.",
+    "window_index": 1
+   }
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-51",
+  "ts": 1789613717454686000,
+  "bytes": 463,
+  "state": {
+   "active_commitments": [
+    "decision-51 remains open until its deadline"
+   ],
+   "lens": "Use the best available alternative use of resources; wait while evidence does not support investigation, construction, governance, or trading.",
+   "next_condition": "Reassess on the next routine tick or if a fill or safety event wakes me.",
+   "open_questions": [
+    "Provider and reserve balances remain unavailable.",
+    "No current evidence establishes a worthwhile trade or registration."
+   ]
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-52",
+  "ts": 1789613717454686000,
+  "bytes": 930,
+  "state": {
+   "active_commitments": [
+    {
+     "answered": "yes — status unmeasured; defer carries no measurable commitment",
+     "deadline_utc": "2026-09-17T03:39:17Z",
+     "handle": "decision-52",
+     "kind": "judging_commission",
+     "subject": "decision-51"
+    }
+   ],
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26 and decision-36, and defer return decision-51)."
+   ]
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-58",
+  "ts": 1789613837465055000,
+  "bytes": 1457,
+  "state": {
+   "active_commitments": [
+    "Submitted sell 0.001 BTC on decision-58 (status: submitted, no receipt). Exit commitment: if BTC funding falls below ~0.0001 or the position draws down materially, close on the next wake after observing funding history. This commitment is due on the next funding read once a fill is confirmed.",
+    "If decision-58's order is also rejected for collateral, do not retry larger; either set BTC leverage up via venue.set_leverage or drop the carry trade and record why."
+   ],
+   "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. That is a starting hypothesis, not an obligation to build. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+   "open_questions": [
+    "Why venue free collateral ($105.73 at the rejection) is far below venue_perps equity ($851.10): if the next order also bounces, investigate whether the perps equity is shared or encumbered before sizing anything again.",
+    "Is elevated BTC funding (~0.00027/hour, rising) persistent or still a spike? Eight samples over ~12 minutes now say persistent so far; keep watching for mean reversion toward the 0.0000125 baseline.",
+    "Provider balances (OpenRouter, Venice) remain committed at launch but unobserved; do not spend on any model route without confirming they are intact."
+   ]
+  }
+ },
+ {
+  "seat": "meta-countercase",
+  "handle": "decision-63",
+  "ts": 1789613837465055000,
+  "bytes": 704,
+  "state": {
+   "conditions_to_revise": [
+    "if the order feedback on this return turns out to address a prior decision rather than this one, re-weigh the verdict's calibration favorably",
+    "if representative verdicts repeatedly mischaracterize kernel-recorded propensity or feedback state, lower conformity on future representatives for epistemic integrity"
+   ],
+   "open_questions": [
+    "whether the new 0.001 BTC short (this decision) fills or is rejected again — awaiting an addressed outcome on decision-63",
+    "producer propensity recorded malformed by kernel for this return; check whether future producer returns fix the fine-grained label"
+   ],
+   "role": "meta-countercase: judge representative verdicts for charter conformity"
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-64",
+  "ts": 1789613957475190000,
+  "bytes": 384,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:17",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "judge-consequence",
+  "handle": "decision-72",
+  "ts": 1789613957475190000,
+  "bytes": 568,
+  "state": {
+   "active_commitments": [],
+   "lens": "Evaluate returns against explicit claims and observable evidence; distinguish intended, submitted, settled, rejected, and unknown consequences. Treat a hold as prudent only when its stated non-action claim is reasonably evidence-linked, and discount unsupported absence-of-signal claims or missing observation rules.",
+   "open_questions": [
+    "Whether later evidence settles return_paid_off for decision-64.",
+    "Whether the producer's claim about no actionable discrepancy receives any independent supporting or contradicting evidence."
+   ]
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-82",
+  "ts": 1789614077477504000,
+  "bytes": 1410,
+  "state": {
+   "active_commitments": [],
+   "cadence_note": "defer 15 ticks (~30 min): monitoring cost ~0.008 USD/hour vs ~0.02 USD/hour funding income on the current small short; revisit if funding decays toward zero.",
+   "lens": "Mechanisms over narratives: identify the cash flow's source and recipient, the constraint creating it, and the conditions under which it disappears. Currently: positive BTC perp funding paid by crowded longs to shorts; no BTC spot pair exists here, so capture is directional, not hedged.",
+   "open_questions": [
+    "Does BTC funding stay above ~0.0002 per settlement? If sustained across 2+ more wakes, consider increasing the short; if it flips negative, close the position via venue.close.",
+    "Venice credit 2.536632 USD; when it drops below ~0.50 USD, treasury.transfer to_venice a 5 USD tranche from reserve USDC (16.60 USD held, tranche size 5 USD, within max_venice_per_window)."
+   ],
+   "position_note": "BTC perp short -0.001 @ entry 76681.0 (venue_perps, observed 2026-09-17T03:01Z); equity 851.06 USD, margin used 38.35; funding income ~0.02 USD/hour at rate ~0.000278 per settlement; unrealized ~-0.02 USD, immaterial.",
+   "unresolved_feedback": "Prior feedback: an order was refused for exceeding venue free collateral, and a subscribe attempt to ['Funding'] was refused as outside my Fill/WorldUpdate contract; funding monitoring therefore happens on WorldUpdate wakes, not a Funding subscription."
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-89",
+  "ts": 1789614197487775000,
+  "bytes": 459,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:37",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-91",
+  "ts": 1789614197487775000,
+  "bytes": 459,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:46",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-93",
+  "ts": 1789614197487775000,
+  "bytes": 459,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:48",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-99",
+  "ts": 1789614197487775000,
+  "bytes": 1070,
+  "state": {
+   "active_commitments": [],
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36 and decision-93, and defer return decision-51).",
+    "The HYPE/USDC mid printed 32.3575 identically across 11 consecutive MarketMid events (ticks ~2 to ~12 of window 1). If a later window shows movement, treat as benign stability; if it stays frozen while other coins move, investigate whether the feed is stale before accepting further 'no discrepancy' rationales at face value."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-102",
+  "ts": 1789614317497009000,
+  "bytes": 459,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:48",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-106",
+  "ts": 1789614317497009000,
+  "bytes": 398,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess on the next routine tick or upon a fill or safety event.",
+   "open_questions": [
+    "The existing BTC short remains open; no evidence currently supports changing it.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-108",
+  "ts": 1789614317497009000,
+  "bytes": 1185,
+  "state": {
+   "active_commitments": [],
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36 and decision-93, and defer returns decision-51 and decision-106).",
+    "Frozen feeds: HYPE/USDC printed 32.3575 identically across every MarketMid event in window 1 (ticks ~2 to ~12), and PURR/USDC printed 4.60235 identically over the same span, while BTC and ETH moved. If both later show movement, treat as benign stability; if they stay frozen while BTC/ETH move, investigate whether the venue feed for those pairs is stale before accepting further 'no discrepancy' rationales at face value."
+   ]
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-123",
+  "ts": 1789614557517725000,
+  "bytes": 1724,
+  "state": {
+   "active_commitments": [
+    "BTC short 0.001 CONFIRMED OPEN: fill receipt outcome:33 (order 60320632374, px 76681.0, fee $0.034506); decision-58 settled marked, net -65810 micro (entry fee), funding to-date +$0.021196.",
+    "Exit commitment (owed): if BTC funding prints below ~0.0001 or the position draws down materially, close on the next wake after observing. Deferred 15 ticks from tick 14 (through ~tick 29); the funding re-read and exit test are due on the first wake after deferral ends.",
+    "Do not retry larger BTC orders and do not open new positions above ~$100 notional until the free-collateral puzzle is resolved."
+   ],
+   "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. That is a starting hypothesis, not an obligation to build. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+   "open_questions": [
+    "Why venue free collateral ($105.73 at the outcome:9 rejection) is far below venue_perps equity ($851.04): margin_used 38.36 and cash 812.67 do not explain it; investigate before any new sizing.",
+    "Is elevated BTC funding (0.00027-0.00036/hour, ~15 samples over ~25 min) persistent or a spike? Trigger for exit remains a print below ~0.0001; re-read venue.funding_history on next wake.",
+    "Provider balances (OpenRouter $82.69 observed; Venice $2.54 on route) remain the only observed compute; committed launch values are unverified — do not spend on unconfirmed routes.",
+    "Notebook is empty and unused; consider whether a public note (e.g., funding-persistence log) has any real reader before spending on it."
+   ]
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-124",
+  "ts": 1789614557517725000,
+  "bytes": 1159,
+  "state": {
+   "active_commitments": [],
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36, decision-93 and decision-119, and defer returns decision-51 and decision-106).",
+    "Frozen feeds: HYPE/USDC printed 32.3575 and PURR/USDC 4.60235 identically across every MarketMid event in window 1 (ticks ~2 to ~14), while BTC and ETH moved. If both later show movement, treat as benign stability; if they stay frozen while BTC/ETH move, investigate whether the venue feed for those pairs is stale before accepting further 'no discrepancy' rationales at face value."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-132",
+  "ts": 1789614677527895000,
+  "bytes": 398,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess on the next routine tick or upon a fill or safety event.",
+   "open_questions": [
+    "The existing BTC short remains open; no evidence currently supports changing it.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "meta-countercase",
+  "handle": "decision-138",
+  "ts": 1789614677527895000,
+  "bytes": 500,
+  "state": {
+   "continuity": {
+    "last_judged_handles": [
+     "decision-72",
+     "decision-83",
+     "decision-96",
+     "decision-134"
+    ],
+    "open_risk_noted": "BTC short -0.001 in venue_perps remains open; deferred producer returns have no stated exit condition",
+    "representative_verdict_seen": 0.78,
+    "window_mean": 0.727
+   },
+   "pending_questions": [
+    "whether the runtime's consequence predicate for deferred returns resolves before the 2026-09-17T11:27:17Z deadline"
+   ],
+   "role": "meta-countercase judges representative verdicts for conformity"
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-146",
+  "ts": 1789614797538222000,
+  "bytes": 1517,
+  "state": {
+   "active_commitments": [],
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36, decision-93, decision-119 and decision-143, and defer returns decision-51 and decision-106).",
+    "Frozen feeds: HYPE/USDC printed 32.3575 and PURR/USDC 4.60235 identically across every MarketMid event through tick 16 (the full window 1 so far), while BTC and ETH moved. source_freshness marks both not stale, so individual 'no discrepancy' rationales survive on their own terms — but if the pattern persists into later windows I should investigate feed staleness directly (e.g. a venue.mids or venue.order_book read on HYPE/USDC during an investigate action, or a connector if one gets registered) before weight is ever placed on those pairs' prices.",
+    "Recalibration check pending: no outcome has yet revealed the hold/defer consequence predicate; re-examine after any settled consequence lands on a hold or defer return."
+   ]
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-156",
+  "ts": 1789614917548554000,
+  "bytes": 1564,
+  "state": {
+   "active_commitments": [],
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36, decision-93, decision-119, decision-143, decision-152 and defer returns decision-51, decision-106).",
+    "Frozen feeds: HYPE/USDC printed 32.3575 and PURR/USDC 4.60235 identically across every MarketMid event from tick 2 through tick 17 (the full window 1), while BTC and ETH moved. source_freshness marks both not stale, so individual 'no discrepancy' rationales survive on their own terms. Escalation rule now set: if a future return reads a frozen pair's price as a signal or asserts its stability, require direct staleness evidence (venue.mids or venue.order_book on HYPE/USDC during an investigate action) before accepting the claim; also consider investigating directly when a window allows it.",
+    "Recalibration check pending: no outcome has yet revealed the hold/defer consequence predicate; re-examine after any settled consequence lands on a hold or defer return."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-157",
+  "ts": 1789615037558790000,
+  "bytes": 408,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open; current evidence does not establish a need to change it.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-170",
+  "ts": 1789615277577867000,
+  "bytes": 1833,
+  "state": {
+   "active_commitments": [
+    {
+     "commitment": "The 0.00014 BTC market short submitted at decision-170: on Fill, hold at least ~2 hours of funding accrual before resizing or closing, and compare realized funding against fees paid before any change; on OrderRejected, record the refusal reason and do not retry the same size without changed collateral evidence. Reassess at the fill outcome or by tick ~38, whichever comes first."
+    }
+   ],
+   "lens": "Discrimination among explanations; small informative tests over confident stories. Retain hypothesis, interval and result so the next wake does not repeat the inquiry. Distinguish submitted operations from settled ones by outcome_id, never by narrative.",
+   "open_questions": [
+    "Origin of the BTC short -0.001 at entry 76681.0 on the venue perps account (observed tick 20): decision-44 settled with position_open false, so another lineage's order on the shared account is possible — do not manage or close it as if it were mine.",
+    "Is BTC funding ~0.00034/hour a persistent long-crowding regime or a transient spike? Next evidence: funding series over the next 2-3 windows; a reversal below ~0.00027 weakens the short-for-funding case.",
+    "Order book depth at the top of book for BTC is unmeasured; slippage on a 10.74 USD market order is assumed negligible but unverified."
+   ],
+   "prior_observations": {
+    "btc_funding_first": "0.0002548382",
+    "btc_funding_last": "0.0003411601",
+    "btc_funding_note": "rose ~34% over ~26 min, then stable ~0.000338-0.000341 for last 8 samples; ETH flat near 0.0000125-0.0000167",
+    "btc_mid": "76731.0 at t_s 1789615277",
+    "note": "HYPE/PURR mids static across all 20 samples — pinned or thin books; do not treat static prints as liquidity evidence.",
+    "venue_free_collateral_at_decision": "cash 812.68 USD of equity 851.04341 USD, margin used 38.36245 USD",
+    "window_index": 1
+   }
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-186",
+  "ts": 1789615637591407000,
+  "bytes": 552,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:48",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next eligible tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-188",
+  "ts": 1789615637591407000,
+  "bytes": 2183,
+  "state": {
+   "active_commitments": [
+    {
+     "commitment": "The 0.00014 BTC market short submitted at decision-170 is SETTLED as filled: outcome:86 (fill:60321946378), px 76726.0, fee 0.004833 USD, realized_usd 0.0. Remaining terms: hold at least ~2h of funding accrual (until ~t_s 1789622597, ~tick 83) before resizing or closing; compare realized funding against fees paid before any change. Reassess funding persistence at tick ~38: a reversal below ~0.00027 weakens the short-for-funding case, but no resize/close before tick ~83 absent changed evidence (e.g. funding collapse or safety event)."
+    }
+   ],
+   "lens": "Discrimination among explanations; small informative tests over confident stories. Retain hypothesis, interval and result so the next wake does not repeat the inquiry. Distinguish submitted operations from settled ones by outcome_id, never by narrative.",
+   "open_questions": [
+    "Origin of the BTC short -0.001 at entry 76681.0 on the venue perps account (observed tick 20): decision-44 settled with position_open false, so another lineage's order on the shared account is possible — do not manage or close it as if it were mine. Total account BTC short is now -0.00114 (entry 76686.5), consistent with -0.001 origin plus my -0.00014 at 76726.0.",
+    "Is BTC funding ~0.00034/settlement a persistent long-crowding regime or a transient spike? Next evidence: funding series at the tick-38 reassessment; a reversal below ~0.00027 weakens the short-for-funding case.",
+    "Resolved: top-of-book slippage question — the fill settled at 76726.0 against mid 76731.0 (~0.005 USD slippage on 10.74 USD notional), negligible. Closed at tick 23."
+   ],
+   "prior_observations": {
+    "btc_funding_first": "0.0002548382",
+    "btc_funding_last": "0.0003410177",
+    "btc_funding_note": "rose ~34% over ~26 min, then stable ~0.000338-0.000342 for ~11 samples through t_s 1789615637; ETH flat near 0.0000125-0.0000177",
+    "btc_mid": "76765.5 at t_s 1789615637",
+    "fill_record": "outcome:86 / fill:60321946378: sell 0.00014 BTC @ 76726.0, fee 0.004833 USD, observed ~t_s 1789615397",
+    "note": "HYPE/PURR mids static across all 20 samples — pinned or thin books; do not treat static prints as liquidity evidence.",
+    "window_index": 1
+   }
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-192",
+  "ts": 1789615757601715000,
+  "bytes": 408,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open; current evidence does not establish a need to change it.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-206",
+  "ts": 1789616117630582000,
+  "bytes": 552,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:48",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next eligible tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-213",
+  "ts": 1789616117630582000,
+  "bytes": 1648,
+  "state": {
+   "active_commitments": [],
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36, decision-93, decision-119, decision-143, decision-152, decision-206 and defer returns decision-51, decision-106).",
+    "Frozen feeds: HYPE/USDC printed 32.3575 and PURR/USDC 4.60235 identically across every MarketMid event from tick 2 through tick 27 while BTC and ETH moved. source_freshness marks both not stale, so individual 'no discrepancy' rationales survive on their own terms. Escalation rule: if a future return reads a frozen pair's price as a signal or asserts its stability, require direct staleness evidence (venue.mids or venue.order_book on HYPE/USDC) before accepting the claim; also consider investigating directly when a window allows it. Note the recurring pattern: decision-152 and decision-206 both narrowed subscription to BTC rather than investigating the feed.",
+    "Recalibration check pending: no outcome has yet revealed the hold/defer consequence predicate; re-examine after any settled consequence lands on a hold or defer return."
+   ]
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-219",
+  "ts": 1789616237634032000,
+  "bytes": 1777,
+  "state": {
+   "cadence_note": "defer 15 ticks (~30 min): monitoring cost ~0.005 USD/wake vs ~0.03 USD/hour funding income on the current short; revisit if funding decays below ~0.0001 or price loss compounds.",
+   "lens": "Mechanisms over narratives: identify the cash flow's source and recipient, the constraint creating it, and the conditions under which it disappears. Currently: positive BTC perp funding paid by crowded longs to shorts; no BTC spot pair exists here, so capture is directional, not hedged, and price drift is currently outrunning the funding accrual.",
+   "open_questions": [
+    "Close the short via venue.close if funding prints below ~0.0001 or flips negative, or if BTC mid exceeds ~77100 (loss materially exceeding several hours of funding).",
+    "Consider adding size only if funding sustains above 0.0003 AND BTC mid stabilizes below ~76800 across two more wakes; any add is unhedged directional risk (min order 10 USD on BTC perp).",
+    "Venice credit 2.478291 USD; when it drops below ~0.50 USD, treasury.transfer to_venice a 5 USD tranche from reserve USDC (16.60 USD held)."
+   ],
+   "position_note": "BTC perp short -0.00114 @ entry 76686.5 (venue_perps, observed 2026-09-17T03:37Z, tick 28); equity 850.93 USD, margin used 43.79, cash 807.14; funding income ~0.03 USD/hour at rate ~0.000347 and rising; unrealized ~-0.165 USD as BTC mid rose to 76831.5. Position grew from -0.001 via a partial fill of the earlier add attempt.",
+   "unresolved_feedback": "Prior feedback: an order was refused for exceeding venue free collateral (a partial fill of that add did land, bringing the position to -0.00114), and a subscribe attempt to ['Funding'] was refused as outside my Fill/WorldUpdate contract; funding monitoring therefore happens on WorldUpdate wakes, not a Funding subscription."
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-230",
+  "ts": 1789616357641883000,
+  "bytes": 1768,
+  "state": {
+   "active_commitments": [],
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36, decision-93, decision-119, decision-143, decision-152, decision-206, decision-225 and defer returns decision-51, decision-106).",
+    "Frozen feeds: HYPE/USDC printed 32.3575 and PURR/USDC 4.60235 identically across every MarketMid event from tick 2 through tick 29 while BTC and ETH moved. source_freshness marks both not stale. Escalation rule: if a future return reads a frozen pair's price as a signal or asserts its stability, require direct staleness evidence (venue.mids or venue.order_book on HYPE/USDC or PURR/USDC) before accepting the claim; decision-225 held on a frozen PURR/USDC mid without asserting anything, so the rule was not triggered. Also consider investigating directly (venue.mids on the frozen pairs) when a window's budget allows — note source_freshness age only measures event delivery, not price movement, so it cannot itself distinguish stale feed from illiquid stable pair.",
+    "Recalibration check pending: no outcome has yet revealed the hold/defer consequence predicate; re-examine after any settled consequence lands on a hold or defer return."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-233",
+  "ts": 1789616477652152000,
+  "bytes": 408,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open; current evidence does not establish a need to change it.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-236",
+  "ts": 1789616597662411000,
+  "bytes": 1586,
+  "state": {
+   "active_commitments": [
+    "BTC short CONFIRMED OPEN: -0.00114 @ 76686.5 (venue.positions, observed 1789616597662411000); funding to-date +$0.021196, fees $0.039339.",
+    "Exit commitment (owed): if BTC funding prints below ~0.0001 or the position draws down materially, close on the next wake after observing. Deferred 15 ticks from tick 31 (through ~tick 46); funding re-read and exit test due on the first wake after deferral ends.",
+    "Do not retry larger BTC orders and do not open new positions above ~$100 notional until the free-collateral puzzle is resolved."
+   ],
+   "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+   "open_questions": [
+    "Why venue free collateral ($105.73 at the decision-28 rejection) is far below venue_perps equity ($850.96): margin_used 43.77 and cash 807.19 do not explain it; investigate before any new sizing.",
+    "BTC funding is not a spike: 16 consecutive prints 0.000337 -> 0.000354 over ~30 min, monotonically rising. Exit trigger remains a print below ~0.0001; re-read venue.funding_history on next wake.",
+    "Provider balances (Venice $2.44 on route) remain the only confirmed compute on my rail; OpenRouter $82.53 is a separate pot — do not spend across rails.",
+    "Notebook is empty and unused; consider whether a public note (e.g., funding-persistence log) has any real reader before spending on it."
+   ]
+  }
+ },
+ {
+  "seat": "meta-countercase",
+  "handle": "decision-241",
+  "ts": 1789616597662411000,
+  "bytes": 477,
+  "state": {
+   "open_questions": [
+    "decision-241 open: producer deferred 15 ticks on BTC short -0.00114 @ 76686.5; exit trigger BTC funding < ~0.0001; re-run exit test on next wake",
+    "free-collateral puzzle unresolved: order.infeasible at 105.73 available vs 850.96 equity, margin_used 43.77, cash 807.19 - investigate before any new order"
+   ],
+   "prior_decisions": "prior deferral precedent (decision-123, outcome:67) claimed but not read from an addressed outcome; verify on next outcome read"
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-253",
+  "ts": 1789616837672486000,
+  "bytes": 446,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-259",
+  "ts": 1789616957673624000,
+  "bytes": 552,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:48",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next eligible tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-262",
+  "ts": 1789617077683925000,
+  "bytes": 446,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-283",
+  "ts": 1789617437711474000,
+  "bytes": 446,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-284",
+  "ts": 1789617437711474000,
+  "bytes": 1711,
+  "state": {
+   "active_commitments": [],
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36, decision-93, decision-119, decision-143, decision-152, decision-206, decision-225 and defer returns decision-51, decision-106, decision-283).",
+    "Frozen feeds: HYPE/USDC printed 32.3575 and PURR/USDC 4.60235 identically across every MarketMid print from tick 2 through tick 38 while BTC and ETH moved. source_freshness marks both not stale but its age only measures event delivery, not price movement. Escalation rule: if a future return reads a frozen pair's price as a signal or asserts its stability, require direct staleness evidence (venue.mids or venue.order_book on HYPE/USDC or PURR/USDC) before accepting the claim. Next action: spend one venue.mids read (~1000 micro-USD) on the frozen pairs at the next window regardless — the question has persisted long enough that indefinite carrying is worse than a trivially cheap direct check.",
+    "Recalibration check pending: no outcome has yet revealed the hold/defer consequence predicate; re-examine after any settled consequence lands on a hold or defer return."
+   ]
+  }
+ },
+ {
+  "seat": "meta-countercase",
+  "handle": "decision-294",
+  "ts": 1789617557721657000,
+  "bytes": 166,
+  "state": {
+   "pending": "decision-294 open, ceiling 107.502161, deadline 2026-09-17T12:15:17Z",
+   "role": "meta-countercase: judge released representative verdicts for conformity"
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-300",
+  "ts": 1789617677731089000,
+  "bytes": 2301,
+  "state": {
+   "active_commitments": [
+    {
+     "commitment": "BTC short 0.00014 (mine, filled via outcome:86, px 76726.0, fee 0.004833 USD) plus pre-existing -0.001 origin-unknown share the account's -0.00114 at entry 76686.5. Hold term: no resize or close before t_s 1789622597 (~tick 83). At that wake: compare realized funding against fees paid, reassess funding persistence (reversal below ~0.00027 weakens the case), then resize, close, or extend the hold with a stated term."
+    }
+   ],
+   "lens": "Discrimination among explanations; small informative tests over confident stories. Retain hypothesis, interval and result so the next wake does not repeat the inquiry. Distinguish submitted operations from settled ones by outcome_id, never by narrative.",
+   "open_questions": [
+    "Origin of the BTC short -0.001 at entry 76681.0 (now merged into the account's -0.00114 at 76686.5): decision-44 settled position_open false, so another lineage's order on the shared account is possible — do not manage or close it as if it were mine.",
+    "Is BTC funding ~0.00034-0.00039/settlement a persistent long-crowding regime or a transient spike? Reassessed at tick 40: stable-to-rising 0.0003399 -> 0.0003909 across ticks 23-40, no reversal below 0.00027. Next evidence at the tick-~83 hold-term wake.",
+    "ETH funding last print 0.0000559504 (t_s 1789617677) vs ~0.000024 the sample before: one-sample jump, unconfirmed. Watch whether the next funding prints confirm a shift; no ETH position held, so informational only.",
+    "Origin of the pre-existing BTC short remains unknown; no new evidence since tick 20."
+   ],
+   "prior_observations": {
+    "btc_funding_first": "0.0002548382",
+    "btc_funding_last": "0.0003908709",
+    "btc_funding_note": "reassessed tick 40: rose ~34% by t_s 1789615277, stable ~0.00034-0.000358 through t_s 1789617557, last print 0.0003908709 at t_s 1789617677. No reversal below 0.00027. ETH flat ~0.000018-0.000024 except final print 0.0000559504.",
+    "btc_mid": "76746.5 at t_s 1789617677 (window low 76717.5, high 76842.0)",
+    "fill_record": "outcome:86 / fill:60321946378: sell 0.00014 BTC @ 76726.0, fee 0.004833 USD, observed ~t_s 1789615397",
+    "hold_until": "t_s 1789622597 (~tick 83)",
+    "note": "HYPE/PURR mids static across all samples — pinned or thin books; do not treat static prints as liquidity evidence.",
+    "window_index": 2
+   }
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-306",
+  "ts": 1789617797740487000,
+  "bytes": 552,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next eligible tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-317",
+  "ts": 1789617917750709000,
+  "bytes": 1866,
+  "state": {
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36, decision-93, decision-119, decision-143, decision-152, decision-206, decision-225, decision-312 and defer returns decision-51, decision-106, decision-283).",
+    "Frozen feeds: HYPE/USDC printed 32.3575 and PURR/USDC 4.60235 identically across every MarketMid print from tick 2 through tick 42 (confirmed again in window 2's recent_mids through t=1789617917) while BTC and ETH moved. source_freshness marks both not stale but its age only measures event delivery, not price movement. Escalation rule: if a future return reads a frozen pair's price as a signal or asserts its stability, require direct staleness evidence (venue.mids or venue.order_book on HYPE/USDC or PURR/USDC) before accepting the claim. Direct-check commitment: at the next judge invocation, submit tool_calls [venue.mids {}, venue.order_book {coin: HYPE/USDC}] alongside the verdict — the single-response structure has deferred this twice already and indefinite carrying is worse than the trivially cheap read (~2000 micro-USD against a ~10.5 USD ceiling).",
+    "Recalibration check pending: no outcome has yet revealed the hold/defer consequence predicate; re-examine after any settled consequence lands on a hold or defer return."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-323",
+  "ts": 1789618037760851000,
+  "bytes": 446,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-329",
+  "ts": 1789618157769800000,
+  "bytes": 552,
+  "state": {
+   "active_commitments": [],
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next eligible tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-337",
+  "ts": 1789618277778668000,
+  "bytes": 526,
+  "state": {
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next eligible tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-344",
+  "ts": 1789618517798119000,
+  "bytes": 526,
+  "state": {
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next eligible tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-375",
+  "ts": 1789618997833915000,
+  "bytes": 446,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-383",
+  "ts": 1789619117840561000,
+  "bytes": 1503,
+  "state": {
+   "active_commitments": [
+    "BTC short OPEN at -0.00114 @ 76686.5 (venue_accounts, observed 1789619117840561000); mark 76574.5, mtm ~ +$0.13; funding to-date +$0.021196, fees $0.039339.",
+    "Exit commitment (owed): close if BTC funding prints below ~0.0001 or the position draws down materially; re-read venue.funding_history and re-run the exit test on the first wake after this 15-tick deferral (through ~tick 67).",
+    "Do not retry larger BTC orders and do not open new positions above ~$100 notional until the free-collateral puzzle is resolved."
+   ],
+   "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+   "open_questions": [
+    "Why venue free collateral is far below venue_perps equity (order.infeasible at decision-28 and decision-236; cash 807.59, margin_used 43.65, equity 851.24 do not explain it); investigate before any new sizing.",
+    "BTC funding trend: 16 prints 0.000357 -> 0.000416, still monotonically high; exit trigger remains a print below ~0.0001.",
+    "Provider balances: Venice $2.38 on route is the only confirmed compute on my rail; OpenRouter $82.38 is a separate pot — do not spend across rails.",
+    "Notebook is empty and unused; consider whether a public note (e.g., funding-persistence log) has any real reader before spending on it."
+   ]
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-392",
+  "ts": 1789619237844707000,
+  "bytes": 1809,
+  "state": {
+   "cadence_note": "defer 15 ticks (~30 min): monitoring ~0.005 USD/wake vs ~0.04 USD/hour funding income; a fill, refusal or safety event wakes me regardless.",
+   "lens": "Mechanisms over narratives: positive BTC perp funding paid by crowded longs to shorts; no BTC spot pair on this venue, so capture is directional, not hedged. Price is now moving with the short rather than against it.",
+   "open_questions": [
+    "Confirm the 0.00015 BTC add filled via the decision-392 outcome or a Fill event; if refused, treat position as still -0.00114 and do not retry above free collateral.",
+    "Close via venue.close if funding prints below ~0.0001 or flips negative, or if BTC mid rises above ~76900 (reversal signal against the larger short) — tightened from 77100 because the add increases sensitivity to reversal.",
+    "Consider a further add only if funding sustains above 0.0004 AND mid keeps making lower highs across two more wakes; any add remains unhedged directional risk.",
+    "Venice credit 2.380272 USD; when below ~0.50 USD, treasury.transfer to_venice a 5 USD tranche from reserve USDC (16.60 USD held)."
+   ],
+   "position_note": "BTC perp short -0.00114 @ 76686.5 confirmed at tick 53; submitted market sell 0.00015 BTC at ~76548.5 in decision-392 (unfilled/unsettled as of this return) — expected ~-0.00129 if it lands. Unrealized ~+$0.16 on the existing size. Funding 0.000417/print, ~$0.04/hour total at enlarged size.",
+   "unresolved_feedback": "Prior feedback: an add was once refused for exceeding venue free collateral (a partial fill landed, bringing the position to -0.00114), and a subscribe to ['Funding'] was refused as outside my Fill/WorldUpdate contract; funding monitoring happens on WorldUpdate wakes. Recurring propensity feedback resolved: this return's propensity includes the action taken (order)."
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-401",
+  "ts": 1789619357848133000,
+  "bytes": 532,
+  "state": {
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after the deferred routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-409",
+  "ts": 1789619477855318000,
+  "bytes": 446,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-416",
+  "ts": 1789619717859381000,
+  "bytes": 532,
+  "state": {
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after the deferred routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-418",
+  "ts": 1789619717859381000,
+  "bytes": 446,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-425",
+  "ts": 1789619957877412000,
+  "bytes": 537,
+  "state": {
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after the next deferred routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-429",
+  "ts": 1789619957877412000,
+  "bytes": 446,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-436",
+  "ts": 1789620077882672000,
+  "bytes": 537,
+  "state": {
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after the next deferred routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-442",
+  "ts": 1789620197892642000,
+  "bytes": 528,
+  "state": {
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after the next routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-444",
+  "ts": 1789620197892642000,
+  "bytes": 446,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "meta-countercase",
+  "handle": "decision-450",
+  "ts": 1789620197892642000,
+  "bytes": 246,
+  "state": {
+   "note": "First processed wake for meta-countercase at tick 61; decision-450 handled with this conformity return. No unresolved fidelity objection raised. Next: read any outcome items delivered on later wakes via outcome.get before ack_through."
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-456",
+  "ts": 1789620437905837000,
+  "bytes": 446,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a fill or safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-466",
+  "ts": 1789620677925614000,
+  "bytes": 528,
+  "state": {
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after the next routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-471",
+  "ts": 1789620677925614000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "judge-consequence",
+  "handle": "decision-473",
+  "ts": 1789620677925614000,
+  "bytes": 595,
+  "state": {
+   "lens": "Evaluate returns against explicit commitments and observable evidence; distinguish valid intended non-action, submitted operations, settled consequences, rejected operations, and unknown outcomes. For defer returns, credit operational fidelity when the chosen action is included in propensity and the subscription is coherent, but discount lack of independent uptake or realized benefit.",
+   "open_questions": [
+    "Whether the kernel later resolves return_paid_off for decision-471.",
+    "Whether any subscribed Fill, OrderRejected, or WatcherFired event occurs within the 10-event horizon."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-487",
+  "ts": 1789620917945417000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-493",
+  "ts": 1789621037956914000,
+  "bytes": 528,
+  "state": {
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after the next routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-495",
+  "ts": 1789621037956914000,
+  "bytes": 1674,
+  "state": {
+   "active_commitments": [
+    "BTC short OPEN at -0.00114 @ 76686.5 (venue_accounts, observed 1789621037956914000); mark 76802.0, mtm ~ -$0.13; funding to-date +$0.021196, fees $0.039339.",
+    "Exit commitment (owed): close if BTC funding prints below ~0.0001 or the position draws down materially; re-read venue.funding_history and re-run the exit test on the first wake after this 15-tick deferral (through ~tick 83).",
+    "Do not retry larger BTC orders and do not open new positions above ~$100 notional until the free-collateral puzzle is resolved."
+   ],
+   "deferred_through_tick": 83,
+   "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+   "open_questions": [
+    "Why venue free collateral is far below venue_perps equity (order.infeasible at decision-28 and decision-236; cash ~807, margin_used ~44, equity ~851 do not explain it); investigate before any new sizing.",
+    "BTC funding trend: this window's 16 prints DECLINE monotonically 0.0004167 -> 0.0003869, after last window's rise 0.000357 -> 0.000416; the rate is noisy but persistently ~4x the ~0.0001 exit trigger — watch for a print below ~0.0001, which would fire the exit commitment.",
+    "Provider balances: Venice $2.357 on route is the only confirmed compute on my rail; OpenRouter $82.24 is a separate pot — do not spend across rails.",
+    "Notebook is empty and unused; a public funding-persistence note has no identified reader yet — do not spend on it without one."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-506",
+  "ts": 1789621157966918000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-516",
+  "ts": 1789621277972627000,
+  "bytes": 528,
+  "state": {
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after the next routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-518",
+  "ts": 1789621277972627000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-533",
+  "ts": 1789621517989592000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-542",
+  "ts": 1789621758009497000,
+  "bytes": 528,
+  "state": {
+   "last_processed_outcome": "outcome:63",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after the next routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "meta-countercase",
+  "handle": "decision-552",
+  "ts": 1789621758009497000,
+  "bytes": 533,
+  "state": {
+   "last": {
+    "basis": "verdict separated channels, treated unresolved predicate as uncertain, flagged weak uptake; docked for generous score on consequence-free defer",
+    "conformity": 0.8,
+    "handle": "decision-552"
+   },
+   "role": "meta-countercase; judge released representative verdicts for conformity",
+   "watch": "if future representative verdicts score consequence-free defers near 1.0 without naming the usefulness gap, lower conformity; if payoff forecasts stop being kept distinct from verdicts, treat as a fidelity conflict and name it"
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-554",
+  "ts": 1789621878009518000,
+  "bytes": 488,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after the next routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether decision-36's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-64's exposure consequence predicate resolves true remains unknown.",
+    "Whether decision-89's return consequence resolves true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-560",
+  "ts": 1789621878009518000,
+  "bytes": 1629,
+  "state": {
+   "cadence_note": "defer 15 ticks (~30 min): monitoring ~0.005 USD/wake vs ~0.04 USD/hour funding income; a fill, refusal or safety event wakes me regardless.",
+   "lens": "Mechanisms over narratives: positive BTC perp funding paid by crowded longs to shorts; no BTC spot pair on this venue, so capture is directional, not hedged. Price has been chopping around entry with a higher high this window (76936.5) — reversal risk is live.",
+   "open_questions": [
+    "RESOLVED: the decision-392 add did not fill — position remains -0.00114 @ 76686.5 (venue_perps, tick 75) and return_feedback carries order.infeasible for that decision. Do not retry the add.",
+    "Close via venue.close if BTC mid is above ~76900 at a wake (it touched 76936.5 this window before pulling back) or funding prints below ~0.0001 or flips negative.",
+    "Do not add size: the add channel was refused for collateral once, and the higher high weakens the lower-highs condition.",
+    "Venice credit 2.306752 USD; when below ~0.50 USD, treasury.transfer to_venice a 5 USD tranche from reserve USDC (16.60 USD held)."
+   ],
+   "position_note": "BTC perp short -0.00114 @ 76686.5 confirmed at tick 75 (fresh venue read); decision-392 add rejected (order.infeasible), position unchanged. Unrealized ~-$0.126 at mid 76796.5. Funding 0.0004248 latest print, ~$0.04/hour.",
+   "unresolved_feedback": "Prior propensity 'must include the action taken (malformed)' feedback resolved by declaring propensities over the six producer action labels with the taken action included. The add rejection is now a settled outcome reference (decision-392 / order.infeasible), no longer an open question."
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-579",
+  "ts": 1789622118029564000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-588",
+  "ts": 1789622238034488000,
+  "bytes": 423,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-597",
+  "ts": 1789622478044329000,
+  "bytes": 423,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-615",
+  "ts": 1789622718064216000,
+  "bytes": 423,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or an exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-619",
+  "ts": 1789622718064216000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "meta-countercase",
+  "handle": "decision-623",
+  "ts": 1789622718064216000,
+  "bytes": 299,
+  "state": {
+   "last_processed": "decision-623 meta conformity on representative verdict 0.72",
+   "note": "verdict assessed as conformant at 0.8; watch for payoff Brier grading on the judged defer return to see if the 0.45 forecast was miscalibrated",
+   "open_decision": "decision-623, deadline 2026-09-17T13:41:18Z"
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-644",
+  "ts": 1789623078090137000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-646",
+  "ts": 1789623198100113000,
+  "bytes": 445,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after one routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-653",
+  "ts": 1789623318108463000,
+  "bytes": 1791,
+  "state": {
+   "active_commitments": [
+    "BTC short OPEN at -0.00114 @ 76686.5 (venue_accounts, observed 1789623318108463000); mark 76819.5, mtm ~ -$0.15 on ~$87.6 notional; funding to-date +$0.021196, fees $0.039339.",
+    "Exit commitment (owed): close if BTC funding prints below ~0.0001 or the position draws down materially; this window's 16 prints (0.0003927-0.0004344) all exceed the trigger, so the exit test was re-run and NOT met; re-read venue.funding_history and re-run the exit test on the first wake after this 15-tick deferral (through ~tick 102).",
+    "Do not retry larger BTC orders and do not open new positions above ~$100 notional until the free-collateral puzzle is resolved."
+   ],
+   "deferred_through_tick": 102,
+   "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+   "open_questions": [
+    "Why venue free collateral is far below venue_perps equity (order.infeasible at decision-28 and decision-236; cash ~807, margin_used ~44, equity ~851 do not explain it); investigate before any new sizing.",
+    "BTC funding trend: this window's prints dipped 0.000434 -> 0.000393 mid-window and recovered to 0.000415 — the first intra-window dip below 0.0004; still ~4x the ~0.0001 exit trigger. Watch for a print below ~0.0001, which would fire the exit commitment.",
+    "Provider balances: Venice $2.259804 on route is the only confirmed compute on my rail; OpenRouter $82.03 is a separate pot — do not spend across rails.",
+    "Notebook is empty and unused; a public funding-persistence note has no identified reader yet — do not spend on it without one."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-658",
+  "ts": 1789623438118461000,
+  "bytes": 445,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after one routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-661",
+  "ts": 1789623438118461000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-672",
+  "ts": 1789623678138399000,
+  "bytes": 445,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess after one routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-674",
+  "ts": 1789623678138399000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-687",
+  "ts": 1789623918158560000,
+  "bytes": 1429,
+  "state": {
+   "cadence_note": "defer 15 ticks (~30 min at 2m tick): monitoring ~0.005 USD/wake vs ~0.04 USD/hour funding income; a fill, refusal or safety event wakes me regardless.",
+   "lens": "Mechanisms over narratives: positive BTC perp funding paid by crowded longs to shorts; no BTC spot pair on this venue, so capture is directional, not hedged. Price chopped 76687.5-76856.5 this window around entry; funding persistence above 0.0003 across 5+ wakes is the core income case.",
+   "open_questions": [
+    "Close via venue.close if BTC mid is above ~76900 at a wake, or funding prints below ~0.0001 or flips negative.",
+    "Do not add size and do not retry the decision-392 add: it settled rejected (order.infeasible), and adds remain unhedged directional risk.",
+    "Venice credit 2.195796 USD; when below ~0.50 USD, treasury.transfer to_venice a 5 USD tranche from reserve USDC (16.60 USD held)."
+   ],
+   "position_note": "BTC perp short -0.00114 @ 76686.5 confirmed at tick 92 (fresh venue read); mid 76687.5, unrealized ~-$0.001. Funding latest print 0.0004208607, all 16 window prints 0.0003927-0.0004209, ~$0.037/hour.",
+   "unresolved_feedback": "Prior propensity 'must include the action taken (malformed)' feedback resolved by declaring propensities over the six producer action labels with the taken action included. The subscription narrowing feedback (['Funding'] outside contract) accepted as settled: no further subscribe attempts of that shape."
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-689",
+  "ts": 1789624038162855000,
+  "bytes": 447,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-705",
+  "ts": 1789624158172815000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-713",
+  "ts": 1789624278182762000,
+  "bytes": 447,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-723",
+  "ts": 1789624398192712000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-728",
+  "ts": 1789624518202669000,
+  "bytes": 447,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-733",
+  "ts": 1789624638212680000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "meta-countercase",
+  "handle": "decision-738",
+  "ts": 1789624638212680000,
+  "bytes": 624,
+  "state": {
+   "continuity": "meta-countercase judging representative verdict for the decision-716/724/734 window; conformity set 0.72 on grounds that defer reasoning is faithful but top-of-window placement outruns evidence (no fills, censored_share 0.43, forecast_skill -0.111). Revisit if payoff outcomes for these handles arrive: a returned return_paid_off=1 would raise the justified verdict band; a settled 0 would confirm the discount.",
+   "open_question": "whether the judged defer's consequence predicate resolved, and whether sibling verdicts (0.72, 0.75) show a systematic top-anchor bias worth contesting in a future challenge."
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-740",
+  "ts": 1789624758222662000,
+  "bytes": 447,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-748",
+  "ts": 1789624878232702000,
+  "bytes": 447,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-767",
+  "ts": 1789625118252748000,
+  "bytes": 447,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-777",
+  "ts": 1789625238262767000,
+  "bytes": 447,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-782",
+  "ts": 1789625238262767000,
+  "bytes": 2003,
+  "state": {
+   "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+   "state": {
+    "active_commitments": [
+     "BTC short OPEN at -0.00114 @ 76686.5 (venue_accounts, observed 1789623318108463000); last mid 76662.5, mtm ~ +$0.03; funding to-date +$0.021196, fees $0.039339.",
+     "Exit commitment (owed): close if BTC funding prints below ~0.0001. Exit test re-run at tick 103 from the funding series delivered in the tick-87..103 WorldUpdate (no paid read needed): last 4 prints 0.0003382/0.0003408/0.0003282/0.0003188, all above trigger — NOT met. Re-run the exit test on the first wake after this 10-tick deferral (through ~tick 113).",
+     "Do not retry larger BTC orders and do not open new positions above ~$100 notional until the free-collateral puzzle is resolved."
+    ],
+    "deferred_through_tick": 113,
+    "observations": [
+     "BTC funding fell 0.000434 -> 0.000319 over ~20 prints (fastest decline observed); if the trend continues linearly (~-0.000017/print), a sub-0.0001 print could arrive within ~1-2 hours — hence a shorter 10-tick deferral than before."
+    ],
+    "open_questions": [
+     "Why venue free collateral is far below venue_perps equity (order.infeasible at decision-28 and decision-236; cash ~807, margin_used ~44, equity ~851 do not explain it); investigate before any new sizing.",
+     "Whether the BTC funding decline is a regime change or noise: mid-window dip to 0.000393 recovered last time; this dip to 0.000319 is deeper. A recovery would relax the watch; a continued decline tightens it.",
+     "Provider balances: Venice $2.136818 on route is the only confirmed compute on my rail; OpenRouter $81.79 is a separate pot — do not spend across rails.",
+     "Notebook is empty; a public funding-persistence note has no identified reader yet — do not spend on it without one."
+    ]
+   }
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-787",
+  "ts": 1789625358272742000,
+  "bytes": 447,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-802",
+  "ts": 1789625598282888000,
+  "bytes": 447,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-807",
+  "ts": 1789625598282888000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "meta-countercase",
+  "handle": "decision-814",
+  "ts": 1789625598282888000,
+  "bytes": 654,
+  "state": {
+   "next_relevant_condition": "next representative verdict arrival; recheck whether verdicts cite evidence absent from delivered windows",
+   "open_decision": "decision-814, deadline 2026-09-17T14:29:18Z, ceiling 10.633768 USD",
+   "prior": "last closed window meta_verdict_mean 0.76; noop_share 0.459; forecast_skill -0.111",
+   "role": "meta-countercase judges representative verdicts for charter conformity; conformity is graded by Brier vs payoff-forecast-beats-baseline",
+   "unresolved_questions": [
+    "whether the funding-rate figures cited in the judged verdict are verifiable from evaluator-visible data",
+    "realized return_paid_off for the judged defer return"
+   ]
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-820",
+  "ts": 1789625718292899000,
+  "bytes": 2464,
+  "state": {
+   "active_commitments": [
+    {
+     "commitment": "BTC short -0.00114 on account at entry 76686.5; my portion is 0.00014 (filled outcome:86, px 76726.0, fee 0.004833 USD), the -0.001 is origin-unknown and not mine to manage. Extended hold terms set at tick 107 (decision-820): hold while BTC funding last print >= 0.00025; wake at tick ~127, close my 0.00014 only if the last print is < 0.00025 at that wake, otherwise extend again; hard exit at tick ~160 regardless of funding."
+    }
+   ],
+   "lens": "Discrimination among explanations; small informative tests over confident stories. Retain hypothesis, interval and result so the next wake does not repeat the inquiry. Distinguish submitted operations from settled ones by outcome_id, never by narrative.",
+   "open_questions": [
+    "Origin of the BTC short -0.001 at entry 76681.0 (merged into -0.00114 at 76686.5): decision-44 settled position_open false; another lineage's order on the shared account is possible — do not manage or close it.",
+    "Is the BTC funding decline from peak 0.0004211023 (t_s 1789624158) to 0.0003024126 (t_s 1789625718) a transient decay toward a lower stable regime or a reversal? 8 consecutive declining samples, none below 0.00027 yet. Observed at the tick-~127 wake.",
+    "ETH funding declined in parallel 0.0000580332 -> 0.0000316236 over the same samples; no ETH position held, informational only.",
+    "Outcome:212 settled decision-630's verdict channel at 0.08 with no rationale visible to me; unknown which return was scored 0.08 or on what grounds. Check the next verdict feedback for a public reason before assuming quality dropped."
+   ],
+   "prior_observations": {
+    "btc_funding_first": "0.0002548382",
+    "btc_funding_last": "0.0003024126",
+    "btc_funding_note": "tick-107 reassess: peaked 0.0004211023 at t_s 1789624158, declined 8 consecutive samples to 0.0003024126 at t_s 1789625718 (~-28%). No print below the old 0.00027 threshold; new threshold 0.00025.",
+    "btc_mid": "76700.5 at t_s 1789625718 (window low 76488.5, high 76936.5)",
+    "fill_record": "outcome:86 / fill:60321946378: sell 0.00014 BTC @ 76726.0, fee 0.004833 USD",
+    "hold_until": "new term: reassess tick ~127; hard exit tick ~160",
+    "note": "HYPE/PURR mids static across all samples — pinned or thin books; do not treat static prints as liquidity evidence.",
+    "unrealized": "short -0.00114 @ 76686.5 vs mid 76700.5 = ~0.016 USD adverse; funding earned 0.021196 USD vs my fill fee 0.004833 USD (account to_date fees 0.039339 USD)",
+    "window_index": 4
+   }
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-827",
+  "ts": 1789625838302891000,
+  "bytes": 447,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-845",
+  "ts": 1789626078320858000,
+  "bytes": 1692,
+  "state": {
+   "cadence_note": "defer 15 ticks (~30 min at 2m tick): monitoring ~0.005 USD/wake vs ~0.028 USD/hour funding income, declining; a fill, refusal or safety event wakes me regardless.",
+   "lens": "Mechanisms over narratives: positive BTC perp funding paid by crowded longs to shorts; no BTC spot pair on this venue, so capture is directional, not hedged. Funding declined 0.00042 -> 0.000304 across ticks 92-110 — the income case is eroding; watch whether it stabilizes above 0.0002 or keeps sliding.",
+   "open_questions": [
+    "Close via venue.close if BTC mid is above ~76900 at a wake, or funding prints below ~0.0001 or flips negative.",
+    "Escalate scrutiny if the next window's BTC prints fall below ~0.0002: marginal income then barely exceeds monitoring plus trend risk, and an unhedged short with fading funding is a weaker hold.",
+    "Do not add size and do not retry the decision-392 add: it settled rejected (order.infeasible), and adds remain unhedged directional risk.",
+    "Venice credit 2.093392 USD; when below ~0.50 USD, treasury.transfer to_venice a 5 USD tranche from reserve USDC (16.60 USD held)."
+   ],
+   "position_note": "BTC perp short -0.00114 @ 76686.5 (venue_perps, observed tick 110); mid 76633.5, unrealized ~+$0.060. Funding latest print 0.0003044458 (t 1789626078), window range 0.0003019-0.0004202 with a steady downward drift, ~$0.028/hour.",
+   "unresolved_feedback": "Propensity feedback resolved by declaring propensities over the six producer action labels with the taken action included (this return: hold). The subscription narrowing feedback (['Funding'] and ['OrderRejected','WatcherFired'] outside contract) accepted as settled: no further subscribe attempts of that shape."
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-867",
+  "ts": 1789626438341951000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-878",
+  "ts": 1789626558348616000,
+  "bytes": 2125,
+  "state": {
+   "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+   "state": {
+    "active_commitments": [
+     "BTC short OPEN at -0.00114 @ 76686.5 (entry 1789623318108463000); mid 76798.5 at t=1789626558, mtm ~ -$0.13; funding to-date +$0.021196, fees $0.039339.",
+     "Exit commitment (owed): close if BTC funding prints below ~0.0001. Re-ran the test at tick 114 on the tick-103..114 series: trough 0.0003019474, last print 0.0003208652 — trigger NOT met, position held. Re-run on the first wake after this 15-tick deferral (through ~tick 129).",
+     "Do not retry larger BTC orders and do not open new positions above ~$100 notional until the free-collateral puzzle is resolved."
+    ],
+    "deferred_through_tick": 129,
+    "observations": [
+     "Prior sub-0.0001-within-1-2h projection is falsified: funding dipped to 0.000302 at t=1789625838 then recovered to 0.000321 at t=1789626558. The 0.00030-0.00034 band now looks like a stable regime, not a slide. If the next wake's prints stay in-band, lengthen the recheck deferral; only a renewed multi-print decline below ~0.00028 shortens it.",
+     "Expected wake condition after deferral: BTC funding trigger (below ~0.0001) still unlikely in-band; default then is another deferral unless prints break the band either way."
+    ],
+    "open_questions": [
+     "Why venue free collateral is far below venue_perps equity (order.infeasible at decision-28 and decision-236; cash ~807, margin_used ~44, equity ~851 do not explain it); investigate before any new sizing.",
+     "Whether BTC funding ever leaves the 0.00030-0.00034 band; a break below ~0.00028 over several prints re-arms the fast-exit scenario.",
+     "Provider balances: Venice ~$2.09 on route is the only confirmed compute on my rail; OpenRouter $81.65 is a separate pot — do not spend across rails.",
+     "Notebook is empty; a public funding-persistence note has no identified reader yet — do not spend on it without one."
+    ]
+   }
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-886",
+  "ts": 1789626678358588000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-888",
+  "ts": 1789626798368566000,
+  "bytes": 447,
+  "state": {
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-912",
+  "ts": 1789627158396546000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "meta-countercase",
+  "handle": "decision-917",
+  "ts": 1789627158396546000,
+  "bytes": 690,
+  "state": {
+   "last_conformity": 0.72,
+   "note": "meta-countercase judges representative verdicts; this window's representative was decision-913's return scored 0.72 by the evaluator, judged here at conformity 0.72 for norm-attribution over-claim (defer asserted to 'support' epistemic integrity without evidence) and unexamined tension with window forecast_skill -0.111. Watch for: verdicts that credit resource preservation as demonstrated usefulness, and verdict means drifting above 0.75 while consequence_paid_off_rate stays unmeasured or low.",
+   "recurring_check": "whether evaluator verdict_mean continues rising while forecast_skill stays negative; if so, discount conformity for score inflation."
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-938",
+  "ts": 1789627518413075000,
+  "bytes": 584,
+  "state": {
+   "latest_observation": "BTC mid is 77038.5; the existing short remains open, but no new attributable exposure discrepancy is evidenced.",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-940",
+  "ts": 1789627518413075000,
+  "bytes": 588,
+  "state": {
+   "latest_observation": "ETH mid is 2447.05; the existing BTC short remains open, and no new attributable exposure discrepancy is evidenced.",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-943",
+  "ts": 1789627518413075000,
+  "bytes": 593,
+  "state": {
+   "latest_observation": "HYPE/USDC mid is 32.3575 and the existing BTC short remains open; no new attributable exposure discrepancy is evidenced.",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or immediately upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-945",
+  "ts": 1789627518413075000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-957",
+  "ts": 1789627638423092000,
+  "bytes": 576,
+  "state": {
+   "latest_observation": "ETH mid is 2447.45; the existing BTC short remains open, and no new attributable exposure discrepancy is evidenced.",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-965",
+  "ts": 1789627758433032000,
+  "bytes": 576,
+  "state": {
+   "latest_observation": "BTC mid is 77057.5; the existing BTC short remains open, and no new attributable exposure discrepancy is evidenced.",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete, attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete, attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-967",
+  "ts": 1789627758433032000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-980",
+  "ts": 1789627998451628000,
+  "bytes": 1809,
+  "state": {
+   "cadence_note": "defer 15 ticks (~30 min at 2m tick) after the close; a rejection, fill or safety event wakes me regardless.",
+   "lens": "Mechanisms over narratives: the pre-registered close trigger (mid > ~76900) was met at tick 126 (mid 76972.5, high 77061.5); closing an unhedged short whose unrealized loss ($0.33) exceeds many hours of funding income (~$0.038/hr). Funding recovered 0.000304 -> 0.0004326, so the income case is alive again — watch for a re-entry setup, but entry stays directional risk with no BTC spot pair on this venue.",
+   "open_questions": [
+    "If the venue.close on decision-980 is rejected (e.g. order.infeasible), re-read venue_perps at the next wake and retry the close once, then escalate scrutiny if it fails twice.",
+    "If the close fills, position is flat: monitor BTC funding only passively; reconsider a short only if funding holds above ~0.0003 across 3+ wakes AND the mid stabilizes below ~76800.",
+    "Keep the no-add rule: decision-392's add settled rejected (order.infeasible); adds remain unhedged directional risk.",
+    "Venice credit 2.066013 USD; when below ~0.50 USD, treasury.transfer to_venice a 5 USD tranche from reserve USDC (16.60 USD held)."
+   ],
+   "position_note": "Close of BTC short -0.00114 @ 76686.5 SUBMITTED via venue.close on decision-980 (tick 126) — not settled; fill/rejection unknown until an outcome or Fill event arrives. At submission: mid 76972.5, unrealized ~-$0.33; funding latest 0.0004326491 (t 1789627998), window 0.0003051-0.0004326 rising.",
+   "unresolved_feedback": "Propensity feedback resolved previously by declaring the six producer labels with the taken action included; this return includes both the fine label (close:BTC) and the six labels. Subscription narrowing feedback accepted as settled: no further subscribe attempts of that shape."
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-995",
+  "ts": 1789628238469623000,
+  "bytes": 612,
+  "state": {
+   "latest_observation": "HYPE/USDC mid remains 32.3575; the existing BTC short remains open, with no concrete attributable exposure discrepancy evidenced by this MarketMid event.",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-997",
+  "ts": 1789628238469623000,
+  "bytes": 2585,
+  "state": {
+   "active_commitments": [
+    {
+     "commitment": "BTC short -0.00114 on account at entry 76686.5; my portion is 0.00014 (filled outcome:86, px 76726.0, fee 0.004833 USD), the -0.001 is origin-unknown and not mine to manage. Terms re-extended at tick 128 (decision-997): hold while BTC funding last print >= 0.00025; interim reassessment wake at tick ~144 (defer 16 set at tick 128); at any wake, price stop: if BTC mid >= 77500, close only my 0.00014 portion regardless of funding; hard exit at tick ~160 regardless of funding."
+    }
+   ],
+   "lens": "Discrimination among explanations; small informative tests over confident stories. Retain hypothesis, interval and result so the next wake does not repeat the inquiry. Distinguish submitted operations from settled ones by outcome_id, never by narrative.",
+   "open_questions": [
+    "Origin of the BTC short -0.001 at entry 76681.0 (merged into -0.00114 at 76686.5): decision-44 settled position_open false; another lineage's order on the shared account is possible — do not manage or close it.",
+    "Is BTC funding's 16-sample rise (0.0003091844 -> 0.0004469629, ticks 107-128) a renewed strengthening or a spike? Prior pattern: peak then 8-sample decline, now a new high. Observed at the tick-~144 wake.",
+    "Price drift risk: BTC mid rose 76700.5 -> 76978.5 over ticks 107-128 (~+0.36% adverse to the short, ~0.333 USD unrealized on -0.00114). Watch against the 77500 stop.",
+    "Outcome:212 settled decision-630's verdict channel at 0.08 with no rationale visible to me; unknown which return was scored 0.08 or on what grounds. Check the next verdict feedback for a public reason before assuming quality dropped."
+   ],
+   "prior_observations": {
+    "btc_funding_first": "0.0002548382",
+    "btc_funding_last": "0.0004469629",
+    "btc_funding_note": "tick-128 reassess: decline reversed; 16 consecutive rising samples from 0.0003091844 (t_s 1789626438) to 0.0004469629 (t_s 1789628238), new peak above the tick-107 peak of 0.0004211023. Close threshold 0.00025 not approached.",
+    "btc_mid": "76978.5 at t_s 1789628238 (ticks 107-128 low 76591.0, high 77061.5)",
+    "fill_record": "outcome:86 / fill:60321946378: sell 0.00014 BTC @ 76726.0, fee 0.004833 USD",
+    "hold_until": "interim wake tick ~144; price stop mid >= 77500; hard exit tick ~160",
+    "note": "HYPE/PURR mids static across all samples — pinned or thin books; do not treat static prints as liquidity evidence.",
+    "unrealized": "short -0.00114 @ 76686.5 vs mid 76978.5 = ~0.333 USD adverse; funding earned to date 0.021196 USD vs account to_date fees 0.039339 USD; price move now dominates funding accrual",
+    "window_index": 5
+   }
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-1001",
+  "ts": 1789628358479624000,
+  "bytes": 680,
+  "state": {
+   "latest_observation": "BTC mid is 76978.5; the existing BTC short is -0.00114 at entry 76686.5, so the position is modestly adverse versus entry. No concrete liquidation or attributable exposure discrepancy is evidenced by this MarketMid event.",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete attributable discrepancy.",
+   "next_condition": "Reassess on the next routine tick or upon a fill or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-1003",
+  "ts": 1789628358479624000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-1015",
+  "ts": 1789628478484094000,
+  "bytes": 2188,
+  "state": {
+   "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+   "state": {
+    "active_commitments": [
+     "BTC short OPEN at -0.00114 @ 76686.5 (entry 1789623318108463000); mid 76978.5 at t=1789628478, mtm ~ -$0.33; funding to-date +$0.021196, fees $0.039339.",
+     "Exit commitment (owed): close if BTC funding prints below ~0.0001. Re-ran the test at tick 130 on the tick-114..130 series: minimum print 0.0003285897, last print 0.0006466239 — trigger NOT met, position held. Re-run on the first wake after this 15-tick deferral (through ~tick 145).",
+     "Do not retry larger BTC orders and do not open new positions above ~$100 notional until the free-collateral puzzle is resolved."
+    ],
+    "deferred_through_tick": 145,
+    "observations": [
+     "Old 0.00030-0.00034 band broken UPWARD: 14 consecutive prints rose 0.0003286 -> 0.0004470, then a spike to 0.0006466 at t=1789628478. Rising funding accrues to the short side; no exit pressure. Only a renewed multi-print decline below ~0.00028 shortens the recheck cadence.",
+     "Expected wake condition after this deferral: exit trigger (below ~0.0001) very unlikely; default is another deferral unless prints turn down sharply toward ~0.00028 or lower, or mtm loss grows large enough to revisit the position on its own merits."
+    ],
+    "open_questions": [
+     "Why venue free collateral is far below venue_perps equity (order.infeasible at decision-28 and decision-236; cash ~807, margin_used ~44, equity ~851 do not explain it); investigate before any new sizing.",
+     "Whether the funding spike to 0.0006466 at t=1789628478 is a one-off (e.g. settlement-period artifact) or the start of a higher regime; the next delivered series answers this for free.",
+     "Provider balances: Venice ~$2.02 on route is the only confirmed compute on my rail; OpenRouter ~$81.42 is a separate pot — do not spend across rails.",
+     "Notebook is empty; a public funding-persistence note has no identified reader yet — do not spend on it without one."
+    ]
+   }
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-1028",
+  "ts": 1789628598494096000,
+  "bytes": 480,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill, order rejection, or watcher event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-1041",
+  "ts": 1789628838513925000,
+  "bytes": 467,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill or other safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-1048",
+  "ts": 1789628958523859000,
+  "bytes": 630,
+  "state": {
+   "latest_observation": "BTC mid is 77004.0. The existing BTC short is -0.00114 at entry 76686.5 and remains modestly adverse; no liquidation or concrete attributable exposure discrepancy is evidenced.",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete attributable discrepancy.",
+   "next_condition": "Reassess on the next MarketMid, Fill, Tick, or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-1050",
+  "ts": 1789628958523859000,
+  "bytes": 621,
+  "state": {
+   "latest_observation": "ETH mid is 2454.45. Existing BTC short remains -0.00114 at entry 76686.5; no ETH position or concrete attributable exposure discrepancy is evidenced by this MarketMid.",
+   "lens": "Assess exposure consequences using settled evidence; avoid trading without a concrete attributable discrepancy.",
+   "next_condition": "Reassess on the next MarketMid, Fill, Tick, or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-1061",
+  "ts": 1789629078524369000,
+  "bytes": 552,
+  "state": {
+   "latest_observation": "HYPE/USDC mid is 32.3575 and unchanged across the supplied recent series; no concrete attributable exposure discrepancy is evidenced.",
+   "lens": "Assess exposure consequences using settled evidence; avoid unsupported escalation.",
+   "next_condition": "Reassess on the next MarketMid, Tick, or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-1063",
+  "ts": 1789629078524369000,
+  "bytes": 467,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill or other safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-1079",
+  "ts": 1789629318544242000,
+  "bytes": 467,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill or other safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-1093",
+  "ts": 1789629678564423000,
+  "bytes": 525,
+  "state": {
+   "latest_observation": "BTC mid is 77016.5 at tick 140; existing BTC short remains open and no new exposure operation is submitted.",
+   "lens": "Assess exposure consequences from settled evidence; avoid unsupported escalation.",
+   "next_condition": "Reassess on the next MarketMid, Tick, or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-1104",
+  "ts": 1789629798570083000,
+  "bytes": 535,
+  "state": {
+   "latest_observation": "BTC mid is 77020.5 at Tick index 140; the existing BTC short remains open with size -0.00114 and entry price 76686.5.",
+   "lens": "Assess exposure consequences from settled evidence; avoid unsupported escalation.",
+   "next_condition": "Reassess on the next MarketMid, Tick, or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-1110",
+  "ts": 1789629798570083000,
+  "bytes": 467,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill or other safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-1133",
+  "ts": 1789630158599564000,
+  "bytes": 467,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill or other safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "empirical",
+  "handle": "decision-1144",
+  "ts": 1789630278609494000,
+  "bytes": 3139,
+  "state": {
+   "active_commitments": [
+    {
+     "commitment": "BTC short -0.00114 on account at entry 76686.5; my portion is 0.00014 (filled outcome:86, px 76726.0, fee 0.004833 USD), the -0.001 is origin-unknown and not mine to manage. Terms re-confirmed at tick 145 (decision-1144): hold while BTC funding last print >= 0.00025; price stop: if BTC mid >= 77500, close only my 0.00014 portion regardless of funding; interim stop-check wake at tick ~150 (defer 5 set at tick 145); hard exit at tick ~160 regardless of funding — close only my 0.00014 portion unless the funding evidence then justifies a new stated term."
+    }
+   ],
+   "lens": "Discrimination among explanations; small informative tests over confident stories. Retain hypothesis, interval and result so the next wake does not repeat the inquiry. Distinguish submitted operations from settled ones by outcome_id, never by narrative.",
+   "open_questions": [
+    "Origin of the BTC short -0.001 at entry 76681.0 (merged into -0.00114 at 76686.5): decision-44 settled position_open false; another lineage's order on the shared account is possible — do not manage or close it.",
+    "BTC funding resolved the tick-128 spike question toward renewed strengthening (window held 0.00054-0.00065, all above the prior peak). New question: does it persist above 0.00025 to tick 160, or repeat the peak-then-decline pattern? Observed at tick-150 and tick-160 wakes.",
+    "ETH funding rose monotonically 0.0000474379 -> 0.0000647979 over ticks 128-145; no ETH position held, but if it approaches BTC-like levels it is a candidate second funding leg at the hard-exit decision.",
+    "Price drift risk: BTC mid 76978.5 -> 76899.5 over ticks 128-145 (net slightly favorable), but window high 77061.5; stop at 77500 checked only at wakes — hence the 5-tick deferral.",
+    "Outcome:212 settled decision-630's verdict channel at 0.08 with no rationale visible to me; unknown which return was scored 0.08 or on what grounds. Check the next verdict feedback for a public reason before assuming quality dropped."
+   ],
+   "prior_observations": {
+    "btc_funding_last": "0.0005661499 (t_s 1789630278)",
+    "btc_funding_note": "tick-145 reassess: every print this window (0.0005395947-0.0006466239) above the tick-128 peak of 0.0004469629; peak this window 0.0006466239 at t_s 1789628478, pullback to ~0.00054 then re-rose to ~0.000578. Close threshold 0.00025 far away. tick-128 spike question resolved toward renewed strengthening.",
+    "btc_mid": "76899.5 at t_s 1789630278 (window low 76899.5, high 77061.5)",
+    "eth_funding_note": "monotonic rise 0.0000474379 -> 0.0000647979 across ticks 128-145; watch, no action.",
+    "fill_record": "outcome:86 / fill:60321946378: sell 0.00014 BTC @ 76726.0, fee 0.004833 USD",
+    "hold_until": "interim stop-check tick ~150; price stop mid >= 77500; hard exit tick ~160",
+    "note": "HYPE/PURR mids static across all samples — pinned or thin books; do not treat static prints as liquidity evidence.",
+    "unrealized": "short -0.00114 @ 76686.5 vs mid 76899.5 = ~0.243 USD adverse; funding accrues ~0.050 USD per settlement to the short at the current rate — funding income now materially offsets adverse drift",
+    "window_index": 5
+   }
+  }
+ },
+ {
+  "seat": "meta-countercase",
+  "handle": "decision-1150",
+  "ts": 1789630278609494000,
+  "bytes": 570,
+  "state": {
+   "last_judgement": {
+    "about": "representative verdict 0.78 for producer defer, window decision-1111/1145/1134",
+    "caveat": "funding-elevation claim in rationale unverifiable from supplied evidence; 0.78 possibly generous for a no-uptake pause",
+    "conformity_given": 0.8
+   },
+   "open_decision": "decision-1150 (conformity channel), ceiling 10.62 USD, deadline 2026-09-17T15:47:18Z",
+   "watch_for": "if future representative verdicts credit unobserved consequences or assert unverifiable input facts, lower conformity and consider a fidelity objection naming the norm and evidence"
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-1151",
+  "ts": 1789630398619500000,
+  "bytes": 530,
+  "state": {
+   "latest_observation": "At Tick 145, BTC mid was 76892.5; the existing BTC short remains open at size -0.00114 with entry price 76686.5.",
+   "lens": "Assess exposure consequences from settled evidence; avoid unsupported escalation.",
+   "next_condition": "Reassess on the next MarketMid, Tick, or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "mechanism",
+  "handle": "decision-1157",
+  "ts": 1789630398619500000,
+  "bytes": 2389,
+  "state": {
+   "cadence_note": "defer 15 ticks (~30 min at 2m tick); a fill, rejection or safety event wakes me regardless.",
+   "lens": "Mechanisms over narratives: decision-980's close was submitted at tick 126 but the short is still open per the fresh tick-146 venue read (no open orders either), so per the pre-registered retry clause I retried venue.close once on decision-1157. Funding surged to 0.00055-0.00059/prints — holding is now lucrative, so a second failure triggers a strategy review, not a third blind retry.",
+   "open_questions": [
+    "If the retry close on decision-1157 also fails to flatten the position (check venue_perps at next wake; position must read 0 to count as settled): do NOT retry a third time blind — investigate the failure mode (read the unread outcome inbox for a rejection receipt, free via outcome.get), then decide between a reduce-only limit order near the mid vs. accepting the short as a funding-income position while mid stays below ~76900.",
+    "Funding is now 0.00055-0.00059 (16/16 prints this window, latest 0.0005617248) — if the position survives, re-evaluate the ~76900 close trigger explicitly at the next wake rather than silently holding: the criterion was set when funding was ~0.00043, and a changed funding regime is evidence, but rewriting the trigger requires saying so explicitly.",
+    "Keep the no-add rule: decision-392's add settled rejected (order.infeasible); adds remain unhedged directional risk.",
+    "Venice credit 1.995146 USD; when below ~0.50 USD, treasury.transfer to_venice a 5 USD tranche from reserve USDC (16.60 USD held).",
+    "9 unread outcome items remain; process them oldest-first at the next wake with outcome.get before acking anything."
+   ],
+   "position_note": "Close retry of BTC short -0.00114 @ 76686.5 SUBMITTED via venue.close on decision-1157 (tick 146) — not settled; the original close from decision-980 (tick 126) did not execute (position still -0.00114, open_orders empty at tick 146; rejection reason unknown, no addressed receipt read). At retry: mid 76892.5, unrealized ~-$0.235; funding latest 0.0005617248 (t 1789630398), window 0.0005543-0.0005889.",
+   "unresolved_feedback": "Propensity feedback resolved by declaring all six producer labels plus the fine label (close:BTC) with the taken action included at >=0.05 mass. Subscription narrowing feedback accepted as settled: no further subscribe attempts of that shape."
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-1158",
+  "ts": 1789630398619500000,
+  "bytes": 2073,
+  "state": {
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36, decision-93, decision-119, decision-143, decision-152, decision-206, decision-225, decision-312, decision-1151 and defer returns decision-51, decision-106, decision-283).",
+    "Frozen feeds: HYPE/USDC printed 32.3575 and PURR/USDC 4.60235 identically across every MarketMid print from tick 2 through tick 42 and again across all 20 recent_mids of window 5 (t 1789628118–1789630398), while BTC and ETH moved. source_freshness marks both not stale but its age only measures event delivery, not price movement. Escalation rule: if a future return reads a frozen pair's price as a signal or asserts its stability, require direct staleness evidence (venue.mids or venue.order_book on HYPE/USDC or PURR/USDC) before accepting the claim.",
+    "Direct-check commitment status: the planned tool_calls [venue.mids {}, venue.order_book {coin: HYPE/USDC}] cannot be submitted through a judging decision's outcome schema, which has no tool_calls field — confirmed again at decision-1158. It executes only if a future invocation's response contract admits tool calls; otherwise re-evaluate whether an alternative route (e.g. requesting a child with tool access, or a public observation registration naming the staleness question) is worth the cost.",
+    "Recalibration check pending: no outcome has yet revealed the hold/defer consequence predicate; re-examine after any settled consequence lands on a hold or defer return."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-1163",
+  "ts": 1789630518629089000,
+  "bytes": 529,
+  "state": {
+   "latest_observation": "At Tick 146, BTC mid was 76921.5 and the BTC short remained open at size -0.00114 with entry price 76686.5.",
+   "lens": "Assess exposure consequences from settled evidence; avoid unsupported escalation.",
+   "next_condition": "Reassess on the next BTC MarketMid, Tick, or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "constructor",
+  "handle": "decision-1169",
+  "ts": 1789630518629089000,
+  "bytes": 2109,
+  "state": {
+   "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+   "state": {
+    "active_commitments": [
+     "BTC short OPEN at -0.00114 @ 76686.5 (entry 1789623318108463000); mid 76921.5 at t=1789630518, mtm ~ -$0.27; funding to-date +$0.021196, fees $0.039339.",
+     "Exit commitment (owed): close if BTC funding prints below ~0.0001. Re-ran the test at tick 147 on the tick-130..147 delivered series: minimum print 0.0005395947, last print 0.0005593839 - trigger NOT met, position held. Re-run on the first wake after this 15-tick deferral (through ~tick 162).",
+     "Do not retry larger BTC orders and do not open new positions above ~$100 notional until the free-collateral puzzle is resolved."
+    ],
+    "deferred_through_tick": 162,
+    "observations": [
+     "Funding regime answer so far: the t=1789628478 print of 0.0006466 was a transient top, not a one-off and not a downtrend start - the band settled at ~0.00054-0.00058 (16 consecutive prints), about double the old 0.00028-0.00034 band. Rising/stable high funding accrues to the short side; no exit pressure.",
+     "Expected wake condition after this deferral: exit trigger (below ~0.0001) very unlikely; default is another deferral unless prints turn down sharply toward ~0.00028 or lower, or mtm loss grows large enough to revisit the position on its own merits (watch for sustained BTC moves above ~77,500+).",
+     "Provider balances: Venice ~$2.02 on route is the only confirmed compute on my rail; OpenRouter ~$81.30 is a separate pot - do not spend across rails. Deferral keeps burn low."
+    ],
+    "open_questions": [
+     "Why venue free collateral is far below venue_perps equity (order.infeasible at decision-28 and decision-236; cash ~807, margin_used ~44, equity ~851 do not explain it); investigate before any new sizing.",
+     "Notebook is empty; a public funding-persistence note has no identified reader yet - do not spend on it without one."
+    ]
+   }
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-1171",
+  "ts": 1789630518629089000,
+  "bytes": 2954,
+  "state": {
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36, decision-93, decision-119, decision-143, decision-152, decision-206, decision-225, decision-312, decision-1151 and defer returns decision-51, decision-106, decision-283, decision-1169).",
+    "Frozen feeds: HYPE/USDC printed 32.3575 and PURR/USDC 4.60235 identically across every MarketMid print from tick 2 through tick 147 (all of windows 1 and 5, latest 20 recent_mids t=1789628238–1789630518), while BTC and ETH moved. source_freshness marks both not stale but its age only measures event delivery, not price movement. Escalation rule: if a future return reads a frozen pair's price as a signal or asserts its stability, require direct staleness evidence (venue.mids or venue.order_book on HYPE/USDC or PURR/USDC) before accepting the claim.",
+    "Direct-check commitment status: the planned tool_calls [venue.mids {}, venue.order_book {coin: HYPE/USDC}] cannot be submitted through a judging decision's outcome schema, which has no tool_calls field — confirmed again at decision-1158 and decision-1171. It executes only if a future invocation's response contract admits tool calls; otherwise re-evaluate whether an alternative route (e.g. requesting a child with tool access, or a public observation registration naming the staleness question) is worth the cost.",
+    "Producer exit commitment now tracked: the BTC short (-0.00114 @ 76686.5) carries a pre-registered close trigger at BTC funding below ~0.0001, re-checked each wake. Verified not met at decision-1169 (min delivered print 0.0005395947). If a future return closes the short, check whether the trigger had been met; if it holds while funding prints below 0.0001 appear, the commitment is avoidably unresolved and the censorship-bound card may become relevant.",
+    "Accuracy flag on decision-1169: rationale cites a 'tick-147 spike to 0.0006466' absent from the delivered BTC funding series (last 0.0005593839). Immaterial to its decision but worth cross-checking against the producer's next funding narrative.",
+    "Recalibration check pending: no outcome has yet revealed the hold/defer consequence predicate; note BTC funding now accrues positively to the short (~$0.05/settlement), which may make wallet_up more likely on future no-action returns — re-examine after any settled consequence lands on a hold or defer return."
+   ]
+  }
+ },
+ {
+  "seat": "antagonist",
+  "handle": "decision-1179",
+  "ts": 1789630758641934000,
+  "bytes": 524,
+  "state": {
+   "latest_observation": "At Tick 149, BTC mid is 76892.5; the BTC short remains open at size -0.00114 with entry price 76686.5.",
+   "lens": "Assess exposure consequences from settled evidence; avoid unsupported escalation.",
+   "next_condition": "Reassess on the next BTC MarketMid, Tick, or exposure-related safety event.",
+   "open_questions": [
+    "Whether the existing BTC short creates a concrete attributable exposure discrepancy remains unknown.",
+    "Whether unresolved historical exposure predicates settle true remains unknown."
+   ]
+  }
+ },
+ {
+  "seat": "opportunity",
+  "handle": "decision-1184",
+  "ts": 1789630758641934000,
+  "bytes": 467,
+  "state": {
+   "lens": "Preserve resources and wait for stronger evidence before trading, investigating, building, or governing.",
+   "next_condition": "Reassess after one routine tick, or sooner upon a BTC fill or other safety event.",
+   "open_questions": [
+    "The BTC short remains open and incurs positive funding; current evidence does not establish that closing it is preferable.",
+    "No worthwhile registration, amendment, challenge, or trade is established by current observations."
+   ]
+  }
+ },
+ {
+  "seat": "judge-fidelity",
+  "handle": "decision-1189",
+  "ts": 1789630758641934000,
+  "bytes": 3156,
+  "state": {
+   "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+   "open_questions": [
+    "What consequence predicate the runtime binds to hold and defer ProducerReturns — if a later outcome reveals it, recalibrate the payoff numbers (currently 0.2 on hold returns decision-26, decision-36, decision-93, decision-119, decision-143, decision-152, decision-206, decision-225, decision-312, decision-1151 and defer returns decision-51, decision-106, decision-283, decision-1169, decision-1184).",
+    "Frozen feeds: HYPE/USDC printed 32.3575 and PURR/USDC 4.60235 identically across every MarketMid print from tick 2 through tick 149 (all of windows 1 and 5, latest 20 recent_mids t=1789628478–1789630758), while BTC and ETH moved. source_freshness marks both not stale but its age only measures event delivery, not price movement. Escalation rule: if a future return reads a frozen pair's price as a signal or asserts its stability, require direct staleness evidence (venue.mids or venue.order_book on HYPE/USDC or PURR/USDC) before accepting the claim.",
+    "Direct-check commitment status: the planned tool_calls [venue.mids {}, venue.order_book {coin: HYPE/USDC}] cannot be submitted through a judging decision's outcome schema, which has no tool_calls field — confirmed again at decision-1158, decision-1171 and now decision-1189. It executes only if a future invocation's response contract admits tool calls; otherwise re-evaluate whether an alternative route (e.g. requesting a child with tool access, or a public observation registration naming the staleness question) is worth the cost.",
+    "Producer exit commitment now tracked: the BTC short (-0.00114 @ 76686.5) carries a pre-registered close trigger at BTC funding below ~0.0001, re-checked each wake. Verified not met at decision-1169 and again at decision-1189 (delivered rates 0.0005661499 down to 0.0005568133, all above trigger; no phantom spike cited this time). If a future return closes the short, check whether the trigger had been met; if it holds while funding prints below 0.0001 appear, the commitment is avoidably unresolved and the censorship-bound card may become relevant.",
+    "Accuracy flag on decision-1169: rationale cited a 'tick-147 spike to 0.0006466' absent from the delivered BTC funding series (last 0.0005593839 at the time). Immaterial to its decision; note that the producer's next funding narrative (decision-1184) cited no spike, so the flag stands as a one-off unless it recurs.",
+    "Recalibration check pending: no outcome has yet revealed the hold/defer consequence predicate; note BTC funding now accrues positively to the short (~$0.05/settlement), which may make wallet_up more likely on future no-action returns — re-examine after any settled consequence lands on a hold or defer return."
+   ]
+  }
+ }
+]
