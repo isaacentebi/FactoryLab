@@ -168,6 +168,20 @@ class ArtifactStore:
         the ledger item left behind, and records whose every reference was released.
         An owned blob and a published blob are never candidates, so collection can
         never take a seat's state, an inbox body or anything the population shared.
+
+        **A replay collects only what the diary knows (R4-C).** The archive
+        directory is not replayed state. After a crash it still holds the bytes
+        the interrupted run wrote *after* the checkpoint a resume starts from, and
+        the restored index does not name them yet, so sweeping it during recovery
+        deletes blobs the recorded path still had live references for and ledgers
+        a removal the recording never made -- which is a divergence, and the
+        replay is the side that is wrong. While the journal is recovering the
+        candidates are therefore restricted to index records whose references were
+        all released: that is checkpointed state, it is reached by the same
+        deterministic tail, and it is ledgered identically on replay. Untracked
+        leftovers keep their bytes until the first boundary after the world is
+        live again, by which time the replay has re-put everything still owned and
+        only the true leftovers remain.
         """
         live = {sha for sha, record in self.index.items()
                 if self.references(sha, record) or record.get("public")}
@@ -176,6 +190,8 @@ class ArtifactStore:
         else:
             orphans = sorted(path.name for path in self.root.glob("*")
                              if len(path.name) == SHA_HEX_CHARS and path.name not in live)
+        if getattr(self.ledger, "recovering", False):
+            orphans = [sha for sha in orphans if sha in self.index]
         for sha in orphans:
             if self.root is None:
                 self._memory.pop(sha, None)

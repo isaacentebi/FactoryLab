@@ -336,3 +336,44 @@ def test_one_return_is_one_observation_however_many_forecasts_share_it(
     from factorylab.runtime.resume import _COMPONENT_FIELDS
 
     assert ("settler", "_Settler__", ("snapshots", "recorded")) in _COMPONENT_FIELDS
+
+
+def test_a_released_unresolved_order_censors_its_return_and_frees_every_later_one(
+    ledger, queue, book, standing, baseline, settler, seal_forecast,
+):
+    """R4-C. The venue lost one order and never reported it. The return that sent it
+    has no fill status, so it has no payoff: its consequence settles censored with the
+    reason documented, it is an excluded sample rather than a silent zero, it trains no
+    standing and enters no base rate -- and the hold it was keeping on every later
+    return's outcome is gone."""
+    from factorylab.settlement.vocabulary import RETURN_PAID_OFF
+
+    consequences = ReturnConsequences(ledger, 200)
+    for handle in ("producer-1", "producer-2"):
+        consequences.start(handle, 0)
+        consequences.finish(handle, 5)
+    consequences.order_intent("producer-1:output", "producer-1", "BTC")
+    # The hold #105 left in place: nothing resolves while the intent is pending.
+    assert consequences.resolve(0) == []
+
+    consequences.release_unresolved("producer-1:output", 1)
+    assert any(i["kind"] == "order.unresolved_released" for i in ledger._recovery_items())
+    # Every later return resolves again, and the censored outcome is handed over with them.
+    fixed = consequences.resolve(2)
+    assert {p.handle for p in fixed} == {"producer-1", "producer-2"}
+    censored = next(p for p in fixed if p.handle == "producer-1")
+    assert censored.censored == "external_unobservable" and not censored.marked
+    assert consequences.resolve(3) == []  # and nothing is resolved twice
+
+    forecast = seal_forecast(predicate_id=RETURN_PAID_OFF.id, q=1.0)
+    (result,) = settler.settle_consequences(consequences.payoff)
+    assert result.handle == forecast.handle and result.about_handle == "producer-1"
+    assert result.y is None and result.brier is None and result.baseline_brier is None
+    assert str(result.status) == str(queue.get(forecast.handle).status) == "censored"
+    assert result.excluded == "external_unobservable"
+    assert settler.excluded(forecast.handle) == "external_unobservable"
+    # Nothing was scored, so nothing moved: no standing, no base rate, no rescoring.
+    assert standing.skill(forecast.evaluator_id) == 0
+    assert baseline.baseline_q(RETURN_PAID_OFF.id) == 0.5
+    assert settler.settle_consequences(consequences.payoff) == []
+    assert book.outstanding() == 0

@@ -292,6 +292,32 @@ class Settler:
                     continue
                 if payoff.handle != forecast.about_handle:
                     raise ValueError("consequence belongs to a different return")
+                if payoff.censored is not None:
+                    # The world was asked and did not answer, and the owner could
+                    # not have made it answer (R4-C). The OUTCOME CONTRACT's third
+                    # answer is "unknown: the necessary observation is
+                    # unavailable", so there is no fact here for anyone to be
+                    # right or wrong about: every commitment on this return
+                    # settles censored, trains no standing, enters no base rate,
+                    # and carries the documented reason that keeps it out of the
+                    # accountable-resolution sample.
+                    self.__queue.settle(
+                        forecast.handle, channel="consequence", score=0.0,
+                        status=SettleStatus.CENSORED, definition_version="censored-v1",
+                        sampling_ref=None,
+                    )
+                    self.__book.mark_settled(forecast.handle)
+                    self.__excluded[forecast.handle] = payoff.censored
+                    results.append(Settled(
+                        forecast.handle, forecast.evaluator_id, forecast.about_handle,
+                        forecast.predicate_id, None, None, None, SettleStatus.CENSORED,
+                        False, excluded=payoff.censored,
+                        receipt=self.__learning_receipt(
+                            forecast, y=None, score=None, baseline=None,
+                            definition="censored-v1", reason=payoff.censored,
+                            sampling_ref=payoff.handle),
+                    ))
+                    continue
                 score = brier(forecast.q, payoff.y)
                 baseline = brier(self.__baseline_before(payoff.handle), payoff.y)
                 self.__book.record_consequence(

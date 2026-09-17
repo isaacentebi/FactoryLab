@@ -565,7 +565,10 @@ _COMPONENT_FIELDS = (
     ("controller", "_PriceController__", (
         "eta", "kappa", "decay", "lambda_max", "min_window_events", "cards",
     )),
-    ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events")),
+    ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events",
+                          # R4-C: a released hold's exposure, and the censored
+                          # outcomes not yet handed to the runtime.
+                          "unresolved_orders", "censored_payoffs")),
     ("consequence_fills", "", ("since_ns", "seen")),
     ("reconciler", "", ("every", "_ticks")),
     # The artifact archive's index (C9): hash -> owner, kind, size, time, published.
@@ -791,6 +794,10 @@ def restore_runtime(rt, state: dict) -> None:
                 continue
             if name in ("working_state", "outcomes") and name not in components:
                 # Older checkpoints predate continuity; heads and inboxes start empty.
+                continue
+            if (name == "consequences" and field in ("unresolved_orders", "censored_payoffs")
+                    and field not in components[name]):
+                # Older checkpoints predate the released hold; nothing is released.
                 continue
             if name == "bill_settlement" and name not in components:
                 # Older checkpoints predate bill settlement; the next read takes a reference.

@@ -21,6 +21,14 @@ class ReturnConsequences:
         self.table = LotTable()
         self.mids: dict[str, str] = {}
         self.pending_orders: dict[str, dict] = {}
+        # R4-C: intents the venue never answered and never will. The hold on
+        # consequence resolution is released for them, but the exposure is not
+        # forgotten: an order the venue may still be holding can still own a
+        # fill, so it keeps its return's attribution alive.
+        self.unresolved_orders: dict[str, dict] = {}
+        # Outcomes fixed outside ``resolve`` -- censored ones -- waiting to be
+        # handed to the runtime with everything else it fixed this event.
+        self.censored_payoffs: list[Payoff] = []
         self.deferred_events: list[tuple[str, dict, int]] = []
         # §6.A: an execution receipt is a fact about the world — a fill, a
         # refusal — addressable on its own and never confused with an
@@ -41,6 +49,45 @@ class ReturnConsequences:
     def order_acknowledged(self, client_id: str) -> list[tuple[str, dict, int]]:
         """Release deferred economic events in original order only after identity is resolved."""
         self.ledger.append({"kind": "consequence.acknowledged", "client_id": client_id})
+        # An answer, however late, ends the exposure this intent was carrying.
+        self.unresolved_orders.pop(client_id, None)
+        return self._release(client_id)
+
+    def release_unresolved(self, client_id: str, event: int,
+                           reason: str = "external_unobservable") -> list[tuple[str, dict, int]]:
+        """Release a hold no answer will ever lift, and censor the return that took it.
+
+        Rehearsal 5 (PR #105): one order timed out on submit and the venue never
+        reported it, so the intent stayed pending and every later return's
+        outcome stayed unfixed behind it. The polling is bounded; this is what
+        the bound means for the return that placed the order. The venue was
+        asked and did not answer, and the owner could not have made it answer,
+        so the necessary observation is unavailable: the return's
+        ``return_paid_off`` settles censored with that documented reason -- an
+        excluded sample, no standing, an ``unknown`` outcome for its owner --
+        and the hold is lifted so every later return resolves normally.
+
+        The intent itself is not forgotten. It stays tracked as exposure, so an
+        order the venue was holding all along can still own its fill, and the
+        money that fill realises reaches the owner late rather than never.
+        """
+        item = self.pending_orders.get(client_id)
+        if item is None:
+            return []
+        self.ledger.append({"kind": "order.unresolved_released", "handle": item["handle"],
+                            "coin": item["coin"], "client_id": client_id, "reason": reason})
+        self.unresolved_orders[client_id] = dict(item)
+        handle = item["handle"]
+        if self.account_open(handle):
+            table = self.table.censor(handle, event, reason)
+            self._apply("censored", {"handle": handle, "reason": reason, "event": event}, table)
+            payoff = table.account(handle).payoff
+            self.ledger.append({"kind": "consequence.outcome", **asdict(payoff)})
+            self.censored_payoffs.append(payoff)
+        return self._release(client_id)
+
+    def _release(self, client_id: str) -> list[tuple[str, dict, int]]:
+        """Drop one hold and, if it was the last, replay what it was holding back."""
         self.pending_orders.pop(client_id, None)
         if not self.pending_orders and self.deferred_events:
             events = self.deferred_events
@@ -148,7 +195,7 @@ class ReturnConsequences:
             if existing.handle != handle:
                 raise ValueError("order already belongs to another decision")
             return
-        if not self.account_open(handle):
+        if not self.account_open(handle) and handle not in self._unresolved_handles():
             reason = "no open consequence account"
             self.ledger.append({"kind": "consequence.refused", "handle": handle,
                                 "order_id": oid, "reason": reason})
@@ -159,6 +206,15 @@ class ReturnConsequences:
             {"handle": handle, "order_id": oid, "size": str(size), "event": event},
             self.table.order(oid, handle, str(size)),
         )
+
+    def _unresolved_handles(self) -> set[str]:
+        """Returns whose censored outcome still has an intent the venue may answer.
+
+        Their accounts are closed, so nothing resolves against them again, but an
+        order the venue finally admits to holding is still theirs: it may be
+        attributed, it may fill, and what it realises is theirs, late.
+        """
+        return {item["handle"] for item in self.unresolved_orders.values()}
 
     def cancel(self, order_id: str, event: int) -> None:
         """Release only the unfilled liability of an acknowledged cancellation or rejection."""
@@ -214,10 +270,12 @@ class ReturnConsequences:
 
     def resolve(self, event: int) -> list[Payoff]:
         """Persist all newly fixed outcomes before publishing the successor accounting state."""
+        # An outcome censored for documented unobservability was fixed the moment
+        # its hold was released; it is handed over here with everything else.
+        fixed, self.censored_payoffs = self.censored_payoffs, []
         if self.pending_orders:
-            return []  # Unknown inventory ownership cannot manufacture a no-fill outcome.
+            return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         table = self.table.resolve(event, self.backstop, self.mids)
-        fixed = []
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})
@@ -301,11 +359,15 @@ class ReturnConsequences:
 
     def counts(self) -> dict[str, int]:
         """Count returns once, independent of how many evaluators judged each return."""
-        outcomes = [r.payoff for r in self.table.returns if r.payoff is not None]
+        every = [r.payoff for r in self.table.returns if r.payoff is not None]
+        # A censored outcome answers nothing, so it is neither a payoff nor a
+        # failure to pay off; it is counted only as what it is.
+        outcomes = [p for p in every if p.censored is None]
         return {
             "paid_off": sum(p.y for p in outcomes),
             "not_paid_off": sum(1 - p.y for p in outcomes),
             "marked": sum(p.marked for p in outcomes),
+            "censored_outcomes": sum(p.censored is not None for p in every),
             # A voided return is not pending: it owes no outcome at all.
             "consequences_pending": sum(
                 r.payoff is None and not r.voided for r in self.table.returns),

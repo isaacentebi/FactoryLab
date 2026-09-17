@@ -595,30 +595,39 @@ class VenueMixin:
                 if result["status"] == "cancelled" and Decimal(str(result["filled_size"])) > 0:
                     attributed = {**result, "status": "filled"}
                 self.consequences.order_result(intent["handle"], attributed, intent["args"], self.n)
-            spot_table = self.consequences.table
-            corrections = []
-            for kind, payload, _event in self.consequences.order_acknowledged(client_id):
-                if kind == "Fill":
-                    if payload.get("market") == "spot":
-                        try:
-                            spot_table = self._spot_fill_table(spot_table, payload)
-                        except ValueError:
-                            continue  # The replay already recorded its refusal.
-                        realized = usd_to_micro(
-                            self._account_spot_fill(payload), rounding="nearest",
-                        )
-                        delta = realized - usd_to_micro(payload["realized_usd"], rounding="nearest")
-                        if delta:
-                            corrections.append((delta, f"fill:{payload['order_id']}",
-                                                "exchange_pnl", "venue_spot",
-                                                str(payload["order_id"])))
-                    self._record_fill_notional(payload)
-            if corrections:
-                self._settle_venue(corrections)
-                delta = sum(change for change, *_rest in corrections)
-                self.realized_to_date += delta
-                self.window.realized_pnl_micro += delta
+            self._replay_deferred(self.consequences.order_acknowledged(client_id))
         return dict(result)
+
+    def _replay_deferred(self, events: list[tuple[str, dict, int]]) -> None:
+        """Account the economic events a released hold was deferring, in their own order.
+
+        A hold is released by an answer (``order_acknowledged``) or, when no
+        answer will ever come, by ``release_unresolved``; either way the events
+        it held back are accounted the same way here.
+        """
+        spot_table = self.consequences.table
+        corrections = []
+        for kind, payload, _event in events:
+            if kind == "Fill":
+                if payload.get("market") == "spot":
+                    try:
+                        spot_table = self._spot_fill_table(spot_table, payload)
+                    except ValueError:
+                        continue  # The replay already recorded its refusal.
+                    realized = usd_to_micro(
+                        self._account_spot_fill(payload), rounding="nearest",
+                    )
+                    delta = realized - usd_to_micro(payload["realized_usd"], rounding="nearest")
+                    if delta:
+                        corrections.append((delta, f"fill:{payload['order_id']}",
+                                            "exchange_pnl", "venue_spot",
+                                            str(payload["order_id"])))
+                self._record_fill_notional(payload)
+        if corrections:
+            self._settle_venue(corrections)
+            delta = sum(change for change, *_rest in corrections)
+            self.realized_to_date += delta
+            self.window.realized_pnl_micro += delta
 
     def _polls_exhausted(self, client_id: str) -> bool:
         """Whether this intent has already spent its bounded poll schedule."""
@@ -626,7 +635,18 @@ class VenueMixin:
         return intent is not None and int(intent.get("polls", 0)) >= UNCERTAIN_ORDER_POLLS
 
     def _give_up_on_order(self, client_id: str) -> None:
-        """Say once, in the diary, that this order's identity was never confirmed."""
+        """Say once, in the diary, that this order's identity was never confirmed, and
+        release the hold that saying so leaves behind (R4-C).
+
+        PR #105 bounded the asking and stopped there, because releasing the hold
+        meant deciding what an order of unknown fill status means for the return
+        that sent it. It means the return's consequence is unknown: it settles
+        censored for documented external unobservability, and every later
+        return's outcome resolves again. What stays is the exposure -- this coin
+        refuses new orders from this seat while the intent reads uncertain, the
+        kill wind-down still reads the venue for it, and a fill the venue
+        eventually admits still belongs to this return.
+        """
         intent = self.order_intents[client_id]
         if intent.get("unresolved"):
             return
@@ -635,6 +655,7 @@ class VenueMixin:
                             "operation": intent["operation"], "polls": int(intent.get("polls", 0)),
                             "result": dict(intent["result"])})
         self.order_intents[client_id] = {**intent, "unresolved": True}
+        self._replay_deferred(self.consequences.release_unresolved(client_id, self.n))
 
     def _reconcile_orders(self, *, final: bool = False) -> None:
         """Pending identities are reconciled before consuming newly observed venue fills.

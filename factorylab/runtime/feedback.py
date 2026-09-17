@@ -706,6 +706,10 @@ class FeedbackMixin:
         # twice, which is exactly the confusion an addressed inbox exists to end.
         if not event_id.startswith(prefix):
             return
+        if s.brier is None:
+            # A censored settlement scored nothing: there is no brier to deliver,
+            # and the return's owner is told the outcome is unknown instead.
+            return
         forecaster_handle = event_id[len(prefix):]
         forecaster = (self.handle_to_assembly.get(forecaster_handle)
                       or self.outcomes.seat_of(forecaster_handle))
@@ -855,6 +859,8 @@ class FeedbackMixin:
         backstop, not settled money, and moves nothing here: what its lots realise
         later is booked to the owner as a late consequence (``_settle_late``).
         """
+        if payoff.censored is not None:
+            return self._address_unknown_outcome(payoff)
         owner = self.handle_to_assembly.get(payoff.handle) or self.outcomes.seat_of(payoff.handle)
         if owner is None:
             self._undeliverable("return_paid_off", payoff.handle, "no seat owns that decision")
@@ -885,6 +891,42 @@ class FeedbackMixin:
         if payoff.marked or owner is None or owner not in self.assemblies:
             return
         self._book_consequence(owner, payoff.net_micro, "return_paid_off")
+
+    def _address_unknown_outcome(self, payoff: Any) -> None:
+        """Tell the owner that its return's consequence is unknown, and why (R4-C).
+
+        The OUTCOME CONTRACT has three answers, and this is the third: the
+        necessary observation is unavailable. The venue would not say whether the
+        order filled, so no payoff is claimed in either direction, nothing is
+        scored and no money moves here. The venue's last answer rides with the
+        item so the seat reads the fact rather than a silence, and if the fill is
+        observed later its money reaches the same seat through ``_settle_late``.
+        """
+        owner = self.handle_to_assembly.get(payoff.handle) or self.outcomes.seat_of(payoff.handle)
+        if owner is None:
+            return self._undeliverable("return_paid_off", payoff.handle,
+                                       "no seat owns that decision")
+        self.outcomes.append(
+            owner, handle=payoff.handle, evidence=payoff.handle,
+            outcome={"outcome": "unknown", "reason": payoff.censored,
+                     "return_paid_off": None,
+                     "provider_cost_micro": payoff.cost_micro,
+                     "cost_micro": payoff.cost_micro,
+                     "earned_micro": payoff.earned_micro,
+                     "venue_answer": self._venue_last_answer(payoff.handle),
+                     "venue_delta_micro": self.venue_deltas.pop(payoff.handle, {}),
+                     "position_open": True, "commitment_settled": False,
+                     "marked": False, "liquidated": payoff.liquidated})
+
+    def _venue_last_answer(self, handle: str) -> dict | None:
+        """The last thing the venue said about this return's unresolved intent."""
+        for client_id, intent in getattr(self, "order_intents", {}).items():
+            if intent.get("handle") == handle and intent.get("unresolved"):
+                return {"client_id": client_id, "coin": intent["args"].get("coin"),
+                        "operation": intent["operation"],
+                        "polls": int(intent.get("polls", 0)),
+                        "result": dict(intent["result"])}
+        return None
 
     def _position_open(self, payoff: Any) -> bool:
         """Whether this decision still has exposure at the venue when its outcome is fixed.
