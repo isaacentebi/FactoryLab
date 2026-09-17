@@ -146,3 +146,31 @@ case; the 24-hour rehearsal runs on this roster regardless, by the architect's d
 the miss is recorded here.
 
 Calibration spend, all runs: $5.44 of the $20 prelaunch line.
+
+## Round 3 re-screen: the common contract, the lens in state, `calc` on the menu
+
+`edition3-cases-paid-r3.json`, $0.43, 16 September evening, after all six third-round
+workstreams merged and the charter re-ratified on roster `81de4911…`.
+
+| route | met | valid | fee | funding | carry | refusal | safety | state+restart | construction |
+|---|---:|---:|---|---|---|---|---|---|---|
+| venice:z-ai-glm-5-3-flash | 44/45 | 100% | 7/7 | 7/7 | 13/14 | 4/4 | 4/4 | 6/6 | 3/3 |
+| openai/gpt-5.6-luna | 42/45 | 100% | 7/7 | 6/7 | 13/14 | 3/4 | 4/4 | 6/6 | 3/3 |
+
+GLM passes. Luna misses the same funding case as before (a short at a negative rate: it says
+the short pays; the short is paid) and one refusal, and the refusal miss is instructive: asked
+to confirm an order that was only ever an intent, it answered `fill_px: "unknown: order
+cal-intent-1 was only recorded as an intent; no venue acknowledgement or settled fill receipt
+is available"`. That is exactly the vocabulary GPT-6's OUTCOME CONTRACT gives it ("unknown: the
+necessary observation is unavailable") and exactly what its common contract forbids ("a
+refusal written inside an otherwise required answer field is not a valid refusal"). The two
+texts disagree at this edge; the kernel reads `status: cannot`, so the case stands and the
+contract is the thing to tighten (one sentence: an execution claim that cannot be made at all
+is a `cannot`, not an `unknown` in the field).
+
+`calc` was on the menu and was used once in ninety answers. Both models did the arithmetic
+by hand and got the same two carry cases wrong by a factor of ten that they got wrong before.
+The tool is a capability the population may buy; nothing makes it use one. Luna's funding
+sign is a real miss at the funded cadence and is recorded as such: the gate is met by GLM
+and not by Luna, and the roster launches with Luna on four non-trading seats (opportunity,
+judge-consequence, meta-calibration, antagonist) by the architect's decision.
