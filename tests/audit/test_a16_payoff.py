@@ -117,8 +117,10 @@ def test_payoff_is_optional_and_the_old_single_number_path_is_gone():
         def complete(self, req):
             nonlocal schema_required
             text = req.messages[-1]["content"]
+            # R3-E renders the OUTCOME CONTRACT between the schema and the
+            # completion criterion; the schema still ends where it always did.
             schema_required = json.loads(text.split("OUTCOME SCHEMA\n")[1]
-                                         .split("\n\nCOMPLETION")[0])["required"]
+                                         .split("\n\nOUTCOME CONTRACT")[0])["required"]
             return ModelResponse(req.model_id, json.dumps(
                 {"verdict": 0.5, "payoff": 0.5, "rationale": "t", "forecasts": []}), 1, 1, "s")
 

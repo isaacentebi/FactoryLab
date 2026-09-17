@@ -38,14 +38,18 @@ def test_scripted_800_event_diaries_have_equal_summaries(tmp_path):
         # The scripted amendment adding the turnover card is approved at event 25. With the
         # scripted consequence backstop at 20 events, A2's cadence allows activation from
         # launch + min_ratio * 20 = event 61, and the scripted measurement window is 120
-        # events, so the first window carrying the new card closes at event 121. The
-        # scripted fill-card amendment sits past the script's 1,600th producer call: with
-        # every seat spending from its own entitlement (edition 2, C10) the seeded trader
-        # runs its share below one call's ceiling and the router draws NOOP for most of
-        # its decisions, so the fill card does not activate inside 800 events and the
-        # turnover card is the one activation. Both diaries must still agree exactly.
+        # events, so the first window carrying the new card closes at event 121.
+        #
+        # The scripted fill-card amendment sits past the script's 1,600th producer call
+        # (`late_amendment_call`). It used to fall outside 800 events, and now it does
+        # not: round 3 added facts the world renders and work the seats do, so the seeded
+        # population reaches that call count inside the same 800 events and the fill card
+        # activates too. The count is a property of the script, not of the diary — this
+        # pin follows it. What the test is actually for is below: both diaries must agree
+        # exactly, and they do, which is the claim that the count cannot weaken.
         activation = [item for item in items if item.get("kind") == "charter.activate"]
-        assert [item["amendment_id"] for item in activation] == ["turnover-card"]
+        assert [item["amendment_id"] for item in activation] == [
+            "turnover-card", "scripted-fill-card"]
         assert "card:turnover" in report["operator"]["dimensions"]
         assert any(w["profile"]["verdict"] is not None for w in report["windows"])
         assert report["settling"] and report["settling"][0]["edition"] == 2

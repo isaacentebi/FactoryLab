@@ -224,6 +224,20 @@ def web_search_spec(price_micro_per_call: int, max_call_usd: str) -> dict:
     }
 
 
+def calc_spec(price_micro_per_call: int) -> dict:
+    """The deterministic arithmetic primitive, at the price a world commits to it.
+
+    GPT-6's third reading, §7. The published contract lives beside the
+    arithmetic in ``factorylab.cortex.calc`` so the two cannot drift; this only
+    stamps the price, the way ``connector_spec`` and ``web_search_spec`` do.
+    """
+    from factorylab.cortex.calc import CALC_SPEC
+
+    if type(price_micro_per_call) is not int or price_micro_per_call < 0:
+        raise ValueError("price_micro_per_call must be a non-negative int")
+    return {**deepcopy(CALC_SPEC), "price_micro_per_call": price_micro_per_call}
+
+
 def as_spec(tool: PopulationTool, price_micro_per_call: int) -> dict:
     """Return public ToolSpec fields without source, provenance or schema aliases."""
     if type(price_micro_per_call) is not int or price_micro_per_call < 0:

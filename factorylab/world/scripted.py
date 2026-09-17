@@ -70,6 +70,30 @@ class ScriptedProvider:
             req.model_id, json.dumps(reply), self.input_tokens, self.output_tokens, "end_turn"
         )
 
+    @staticmethod
+    def _trading_equity(seat: Any) -> Any:
+        """The venue equity this seat reads to size a position, from its ``YOU`` block.
+
+        R3-E moved it: edition 3's C4 put it under ``world_resources``, and §8's
+        template puts the venue's own money under ``venue_accounts``, by custody.
+        Both are read, newest first, because a recorded diary still carries
+        prompts in the older shape and a replay of one must decide what it
+        decided then. An account the venue would not give is unavailable, and an
+        unavailable equity sizes nothing.
+        """
+        if not isinstance(seat, dict):
+            return 0
+        accounts = seat.get("venue_accounts")
+        if isinstance(accounts, dict):
+            perps = accounts.get("venue_perps")
+            if (isinstance(perps, dict) and perps.get("status") == "observed"
+                    and perps.get("equity_usd") is not None):
+                return perps["equity_usd"]
+        resources = seat.get("world_resources")
+        if isinstance(resources, dict):
+            return resources.get("trading_equity_usd", 0)
+        return 0
+
     def _produce(self, desc: str, inputs: dict[str, Any]) -> dict[str, Any]:
         self._producer_calls += 1
         reply: dict[str, Any] = {"action": "hold", "payoff": 0.1}
@@ -79,7 +103,7 @@ class ScriptedProvider:
                 # Edition 3 (C4) removed the root-wallet-only impression: what a
                 # seat reads to size a position is the trading equity in its own
                 # YOU block, which is the money the venue actually holds.
-                equity = Decimal(str(inputs["seat"]["world_resources"]["trading_equity_usd"]))
+                equity = Decimal(str(self._trading_equity(inputs["seat"])))
                 mid = Decimal(str(payload["mids"]["BTC"]))
                 phase = int(payload["index"]) % 4
             except (KeyError, ValueError, ArithmeticError, TypeError):
@@ -326,6 +350,13 @@ def _world_from_prompt(text: str) -> dict[str, Any]:
     a reader of the prompt wants the whole world, so it reads both and joins
     them.
     """
+    # R3-E: the head of the user message is the stable prefix — the WORLD
+    # CONTRACT wrapper and the base capability index — which is prose and a small
+    # index rather than the world block it used to be, so this finds nothing
+    # there and says so. What the world block holds now arrives in
+    # ``WORLD UPDATE`` and in ``INPUTS``, and ``_with_seat_block`` joins the
+    # first of those back into the world a reader of the prompt sees. The guard
+    # is kept because a recorded prompt from an earlier world still has one.
     if not text.startswith("WORLD\n") or (start := text.find("{")) < 0:
         return {}
     try:
@@ -358,18 +389,34 @@ def _inputs_from_prompt(text: str) -> dict[str, Any]:
     return _with_seat_block(text, inputs)
 
 
-def _seat_block_from_prompt(text: str) -> dict[str, Any]:
-    """The rendered ``YOU`` block, as an object again."""
-    marker = "\nYOU\n"
+def _block_from_prompt(text: str, marker: str) -> dict[str, Any]:
+    """One rendered block of the prompt, as an object again.
+
+    Guarantees a prompt without that block, or one whose block is damaged, reads
+    as an empty mapping rather than an error: a reader of a prompt is not a
+    parser of a wire format, and a section that is absent is absent.
+    """
     start = text.find(marker)
     if start < 0:
         return {}
-    start = text.index("{", start + len(marker))
+    brace = text.find("{", start + len(marker))
+    if brace < 0:
+        return {}
     try:
-        block, _ = json.JSONDecoder().raw_decode(text[start:])
+        block, _ = json.JSONDecoder().raw_decode(text[brace:])
     except (ValueError, json.JSONDecodeError):
         return {}
     return block if isinstance(block, dict) else {}
+
+
+def _seat_block_from_prompt(text: str) -> dict[str, Any]:
+    """The rendered ``YOU`` block, as an object again."""
+    return _block_from_prompt(text, "\nYOU\n")
+
+
+def _world_update_from_prompt(text: str) -> dict[str, Any]:
+    """The rendered ``WORLD UPDATE`` block (R3-E), as an object again."""
+    return _block_from_prompt(text, "\nWORLD UPDATE\n")
 
 
 def _with_seat_block(text: str, inputs: dict[str, Any]) -> dict[str, Any]:
@@ -384,14 +431,44 @@ def _with_seat_block(text: str, inputs: dict[str, Any]) -> dict[str, Any]:
     block above is put back together.
     """
     block = _seat_block_from_prompt(text)
-    continuity = block.get("continuity") if isinstance(block.get("continuity"), dict) else {}
-    if not continuity:
+    update = _world_update_from_prompt(text)
+    if not block and not update:
         return inputs
-    inputs["seat"] = block
-    for name in ("your_state", "unread_outcomes"):
-        if name in continuity:
-            inputs[name] = continuity[name]
-    fold = continuity.get("since_you_last_woke")
-    if fold is not None and isinstance(inputs.get("payload"), dict):
-        inputs["payload"] = {**inputs["payload"], "since_you_last_woke": fold}
+    if block:
+        inputs["seat"] = block
+        # §8's ``YOU`` slots, back under the request-input names they were
+        # rendered from. A slot that says ``unavailable`` is put back as absent,
+        # because that is what it means: the request carried no such source.
+        state = block.get("working_state")
+        if isinstance(state, dict):
+            inputs["your_state"] = state
+        outcomes = block.get("outcomes")
+        if isinstance(outcomes, dict) and type(outcomes.get("unread_count")) is int:
+            inputs["unread_outcomes"] = {"count": outcomes["unread_count"],
+                                         "items": list(outcomes.get("items") or ())}
+    if update:
+        inputs["world_update"] = update
+        fold = update.get("changes_since_last_successful_delivery")
+        if isinstance(fold, dict) and "status" not in fold and isinstance(
+                inputs.get("payload"), dict):
+            inputs["payload"] = {**inputs["payload"], "since_you_last_woke": fold}
+        receipts = update.get("execution_receipts")
+        if not (isinstance(receipts, dict) and receipts.get("status") == "unavailable"):
+            inputs["execution_receipts"] = receipts
+        # The world's moving facts the update block carries, joined back into the
+        # world a reader of the prompt sees, under the names the block builds
+        # them from.
+        world = inputs.get("world")
+        if isinstance(world, dict):
+            charter = update.get("charter")
+            if isinstance(charter, dict):
+                world = {**world, "charter": charter.get("text"),
+                         "charter_edition": charter.get("edition"),
+                         "card_prices": charter.get("cards"),
+                         "governance": charter.get("pending_changes")}
+            public = update.get("public_observations")
+            if isinstance(public, dict):
+                world = {**world, "pathologies": public.get("pathologies"),
+                         "recent_mids": public.get("recent_mids")}
+            inputs["world"] = world
     return inputs

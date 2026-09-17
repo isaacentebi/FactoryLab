@@ -523,8 +523,11 @@ def test_edition3_testnet_manifest_identity_is_pinned_beside_edition_2():
     m = load_manifest("edition3-testnet")
     assert m.exchange.kind == "hyperliquid" and m.exchange.mainnet is False
     assert len(m.assemblies) == 9 and m.kill.wind_down is True
+    # Re-pinned by R3-E: every seat's system prompt became the common system
+    # contract and every lens moved into `initial_state`, so this world's text —
+    # and its roster digest — is new. Edition 2's pin below is untouched.
     assert m.manifest_hash() == (
-        "54e84cfaf767f6f9c1af676e6411dddf86d8dd02af4f6d4895bcaaf2a11d29a0")
+        "1d7768fe98b9537aa236eb33b9ecb9a94f966413ddd221dfe9c6204803ce2cb5")
     # Edition 3's new keys are hash-neutral at their defaults: edition 2 is untouched.
     assert load_manifest("edition2-testnet").manifest_hash() == (
         "b184b1d8dc55daf56978ea51181be0d06e59493bef2727d97b2f67717efdbf8b")

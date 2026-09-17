@@ -26,7 +26,14 @@ from factorylab.runtime.venue import wind_down
 from factorylab.runtime.worlds import NS_PER_DAY, KillSpec, load_manifest
 from factorylab.world.exchange import Order
 
-EDITION3_HASH = "54e84cfaf767f6f9c1af676e6411dddf86d8dd02af4f6d4895bcaaf2a11d29a0"
+#: Re-pinned by R3-E: every seat's system prompt became the common system contract
+#: and every lens moved into `initial_state`, so the manifest and the roster are new
+#: text. The coordinator re-ratifies the edition 3 charter on this roster digest.
+EDITION3_HASH = "1d7768fe98b9537aa236eb33b9ecb9a94f966413ddd221dfe9c6204803ce2cb5"
+EDITION3_ROSTER = "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434"
+#: The roster the ratified edition 3 charter was voted against, before R3-E.
+RATIFIED_AGAINST_ROSTER = (
+    "fc5a7f24a71a1821ecab8bd73c15739d60dd8d544ea40009d65f6a7bdb33a291")
 
 
 @pytest.fixture(autouse=True)
@@ -114,26 +121,45 @@ def test_edition3_manifest_loads_with_the_roster_money_and_kill_contract_of_c5()
     assert m.manifest_hash() == EDITION3_HASH
 
 
-def test_every_seat_carries_its_seed_lens_verbatim_as_state_and_as_prompt():
-    """C5: the common paragraph of §11 then the seat's own lens, character for character."""
+def test_every_seat_carries_the_common_contract_and_its_lens_only_as_state():
+    """R3-E: one contract for all nine, and the lens seeded once into working state.
+
+    GPT-6's third reading, §7: "Remove the permanent lens from the system prompt
+    (seed it once in working state)." The system prompt is now the common system
+    contract of §8, verbatim and identical for every seat — a contract that
+    differs by seat is not one — and the lens is `initial_state`, which is C1's
+    first working-state head and which the seat may overwrite from its very first
+    return. The common paragraph of the old seed prompts is gone: its content is
+    in the contract.
+    """
+    import json as _json
     import re
+
+    third = Path("docs/audits/v6/gpt6-third/prompts.md").read_text()
+    contract = re.findall(r"```text\n(.*?)```", third, re.S)[0].rstrip("\n")
+    constructor = _json.loads(re.search(r"```json\n(.*?)```", third, re.S).group(1))["lens"]
 
     source = Path("docs/audits/v6/gpt6/seed-prompts.md").read_text()
     quoted = re.findall(r"^> (.+)$", source, re.MULTILINE)
     names = re.findall(r"^\*\*([a-z-]+)\*\*$", source, re.MULTILINE)
     common, lenses = quoted[0], dict(zip(names, quoted[1:], strict=True))
+    lenses["constructor"] = constructor
     assert len(lenses) == 9
 
     m = load_manifest("edition3-testnet")
+    assert {a.system_prompt for a in m.assemblies} == {contract}
     for seat in m.assemblies:
-        expected = common + "\n\n" + lenses[seat.id]
-        # The lens is the first head of C1's working state. The seat's prompt opens with
-        # the JSON and refusal contract (a seat prompt replaces the seed prompt, so without
-        # this no seat is ever told how to refuse) and then carries the lens verbatim.
-        assert seat.initial_state == {"lens": expected}, seat.id
-        assert seat.system_prompt.startswith("You receive one request."), seat.id
-        assert '{"status": "cannot", "reason": "<why>"}' in seat.system_prompt, seat.id
-        assert seat.system_prompt.endswith("\n\n" + expected), seat.id
+        assert seat.initial_state == {"lens": lenses[seat.id], "open_questions": [],
+                                      "active_commitments": []}, seat.id
+        # The lens is nowhere in the system message, for any seat.
+        assert lenses[seat.id] not in seat.system_prompt, seat.id
+        assert common not in seat.system_prompt, seat.id
+        # And the contract still says how to refuse, which is the one thing a seat
+        # prompt may never drop.
+        assert '{"status":"cannot","reason":"<specific reason>"}' in seat.system_prompt
+    from factorylab.charter.provenance import roster_hash
+
+    assert roster_hash(m) == EDITION3_ROSTER
 
 
 def test_edition3_keys_leave_every_earlier_world_identical():
@@ -177,17 +203,26 @@ def test_edition3_preflight_passes_every_gate_up_to_the_namespace():
     charter_path = Path("docs/charter/edition3-ratified.toml")
     m = load_manifest(str(world))
 
-    voted = voted_charter(charter_path, m)
+    # R3-E changed every seat prompt, so the roster digest the charter was ratified
+    # against is no longer this roster's. That is what the gate is for: preflight
+    # refuses at the roster, ahead of every later gate, until the coordinator
+    # re-ratifies on the new digest. Nothing here forges that vote.
     raw = tomllib.loads(world.read_text())
+    assert raw["charter"]["roster_sha256"] == RATIFIED_AGAINST_ROSTER
+    assert roster_hash(m) == EDITION3_ROSTER != RATIFIED_AGAINST_ROSTER
+    with pytest.raises(ValueError, match="roster differs from rehearsal roster"):
+        voted_charter(charter_path, m)
+    with pytest.raises(ValueError, match="roster differs from rehearsal roster"):
+        preflight(world, charter_path)
+    # The charter artifact itself is untouched and still internally consistent: the
+    # cards it exports are the ones this world loads, and its own digest holds.
+    exported = tomllib.loads(charter_path.read_text())["charter"]
     loaded = {k: v for k, v in raw["charter"].items()
               if k not in ("ratified_sha256", "roster_sha256")}
-    assert loaded == voted
-    assert raw["charter"]["ratified_sha256"] == charter_digest(voted)
-    assert raw["charter"]["roster_sha256"] == roster_hash(m)
-    assert [c["id"] for c in voted["cards"]] == ["censorship-bound"]
-    assert all(isinstance(n, dict) and n["definition"] for n in voted["norms"])
-    with pytest.raises(ValueError, match="fresh exchange client namespace"):
-        preflight(world, charter_path)
+    assert loaded == exported
+    assert raw["charter"]["ratified_sha256"] == charter_digest(exported)
+    assert [c["id"] for c in exported["cards"]] == ["censorship-bound"]
+    assert all(isinstance(n, dict) and n["definition"] for n in exported["norms"])
 
 def _exposed_runtime(*, wind: bool, ledger_path=None) -> Runtime:
     """A scripted world holding one resting order, one perp position and one spot balance."""

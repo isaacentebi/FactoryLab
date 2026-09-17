@@ -467,7 +467,27 @@ class ComputeMixin:
         self.tool_specs.setdefault(
             "connector.fetch", connector_spec(self.m.connectors.call_price_micro))
         self._ensure_web_tool()
+        self._ensure_calc_tool()
         self._ensure_directory_tools()
+
+    def _ensure_calc_tool(self) -> None:
+        """Publish ``calc`` wherever the fixed primitives are published (R3-E).
+
+        It rides here rather than in ``bootstrap`` for one reason: every path
+        that can dispatch a tool or render a world block already calls
+        ``_ensure_connector_tool``, a resume included, so a world restored from a
+        diary has the arithmetic capability a live world has. Nothing about the
+        manifest, the roster or the manifest hash changes — the spec is a
+        constant of the runtime, not a committed parameter.
+
+        The price is ``prices.tool_micro_per_call`` where a world commits one
+        (GPT-6 §7 allows free or the flat tool price) and free otherwise, which
+        is what every world in this repository is today.
+        """
+        from factorylab.cortex.tools import calc_spec
+
+        price = getattr(self.m.prices, "tool_micro_per_call", 0)
+        self.tool_specs.setdefault("calc", calc_spec(price if type(price) is int else 0))
 
     def _ensure_web_tool(self) -> None:
         """Register ``web.search`` exactly when the manifest names a search route.
@@ -868,6 +888,14 @@ class ComputeMixin:
                 return self.treasury.transfer(
                     direction, usd, handle=handle, now_ns=self.clock.now_ns
                 )
+            if spec["kind"] == "calc":
+                # Deterministic arithmetic (R3-E): a pure function of its arguments,
+                # no jail, no rail, no clock. It is metered and ledgered like any
+                # other tool so its use is evidence in the diary, and at a price of
+                # zero that costs the seat nothing but the record.
+                from factorylab.cortex.calc import calc
+
+                return calc(args)
             tool = self.population_tools.get(tool_id)
             if tool is None:
                 return {"error": "tool unavailable"}

@@ -151,20 +151,30 @@ def test_one_assembly_on_two_events_opens_with_a_byte_identical_wire_prefix():
         assert first.startswith(lead) and second.startswith(lead)
         # Byte-identical through the whole of the block and not one byte short of it.
         assert os.path.commonprefix([first, second]).startswith(lead)
-        assert len(prefix) > 0.5 * len(first)
+        assert len(prefix) > 0
     block = rt._world_block()
-    assert json.dumps(block["charter"]) in prefix  # the charter text, escaped as JSON
-    for card in rt.charter.cards:
-        assert card.id in prefix
-    assert '"recurrence"' in prefix and '"consequence_mix"' in prefix  # mechanics
+    # R3-E: what the prefix carries is the WORLD CONTRACT with the charter's own
+    # norms, and one line and one price for every capability. The cards, their
+    # prices and the institutional descriptions are outside it, which is GPT-6's
+    # third reading §8 exactly: byte stability "does not require copying every
+    # institutional description into that prefix".
+    assert prefix.startswith("WORLD CONTRACT\n")
+    for norm in rt.charter.norms:
+        assert str(norm)[1:] in prefix
     assert '"venue.place_market"' in prefix and '"venue.instruments"' in prefix
+    assert '"kind": "amendment"' in prefix  # every proposal kind, one line each
+    assert '"recurrence"' not in prefix and '"consequence_mix"' not in prefix
+    for card in rt.charter.cards:
+        assert card.description not in prefix
     stable = {k: v for k, v in block.items() if k in STABLE_WORLD_KEYS}
     # The ratio that matters is the rendered one: what the provider tokenises, not
     # what the world block happens to hold. Edition 3's ``seats`` map carries an
     # entry per live seat and exactly one of them is ever rendered, so measuring
     # the block would count bytes no prompt has ever contained.
-    assert len(prefix) > 0.85 * len(first)
-    assert len(prefix) >= len(rendered(stable))
+    # And it is now a small fraction of the prompt rather than most of it: the
+    # institutional disclosure is rendered once, with the work.
+    assert len(prefix) < 0.25 * len(first)
+    assert len(prefix) < len(rendered(stable))
 
 
 INJECTION = (
@@ -202,17 +212,38 @@ def test_no_population_authored_text_reaches_the_system_role():
         assert user.startswith(prefix) and INJECTION in user
 
 
-def test_the_prefix_changes_on_a_charter_edition_and_on_a_registration():
+def test_the_prefix_changes_on_the_norms_and_on_a_capability_and_on_nothing_else():
+    """R3-E: the prefix is a function of the norms and the capability index, of those only.
+
+    A seat registered, a card repriced or a charter edition bumped no longer
+    breaks every cached prefix in the world. They are all published — in
+    ``WORLD UPDATE``, which is where a thing that moves belongs — and the leading
+    bytes hold still through them. A registered *tool* does change it, because a
+    tool is a capability and the index is what says a capability exists.
+    """
+    from factorylab.charter.charter import EDITION3_NORMS
+
     rt = make_runtime()
+    rt.tool_jail_available = True
     before = request_for(rt, "a", {}).stable_prefix()
     rt._manage_reserve_window()
     rt._register("author", AssemblyProposal(
         id="new-public", model_id="fake-haiku", role="producer", accepts=("Tick",),
         system_prompt="PRIVATE PROMPT", max_tokens=128, effort="low"))
-    after_registration = request_for(rt, "a", {}).stable_prefix()
-    assert after_registration != before
+    assert request_for(rt, "a", {}).stable_prefix() == before
     rt.charter = replace(rt.charter, edition=rt.charter.edition + 1)
-    assert request_for(rt, "a", {}).stable_prefix() != after_registration
+    assert request_for(rt, "a", {}).stable_prefix() == before
+    # The edition is still published, once, where it moves.
+    assert request_for(rt, "a", {}).world_update_block()["charter"]["edition"] == (
+        rt.charter.edition)
+    rt._register("author", ToolProposal(
+        "a-new-capability", "computes something", {"type": "object", "properties": {}}, "", 1))
+    with_tool = request_for(rt, "a", {}).stable_prefix()
+    assert with_tool != before and "a-new-capability" in with_tool
+    rt.charter = replace(rt.charter, norms=EDITION3_NORMS, cards=())
+    changed = request_for(rt, "a", {}).stable_prefix()
+    assert changed != with_tool
+    assert "Measurements are defeasible evidence of the values" in changed
 
 
 def test_the_identity_stamp_and_the_event_are_outside_the_prefix():
@@ -227,8 +258,11 @@ def test_the_identity_stamp_and_the_event_are_outside_the_prefix():
     assert '"you": "seed-decider"' in user and '"you"' not in prefix
     assert "EVENT-MARKER" in user and "EVENT-MARKER" not in prefix
     assert "Respond to event Tick" in user[len(prefix):]
-    # Controller prices move every closed window, so they are named, not inlined.
-    assert '"card_prices"' in user
+    # Controller prices move every closed window, so they are outside the prefix:
+    # they are published in the WORLD UPDATE block's charter, with their regions.
+    assert '"pending_changes"' in user[len(prefix):]
+    assert '"card_prices"' not in prefix and '"pending_changes"' not in prefix
+    assert request.world_update_block()["charter"]["edition"] == rt.charter.edition
 
 
 def test_the_prefix_holds_still_while_the_account_and_the_prices_move():
@@ -277,11 +311,14 @@ def test_a_live_adaptation_moves_the_values_and_leaves_the_prefix_byte_identical
     assert os.path.commonprefix([wire_text(before_wire), wire_text(after_wire)]).startswith(
         f"system\n{rt.assemblies['seed-decider'].spec.system_prompt}\nuser\n{prefix}")
     assert request_for(rt, "a", {}).stable_prefix() == prefix
-    # The prefix carries the committed parameters and names where the live ones are.
-    assert f'"consequence_mix": {committed_mix}' in prefix
-    assert f'"decay": {committed_decay}' in prefix
-    assert f'"consequence_mix": {mix}' not in prefix and f'"decay": {decay}' not in prefix
-    assert "world.adaptive_scoring" in prefix
+    # The committed parameters are published with the rest of the institutional
+    # disclosure and the live ones beside them; neither is in the prefix, so
+    # neither can cost it.
+    body = wire_text(after_wire)[len(prefix):]
+    assert f'"consequence_mix": {committed_mix}' in body
+    assert f'"decay": {committed_decay}' in body
+    assert f'"consequence_mix": {committed_mix}' not in prefix
+    assert "world.adaptive_scoring" in body and "world.adaptive_scoring" not in prefix
     # The moving part carries what is actually in force.
     user = after_wire[-1]["content"]
     adaptive = json.loads(user.split("INPUTS\n")[1].split("\n\nOUTCOME")[0])["world"][
