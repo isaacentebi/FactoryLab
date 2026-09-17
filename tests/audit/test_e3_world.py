@@ -32,8 +32,7 @@ from factorylab.world.exchange import Order
 EDITION3_HASH = "1d7768fe98b9537aa236eb33b9ecb9a94f966413ddd221dfe9c6204803ce2cb5"
 EDITION3_ROSTER = "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434"
 #: The roster the ratified edition 3 charter was voted against, before R3-E.
-RATIFIED_AGAINST_ROSTER = (
-    "fc5a7f24a71a1821ecab8bd73c15739d60dd8d544ea40009d65f6a7bdb33a291")
+RATIFIED_AGAINST_ROSTER = EDITION3_ROSTER  # re-ratified 16 September on the R3-E prompts
 
 
 @pytest.fixture(autouse=True)
@@ -203,16 +202,15 @@ def test_edition3_preflight_passes_every_gate_up_to_the_namespace():
     charter_path = Path("docs/charter/edition3-ratified.toml")
     m = load_manifest(str(world))
 
-    # R3-E changed every seat prompt, so the roster digest the charter was ratified
-    # against is no longer this roster's. That is what the gate is for: preflight
-    # refuses at the roster, ahead of every later gate, until the coordinator
-    # re-ratifies on the new digest. Nothing here forges that vote.
+    # R3-E changed every seat prompt, so the roster digest moved; the charter was
+    # re-ratified on the new digest the same day (docs/charter/edition3-ratification.json,
+    # five of five ballots), so the vote binds and preflight passes every gate until the
+    # base manifest's missing namespace, which only a rehearsal copy supplies.
     raw = tomllib.loads(world.read_text())
-    assert raw["charter"]["roster_sha256"] == RATIFIED_AGAINST_ROSTER
-    assert roster_hash(m) == EDITION3_ROSTER != RATIFIED_AGAINST_ROSTER
-    with pytest.raises(ValueError, match="roster differs from rehearsal roster"):
-        voted_charter(charter_path, m)
-    with pytest.raises(ValueError, match="roster differs from rehearsal roster"):
+    assert raw["charter"]["roster_sha256"] == RATIFIED_AGAINST_ROSTER == roster_hash(m)
+    voted = voted_charter(charter_path, m)
+    assert [c["id"] for c in voted["cards"]] == ["censorship-bound"]
+    with pytest.raises(ValueError, match="fresh exchange client namespace"):
         preflight(world, charter_path)
     # The charter artifact itself is untouched and still internally consistent: the
     # cards it exports are the ones this world loads, and its own digest holds.

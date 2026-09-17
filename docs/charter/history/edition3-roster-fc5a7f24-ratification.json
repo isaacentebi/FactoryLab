@@ -1,0 +1,101 @@
+{
+  "roster_sha256": "fc5a7f24a71a1821ecab8bd73c15739d60dd8d544ea40009d65f6a7bdb33a291",
+  "parent_charter_sha256": "c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712",
+  "conflicts": [],
+  "calls": [
+    {
+      "seat": {
+        "alias": "seat-1",
+        "assembly_id": "meta-calibration",
+        "role": "meta"
+      },
+      "model": "openai/gpt-5.6-luna",
+      "text": "{\"selected\":[\"censorship-bound\"],\"reason\":\"No preflight issues were identified, and the card makes unresolved commitments measurable while preserving explicit exclusions and provisional status.\"}",
+      "stop": "stop",
+      "cost_micro": 220,
+      "input_tokens": 571,
+      "output_tokens": 88,
+      "served_by": "openai/gpt-5.6-luna",
+      "valid": true,
+      "selected": [
+        "censorship-bound"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-2",
+        "assembly_id": "empirical",
+        "role": "producer"
+      },
+      "model": "venice:z-ai-glm-5-3-flash",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"The card faithfully operationalizes epistemic integrity \u2014 it samples only attributable, avoidably unresolved, accepted and due commitments, excludes what the seat could not observe or never promised, avoids zero-denominator artifacts, keeps accountability with the owner even when delegated, and is explicitly provisional (replace, reprice or remove) so the measurement remains defeasible evidence rather than a substitute for the value; with empty preflight feedback there is no ground to withhold approval.\"}",
+      "stop": "stop",
+      "cost_micro": 310,
+      "input_tokens": 1454,
+      "output_tokens": 182,
+      "served_by": "venice:z-ai-glm-5-3-flash",
+      "valid": true,
+      "selected": [
+        "censorship-bound"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-3",
+        "assembly_id": "meta-countercase",
+        "role": "meta"
+      },
+      "model": "venice:z-ai-glm-5-3-flash",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"With no preflight objections recorded, the card's sampling excludes non-due, externally unobservable, and never-committed items while keeping accountability with the commitment owner, so it cleanly operationalizes epistemic integrity without distorting the approved definition.\"}",
+      "stop": "stop",
+      "cost_micro": 271,
+      "input_tokens": 1454,
+      "output_tokens": 104,
+      "served_by": "venice:z-ai-glm-5-3-flash",
+      "valid": true,
+      "selected": [
+        "censorship-bound"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-4",
+        "assembly_id": "judge-consequence",
+        "role": "evaluator"
+      },
+      "model": "openai/gpt-5.6-luna",
+      "text": "{\"selected\":[\"censorship-bound\"],\"reason\":\"Selected because it operationalizes epistemic integrity with explicit scope, exclusions, accountability, and a bounded acceptance threshold; no preflight feedback identified a defect.\"}",
+      "stop": "stop",
+      "cost_micro": 233,
+      "input_tokens": 571,
+      "output_tokens": 99,
+      "served_by": "openai/gpt-5.6-luna",
+      "valid": true,
+      "selected": [
+        "censorship-bound"
+      ]
+    },
+    {
+      "seat": {
+        "alias": "seat-5",
+        "assembly_id": "mechanism",
+        "role": "producer"
+      },
+      "model": "venice:z-ai-glm-5-3-flash",
+      "text": "{\"selected\": [\"censorship-bound\"], \"reason\": \"With preflight feedback empty, the card stands as approved: it cleanly operationalizes epistemic integrity (answering for avoidably unresolved accepted commitments), aligns with fidelity by treating the 0.30 ceiling as defeasible evidence rather than a verdict, and already encodes the needed safeguards \u2014 excluding not-yet-due and unobservable-by-no-fault items, pinning accountability on the commitment owner, and being explicitly provisional for replace, reprice or removal.\"}",
+      "stop": "stop",
+      "cost_micro": 367,
+      "input_tokens": 1454,
+      "output_tokens": 296,
+      "served_by": "venice:z-ai-glm-5-3-flash",
+      "valid": true,
+      "selected": [
+        "censorship-bound"
+      ]
+    }
+  ],
+  "accepted": [
+    "censorship-bound"
+  ],
+  "charter_sha256": "c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712"
+}

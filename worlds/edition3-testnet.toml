@@ -339,7 +339,7 @@ edition = 1
 # docs/charter/edition3-ratification.json. The first ballot, on the roster GPT-6 proposed, is
 # under docs/charter/history/ (roster 488c62ef…).
 ratified_sha256 = "c25f561741f565f12ee0036670c621661d6cde46507547ad822118edf4e3b712"
-roster_sha256 = "fc5a7f24a71a1821ecab8bd73c15739d60dd8d544ea40009d65f6a7bdb33a291"
+roster_sha256 = "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434"
 norms = [
   { id = "consequential usefulness", definition = "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis." },
   { id = "epistemic integrity", definition = "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised." },
