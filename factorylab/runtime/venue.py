@@ -22,6 +22,15 @@ from factorylab.world.exchange import (
 #: A share of a declared principal is floored to the micro: a cap may never round up.
 _MICRO = Decimal("0.000001")
 
+#: How many times an uncertain order is polled before the runtime says so and stops.
+#: The manifest declares no order-lifecycle schedule, so the schedule is this bound:
+#: an uncertain intent is asked about at most this many times in all, each answer
+#: ledgered once, and then one ``order.unresolved`` closes the question. An order
+#: whose identity the venue will not confirm is a fact to record, not a poll to
+#: repeat forever. The kill wind-down's terminal reconciliation reads past it: a
+#: dying runtime asks once more, whatever the schedule already spent.
+UNCERTAIN_ORDER_POLLS = 5
+
 
 def _floor_micro(value: Decimal) -> Decimal:
     """Round a capped collateral figure down to the micro. A cap never rounds up."""
@@ -146,7 +155,7 @@ class VenueMixin:
         self.ledger.append({"kind": "runtime.finish_budget"})
         report = {"attempted": self.venue is not None, "fill_read_error": None}
         if self.venue is not None:
-            self._reconcile_orders()
+            self._reconcile_orders(final=True)
             try:
                 fills = self.consequence_fills.poll(self.exchange, strict=True)
             except Exception as exc:
@@ -459,6 +468,12 @@ class VenueMixin:
             if previous["operation"] != operation or previous["args"] != args:
                 return self._refuse_order(handle, "client id already binds another intent")
             if previous["result"]["status"] == "uncertain":
+                if self._polls_exhausted(client_id):
+                    # The schedule is spent: repeating the identical write asks the
+                    # venue nothing new, and it may never resubmit. It reads back
+                    # the unresolved answer it already has.
+                    self._give_up_on_order(client_id)
+                    return dict(previous["result"])
                 return self._recover_order(client_id)
             return dict(previous["result"])
         if args.get("market") == "spot" and (
@@ -564,10 +579,13 @@ class VenueMixin:
         if result.get("status") not in ("filled", "resting", "cancelled", "rejected"):
             result = {"status": "uncertain", "error": str(
                 result.get("error") or "venue acknowledgement unavailable")[:300]}
-        self.ledger.append({"kind": "order.uncertain" if result["status"] == "uncertain"
+        uncertain = result["status"] == "uncertain"
+        polls = int(intent.get("polls", 0)) + int(uncertain)
+        self.ledger.append({"kind": "order.uncertain" if uncertain
                             else "order.acknowledged", "client_id": client_id,
-                            "handle": intent["handle"], "result": result})
-        self.order_intents[client_id] = {**intent, "result": dict(result)}
+                            "handle": intent["handle"], "result": result,
+                            **({"poll": polls} if uncertain else {})})
+        self.order_intents[client_id] = {**intent, "result": dict(result), "polls": polls}
         if result["status"] != "uncertain":
             if intent["operation"] == "venue.cancel":
                 if result["status"] == "cancelled":
@@ -602,11 +620,38 @@ class VenueMixin:
                 self.window.realized_pnl_micro += delta
         return dict(result)
 
-    def _reconcile_orders(self) -> None:
-        """Pending identities are reconciled before consuming newly observed venue fills."""
+    def _polls_exhausted(self, client_id: str) -> bool:
+        """Whether this intent has already spent its bounded poll schedule."""
+        intent = self.order_intents.get(client_id)
+        return intent is not None and int(intent.get("polls", 0)) >= UNCERTAIN_ORDER_POLLS
+
+    def _give_up_on_order(self, client_id: str) -> None:
+        """Say once, in the diary, that this order's identity was never confirmed."""
+        intent = self.order_intents[client_id]
+        if intent.get("unresolved"):
+            return
+        self.ledger.append({"kind": "order.unresolved", "client_id": client_id,
+                            "handle": intent["handle"], "coin": intent["args"].get("coin"),
+                            "operation": intent["operation"], "polls": int(intent.get("polls", 0)),
+                            "result": dict(intent["result"])})
+        self.order_intents[client_id] = {**intent, "unresolved": True}
+
+    def _reconcile_orders(self, *, final: bool = False) -> None:
+        """Pending identities are reconciled before consuming newly observed venue fills.
+
+        An uncertain intent is polled on a bounded schedule: at most
+        ``UNCERTAIN_ORDER_POLLS`` answers in all, each ledgered once, then one
+        ``order.unresolved`` and no further polling. The terminal reconciliation
+        of a kill wind-down (``final``) still reads the venue for it: the last
+        read of a dying runtime is owed to the order whatever the schedule spent.
+        """
         for client_id, intent in list(self.order_intents.items()):
-            if intent["result"]["status"] == "uncertain":
-                self._recover_order(client_id)
+            if intent["result"]["status"] != "uncertain":
+                continue
+            if self._polls_exhausted(client_id) and not final:
+                self._give_up_on_order(client_id)
+                continue
+            self._recover_order(client_id)
 
     def _order_collateral(
         self, handle: str, coin: str, size: Decimal, is_buy: bool,

@@ -67,6 +67,15 @@ class ReturnConsequences:
             self.table.finish(handle, cost_micro),
         )
 
+    def void(self, handle: str, event: int) -> None:
+        """Close an admitted return that authored nothing without opening a consequence.
+
+        A router draw that chose nobody is not a producer return: it owes no
+        ``return_paid_off``, so none is resolved, none is sealed against it and
+        no seat is ever addressed with the outcome of a decision it never made.
+        """
+        self._apply("void", {"handle": handle, "event": event}, self.table.void(handle))
+
     def carry(self, handle: str, cost_micro: int) -> bool:
         """Add a retained liability to an open return; report whether it could be borne.
 
@@ -123,9 +132,10 @@ class ReturnConsequences:
     def account_open(self, handle: str) -> bool:
         """Only a return admitted here and not yet resolved may create venue exposure."""
         try:
-            return self.table.account(handle).payoff is None
+            account = self.table.account(handle)
         except KeyError:
             return False
+        return account.payoff is None and not account.voided
 
     def order_result(self, handle: str, result: dict, args: dict, event: int) -> None:
         """Attribute accepted market, limit and close orders before processing their fills."""
@@ -263,6 +273,8 @@ class ReturnConsequences:
         tick_ns,
     ) -> Forecast:
         account = self.table.account(about)
+        if account.voided:
+            raise ValueError("a voided return carries no payoff forecast")
         horizon = max(1, account.opened_at_event + self.backstop - event)
         handle = open_forecast_decision(
             queue,
@@ -294,7 +306,9 @@ class ReturnConsequences:
             "paid_off": sum(p.y for p in outcomes),
             "not_paid_off": sum(1 - p.y for p in outcomes),
             "marked": sum(p.marked for p in outcomes),
-            "consequences_pending": sum(r.payoff is None for r in self.table.returns),
+            # A voided return is not pending: it owes no outcome at all.
+            "consequences_pending": sum(
+                r.payoff is None and not r.voided for r in self.table.returns),
             "lots_opened": sum(r.opened_lots for r in self.table.returns),
             "lots_closed": sum(r.closed_lots for r in self.table.returns),
             "closes_credited": sum(r.closes for r in self.table.returns),

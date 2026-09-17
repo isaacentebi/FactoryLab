@@ -646,6 +646,13 @@ class BootstrapMixin:
 
         # loop state
         self.pending: dict[str, PendingJudgement] = {}
+        # A verdict commitment is closed out once and never re-opened. The judge's
+        # payoff forecast stays pending in the book after an unread close, so
+        # without these the per-event commitment pass would re-create the same
+        # commitment and close it unread again on every event. They are snapshot
+        # state (``resume._RUNTIME_FIELDS``): a restored runtime re-emits nothing.
+        self.verdicts_closed_out: set[str] = set()
+        self.verdicts_graded: set[str] = set()
         self.balance_at: list[int] = [self.wallet.balance]  # index = event number
         self.events_log: list[dict[str, Any]] = [{"kind": "Launch", "payload": {}}]
         self.last_closure_ns = -1

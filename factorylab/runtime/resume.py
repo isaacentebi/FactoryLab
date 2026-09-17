@@ -504,6 +504,9 @@ _RUNTIME_FIELDS = (
     "order_intents", "market_index", "unresolved_x402",
     "card_samples",
     "exposure_evidence", "pending_meta", "verdict_outcomes", "consequence_mix",
+    # Verdict commitments already closed out and already graded, by judge handle: a
+    # restored runtime never re-opens, re-closes or re-grades one it finished.
+    "verdicts_closed_out", "verdicts_graded",
     "sampling_history", "novelty_grant",
     "card_samples", "price_windows", "price_origins",
     "retired_assemblies", "retirement_proposals", "return_kinds", "decision_subjects",

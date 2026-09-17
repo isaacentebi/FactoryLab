@@ -600,7 +600,10 @@ class Runtime(
         if sample.chosen == NOOP:
             # A router abstention is not an authored producer return.
             self.stats.noops += 1
-            self.consequences.finish(handle, 0)
+            # It authored nothing, so it owes nothing: the consequence is voided
+            # rather than costed. A costed abstention resolves a `return_paid_off`
+            # for a decision no seat made, which can only be ledgered undeliverable.
+            self.consequences.void(handle, self.n)
             self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
                               status=SettleStatus.INAPPLICABLE,
                               definition_version=DEF_VERDICT, sampling_ref=None)
@@ -657,6 +660,8 @@ class Runtime(
             account = self.consequences.table.account(about)
         except KeyError:
             return None
+        if account.voided:
+            return "judgement needs a chosen return a seat authored, not an abstention"
         if account.payoff is not None:
             return "judgement needs a chosen return whose consequence is still open"
         due = account.opened_at_event + self.consequences.backstop

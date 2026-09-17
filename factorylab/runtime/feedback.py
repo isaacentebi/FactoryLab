@@ -1096,6 +1096,11 @@ class FeedbackMixin:
             if not decision.event_id.startswith("verdict-"):
                 continue
             judge = decision.event_id[len("verdict-"):]
+            if judge in self.verdicts_closed_out:
+                # This verdict was already closed out. Its payoff forecast stays
+                # pending in the book until the world settles it, and re-committing
+                # it here would close it unread again on every following event.
+                continue
             announced = self.return_events.get(judge)
             if (announced is None or announced.kind is not EventKind.VERDICT
                     or announced.payload.get("payoff_handle") != forecast.handle):
@@ -1133,7 +1138,7 @@ class FeedbackMixin:
         decided by the normative fact alone, or by nothing at all.
         """
         key = f"{NORM_COMMITMENT}:{judge_handle}"
-        if key in self.pending:
+        if key in self.pending or judge_handle in self.verdicts_closed_out:
             return
         try:
             opened = self.consequences.table.account(about).opened_at_event
@@ -1191,6 +1196,8 @@ class FeedbackMixin:
             if state == "open" and self.n < c.opened_at_event + backstop:
                 continue
             c.verdict_closed = True
+            # Closed out once: the commitment pass may not re-open this judge.
+            self.verdicts_closed_out.add(c.judge)
             if not (state == "closed" and c.about in self.price_origins):
                 # No window judged this return: an unread fact is not a good verdict.
                 self.ledger.append({
@@ -1269,9 +1276,11 @@ class FeedbackMixin:
         produced neither, there is nothing to be right about, and the verdict
         and every meta that conformed to it close unmeasured rather than at zero.
         """
-        if commitment.graded:
+        if commitment.graded or commitment.judge in self.verdicts_graded:
+            commitment.graded = True
             return
         commitment.graded = True
+        self.verdicts_graded.add(commitment.judge)
         facts = [f for f in (commitment.payoff_beat, commitment.verdict_beat) if f is not None]
         if not facts:
             self.ledger.append({"kind": "verdict.unmeasured", "handle": commitment.judge,
