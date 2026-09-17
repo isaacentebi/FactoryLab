@@ -529,8 +529,11 @@ def test_edition3_testnet_manifest_identity_is_pinned_beside_edition_2():
     # Re-pinned again by R3-G: `[venue] principal_usd = "120"` declares the trading
     # principal the runtime refuses to exceed. The key is hash-neutral where it is
     # absent, so every other world — edition 2 below included — keeps its identity.
+    # Re-pinned again by R4-A: the GLM tier disables Venice thinking after rehearsal 5
+    # returned 40 answers that were entirely reasoning and no content. A model tier is
+    # roster text, so the roster digest moved with the manifest hash (test_e3_world.py).
     assert m.manifest_hash() == (
-        "a8ba54eebbb2473dc5636ff84e567eb8e2d668712b3778ba70ed564ebb51b483")
+        "5b8d92d6894b1af7ad0c4b04bd30e921b2818a4c97500bd8ecf5ee1f422ba77e")
     # Edition 3's new keys are hash-neutral at their defaults: edition 2 is untouched.
     assert load_manifest("edition2-testnet").manifest_hash() == (
         "b184b1d8dc55daf56978ea51181be0d06e59493bef2727d97b2f67717efdbf8b")

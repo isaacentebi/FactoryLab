@@ -356,15 +356,16 @@ def test_an_empty_router_draw_is_not_graded_as_a_producer_return():
     sends an unselected draw into `_producer_step`. §7: delete the synthetic noop path."""
     from factorylab.kernel.queue import SettleStatus
 
-    called, settled = [], []
+    called, settled, costed, voided = [], [], [], []
     step = method_from_source("factorylab/runtime/loop.py", "Runtime", "_assembly_step",
                               {"NOOP": "noop", "SettleStatus": SettleStatus,
                                "DEF_VERDICT": "verdict-v1"})
     stats = SimpleNamespace(noops=0)
     rt = SimpleNamespace(
         _start_return=lambda h: None, _event_subject=lambda ev: None,
-        _producer_step=lambda *args: called.append(args), stats=stats,
-        consequences=SimpleNamespace(finish=lambda h, c: None),
+        _producer_step=lambda *args: called.append(args), stats=stats, n=3,
+        consequences=SimpleNamespace(finish=lambda h, c: costed.append(h),
+                                     void=lambda h, e: voided.append((h, e))),
         queue=SimpleNamespace(get=lambda h: SimpleNamespace(channel="conformity"),
                               settle=lambda h, **kw: settled.append((h, kw))),
     )
@@ -373,6 +374,10 @@ def test_an_empty_router_draw_is_not_graded_as_a_producer_return():
     assert stats.noops == 1
     assert settled[0][0] == "d1"
     assert settled[0][1]["status"] is SettleStatus.INAPPLICABLE
+    # Rehearsal 5 (R4-A): nor does it manufacture a consequence. A costed abstention
+    # resolves a `return_paid_off` for a decision no seat authored, which can only be
+    # ledgered `outcome.undeliverable`. The abstention's consequence is voided instead.
+    assert costed == [] and voided == [("d1", 3)]
 
 
 def test_open_commitments_follow_the_executing_seat_not_the_router_actor():
@@ -724,3 +729,41 @@ def test_cascade_separation_is_time_and_completed_evidence():
     _, released = arrive(gate, 3, 100 + window_ns)
     assert released is not None
     assert released.payload["window"]["count"] == 4
+
+
+def test_a_router_abstention_opens_no_consequence_for_anybody_to_receive():
+    """Rehearsal 5: 197 `outcome.undeliverable` rows, all `return_paid_off` consequences
+    of decisions the router opened and then drew nobody for. The abstention was costed,
+    so the consequence book resolved a payoff for a decision no seat authored and the
+    feedback pass had nobody to address it to. A quiet draw now voids its consequence:
+    nothing resolves, nothing is sealed against it, and nothing is addressed."""
+    from types import SimpleNamespace
+
+    from factorylab.kernel.events import Event, EventKind
+    from factorylab.runtime.shared import NOOP
+    from tests.runtime.test_loop import _consequence_decision, _consequence_runtime
+
+    runtime = _consequence_runtime()
+    quiet = []
+    for _ in range(6):
+        runtime.n += 1
+        handle = _consequence_decision(runtime, NOOP, "verdict")
+        runtime._assembly_step(
+            Event(f"tick-{runtime.n}", EventKind.TICK, runtime.clock.now_ns, {"index": 0},
+                  "router:Tick"),
+            handle, SimpleNamespace(chosen=NOOP), runtime.queue.get(handle).deadline_ns)
+        quiet.append(handle)
+    for _ in range(runtime.ev.consequence_backstop_events * 2):
+        runtime.n += 1
+        runtime._settle_due_forecasts()
+    items = runtime.ledger._recovery_items()
+    assert [i for i in items if i["kind"] == "outcome.undeliverable"] == []
+    for handle in quiet:
+        # No outcome was ever fixed for it, so no `return_paid_off` could settle.
+        assert runtime.consequences.payoff(handle) is None
+        assert not runtime.consequences.account_open(handle)
+        # And nothing may be sealed against it or addressed to it.
+        assert runtime._hindsight_reason(handle, handle) is not None
+    assert runtime.consequences.counts()["consequences_pending"] == 0
+    assert len([i for i in items if i["kind"] == "consequence.void"]) == len(quiet)
+    assert runtime.ledger.verify()

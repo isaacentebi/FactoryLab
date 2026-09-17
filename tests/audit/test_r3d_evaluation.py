@@ -26,6 +26,7 @@ from factorylab.kernel.queue import SettleStatus
 from factorylab.runtime.cascade import CascadeGate, release_window_ns
 from factorylab.runtime.feedback import NORM_COMMITMENT, PendingJudgement
 from factorylab.runtime.shared import NOOP
+from factorylab.runtime.worlds import load_manifest
 from factorylab.settlement.fidelity import (
     FidelityObjection,
     challenge_proposal,
@@ -472,3 +473,74 @@ def test_the_catalogue_no_longer_offers_a_judge_as_a_request_target():
     addressing = runtime._world_block()["addressing"]
     assert "cannot be commissioned as a child" in addressing
     assert "the router's sampling, the adversarial share and the cascade" in addressing
+
+
+def _verdict_rows(runtime, kind: str) -> list[dict]:
+    return [i for i in runtime.ledger._recovery_items() if i["kind"] == kind]
+
+
+class _Endorser(ScriptedProvider):
+    """An evaluator that endorses the return it judges and seals a payoff forecast."""
+
+    def _produce(self, desc, inputs):
+        return {"action": "hold", "subscribe": {"cadence_floor": 1}}
+
+    def _evaluate(self, req, inputs):
+        return {"verdict": 1.0, "payoff": 0.0, "rationale": "fine", "forecasts": []}
+
+
+def test_a_verdict_closes_unread_once_while_its_payoff_forecast_is_still_pending():
+    """Rehearsal 5's loudest defect: 12,672 ``verdict.unread`` rows over 47 judges, one
+    of them 960 times. The judge's payoff forecast stays pending in the book after its
+    commitment closed unread, so the per-event commitment pass re-created the same
+    commitment, closed it unread again and finalized it unmeasured again, every event
+    for the rest of the run. A judge handle closes unread once and is graded once."""
+    manifest = load_manifest("scripted")
+    manifest = replace(manifest, evaluation=replace(manifest.evaluation,
+                                                    consequence_backstop_events=30))
+    runtime = _consequence_runtime(provider=_Endorser(), manifest=manifest)
+    runtime._manage_reserve_window()
+    # One unacknowledged order at the venue, as rehearsal 5 had: while an order's
+    # identity is unknown no return\'s outcome may be fixed, so every judge\'s payoff
+    # forecast stays pending in the book while its normative window closes unread.
+    runtime.consequences.order_intent("cid-1", "decision-0", "BTC")
+    _, event = _consequence_produce(runtime, "seed-decider")
+    judge = _consequence_judge(runtime, event, "eval-a")
+    for _ in range(300):
+        runtime.n += 1
+        runtime._settle_due_forecasts()
+    assert [i["handle"] for i in _verdict_rows(runtime, "verdict.unread")] == [judge]
+    assert [i["handle"] for i in _verdict_rows(runtime, "verdict.unmeasured")] == [judge]
+    assert runtime.book.pending(predicate_id="return_paid_off")  # still owed, still quiet
+    assert judge in runtime.verdicts_closed_out and judge in runtime.verdicts_graded
+    # And the commitment left ``pending``: nothing waits on it any more.
+    assert not [p for p in runtime.pending.values() if p.judge == judge]
+
+
+def test_a_restored_runtime_does_not_re_emit_a_verdict_it_already_closed_out():
+    """The same guarantee across a restore: what the diary already said once, a runtime
+    resumed from it does not say again."""
+    from factorylab.runtime.resume import restore_runtime, runtime_state
+
+    manifest = load_manifest("scripted")
+    manifest = replace(manifest, evaluation=replace(manifest.evaluation,
+                                                    consequence_backstop_events=30))
+    runtime = _consequence_runtime(provider=_Endorser(), manifest=manifest)
+    runtime._manage_reserve_window()
+    runtime.consequences.order_intent("cid-1", "decision-0", "BTC")
+    _, event = _consequence_produce(runtime, "seed-decider")
+    judge = _consequence_judge(runtime, event, "eval-a")
+    for _ in range(40):
+        runtime.n += 1
+        runtime._settle_due_forecasts()
+    assert len(_verdict_rows(runtime, "verdict.unread")) == 1
+    state = runtime_state(runtime)
+    restored = _consequence_runtime(provider=_Endorser(), manifest=manifest)
+    restore_runtime(restored, state)
+    assert judge in restored.verdicts_closed_out
+    before = len(_verdict_rows(restored, "verdict.unread"))
+    for _ in range(40):
+        restored.n += 1
+        restored._settle_due_forecasts()
+    assert len(_verdict_rows(restored, "verdict.unread")) == before
+    assert not [i for i in _verdict_rows(restored, "verdict.unmeasured") if i["handle"] == judge]

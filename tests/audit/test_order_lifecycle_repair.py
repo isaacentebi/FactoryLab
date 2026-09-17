@@ -240,3 +240,69 @@ def test_session_order_cap_is_removed_from_runtime_and_manifest():
     result = rt._venue_write(h, 'venue.place_market', {
         'coin': 'BTC', 'side': 'buy', 'size': '.001'}, slot='output')
     assert result['status'] == 'filled'  # $60 fixture order exceeds the removed $20 cap.
+
+
+def _order_rows(rt, kind: str) -> list[dict]:
+    return [i for i in rt.ledger._recovery_items() if i["kind"] == kind]
+
+
+def test_an_uncertain_order_is_polled_on_a_bounded_schedule_then_left_unresolved(monkeypatch):
+    """Rehearsal 5: one order (a ReadTimeout on submit) was re-ledgered "order not
+    observed" on every later poll — 100 rows for one intent over 150 ticks. The venue is
+    asked a bounded number of times, each answer is ledgered once, and then the runtime
+    says so and stops asking."""
+    from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
+
+    rt = make_runtime(live=True, clock_source=LiveClock(1, 0, now_ns=lambda: 0))
+    exchange = rt.exchange.target
+    lookups = []
+    monkeypatch.setattr(exchange, "place",
+                        lambda order: OrderResult(None, "uncertain", Decimal(0), None,
+                                                  "submit timeout"))
+    monkeypatch.setattr(exchange, "lookup",
+                        lambda *a, **kw: (lookups.append(a)
+                                          or OrderResult(None, "uncertain", Decimal(0), None,
+                                                         "order not observed")))
+    h = _producing_decision(rt)
+    rt._venue_write(h, "venue.place_market", {"coin": "BTC", "side": "buy", "size": "0.001"},
+                    slot="output")
+    for _ in range(50):
+        rt._reconcile_orders()
+    uncertain = _order_rows(rt, "order.uncertain")
+    unresolved = _order_rows(rt, "order.unresolved")
+    assert len(uncertain) == UNCERTAIN_ORDER_POLLS
+    assert len(unresolved) == 1 and unresolved[0]["handle"] == h
+    assert len(uncertain) + len(unresolved) == UNCERTAIN_ORDER_POLLS + 1
+    # The schedule is the polling, not the bookkeeping: the venue was asked once per row.
+    assert len(lookups) == UNCERTAIN_ORDER_POLLS - 1  # the submit's own answer is the first
+    # And a repeat of the identical write never resubmits or re-asks past the bound.
+    again = rt._venue_write(h, "venue.place_market",
+                            {"coin": "BTC", "side": "buy", "size": "0.001"}, slot="output")
+    assert again["status"] == "uncertain"
+    assert len(_order_rows(rt, "order.uncertain")) == UNCERTAIN_ORDER_POLLS
+    assert len(_order_rows(rt, "order.unresolved")) == 1
+
+
+def test_the_kill_wind_downs_reconciliation_still_reads_the_venue_for_it(monkeypatch):
+    """The bound is a polling schedule, not a decision to stop caring: a dying runtime
+    reads the venue once more for an order whose identity it never confirmed."""
+    rt = make_runtime(live=True, clock_source=LiveClock(1, 0, now_ns=lambda: 0))
+    exchange = rt.exchange.target
+    lookups = []
+    monkeypatch.setattr(exchange, "place",
+                        lambda order: OrderResult(None, "uncertain", Decimal(0), None,
+                                                  "submit timeout"))
+    monkeypatch.setattr(exchange, "lookup",
+                        lambda *a, **kw: (lookups.append(a)
+                                          or OrderResult(None, "uncertain", Decimal(0), None,
+                                                         "order not observed")))
+    h = _producing_decision(rt)
+    rt._venue_write(h, "venue.place_market", {"coin": "BTC", "side": "buy", "size": "0.001"},
+                    slot="output")
+    for _ in range(50):
+        rt._reconcile_orders()
+    assert _order_rows(rt, "order.unresolved")
+    spent = len(lookups)
+    rt._finish_budget()
+    assert len(lookups) == spent + 1
+    assert rt._summary()["execution"]["statuses"]["uncertain"] == 1

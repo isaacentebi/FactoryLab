@@ -32,8 +32,13 @@ from factorylab.world.exchange import Order
 #: Re-pinned again by the R3-G launch gates, which added `[venue] principal_usd = "120"`:
 #: the world's physics changed, the roster text did not, so the ratified charter still
 #: binds to the roster digest below.
-EDITION3_HASH = "a8ba54eebbb2473dc5636ff84e567eb8e2d668712b3778ba70ed564ebb51b483"
-EDITION3_ROSTER = "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434"
+#: Re-pinned again after rehearsal 5 (R4-A): the `venice:z-ai-glm-5-3-flash` tier now
+#: carries `reasoning = { enabled = false }`, which Venice honours as
+#: `venice_parameters.disable_thinking = true`. That is a model tier, so both the
+#: manifest hash and the roster digest moved and the coordinator re-ratifies on the new
+#: digest; the charter text the committee voted is untouched.
+EDITION3_HASH = "5b8d92d6894b1af7ad0c4b04bd30e921b2818a4c97500bd8ecf5ee1f422ba77e"
+EDITION3_ROSTER = "a18e11b83de4914ecde016126fbb88cd1c8732bafca9bb4f4f6fe67f2dc6d871"
 #: The roster the ratified edition 3 charter was voted against, before R3-E.
 RATIFIED_AGAINST_ROSTER = EDITION3_ROSTER  # re-ratified 16 September on the R3-E prompts
 

@@ -16,6 +16,11 @@ from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse,
 from factorylab.world.openai_wire import dispatched, parse_completion
 from factorylab.world.x402 import VENICE_URL, X402Client, http_request, redact
 
+#: How much of a completion's `reasoning_content` the diary keeps. Enough to see
+#: what the model actually said when it answered in prose it never returned as
+#: content, and bounded so a runaway thought cannot fill the ledger.
+MAX_REASONING_CHARS = 2_000
+
 
 def prepare_top_up(client: X402Client, *, now_s: int, nonce: bytes) -> dict:
     """Fix a $5 quote and unsigned authorization before the treasury reserves and journals it."""
@@ -274,13 +279,25 @@ class VeniceProvider:
                 raw["cached_tokens"] = wire.cached_tokens
             for key in ("tool_calls", "reasoning_content", "reasoning_details"):
                 if key in wire.message:
-                    raw[key] = wire.message[key]
+                    value = wire.message[key]
+                    raw[key] = (value[:MAX_REASONING_CHARS]
+                                if key == "reasoning_content" and isinstance(value, str)
+                                else value)
+            stop_reason = wire.stop_reason
+            if not wire.text and raw.get("reasoning_content") and not raw.get("tool_calls"):
+                # The model spent its whole output budget thinking and answered
+                # nothing. The answer is malformed either way -- there is no
+                # content to parse -- but the diary should say why rather than
+                # record an empty `stop`: the reasoning it kept is the evidence.
+                # A message that called a tool answered with the call, not with
+                # content, and is not this failure.
+                stop_reason = "reasoning_only"
             return ModelResponse(
                 serving_id,
                 wire.text,
                 wire.input_tokens,
                 wire.output_tokens,
-                wire.stop_reason,
+                stop_reason,
                 False,
                 raw,
                 cost,

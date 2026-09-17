@@ -344,3 +344,61 @@ def test_json_output_contract_is_sent_only_for_object_requests(completion, req):
     provider.complete(replace(req, json_object=True))
     assert "response_format" not in fake.calls[0][2]
     assert fake.calls[1][2]["response_format"] == {"type": "json_object"}
+
+
+def test_an_answer_that_is_all_reasoning_and_no_content_says_so(completion, req):
+    """Rehearsal 5: 40 of 110 GLM answers came back `finish_reason: stop` with an empty
+    content and the whole answer in `reasoning_content`. There is nothing to parse, so
+    the answer is malformed either way — but the diary should say why, and keep the
+    prose the model did produce, bounded, as the evidence that it did."""
+    from factorylab.world.venice import MAX_REASONING_CHARS
+
+    thought = "I should answer with JSON. " * 400
+    completion["choices"][0]["message"] = {"role": "assistant", "content": "",
+                                           "reasoning_content": thought}
+    response = VeniceProvider(transport=FakeTransport([completion])).complete(req)
+    assert response.text == ""  # malformed: no content reached the contract
+    assert response.stop_reason == "reasoning_only"
+    assert response.raw["reasoning_content"] == thought[:MAX_REASONING_CHARS]
+    assert len(response.raw["reasoning_content"]) == 2_000
+
+
+def test_an_answer_with_content_or_a_tool_call_is_not_reasoning_only(completion, req):
+    """The finding is an empty answer, not the presence of reasoning: a completion that
+    answered, and one that answered by calling a tool, keep the provider's own reason."""
+    completion["choices"][0]["message"] = {"role": "assistant", "content": "OK",
+                                           "reasoning_content": "thinking"}
+    answered = VeniceProvider(transport=FakeTransport([completion])).complete(req)
+    assert answered.stop_reason == "stop" and answered.text == "OK"
+    completion["choices"][0]["message"] = {
+        "role": "assistant", "content": "", "reasoning_content": "thinking",
+        "tool_calls": [{"id": "c1", "type": "function",
+                        "function": {"name": "t", "arguments": "{}"}}]}
+    completion["choices"][0]["finish_reason"] = "tool_calls"
+    called = VeniceProvider(transport=FakeTransport([completion])).complete(req)
+    assert called.stop_reason == "tool_calls"
+
+
+def test_the_edition3_glm_tier_sends_venices_own_thinking_switch():
+    """And the world stops producing the failure: the tier rehearsal 5 ran GLM on now
+    declares `reasoning = { enabled = false }`, which this adapter sends to Venice as
+    `venice_parameters.disable_thinking = true`."""
+    from factorylab.runtime.worlds import load_manifest
+
+    manifest = load_manifest("edition3-testnet")
+    tier = next(m for m in manifest.models if m.id == "venice:z-ai-glm-5-3-flash")
+    reasoning = dict(tier.reasoning)
+    assert reasoning == {"enabled": False}
+    fake = FakeTransport([{
+        "id": "venice-test-1", "model": "z-ai-glm-5-3-flash",
+        "choices": [{"message": {"role": "assistant", "content": "OK"},
+                     "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 25, "completion_tokens": 10},
+        "cost": {"usd": "0.0000123"},
+    }])
+    provider = VeniceProvider(transport=fake,
+                              reasoning_config={tier.id: reasoning})
+    provider.complete(ModelRequest(tier.id, "System", ({"role": "user", "content": "Hi"},), 64))
+    payload = fake.calls[0][2]
+    assert payload["venice_parameters"] == {"disable_thinking": True}
+    assert payload["reasoning"] == {"enabled": False}

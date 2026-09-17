@@ -83,6 +83,10 @@ class ReturnAccount:
     earned_micro: int = 0  # paid calls of the service this return registered, while open
     earnings: int = 0  # how many such receipts
     late_micro: int = 0  # realised P&L already booked to the owner after the outcome was fixed
+    # A return no seat authored: a router abstention. It is kept so its handle can
+    # never be admitted twice, but it owes no outcome — nothing resolves against it
+    # and no payoff forecast may be sealed on it.
+    voided: bool = False
 
 
 @dataclass(frozen=True)
@@ -130,6 +134,22 @@ class LotTable:
         if account.cost_micro is not None:
             raise ValueError("return cost already final")
         return self._accounts({handle: replace(account, cost_micro=cost_micro)})
+
+    def void(self, handle: str) -> "LotTable":
+        """Void an admitted return that authored nothing, so it owes no outcome.
+
+        A router abstention opens no consequence: nothing resolves against a
+        voided account, so no payoff is ever fixed for it and no seat can be
+        addressed with one. A return that already traded, cost something or was
+        resolved is not an abstention and may not be voided.
+        """
+        account = self.account(handle)
+        if (account.payoff is not None or account.cost_micro is not None
+                or account.opened_lots or account.closes or account.earnings
+                or any(lot.handle == handle for lot in self.lots)
+                or any(order.handle == handle for order in self.orders)):
+            raise ValueError("only a return that authored nothing may be voided")
+        return self._accounts({handle: replace(account, voided=True)})
 
     def carry(self, handle: str, cost_micro: int) -> "LotTable":
         """Add a nonnegative retained liability to a return whose outcome is still open.
@@ -363,7 +383,7 @@ class LotTable:
         _require_event_index(backstop, "backstop", positive=True)
         updates = {}
         for account in self.returns:
-            if account.cost_micro is None or account.payoff is not None:
+            if account.voided or account.cost_micro is None or account.payoff is not None:
                 continue
             lots = [lot for lot in self.lots if lot.handle == account.handle]
             waiting = any(o.handle == account.handle and o.remaining for o in self.orders)
