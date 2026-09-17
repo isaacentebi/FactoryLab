@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from factorylab.cortex.request import Return
 from factorylab.kernel.money import usd_to_micro
@@ -18,6 +18,14 @@ from factorylab.world.exchange import (
     OrderResult,
     VenueUnavailable,
 )
+
+#: A share of a declared principal is floored to the micro: a cap may never round up.
+_MICRO = Decimal("0.000001")
+
+
+def _floor_micro(value: Decimal) -> Decimal:
+    """Round a capped collateral figure down to the micro. A cap never rounds up."""
+    return value.quantize(_MICRO, rounding=ROUND_DOWN)
 
 
 def _custody_of(market: str) -> str:
@@ -641,7 +649,7 @@ class VenueMixin:
         spot = "/" in coin
         available: Decimal | None = None
         try:
-            view = self.exchange.collateral_view(coin, "spot" if spot else "perp")
+            view = self._collateral_view(coin, "spot" if spot else "perp")
             mids = self._tick_mids()
             mark = max(mids[coin], price or mids[coin])
             headroom = Decimal(str(getattr(self.m.exchange, "collateral_headroom_usd", "0")))
@@ -661,6 +669,50 @@ class VenueMixin:
         self._refuse_order(handle, reason, kind="order.infeasible",
                            venue_available_usd=None if available is None else str(available))
         return reason
+
+    def _collateral_view(self, coin: str, market: str = "perp") -> dict:
+        """The venue's own collateral view, capped at the principal this world declared.
+
+        ``[venue] principal_usd`` is the reviewer's second way of meeting the first
+        launch gate: "the experimenter withdraws the rest of the testnet balance
+        first **or the manifest declares the principal and the runtime refuses to
+        use more**". A testnet account funded with $966 that declares ``"120"``
+        is collateralised as if it held $120, so the rehearsal is the size of the
+        real proposal and nothing has to be moved to make it so.
+
+        The cap is on the venue's *eligible* USD, and the venue holds it in two
+        pools the runtime already checks separately: the perps account's eligible
+        equity and the spot account's quote balance. A per-pool ceiling would let
+        an order lean on the principal twice, so the declared principal is shared
+        between them in proportion to what each actually holds, floored to the
+        micro. When the spot quote balance is empty — the ordinary case — that is
+        exactly "eligible equity capped at the principal".
+
+        The cap only ever lowers a number. It is not a balance and is never
+        reported as one: custody still shows what the venue actually holds, and
+        the view carries ``principal_cap_usd`` and the uncapped figures so a
+        refusal can say which of the two refused it. A world that declares no
+        principal gets the venue's view unchanged.
+        """
+        view = dict(self.exchange.collateral_view(coin, market))
+        declared = getattr(self.m.exchange, "principal_usd", None)
+        if declared is None:
+            return view
+        cap = Decimal(str(declared))
+        view["principal_cap_usd"] = cap
+        equity = Decimal(str(view.get("eligible_equity_usd", 0)))
+        balances = dict(view.get("spot_available") or {})
+        quote = Decimal(str(balances.get("USDC", 0)))
+        total = max(Decimal(0), equity) + max(Decimal(0), quote)
+        if total <= cap or total <= 0:
+            return view
+        view["uncapped_eligible_equity_usd"] = equity
+        view["eligible_equity_usd"] = _floor_micro(max(Decimal(0), equity) * cap / total)
+        if balances:
+            view["uncapped_spot_available"] = dict(balances)
+            balances["USDC"] = _floor_micro(max(Decimal(0), quote) * cap / total)
+            view["spot_available"] = balances
+        return view
 
     def _collateral_stale(self, view: dict) -> str | None:
         """An observation older than one tick cannot authorise new risk.

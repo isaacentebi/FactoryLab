@@ -71,6 +71,13 @@ class ExchangeSpec:
     # it cannot be reasoned away by the order that wants it. Zero by default: a
     # world that wants a cushion says so.
     collateral_headroom_usd: str = "0"
+    # The risk-bearing trading principal this world declares it may use at the venue,
+    # as an exact USD decimal string. A launch gate, not a balance: a testnet account
+    # funded with $966 that declares "120" is collateralised as if it held $120, so the
+    # rehearsal is the size of the real proposal without withdrawing anything first.
+    # ``None`` means "whatever the venue holds", which is every world that predates the
+    # key, and it is dropped from the canonical JSON at that default.
+    principal_usd: str | None = None
 
 
 @dataclass(frozen=True)
@@ -467,6 +474,10 @@ class WorldManifest:
         # the key existed: an added key may not rename a world that predates it.
         if payload["exchange"].get("collateral_headroom_usd") == "0":
             payload["exchange"].pop("collateral_headroom_usd")
+        # A world that declares no trading principal hashes as it did before the key
+        # existed: an added key may not rename a world that predates it.
+        if payload["exchange"].get("principal_usd") is None:
+            payload["exchange"].pop("principal_usd", None)
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -871,6 +882,16 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         raise ValueError(
             "venue.collateral_headroom_usd must be a nonnegative exact decimal string"
         ) from None
+    principal = venue.get("principal_usd")
+    if principal is not None:
+        principal = str(principal)
+        try:
+            if Decimal(principal) <= 0 or not Decimal(principal).is_finite():
+                raise ValueError
+        except (ArithmeticError, ValueError):
+            raise ValueError(
+                "venue.principal_usd must be a positive exact decimal string"
+            ) from None
     if (not isinstance(spot_pairs, list) or any(
             not isinstance(p, str) or p.count("/") != 1 or not p.endswith("/USDC")
             or not p.split("/")[0] for p in spot_pairs)
@@ -885,6 +906,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         seed=int(ex.get("seed", d.get("seed", 0))),
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
         collateral_headroom_usd=headroom,
+        principal_usd=principal,
         shocks=tuple(
             Shock(int(sh["step"]), str(sh["coin"]), str(sh["multiplier"]))
             for sh in ex.get("shocks", [])

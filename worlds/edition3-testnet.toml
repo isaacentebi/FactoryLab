@@ -323,6 +323,12 @@ base_gas_budget_wei = 1000000000000000
 max_transfer_fee_usd = "2"
 
 [venue]
+# The risk-bearing trading principal this world may use, stated as a gate rather than
+# as a balance. GPT-6 Pro's third reading, §11: the first launch gate is met either by
+# withdrawing the rest of the testnet balance or by declaring the principal so "the
+# runtime refuses to use more". A testnet account funded far above $120 is therefore
+# collateralised as if it held $120, which is `[exchange] start_cash_usd` above.
+principal_usd = "120"
 # Testnet spot, unchanged from edition 2: PURR/USDC is the only testnet pair with a
 # canonical name and a rehearsable lot, and HYPE/USDC is the spot HYPE that pays the
 # population's own Core gas.

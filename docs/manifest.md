@@ -1912,6 +1912,26 @@ before the orders that would want it. It is not `[kill] dust_micro`, which is a
 different setting for a different thing. At its default the key is dropped from
 the canonical manifest JSON, so no world that predates it changes hash.
 
+`[venue] principal_usd` is an exact positive decimal string, default absent: the
+risk-bearing trading principal this world declares it may use at the venue. It
+is a gate, not a balance. GPT-6 Pro's third reading §11 offers the experimenter
+two ways to launch at the proposed size — withdraw the rest of the testnet
+balance, or declare the principal so "the runtime refuses to use more" — and
+this key is the second. `_collateral_view` reads the venue's own
+`collateral_view` and lowers it to the declaration before `_order_collateral`
+does any arithmetic, so an account funded with $966 that declares `"120"` is
+collateralised as if it held $120. The venue holds eligible USD in two pools
+the runtime checks separately (the perps account's eligible equity and the spot
+account's quote balance), so the declared principal is shared between them in
+proportion to what each actually holds, floored to the micro; with an empty spot
+quote balance that is exactly "eligible equity capped at the principal". The cap
+only lowers a figure, and the capped view carries `principal_cap_usd` beside
+`uncapped_eligible_equity_usd` and `uncapped_spot_available` so a refusal can say
+which of the two — the venue or the declaration — refused it. Custody still
+reports what the venue actually holds. Where the key is absent it is dropped from
+the canonical manifest JSON, so no world that predates it changes hash;
+`worlds/edition3-testnet.toml` declares `principal_usd = "120"`.
+
 ### The reward line
 
 `_credit_consequence` books the consequence in parts rather than as one number:

@@ -526,8 +526,11 @@ def test_edition3_testnet_manifest_identity_is_pinned_beside_edition_2():
     # Re-pinned by R3-E: every seat's system prompt became the common system
     # contract and every lens moved into `initial_state`, so this world's text —
     # and its roster digest — is new. Edition 2's pin below is untouched.
+    # Re-pinned again by R3-G: `[venue] principal_usd = "120"` declares the trading
+    # principal the runtime refuses to exceed. The key is hash-neutral where it is
+    # absent, so every other world — edition 2 below included — keeps its identity.
     assert m.manifest_hash() == (
-        "1d7768fe98b9537aa236eb33b9ecb9a94f966413ddd221dfe9c6204803ce2cb5")
+        "a8ba54eebbb2473dc5636ff84e567eb8e2d668712b3778ba70ed564ebb51b483")
     # Edition 3's new keys are hash-neutral at their defaults: edition 2 is untouched.
     assert load_manifest("edition2-testnet").manifest_hash() == (
         "b184b1d8dc55daf56978ea51181be0d06e59493bef2727d97b2f67717efdbf8b")
