@@ -176,7 +176,13 @@ def test_scripted_amendment_lambda_is_voted_adopted_and_visible(scripted_runtime
 
     # The scripted world registers its own observation (T29), so the world block carries
     # the seed catalogue plus the population's; the seed entries must all be present.
-    assert all(all(o in w["observations"] for o in catalogue()) for w in worlds)
+    # R4-B (PR #104) moved ``observations`` into the cached prefix, so the rendered
+    # INPUTS world no longer repeats it — each fact is rendered exactly once, and this
+    # one is now rendered in the prefix's institutional block, identically for every
+    # request this runtime makes. The catalogue is therefore read from the world block
+    # itself, which still carries every key because it is the runtime's own disclosure
+    # surface and not merely the prompt's source.
+    assert worlds and all(o in rt._world_block()["observations"] for o in catalogue())
     assert all(am["add"][0]["observation"] == "turnover" for am in votes)
     windows = [e for e in entries if e["kind"] == "price.window"]
     assert windows and all("revision_rate" in e["observations"] for e in windows)

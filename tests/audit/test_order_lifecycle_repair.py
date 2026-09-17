@@ -306,3 +306,99 @@ def test_the_kill_wind_downs_reconciliation_still_reads_the_venue_for_it(monkeyp
     rt._finish_budget()
     assert len(lookups) == spent + 1
     assert rt._summary()["execution"]["statuses"]["uncertain"] == 1
+
+
+def _uncertain_venue(rt, monkeypatch, lookups=None):
+    """A venue that loses the submit and then never reports the order."""
+    exchange = rt.exchange.target
+    monkeypatch.setattr(exchange, "place",
+                        lambda order: OrderResult(None, "uncertain", Decimal(0), None,
+                                                  "submit timeout"))
+    monkeypatch.setattr(exchange, "lookup",
+                        lambda *a, **kw: ((lookups.append(a) if lookups is not None else None)
+                                          or OrderResult(None, "uncertain", Decimal(0), None,
+                                                         "order not observed")))
+    return exchange
+
+
+def _held_position(rt, handle, order_id="opener"):
+    """Give a return an open perp lot, so a later close has a P&L to realise."""
+    rt.consequences.order_result(
+        handle, {"status": "filled", "order_id": order_id, "filled_size": "0.001"},
+        {"size": "0.001"}, rt.n)
+    rt.consequences.observe("Fill", {"order_id": order_id, "coin": "BTC", "is_buy": True,
+                                     "size": "0.001", "px": "60000", "fee_usd": "0"}, rt.n)
+
+
+def test_an_unresolved_order_releases_the_hold_as_a_censored_unknown_outcome(monkeypatch):
+    """R4-C: what PR #105 left undecided. An order whose fill status the venue will not
+    confirm gives its return no payoff anybody can be right or wrong about, so the
+    return's ``return_paid_off`` settles censored for documented external
+    unobservability -- no eligible sample, no standing, an ``unknown`` outcome for its
+    owner -- and the hold on ``pending_orders`` is released, so every later return's
+    outcome resolves again. The exposure survives the release: the coin stays shut to
+    that seat while the intent reads uncertain, and a fill the venue finally admits to
+    is still this return's money, late."""
+    rt = make_runtime(live=True, clock_source=LiveClock(1, 0, now_ns=lambda: 0))
+    exchange = _uncertain_venue(rt, monkeypatch)
+    h = _producing_decision(rt)
+    _held_position(rt, h)
+    rt.consequences.finish(h, 1_000)
+    rt._venue_write(h, "venue.place_market", {"coin": "BTC", "side": "sell", "size": "0.001"},
+                    slot="output")
+    assert rt.consequences.pending_orders  # the hold #105 could not lift
+    for _ in range(50):
+        rt._reconcile_orders()
+
+    released = _order_rows(rt, "order.unresolved_released")
+    assert len(released) == 1
+    assert released[0] == {"kind": "order.unresolved_released", "handle": h, "coin": "BTC",
+                           "client_id": h, "reason": "external_unobservable",
+                           **{k: v for k, v in released[0].items()
+                              if k not in ("kind", "handle", "coin", "client_id", "reason")}}
+    assert not rt.consequences.pending_orders
+
+    # The outcome exists, carries its documented reason, and is nobody's payoff.
+    payoff = rt.consequences.payoff(h)
+    assert payoff is not None and payoff.censored == "external_unobservable"
+    assert not payoff.marked and payoff.net_micro == 0
+    assert rt.consequences.counts()["censored_outcomes"] == 1
+
+    # And the returns that were queued behind the hold resolve normally again.
+    other = _producing_decision(rt)
+    rt.consequences.finish(other, 1_000)
+    fixed = rt.consequences.resolve(rt.n)
+    assert {p.handle for p in fixed} == {h, other}
+    for p in fixed:
+        rt._credit_consequence(p)
+    items = [rt.outcomes.body(i["sha"]) for i in rt.outcomes.items["seed-decider"]
+             if i["handle"] == h]
+    assert len(items) == 1 and items[0]["outcome"]["outcome"] == "unknown"
+    assert items[0]["outcome"]["return_paid_off"] is None
+    assert items[0]["outcome"]["reason"] == "external_unobservable"
+    # The venue's last answer rides with it, so the seat reads a fact, not a silence.
+    assert items[0]["outcome"]["venue_answer"]["result"]["error"] == "order not observed"
+    assert items[0]["delta_micro"] == 0  # a censored outcome moves no money
+
+    # The coin stays shut to that seat while the venue has still said nothing.
+    refused = rt._venue_write(other, "venue.place_market",
+                              {"coin": "BTC", "side": "buy", "size": "0.001"}, slot="output")
+    assert refused["status"] == "rejected"
+    assert "still uncertain" in refused["error"]
+
+    # The venue finally admits to the order: the fill is still this return's, and its
+    # money reaches the same seat late rather than never.
+    monkeypatch.setattr(exchange, "lookup",
+                        lambda *a, **kw: OrderResult("late-1", "filled", Decimal("0.001"),
+                                                     Decimal("61000")))
+    rt._recover_order(h)
+    assert any(o.order_id == "late-1" and o.handle == h for o in rt.consequences.table.orders)
+    rt.consequences.observe("Fill", {"order_id": "late-1", "coin": "BTC", "is_buy": False,
+                                     "size": "0.001", "px": "61000", "fee_usd": "0"}, rt.n)
+    rt._settle_late()
+    late = [b for b in (rt.outcomes.body(i["sha"]) for i in rt.outcomes.items["seed-decider"]
+                        if i["handle"] == h)
+            if "late_realization_micro" in b["outcome"]]
+    assert len(late) == 1 and late[0]["outcome"]["late_realization_micro"] == 1_000_000
+    # The censored outcome itself is never reopened; only the money moved.
+    assert rt.consequences.payoff(h) is payoff

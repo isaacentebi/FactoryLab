@@ -45,6 +45,11 @@ class Payoff:
     marked: bool = False
     liquidated: bool = False
     earned_micro: int = 0
+    # The documented reason this outcome carries no fact at all (R4-C). A
+    # censored outcome closes the account so later returns resolve, but its
+    # ``y`` is not an observation: nothing is scored from it and no money moves
+    # on it. ``external_unobservable`` is the one reason the runtime writes.
+    censored: str | None = None
 
 
 @dataclass(frozen=True)
@@ -150,6 +155,29 @@ class LotTable:
                 or any(order.handle == handle for order in self.orders)):
             raise ValueError("only a return that authored nothing may be voided")
         return self._accounts({handle: replace(account, voided=True)})
+
+    def censor(self, handle: str, event: int, reason: str) -> "LotTable":
+        """Close an open return whose consequence the world never let anyone observe.
+
+        A venue that will not say whether an order filled leaves the return's
+        ``return_paid_off`` question unanswered, not answered "no": there is no
+        fill status, so there is no payoff anybody could be right or wrong
+        about. The account is closed with the reason attached so every later
+        return resolves normally, the outcome is scored by nobody, and the late
+        baseline starts at zero, so whatever the account realises afterwards is
+        booked late in full -- the money is never lost, only late.
+        """
+        _require_event_index(event, "event")
+        if type(reason) is not str or not reason:
+            raise ValueError("a censored outcome requires a documented reason")
+        account = self.account(handle)
+        if account.voided or account.payoff is not None:
+            raise ValueError("only an open return may be censored")
+        outcome = Payoff(
+            account.handle, 0, 0, (account.cost_micro or 0) + account.carried_micro, event,
+            False, account.liquidated, account.earned_micro, censored=reason,
+        )
+        return self._accounts({handle: replace(account, payoff=outcome, late_micro=0)})
 
     def carry(self, handle: str, cost_micro: int) -> "LotTable":
         """Add a nonnegative retained liability to a return whose outcome is still open.
