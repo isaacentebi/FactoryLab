@@ -104,3 +104,80 @@ class TestD1NoLeverageOrPrincipalCap:
         # venue's leverage is unknown here, so the venue's own answer decides.
         assert rt._perp_collateral(view, "BTC", Decimal("0.01"), True,
                                    Decimal(60000), Decimal(0)) is None
+
+
+# ------------------------------------------------------------------------------ 1
+
+
+def _lost_ack_runtime(monkeypatch):
+    """A live-shaped runtime whose venue loses the first BTC submit and never reports it."""
+    from factorylab.runtime.live import LiveClock
+    from factorylab.world.exchange import OrderResult
+    from tests.conftest import make_runtime
+
+    rt = make_runtime(live=True, clock_source=LiveClock(1, 0, now_ns=lambda: 0))
+    exchange = rt.exchange.target
+    real_place, real_lookup = exchange.place, exchange.lookup
+    lost = set()
+
+    def place(order):
+        if not lost:
+            lost.add(order.client_id)
+            return OrderResult(None, "uncertain", Decimal(0), None, "submit timeout")
+        return real_place(order)
+
+    def lookup(client_id, **kw):
+        if client_id in lost:
+            return OrderResult(None, "uncertain", Decimal(0), None, "order not observed")
+        return real_lookup(client_id, **kw)
+
+    monkeypatch.setattr(exchange, "place", place)
+    monkeypatch.setattr(exchange, "lookup", lookup)
+    return rt
+
+
+class TestFix1NoCoinFreeze:
+    """One lost acknowledgement may not shut a coin for every seat."""
+
+    def test_another_seats_uncertain_order_never_blocks_a_place_close_or_cancel(
+            self, monkeypatch):
+        from tests.audit.test_r3_b_authority import _producing_decision
+
+        rt = _lost_ack_runtime(monkeypatch)
+        lost = _producing_decision(rt, "seed-decider")
+        order = {"coin": "BTC", "side": "buy", "size": "0.001"}
+        assert rt._venue_write(lost, "venue.place_market", order,
+                               slot="output")["status"] == "uncertain"
+        other = _producing_decision(rt, "seed-decider")
+        assert rt._venue_write(other, "venue.place_market", order,
+                               slot="output")["status"] == "filled"
+        closer = _producing_decision(rt, "seed-decider")
+        closed = rt._venue_write(closer, "venue.close", {"coin": "BTC", "size": None},
+                                 slot="tool0")
+        assert closed["status"] == "filled"
+        limit = _producing_decision(rt, "seed-decider")
+        rest = rt._venue_write(limit, "venue.place_limit",
+                               {**order, "price": "1000"}, slot="output")
+        assert rest["status"] == "resting"
+        canceller = _producing_decision(rt, "seed-decider")
+        cancelled = rt._venue_write(canceller, "venue.cancel",
+                                    {"coin": "BTC", "order_id": rest["order_id"]},
+                                    slot="tool0")
+        assert cancelled["status"] == "cancelled"
+        assert not any("still uncertain" in i["reason"]
+                       for i in ledger_items(rt, "order.refused"))
+
+    def test_an_exhausted_intent_is_censored_and_blocks_nothing(self, monkeypatch):
+        from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
+        from tests.audit.test_r3_b_authority import _producing_decision
+
+        rt = _lost_ack_runtime(monkeypatch)
+        lost = _producing_decision(rt)
+        order = {"coin": "BTC", "side": "buy", "size": "0.001"}
+        rt._venue_write(lost, "venue.place_market", order, slot="output")
+        for _ in range(UNCERTAIN_ORDER_POLLS + 2):
+            rt._reconcile_orders()
+        assert rt.order_intents[lost]["unresolved"]
+        again = _producing_decision(rt)
+        assert rt._venue_write(again, "venue.place_market", order,
+                               slot="output")["status"] == "filled"

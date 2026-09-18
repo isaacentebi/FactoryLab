@@ -480,10 +480,11 @@ class VenueMixin:
                         if lot.coin == args["coin"] and lot.market == "spot"), 0)
             if quantity <= 0 or quantity > min(held, lots):
                 return self._refuse_order(handle, "spot sell exceeds accounted inventory")
-        if any(i["result"]["status"] == "uncertain" and i["args"]["coin"] == args["coin"]
-               for i in self.order_intents.values()):
-            return self._refuse_order(handle, "prior order on this coin is still uncertain")
-        intent = {"handle": handle, "client_id": client_id, "operation": operation,
+        # An uncertain intent blocks only its own identity: repeating it reconciles
+        # (above) and never resubmits. It never shuts the coin: another write on the
+        # same coin -- another seat's, or a close or cancel -- carries its own identity,
+        # and one lost acknowledgement used to refuse every one of them forever.
+        intent ={"handle": handle, "client_id": client_id, "operation": operation,
                   "args": dict(args), "result": {"status": "uncertain"}}
         self.ledger.append({"kind": "order.intent", **intent})
         self.order_intents[client_id] = intent
@@ -634,8 +635,9 @@ class VenueMixin:
         meant deciding what an order of unknown fill status means for the return
         that sent it. It means the return's consequence is unknown: it settles
         censored for documented external unobservability, and every later
-        return's outcome resolves again. What stays is the exposure -- this coin
-        refuses new orders from this seat while the intent reads uncertain, the
+        return's outcome resolves again. The intent is then terminal
+        (``unresolved``): it is polled no more and blocks nothing -- not its coin,
+        not another seat, not a close or a cancel. What stays is the exposure: the
         kill wind-down still reads the venue for it, and a fill the venue
         eventually admits still belongs to this return.
         """
