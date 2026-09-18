@@ -461,15 +461,20 @@ class BudgetBook:
     def _settle_hold(self, reservation: Any, actual: Money) -> Money:
         """Debit the booked cost from the seat as far as its entitlement reaches.
 
-        The wallet has already paid ``actual``. The seat pays first; whatever its
-        entitlement cannot cover (protected exploration admitted at reserve time,
+        The wallet has already paid ``actual``. The seat pays first, out of this
+        hold and its free entitlement (never another open hold's); whatever that cannot
+        cover (protected exploration admitted at reserve time,
         or a reported overrun beyond the hold) stays with the pool and is ledgered
         as ``commons`` so the commons-funded part of every call is visible.
         Returns what the seat itself paid.
         """
         require_money(actual, nonnegative=True)
         seat, held = self._held(reservation)
-        own = max(0, min(actual, self.__gross.get(seat, 0)))
+        # The seat pays from this hold and from what it has free, never from the
+        # money its other open holds are keeping for their own calls: an overrun
+        # beyond both lands on the commons, so no entitlement is driven negative.
+        free = self.__gross.get(seat, 0) - (self.held_by(seat) - held)
+        own = max(0, min(actual, free))
         after = self.__gross.get(seat, 0) - own
         self._log("commit", assembly_id=seat, amount=actual, own=own, commons=actual - own,
                   handle=reservation.handle, reason=reservation.reason,

@@ -276,11 +276,14 @@ class ComputeMixin:
     def _novelty_protection(self, handle: str, reason: str) -> int:
         """The protected share for one reservation: the seat's, for exactly the calls
         the wallet already classifies as protected (an unhistoried seat's own model
-        calls), plus any pool bridge routing granted this call; nothing otherwise."""
+        calls), or the pool bridge routing granted this call where that is larger; the
+        bridge alone otherwise."""
         bridged = self.entitlement_bridges.get(handle, 0)
         if not self._novelty_compute(handle, reason):
             return bridged
-        return self._protected_share(self.queue.get(handle).propensity.chosen) + bridged
+        # Both are drawn on the same unallocated pool, so the cover is the larger of
+        # the two, never their sum: adding them let one call spend the pool twice.
+        return max(self._protected_share(self.queue.get(handle).propensity.chosen), bridged)
 
     @staticmethod
     def _world_chars(world: Any) -> int:
