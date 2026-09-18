@@ -464,7 +464,7 @@ class GovernanceMixin:
             permissions=frozenset(),
             resource_bounds=ResourceBounds(),
         )
-        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        self._register_proposal(contract, handle, reason="trial:challenge")
         record = {
             "id": challenge_id, "handle": handle, "card_id": incumbent.id,
             "evidence": prop.evidence, "incumbent": incumbent, "replacement": replacement,
@@ -556,6 +556,20 @@ class GovernanceMixin:
             committee = self.charter_book.seat(am.id, eligible, self.rng,
                                                size=self.m.committee.seats)
             self._hold_vote(am, committee)
+    def _register_proposal(self, contract: Contract, handle: str, *, reason: str) -> None:
+        """Register a proposal's contract and charge its proposer the trial, as any
+        registration is charged.
+
+        Each voter a proposal summons pays for its own ballot; the proposer that
+        chose to summon them pays its trial from its own entitlement (C10). One
+        that cannot is refused before anything is registered or any committee is
+        drawn, and a refused registration returns its receipt to the window.
+        """
+        amount = self.ev.trial_amount_micro
+        self._require_trial(handle, amount)
+        self._register_with_trial(contract, handle, amount)
+        self._move_trial(handle, amount, to=None, reason=reason)
+
     def _trial_proposer(self, handle: str) -> str | None:
         """The seat whose entitlement pays a registration's trial, when the handle has one."""
         owner = self.handle_to_assembly.get(handle)
@@ -858,6 +872,9 @@ class GovernanceMixin:
             version = self.registry.get(f"connector:{prop.id}").version + 1
         except KeyError:
             version = 1
+        # The proposer pays its trial (defect 13): one that cannot is refused before
+        # a committee is drawn and its ballots are bought.
+        self._require_trial(handle, self.ev.trial_amount_micro)
         eligible = self._committee_eligible()
         eligible.pop(owner, None)
         vote_id = f"connector:{prop.id}:v{version}:{handle}"
@@ -882,7 +899,7 @@ class GovernanceMixin:
                 max_memory_bytes=self.m.connectors.max_bytes),
         )
         try:
-            self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+            self._register_proposal(contract, handle, reason="trial:connector")
         except (Infeasible, ValueError, PermissionError):
             self._censor_ballots(vote_id)
             raise
@@ -1066,7 +1083,7 @@ class GovernanceMixin:
             permissions=frozenset(),
             resource_bounds=ResourceBounds(),
         )
-        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        self._register_proposal(contract, handle, reason="trial:amendment")
         self.charter_book.propose(am, self.observations)
         self.stats.amendments_proposed += 1
         self.window.amendments_proposed += 1
@@ -1130,7 +1147,7 @@ class GovernanceMixin:
             id=motion.id, version=1, kind="tool", description="assembly retirement proposal",
             input_schema={"type": "object"}, output_schema={"type": "object"},
             price=PriceSpec({}), permissions=frozenset(), resource_bounds=ResourceBounds())
-        self._register_with_trial(contract, handle, self.ev.trial_amount_micro)
+        self._register_proposal(contract, handle, reason="trial:retirement")
         eligible = self._committee_eligible()
         proposer = self.handle_to_assembly.get(handle, self.queue.get(handle).propensity.chosen)
         eligible.pop(proposer, None)
