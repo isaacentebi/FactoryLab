@@ -364,6 +364,11 @@ class VenueMixin:
                     continue
                 we.payload["realized_usd"] = str(self._account_spot_fill(we.payload))
         for we in evs:
+            if id(we) in refused:
+                # A fill the lot book refused has no accounted owner and no accounted
+                # inventory: the venue's own realized figure for it is not evidence
+                # of anyone's P&L, so it is neither settled nor counted below.
+                continue
             if we.kind is WorldEventKind.FILL:
                 delta = usd_to_micro(we.payload["realized_usd"], rounding="nearest") - usd_to_micro(
                     we.payload["fee_usd"]
@@ -383,6 +388,9 @@ class VenueMixin:
             if id(we) not in refused:
                 self.consequences.observe(str(we.kind), dict(we.payload), self.n)
         for we in evs:
+            if id(we) in refused:
+                self.internal.append(self._kernel_event(we))
+                continue
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
                 self.window.fills += 1
