@@ -631,7 +631,11 @@ class ThinkingMixin:
         observed: dict[str, Any] = {"mids": mids,
                                     "funding": dict(self.subscription_book.funding)}
         try:
-            observed["equity_usd"] = str(self.exchange.account().equity_usd)
+            account = self.exchange.account()
+            # A fallback snapshot is not the equity now: a watcher settles on a live
+            # read or keeps the last value it actually saw.
+            if not getattr(account, "stale", False):
+                observed["equity_usd"] = str(account.equity_usd)
         except Exception:
             # R3-F: a failed account read is not the compute wallet's balance. The
             # wallet is spending authority, not venue equity, and substituting it

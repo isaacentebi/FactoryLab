@@ -27,6 +27,11 @@ KillMode=control-group
 StandardOutput=null
 StandardError=null
 LimitCORE=0
+# The runtime, its journal and every jailed tool call share these bounds: a
+# population program (or a leak) that exhausts memory or forks without limit
+# ends this unit, not the host the witness and the backups run on.
+MemoryMax=3G
+TasksMax=256
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

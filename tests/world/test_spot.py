@@ -1,3 +1,4 @@
+from dataclasses import replace
 from decimal import Decimal as D
 from types import SimpleNamespace
 
@@ -223,5 +224,8 @@ def test_spot_outage_returns_the_last_complete_account():
         raise VenueUnavailable('spot_user_state: ConnectionError')
 
     ex._info.spot_user_state = outage
-    assert ex.account() == first and ex.account_fallbacks == 1
+    fallback = ex.account()
+    # The last complete snapshot, marked stale and keeping its own observation time.
+    assert fallback == replace(first, stale=True) and ex.account_fallbacks == 1
+    assert fallback.observed_at_ns == first.observed_at_ns
     assert ex.account().spot_balances == first.spot_balances

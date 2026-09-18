@@ -320,10 +320,17 @@ def test_settle_uncertain_releases_the_ceiling_over_the_true_cost_and_conserves(
 
 
 def test_settle_uncertain_never_revives_a_dead_wallet(ledger, clock):
+    """Dead on settled money -- at the floor even if the bill cost nothing -- is final.
+
+    (fix/venue-money #13: a provisional ceiling alone no longer kills; this wallet is
+    dead on a settled loss.)
+    """
     wallet = Wallet(100, ledger, clock_ns=clock, balance_floor_micro=10)
-    reservation = wallet.reserve(95, "h", "model:m")
+    reservation = wallet.reserve(50, "h", "model:m")
     wallet.commit_uncertain(reservation)
+    assert not wallet.dead  # 50 booked, 100 in the best case
+    wallet.settle(-95, "fill:1", "exchange_pnl")  # -45 booked, 5 in the best case
     assert wallet.dead
     with pytest.raises(Infeasible):
         wallet.settle_uncertain(reservation.id, 1)
-    assert wallet.balance == 5 and wallet.check_conservation()
+    assert wallet.balance == -45 and wallet.check_conservation()

@@ -50,7 +50,7 @@ def test_failed_lookup_exposes_exception_class_without_exception_payload():
     assert exchange.lookup("identity").error == "lookup exception: ValueError"
 
 
-def test_uncertain_order_blocks_same_coin_and_retains_first_diagnostic(monkeypatch):
+def test_uncertain_order_blocks_only_its_identity_and_retains_first_diagnostic(monkeypatch):
     rt = make_runtime()
     h = _producing_decision(rt)
     exchange = rt.exchange.target
@@ -67,10 +67,15 @@ def test_uncertain_order_blocks_same_coin_and_retains_first_diagnostic(monkeypat
     entries = [i for i in rt.ledger._recovery_items() if i["kind"] == "order.uncertain"]
     assert entries[0]["result"]["error"] == "write exception: TimeoutError"
     assert "secret" not in json.dumps(entries)
-    h2 = _producing_decision(rt)
-    refused = rt._venue_write(h2, "venue.place_market", {
+    # Repeating the uncertain identity reconciles and never resubmits.
+    again = rt._venue_write(h, "venue.place_market", {
         "coin": "BTC", "side": "buy", "size": "0.001"}, slot="output")
-    assert refused["status"] == "rejected" and len(calls) == 1
+    assert again["status"] == "uncertain" and len(calls) == 1
+    # Another identity on the same coin is not shut out (fix/venue-money #1).
+    h2 = _producing_decision(rt)
+    rt._venue_write(h2, "venue.place_market", {
+        "coin": "BTC", "side": "buy", "size": "0.001"}, slot="output")
+    assert len(calls) == 2
 
 
 def test_public_registration_feedback_contains_only_actual_proposal_failures():

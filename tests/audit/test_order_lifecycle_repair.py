@@ -336,9 +336,9 @@ def test_an_unresolved_order_releases_the_hold_as_a_censored_unknown_outcome(mon
     return's ``return_paid_off`` settles censored for documented external
     unobservability -- no eligible sample, no standing, an ``unknown`` outcome for its
     owner -- and the hold on ``pending_orders`` is released, so every later return's
-    outcome resolves again. The exposure survives the release: the coin stays shut to
-    that seat while the intent reads uncertain, and a fill the venue finally admits to
-    is still this return's money, late."""
+    outcome resolves again. The exposure survives the release -- a fill the venue
+    finally admits to is still this return's money, late -- but the coin is not shut
+    (fix/venue-money #1)."""
     rt = make_runtime(live=True, clock_source=LiveClock(1, 0, now_ns=lambda: 0))
     exchange = _uncertain_venue(rt, monkeypatch)
     h = _producing_decision(rt)
@@ -380,12 +380,6 @@ def test_an_unresolved_order_releases_the_hold_as_a_censored_unknown_outcome(mon
     assert items[0]["outcome"]["venue_answer"]["result"]["error"] == "order not observed"
     assert items[0]["delta_micro"] == 0  # a censored outcome moves no money
 
-    # The coin stays shut to that seat while the venue has still said nothing.
-    refused = rt._venue_write(other, "venue.place_market",
-                              {"coin": "BTC", "side": "buy", "size": "0.001"}, slot="output")
-    assert refused["status"] == "rejected"
-    assert "still uncertain" in refused["error"]
-
     # The venue finally admits to the order: the fill is still this return's, and its
     # money reaches the same seat late rather than never.
     monkeypatch.setattr(exchange, "lookup",
@@ -402,3 +396,12 @@ def test_an_unresolved_order_releases_the_hold_as_a_censored_unknown_outcome(mon
     assert len(late) == 1 and late[0]["outcome"]["late_realization_micro"] == 1_000_000
     # The censored outcome itself is never reopened; only the money moved.
     assert rt.consequences.payoff(h) is payoff
+
+    # The unresolved intent shut nothing: the same coin takes another identity's order
+    # (fix/venue-money #1 -- it used to be shut to every seat forever).
+    reached = []
+    monkeypatch.setattr(exchange, "place", lambda order: reached.append(order) or OrderResult(
+        None, "rejected", Decimal(0), None, "venue says no"))
+    admitted = rt._venue_write(other, "venue.place_market",
+                               {"coin": "BTC", "side": "buy", "size": "0.001"}, slot="output")
+    assert reached and admitted["error"] == "venue says no"

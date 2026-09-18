@@ -34,9 +34,10 @@ collateral scope from the view is
 `::test_spot_and_perp_are_checked_separately_against_their_own_balances`; a failed
 venue read staying `unavailable` is
 `::test_a_failed_venue_read_is_unavailable_and_never_the_wallet_balance`. New here:
-the declared trading principal (`[venue] principal_usd`), which no workstream had,
-and the custody reconciliation across a fill, a funding print and a confirmed
-Venice purchase, which no single test performed end to end.
+the declared trading principal (`[venue] principal_usd`), now inert under architect
+decision D1 (the venue account is the only limit; the gate is met by holding only the
+proposed principal there), and the custody reconciliation across a fill, a funding
+print and a confirmed Venice purchase, which no single test performed end to end.
 
 **2. Continuity and information boundaries.** The four fault injections are
 `tests/audit/test_gpt6_third_regressions.py::test_failed_state_evidence_leaves_the_head_where_it_was`
@@ -178,66 +179,30 @@ class TestGateOneFinancialReality:
     """"test with the real $120 principal; separate custody reconciliation, exact-once
     income, correct collateral scope, a bridge that replenishes only the destination"."""
 
-    def test_the_runtime_refuses_to_use_more_than_the_principal_the_manifest_declared(self):
-        """"the manifest declares the principal and the runtime refuses to use more".
+    def test_a_declared_principal_is_inert_and_the_venue_is_the_only_limit(self):
+        """Architect decision D1 retired the principal cap this gate used to prove.
 
-        The reviewer offered the experimenter two ways to meet this gate: withdraw
-        the rest of the testnet balance, or declare the principal. This is the
-        second. A testnet account holding $966 that declares `principal_usd = "120"`
-        carries an order $120 of collateral can carry and refuses one only $966
-        could, and the refusal comes out of the collateral view rather than out of
-        a balance the seat was shown.
+        The reviewer offered two ways to launch at the proposed size: withdraw the
+        rest of the testnet balance, or declare the principal so the runtime refuses
+        to use more. The second is a limit supplied from outside, a Class-2
+        imposition, and it is gone: the gate is now met by holding only the proposed
+        principal at the venue. A world that still declares ``principal_usd`` loads,
+        and the collateral view is the venue's own, unchanged.
         """
         rt = principal_runtime()
-        mid = rt.exchange.mids()["BTC"]
-        view = rt._collateral_view("BTC")
-        assert rt.exchange.collateral_view("BTC")["eligible_equity_usd"] == Decimal(966)
-        assert view["eligible_equity_usd"] == Decimal(DECLARED_PRINCIPAL)
-        assert view["principal_cap_usd"] == Decimal(DECLARED_PRINCIPAL)
-        assert view["uncapped_eligible_equity_usd"] == Decimal(966)
-
-        # $120 of eligible equity at 3x carries $360 of notional and no more.
-        carried = (Decimal(300) / mid).quantize(Decimal("0.00001"))
-        beyond = (Decimal(900) / mid).quantize(Decimal("0.00001"))
-        assert carried * mid / 3 < Decimal(DECLARED_PRINCIPAL) < beyond * mid / 3
-        assert beyond * mid / 3 < Decimal(TESTNET_BALANCE)  # the $966 could carry it
-
-        assert place(rt, str(carried))["status"] == "filled"
-        refused = place(rt, str(beyond))
-        assert refused["status"] == "rejected"
-        assert refused["error"] == "order collateral exceeds venue free collateral"
-        (infeasible,) = ledger_items(rt, "order.infeasible")
-        # The figure in the refusal is the principal's free collateral, not the venue's.
-        assert Decimal(infeasible["venue_available_usd"]) <= Decimal(DECLARED_PRINCIPAL)
-
-    def test_a_world_that_declares_no_principal_is_collateralised_by_the_venue_alone(self):
-        """The cap is a declaration, not a new default: absent, nothing changes."""
-        rt = principal_runtime(principal=None)
         view = rt._collateral_view("BTC")
         assert view["eligible_equity_usd"] == Decimal(TESTNET_BALANCE)
         assert "principal_cap_usd" not in view
         beyond = (Decimal(900) / rt.exchange.mids()["BTC"]).quantize(Decimal("0.00001"))
         assert place(rt, str(beyond))["status"] == "filled"
 
-    def test_the_declared_principal_cannot_be_leaned_on_twice_by_the_two_venue_pools(self):
-        """One principal, two pools: a spot buy may not spend what a perp is holding.
-
-        The venue keeps perps and spot apart and the runtime checks them
-        separately, so a ceiling applied to each pool on its own would authorise
-        twice the declared principal. The declared principal is shared between the
-        pools in proportion to what each actually holds, and the two capped
-        figures sum to the declaration and never past it.
-        """
-        rt = principal_runtime()
-        rt.exchange.target.class_transfer(Decimal(400), False)  # $400 of it into spot
+    def test_a_world_that_declares_no_principal_is_collateralised_by_the_venue_alone(self):
+        rt = principal_runtime(principal=None)
         view = rt._collateral_view("BTC")
-        spot_view = rt._collateral_view("PURR/USDC", "spot")
-        total = view["eligible_equity_usd"] + Decimal(str(spot_view["spot_available"]["USDC"]))
-        assert total <= Decimal(DECLARED_PRINCIPAL)
-        assert view["eligible_equity_usd"] > 0 and spot_view["spot_available"]["USDC"] > 0
-        # And the uncapped figures are still reported, so a refusal can say which
-        # of the two -- the venue or the declaration -- refused it.
-        assert view["uncapped_eligible_equity_usd"] > Decimal(DECLARED_PRINCIPAL)
+        assert view["eligible_equity_usd"] == Decimal(TESTNET_BALANCE)
+        assert "principal_cap_usd" not in view
+        beyond = (Decimal(900) / rt.exchange.mids()["BTC"]).quantize(Decimal("0.00001"))
+        assert place(rt, str(beyond))["status"] == "filled"
 
     def test_every_custody_account_reconciles_with_the_treasury_and_the_venue(self):
         """"separate custody reconciliation", after a fill, a funding print and a bridge.
@@ -330,8 +295,8 @@ class TestGateOneFinancialReality:
             self, monkeypatch):
         money.test_a_failed_venue_read_is_unavailable_and_never_the_wallet_balance(monkeypatch)
 
-    def test_the_edition_3_manifest_declares_the_principal_it_proposes_to_risk(self):
-        """The gate is on the world that launches, not on a fixture."""
+    def test_the_edition_3_manifest_still_loads_its_deprecated_principal(self):
+        """The retired key still loads and still hashes; nothing enforces it (D1)."""
         m = load_manifest("edition3-testnet")
         assert m.exchange.principal_usd == DECLARED_PRINCIPAL
         assert m.exchange.start_cash_usd == DECLARED_PRINCIPAL
@@ -341,14 +306,6 @@ class TestGateOneFinancialReality:
         assert "principal_usd" not in payload["exchange"]
         assert load_manifest("edition2-testnet").manifest_hash() == (
             "b184b1d8dc55daf56978ea51181be0d06e59493bef2727d97b2f67717efdbf8b")
-
-    @pytest.mark.skip(reason="needs Hyperliquid testnet and the world's key: the "
-                             "coordinator runs this by hand before the funded manifest. "
-                             "It reads the live account and asserts the runtime's capped "
-                             "collateral view equals the declared $120 whatever the "
-                             "testnet balance is.")
-    def test_the_live_testnet_account_is_collateralised_at_the_declared_principal(self):
-        raise AssertionError("run by hand against testnet")
 
 
 # =====================================================================================

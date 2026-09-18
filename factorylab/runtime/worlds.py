@@ -71,12 +71,11 @@ class ExchangeSpec:
     # it cannot be reasoned away by the order that wants it. Zero by default: a
     # world that wants a cushion says so.
     collateral_headroom_usd: str = "0"
-    # The risk-bearing trading principal this world declares it may use at the venue,
-    # as an exact USD decimal string. A launch gate, not a balance: a testnet account
-    # funded with $966 that declares "120" is collateralised as if it held $120, so the
-    # rehearsal is the size of the real proposal without withdrawing anything first.
-    # ``None`` means "whatever the venue holds", which is every world that predates the
-    # key, and it is dropped from the canonical JSON at that default.
+    # DEPRECATED and inert (architect decision D1: a principal cap is a Class-2
+    # imposition). Still read, validated and hashed exactly as declared, so the
+    # manifests that carry it load and keep their historical manifest hashes; nothing
+    # enforces it. The venue's own account is the only limit on the principal used.
+    # Dropped from the canonical JSON at its ``None`` default, as it always was.
     principal_usd: str | None = None
 
 
@@ -134,6 +133,8 @@ class AssemblySeed:
 @dataclass(frozen=True)
 class ToolsSpec:
     population_tool_micro_per_call: int = 50
+    # DEPRECATED and inert (architect decision D1): leverage is whatever the venue
+    # allows. Kept only because every manifest hash was computed with it.
     max_leverage: int = 3
     max_routers_per_kind: int = 3
     max_depth: int = 4

@@ -289,7 +289,7 @@ def test_a_restart_mid_wind_down_reconciles_the_diary_it_finds():
     """The process died between the two records; the next kill continues from them."""
     op_id = operation_id(NONCE, "BTC", "perp", "sell", 0)
     venue = Venue(positions=[Position("BTC", Decimal("1"), Decimal("100")),
-                             Position("ETH", Decimal("2"), Decimal("10"))])
+                             Position("ETH", Decimal("1"), Decimal("10"))])
     # First pass: the diary refuses the result records, exactly as a crash between
     # the submission and its answer would leave them.
     crashed = Diary("winddown.op_result")
@@ -326,7 +326,8 @@ def test_the_executor_cannot_reach_the_population():
         assert forbidden not in source
     executor = WindDownExecutor(Venue(), Diary(), launch_nonce=NONCE)
     assert set(vars(executor)) == {"exchange", "ledger", "launch_nonce", "dust_micro",
-                                   "reader", "report", "_known", "_submitted"}
+                                   "reader", "report", "_known", "_submitted",
+                                   "_owed", "_minimums"}
 
 
 def test_the_witness_line_carries_both_states_and_the_operation_count(tmp_path):

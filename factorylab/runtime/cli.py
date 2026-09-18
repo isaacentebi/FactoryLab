@@ -92,13 +92,51 @@ class KeyFileModeError(ValueError):
     """A credential's metadata is unsafe; its contents have not been read."""
 
 
+def _read_key_file(path, filename: str) -> str:
+    """Read one key file without following a link, checking the file actually opened.
+
+    ``O_NOFOLLOW`` refuses a symlink at open, and the owner, type and mode are read
+    with ``fstat`` from the descriptor itself, so no rename between the check and
+    the read can substitute another file.
+    """
+    import os
+    import stat
+
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        raise KeyFileModeError(
+            f"{filename} must be an owned regular file with mode 0400 or 0600") from None
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) not in (0o400, 0o600)):
+            raise KeyFileModeError(
+                f"{filename} must be an owned regular file with mode 0400 or 0600")
+        chunks = []
+        while chunk := os.read(fd, 65536):
+            chunks.append(chunk)
+        return b"".join(chunks).decode().strip()
+    finally:
+        os.close(fd)
+
+
 def _load_dotenv() -> None:
     """Load KEY=VALUE lines from a .env file in the working directory into the environment.
 
-    Existing variables win. Values are never printed. This is the only place
-    the runtime reads a file for secrets; the file is gitignored.
+    Key files win over the environment. A key exported into the environment is in
+    the process's initial environment block, which another process on the host
+    can read (``kern.procargs2`` on macOS, ``/proc/<pid>/environ`` on Linux); a key
+    read from its file after start is not. So when a key file exists and the
+    environment also exports a *different* value for it, the file is used and the
+    conflict is refused outright while a registered-code jail is installed on this
+    host (population code runs here) -- a warning otherwise. Values are never
+    printed. This is the only place the runtime reads a file for secrets; the
+    files are gitignored and read with ``O_NOFOLLOW`` and ``fstat`` (the owner,
+    type and 0400/0600 mode of the file actually opened).
     """
     import os
+    import sys
     from pathlib import Path
 
     for filename, var in (
@@ -107,20 +145,23 @@ def _load_dotenv() -> None:
         ("reserve.key", "RESERVE_PRIVATE_KEY"),
     ):
         keyfile = Path.cwd() / filename
-        if (keyfile.exists() or keyfile.is_symlink()) and var not in os.environ:
-            # An inference credential is spendable money too: the same mode check.
-            if filename in {"reserve.key", "hyperliquid.key", "openrouter.key"}:
-                import stat
+        if not (keyfile.exists() or keyfile.is_symlink()):
+            continue
+        # An inference credential is spendable money too: the same file checks.
+        value = _read_key_file(keyfile, filename)
+        if not value:
+            continue
+        exported = os.environ.get(var)
+        if exported is not None and exported != value:
+            from factorylab.cortex.sandbox import jail_installed
 
-                info = keyfile.lstat()
-                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                        or stat.S_IMODE(info.st_mode) not in (0o400, 0o600)):
-                    raise KeyFileModeError(
-                        f"{filename} must be an owned regular file with mode 0400 or 0600"
-                    )
-            value = keyfile.read_text().strip()
-            if value:
-                os.environ[var] = value
+            if jail_installed():
+                raise KeyFileModeError(
+                    f"{var} is exported in the environment and differs from {filename}; "
+                    "unset it: a registered-code jail runs on this host")
+            print(f"factorylab: {var} is exported and differs from {filename}; "
+                  f"using {filename}", file=sys.stderr)
+        os.environ[var] = value
     path = Path.cwd() / ".env"
     if not path.exists():
         return

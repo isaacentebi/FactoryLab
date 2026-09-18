@@ -37,18 +37,54 @@ from factorylab.runtime.seller import (  # noqa: E402
     serve,
     services_from_items,
     spool_earn,
+    world_is_dead,
 )
 
 
-def load_catalogue(ledger_path: Path):
+class Liveness:
+    """Whether the world is alive, as of the last ledger read, and whether that read is fresh.
+
+    Fails closed: a diary that records the world's death (a production kill or
+    ``Terminated``) ends sales for good, and a view older than ``max_age_s`` -- the
+    ledger stopped being readable -- is not evidence of life either.
+    """
+
+    def __init__(self, *, max_age_s: float, clock=time.monotonic) -> None:
+        self.max_age_s = max_age_s
+        self.clock = clock
+        self.dead = False
+        self.observed_at: float | None = None
+
+    def observe(self, items) -> None:
+        self.dead = self.dead or world_is_dead(items)
+        self.observed_at = self.clock()
+
+    def __call__(self) -> bool:
+        return (not self.dead and self.observed_at is not None
+                and self.clock() - self.observed_at <= self.max_age_s)
+
+
+def load_catalogue(ledger_path: Path, liveness: Liveness | None = None):
     """The current services, the manifest's reserve address and the facilitator the
-    Launch event ledgered, from one frozen read."""
+    Launch event ledgered, from one frozen read that also refreshes ``liveness``."""
     from factorylab.runtime.wake import _open_snapshot
 
     ledger, manifest = _open_snapshot(ledger_path)
     items = list(ledger.items())
+    if liveness is not None:
+        liveness.observe(items)
     return (services_from_items(items), manifest.treasury.reserve_address,
             facilitator_from_items(items))
+
+
+def build_seller(services, pay_to: str, facilitator: str, spool_path,
+                 live=None) -> Seller:
+    """The hosted seller. Its spool rows name the reserve they were paid to, so the
+    runtime's chain read and every other booking path agree on the payment's identity;
+    ``live`` ends every sale once the world is dead or its view of it is stale."""
+    return Seller(services, pay_to=pay_to, runner=default_runner(),
+                  earn=spool_earn(IncomeSpool(spool_path), pay_to=pay_to),
+                  facilitator=facilitator, live=live)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -62,8 +98,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="seconds between catalogue re-reads of the ledger")
     args = parser.parse_args(argv)
     ledger_path = Path(args.ledger)
+    # Three missed re-reads and the host stops selling until the ledger reads again.
+    liveness = Liveness(max_age_s=3 * max(1.0, args.refresh))
     try:
-        services, pay_to, facilitator = load_catalogue(ledger_path)
+        services, pay_to, facilitator = load_catalogue(ledger_path, liveness)
     except Exception:
         print("factorylab serve: ledger_unavailable", file=sys.stderr)
         return 1
@@ -76,15 +114,17 @@ def main(argv: list[str] | None = None) -> int:
         # facilitator the world never bound, and the environment is not consulted.
         print("factorylab serve: facilitator_unpinned", file=sys.stderr)
         return 2
-    seller = Seller(services, pay_to=pay_to, runner=default_runner(),
-                    earn=spool_earn(IncomeSpool(args.spool)), facilitator=facilitator)
+    if liveness.dead:
+        print("factorylab serve: world_dead", file=sys.stderr)
+        return 3
+    seller = build_seller(services, pay_to, facilitator, args.spool, live=liveness)
     server = serve(seller, host=args.bind, port=args.port)
 
     def refresh() -> None:
         while True:
             time.sleep(max(1.0, args.refresh))
             try:
-                seller.refresh(load_catalogue(ledger_path)[0])
+                seller.refresh(load_catalogue(ledger_path, liveness)[0])
             except Exception:
                 pass  # the previous catalogue stands until the ledger reads again
 
