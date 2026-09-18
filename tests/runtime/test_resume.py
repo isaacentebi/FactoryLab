@@ -527,7 +527,17 @@ def test_resume_replays_a_disputed_vendor_bill_once_without_death(tmp_path):
 
 @pytest.mark.parametrize("cut", ["fill:0", "fill:1", "consequence.refused"])
 @pytest.mark.parametrize("recover_cash", [False, True])
-def test_resume_books_the_entire_fatal_fill_batch_once(tmp_path, cut, recover_cash):
+def test_resume_books_the_entire_venue_fill_batch_once(tmp_path, cut, recover_cash):
+    """A cut inside one exchange batch replays every venue effect exactly once.
+
+    This was the fatal-fill test: the batch's fees and funding used to settle on the
+    compute wallet (``wallet.settle``, handle ``fill:N``) and took a ten-micro wallet
+    below zero. Since 7b3b509 venue P&L, fees and funding settle on the venue accounts
+    only (``venue.settled``; the compute wallet's ``settle`` is reached by income
+    alone), so no fill batch can kill a world and the old cut point is never written.
+    The same batch is cut at the same places in their new form, and the resumed diary
+    and summary must be the uninterrupted ones.
+    """
     class BatchVenue(FakeExchange):
         def advance(self, ts_ns):
             events = [WorldEvent(WorldEventKind.FILL, ts_ns, self.name, {
@@ -540,35 +550,60 @@ def test_resume_books_the_entire_fatal_fill_batch_once(tmp_path, cut, recover_ca
             })]
 
     m = replace(load_manifest("scripted"), initial_balance_micro=10, drip=None)
+
+    def world(path):
+        rt = make_runtime(m, path, exchange=BatchVenue())
+        rt.events_budget = 1
+        return rt
+
+    whole = world(tmp_path / "whole.jsonl")
+    expected = whole.run()
     path = tmp_path / "fill-batch.jsonl"
-    rt = make_runtime(m, path, exchange=BatchVenue())
-    rt.events_budget = 1
+    rt = world(path)
     append = rt.ledger.append
+    cuts = []
 
     def crash_after_append(entry):
         seq = append(entry)
         if (entry["kind"] == cut or
-                entry["kind"] == "wallet.settle" and entry["handle"] == cut):
+                entry["kind"] == "venue.settled" and entry["reference"] == cut):
+            cuts.append(entry)
             raise ProcessDeath
         return seq
 
     rt.ledger.append = crash_after_append
     with pytest.raises(ProcessDeath):
         rt.run()
+    assert len(cuts) == 1  # the process died at the item the parameter names
     prefix = path.read_bytes()
     restored = resume_runtime(m, str(path), exchange=BatchVenue())
     summary = restored.run()
-    assert summary["terminated"] and summary["termination_reason"] == "balance_zero"
-    assert summary["wallet_balance_micro"] == (-35 + 100 * recover_cash)
+    assert summary["stats"]["resumes"] == 1
+    summary["stats"]["resumes"] = 0
+    assert summary == expected
+    assert summary["wallet_balance_micro"] == 10  # the venue batch never touched it
     assert summary["wallet_conservation"] and summary["ledger_verify"]
-    assert summary["stats"]["fills"] == 2 and summary["stats"]["invocations"] == 0
+    assert summary["stats"]["fills"] == 2
     assert restored.fees_to_date == 40 and restored.funding_to_date == -5
     assert path.read_bytes().startswith(prefix)
     diary = restored.ledger._recovery_items()
-    settlements = [item for item in diary if item["kind"] == "wallet.settle"]
-    assert [item["amount"] for item in settlements] == [-20, -20 + 100 * recover_cash, -5]
+    settlements = [item for item in diary if item["kind"] == "venue.settled"]
+    assert [(item["reference"].split(":")[0], item["amount"]) for item in settlements] == [
+        ("fill", -20), ("fill", -20 + 100 * recover_cash), ("funding", -5)]
+    assert not any(item["kind"] == "wallet.settle" for item in diary)
+    # Item for item, the resumed diary is the uninterrupted one with the resume's own
+    # block (resume.begin .. resume: its reconciliation reads) inserted where the
+    # replayed tail ran out, and nothing else added, dropped or reordered.
+    body = ("seq", "prev_hash", "hash")
+    kinds = [i["kind"] for i in diary]
+    begin, end = kinds.index("resume.begin"), kinds.index("resume")
+    resumed = [{k: v for k, v in i.items() if k not in body}
+               for i in diary[:begin] + diary[end + 1:]]
+    reference = [{k: v for k, v in i.items() if k not in body}
+                 for i in whole.ledger._recovery_items()]
+    assert resumed == reference
     # Fills nobody with an open account ordered are refused by the book (A9); the refusal
-    # is booked once, like the fill it replaces, and the wallet still saw every event.
+    # is booked once, like the fill it replaces, and the venue still saw every event.
     assert sum(item["kind"] == "consequence.fill" for item in diary) == 0
     assert sum(item["kind"] == "consequence.refused" for item in diary) == 2
     assert sum(item["kind"] == "consequence.funding" for item in diary) == 1
@@ -632,20 +667,28 @@ def test_fake_treasury_trading_shock_replays_fee_unfunded_cut(tmp_path, monkeypa
     monkeypatch.setattr(FakeRail, 'poll', cheaper_receipt)
     submitted = rt.treasury.transfer('to_reserve', '5', handle='parent', now_ns=0)
     assert submitted['status'] == 'submitted'
-    rt._settle_exchange_effects([WorldEvent(WorldEventKind.FUNDING, 0, 'shock', {
-        'coin': 'BTC', 'paid_usd': '.9'})])
+    # The shock used to be a venue funding payment, but since 7b3b509 venue P&L, fees
+    # and funding settle on the venue accounts and never reach the compute wallet, so
+    # that shock no longer moves ``available`` at all. What still drives the wallet
+    # below its holds mid-transfer is a vendor bill booked above its hold (a metered
+    # overrun inside the reported-cost multiple): the same 0.9 USD leaves the wallet.
+    bill = rt.wallet.reserve(rt.wallet.available, 'shock', 'model:shock')
+    assert rt.wallet.commit_reported(bill, 900_000) == 900_000
     assert rt.wallet.available < 0
     append = rt.ledger.append
+    cuts = []
 
     def interrupt(entry):
         seq = append(entry)
         if entry['kind'] == 'treasury.fee_unfunded':
+            cuts.append(entry)
             raise ProcessDeath
         return seq
 
     rt.ledger.append = interrupt
     with pytest.raises(ProcessDeath):
         rt.run()
+    assert len(cuts) == 1 and cuts[0]['reserved_micro'] < cuts[0]['required_micro']
     restored = resume_runtime(m, str(path))
     assert restored.treasury.state['status'] == 'confirmed'
     assert restored.treasury.state['fees_micro'] == 10_000
@@ -681,6 +724,14 @@ def test_live_order_process_cut_after_acceptance_recovers_original_handle(tmp_pa
             super().__init__(coins=('BTC',))
             self.armed = False
             self.writes = 0
+            self.now = lambda: 0
+
+        def collateral_view(self, coin, market='perp'):
+            # A live adapter stamps the view with the moment of its account read
+            # (d016697: an older stamp is refused as stale). Nothing advances this
+            # fake's own time in a live-kind world, so without the read-time stamp
+            # every new-risk order is refused as stale before it reaches place().
+            return {**super().collateral_view(coin, market), 'observed_at_ns': self.now()}
 
         def place(self, order):
             result = super().place(order)
@@ -725,9 +776,11 @@ def test_live_order_process_cut_after_acceptance_recovers_original_handle(tmp_pa
     rt = make_runtime(m, path, provider=provider, exchange=venue,
                       clock_source=ClockSource(1_000_000_000, 1_000_000_000, 3).events())
     rt.events_budget = 3
+    venue.now = lambda: rt.clock.now_ns
     with pytest.raises(ProcessDeath):
         rt.run()
     before = items(path, m)
+    assert not any(i['kind'] in ('order.infeasible', 'order.refused') for i in before)
     intent = next(i for i in before if i['kind'] == 'order.intent')
     assert venue.writes == 1
     restored = resume_runtime(m, str(path), provider=provider, exchange=venue,
