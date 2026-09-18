@@ -119,6 +119,9 @@ def survey_world(world: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in world.items() if k not in (
         "charter", "card_prices", "amendment_feedback", "registration_feedback",
         "a_return_may_include", "proposal_shapes",
+        # The cached prefix embeds the same registration text a_return_may_include
+        # carries; the survey is bound to neither copy of it.
+        "stable_prefix",
     )}
 
 

@@ -9,7 +9,7 @@ from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.loop import Runtime, run_world
 from factorylab.runtime.worlds import load_manifest
-from factorylab.world.scripted import ScriptedProvider
+from factorylab.world.scripted import ScriptedProvider, _description_from_prompt
 
 
 def _covered_evaluators(standing: dict) -> list[str]:
@@ -257,7 +257,9 @@ class RecursiveMetaProvider(ScriptedProvider):
                     "kind": "assembly",
                     "id": aid,
                     "role": "meta",
-                    "model_id": inputs["world"]["models"][0]["id"],
+                    # The world block no longer publishes a model list; the scripted
+                    # world's other registrations name their model directly.
+                    "model_id": "fake-haiku",
                     "system_prompt": "Assess the supplied judgement against the charter.",
                     "accepts": ["MetaVerdict"],
                     "max_tokens": 128,
@@ -401,6 +403,14 @@ class TwoRecursiveMetaProvider(RecursiveMetaProvider):
     def __init__(self):
         super().__init__()
         self.meta_inputs = []
+        self.meta_descriptions = []
+
+    def complete(self, req):
+        text = "\n".join(str(m.get("content", "")) for m in req.messages)
+        desc = _description_from_prompt(text)
+        if desc.startswith("Assess"):
+            self.meta_descriptions.append(desc)
+        return super().complete(req)
 
     def _meta(self, inputs):
         self.meta_inputs.append(inputs)
@@ -432,9 +442,13 @@ def test_two_recursive_metas_terminate_by_cadence_and_receive_representatives():
     assert len(provider.meta_inputs) <= arrivals[1] // 2
     assert provider.meta_inputs
     assert all("window" in inputs for inputs in provider.meta_inputs)
+    # The released-representative text moved out of inputs["world"] (now
+    # world["meta_input"] only in the cached prefix); the meta is told it in the
+    # request's own description, which is the text this assertion pins.
+    assert len(provider.meta_descriptions) == len(provider.meta_inputs)
     assert all(
-        "released representative" in inputs["world"]["meta_input"]
-        for inputs in provider.meta_inputs
+        "released representative" in description
+        for description in provider.meta_descriptions
     )
     opens = {i["handle"]: i for i in items if i["kind"] == "decision.open"}
     settlements = {i["return"]["handle"]: i for i in items if i["kind"] == "decision.settle"}
