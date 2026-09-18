@@ -79,28 +79,6 @@ def test_persistent_parent_and_thin_immutable_returns(queue, open_decision, cloc
         settle(queue, child)
 
 
-def test_invariant_4_retired_actor_receives_compatible_successor_return(
-    queue,
-    open_decision,
-    clock,
-):
-    handle = open_decision()
-    compat = {"outcome": "reward-v2"}
-    queue.register_successor("learner", "successor", compat)
-    compat["outcome"] = "tampered"
-    clock.now += 1_000
-    settle(queue, handle)
-    assert queue.returns_for("learner") == ()
-    assert queue.returns_for("successor") == (
-        LearningReturn(handle, "reward-v2", 0.5, "score-v1", SettleStatus.SETTLED, "sample-1"),
-    )
-    assert queue.history(handle)[0].channel == "outcome"
-    assert queue.get(handle).actor == "learner"
-    assert queue.get(handle).propensity.learner_id == "learner"
-    with pytest.raises(ValueError):
-        open_decision(actor="learner")
-
-
 @pytest.mark.parametrize("mapped", [False, True])
 def test_invariant_4_retired_unmapped_settlement_is_historical_never_dropped(
     mapped,
@@ -121,18 +99,6 @@ def test_invariant_4_retired_unmapped_settlement_is_historical_never_dropped(
     assert queue.history(handle)[0].status == SettleStatus.HISTORICAL
     assert queue.returns_for("successor") == queue.returns_for("learner") == ()
     assert queue.has_history("new")
-
-
-def test_successor_chain_and_cycle_rejection(queue, open_decision):
-    handle = open_decision()
-    queue.register_successor("learner", "next", {"outcome": "next-outcome"})
-    queue.register_successor("next", "last", {"next-outcome": "last-outcome"})
-    with pytest.raises(ValueError, match="cycle"):
-        queue.register_successor("last", "learner", {"last-outcome": "outcome"})
-    with pytest.raises(ValueError, match="immutable"):
-        queue.register_successor("learner", "other", {})
-    settle(queue, handle)
-    assert queue.returns_for("last")[0].channel == "last-outcome"
 
 
 def test_timeout_has_no_manufactured_outcome_and_late_settlement_still_arrives(

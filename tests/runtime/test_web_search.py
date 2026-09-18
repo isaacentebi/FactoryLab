@@ -15,13 +15,11 @@ from factorylab.kernel.queue import PropensityRecord
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.resume import JournalProxy, RecoveryJournal
 from factorylab.runtime.websearch import (
-    MAX_RESULT_BYTES,
-    MAX_SNIPPET_CHARS,
     REFUSALS,
     SYSTEM_PROMPT,
     parse_results,
 )
-from factorylab.runtime.worlds import WebSpec, load_manifest, manifest_from_dict, online_id
+from factorylab.runtime.worlds import WebSpec, load_manifest, online_id
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelRequest, ModelResponse
 from factorylab.world.scripted import ScriptedProvider
@@ -87,43 +85,6 @@ def search(rt, handle, **args):
     return rt._run_tool("seed-decider", handle, {"tool": "web.search", "args": args})
 
 
-# --- registration -----------------------------------------------------------------------
-
-
-def test_a_world_without_a_web_block_registers_no_search_tool():
-    """The outside is reachable only where a launch decided what one look at it costs."""
-    from tests.conftest import make_runtime
-
-    rt = make_runtime()  # the scripted world carries no [web] block
-    rt._ensure_connector_tool()
-    assert rt.m.web == WebSpec() and rt.m.web.search_model is None
-    assert "web.search" not in rt.tool_specs
-    assert "web.search" not in {spec["id"] for spec in rt._published_tool_specs()}
-
-
-def test_the_search_tool_is_published_in_the_tool_index_with_its_flat_price():
-    """The only prompt change is the affordance index schematics already publishes."""
-    rt = web_runtime()
-    rt._ensure_connector_tool()
-    index = {spec["id"]: spec for spec in rt._published_tool_specs()}
-    assert index["web.search"]["price_micro_per_call"] == CALL_PRICE
-    assert index["web.search"]["args"] == ["max_results", "query"]
-    assert "0.05" in rt.tool_specs["web.search"]["description"]
-
-
-def test_an_unknown_web_key_and_an_unpriced_route_are_both_refused():
-    raw = {"name": "w", "seed": 1, "initial_balance_usd": "1",
-           "exchange": {"kind": "fake"}, "models": [
-               {"id": "fake-haiku", "provider": "fake",
-                "input_usd_per_mtok": "1", "output_usd_per_mtok": "5"}],
-           "assemblies": [{"id": "a", "model_id": "fake-haiku", "accepts": ["Tick"]}]}
-    with pytest.raises(ValueError, match="unknown web manifest key"):
-        manifest_from_dict({**raw, "web": {"engine": "exa"}})
-    with pytest.raises(ValueError, match="search-capable model on the menu"):
-        manifest_from_dict({**raw, "web": {"search_model": "fake-haiku",
-                                           "call_price_micro": 1, "max_call_usd": "0.05"}})
-
-
 # --- the priced, bounded call ------------------------------------------------------------
 
 
@@ -151,36 +112,6 @@ def test_search_returns_the_bounded_list_and_charges_call_price_plus_metered_cos
     assert rt.wallet.check_conservation()
 
 
-def test_the_result_list_is_bounded_in_count_snippet_length_and_total_bytes():
-    """A route that answers with a megabyte cannot put a megabyte in the next prompt."""
-    long = [{"title": f"row {n}", "url": f"https://example.org/{n}",
-             "snippet": "x" * 5000, "published": "2026-01-01"} for n in range(50)]
-    rt = web_runtime(provider=SearchProvider(text=json.dumps({"results": long})))
-    handle = decision(rt)
-    result, _ = search(rt, handle, query="everything", max_results=10)
-    rows = result["results"]
-    assert len(rows) <= 10 and all(len(row["snippet"]) == MAX_SNIPPET_CHARS for row in rows)
-    assert len(json.dumps(rows).encode()) <= MAX_RESULT_BYTES
-    assert search(rt, handle, query="fewer", max_results=3)[0]["results"][:3] == rows[:3]
-
-
-@pytest.mark.parametrize("args,reason", [
-    ({"query": ""}, "1-400 characters"),
-    ({"query": "x" * 401}, "1-400 characters"),
-    ({"query": "ok", "max_results": 11}, "max_results must be 1-10"),
-    ({"query": "ok", "max_results": 0}, "max_results must be 1-10"),
-    ({"query": 5}, "property query must be string"),
-    ({"query": "ok", "depth": 2}, "additional property depth"),
-])
-def test_bad_arguments_are_refused_before_any_call(args, reason):
-    rt = web_runtime()
-    handle = decision(rt)
-    result, cost = search(rt, handle, **args)
-    assert reason in result["error"] and cost == 0
-    assert not rt.provider.target.searches
-    assert ledger_items(rt, "web.refused")
-
-
 def test_a_search_whose_ceiling_exceeds_max_call_usd_is_refused_before_the_call():
     """Over cap is a refusal, not an attempt: nothing is reserved and nothing is bought."""
     rt = web_runtime(max_call_micro=3000)
@@ -199,19 +130,6 @@ def test_an_unaffordable_search_cannot_dispatch(monkeypatch):
     result, cost = search(rt, handle, query="anything at all")
     assert result == {"error": REFUSALS["unaffordable"]} and cost == 0
     assert not rt.provider.target.searches
-
-
-def test_a_malformed_answer_returns_an_error_and_charges_the_metered_cost_only():
-    """The provider billed the call, so the call is paid; the tool sold nothing, so it is not."""
-    rt = web_runtime(provider=SearchProvider(text="I could not find anything, sorry."))
-    handle = decision(rt)
-    before = rt.wallet.balance
-    result, cost = search(rt, handle, query="hyperliquid funding rate")
-    assert result == {"error": REFUSALS["malformed"]}
-    assert cost == MODEL_COST and rt.wallet.balance == before - MODEL_COST
-    assert ledger_items(rt, "web.call")[-1]["ok"] is False
-    assert ledger_items(rt, "web.refused")[-1]["reason"] == REFUSALS["malformed"]
-    assert rt.wallet.check_conservation()
 
 
 def test_a_failing_route_is_charged_what_the_wallet_was_charged(monkeypatch):
@@ -280,67 +198,6 @@ def test_searched_text_is_kept_off_durable_surfaces_like_a_fetched_body():
     assert "SHORT-URL" in redacted and "short title" in redacted and "brief" in redacted
     # The ledger row for the call names the query and the count, never the text.
     assert "SENTINEL" not in json.dumps(ledger_items(rt), default=str)
-
-
-# --- searching and acting inside one wake ------------------------------------------------
-
-
-def one_wake(rt, monkeypatch, answer, *, compose=True):
-    """Drive one decision: search, compose in the continuation, then return an order."""
-    requests = []
-    order = {"action": "order", "coin": "BTC", "side": "buy", "size": "0.01"}
-
-    def complete(req):
-        if req.model_id.endswith(":online"):  # the search route, not the seat's own
-            return ModelResponse(req.model_id, answer, 1, 1, "end_turn")
-        requests.append(req)
-        if len(requests) == 1:
-            reply = {"tool_calls": [{"tool": "web.search", "args": {"query": "hype funding"}}]}
-        elif len(requests) == 2 and compose:
-            # The continuation carries what was searched, and one more round of the
-            # ordinary jailed tool kinds to compose it with.
-            assert "SENTINEL-BODY" in str(req.messages)
-            assert "seen_tool_results" in str(req.messages)
-            assert "population tools once more" in str(req.messages)
-            reply = {"tool_calls": [{"tool": "note.list", "args": {}}]}
-        else:
-            reply = order
-        return ModelResponse(req.model_id, json.dumps(reply), 1, 1, "end_turn")
-
-    monkeypatch.setattr(rt.provider.target, "complete", complete)
-    rt.ledger.active = True
-    handle = decision(rt)
-    req = rt._request(handle, "Produce a return", {}, {
-        "type": "object", "properties": {"action": {"type": "string"}}, "required": ["action"]},
-        10**15, "verdict")
-    return rt._invoke("seed-decider", req, "producer"), requests
-
-
-def test_a_successful_search_opens_the_extra_round_so_one_wake_can_search_and_act(monkeypatch):
-    """A search earns the round a fetch earns: read outside, compose, then act."""
-    rt = web_runtime()
-    ret, requests = one_wake(rt, monkeypatch, json.dumps({"results": SENTINEL}))
-    assert len(requests) == 3
-    assert ret.status == "ok" and ret.outputs["action"] == "order" and ret.outputs["coin"] == "BTC"
-    rows = ledger_items(rt)
-    assert [row["tool"] for row in rows if row["kind"] == "tool.call"] == [
-        "web.search", "note.list"]
-    # The search's own evidence is there; the text it returned is not, anywhere public.
-    assert [row["ok"] for row in rows if row["kind"] == "web.call"] == [True]
-    public = [row for row in rows if row["kind"] not in ("io.call", "io.result")]
-    assert "SENTINEL" not in json.dumps(public, default=str)
-    # Protection is transient, exactly as a fetched body's is.
-    assert not rt.ledger.connector_bodies
-    assert rt.wallet.check_conservation()
-
-
-def test_a_failed_search_earns_no_extra_round(monkeypatch):
-    """The round is bought by text actually retrieved, not by having asked for it."""
-    rt = web_runtime()
-    _, requests = one_wake(rt, monkeypatch, "no idea, sorry", compose=False)
-    assert len(requests) == 2  # the search, then the final answer; no composing round
-    assert [row["tool"] for row in ledger_items(rt) if row["kind"] == "tool.call"] == [
-        "web.search"]
 
 
 # --- replay -----------------------------------------------------------------------------

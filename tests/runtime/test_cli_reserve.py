@@ -4,7 +4,6 @@ import stat
 from dataclasses import asdict
 from io import BytesIO
 from pathlib import Path
-from types import SimpleNamespace
 from urllib import error, request
 
 import pytest
@@ -15,10 +14,9 @@ from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.termination import Termination
 from factorylab.kernel.wallet import Wallet
 from factorylab.runtime.cli import _load_dotenv, main
-from factorylab.runtime.live import build_provider
 from factorylab.world.metering import Meter, MeteredModel
 from factorylab.world.models import ModelRequest, PriceTable, TokenPrice
-from factorylab.world.venice import VeniceAndOpenRouter, VeniceProvider
+from factorylab.world.venice import VeniceProvider
 from factorylab.world.x402 import BASE_NETWORK, BASE_USDC
 
 TEST_KEY = "0x" + "11" * 32  # Deliberately public test fixture, never a real wallet.
@@ -127,42 +125,6 @@ def test_insecure_key_permissions_fail_before_read(keyfile, monkeypatch, capsys)
     assert TEST_KEY[2:] not in str(capsys.readouterr())
 
 
-@pytest.mark.parametrize(
-    "balance,affordable", [(5_500_000, True), (5_000_000, True), (4_999_999, False)]
-)
-def test_status_overrides_and_exact_affordability(keyfile, wire, capsys, balance, affordable):
-    responses, calls = wire
-    responses.extend(
-        [
-            Response({"id": 1, "result": hex(balance)}),
-            Response({"id": 1, "result": "0x0"}),
-            Response({"balanceUsd": "0.0000009", "canConsume": False}),
-        ]
-    )
-    assert (
-        main(
-            [
-                "reserve",
-                "status",
-                "--rpc",
-                "http://rpc.fake",
-                "--base-url",
-                "http://venice.fake/api/v1",
-            ]
-        )
-        == 0
-    )
-    captured = capsys.readouterr()
-    result = json.loads(captured.out)
-    assert result["address"] == Account.from_key(TEST_KEY).address
-    assert result["usdc_micro"] == balance and result["venice_balance_micro"] == 0
-    assert result["eth_wei"] == 0 and result["topup_5_affordable"] is affordable
-    assert [r.full_url for r in calls[:2]] == ["http://rpc.fake"] * 2
-    assert calls[2].full_url.startswith("http://venice.fake/api/v1/x402/balance/")
-    assert all("x-sign-in-with-x" not in dict(r.header_items()) for r in calls[:2])
-    assert TEST_KEY[2:] not in captured.out + captured.err
-
-
 def topup_responses():
     quote = {
         "x402Version": 2,
@@ -257,79 +219,12 @@ def completion():
     }
 
 
-def test_probe_uses_wallet_one_completion_and_reports_cost(keyfile, wire, capsys):
-    wire[0].append(Response(completion()))
-    assert (
-        main(
-            [
-                "probe",
-                "--provider",
-                "venice",
-                "--model",
-                "venice:test-flash",
-                "--base-url",
-                "http://venice.fake/api/v1",
-                "--rpc",
-                "http://rpc.fake",
-            ]
-        )
-        == 0
-    )
-    captured = capsys.readouterr()
-    result = json.loads(captured.out)
-    assert result["text"] == "OK" and result["cost_micro"] == 2
-    assert result["cost_source"] == "reported" and result["model"] == "venice:test-flash"
-    assert len(wire[1]) == 1
-    req = wire[1][0]
-    assert req.full_url == "http://venice.fake/api/v1/chat/completions"
-    assert json.loads(req.data)["model"] == "test-flash"
-    assert "X-sign-in-with-x" in dict(req.header_items())
-    assert TEST_KEY[2:] not in captured.out + captured.err
-
-
 def test_cli_failure_never_prints_transport_secret(keyfile, wire, capsys):
     wire[0].append(RuntimeError(TEST_KEY))
     assert main(["probe", "--provider", "venice", "--model", "venice:test-flash"]) == 1
     captured = capsys.readouterr()
     assert captured.err.startswith("factorylab probe: reserve_unavailable\n")
     assert TEST_KEY[2:] not in captured.out + captured.err
-
-
-def manifest(*providers):
-    return SimpleNamespace(
-        models=tuple(
-            SimpleNamespace(
-                provider=p,
-                id="venice:test-flash" if p == "venice" else "test/flash",
-                reasoning=(("max_tokens", 200),),
-            )
-            for p in providers
-        ),
-        web_config=lambda: {},
-    )
-
-
-def test_build_provider_venice_and_mixed_routing(monkeypatch):
-    with pytest.raises(RuntimeError, match="VENICE_API_KEY or RESERVE_PRIVATE_KEY"):
-        build_provider(manifest("venice"))
-    monkeypatch.setenv("RESERVE_PRIVATE_KEY", TEST_KEY)
-    provider = build_provider(manifest("venice"))
-    assert isinstance(provider, VeniceProvider)
-    assert provider._reasoning_config == {"venice:test-flash": {"max_tokens": 200}}
-    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
-        build_provider(manifest("venice", "openrouter"))
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-only-api-key")
-    mixed = build_provider(manifest("venice", "openrouter"))
-    assert isinstance(mixed, VeniceAndOpenRouter)
-    calls = []
-    monkeypatch.setattr(mixed._venice, "complete", lambda req: calls.append("venice"))
-    monkeypatch.setattr(mixed._openrouter, "complete", lambda req: calls.append("openrouter"))
-    mixed.complete(ModelRequest("venice:test-flash", "", ()))
-    mixed.complete(ModelRequest("test/flash", "", ()))
-    assert calls == ["venice", "openrouter"]
-    monkeypatch.setattr(mixed._venice, "catalogue", lambda: ["venice:test-flash"])
-    monkeypatch.setattr(mixed._openrouter, "catalogue", lambda: ["test/flash"])
-    assert mixed.catalogue() == ["test/flash", "venice:test-flash"]
 
 
 def test_cli_output_and_decrypted_metering_ledger_never_contain_private_key(

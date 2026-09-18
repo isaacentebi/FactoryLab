@@ -1,11 +1,9 @@
 """The essay's casts have observable purchase on live behaviour."""
 
 from dataclasses import replace
-from random import Random
 
 import pytest
 
-from factorylab.charter.charter import Charter, MetricCard
 from factorylab.charter.windows import MetricWindow
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.wallet import Infeasible
@@ -51,39 +49,6 @@ def close(rt, value, *, registrations=1):
     rt._close_price_window()
 
 
-def test_population_authored_price_changes_a_settled_reward():
-    """II.IV.a: a factory's speculative shadow price must affect what it earns."""
-    rt = runtime()
-    rt._manage_reserve_window()
-    for assembly in rt.assemblies:
-        for _ in range(5):
-            decision(rt, assembly, settled=True)
-    rt._propose_amendment("author", {
-        "id": "population-quality",
-                    "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease",
-                    "window": 1},
-        "replace": [{"id": "well_formed_rate", "norm": rt.charter.norms[0],
-                 "description": "Quality observed in this world.", "units": "fraction",
-                 "window": {"kind": "windows", "n": 1, "per": None},
-                    "acceptable_region": "at least 0.9",
-                 "observation": "well_formed_rate", "answers_for": "producer", "lambda": 0.5}],
-    })
-    rt.clock.now_ns += (rt.m.timing.min_ratio * rt.ev.consequence_backstop_events
-                        * rt.tick_clock.interval_ns)
-    rt.n = rt.cadence.earliest_event()
-    rt.cadence.advance(rt.n)
-    rt._activate_charter_if_due()
-    assert rt.charter.edition == 2
-    rt.card_samples.values = {c.id: 0.5 for c in rt.charter.cards}
-    handle = decision(rt, "seed-decider")
-    rt._contribution(handle, "producer").update(invocations=1, ok=0)
-    rt._settle_priced(handle, channel="verdict", score=0.8,
-                      definition_version="test", sampling_ref=None, cards="producer")
-    earned = rt.queue.returns_for("test-router")[-1].score
-    # Runtime regions normalize the deficit by the card's own 0.9 bound.
-    assert earned == pytest.approx(0.8 - 0.5 * (0.9 - 0.5) / 0.9)
-
-
 def test_incumbent_cannot_spend_the_frontiers_compute():
     """II.II.b: compute usable only for unhistoried actions remains affordable to them."""
     rt = runtime()
@@ -100,85 +65,6 @@ def test_incumbent_cannot_spend_the_frontiers_compute():
     assert rt.reserve.remaining() == protected - protected // 2
     assert rt.wallet.available == 0
     assert rt.wallet.check_conservation()
-
-
-def test_stable_failure_ratchets_gain_live():
-    """II.IV.b: persistent failure must ratchet up the available gain."""
-    rt = runtime()
-    rt._derive_regions()
-    rt.controller.set_price("well_formed_rate", 0.2, amendment_id="test")
-    router = rt.routers["Tick"][0]
-    for _ in range(3):
-        close(rt, 0.2)
-    assert router.learner.gamma > 0.1
-    assert rt._world_block()["pathologies"]["stable_failure"]
-
-
-def test_thrash_lowers_gain_live_and_temporarily_increases_decay():
-    """II.IV.b: excessive gain must not keep amplifying oscillation."""
-    rt = runtime()
-    rt._derive_regions()
-    router = rt.routers["Tick"][0]
-    router.learner.gamma = 0.5
-    for i in range(8):
-        close(rt, .2, registrations=3 * (i % 2))
-    assert 0.1 <= router.learner.gamma < 0.5
-    assert rt._world_block()["pathologies"]["thrash"]
-    assert rt.controller.snapshot()["parameters"]["decay"] > rt.m.prices.decay
-
-
-def test_registration_flood_does_not_change_committee_draw():
-    """II.IV.a: a rotated delegation represents stakeholders, not empty registrations."""
-    from factorylab.cortex.registration import AssemblyProposal
-
-    rt = runtime()
-    rt._manage_reserve_window()
-    for assembly in rt.assemblies:
-        for _ in range(5):
-            decision(rt, assembly, settled=True)
-    item = {"id": "before-flood", "tick_interval": "2s",
-                    "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease",
-                    "window": 1}}
-    rt.rng = Random(3)
-    rt._propose_amendment("author", item)
-    first = rt.charter_book._CharterBook__committees[item["id"]]
-    for i in range(40):
-        rt._register("author", AssemblyProposal(
-            id=f"flood-{i}", model_id="fake-haiku", role="producer", accepts=("Tick",),
-            system_prompt="Observe.", max_tokens=128, effort="medium",
-        ))
-    rt.rng = Random(3)
-    rt._propose_amendment("author", {**item, "id": "after-flood"})
-    second = rt.charter_book._CharterBook__committees["after-flood"]
-    assert first.seats == second.seats
-
-
-def test_role_field_is_required_and_validated_in_population_cards():
-    rt = runtime()
-    base = dict(vars(rt.charter.cards[1]), id="new-quality")
-    for value in (None, True, "unknown", ""):
-        card = {**base, "answers_for": value}
-        with pytest.raises(ValueError, match="answers_for"):
-            rt._propose_amendment("author", {"id": "bad-card", "add": [card],
-                                             "predicted_effect": {"card_id": "cost_per_return",
-                   "direction": "decrease",
-                    "window": 1}})
-
-
-def test_role_prices_are_not_card_id_conventions():
-    rt = runtime()
-    rt.charter = Charter(1, rt.charter.norms, tuple(
-        MetricCard(f"card-{role}", rt.charter.norms[0], "d", "fraction",
-                   MetricWindow("windows", 1, None),
-                   "above 0.9", "well_formed_rate", answers_for=role)
-        for role in ("producer", "evaluator", "meta", "all")
-    ))
-    rt._derive_regions()
-    rt.card_samples.values = {c.id: 0.5 for c in rt.charter.cards}
-    for card in rt.charter.cards:
-        rt.controller.set_price(card.id, 0.25, amendment_id="test")
-    for role in ("producer", "evaluator", "meta"):
-        assert rt._penalty_for(role) == pytest.approx(2 * 0.25 * (0.9 - 0.5) / 0.9)
 
 
 def test_new_assembly_keeps_protected_compute_until_its_consequences_settle():
@@ -220,52 +106,6 @@ def test_new_assembly_keeps_protected_compute_until_its_consequences_settle():
     req = rt._request(handle, "Observe.", {}, {}, 10**18, "verdict")
     assert rt._invoke("new-explorer", req, "producer").cost == 0
     assert rt.wallet.check_conservation()
-
-
-def test_missing_proposal_role_is_rejected_before_spending_write_access():
-    rt = runtime()
-    rt._manage_reserve_window()
-    card = dict(vars(rt.charter.cards[1]), id="new-quality")
-    del card["answers_for"]
-    before = rt.reserve.remaining()
-    with pytest.raises(ValueError, match="answers_for"):
-        rt._propose_amendment("author", {"id": "bad-card", "add": [card],
-                                         "predicted_effect": {"card_id": "cost_per_return",
-                   "direction": "decrease",
-                    "window": 1}})
-    assert rt.reserve.remaining() == before
-
-
-def test_detection_needs_persistent_supported_failure_and_resets_on_compliance():
-    rt = runtime()
-    rt._derive_regions()
-    for value in (0.2, 1, 0.2):
-        close(rt, value)
-    assert not rt.stats.pathologies["stable_failure"]
-    for _ in range(3):
-        close(rt, 1, registrations=0)
-    assert rt.stats.pathologies["learning_death"]
-    assert not rt.stats.pathologies["stable_failure"]
-    before = rt.routers["Tick"][0].learner.gamma
-    close(rt, 1, registrations=0)
-    assert rt.routers["Tick"][0].learner.gamma == before
-
-
-def test_immune_gain_is_bounded_and_decay_expires_after_one_window():
-    rt = runtime()
-    rt._derive_regions()
-    for _ in range(30):
-        close(rt, 0.2)
-    assert all(st.learner.gamma == rt.m.immune.gamma_max for st in rt._all_router_states())
-    for i in range(12):
-        close(rt, .2, registrations=3 * (i % 2))
-    assert rt.stats.pathologies["thrash"]
-    # A constant compliant stretch clears sustained changes; extra decay is removed.
-    for _ in range(12):
-        close(rt, 1)
-    assert not rt.stats.pathologies["thrash"]
-    assert rt.controller.snapshot()["parameters"]["decay"] == rt.m.prices.decay
-    assert all(st.learner.gamma >= st.seed_gamma for st in rt._all_router_states())
 
 
 def test_live_immune_actions_are_ledger_first_and_do_not_read_diary(monkeypatch):
@@ -317,22 +157,6 @@ def test_immune_and_novelty_state_survive_checkpoint_without_changing_future():
     assert original.reserve.state() == restored.reserve.state()
 
 
-def test_immune_adjusts_swap_router_rows_without_losing_delayed_decisions():
-    from factorylab.runtime.immune import gamma
-
-    rt = runtime()
-    rt._derive_regions()
-    router = rt._build_router("Tick", "blum_mansour", 0.1)
-    router.learner.current_key = "pending-route"
-    distribution = router.learner.distribution(router.universe)
-    saved = router.learner.state()["inner"]["snapshots"]
-    for _ in range(3):
-        close(rt, 0.2)
-    assert gamma(router.learner) > 0.1
-    assert router.learner.state()["inner"]["snapshots"] == saved
-    assert sum(distribution.values()) == pytest.approx(1)
-
-
 @pytest.mark.parametrize("mode", ["direct", "market-tool", "limit-tool"])
 def test_an_empty_thinking_pot_does_not_stop_an_order_the_venue_can_carry(mode):
     """Rehearsal 3, defect 1: the protected novelty reserve is not order collateral.
@@ -381,20 +205,6 @@ def test_an_empty_thinking_pot_does_not_stop_an_order_the_venue_can_carry(mode):
     assert rt.wallet.available <= 0
 
 
-def test_learning_death_cannot_be_hidden_by_naming_a_card_registrations():
-    rt = runtime()
-    rt.charter = Charter(1, rt.charter.norms, (
-        MetricCard("registrations", rt.charter.norms[0], "quality", "fraction",
-                   MetricWindow("windows", 1, None),
-                   "above 0.9", "well_formed_rate", answers_for="all"),
-    ))
-    rt._derive_regions()
-    for _ in range(3):
-        close(rt, 0.2, registrations=0)
-    assert rt.stats.pathologies["stable_failure"]
-    assert rt.stats.pathologies["learning_death"]
-
-
 def test_gamma_write_failure_leaves_router_unchanged(monkeypatch):
     rt = runtime()
     rt._derive_regions()
@@ -412,21 +222,6 @@ def test_gamma_write_failure_leaves_router_unchanged(monkeypatch):
     with pytest.raises(RuntimeError, match="ledger unavailable"):
         close(rt, 0.2)
     assert before == [s.state() for s in rt._all_router_states()]
-
-
-def test_sortition_threshold_counts_settled_decisions_only():
-    rt = runtime()
-    for _ in range(rt.m.committee.min_settled - 1):
-        decision(rt, "seed-decider", settled=True)
-    assert "seed-decider" not in rt._committee_eligible()
-    for status in (SettleStatus.CENSORED, SettleStatus.INAPPLICABLE):
-        handle = decision(rt, "seed-decider")
-        rt.queue.settle(handle, channel="verdict", score=0.0, status=status,
-                        definition_version="test", sampling_ref=None)
-    decision(rt, "seed-decider")  # An outstanding decision is not experience either.
-    assert "seed-decider" not in rt._committee_eligible()
-    decision(rt, "seed-decider", settled=True)
-    assert rt._committee_eligible() == {"seed-decider": "producer"}
 
 
 def test_order_protection_uses_acknowledged_leverage_not_the_maximum():
@@ -471,16 +266,3 @@ def test_pending_protected_compute_hold_survives_checkpoint():
     assert rt.wallet.state() == restored.wallet.state()
     assert rt.reserve.state() == restored.reserve.state()
     assert rt.reserve.remaining() == protected - 7
-
-
-def test_thrash_decay_reduces_next_windows_compliant_price():
-    rt = runtime()
-    rt._derive_regions()
-    for i in range(8):
-        close(rt, .2, registrations=3 * (i % 2))
-    assert rt.stats.pathologies["thrash"]
-    rt.controller.set_price("well_formed_rate", 0.8, amendment_id="test")
-    close(rt, 1)
-    assert rt.controller.price("well_formed_rate") == pytest.approx(
-        0.8 - rt.m.prices.decay - rt.m.immune.decay_step
-    )

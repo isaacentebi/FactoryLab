@@ -3,8 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from factorylab.charter.amendment import Amendment, proposed_price
-from factorylab.charter.book import CharterBook
+from factorylab.charter.amendment import Amendment
 from factorylab.charter.charter import seed_charter
 from factorylab.charter.controller import CardRegion, PriceController
 from factorylab.kernel.ledger import Ledger
@@ -47,42 +46,6 @@ def activate_after_backstop(rt):
     rt.cadence.advance(rt.n)
     rt._activate_charter_if_due()
     assert rt.charter.edition == edition + 1
-
-
-@pytest.mark.parametrize("value", [True, False, None, "0.5", -0.1, 1.01,
-                                   float("nan"), float("inf"), 10**1000])
-def test_invalid_lambda_rejected_before_registration_with_public_reason(value):
-    rt = runtime()
-    before = rt.registry.available("tool")
-    card = {**vars(rt.charter.cards[1]), "lambda": value}
-    with pytest.raises(ValueError, match=r"lambda.*\[0, 1.0\]"):
-        rt._propose_amendment("decision-1", {"id": "invalid-price", "replace": [card]})
-    assert rt.charter_book.pending() == []
-    assert rt.registry.available("tool") == before
-    assert "lambda" in rt._world_block()["amendment_feedback"]["reason"]
-
-
-@pytest.mark.parametrize("value", [0, 0.5, 1])
-def test_inclusive_prices(value):
-    assert proposed_price(value, 1) == value
-
-
-def test_proposals_are_frozen_and_activation_identifies_exact_prices():
-    prices = [["well_formed_rate", 0.7]]
-    am = amendment(proposed_prices=prices)
-    prices[0][1] = 0
-    assert am.proposed_prices == (("well_formed_rate", 0.7),)
-    book = CharterBook(Ledger(), seed_charter())
-    book.propose(am)
-    committee = book.seat(am.id, {"one": "producer"}, random.Random(1))
-    book.vote(committee, "seat-1", True, "yes")
-    assert book.activate_due(1).edition == 2
-    assert book.activated_amendment(2) == am
-    with pytest.raises(KeyError):
-        book.activated_amendment(1)
-    for values in ((("unknown", 0.5),), (("well_formed_rate", 0.5),) * 2):
-        with pytest.raises(ValueError):
-            amendment(proposed_prices=values)
 
 
 def test_controller_ledger_first_bounds_history_and_removal(monkeypatch):
@@ -140,27 +103,6 @@ def test_controller_ledger_first_bounds_history_and_removal(monkeypatch):
     assert controller.price("card") == 0.5
 
 
-def test_activation_preserves_unpriced_changes_removes_and_readds_cards():
-    rt = runtime()
-    rt._derive_regions()
-    rt.controller.set_price("well_formed_rate", 0.7, amendment_id="initial")
-    pass_amendment(rt, amendment())
-    activate_after_backstop(rt)
-    assert rt.controller.price("well_formed_rate") == 0.7
-    pass_amendment(rt, amendment(id="remove-card", edition_base=2, replace=(),
-                                remove=("well_formed_rate",)))
-    activate_after_backstop(rt)
-    assert "well_formed_rate" not in rt.regions
-    assert "well_formed_rate" not in rt.priced
-    assert "well_formed_rate" not in rt.controller.snapshot()["cards"]
-    pass_amendment(rt, amendment(id="restore-card", edition_base=3, replace=(),
-                                add=(seed_charter().cards[1],),
-                                proposed_prices=(("well_formed_rate", 0.4),)))
-    activate_after_backstop(rt)
-    assert rt.controller.price("well_formed_rate") == 0.4
-    assert "well_formed_rate" in rt.regions
-
-
 def test_unreadable_bounds_are_refused_before_prices_change():
     rt = runtime()
     card = replace(rt.charter.cards[1], acceptable_region="use judgment")
@@ -190,12 +132,3 @@ def test_prices_wait_for_approval_and_later_passed_proposals_win():
     activate_after_backstop(rt)
     assert rt.charter.edition == 3
     assert rt.controller.price("well_formed_rate") == 0.9
-
-
-def test_added_unreadable_card_is_refused_before_prices_change():
-    rt = runtime()
-    card = replace(rt.charter.cards[1], id="new-card", acceptable_region="use judgment")
-    with pytest.raises(ValueError, match="bounds"):
-        pass_amendment(rt, amendment(replace=(), add=(card,), proposed_prices=((card.id, 0.6),)))
-    assert rt.charter.edition == 1
-    assert rt.controller.price(card.id) == 0

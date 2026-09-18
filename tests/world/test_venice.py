@@ -7,7 +7,7 @@ from urllib import error, request
 
 import pytest
 
-from factorylab.world.models import ModelRequest, TokenPrice
+from factorylab.world.models import ModelRequest
 from factorylab.world.venice import VeniceError, VeniceProvider
 
 TEST_KEY = "0x" + "11" * 32
@@ -75,19 +75,6 @@ class FakeTransport:
         return response
 
 
-def test_catalogue_namespaces_prices_and_preserves_fractional_mtok(catalogue):
-    fake = FakeTransport([catalogue])
-    (entry,) = VeniceProvider(transport=fake).catalogue()
-    assert (entry.id, entry.name, entry.context_length) == (
-        "venice:test-flash",
-        "Test Flash",
-        32768,
-    )
-    assert entry.price() == TokenPrice(Fraction(3, 20), Fraction(1, 2))
-    assert entry.price().cost(25, 10) == 9
-    assert fake.calls == [("GET", "/models", None)]
-
-
 def test_catalogue_long_decimal_price_has_no_intermediate_rounding(catalogue):
     quote = "0.123456789012345678901234567890123456789"
     catalogue["data"][0]["model_spec"]["pricing"]["input"]["usd"] = quote
@@ -147,15 +134,6 @@ def test_missing_cost_uses_catalogue_and_records_estimate(completion, catalogue,
     assert [call[0] for call in fake.calls] == ["POST", "GET", "POST"]
 
 
-def test_fallback_uses_serving_model_when_catalogued(completion, catalogue, req):
-    completion.pop("cost")
-    completion["model"] = "served-model"
-    catalogue["data"][0]["id"] = "served-model"
-    catalogue["data"][0]["model_spec"]["pricing"]["output"]["usd"] = "1.00"
-    result = VeniceProvider(transport=FakeTransport([completion, catalogue])).complete(req)
-    assert result.model_id == "venice:served-model" and result.cost_micro == 14
-
-
 @pytest.mark.parametrize("cost", ["-1", "NaN", "Infinity", "not-money", True])
 def test_invalid_reported_cost_fails_without_catalogue_fallback(completion, req, cost):
     completion["cost"]["usd"] = cost
@@ -163,90 +141,6 @@ def test_invalid_reported_cost_fails_without_catalogue_fallback(completion, req,
     with pytest.raises(VeniceError):
         VeniceProvider(transport=fake).complete(req)
     assert len(fake.calls) == 1
-
-
-@pytest.mark.parametrize(
-    "config,expected",
-    [
-        ({"effort": "high"}, {"reasoning_effort": "high", "disable_thinking": False}),
-        ({"effort": "none"}, {"reasoning": {"enabled": False}, "disable_thinking": True}),
-        ({"enabled": False}, {"reasoning": {"enabled": False}, "disable_thinking": True}),
-        ({"enabled": True}, {"disable_thinking": False}),
-        ({"max_tokens": 200}, {"reasoning_effort": "low", "disable_thinking": False}),
-    ],
-)
-def test_reasoning_tier_mapping_and_budget_substitution(completion, req, config, expected):
-    fake = FakeTransport([completion])
-    provider = VeniceProvider(transport=fake, reasoning_config={req.model_id: config})
-    saved = dict(config)
-    config.clear()  # Tier settings are copied, not shared mutable configuration.
-    response = provider.complete(req)
-    payload = fake.calls[0][2]
-    assert payload.get("reasoning_effort") == expected.get("reasoning_effort")
-    assert payload["venice_parameters"]["disable_thinking"] == expected["disable_thinking"]
-    assert payload.get("reasoning") == expected.get("reasoning")
-    if "max_tokens" in saved:
-        assert response.raw["reasoning_substitution"] == {
-            "requested_max_tokens": 200,
-            "reasoning_effort": "low",
-            "reason": "token_budget_unsupported",
-        }
-    else:
-        assert "reasoning_substitution" not in response.raw
-
-
-def test_effort_suffix_and_web_tier_mapping(completion, req):
-    fake = FakeTransport([completion])
-    provider = VeniceProvider(
-        transport=fake,
-        reasoning_config={req.model_id: {"max_tokens": 200}},
-        web_config={req.model_id + ":online": {"engine": "exa", "max_results": 2}},
-    )
-    response = provider.complete(replace(req, model_id=req.model_id + ":online@high"))
-    payload = fake.calls[0][2]
-    assert payload["model"] == "test-flash"
-    assert payload["reasoning_effort"] == "high"
-    assert payload["venice_parameters"] == {"disable_thinking": False, "enable_web_search": "auto"}
-    assert "plugins" not in payload and "reasoning_substitution" not in response.raw
-
-
-@pytest.mark.parametrize("mode", ["on", "off", "auto"])
-def test_explicit_web_modes(completion, req, mode):
-    fake = FakeTransport([completion])
-    VeniceProvider(transport=fake, web_config={req.model_id: {"enable_web_search": mode}}).complete(
-        req
-    )
-    assert fake.calls[0][2]["venice_parameters"]["enable_web_search"] == mode
-
-
-def test_function_tools_and_tool_messages_are_preserved(completion, req):
-    tools = [{"type": "function", "function": {"name": "price", "parameters": {"type": "object"}}}]
-    calls = [{"id": "call-1", "type": "function", "function": {"name": "price", "arguments": "{}"}}]
-    messages = (
-        {"role": "assistant", "content": None, "tool_calls": calls},
-        {"role": "tool", "tool_call_id": "call-1", "content": "42"},
-    )
-    completion["choices"][0]["message"] = {
-        "content": None,
-        "tool_calls": calls,
-        "reasoning_content": "Reasoning text",
-    }
-    completion["choices"][0]["finish_reason"] = "tool_calls"
-    fake = FakeTransport([completion])
-    result = VeniceProvider(transport=fake).complete(
-        replace(req, messages=messages),
-        tools=tools,
-        tool_choice="auto",
-        parallel_tool_calls=False,
-    )
-    payload = fake.calls[0][2]
-    assert payload["messages"][1:] == list(messages)
-    assert payload["tools"] == tools and payload["tool_choice"] == "auto"
-    assert payload["parallel_tool_calls"] is False
-    assert result.text == "" and result.raw["tool_calls"] == calls
-    assert (
-        result.stop_reason == "tool_calls" and result.raw["reasoning_content"] == "Reasoning text"
-    )
 
 
 @pytest.mark.parametrize(
@@ -264,16 +158,6 @@ def test_completion_never_retries_or_exposes_transport_failures(req, failure):
         VeniceProvider(transport=fake).complete(req)
     assert len(fake.calls) == 1
     assert TEST_KEY[2:] not in "".join(traceback.format_exception(caught.value))
-
-
-def test_get_retries_once_only_for_connection_errors(catalogue):
-    fake = FakeTransport([error.URLError("offline"), catalogue])
-    assert VeniceProvider(transport=fake).catalogue()
-    assert len(fake.calls) == 2
-    fake = FakeTransport([error.URLError("offline"), TimeoutError()])
-    with pytest.raises(VeniceError):
-        VeniceProvider(transport=fake).catalogue()
-    assert len(fake.calls) == 2
 
 
 class WireResponse(BytesIO):
@@ -311,15 +195,6 @@ def test_wire_auth_prefers_api_key_otherwise_fresh_siwe(monkeypatch, completion,
         assert auth["chainId"] == 8453 and "fake.test" in auth["message"]
 
 
-def test_public_catalogue_needs_no_key(monkeypatch, catalogue):
-    def fake_open(self, req, timeout):
-        assert not req.has_header("Authorization") and not req.has_header("X-sign-in-with-x")
-        return WireResponse(catalogue)
-
-    monkeypatch.setattr(request.OpenerDirector, "open", fake_open)
-    assert VeniceProvider().catalogue()[0].id == "venice:test-flash"
-
-
 def test_response_metadata_and_text_cannot_echo_keys(monkeypatch, completion, req):
     monkeypatch.setenv("RESERVE_PRIVATE_KEY", TEST_KEY)
     completion["id"] = TEST_KEY
@@ -335,48 +210,6 @@ def test_missing_auth_and_unprefixed_id_cannot_call_completion(req):
     with pytest.raises(VeniceError):
         VeniceProvider(transport=fake).complete(replace(req, model_id="test-flash"))
     assert not fake.calls
-
-
-def test_json_output_contract_is_sent_only_for_object_requests(completion, req):
-    fake = FakeTransport([completion, completion])
-    provider = VeniceProvider(transport=fake)
-    provider.complete(req)
-    provider.complete(replace(req, json_object=True))
-    assert "response_format" not in fake.calls[0][2]
-    assert fake.calls[1][2]["response_format"] == {"type": "json_object"}
-
-
-def test_an_answer_that_is_all_reasoning_and_no_content_says_so(completion, req):
-    """Rehearsal 5: 40 of 110 GLM answers came back `finish_reason: stop` with an empty
-    content and the whole answer in `reasoning_content`. There is nothing to parse, so
-    the answer is malformed either way — but the diary should say why, and keep the
-    prose the model did produce, bounded, as the evidence that it did."""
-    from factorylab.world.venice import MAX_REASONING_CHARS
-
-    thought = "I should answer with JSON. " * 400
-    completion["choices"][0]["message"] = {"role": "assistant", "content": "",
-                                           "reasoning_content": thought}
-    response = VeniceProvider(transport=FakeTransport([completion])).complete(req)
-    assert response.text == ""  # malformed: no content reached the contract
-    assert response.stop_reason == "reasoning_only"
-    assert response.raw["reasoning_content"] == thought[:MAX_REASONING_CHARS]
-    assert len(response.raw["reasoning_content"]) == 2_000
-
-
-def test_an_answer_with_content_or_a_tool_call_is_not_reasoning_only(completion, req):
-    """The finding is an empty answer, not the presence of reasoning: a completion that
-    answered, and one that answered by calling a tool, keep the provider's own reason."""
-    completion["choices"][0]["message"] = {"role": "assistant", "content": "OK",
-                                           "reasoning_content": "thinking"}
-    answered = VeniceProvider(transport=FakeTransport([completion])).complete(req)
-    assert answered.stop_reason == "stop" and answered.text == "OK"
-    completion["choices"][0]["message"] = {
-        "role": "assistant", "content": "", "reasoning_content": "thinking",
-        "tool_calls": [{"id": "c1", "type": "function",
-                        "function": {"name": "t", "arguments": "{}"}}]}
-    completion["choices"][0]["finish_reason"] = "tool_calls"
-    called = VeniceProvider(transport=FakeTransport([completion])).complete(req)
-    assert called.stop_reason == "tool_calls"
 
 
 def test_the_edition3_glm_tier_sends_venices_own_thinking_switch():

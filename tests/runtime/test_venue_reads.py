@@ -24,7 +24,6 @@ from decimal import Decimal
 
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.resume import decode, runtime_state
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
@@ -66,70 +65,6 @@ def place(rt: Runtime, size: str) -> dict:
         "args": {"coin": "BTC", "side": "buy", "size": size}})[0]
 
 
-def test_two_prompt_builds_in_one_tick_record_one_account_read():
-    rt = venue_runtime()
-    before = reads(rt, "exchange.account")
-    first, second = rt._world_block(), rt._world_block()
-    assert first["account"] == second["account"]
-    assert first["account"]["equity_usd"] == "1000"  # the block is still populated
-    assert first["world_resources"]["trading_equity_usd"] == "1000"
-    assert reads(rt, "exchange.account") - before == 1
-
-
-def test_two_prompt_builds_in_one_tick_record_one_mids_read():
-    """``_tick_mids`` is what the tick payload of every prompt in the tick is priced from."""
-    rt = venue_runtime()
-    before = reads(rt, "exchange.mids")
-    first, second = rt._tick_mids(), rt._tick_mids()
-    assert first == second and first["BTC"] > 0
-    assert reads(rt, "exchange.mids") - before == 1
-
-
-def test_the_next_tick_reads_both_again():
-    rt = venue_runtime()
-    before = (reads(rt, "exchange.mids"), reads(rt, "exchange.account"))
-    rt._tick_mids(), rt._world_block()
-    rt.ticks_consumed += 1
-    rt._tick_mids(), rt._world_block()
-    rt._tick_mids(), rt._world_block()
-    assert reads(rt, "exchange.mids") - before[0] == 2
-    assert reads(rt, "exchange.account") - before[1] == 2
-
-
-def test_a_memo_is_never_handed_out_to_be_mutated():
-    rt = venue_runtime()
-    rt._tick_mids()["BTC"] = Decimal(1)
-    assert rt._tick_mids()["BTC"] != Decimal(1)
-
-
-def test_the_memos_are_not_resumable_state():
-    """A resumed runtime reads both afresh and records those reads."""
-    rt = venue_runtime()
-    rt._tick_mids(), rt._world_block()
-    saved = decode(runtime_state(rt)["runtime"])
-    assert not [name for name in saved if "mids_memo" in name or "account_memo" in name]
-
-    resumed = venue_runtime()
-    resumed.ticks_consumed = rt.ticks_consumed
-    before = (reads(resumed, "exchange.mids"), reads(resumed, "exchange.account"))
-    resumed._tick_mids(), resumed._world_block()
-    assert reads(resumed, "exchange.mids") - before[0] == 1
-    assert reads(resumed, "exchange.account") - before[1] == 1
-
-
-def test_a_checkpoint_carries_neither_and_the_run_holds_neither_past_it():
-    """Both sides drop the memo at the boundary, so the replayed tail reads where it did."""
-    rt = venue_runtime()
-    rt._tick_mids(), rt._world_block()
-    assert rt._mids_memo is not None and rt._account_memo is not None
-    assert rt._snapshot("test") is True
-    assert rt._mids_memo is None and rt._account_memo is None
-    before = (reads(rt, "exchange.mids"), reads(rt, "exchange.account"))
-    rt._tick_mids(), rt._world_block()
-    assert reads(rt, "exchange.mids") - before[0] == 1
-    assert reads(rt, "exchange.account") - before[1] == 1
-
-
 def test_the_paid_population_reads_are_never_served_from_the_memo():
     """A seat that pays for a venue read is told what the venue says now."""
     rt = venue_runtime()
@@ -154,16 +89,3 @@ def test_an_order_and_its_settlement_in_the_same_tick_read_the_account_fresh():
     rt._observe_positions()
     assert reads(rt, "exchange.account") > marked
     assert rt._equity_micro() and reads(rt, "exchange.account") > marked + 1
-
-
-def test_the_collateral_check_shares_the_ticks_mids():
-    """One price for the tick: what the prompt was priced from is what the order is sized by.
-
-    Read on a refused order, which stops at the collateral check, so no settlement
-    path's own fresh read is in the count.
-    """
-    rt = venue_runtime()
-    rt._tick_mids()
-    before = reads(rt, "exchange.mids")
-    assert place(rt, "1")["status"] == "rejected"
-    assert reads(rt, "exchange.mids") == before

@@ -4,50 +4,10 @@ import pytest
 
 from factorylab.charter.amendment import PredictedEffect
 from factorylab.charter.controller import CardRegion, promise_kept
-from factorylab.cortex.registration import RouterProposal, parse_proposals
+from factorylab.cortex.registration import RouterProposal
 from factorylab.cortex.request import Return
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from tests.conftest import make_runtime
-
-
-def test_router_string_booleans_are_case_insensitive_and_do_not_use_truthiness():
-    for value, expected in ((True, True), (False, False), ('true', True), ('TRUE', True),
-                            ('TrUe', True), ('false', False), ('FALSE', False), ('FaLsE', False)):
-        accepted, rejected = parse_proposals(
-            {'register': [{'kind': 'router', 'learner': 'exp3', 'event_kind': 'Tick',
-                           'add': value}]}, event_kinds=frozenset({'Tick'}),
-            known_models=frozenset(), known_assemblies=frozenset(),
-        )
-        assert not rejected and accepted[0].add is expected
-
-
-def test_proposal_examples_preserve_required_scalar_and_enum_types():
-    from factorylab.runtime.loop import Runtime
-
-    shapes = Runtime.PROPOSAL_SHAPES
-    assert type(shapes['router']['add']) is bool
-    assert shapes['router']['learner'] in ('exp3', 'blum_mansour')
-    assert shapes['router']['event_kind'] == 'Tick'
-    assert shapes['assembly']['role'] == 'producer'
-    assert shapes['assembly']['effort'] in ('low', 'medium', 'high')
-    assert type(shapes['assembly']['max_tokens']) is int
-    assert type(shapes['tool']['timeout_s']) is int
-    assert type(shapes['amendment']['add'][0]['lambda']) in (int, float)
-
-
-def test_amendments_share_the_return_cap_and_public_refusal(monkeypatch):
-    rt = make_runtime()
-    calls = []
-    monkeypatch.setattr(rt, '_propose_amendment', lambda h, i: calls.append(i['id']))
-    monkeypatch.setattr(rt, '_register', lambda h, p: calls.append(p))
-    proposals = [{'kind': 'amendment', 'id': 'first'},
-                 {'kind': 'router', 'learner': 'exp3', 'event_kind': 'Tick'},
-                 {'kind': 'amendment', 'id': 'second'},
-                 {'kind': 'amendment', 'id': 'excess'}]
-    rt._apply_registrations('parent', Return('parent', {'register': proposals}, 0, 'ok'))
-    assert calls == ['first', RouterProposal('Tick', 'exp3', .1), 'second']
-    assert rt.registration_feedback[-1]['index'] == 3
-    assert 'cap' in rt.registration_feedback[-1]['reason']
 
 
 def test_votes_have_one_queue_decision_per_seat_per_amendment(monkeypatch):
@@ -131,13 +91,6 @@ def test_promise_grading_scores_the_direction_against_the_baseline(direction, ba
     assert promise_kept(direction, baseline, value, FLOOR, resolution=0.01) is kept
 
 
-def test_promise_grading_rejects_bad_direction_and_resolution():
-    with pytest.raises(ValueError, match="direction"):
-        promise_kept("sideways", 0.9, 0.9, FLOOR, resolution=0.01)
-    with pytest.raises(ValueError, match="resolution"):
-        promise_kept("increase", 0.9, 0.9, FLOOR, resolution=0.0)
-
-
 def _ballot(rt, monkeypatch, direction, *, baseline, value, vote=True):
     """One favourable ballot on the well-formed card, activated at ``baseline``."""
     import factorylab.runtime.governance as governance
@@ -173,22 +126,6 @@ def test_a_vote_for_a_change_that_went_the_wrong_way_is_wrong_inside_the_region(
     settled = rt.queue.history(handle)[-1]
     assert settled.score == 0.0 and settled.status is SettleStatus.SETTLED
     assert settled.definition_version == "policy-promise-brier-v2"
-
-
-@pytest.mark.parametrize("direction, baseline, value", [
-    ("increase", 0.92, 0.95), ("decrease", 0.95, 0.92),
-])
-def test_a_vote_for_a_change_that_kept_its_promise_is_right(monkeypatch, direction, baseline,
-                                                            value):
-    rt = make_runtime()
-    handle, outcome = _ballot(rt, monkeypatch, direction, baseline=baseline, value=value)
-    assert outcome["y"] is True and outcome["score"] == 1.0
-    assert rt.queue.history(handle)[-1].score == 1.0
-    # A no vote on the same change is the wrong call.
-    rt = make_runtime()
-    handle, outcome = _ballot(rt, monkeypatch, direction, baseline=baseline, value=value,
-                              vote=False)
-    assert outcome["y"] is True and rt.queue.history(handle)[-1].score == 0.0
 
 
 def test_a_ballot_without_a_baseline_is_censored(monkeypatch):

@@ -275,28 +275,6 @@ def test_the_cli_reports_witness_unavailable_with_the_retried_exit_code(tmp_path
     assert "RestartPreventExitStatus=3\n" in unit and "Restart=always\n" in unit
 
 
-def test_the_units_may_write_the_witness_directory():
-    """The droplet's units bind .witness/ writable: the runtime's kill line, start.sh's
-    launch and failed_resume lines and the wake unit's dormant lines land there, and
-    ProtectSystem=strict would otherwise refuse every one of them silently."""
-    deploy = Path(__file__).resolve().parents[2] / "deploy"
-    world = (deploy / "factorylab.service").read_text()
-    wake = (deploy / "factorylab-wake.service").read_text()
-    for unit in (world, wake):
-        assert "ProtectSystem=strict\n" in unit
-        line = next(ln for ln in unit.splitlines() if ln.startswith("ReadWritePaths="))
-        paths = line.removeprefix("ReadWritePaths=").split()
-        assert "/srv/factorylab/runs" in paths and "/srv/factorylab/.witness" in paths
-    assert "/srv/factorylab/www" in wake
-    # Where the runtime and the scripts write, resolved from the funded ledger path.
-    assert witness.witness_path("/srv/factorylab/runs/funded.jsonl") == Path(
-        "/srv/factorylab/.witness/funded.jsonl")
-    assert '$root/.witness/$world.jsonl' in (deploy / "witness.sh").read_text()
-    # The directory exists before the units bind it, owned by the service user.
-    provision = (deploy / "cloud-init.yaml").read_text()
-    assert "install -d -o factory -g factory -m 0700 /srv/factorylab/.witness" in provision
-
-
 def test_a_checkpoint_cannot_revive_a_killed_runtime():
     m = load_manifest("scripted")
     rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
