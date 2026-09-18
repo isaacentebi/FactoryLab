@@ -691,3 +691,57 @@ class SimpleService:
     id = "oracle"
     program_id = "prog"
     version = 1
+
+
+# ------------------------------------------------------------------------------ 11
+
+
+class TestFix11NoSalesAfterDeath:
+    """A dead world sells nothing: no quote, no settlement, no program run."""
+
+    def test_a_killed_runtime_seller_refuses_before_quoting_or_settling(self):
+        from factorylab.runtime.seller import seller_from_runtime
+        from tests.runtime.test_seller import (
+            SERVICE,
+            TOOL,
+            FakeHTTP,
+            fixture_service,
+            paid_header,
+            register,
+            runtime_with_reserve,
+            settlement,
+        )
+
+        rt = runtime_with_reserve()
+        register(rt, TOOL)
+        register(rt, SERVICE)
+        transport = FakeHTTP([settlement()])
+        seller = seller_from_runtime(rt, transport=transport,
+                                     facilitator="https://facilitator.test")
+        assert seller.handle("doubler", b"{}", {}, "https://x/service/doubler")[0] == 402
+        rt.kill("explicit_kill:operator")
+        header = paid_header(fixture_service())
+        status, _, body = seller.handle("doubler", b'{"x": 1}',
+                                        {"PAYMENT-SIGNATURE": header},
+                                        "https://x/service/doubler")
+        assert status == 503 and transport.calls == []
+        assert seller.handle("doubler", b"{}", {}, "https://x/service/doubler")[0] == 503
+
+    def test_the_hosted_seller_fails_closed_on_death_and_on_stale_liveness(self):
+        import importlib.util
+        from pathlib import Path
+
+        spec = importlib.util.spec_from_file_location(
+            "serve", Path(__file__).resolve().parents[2] / "deploy" / "serve.py")
+        serve = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(serve)
+        clock = [100.0]
+        liveness = serve.Liveness(max_age_s=60, clock=lambda: clock[0])
+        liveness.observe([{"kind": "event", "event": {"kind": "Launch"}}])
+        assert liveness()
+        clock[0] += 61  # the ledger has not been re-read for longer than the bound
+        assert not liveness()
+        liveness.observe([{"kind": "kill.production", "production_state": "killed"}])
+        assert not liveness()
+        liveness.observe([{"kind": "event", "event": {"kind": "Launch"}}])
+        assert not liveness()  # death is final: a later read cannot revive it
