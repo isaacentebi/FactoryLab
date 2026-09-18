@@ -401,11 +401,18 @@ def test_a_refusing_venue_is_recorded_order_by_order_and_never_raises():
             return {"status": "rejected", "error": "venue refused the close"}
 
     ledger = _MemoryLedger()
+    from factorylab.runtime.winddown import ROUNDS_PER_KILL
+
     report = wind_down(Refusing(), ledger)
-    assert report["orders"] == 3 and report["failed"] == 3
+    # The cancel raised (ambiguous: read, never resent); the two definitive
+    # rejections are retried under new identities, a bounded number of rounds.
+    sent = 1 + 2 * ROUNDS_PER_KILL
+    assert report["orders"] == sent and report["failed"] == sent
     assert report["cancelled"] == report["closed"] == report["sold"] == 0
-    assert [i["op"] for i in ledger.rows if i["kind"] == "winddown.op"] == [
-        "cancel", "close", "sell"]
+    ops = [i for i in ledger.rows if i["kind"] == "winddown.op"]
+    assert [i["op"] for i in ops[:3]] == ["cancel", "close", "sell"]
+    assert [i["op"] for i in ops[3:]] == ["close", "sell"] * (ROUNDS_PER_KILL - 1)
+    assert len({i["op_id"] for i in ops}) == len(ops)
     results = [i for i in ledger.rows if i["kind"] == "winddown.op_result"]
     assert results[0]["result"] == {"status": "failed", "error": "RuntimeError"}
     # Nothing was left flat and the executor says so, from the account and not from

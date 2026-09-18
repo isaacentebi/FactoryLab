@@ -181,3 +181,61 @@ class TestFix1NoCoinFreeze:
         again = _producing_decision(rt)
         assert rt._venue_write(again, "venue.place_market", order,
                                slot="output")["status"] == "filled"
+
+
+# ------------------------------------------------------------------------------ 2
+
+
+class TestFix2WindDownRetries:
+    """A kill retries what the venue refused or half-did, and never repeats what it did."""
+
+    def test_a_rejected_close_is_retried_by_the_next_kill_under_a_new_identity(self):
+        from factorylab.runtime.venue import wind_down
+        from factorylab.runtime.winddown import FLAT, operation_id
+        from factorylab.world.exchange import OrderResult, Position
+        from tests.audit.test_r3c_death import NONCE, Diary, Venue
+
+        venue = Venue(positions=[Position("BTC", Decimal("1"), Decimal("100"))],
+                      close_result=OrderResult(None, "rejected", Decimal(0), None, "busy"))
+        diary = Diary()
+        wind_down(venue, diary, launch_nonce=NONCE)
+        first = [call[3] for call in venue.sent("close")]
+        assert first[0] == operation_id(NONCE, "BTC", "perp", "sell", 0)
+
+        venue.close_result = OrderResult("o2", "filled", Decimal("1"), Decimal("100"))
+        before = len(venue.sent("close"))
+        wind_down(venue, diary, launch_nonce=NONCE)
+        retried = [call[3] for call in venue.sent("close")][before:]
+        assert len(retried) == 1 and retried[0] not in first
+        venue.positions = []
+        # A third kill after the venue is flat sends nothing and reads flat.
+        before = len(venue.sent("close"))
+        assert wind_down(venue, diary, launch_nonce=NONCE)["exposure_state"] == FLAT
+        assert len(venue.sent("close")) == before
+
+    def test_a_partial_ioc_close_is_retried_in_the_same_kill(self):
+        from factorylab.runtime.venue import wind_down
+        from factorylab.world.exchange import OrderResult, Position
+        from tests.audit.test_r3c_death import NONCE, Diary, Venue
+
+        venue = Venue(positions=[Position("BTC", Decimal("1"), Decimal("100"))],
+                      close_result=OrderResult("o1", "filled", Decimal("0.4"), Decimal("100")))
+        wind_down(venue, Diary(), launch_nonce=NONCE)
+        ids = [call[3] for call in venue.sent("close")]
+        assert len(ids) >= 2 and len(set(ids)) == len(ids)
+
+    def test_a_balance_below_the_venue_minimum_is_reported_dust_not_pending(self):
+        from factorylab.runtime.venue import wind_down
+        from factorylab.runtime.winddown import DUST
+        from factorylab.world.exchange import SpotBalance
+        from tests.audit.test_r3c_death import NONCE, Diary, Venue
+
+        venue = Venue(balances=[SpotBalance("PURR", Decimal("1"), Decimal("1"))],
+                      mids={"PURR/USDC": Decimal("5")})  # $5: above $1 dust, below $10
+        venue.instruments = lambda: {"spot": [{"coin": "PURR/USDC",
+                                               "min_order_value_usd": "10"}], "perp": []}
+        report = wind_down(venue, Diary(), launch_nonce=NONCE)
+        assert report["exposure_state"] == DUST
+        assert not venue.sent("close")
+        (row,) = report["residual"]["dust"]
+        assert row["coin"] == "PURR/USDC" and row["reason"] == "below_venue_minimum"

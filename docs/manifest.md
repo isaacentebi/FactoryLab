@@ -1725,8 +1725,16 @@ whole authority is to cancel, reduce, close and reconcile: it cannot open risk
 and cannot resume the population. Every external operation has a durable
 identity derived from (launch nonce, coin, market, side, target), ledgered
 `winddown.op` before submission and `winddown.op_result` after it, so a repeated
-kill or a kill after a restart reconciles by identity and repeats nothing. A
-final account read is ledgered as `winddown.reconciliation` with the residual and
+kill or a kill after a restart reconciles by identity and repeats nothing it
+completed. What the venue definitively refused or only partly did (rejected, an
+IOC that cancelled, a partial fill) is retried under the target's next attempt
+identity: up to three rounds in one kill, each re-reading the venue, and a later
+kill of the same diary continues the numbering. An ambiguous answer (a timeout, an
+exception, a resting order) is read again, never resent. A residual below the
+venue's minimum order value (Hyperliquid's $10, above the default `[kill]
+dust_usd = "1"`) can never be sold; it is reported in the residual's dust with
+`reason = "below_venue_minimum"` and reads `dust_within_precommitted_bound`, not
+`wind_down_pending`. A final account read is ledgered as `winddown.reconciliation` with the residual and
 the `exposure_state` it implies: an acknowledgement is not a flat account, and a
 failed read is `unknown`. Neither a venue nor the diary can prevent death; a
 diary failure during the wind-down is counted, printed on stderr and carried to
