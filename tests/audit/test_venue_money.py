@@ -239,3 +239,73 @@ class TestFix2WindDownRetries:
         assert not venue.sent("close")
         (row,) = report["residual"]["dust"]
         assert row["coin"] == "PURR/USDC" and row["reason"] == "below_venue_minimum"
+
+
+# ------------------------------------------------------------------------------ 3
+
+
+def _client_error(status: int):
+    from hyperliquid.utils.error import ClientError
+
+    return ClientError(status, None, "rate limited" if status == 429 else "bad", {})
+
+
+class TestFix3ClientErrorsAreVenueWeather:
+    """A 4xx from the SDK is a typed venue failure, never an exception that kills a tick."""
+
+    def test_a_429_is_retried_with_backoff_then_unavailable(self, monkeypatch):
+        from factorylab.world.exchange import VenueUnavailable
+
+        sleeps = []
+        monkeypatch.setattr("time.sleep", sleeps.append)
+        ex = _live_stub()
+        ex._info.user_state.side_effect = _client_error(429)
+        try:
+            ex.account()
+        except VenueUnavailable as exc:
+            assert "429" in str(exc) or "ClientError" in str(exc)
+        else:
+            raise AssertionError("a rate-limited read must be VenueUnavailable")
+        assert ex._info.user_state.call_count > 1 and sleeps  # it backed off and asked again
+
+    def test_other_4xx_are_unavailable_without_hammering(self, monkeypatch):
+        from factorylab.world.exchange import VenueUnavailable
+
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        ex = _live_stub()
+        ex._info.user_state.side_effect = _client_error(400)
+        try:
+            ex.account()
+        except VenueUnavailable:
+            pass
+        assert ex._info.user_state.call_count == 1
+
+    def test_every_public_read_maps_a_client_error(self, monkeypatch):
+        from factorylab.world.exchange import VenueUnavailable
+
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        ex = _live_stub()
+        for name in ("candles_snapshot", "l2_snapshot", "funding_history", "open_orders"):
+            getattr(ex._info, name).side_effect = _client_error(429)
+        for call in (lambda: ex.candles("BTC", "1m", 2), lambda: ex.order_book("BTC", 1),
+                     lambda: ex.funding_history("BTC", 2), ex.open_orders,
+                     lambda: ex.collateral_view("BTC")):
+            try:
+                call()
+            except VenueUnavailable:
+                continue
+            raise AssertionError("expected VenueUnavailable")
+
+    def test_a_rate_limited_collateral_read_refuses_the_order_and_the_tick_survives(
+            self, monkeypatch):
+        rt = venue_runtime(venue_usd="1000")
+
+        def limited(*a, **kw):
+            raise _client_error(429)
+
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        live = _live_stub()
+        live._info.open_orders.side_effect = limited
+        monkeypatch.setattr(rt.exchange.target, "collateral_view", live.collateral_view)
+        reason = rt._order_collateral("h", "BTC", Decimal("0.001"), True)
+        assert reason == "order collateral unavailable: VenueUnavailable"

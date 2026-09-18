@@ -889,15 +889,27 @@ class HyperliquidExchange:
         import time
 
         import requests
-        from hyperliquid.utils.error import ServerError
+        from hyperliquid.utils.error import ClientError, ServerError
 
         delay = 0.5
         for attempt in range(attempts):
             try:
                 return call()
+            except ClientError as exc:
+                # A 4xx is the SDK's ClientError, which is not a RuntimeError and used
+                # to escape every catch site and kill the tick. A 429 is the venue
+                # asking us to slow down: back off harder and ask again. Any other 4xx
+                # is an answer that asking again will not change.
+                status = getattr(exc, "status_code", None)
+                if status != 429 or attempt == attempts - 1:
+                    self.transient_failures = getattr(self, "transient_failures", 0) + 1
+                    raise VenueUnavailable(
+                        f"{what}: ClientError {status}") from exc
+                time.sleep(delay * 4)
+                delay *= 2
             except (requests.RequestException, OSError, TimeoutError, ServerError) as exc:
                 if attempt == attempts - 1:
-                    self.transient_failures += 1
+                    self.transient_failures = getattr(self, "transient_failures", 0) + 1
                     raise VenueUnavailable(f"{what}: {type(exc).__name__}: {exc}") from exc
                 time.sleep(delay)
                 delay *= 2
@@ -1184,7 +1196,8 @@ class HyperliquidExchange:
         width_ms = _interval_ns(interval) // NS_PER_MS
         end_ms = time.time_ns() // NS_PER_MS
         start_ms = end_ms - end_ms % width_ms - (n - 1) * width_ms
-        raw = self._info.candles_snapshot(self._wire_coin(coin), interval, start_ms, end_ms)
+        raw = self._guarded("candles", lambda: self._info.candles_snapshot(
+            self._wire_coin(coin), interval, start_ms, end_ms))
         return [
             {
                 "ts_ns": int(c["t"]) * NS_PER_MS,
@@ -1200,7 +1213,7 @@ class HyperliquidExchange:
     def order_book(self, coin: str, depth: int) -> dict:
         """Return at most depth levels per side, bids descending and asks ascending."""
         _check_count(depth, 20)
-        raw = self._info.l2_snapshot(self._wire_coin(coin))
+        raw = self._guarded("l2_snapshot", lambda: self._info.l2_snapshot(self._wire_coin(coin)))
         sides = [
             sorted(
                 [
@@ -1225,7 +1238,8 @@ class HyperliquidExchange:
 
         _check_count(n, 100)
         end_ms = time.time_ns() // NS_PER_MS
-        raw = self._info.funding_history(coin, end_ms - n * NS_PER_HOUR // NS_PER_MS, end_ms)
+        raw = self._guarded("funding_history", lambda: self._info.funding_history(
+            coin, end_ms - n * NS_PER_HOUR // NS_PER_MS, end_ms))
         return [
             FundingEvent(
                 coin,
@@ -1248,7 +1262,7 @@ class HyperliquidExchange:
                 "size": Decimal(str(o["sz"])),
                 "price": Decimal(str(o["limitPx"])),
             }
-            for o in self._info.open_orders(self._address)
+            for o in self._guarded("open_orders", lambda: self._info.open_orders(self._address))
         ]
 
     # ---- writes
