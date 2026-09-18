@@ -1099,13 +1099,18 @@ class GovernanceMixin:
         self._hold_vote(am, committee)
 
     def _committee_eligible(self) -> dict[str, str]:
-        """Distinct independently requested decisions need settled consequences to qualify."""
+        """Distinct independently requested decisions need observed consequences to qualify.
+
+        An outcome the world never let anyone observe (a censored payoff) is not a
+        settled decision: it qualifies nobody, however many of them a seat has.
+        """
         from collections import Counter
 
         from factorylab.charter.committee import experienced
 
         evidence = {(r.handle, self.handle_to_assembly.get(r.handle))
-                    for r in self.consequences.table.returns if r.payoff is not None
+                    for r in self.consequences.table.returns
+                    if r.payoff is not None and r.payoff.censored is None
                     and self.queue.get(r.handle).channel in ("verdict", "exposure")}
         from factorylab.runtime.shared import DEF_CONFORMITY, DEF_META_CONSEQUENCE
 

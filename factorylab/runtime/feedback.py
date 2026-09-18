@@ -538,9 +538,10 @@ class FeedbackMixin:
         runtime owed it and never delivered. The commission is answered
         ``unmeasured`` instead.
         """
+        # An unmeasured commission carries no fact about the meta, so it ends none
+        # of its novelty trials: only resolved evidence is counted.
         channel = self.queue.get(meta_handle).channel
-        if self._settle_unmeasured(meta_handle, channel, reason):
-            self._count_consequence(self.handle_to_assembly.get(meta_handle))
+        self._settle_unmeasured(meta_handle, channel, reason)
 
     def _drain_pending_meta(self, judge_handle: str, reason: str) -> None:
         """Every meta waiting on this judge closes unmeasured, and the queue is emptied."""
@@ -812,8 +813,12 @@ class FeedbackMixin:
             self.window.exposures_won += 1
 
     def _count_consequence(self, assembly_id: str | None) -> None:
-        """One settled consequence delivered to an assembly ends one of its novelty trials;
-        a trial beyond the base allowance spends the window's learning-death grant."""
+        """One observed consequence delivered to an assembly ends one of its novelty trials;
+        a trial beyond the base allowance spends the window's learning-death grant.
+
+        Callers count resolved evidence only: a censored payoff or an unmeasured
+        commission told nobody anything about the seat, so it spends no trial.
+        """
         if assembly_id is None:
             return
         delivered = self.stats.consequences_by_assembly.get(assembly_id, 0)
@@ -1034,7 +1039,9 @@ class FeedbackMixin:
                 top_level = self.queue.get(payoff.handle).parent_handle is None
             except KeyError:
                 top_level = True
-            if top_level:  # continuations and children are not trials
+            # Continuations and children are not trials, and neither is an outcome
+            # nobody observed: an unknown consequence ends no novelty trial.
+            if top_level and payoff.censored is None:
                 self._count_consequence(self.handle_to_assembly.get(payoff.handle))
         self._commit_verdicts()
         pending = {f.handle: f for f in self.book.pending()}
