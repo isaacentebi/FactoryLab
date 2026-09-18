@@ -45,6 +45,23 @@ def _position_leverage(raw: Any) -> Decimal | None:
     return leverage if leverage.is_finite() and leverage > 0 else None
 
 
+def _funding_identity(row: dict, coin: str, stamp_ms: int) -> str:
+    """One funding payment's identity, from the row itself.
+
+    Hyperliquid's ``userFunding`` rows carry an all-zero ``hash`` (funding is not a
+    transaction), so ``hash:coin`` named every payment of a coin the same thing: a
+    page kept one of them and the live cursor refused every later one as seen. A
+    real hash keeps its historical ``hash:coin`` identity; a zero or missing one is
+    replaced by the row's full identity -- time, coin, amount and position size --
+    which is what distinguishes two payments at all.
+    """
+    raw = str(row.get("hash") or "")
+    if raw and raw.lower().removeprefix("0x").strip("0"):
+        return f"{raw}:{coin}"
+    delta = row["delta"]
+    return f"funding:{stamp_ms}:{coin}:{delta.get('usdc')}:{delta.get('szi')}"
+
+
 def _interval_ns(interval: str) -> int:
     return {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}[interval] * 1_000_000_000
 
@@ -1113,7 +1130,7 @@ class HyperliquidExchange:
         """Read inclusive, paginated user cash flows; never infer payments from funding rates.
 
         Hyperliquid's delta.usdc is a credit to the user, so paid_usd negates it.
-        The boundary millisecond is reread and deduplicated by hash plus coin.
+        The boundary millisecond is reread and deduplicated by ``_funding_identity``.
         A stalled full page fails closed instead of silently skipping its tail.
         """
         if type(since_ns) is not int or since_ns < 0:
@@ -1141,9 +1158,9 @@ class HyperliquidExchange:
                     if ts_ns < since_ns:
                         continue
                     coin = delta["coin"]
-                    if not isinstance(coin, str) or not coin or not row["hash"]:
+                    if not isinstance(coin, str) or not coin:
                         continue
-                    ident = f"{row['hash']}:{coin}"
+                    ident = _funding_identity(row, coin, stamp)
                     paid = -Decimal(str(delta["usdc"]))
                     rate = Decimal(str(delta["fundingRate"]))
                     if not paid.is_finite() or not rate.is_finite():

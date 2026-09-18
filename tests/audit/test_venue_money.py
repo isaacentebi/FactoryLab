@@ -390,3 +390,56 @@ class TestFix5UnpricedSpotToken:
         assert account.unpriced == ("JUNK",)
         assert any(b.coin == "JUNK" for b in account.spot_balances)
         assert account.stale is False
+
+
+# ------------------------------------------------------------------------------ 6
+
+
+ZERO_HASH = "0x" + "0" * 64
+
+
+def _funding_row(ms, coin, usdc, szi="1", hash_=ZERO_HASH):
+    return {"time": ms, "hash": hash_,
+            "delta": {"type": "funding", "coin": coin, "usdc": usdc, "szi": szi,
+                      "fundingRate": "0.0001", "nSamples": None}}
+
+
+class TestFix6FundingIdentity:
+    """Hyperliquid's userFunding rows carry an all-zero hash: it identifies nothing."""
+
+    def test_zero_hash_payments_are_all_kept_and_distinct(self):
+        from types import SimpleNamespace
+
+        rows = [_funding_row(3_600_000, "ETH", "-0.25"),
+                _funding_row(7_200_000, "ETH", "-0.30"),
+                _funding_row(7_200_000, "BTC", "-0.10"),
+                _funding_row(10_800_000, "ETH", "-0.25")]
+        ex = HyperliquidExchange.__new__(HyperliquidExchange)
+        ex._address = "0x" + "1" * 40
+        ex._info = SimpleNamespace(user_funding_history=lambda user, start: rows)
+        ex._guarded = lambda name, fn: fn()
+        payments = ex.funding_payments(0)
+        assert len(payments) == 4 and len({p.id for p in payments}) == 4
+        assert sum(p.paid_usd for p in payments) == Decimal("0.90")
+        # An empty hash is not a reason to drop a real payment either.
+        rows.append(_funding_row(14_400_000, "ETH", "-0.05", hash_=""))
+        assert len(ex.funding_payments(0)) == 5
+
+    def test_the_live_cursor_books_each_zero_hash_payment_once(self):
+        from types import SimpleNamespace
+
+        from factorylab.runtime.live import LiveVenue
+
+        rows = [_funding_row(3_600_000, "ETH", "-0.25")]
+        ex = HyperliquidExchange.__new__(HyperliquidExchange)
+        ex._address = "0x" + "1" * 40
+        ex.name = "hyperliquid-testnet"
+        ex._info = SimpleNamespace(user_funding_history=lambda user, start: [
+            r for r in rows if r["time"] >= start])
+        ex._guarded = lambda name, fn: fn()
+        venue = LiveVenue(ex, ledger=SimpleNamespace(append=lambda item: None))
+        assert len(venue.funding_payments(0)) == 1  # opens the cursor at 0 and books it
+        rows.append(_funding_row(7_200_000, "ETH", "-0.25"))
+        booked = venue.funding_payments(2)
+        assert len(booked) == 1 and booked[0].payload["paid_usd"] == "0.25"
+        assert venue.funding_payments(3) == []
