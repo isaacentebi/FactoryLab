@@ -1881,7 +1881,16 @@ a pending claim in `pending_conversions`, never a balance in two places.
 A receipt's identity is chain, transaction hash, log index, asset and recipient
 (defaults: `base`, `USDC`, the reserve). `Treasury.earn` is idempotent on that
 identity: the same payment twice books once, and a *different* payment presented
-under one identity fails closed with `income.conflict` and books nothing.
+under one identity fails closed with `income.conflict` and books nothing. The log
+index is normalised to an integer and a missing recipient is the reserve, and a
+transfer is also deduplicated across spellings: the same transaction and recipient
+with the same log index, or the same amount where either side has no log index, is
+the same transfer (`income.duplicate`, nothing booked). A confirmed claim is booked
+under the chain's own identity (the log the transfer is at, the recipient it
+reached); two equal transfers to the reserve in one transaction and a claim that
+names no log index are ambiguous and the claim stays unresolved. A receipt a claim
+became is handed to the runtime's credit exactly once, even when `Treasury.tick`
+verified it; the hosted seller (`deploy/serve.py`) spools the recipient.
 
 The seller's spool is the wake host's word, not a payment. `collect_income`
 books each spool row as a **claim** (`income.claimed`, counted in

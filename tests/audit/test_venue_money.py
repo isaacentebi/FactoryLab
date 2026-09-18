@@ -589,3 +589,105 @@ class TestFix9SellerIsHttpsAndPublic:
                           resolver=lambda host: ["93.184.216.34"])
         with pytest.raises(X402Error, match="transport"):
             ok.registration_price("x402:https://seller.example#model")
+
+
+# ------------------------------------------------------------------------------ 10
+
+
+RESERVE = "0x" + "ab" * 20
+USDC_BASE = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+
+
+def _canonical(tx, log_index=5, micro=2500):
+    return {"confirmed": True, "evidence": {"chain": 8453, "tx": tx, "log_index": log_index,
+                                            "token": USDC_BASE, "recipient": RESERVE,
+                                            "micro": micro}}
+
+
+class TestFix10IncomeBooksOnce:
+    """One on-chain transfer is income once, whichever path reports it and how."""
+
+    def _runtime(self, monkeypatch, outcome=None):
+        from tests.runtime.test_fidelity import runtime as scripted_runtime
+
+        rt = scripted_runtime()
+        if outcome is not None:
+            monkeypatch.setattr(rt.treasury.rail.target, "verify_receipt", outcome)
+        return rt
+
+    def test_a_direct_booking_and_a_later_verified_claim_of_it_book_once(self, monkeypatch):
+        rt = self._runtime(monkeypatch, lambda receipt: _canonical(receipt["tx"]))
+        treasury = rt.treasury
+        assert treasury.earn("oracle", 2500, "0xFEED", payer="0xb", chain="base",
+                             asset="USDC", recipient=RESERVE) is not None
+        # The host's spool reports the same payment without a log index or recipient.
+        treasury.earn("oracle", 2500, "0xfeed", claim=True, payer="0xb")
+        assert treasury.verify_receipts() == []
+        assert treasury.income["earned_micro"] == 2500
+        assert treasury.pots()["claimed_micro"] == 0
+
+    def test_two_spellings_of_one_claim_verify_to_one_booking(self, monkeypatch):
+        rt = self._runtime(monkeypatch, lambda receipt: _canonical(receipt["tx"]))
+        treasury = rt.treasury
+        treasury.earn("oracle", 2500, "0xabc", claim=True, payer="0xb")
+        treasury.earn("oracle", 2500, "0xabc", claim=True, payer="0xb", log_index=5,
+                      recipient=RESERVE)
+        assert len(treasury.verify_receipts()) == 1
+        assert treasury.income["earned_micro"] == 2500
+
+    def test_a_claim_verified_inside_the_treasury_tick_still_credits_once(self, monkeypatch):
+        rt = self._runtime(monkeypatch, lambda receipt: _canonical(receipt["tx"]))
+        treasury = rt.treasury
+        treasury.earn("oracle", 2500, "0xabc", claim=True, payer="0xb")
+        before = rt.wallet.balance
+        treasury.tick(1)  # verifies the claim; the runtime must still credit it
+        rt._collect_income()
+        rt._collect_income()
+        assert rt.wallet.balance == before + 2500
+        assert len(ledger_items(rt, "income.custody")) == 1
+
+    def test_the_live_rail_leaves_an_ambiguous_transfer_unresolved(self):
+        from types import SimpleNamespace
+
+        from factorylab.world.evm import event_topic, word_address
+        from factorylab.world.treasury_rails import LiveRail
+
+        topic = event_topic("Transfer(address,address,uint256)")
+        to_word = "0x" + word_address(RESERVE).hex()
+
+        def log(index, value):
+            return {"address": USDC_BASE, "topics": [topic, "0x" + "00" * 32, to_word],
+                    "data": hex(value), "logIndex": hex(index)}
+
+        rail = LiveRail.__new__(LiveRail)
+        rail.reserve_address = RESERVE
+        receipt = {"status": "0x1", "logs": [log(2, 2500), log(7, 2500)]}
+        rail.base = SimpleNamespace(chain=SimpleNamespace(usdc=USDC_BASE, id=8453),
+                                    proof=lambda tx: receipt)
+        claim = {"tx": "0xabc", "micro": 2500}
+        assert rail.verify_receipt(claim) is None  # two equal transfers: which one?
+        confirmed = rail.verify_receipt({**claim, "log_index": 7})
+        assert confirmed["confirmed"] and confirmed["evidence"]["log_index"] == 7
+        receipt["logs"] = [log(3, 2500)]
+        only = rail.verify_receipt(claim)
+        assert only["evidence"]["log_index"] == 3 and only["evidence"]["token"] == USDC_BASE
+
+    def test_the_hosted_seller_spools_the_recipient(self, tmp_path):
+        import importlib.util
+        from pathlib import Path
+
+        spec = importlib.util.spec_from_file_location(
+            "serve", Path(__file__).resolve().parents[2] / "deploy" / "serve.py")
+        serve = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(serve)
+        spool = tmp_path / "income.jsonl"
+        seller = serve.build_seller({}, RESERVE, "https://facilitator.example", spool)
+        seller.earn(SimpleService(), 2500, "0xabc", "0xb", 1)
+        row = json.loads(spool.read_text().splitlines()[-1])
+        assert row["recipient"] == RESERVE
+
+
+class SimpleService:
+    id = "oracle"
+    program_id = "prog"
+    version = 1

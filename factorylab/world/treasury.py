@@ -29,6 +29,40 @@ def _fresh_income() -> dict:
             "spool_offset": 0, "receipts": {}, "claims": {}, "claimed_micro": 0}
 
 
+def _log_index(value: Any) -> int | None:
+    """A log index as an integer (``5``, ``"5"``, ``"0x5"``), or ``None`` when absent."""
+    if value is None or value == "" or isinstance(value, bool):
+        return None
+    try:
+        return int(value, 0) if isinstance(value, str) else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _same_transfer(seen: list[dict], log_index: int | None, micro: int) -> dict | None:
+    """The booked transfer this one is, if any: the same log, or an unindexed twin.
+
+    A known log index settles it. Without one on either side, an equal amount in the
+    same transaction to the same recipient is taken to be the same transfer: booking
+    it twice would mint authority from a repeated reference, and the fail-closed
+    direction is to book it once.
+    """
+    for entry in seen:
+        if log_index is not None and entry["log_index"] == log_index:
+            return entry
+    for entry in seen:
+        if entry["micro"] == micro and (entry["log_index"] is None or log_index is None):
+            return entry
+    return None
+
+
+def _reserve_address(rail: Any) -> str | None:
+    """The reserve address a live rail pays income to, or ``None`` for a rail without one."""
+    target = getattr(rail, "target", rail)
+    address = getattr(target, "reserve_address", None)
+    return address if isinstance(address, str) else None
+
+
 def _seed_credits(provider: Any) -> int | None:
     """Account credits are independent of an API key's optional spending allowance."""
     if getattr(provider, "name", "") != "openrouter":
@@ -210,12 +244,19 @@ class Treasury:
         # this factory sells over, USDC on Base to the reserve, so a receipt
         # without an explicit chain is still a complete identity and two
         # spellings of the same transfer collide.
+        # Every income goes to the reserve: a receipt that names no recipient names
+        # the reserve, and a log index is an integer however it was spelled. Without
+        # this, one transfer reported by two paths ("None" against "5", "" against
+        # the address) was two identities and booked twice.
+        log_index = _log_index(detail.get("log_index"))
+        recipient = str(detail.get("recipient") or detail.get("pay_to")
+                        or _reserve_address(getattr(self, "rail", None)) or "").lower()
         receipt_id = ":".join((
             str(detail.get("chain") or "base").lower(),
             tx.lower() if tx.startswith("0x") else tx,
-            str(detail.get("log_index")),
+            str(log_index),
             str(detail.get("asset") or "USDC").upper(),
-            str(detail.get("recipient") or detail.get("pay_to") or "").lower(),
+            recipient,
         ))
         signature = {"service": service, "micro": micro,
                      **{k: detail.get(k) for k in ("payer", "program", "version")}}
@@ -241,11 +282,27 @@ class Treasury:
                                                   "detail": dict(detail)}},
             }
             return None
+        transfers = self.income.get("transfers", {})
+        key = f"{recipient}|{tx.lower()}"
+        seen = list(transfers.get(key, []))
+        same = _same_transfer(seen, log_index, micro)
+        if same is not None:
+            # The transfer is already income under another spelling of its identity
+            # (a direct booking without a log index, then the chain's own answer).
+            # One transfer is booked once; the known entry learns the log index.
+            if same["log_index"] is None and log_index is not None:
+                seen[seen.index(same)] = {**same, "log_index": log_index}
+                self.income = {**self.income, "transfers": {**transfers, key: seen}}
+            self.ledger.append({"kind": "income.duplicate", "receipt_id": receipt_id,
+                                "booked_as": same["receipt_id"], "tx": tx, "micro": micro})
+            return None
         item = {**detail, "kind": "income.earned", "service": service, "micro": micro, "tx": tx,
                 "receipt_id": receipt_id}
         self.ledger.append(item)
+        seen.append({"log_index": log_index, "micro": micro, "receipt_id": receipt_id})
         self.income = {**self.income, "earned_micro": self.income["earned_micro"] + micro,
-                       "receipts": {**receipts, receipt_id: signature}}
+                       "receipts": {**receipts, receipt_id: signature},
+                       "transfers": {**transfers, key: seen}}
         return item
 
     def verify_receipt(self, receipt_id: str) -> dict | None:
@@ -291,15 +348,34 @@ class Treasury:
                                 "tx": claim["tx"], "claimed": claim["signature"],
                                 "reason": str(outcome.get("reason", "chain contradicts claim"))})
             return None
-        return self.earn(claim["service"], claim["micro"], claim["tx"], **claim["detail"])
+        # The chain's answer is the identity: the log the transfer is actually at and
+        # the address it actually reached, whatever the claim spelled.
+        evidence = outcome.get("evidence") or {}
+        detail = dict(claim["detail"])
+        if _log_index(evidence.get("log_index")) is not None:
+            detail["log_index"] = _log_index(evidence["log_index"])
+        if isinstance(evidence.get("recipient"), str):
+            detail["recipient"] = evidence["recipient"].lower()
+        item = self.earn(claim["service"], claim["micro"], claim["tx"], **detail)
+        if item is not None:
+            # Held until the runtime credits it: a claim verified inside ``tick`` used
+            # to be income the treasury counted and the wallet never received.
+            self.income = {**self.income, "verified_unbooked": [
+                *self.income.get("verified_unbooked", []), item]}
+        return item
 
     def verify_receipts(self) -> list[dict]:
-        """Verify every standing claim once; return the receipts that became income."""
-        booked = []
+        """Verify every standing claim once; return every verified receipt not yet handed out.
+
+        Each receipt a claim became is returned exactly once, by this call or a later
+        one: ``tick`` verifies too and discards the answer, and what it verified is
+        still owed to the caller that credits it (the runtime's ``_collect_income``).
+        """
         for receipt_id in list(self.income.get("claims", {})):
-            item = self.verify_receipt(receipt_id)
-            if item is not None:
-                booked.append(item)
+            self.verify_receipt(receipt_id)
+        booked = list(self.income.get("verified_unbooked", []))
+        if booked:
+            self.income = {**self.income, "verified_unbooked": []}
         return booked
 
     def collect_income(self) -> list[dict]:
@@ -744,7 +820,10 @@ class Treasury:
 
     def tick(self, now_ns: int) -> list[dict]:
         self.collect_income()
-        self.verify_receipts()
+        # Verify, but hand nothing out: what this books stays owed to the caller
+        # that credits it (``verify_receipts``, from the runtime), exactly once.
+        for receipt_id in list(self.income.get("claims", {})):
+            self.verify_receipt(receipt_id)
         if self.stranded and not self._blocking():
             self._recover(now_ns)
             return []

@@ -176,18 +176,29 @@ class LiveRail(ClassTransferRail):
                     or len(topics) < 3 or topics[0] != topic.lower()
                     or topics[2] != to_word.lower() or log.get("removed", False)):
                 continue
-            matches.append((log.get("logIndex", hex(index)), int(log["data"], 16)))
+            matches.append((int(str(log.get("logIndex", hex(index))), 0),
+                            int(log["data"], 16)))
         claimed_index = receipt.get("log_index")
         if claimed_index is not None:
-            matches = [m for m in matches if int(str(m[0]), 0) == int(claimed_index)]
+            matches = [m for m in matches if m[0] == int(str(claimed_index), 0)]
         if not matches:
             return {"confirmed": False, "reason": "no USDC transfer to the reserve in this "
                                                   "transaction"}
-        if not any(value == amount for _index, value in matches):
+        exact = [m for m in matches if m[1] == amount]
+        if not exact:
             return {"confirmed": False, "reason": "transferred amount differs from the receipt"}
+        if len(exact) > 1:
+            # Two equal transfers to the reserve in one transaction and a claim that
+            # does not say which: confirming either would let the other be claimed and
+            # confirmed again. The claim stands unresolved until it names its log.
+            return None
+        # The identity is the chain's: chain id, transaction, the log the transfer is
+        # at, the token contract and the recipient, whatever the claim spelled.
         return {"confirmed": True, "evidence": {"chain": self.base.chain.id, "tx": tx_hash,
+                                                "log_index": exact[0][0],
+                                                "token": self.base.chain.usdc.lower(),
                                                 "asset": "USDC",
-                                                "recipient": self.reserve_address,
+                                                "recipient": self.reserve_address.lower(),
                                                 "micro": amount}}
 
     def balances(self) -> dict:

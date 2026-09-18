@@ -51,6 +51,14 @@ def load_catalogue(ledger_path: Path):
             facilitator_from_items(items))
 
 
+def build_seller(services, pay_to: str, facilitator: str, spool_path) -> Seller:
+    """The hosted seller. Its spool rows name the reserve they were paid to, so the
+    runtime's chain read and every other booking path agree on the payment's identity."""
+    return Seller(services, pay_to=pay_to, runner=default_runner(),
+                  earn=spool_earn(IncomeSpool(spool_path), pay_to=pay_to),
+                  facilitator=facilitator)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--ledger", required=True, help="the living world's ledger")
@@ -76,8 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         # facilitator the world never bound, and the environment is not consulted.
         print("factorylab serve: facilitator_unpinned", file=sys.stderr)
         return 2
-    seller = Seller(services, pay_to=pay_to, runner=default_runner(),
-                    earn=spool_earn(IncomeSpool(args.spool)), facilitator=facilitator)
+    seller = build_seller(services, pay_to, facilitator, args.spool)
     server = serve(seller, host=args.bind, port=args.port)
 
     def refresh() -> None:

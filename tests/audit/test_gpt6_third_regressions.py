@@ -518,7 +518,12 @@ def test_a_late_credit_does_not_resurrect_a_retired_seat():
 def test_the_same_income_receipt_books_once():
     """Finding: "Duplicate income receipts booked twice" — `world/treasury.py`,
     `runtime/seller.py`; that mints internal authority."""
-    earn = method_from_source("factorylab/world/treasury.py", "Treasury", "earn")
+    from factorylab.world import treasury
+
+    # The receipt identity's normalisation lives beside the class (fix/venue-money #10).
+    earn = method_from_source("factorylab/world/treasury.py", "Treasury", "earn", injected={
+        name: getattr(treasury, name)
+        for name in ("_log_index", "_same_transfer", "_reserve_address")})
     t = SimpleNamespace(ledger=Evidence(), income={"earned_micro": 0, "receipts": {}})
     first = earn(t, "service", 1000, "0xSAME-TRANSACTION", payer="buyer")
     assert first is not None
