@@ -83,6 +83,7 @@ def test_a6_unmeasurable_window_is_publicly_refused_before_reservation():
     assert not rt.charter_book.pending()
 
 
+@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_a6_survey_unanchored_uncapped_and_bound_to_roster(monkeypatch):
     rt = runtime()
     c = replace(card(), description="EXISTING CARD ANCHOR")

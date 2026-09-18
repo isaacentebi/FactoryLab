@@ -28,13 +28,22 @@ packages = ["factorylab"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Tiers (tests/conftest.py assigns check/gate at collection):
+#   check  the inner loop and the default: no test runs a world; each call < 2 s
+#   gate   runs a world or reads a shared scripted run; run before a merge
+#   slow   kills and resumes real subprocesses
+# A bare `uv run pytest` runs `check` on 2 workers. The merge gate is
+# `uv run pytest -m "check or gate" -n 4`; more workers: `-n 8`, or `-n auto` for all
+# cores (hot on a laptop). The last `-m`/`-n` on the command line wins over these.
 markers = [
-    "fast: tests without a world-run import or shared scripted fixture",
-    "world: tests importing run_world or consuming shared scripted fixtures",
+    "check: the developer inner loop; runs no world (the default selection)",
+    "gate: runs a world or consumes a shared scripted fixture",
+    "fast: old name of check, still set on every check test",
+    "world: old name of gate, still set on every gate test",
     "network: requires network access (deselected in CI)",
-    "slow: kills and resumes real subprocesses; run before merging to main (`-m ''`)",
+    "slow: kills and resumes real subprocesses; run before merging to main",
 ]
-addopts = "-m 'not network and not slow' -n auto"
+addopts = "-m check -n 2"
 
 [tool.ruff]
 line-length = 100

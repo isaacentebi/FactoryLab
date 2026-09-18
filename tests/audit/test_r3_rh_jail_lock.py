@@ -82,6 +82,7 @@ def test_a_child_launched_while_the_lock_is_held_never_holds_it(world):
 
 
 @pytest.mark.skipif(not sandbox.jail_available(), reason="no jail on this host")
+@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_a_living_jailed_child_never_holds_the_lock(world):
     lock = LedgerLock(world)
     finished = threading.Event()

@@ -27,7 +27,13 @@ code wins where any document disagrees with it.
 
 ```
 uv run ruff check . && uv run pytest
+uv run pytest -m gate -n 2 <the gate test files you touched or that cover your change>
 ```
 
-Run it before you return. Return the list of changed files, the gate output
+A bare `uv run pytest` runs the `check` tier (no world runs, 2 workers). Run it, plus
+only the specific `gate` files for what you changed; do not run the whole gate
+(`uv run pytest -m "check or gate" -n 4`) unless your task says so, and never with
+`-n auto`. A new test that runs a world is `gate`: the conftest usually detects it,
+and a `check` test over 2 s fails with a message telling you to mark it
+`@pytest.mark.gate`. Run it before you return. Return the list of changed files, the gate output
 verbatim, and any decision you made that the task did not specify.

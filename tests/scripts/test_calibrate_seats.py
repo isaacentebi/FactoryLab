@@ -79,6 +79,7 @@ def test_every_scenario_renders_as_a_real_request(manifest):
     assert len(by_name["produce"].request.prompt_text().encode()) < 90_000
 
 
+@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_budget_guard_refuses_over_cap_calls(manifest):
     guard = BudgetGuard(budget_micro=1000)
     guard.admit(1000)
@@ -156,6 +157,7 @@ def test_report_has_every_column(tmp_path, capsys):
     assert f"| {CANDIDATE} | 14 | 100% | 100% | 100% | 100% |" in table
 
 
+@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_manifest_roster_tick_prices_every_calibrated_seat(tmp_path):
     out = tmp_path / "menu.json"
     assert main(["--world", WORLD, "--all-menu", "--repeats", "1", "--out", str(out),

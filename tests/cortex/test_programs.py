@@ -154,6 +154,7 @@ OVERRAN = ("timeout", "exit -24")
     ("print('not json')", None),
     ("import json\nprint(json.dumps({'status': 7}))", None),
 ])
+@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_failure_is_a_billed_malformed_return_never_an_exception(code, reason):
     require_jail()
     asm, wallet, recorded = program(code=code, timeout_s=1)

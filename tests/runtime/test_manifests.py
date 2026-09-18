@@ -301,6 +301,7 @@ def test_manifest_charter_requires_norm_list(norms):
         manifest_from_dict(raw)
 
 
+@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_example_manifest_and_cli_resolve_population_charter(capsys):
     import json
     from dataclasses import replace

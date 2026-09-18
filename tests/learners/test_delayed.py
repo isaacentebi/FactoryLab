@@ -53,6 +53,7 @@ def test_immediate_ordered_delivery_matches_synchronous(kind):
         assert not delayed.state()["snapshots"]
 
 
+@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_investment_trap_at_5000_seed_zero_separates_delivery_from_adaptation():
     game = investment_trap()
     count = 5000
