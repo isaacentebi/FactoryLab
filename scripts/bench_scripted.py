@@ -28,7 +28,8 @@ from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 
 
-def run_once(events: int, seed: int, world: str = "scripted") -> dict:
+def run_once(events: int, seed: int, world: str = "scripted",
+             summary_dir: str | None = None) -> dict:
     """Run one world and return its wall time, item count and digests."""
     manifest = load_manifest(world)
     rt = Runtime(manifest, events=events, seed=seed, initial_balance_micro=None,
@@ -57,6 +58,9 @@ def run_once(events: int, seed: int, world: str = "scripted") -> dict:
         rt.ledger.append = append
         rt._ledger_lock.close()
     elapsed = time.perf_counter() - start
+    if summary_dir:
+        with open(f"{summary_dir}/{world}-{events}-{seed}.json", "w") as fh:
+            json.dump(summary, fh, indent=2, sort_keys=True, default=str)
     return {
         "events": events,
         "seed": seed,
@@ -74,11 +78,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--world", default="scripted")
     parser.add_argument("--json", default=None, help="also write the rows to this file")
+    parser.add_argument("--summaries", default=None,
+                        help="write each run's summary to <dir>/<world>-<events>-<seed>.json")
     args = parser.parse_args(argv)
     rows = []
     print(f"{'events':>6} {'seconds':>9} {'items':>7}  ledger_sha256[:16]  summary_sha256[:16]")
     for n in args.sizes:
-        row = run_once(n, args.seed, args.world)
+        row = run_once(n, args.seed, args.world, args.summaries)
         rows.append(row)
         print(f"{n:>6} {row['seconds']:>9.2f} {row['items']:>7}  "
               f"{row['ledger_sha256'][:16]}    {row['summary_sha256'][:16]}", flush=True)

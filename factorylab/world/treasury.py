@@ -980,23 +980,65 @@ class FakeTreasury(Treasury):
         )
         self.refresh_pots()
 
+    # The last custodian read and the state it was read in: ``(key, balances, error)``.
+    # Not resumable state and never checkpointed; ``forget_observations`` drops it.
+    _balances_memo: tuple | None = None
+
+    def forget_observations(self) -> None:
+        """Drop the held custodian read, so the next view reads (and records) afresh."""
+        self._balances_memo = None
+
+    def restore(self, saved: dict) -> None:
+        super().restore(saved)
+        self.forget_observations()
+
+    def _observed_balances(self) -> dict:
+        """The rail's balances, read again only when something could have changed them.
+
+        The read is recorded I/O (``treasury.rail.balances``, and inside it the
+        venue's ``account``); a world block built a dozen times a tick recorded it
+        three times a block. The memo sits here, above the recorded-I/O layer, so a
+        replay sees exactly the reads that were recorded. It is keyed on every
+        input of the answer: the journal's count of venue and treasury writes (an order, a
+        fill drain, a price step, a transfer step all pass through it), the
+        scripted reserve and Venice pots, and the wallet when no venue keeps its
+        own books. Only venue and treasury writes count: a model call moves the
+        wallet, which is in the key exactly when the rail reads it. A ledger with
+        no journal gets a fresh read every time.
+        """
+        writes = getattr(self.ledger, "writes", None)
+        key = None if type(writes) is not dict else (
+            writes.get("exchange", 0), writes.get("treasury", 0),
+            self.rail.reserve, self.rail.venice,
+            self.wallet.balance if self.rail.exchange is None else None)
+        memo = self._balances_memo
+        if key is None or memo is None or memo[0] != key:
+            try:
+                memo = (key, self.rail.balances(), None)
+            except Exception as exc:  # noqa: BLE001 - a failed read is held like an answer
+                memo = (key, None, exc)
+            self._balances_memo = memo if key is not None else None
+        if memo[2] is not None:
+            raise memo[2]
+        return dict(memo[1])
+
     def pots(self) -> dict:
         result = super().pots()
         try:
-            self.rail.balances()
+            observed = self._observed_balances()
         except Exception:  # noqa: BLE001 - an unreadable custodian is not a zero balance
             return {**result, "venue": None, "complete": False, "total_micro": None,
                     "seed": 0, "sellers": {"venice": self.rail.venice},
                     "reserve": self.rail.reserve}
         if not result["pending"]:
-            # The scripted rail reads its custodians on every call, so this view is
-            # observed now, not at the last refresh.
+            # The scripted rail's custodians are read whenever they could have
+            # changed (see ``_observed_balances``), so this view holds now.
             result.update(
-                {k: v for k, v in self.rail.balances().items() if k != "venice"},
+                {k: v for k, v in observed.items() if k != "venice"},
                 seed=0,
                 sellers={"venice": self.rail.venice},
                 complete=True,
-                total_micro=self.rail.balances()["venue"] + self.rail.reserve + self.rail.venice,
+                total_micro=observed["venue"] + self.rail.reserve + self.rail.venice,
                 observed_at_ns=self.clock_ns(),
             )
         return result
