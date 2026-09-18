@@ -863,12 +863,13 @@ class FeedbackMixin:
     def _credit_consequence(self, payoff: Any) -> None:
         """A settled return's net proceeds are its owner's, in both directions (C10).
 
-        Profit credits the owning seat's entitlement, bounded by the pool so it
-        classifies money the wallet has already booked and never mints. A loss
-        debits the owner down to a floor of zero; what the seat cannot cover lands
-        on the pool and is ledgered as such. A marked outcome is an estimate at the
-        backstop, not settled money, and moves nothing here: what its lots realise
-        later is booked to the owner as a late consequence (``_settle_late``).
+        They are venue money: the P&L settled on the venue account, which never
+        passes through the compute wallet (C5). So they are the owner's claim on
+        venue custody (``BudgetBook.claim_venue``), not compute entitlement drawn
+        from, or paid into, the pool that funds every seat's thinking (defect 6).
+        A marked outcome is an estimate at the backstop, not settled money, and
+        moves nothing here: what its lots realise later is booked to the owner as
+        a late consequence (``_settle_late``).
         """
         if payoff.censored is not None:
             return self._address_unknown_outcome(payoff)
@@ -887,7 +888,7 @@ class FeedbackMixin:
             # at Hyperliquid, position still open, committed hypothesis not
             # settled" -- four facts in different units and different custodies,
             # which a single net destroys. ``net_micro`` stays because it is
-            # itself a fact: the movement in this seat's entitlement.
+            # itself a fact: the movement in this seat's venue claim.
             venue_delta = self.venue_deltas.pop(payoff.handle, {})
             self.outcomes.append(
                 owner, handle=payoff.handle, delta_micro=payoff.net_micro,
@@ -963,18 +964,17 @@ class FeedbackMixin:
         return account.opened_lots > account.closed_lots
 
     def _book_consequence(self, owner: str, micro: int, reason: str) -> None:
-        if micro > 0:
-            self.budget.credit(owner, micro, reason)
-        elif micro < 0:
-            self.budget.charge(owner, -micro, reason)
+        """Book a return's realised venue P&L to its owner as a venue-custody claim."""
+        if micro:
+            self.budget.claim_venue(owner, micro, reason)
 
     def _settle_late(self) -> None:
         """Money realised after an outcome was fixed still belongs to the return's owner.
 
-        A position marked at the backstop and closed later is booked to the wallet
-        by the venue; the opener's entitlement is charged (or credited) by the
-        realised result, ledgered as a late consequence. The learning score of the
-        marked outcome stays as it was; only the money moves.
+        A position marked at the backstop and closed later is settled by the venue
+        on its own account; the opener's venue claim moves by the realised result,
+        ledgered as a late consequence. The learning score of the marked outcome
+        stays as it was; only the claim moves.
         """
         for handle, micro in self.consequences.settle_late(self.n).items():
             owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)

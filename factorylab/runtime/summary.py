@@ -169,6 +169,11 @@ class SummaryMixin:
             "seal_key_released": self.ledger.seal_key_released(),
             "wallet_balance_micro": self.wallet.balance,
             "wallet_conservation": self.wallet.check_conservation(),
+            # Venue P&L is classified apart from compute (defect 6): the owners'
+            # claims and what no return owns sum to what the venue settled.
+            "venue_custody": {"booked_micro": self.budget.venue_booked(),
+                              "claimed_micro": sum(self.budget.venue_claims().values()),
+                              "unattributed_micro": self.budget.venue_unattributed()},
             "ledger_verify": self.ledger.verify(),
             "outstanding_decisions": len(self.queue.outstanding()),
             "execution": {

@@ -328,6 +328,8 @@ class VenueMixin:
         """
         for delta, reference, reason, custody, order_id in settlements:
             handle = self._order_owner(order_id)
+            # The venue's own settled P&L: what every seat's venue claim is backed by.
+            self.budget.book_venue(delta, f"{reason}:{reference}")
             self.ledger.append({
                 "kind": "venue.settled", "custody": custody, "amount": delta,
                 "reference": reference, "reason": reason, "handle": handle,
