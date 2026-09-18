@@ -236,7 +236,8 @@ def test_state_round_trips_exactly(ledger, clock):
     assert state == {"base_share": "0.6", "entitlements": {"a": 300, "b": 0},
                      "holds": {reservation.id: ["a", 50]}, "retired": ["b"],
                      "last_holds": {"a": 50}, "uncertain": {},
-                     "lineages": {"a": "a", "b": "b"}}
+                     "lineages": {"a": "a", "b": "b"},
+                     "venue_claims": {}, "venue_booked": 0}
     other = BudgetBook(wallet, ledger, clock_ns=clock, base_share="0.6")
     other._restore_state(state)
     assert other.state() == state and other.entitlement("a") == 250 and other.seats() == ("a",)

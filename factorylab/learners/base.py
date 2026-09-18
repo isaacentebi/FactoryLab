@@ -34,6 +34,46 @@ class BanditFeedback:
 type Feedback = FullInfoFeedback | BanditFeedback
 
 
+class ObservedRewards:
+    """Running sums of the rewards a learner actually observed, per action.
+
+    Censoring is neutral with it (defect 2). For a gain-based learner such as
+    EXP3 a round skipped for want of an outcome is a round credited zero, so an
+    arm whose outcomes are censored more often falls behind an arm of the same
+    worth whose outcomes are read. ``neutral`` is the learner's best estimate of
+    an unobserved reward, the observed mean of the arm that was drawn, else of
+    every arm the learner has observed, else nothing: an unknown is imputed at
+    what the evidence says, never at zero, and never invented where there is no
+    evidence at all (with no observation yet, no arm has moved, so no update is
+    already neutral). The imputed value is used for the update only; it never
+    enters these sums, so the estimate is built from observations alone.
+    """
+
+    def __init__(self, sums: dict[str, list] | None = None) -> None:
+        self.sums: dict[str, list] = {a: [float(v[0]), int(v[1])]
+                                      for a, v in (sums or {}).items()}
+
+    def record(self, action: str, reward: float) -> None:
+        """Add one observed reward in [0, 1] for ``action``."""
+        assert math.isfinite(reward) and 0 <= reward <= 1
+        total, count = self.sums.get(action, (0.0, 0))
+        self.sums[action] = [total + reward, count + 1]
+
+    def neutral(self, action: str) -> float | None:
+        """The observed mean for ``action``, else across actions, else None."""
+        total, count = self.sums.get(action, (0.0, 0))
+        if count:
+            return min(1.0, max(0.0, total / count))
+        count = sum(c for _t, c in self.sums.values())
+        if not count:
+            return None
+        return min(1.0, max(0.0, sum(t for t, _c in self.sums.values()) / count))
+
+    def state(self) -> dict[str, list]:
+        """Plain, JSON-serialisable sums: action -> [sum, count]."""
+        return {a: [t, c] for a, (t, c) in self.sums.items()}
+
+
 @runtime_checkable
 class Learner(Protocol):
     """Private learning state round-trips through JSON, independent of kernel records."""

@@ -387,9 +387,12 @@ class Ledger:
             choice = item["propensity"]["chosen"]
             index["choices"][item["handle"]] = choice
             index["actions"][choice] = index["actions"].get(choice, 0) + 1
-        if kind == "wallet.commit":
+        if kind in ("wallet.commit", "wallet.settle_uncertain"):
+            # An uncertain bill is committed at its ceiling; its settlement returns the
+            # over-charge, so spend is the commit less that refund, never the ceiling.
             choice = index["choices"].get(item["handle"], item["reason"])
-            index["spend"][choice] = index["spend"].get(choice, 0) + item["amount"]
+            sign = -1 if kind == "wallet.settle_uncertain" else 1
+            index["spend"][choice] = index["spend"].get(choice, 0) + sign * item["amount"]
         if kind == "invocation":
             name = item["assembly_id"]
             index["invocations"][name] = index["invocations"].get(name, 0) + 1
@@ -936,9 +939,10 @@ class Ledger:
             }
             amounts: Counter = Counter()
             for item in selected:
-                if item.get("kind") == "wallet.commit":
+                if item.get("kind") in ("wallet.commit", "wallet.settle_uncertain"):
                     capability = choices.get(item["handle"], item["reason"])
-                    amounts[capability] += item["amount"]
+                    sign = -1 if item["kind"] == "wallet.settle_uncertain" else 1
+                    amounts[capability] += sign * item["amount"]
             return {"spend": dict(sorted(amounts.items()))}
         if view == "invocations_by_assembly":
             counts = Counter(

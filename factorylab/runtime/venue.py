@@ -328,6 +328,8 @@ class VenueMixin:
         """
         for delta, reference, reason, custody, order_id in settlements:
             handle = self._order_owner(order_id)
+            # The venue's own settled P&L: what every seat's venue claim is backed by.
+            self.budget.book_venue(delta, f"{reason}:{reference}")
             self.ledger.append({
                 "kind": "venue.settled", "custody": custody, "amount": delta,
                 "reference": reference, "reason": reason, "handle": handle,
@@ -364,6 +366,11 @@ class VenueMixin:
                     continue
                 we.payload["realized_usd"] = str(self._account_spot_fill(we.payload))
         for we in evs:
+            if id(we) in refused:
+                # A fill the lot book refused has no accounted owner and no accounted
+                # inventory: the venue's own realized figure for it is not evidence
+                # of anyone's P&L, so it is neither settled nor counted below.
+                continue
             if we.kind is WorldEventKind.FILL:
                 delta = usd_to_micro(we.payload["realized_usd"], rounding="nearest") - usd_to_micro(
                     we.payload["fee_usd"]
@@ -383,6 +390,9 @@ class VenueMixin:
             if id(we) not in refused:
                 self.consequences.observe(str(we.kind), dict(we.payload), self.n)
         for we in evs:
+            if id(we) in refused:
+                self.internal.append(self._kernel_event(we))
+                continue
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
                 self.window.fills += 1
@@ -598,17 +608,21 @@ class VenueMixin:
                 if result["status"] == "cancelled" and Decimal(str(result["filled_size"])) > 0:
                     attributed = {**result, "status": "filled"}
                 self.consequences.order_result(intent["handle"], attributed, intent["args"], self.n)
-            self._replay_deferred(self.consequences.order_acknowledged(client_id))
+            before = self.consequences.table
+            self._replay_deferred(self.consequences.order_acknowledged(client_id), before)
         return dict(result)
 
-    def _replay_deferred(self, events: list[tuple[str, dict, int]]) -> None:
+    def _replay_deferred(self, events: list[tuple[str, dict, int]], before=None) -> None:
         """Account the economic events a released hold was deferring, in their own order.
 
         A hold is released by an answer (``order_acknowledged``) or, when no
         answer will ever come, by ``release_unresolved``; either way the events
-        it held back are accounted the same way here.
+        it held back are accounted the same way here. The consequence book has
+        already replayed them by the time this runs, so each spot fill is checked
+        against the table as it stood before the release (``before``): checking it
+        against the table that already holds it would execute it twice.
         """
-        spot_table = self.consequences.table
+        spot_table = before if before is not None else self.consequences.table
         corrections = []
         for kind, payload, _event in events:
             if kind == "Fill":
@@ -659,7 +673,8 @@ class VenueMixin:
                             "operation": intent["operation"], "polls": int(intent.get("polls", 0)),
                             "result": dict(intent["result"])})
         self.order_intents[client_id] = {**intent, "unresolved": True}
-        self._replay_deferred(self.consequences.release_unresolved(client_id, self.n))
+        before = self.consequences.table
+        self._replay_deferred(self.consequences.release_unresolved(client_id, self.n), before)
 
     def _reconcile_orders(self, *, final: bool = False) -> None:
         """Pending identities are reconciled before consuming newly observed venue fills.

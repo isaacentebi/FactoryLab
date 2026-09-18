@@ -208,7 +208,6 @@ class PricingMixin:
         self.price_origins[handle]["turnover"] = self.window.index
 
     def _manage_reserve_window(self) -> None:
-        self.cadence.advance(self.n)
         if self.reserve_window_start is None:
             self.cadence.launch(self.clock.now_ns if self.live else 0)
         if (
@@ -426,7 +425,6 @@ class PricingMixin:
                 "ts": self.clock.now_ns,
             }
         )
-        self.controller.expire_relief(window=w.index)
         before = self.controller.snapshot()["cards"]
         observed = sorted(card_values)
         for card_id in observed:
@@ -442,14 +440,19 @@ class PricingMixin:
         self._close_policy_window(w.index)  # delayed committee liability
         self.stats.last_window_values = values
         self.controller.set_decay(self.m.prices.decay, ledger=self.ledger, window=w.index)
-        close_window(self, values)
         # The window's own blame is settled here, before any amendment can activate at this
         # boundary: the cards it measured and the prices its close left them holding. A verdict
         # or a late settlement from this window is attributed by this edition, never by the one
-        # that replaced it (docs/manifest.md, observation units and attribution).
+        # that replaced it (docs/manifest.md, observation units and attribution). It is frozen
+        # before the immune organ runs: a relief it issues is for the next window, and must
+        # not halve the prices of the window whose failure it diagnosed.
         self.window.closed_cards = tuple(c for c in self.charter.cards if c.id in card_values)
         self.window.closed_prices = {c.id: self.controller.price(c.id)
                                      for c in self.window.closed_cards}
+        # A relief lasts exactly the window it was issued for: that window's frozen prices
+        # carry it, and it ends here, after them and before any new diagnosis.
+        self.controller.expire_relief(window=w.index)
+        close_window(self, values)
         self._prune_price_evidence()
 
     def _priced_cards(self, origins: dict[str, int]) -> list[tuple]:

@@ -252,7 +252,7 @@ class BootstrapMixin:
             self.ledger,
             sample=manifest.timing.cadence_sample,
             min_ratio=manifest.timing.min_ratio,
-            backstop=self.ev.consequence_backstop_events,
+            backstop=self.ev.consequence_backstop_ticks,
         )
         self.timing = TimingRegistry()
         self.timing.register_loop("leaf", [])
@@ -275,7 +275,7 @@ class BootstrapMixin:
                 self.charter, self.return_kinds.get(forecast.about_handle)),
         )
         self.consequences = ContractConsequences(
-            self.ledger, self.ev.consequence_backstop_events, self)
+            self.ledger, self.ev.consequence_backstop_ticks, self)
         self.consequence_fills = FillCursor(self.ledger, start_ns=self.clock.now_ns)
 
         # world

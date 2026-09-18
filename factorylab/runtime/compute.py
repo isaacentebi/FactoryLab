@@ -20,8 +20,7 @@ from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.reasons import Reason
-from factorylab.runtime.routing import _KeyedLearner
-from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, NOOP, _to_plain
+from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, _to_plain
 from factorylab.runtime.summary import _price_str
 from factorylab.settlement import SEED_VOCABULARY
 from factorylab.settlement.consequence import ReturnConsequences
@@ -247,6 +246,10 @@ class ContractConsequences(ReturnConsequences):
         super().__init__(ledger, backstop)
         self.runtime = runtime
 
+    def _tick(self, event: int) -> int:
+        """The runtime's world ticks consumed: the unit the backstop counts (defect 1)."""
+        return self.runtime.ticks_consumed
+
     def resolve(self, event):
         resolved = super().resolve(event)
         return [payoff for payoff in resolved
@@ -276,11 +279,14 @@ class ComputeMixin:
     def _novelty_protection(self, handle: str, reason: str) -> int:
         """The protected share for one reservation: the seat's, for exactly the calls
         the wallet already classifies as protected (an unhistoried seat's own model
-        calls), plus any pool bridge routing granted this call; nothing otherwise."""
+        calls), or the pool bridge routing granted this call where that is larger; the
+        bridge alone otherwise."""
         bridged = self.entitlement_bridges.get(handle, 0)
         if not self._novelty_compute(handle, reason):
             return bridged
-        return self._protected_share(self.queue.get(handle).propensity.chosen) + bridged
+        # Both are drawn on the same unallocated pool, so the cover is the larger of
+        # the two, never their sum: adding them let one call spend the pool twice.
+        return max(self._protected_share(self.queue.get(handle).propensity.chosen), bridged)
 
     @staticmethod
     def _world_chars(world: Any) -> int:
@@ -1532,76 +1538,6 @@ class ComputeMixin:
             return
         self.assembly_rounds[handle] = action_id
 
-    def _settle_outside_universe(self, handle: str, prop: PropensityRecord, feedback) -> None:
-        """Deliver a settled score whose action the router holding the decision cannot hold.
-
-        A parent may request a target its own router never offers — a Tick
-        producer asking for an evaluator that only accepts ProducerReturn — and
-        the parent's router cannot be trained on an arm outside its universe.
-        Guarantees the score still reaches a learner that can use it: the router
-        whose universe holds the target, found by the kinds the target accepts,
-        else the requesting assembly's own learner over the request action it
-        registered. The ledger names whichever was trained, or why neither was,
-        so no settlement is dropped in silence.
-        """
-        target = prop.chosen
-        spec = self.assemblies[target].spec if target in self.assemblies else None
-        for kind in (sorted(spec.accepts) if spec is not None else sorted(self.routers)):
-            for state in self.routers.get(kind, []):
-                if target in state.universe:
-                    self._settle_on_router(handle, state, kind, target, feedback)
-                    return
-        self._settle_on_requester(handle, target, feedback)
-
-    def _settle_on_router(self, handle: str, state, kind: str, target: str, feedback) -> None:
-        """Train the router that owns the target's kind on the child it did not select."""
-        learner = state.learner
-        try:
-            if isinstance(learner, _KeyedLearner):
-                # A keyed learner scores frozen rounds, so the settlement needs one
-                # opened under this handle before it can be applied.
-                learner.inner.distribution_for(
-                    handle, [a for a in state.universe if a != NOOP])
-                learner.inner.update_for(handle, feedback)
-            else:
-                learner.update(feedback)
-        except (KeyError, ValueError, RuntimeError, TypeError, AssertionError) as exc:
-            self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
-                                "learner_id": learner.id, "reason": str(exc)[:200],
-                                "ts": self.clock.now_ns})
-            return
-        self.ledger.append({"kind": "request.settled", "handle": handle,
-                            "target": target, "learner_id": learner.id,
-                            "learner": "router", "event_kind": kind,
-                            "reward": feedback.reward, "ts": self.clock.now_ns})
-
-    def _settle_on_requester(self, handle: str, target: str, feedback) -> None:
-        """Train the assembly that asked for the child, over the request action it declared."""
-        parent = self.queue.get(handle).parent_handle
-        assembly_id = self.handle_to_assembly.get(parent) if parent is not None else None
-        learner = self.assembly_learners.get(assembly_id)
-        action = f"request:{target}"[:64]
-        reason = None
-        if learner is None:
-            reason = f"no router holds {target} and the requester registered no learner"
-        elif action not in set(getattr(learner.inner, "actions", ())):
-            reason = f"no router holds {target} and {action} is outside the requester's actions"
-        if reason is None:
-            try:
-                learner.distribution_for(handle, list(learner.inner.actions))
-                learner.update_for(handle, replace(feedback, action=action))
-            except (KeyError, ValueError, RuntimeError, TypeError, AssertionError) as exc:
-                reason = str(exc)[:200]
-        if reason is not None:
-            self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
-                                "assembly_id": assembly_id, "reason": reason,
-                                "ts": self.clock.now_ns})
-            return
-        self.ledger.append({"kind": "request.settled", "handle": handle, "target": target,
-                            "learner_id": learner.id, "learner": "assembly",
-                            "assembly_id": assembly_id, "action": action,
-                            "reward": feedback.reward, "ts": self.clock.now_ns})
-
     def _invoke_child(
         self, action_id: str, parent: Request, item: ChildRequest, ceiling: int,
     ) -> tuple[dict, int]:
@@ -1622,12 +1558,10 @@ class ComputeMixin:
         # ceiling says, the ceiling never exceeds what the parent's own decision may
         # spend now, so a fresh target cannot be bought compute the parent lacks.
         ceiling = min(ceiling, max(0, self._compute_available(parent.handle)))
-        # The child is opened under the learner that woke its parent, so the score
-        # its return settles at reaches a router that exists: the parent's router
-        # learns what the target it chose was worth on this kind of work. A target
-        # that router never offers is settled on the router that owns the target's
-        # kind instead (_settle_outside_universe). The propensity is still the
-        # parent's choice, recorded as such.
+        # The child is opened under the learner that woke its parent, so its
+        # returns have an addressable home. Its propensity is the parent's choice,
+        # recorded as such ("parent-selected"): no router sampled it, so no router
+        # is trained on it (defect 3, ``FeedbackMixin._router_sampled``).
         actor = self.queue.get(parent.handle).actor
         channels = self._return_channels(target) if target in self.assemblies else {}
         handle = self.queue.open(
@@ -1678,16 +1612,16 @@ class ComputeMixin:
                 self._apply_registrations(handle, ret)
             self.consequences.finish(handle, ret.cost)
             if emitted == "Exposure":
-                self.pending_exposure[handle] = self.n
+                self.pending_exposure[handle] = self.ticks_consumed
                 payoff = ret.outputs.get("payoff") if ret.status == "ok" else None
-                if payoff is not None:
-                    self.consequences.seal_self_forecast(
+                if payoff is not None and self.consequences.seal_self_forecast(
                         self.book, self.queue, handle=handle, assembly_id=target, payoff=payoff,
                         event=self.n, now_ns=self.clock.now_ns,
-                        tick_ns=self.tick_clock.interval_ns)
+                        tick_ns=self.tick_clock.interval_ns) is not None:
                     self.stats.forecasts_sealed += 1
             else:
-                self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
+                self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
+                                                        opened_at_tick=self.ticks_consumed)
             self.stats.producer_returns += 1
             payload = {"about_handle": handle, "description": item.description,
                        "inputs": item.inputs, "outputs": public_return(ret.outputs),

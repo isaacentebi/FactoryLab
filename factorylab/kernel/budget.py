@@ -16,6 +16,13 @@ amount out of the entitlement and a commit settles it against the wallet.
 
 Every movement is ledgered first as ``kind: "budget"`` with an ``op`` naming it.
 
+Venue claims: P&L the venue settles on its own account (fills, fees, funding) is
+not compute money and never passes through the wallet (C5). It is classified here
+separately, as each seat's signed claim on what the venue holds (``claim_venue``)
+against what the venue actually settled (``book_venue``). A claim moves no
+entitlement and no pool: ``sum(venue_claims) + venue_unattributed ==
+venue_booked``, and the compute invariant above is untouched by trading.
+
 Lineages: each genesis seat is a lineage root; a child registered by a seat belongs
 to its proposer's lineage. A released tranche's ``base_share`` is split equally
 across the live lineages, each lineage's share going to its head (the root while
@@ -75,6 +82,10 @@ class BudgetBook:
         # seat -> lineage id (the genesis root's id), in registration order, so the
         # oldest live member of a lineage is its first entry that is still live.
         self.__lineage: dict[str, str] = {}
+        # Venue custody, classified apart from compute: each seat's signed claim on
+        # the P&L the venue settled, and what the venue settled in all.
+        self.__venue_claims: dict[str, Money] = {}
+        self.__venue_booked: Money = 0
 
     # ---- reads
 
@@ -146,6 +157,18 @@ class BudgetBook:
         every reservation until a credit or release restores it.
         """
         return unlocked_balance(self.__wallet) - sum(self.__gross.values())
+
+    def venue_claims(self) -> dict[str, Money]:
+        """Each seat's signed claim on venue-custody P&L, in id order."""
+        return dict(sorted(self.__venue_claims.items()))
+
+    def venue_booked(self) -> Money:
+        """All the P&L the venue settled on its own account, signed."""
+        return self.__venue_booked
+
+    def venue_unattributed(self) -> Money:
+        """Venue P&L no seat's return owns: what was booked less what is claimed."""
+        return self.__venue_booked - sum(self.__venue_claims.values())
 
     def check_invariant(self) -> bool:
         """Confirm the classification sums to the unlocked balance net of holds, and that every
@@ -258,6 +281,33 @@ class BudgetBook:
         self.__gross[seat] = after
         self.__retired.discard(seat)
         return credited
+
+    def book_venue(self, amount: Money, reason: str) -> None:
+        """Record signed P&L the venue settled on its own account (never the wallet's)."""
+        require_money(amount)
+        self._log("venue_booked", amount=amount, reason=reason,
+                  venue_booked_after=self.__venue_booked + amount)
+        self.__venue_booked += amount
+
+    def claim_venue(self, assembly_id: str, amount: Money, reason: str) -> None:
+        """Classify signed venue P&L as a seat's claim on venue custody (defect 6).
+
+        A return's realised result is the owner's in both directions, but it is
+        money the venue holds, not compute authority: the seat's entitlement and
+        the pool are untouched, so no other seat funds a trader's profit and no
+        loss mints authority for the commons. A retired seat's claim stays with
+        the venue unattributed, as its late compute credits stay with the pool.
+        """
+        seat = self._seat(assembly_id)
+        require_money(amount)
+        if seat in self.__retired:
+            self._log("retired_venue_claim", assembly_id=seat, amount=amount, reason=reason,
+                      venue_unattributed_after=self.venue_unattributed())
+            return
+        after = self.__venue_claims.get(seat, 0) + amount
+        self._log("venue_claim", assembly_id=seat, amount=amount, reason=reason,
+                  venue_claim_after={seat: after})
+        self.__venue_claims[seat] = after
 
     def debit(self, assembly_id: str, amount: Money, reason: str) -> None:
         """Move ``amount`` from a seat back to the unallocated pool; refuses beyond the seat."""
@@ -461,15 +511,20 @@ class BudgetBook:
     def _settle_hold(self, reservation: Any, actual: Money) -> Money:
         """Debit the booked cost from the seat as far as its entitlement reaches.
 
-        The wallet has already paid ``actual``. The seat pays first; whatever its
-        entitlement cannot cover (protected exploration admitted at reserve time,
+        The wallet has already paid ``actual``. The seat pays first, out of this
+        hold and its free entitlement (never another open hold's); whatever that cannot
+        cover (protected exploration admitted at reserve time,
         or a reported overrun beyond the hold) stays with the pool and is ledgered
         as ``commons`` so the commons-funded part of every call is visible.
         Returns what the seat itself paid.
         """
         require_money(actual, nonnegative=True)
         seat, held = self._held(reservation)
-        own = max(0, min(actual, self.__gross.get(seat, 0)))
+        # The seat pays from this hold and from what it has free, never from the
+        # money its other open holds are keeping for their own calls: an overrun
+        # beyond both lands on the commons, so no entitlement is driven negative.
+        free = self.__gross.get(seat, 0) - (self.held_by(seat) - held)
+        own = max(0, min(actual, free))
         after = self.__gross.get(seat, 0) - own
         self._log("commit", assembly_id=seat, amount=actual, own=own, commons=actual - own,
                   handle=reservation.handle, reason=reservation.reason,
@@ -536,6 +591,8 @@ class BudgetBook:
             "last_holds": dict(self.__last_holds),
             "uncertain": {rid: [seat, own] for rid, (seat, own) in self.__uncertain.items()},
             "lineages": dict(self.__lineage),
+            "venue_claims": dict(self.__venue_claims),
+            "venue_booked": self.__venue_booked,
         }
 
     def _restore_state(self, state: dict) -> None:
@@ -556,6 +613,9 @@ class BudgetBook:
                           for seat, lineage in state.get("lineages", {}).items()}
         if not self.__lineage:
             self.__lineage = {seat: seat for seat in gross}
+        self.__venue_claims = {str(seat): require_money(amount)
+                               for seat, amount in state.get("venue_claims", {}).items()}
+        self.__venue_booked = require_money(state.get("venue_booked", 0))
 
 
 class SeatWallet:

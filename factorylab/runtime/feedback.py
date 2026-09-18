@@ -99,6 +99,12 @@ class PendingJudgement:
     # and every meta that conformed to it closes unmeasured with it, rather than
     # timing out at zero for a fact the runtime owed them and never delivered.
     unmeasured: bool = False
+    # The world tick this judgement opened at. Its horizons (the verdict timeout,
+    # the consequence backstop) count world ticks consumed, never internal events:
+    # a busy tick is many events and still one tick (defect 1). A judgement
+    # recorded without one is aged from the world's first tick, so it can never
+    # wait forever.
+    opened_at_tick: int | None = None
 
 
 class FeedbackMixin:
@@ -108,9 +114,9 @@ class FeedbackMixin:
     def meta_waiting_since(self) -> dict[str, int]:
         """When each judge's metas began waiting on a fact about it.
 
-        Derived timing state, rebuilt on demand: a restored runtime starts the
-        wait again from the event it restored at, which is the conservative
-        direction — a meta is closed unmeasured later, never sooner.
+        Counted in world ticks consumed, like the backstop it is compared with.
+        Checkpointed with the rest of the runtime, so a restored runtime carries
+        each wait over exactly rather than starting it again.
         """
         if not hasattr(self, "_meta_waiting_since"):
             self._meta_waiting_since: dict[str, int] = {}
@@ -416,7 +422,7 @@ class FeedbackMixin:
                                 >= fmean(evidence[f][1] for f in forecasts))
                         for meta_handle, conformity in self.pending_meta.pop(handle, []):
                             self._settle_meta_consequence(meta_handle, conformity, y, forecasts[0])
-                        self.verdict_outcomes[handle] = (y, self.n, forecasts[0])
+                        self.verdict_outcomes[handle] = (y, self.ticks_consumed, forecasts[0])
             del self.forecast_returns[handle]
 
     def _deliver_meta_verdict(self, ev: Event) -> None:
@@ -429,7 +435,7 @@ class FeedbackMixin:
             pend is None
             or pend.channel != CH_CONFORMITY
             or tier <= pend.tier
-            or self.n - pend.opened_at_event > self.ev.verdict_timeout_events
+            or self._tick_age(pend) > self.ev.verdict_timeout_ticks
             or self.queue.get(about).status is not SettleStatus.PENDING
         ):
             return
@@ -447,7 +453,7 @@ class FeedbackMixin:
             sib = self.pending.get(sibling)
             if (
                 sib is None
-                or self.n - sib.opened_at_event > self.ev.verdict_timeout_events
+                or self._tick_age(sib) > self.ev.verdict_timeout_ticks
                 or self.queue.get(sibling).status is not SettleStatus.PENDING
             ):
                 continue
@@ -538,9 +544,10 @@ class FeedbackMixin:
         runtime owed it and never delivered. The commission is answered
         ``unmeasured`` instead.
         """
+        # An unmeasured commission carries no fact about the meta, so it ends none
+        # of its novelty trials: only resolved evidence is counted.
         channel = self.queue.get(meta_handle).channel
-        if self._settle_unmeasured(meta_handle, channel, reason):
-            self._count_consequence(self.handle_to_assembly.get(meta_handle))
+        self._settle_unmeasured(meta_handle, channel, reason)
 
     def _drain_pending_meta(self, judge_handle: str, reason: str) -> None:
         """Every meta waiting on this judge closes unmeasured, and the queue is emptied."""
@@ -555,7 +562,7 @@ class FeedbackMixin:
         backstop, a meta still waiting on it is waiting on nothing: it closes
         unmeasured while it can still be closed at all.
         """
-        backstop = self.ev.consequence_backstop_events
+        backstop = self.ev.consequence_backstop_ticks
         for judge_handle in list(self.pending_meta):
             waiting = [c for c in self.pending.values()
                        if c.channel == NORM_COMMITMENT and c.judge == judge_handle
@@ -564,9 +571,9 @@ class FeedbackMixin:
                 continue
             opened = self.meta_waiting_since.get(judge_handle)
             if opened is None:
-                self.meta_waiting_since[judge_handle] = self.n
+                self.meta_waiting_since[judge_handle] = self.ticks_consumed
                 continue
-            if self.n - opened > backstop:
+            if self.ticks_consumed - opened > backstop:
                 self._drain_pending_meta(
                     judge_handle, "the judged verdict produced no fact within its backstop")
                 self.meta_waiting_since.pop(judge_handle, None)
@@ -782,7 +789,7 @@ class FeedbackMixin:
         stale = [
             h
             for h, o in self.pending_exposure.items()
-            if self.n - o > self.ev.verdict_timeout_events and h not in waiting
+            if self.ticks_consumed - o > self.ev.verdict_timeout_ticks and h not in waiting
         ]
         for h in stale:
             self._settle_exposure(h, 0.0)
@@ -812,8 +819,12 @@ class FeedbackMixin:
             self.window.exposures_won += 1
 
     def _count_consequence(self, assembly_id: str | None) -> None:
-        """One settled consequence delivered to an assembly ends one of its novelty trials;
-        a trial beyond the base allowance spends the window's learning-death grant."""
+        """One observed consequence delivered to an assembly ends one of its novelty trials;
+        a trial beyond the base allowance spends the window's learning-death grant.
+
+        Callers count resolved evidence only: a censored payoff or an unmeasured
+        commission told nobody anything about the seat, so it spends no trial.
+        """
         if assembly_id is None:
             return
         delivered = self.stats.consequences_by_assembly.get(assembly_id, 0)
@@ -852,12 +863,13 @@ class FeedbackMixin:
     def _credit_consequence(self, payoff: Any) -> None:
         """A settled return's net proceeds are its owner's, in both directions (C10).
 
-        Profit credits the owning seat's entitlement, bounded by the pool so it
-        classifies money the wallet has already booked and never mints. A loss
-        debits the owner down to a floor of zero; what the seat cannot cover lands
-        on the pool and is ledgered as such. A marked outcome is an estimate at the
-        backstop, not settled money, and moves nothing here: what its lots realise
-        later is booked to the owner as a late consequence (``_settle_late``).
+        They are venue money: the P&L settled on the venue account, which never
+        passes through the compute wallet (C5). So they are the owner's claim on
+        venue custody (``BudgetBook.claim_venue``), not compute entitlement drawn
+        from, or paid into, the pool that funds every seat's thinking (defect 6).
+        A marked outcome is an estimate at the backstop, not settled money, and
+        moves nothing here: what its lots realise later is booked to the owner as
+        a late consequence (``_settle_late``).
         """
         if payoff.censored is not None:
             return self._address_unknown_outcome(payoff)
@@ -876,7 +888,7 @@ class FeedbackMixin:
             # at Hyperliquid, position still open, committed hypothesis not
             # settled" -- four facts in different units and different custodies,
             # which a single net destroys. ``net_micro`` stays because it is
-            # itself a fact: the movement in this seat's entitlement.
+            # itself a fact: the movement in this seat's venue claim.
             venue_delta = self.venue_deltas.pop(payoff.handle, {})
             self.outcomes.append(
                 owner, handle=payoff.handle, delta_micro=payoff.net_micro,
@@ -896,27 +908,34 @@ class FeedbackMixin:
         """Tell the owner that its return's consequence is unknown, and why (R4-C).
 
         The OUTCOME CONTRACT has three answers, and this is the third: the
-        necessary observation is unavailable. The venue would not say whether the
-        order filled, so no payoff is claimed in either direction, nothing is
-        scored and no money moves here. The venue's last answer rides with the
-        item so the seat reads the fact rather than a silence, and if the fill is
-        observed later its money reaches the same seat through ``_settle_late``.
+        necessary observation is unavailable. The venue would not say whether one
+        order filled, so no payoff is claimed in either direction and nothing is
+        scored. Only that order's portion is unknown (defect 10): what the
+        return's observed orders realised is booked to the owner exactly as a
+        settled outcome's would be, and a marked one books nothing until it is
+        real. The venue's last answer rides with the item so the seat reads the
+        fact rather than a silence, and if the missing fill is observed later its
+        money reaches the same seat through ``_settle_late``.
         """
         owner = self.handle_to_assembly.get(payoff.handle) or self.outcomes.seat_of(payoff.handle)
         if owner is None:
             return self._undeliverable("return_paid_off", payoff.handle,
                                        "no seat owns that decision")
         self.outcomes.append(
-            owner, handle=payoff.handle, evidence=payoff.handle,
+            owner, handle=payoff.handle, delta_micro=0 if payoff.marked else payoff.net_micro,
+            evidence=payoff.handle,
             outcome={"outcome": "unknown", "reason": payoff.censored,
                      "return_paid_off": None,
+                     "known_net_micro": payoff.net_micro,
                      "provider_cost_micro": payoff.cost_micro,
                      "cost_micro": payoff.cost_micro,
                      "earned_micro": payoff.earned_micro,
                      "venue_answer": self._venue_last_answer(payoff.handle),
                      "venue_delta_micro": self.venue_deltas.pop(payoff.handle, {}),
                      "position_open": True, "commitment_settled": False,
-                     "marked": False, "liquidated": payoff.liquidated})
+                     "marked": payoff.marked, "liquidated": payoff.liquidated})
+        if not payoff.marked and owner in self.assemblies:
+            self._book_consequence(owner, payoff.net_micro, "return_known_portion")
 
     def _venue_last_answer(self, handle: str) -> dict | None:
         """The last thing the venue said about this return's unresolved intent."""
@@ -945,18 +964,17 @@ class FeedbackMixin:
         return account.opened_lots > account.closed_lots
 
     def _book_consequence(self, owner: str, micro: int, reason: str) -> None:
-        if micro > 0:
-            self.budget.credit(owner, micro, reason)
-        elif micro < 0:
-            self.budget.charge(owner, -micro, reason)
+        """Book a return's realised venue P&L to its owner as a venue-custody claim."""
+        if micro:
+            self.budget.claim_venue(owner, micro, reason)
 
     def _settle_late(self) -> None:
         """Money realised after an outcome was fixed still belongs to the return's owner.
 
-        A position marked at the backstop and closed later is booked to the wallet
-        by the venue; the opener's entitlement is charged (or credited) by the
-        realised result, ledgered as a late consequence. The learning score of the
-        marked outcome stays as it was; only the money moves.
+        A position marked at the backstop and closed later is settled by the venue
+        on its own account; the opener's venue claim moves by the realised result,
+        ledgered as a late consequence. The learning score of the marked outcome
+        stays as it was; only the claim moves.
         """
         for handle, micro in self.consequences.settle_late(self.n).items():
             owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
@@ -1034,10 +1052,11 @@ class FeedbackMixin:
                 top_level = self.queue.get(payoff.handle).parent_handle is None
             except KeyError:
                 top_level = True
-            if top_level:  # continuations and children are not trials
+            # Continuations and children are not trials, and neither is an outcome
+            # nobody observed: an unknown consequence ends no novelty trial.
+            if top_level and payoff.censored is None:
                 self._count_consequence(self.handle_to_assembly.get(payoff.handle))
         self._commit_verdicts()
-        pending = {f.handle: f for f in self.book.pending()}
         settled = self.settler.settle_due(self.n, self._facts_for)
         settled.extend(self.settler.settle_consequences(self.consequences.payoff))
         for result in settled:
@@ -1046,15 +1065,24 @@ class FeedbackMixin:
                 self.forecast_returns[parent]["results"][result.handle] = (
                     result.brier, result.baseline_brier)
         self._settle_forecast_returns()
-        self._settle_due_verdicts()
+        # Which payoff forecasts this pass settled, so a verdict whose window closes
+        # unread in the same pass waits for its payoff fact below.
+        self._settle_due_verdicts(landing={result.handle for result in settled})
         self._expire_pending_meta()
         self._settle_exposures(settled)
-        backstop = self.ev.consequence_backstop_events
+        backstop = self.ev.consequence_backstop_ticks
         for judge_handle in [h for h, (_y, at, _f) in self.verdict_outcomes.items()
-                             if self.n - at > backstop]:
+                             if self.ticks_consumed - at > backstop]:
             del self.verdict_outcomes[judge_handle]
         for s in settled:
-            forecast = pending[s.handle]
+            if s.predicate_id == RETURN_PAID_OFF.id and s.brier is None:
+                # A censored payoff is no fact: a verdict already closed that was
+                # waiting only on it is decided on what exists, or closes unmeasured.
+                commitment = self.pending.get(s.handle)
+                if (commitment is not None and commitment.channel == NORM_COMMITMENT
+                        and commitment.verdict_closed):
+                    self._finalize_verdict(commitment)
+                    del self.pending[commitment.handle]
             if s.predicate_id == RETURN_PAID_OFF.id and s.brier is not None:
                 event_id = self.queue.get(s.handle).event_id
                 if event_id.startswith("verdict-"):
@@ -1074,12 +1102,13 @@ class FeedbackMixin:
                         # grades the metas, as before the verdict had its own anchor.
                         for meta_handle, conformity in self.pending_meta.pop(judge_handle, []):
                             self._settle_meta_consequence(meta_handle, conformity, y, s.handle)
-                        self.verdict_outcomes[judge_handle] = (y, self.n, s.handle)
+                        self.verdict_outcomes[judge_handle] = (y, self.ticks_consumed, s.handle)
+            # The cadence's clock is world ticks consumed (defect 1).
             self.cadence.record(
                 handle=s.handle,
                 predicate_id=s.predicate_id,
-                opened_event=forecast.made_at_event,
-                settled_event=self.n,
+                opened_event=self.cadence.opened_at(s.handle, self.ticks_consumed),
+                settled_event=self.ticks_consumed,
                 opened_ns=self.queue.get(s.handle).opened_ns,
                 settled_ns=self.clock.now_ns,
                 status=str(s.status),
@@ -1151,10 +1180,7 @@ class FeedbackMixin:
             if q is None:
                 continue
             about = forecast.about_handle
-            try:
-                opened = self.consequences.table.account(about).opened_at_event
-            except KeyError:
-                opened = self.n
+            opened, opened_tick = self._account_opened(about)
             cards = _CARDS_FOR_CHANNEL.get(self.queue.get(about).channel, "producer")
             emitted = self.return_kinds.get(about)
             if emitted and emitted not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
@@ -1165,8 +1191,10 @@ class FeedbackMixin:
             self.pending[forecast.handle] = PendingJudgement(
                 forecast.handle, NORM_COMMITMENT, opened, about=about, judge=judge,
                 evaluator_id=forecast.evaluator_id, q=q, cards=cards, window=window,
+                opened_at_tick=opened_tick,
             )
-            self.pending.setdefault(about, PendingJudgement(about, NORM_SUBJECT, self.n))
+            self.pending.setdefault(about, PendingJudgement(
+                about, NORM_SUBJECT, self.n, opened_at_tick=self.ticks_consumed))
 
     def _commit_verdict_without_payoff(
         self, judge_handle: str, evaluator_id: str, about: str, verdict: float
@@ -1182,10 +1210,7 @@ class FeedbackMixin:
         key = f"{NORM_COMMITMENT}:{judge_handle}"
         if key in self.pending or judge_handle in self.verdicts_closed_out:
             return
-        try:
-            opened = self.consequences.table.account(about).opened_at_event
-        except KeyError:
-            opened = self.n
+        opened, opened_tick = self._account_opened(about)
         cards = _CARDS_FOR_CHANNEL.get(self.queue.get(about).channel, "producer")
         emitted = self.return_kinds.get(about)
         if emitted and emitted not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
@@ -1194,12 +1219,30 @@ class FeedbackMixin:
         self.pending[key] = PendingJudgement(
             key, NORM_COMMITMENT, opened, about=about, judge=judge_handle,
             evaluator_id=evaluator_id, q=float(verdict), cards=cards, window=window,
-            awaits_payoff=False,
+            awaits_payoff=False, opened_at_tick=opened_tick,
         )
         self.ledger.append({"kind": "verdict.committed_without_payoff", "handle": judge_handle,
                             "about_handle": about, "evaluator_id": evaluator_id,
                             "q": float(verdict), "ts": self.clock.now_ns})
-        self.pending.setdefault(about, PendingJudgement(about, NORM_SUBJECT, self.n))
+        self.pending.setdefault(about, PendingJudgement(
+            about, NORM_SUBJECT, self.n, opened_at_tick=self.ticks_consumed))
+
+    def _tick_age(self, judgement: PendingJudgement) -> int:
+        """World ticks consumed since this judgement opened."""
+        return self.ticks_consumed - (judgement.opened_at_tick or 0)
+
+    def _account_opened(self, about: str) -> tuple[int, int]:
+        """The event and the world tick the judged return's account opened at.
+
+        A verdict's consequence backstop runs from its subject's own opening, so
+        it closes when the subject's outcome is fixed, not later.
+        """
+        try:
+            account = self.consequences.table.account(about)
+        except KeyError:
+            return self.n, self.ticks_consumed
+        tick = account.opened_at_tick
+        return account.opened_at_event, self.ticks_consumed if tick is None else tick
 
     def _verdicts_waiting(self) -> set[str]:
         """The judged returns with a verdict whose window has not yet judged it."""
@@ -1213,7 +1256,7 @@ class FeedbackMixin:
             return "released"
         return "closed" if window.closed_values is not None else "open"
 
-    def _settle_due_verdicts(self) -> None:
+    def _settle_due_verdicts(self, landing: frozenset[str] | set[str] = frozenset()) -> None:
         """A verdict settles once, when the judged return's window has closed, against the
         share of that window's charter blame the pricing pass attributed to the return.
 
@@ -1229,13 +1272,17 @@ class FeedbackMixin:
         performance). Where the fact is real, the Brier enters the judge's
         standing beside payoff skill; a high verdict on a blamed return exposes
         the judge to the antagonist that made it; the judge is told, privately.
+
+        ``landing`` names the payoff forecasts this same pass settled: an unread
+        verdict whose payoff fact is among them is decided by it when it is
+        attached, rather than closing unmeasured a moment before.
         """
-        backstop = self.ev.consequence_backstop_events
+        backstop = self.ev.consequence_backstop_ticks
         due = [p for p in self.pending.values()
                if p.channel == NORM_COMMITMENT and not p.verdict_closed]
         for c in due:
             state = self._verdict_window(c)
-            if state == "open" and self.n < c.opened_at_event + backstop:
+            if state == "open" and self._tick_age(c) < backstop:
                 continue
             c.verdict_closed = True
             # Closed out once: the commitment pass may not re-open this judge.
@@ -1252,6 +1299,12 @@ class FeedbackMixin:
                 # is unmeasured, not scored on payoff. The judge's own payoff
                 # forecast still settles on its own handle, against the world;
                 # what it may not do is stand in for the charter's judgement.
+                if c.awaits_payoff and c.payoff_beat is None and c.handle in landing:
+                    # The payoff fact settled in this same pass (a return judged while
+                    # its position was open resolves at the same backstop that closes
+                    # this window unread): it decides the verdict below, rather than
+                    # the verdict closing unmeasured a moment before it is attached.
+                    continue
                 self._finalize_verdict(c)
                 del self.pending[c.handle]
                 continue
@@ -1335,7 +1388,7 @@ class FeedbackMixin:
             self.meta_waiting_since.pop(commitment.judge, None)
             return
         y = int(all(bool(f) for f in facts))
-        self.verdict_outcomes[commitment.judge] = (y, self.n, commitment.handle)
+        self.verdict_outcomes[commitment.judge] = (y, self.ticks_consumed, commitment.handle)
         for meta_handle, conformity in self.pending_meta.pop(commitment.judge, []):
             self._settle_meta_consequence(meta_handle, conformity, y, commitment.handle)
         self.meta_waiting_since.pop(commitment.judge, None)
@@ -1385,7 +1438,7 @@ class FeedbackMixin:
             p
             for p in self.pending.values()
             if p.channel not in (NORM_COMMITMENT, NORM_SUBJECT)  # settled by the window
-            and self.n - p.opened_at_event > self.ev.verdict_timeout_events
+            and self._tick_age(p) > self.ev.verdict_timeout_ticks
         ]
         for p in stale:
             if self.queue.get(p.handle).status is SettleStatus.PENDING:
@@ -1405,22 +1458,21 @@ class FeedbackMixin:
     def _close_assembly_rounds(self) -> None:
         """Close every assembly round whose decision now has an outcome.
 
-        The evidence is the same thin score the router receives: the first
-        settlement or timeout on the handle. A round is closed once, whatever
-        opened the decision — a router, a parent's child request, a continuation —
-        so nothing is left open for a decision that will never be scored again.
+        The evidence is the decision's first outcome, by the same rule the router
+        follows (``_deliver_returns``): a score that settled it before its cutoff,
+        or else nothing observed. A timeout is the cutoff, not a zero; a score
+        that arrives after it trains nothing. A round is closed once, whatever
+        opened the decision, so nothing is left open for a decision that will
+        never be scored again.
         """
         for handle in list(self.assembly_rounds):
             decision = self.queue.get(handle)
             if decision.status is SettleStatus.PENDING:
                 continue
-            scored = next((lr for lr in self.queue.history(handle)
-                           if lr.status in (SettleStatus.SETTLED, SettleStatus.TIMED_OUT)), None)
-            if scored is None:
-                self._close_assembly_round(handle, None)  # censored: no evidence
-                continue
-            reward = (min(1.0, max(0.0, float(scored.score)))
-                      if scored.status is SettleStatus.SETTLED else 0.0)
+            first = next(iter(self.queue.history(handle)), None)
+            reward = (min(1.0, max(0.0, float(first.score)))
+                      if first is not None and first.status is SettleStatus.SETTLED
+                      else None)
             self._close_assembly_round(handle, reward)
 
     def _close_assembly_round(self, handle: str, reward: float | None) -> None:
@@ -1429,7 +1481,10 @@ class FeedbackMixin:
         The reward is the same thin score the router receives; what differs is the
         distribution it is attributed to. The router's record prices the choice of
         who acted; this one prices what the actor chose to do, over the action set
-        the actor declared. A censored decision closes its round without evidence.
+        the actor declared. A decision with no observed score (censored,
+        inapplicable, or past its cutoff) is credited the learner's neutral
+        estimate for the action, as the router's are, or closes without evidence
+        when the learner has observed nothing yet.
         """
         assembly_id = self.assembly_rounds.pop(handle, None)
         if assembly_id is None:
@@ -1438,6 +1493,9 @@ class FeedbackMixin:
         if learner is None:
             return
         declared = self.queue.declared_propensity(handle)
+        imputed = reward is None
+        if declared is not None and reward is None:
+            reward = learner.observed.neutral(declared.chosen)
         if reward is None or declared is None:
             try:
                 learner.discard_for(handle)
@@ -1454,10 +1512,70 @@ class FeedbackMixin:
                                 "assembly_id": assembly_id, "reason": str(exc)[:200],
                                 "ts": self.clock.now_ns})
             return
+        if not imputed:
+            learner.observed.record(declared.chosen, reward)
         self.ledger.append({"kind": "propensity.learned", "handle": handle,
                             "assembly_id": assembly_id, "action": declared.chosen,
                             "propensity": declared.probs[index], "reward": reward,
-                            "ts": self.clock.now_ns})
+                            "imputed": imputed, "ts": self.clock.now_ns})
+
+    @staticmethod
+    def _router_sampled(decision: Any) -> bool:
+        """Whether the router that holds this decision drew it (defect 3).
+
+        A child request is opened under its parent's router so its score has an
+        addressable home, but the parent chose the target: its propensity of 1.0
+        is the parent's choice, not a probability the router sampled from, and a
+        router trained on it would learn from a round it never played.
+        """
+        prop = decision.propensity
+        return (decision.parent_handle is None and prop.source == "sampled"
+                and prop.learner_state_hash != "parent-selected")
+
+    def _learn_router_return(self, state: Any, lr: LearningReturn) -> None:
+        """Train a router once per decision it drew, on the evidence that decision has.
+
+        The rule (defects 2 and 4): a decision's cutoff is its kernel deadline. Its
+        first outcome is its one update. A score that settled it before the cutoff
+        is observed and trains the router at that score. A decision that closed
+        without an observed score (censored, inapplicable) or reached its cutoff
+        unscored (timed out) is not a zero: it is credited the router's neutral
+        estimate for the arm drawn (``ObservedRewards.neutral``), or nothing if
+        the router has observed nothing yet. A score that arrives after the
+        cutoff still settles the decision for the kernel -- its money, its
+        standing, its history -- but trains no learner a second time.
+        """
+        decision = self.queue.get(lr.handle)
+        prop = decision.propensity
+        keyed = isinstance(state.learner, _KeyedLearner)
+        key = self.snapshot_keys.pop(lr.handle, None) if keyed else None
+        if not self._router_sampled(decision):
+            if key is not None:
+                state.learner.inner.discard_for(key)
+            return
+        if lr.status is not SettleStatus.TIMED_OUT and any(
+                r.status is SettleStatus.TIMED_OUT for r in self.queue.history(lr.handle)):
+            return  # learned once already, neutrally, at its cutoff
+        if lr.status is SettleStatus.SETTLED:
+            reward = min(1.0, max(0.0, float(lr.score)))
+            state.observed.record(prop.chosen, reward)
+        else:
+            reward = state.observed.neutral(prop.chosen)
+        if reward is None:
+            if key is not None:
+                state.learner.inner.discard_for(key)
+            return
+        fb = BanditFeedback(prop.chosen, reward, prop.probs[prop.action_ids.index(prop.chosen)])
+        if keyed:
+            if key is not None:
+                state.learner.inner.update_for(key, fb)
+        elif set(prop.action_ids) <= set(state.universe):
+            state.learner.update(fb)
+        else:
+            self.ledger.append({"kind": "propensity.unlearned", "handle": lr.handle,
+                                "learner_id": state.learner.id,
+                                "reason": "the drawn arm is outside this router's universe",
+                                "ts": self.clock.now_ns})
 
     def _deliver_returns(self) -> None:
         self._close_assembly_rounds()
@@ -1471,30 +1589,7 @@ class FeedbackMixin:
                 returns = self.queue.returns_for(lid)
                 fresh, total = returns[seen:], len(returns)
             for lr in fresh:
-                if lr.status not in (SettleStatus.SETTLED, SettleStatus.TIMED_OUT):
-                    if isinstance(state.learner, _KeyedLearner):
-                        key = self.snapshot_keys.pop(lr.handle, None)
-                        if key is not None:
-                            state.learner.inner.discard_for(key)
-                    continue  # censored or inapplicable: no evidence, no update
-                decision = self.queue.get(lr.handle)
-                prop = decision.propensity
-                idx = prop.action_ids.index(prop.chosen)
-                reward = (
-                    min(1.0, max(0.0, float(lr.score)))
-                    if lr.status is SettleStatus.SETTLED
-                    else 0.0
-                )
-                fb = BanditFeedback(prop.chosen, reward, prop.probs[idx])
-                learner = state.learner
-                if isinstance(learner, _KeyedLearner):
-                    key = self.snapshot_keys.pop(lr.handle, None)
-                    if key is not None:
-                        learner.inner.update_for(key, fb)
-                elif set(prop.action_ids) <= set(state.universe):
-                    learner.update(fb)
-                else:  # an action this router cannot hold: settle it where it can be held
-                    self._settle_outside_universe(lr.handle, prop, fb)
+                self._learn_router_return(state, lr)
             self.delivered_seen[lid] = total
             if lid in self.retired_routers and not self.queue.outstanding(lid):
                 self.queue.retire_actor(lid)
