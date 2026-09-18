@@ -130,6 +130,11 @@ class ContractQueue:
     def returns_for(self, actor):
         return tuple(self._mapped(r.handle, r) for r in self.queue.returns_for(actor))
 
+    def returns_since(self, actor, start):
+        """``(returns_for(actor)[start:], len(returns_for(actor)))``, mapping only the tail."""
+        raw = self.queue.returns_for(actor)
+        return tuple(self._mapped(r.handle, r) for r in raw[start:]), len(raw)
+
 
 @dataclass
 class RouterState:

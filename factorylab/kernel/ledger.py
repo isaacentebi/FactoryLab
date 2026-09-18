@@ -3,6 +3,7 @@
 import fcntl
 import hashlib
 import json
+import operator
 import os
 import tempfile
 from collections import Counter
@@ -242,7 +243,9 @@ class Ledger:
         self.__genesis = hashlib.sha256(canonical({"manifest": manifest or {}})).hexdigest()
         self.__header = {"format": 1, "genesis_hash": self.__genesis}
         self.__head = self.__genesis
-        self.__verified_tokens: tuple[bytes, ...] = ()
+        # A private copy of the ciphertexts the last full walk authenticated. It is
+        # extended, never shared, so a later change to ``__tokens`` cannot reach it.
+        self.__verified_tokens: list[bytes] = []
         self.__verified_head = self.__genesis
         self.__verified_count = -1  # No item count has had its full walk yet.
         self.__path = Path(path) if path is not None else None
@@ -763,7 +766,7 @@ class Ledger:
                 return False
             prefix = self.__verified_tokens
             # The whole stored prefix is still compared, element by element, at C speed.
-            if len(tokens) < len(prefix) or tuple(tokens[:len(prefix)]) != prefix:
+            if len(tokens) < len(prefix) or not all(map(operator.eq, prefix, tokens)):
                 return False
             previous = self.__verified_head
             for seq in range(len(prefix), len(tokens)):
@@ -777,7 +780,7 @@ class Ledger:
                 previous = digest
             if previous != self.__head:
                 return False
-            self.__verified_tokens = tuple(tokens)
+            prefix.extend(tokens[len(prefix):])
             self.__verified_head = previous
             return True
         except (

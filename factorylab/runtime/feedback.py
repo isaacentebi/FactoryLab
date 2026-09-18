@@ -1463,8 +1463,14 @@ class FeedbackMixin:
         self._close_assembly_rounds()
         for state in self._all_router_states() + list(self.retired_routers.values()):
             lid = state.learner.id
-            returns = self.queue.returns_for(lid)
-            for lr in returns[self.delivered_seen.get(lid, 0) :]:
+            seen = self.delivered_seen.get(lid, 0)
+            if hasattr(self.queue, "returns_since"):
+                # Only the undelivered tail is mapped; the delivered prefix is never read.
+                fresh, total = self.queue.returns_since(lid, seen)
+            else:
+                returns = self.queue.returns_for(lid)
+                fresh, total = returns[seen:], len(returns)
+            for lr in fresh:
                 if lr.status not in (SettleStatus.SETTLED, SettleStatus.TIMED_OUT):
                     if isinstance(state.learner, _KeyedLearner):
                         key = self.snapshot_keys.pop(lr.handle, None)
@@ -1489,7 +1495,7 @@ class FeedbackMixin:
                     learner.update(fb)
                 else:  # an action this router cannot hold: settle it where it can be held
                     self._settle_outside_universe(lr.handle, prop, fb)
-            self.delivered_seen[lid] = len(returns)
+            self.delivered_seen[lid] = total
             if lid in self.retired_routers and not self.queue.outstanding(lid):
                 self.queue.retire_actor(lid)
                 self.ledger.append({"kind": "router.drained", "learner_id": lid})
