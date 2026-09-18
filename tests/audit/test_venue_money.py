@@ -443,3 +443,45 @@ class TestFix6FundingIdentity:
         booked = venue.funding_payments(2)
         assert len(booked) == 1 and booked[0].payload["paid_usd"] == "0.25"
         assert venue.funding_payments(3) == []
+
+
+# ------------------------------------------------------------------------------ 7
+
+
+class TestFix7LimitPriceRounding:
+    """≤5 significant figures (integers always allowed) and ≤ 6/8 − szDecimals decimals,
+    rounded toward the passive side so rounding never makes an order more aggressive."""
+
+    def _sent_price(self, coin, is_buy, px, *, sz_decimals, market="perp"):
+        from factorylab.world.exchange import Order, OrderKind
+
+        ex = _live_stub()
+        ex.coins = (coin,) if market == "perp" else ()
+        if market == "spot":
+            ex.spot_pairs = (coin,)
+            ex._spot_names = {coin: "@1"}
+        ex._sz_decimals = {coin: sz_decimals}
+        ex._exchange.order.return_value = {"status": "ok", "response": {"data": {
+            "statuses": [{"resting": {"oid": 1}}]}}}
+        ex.place(Order(coin, is_buy, Decimal("1"), OrderKind.LIMIT, Decimal(px),
+                       client_id="c", market=market))
+        return Decimal(str(ex._exchange.order.call_args.args[3]))
+
+    def test_significant_figures_toward_the_passive_side(self):
+        assert self._sent_price("BTC", True, "60123.456", sz_decimals=5) == Decimal("60123")
+        assert self._sent_price("BTC", False, "60123.456", sz_decimals=5) == Decimal("60124")
+        assert self._sent_price("ETH", True, "2500.123", sz_decimals=4) == Decimal("2500.1")
+        assert self._sent_price("ETH", False, "2500.123", sz_decimals=4) == Decimal("2500.2")
+
+    def test_integer_prices_are_always_allowed(self):
+        assert self._sent_price("BTC", True, "123456.7", sz_decimals=5) == Decimal("123456")
+
+    def test_decimal_cap_depends_on_market_and_size_decimals(self):
+        assert self._sent_price("kPEPE", True, "0.0123456", sz_decimals=0) == Decimal("0.012345")
+        assert self._sent_price("kPEPE", False, "0.0123456", sz_decimals=0) == Decimal("0.012346")
+        # A perp with szDecimals 3 allows 3 decimals: 1.23456 -> 1.234 (buy), 1.235 (sell).
+        assert self._sent_price("SOL", True, "1.23456", sz_decimals=3) == Decimal("1.234")
+        assert self._sent_price("SOL", False, "1.23456", sz_decimals=3) == Decimal("1.235")
+        # Spot allows 8 − szDecimals.
+        assert self._sent_price("PURR/USDC", True, "0.000123456", sz_decimals=0,
+                                market="spot") == Decimal("0.00012345")

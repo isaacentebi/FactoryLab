@@ -1402,7 +1402,8 @@ class HyperliquidExchange:
         try:
             rounded = self._round_size(order.coin, order.size)
             sz = self._wire_number(rounded)
-            price = (self._wire_number(order.limit_px)
+            price = (self._wire_number(self._round_price(
+                order.coin, order.limit_px, order.is_buy, spot=order.market == "spot"))
                      if order.kind is OrderKind.LIMIT else None)
         except Exception as exc:
             return OrderResult(None, "rejected", Decimal(0), None,
@@ -1582,6 +1583,27 @@ class HyperliquidExchange:
         if not isfinite(number) or number <= 0 or Decimal(float_to_wire(number)) <= 0:
             raise ValueError("invalid SDK wire number")
         return number
+
+    def _round_price(self, coin: str, price: Decimal, is_buy: bool, *, spot: bool) -> Decimal:
+        """A limit price Hyperliquid will accept, never more aggressive than the one asked.
+
+        The venue's rule: at most five significant figures -- an integer price is
+        always allowed whatever its figures -- and at most ``6 - szDecimals``
+        decimals for a perp, ``8 - szDecimals`` for spot. A price that breaks it is
+        rejected outright, so it is rounded here, toward the passive side: a buy
+        down, a sell up. Guarantees a positive result or raises ``ValueError``.
+        """
+        from decimal import ROUND_UP
+
+        if not price.is_finite() or price <= 0:
+            raise ValueError("limit price must be finite and positive")
+        decimals = (8 if spot else 6) - self._sz_decimals.get(coin, 4)
+        figures = Decimal(1).scaleb(price.adjusted() - 4)  # the fifth significant figure
+        quantum = max(min(figures, Decimal(1)), Decimal(1).scaleb(-max(decimals, 0)))
+        rounded = price.quantize(quantum, rounding=ROUND_DOWN if is_buy else ROUND_UP)
+        if rounded <= 0:
+            raise ValueError("limit price below the venue's price precision")
+        return rounded
 
     def _round_size(self, coin: str, size: Decimal) -> Decimal:
         d = self._sz_decimals.get(coin, 4)
