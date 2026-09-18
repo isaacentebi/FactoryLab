@@ -367,3 +367,26 @@ class TestFix4StaleIsNeverLive:
             assert rt._equity_micro() is None
         finally:
             del rt.exchange.target.account
+
+
+# ------------------------------------------------------------------------------ 5
+
+
+class TestFix5UnpricedSpotToken:
+    def test_one_unpriceable_spot_token_is_flagged_and_excluded_not_fatal(self):
+        ex = _live_stub()
+        ex.spot_pairs = ("PURR/USDC",)
+        ex._configure_spot({"tokens": [{"index": 0, "name": "USDC", "szDecimals": 8},
+                                       {"index": 1, "name": "PURR", "szDecimals": 0},
+                                       {"index": 2, "name": "JUNK", "szDecimals": 0}],
+                            "universe": [{"index": 1, "name": "PURR/USDC", "tokens": [1, 0]}]})
+        ex._info.all_mids.return_value = {"BTC": "60000", "PURR/USDC": "4"}
+        ex._info.spot_user_state.return_value = {"balances": [
+            {"coin": "USDC", "total": "10", "hold": "0"},
+            {"coin": "PURR", "total": "5", "hold": "0"},
+            {"coin": "JUNK", "total": "1000", "hold": "0"}]}
+        account = ex.account()
+        assert account.equity_usd == Decimal(100) + Decimal(10) + Decimal(20)
+        assert account.unpriced == ("JUNK",)
+        assert any(b.coin == "JUNK" for b in account.spot_balances)
+        assert account.stale is False

@@ -156,6 +156,11 @@ class AccountState:
     # wind-down's reconciliation, the watchers and the prompts refuse it.
     observed_at_ns: int | None = None
     stale: bool = False
+    # Spot tokens held that the venue gives no usable USD mark for. They are listed
+    # in ``spot_balances`` and excluded from ``equity_usd``: an equity that counts
+    # them at a guessed price is invented, and one unpriceable token must not make
+    # the whole account unreadable.
+    unpriced: tuple[str, ...] = ()
 
 
 class Exchange(Protocol):
@@ -1003,6 +1008,7 @@ class HyperliquidExchange:
         # The leverage the venue reports in effect for each open position, as read.
         self.__dict__["_position_leverage"] = in_effect
         balances = []
+        unpriced: list[str] = []
         spot_value = Decimal(0)
         if spot is not None:
             for row in spot.get("balances", []):
@@ -1013,11 +1019,13 @@ class HyperliquidExchange:
                     spot_value += total
                 elif total:
                     symbol = self._spot_marks.get(row["coin"])
-                    if symbol is None or symbol not in mids:
-                        raise VenueUnavailable("spot balance has no USD mid")
-                    mark = Decimal(str(mids[symbol]))
-                    if not mark.is_finite() or mark <= 0:
-                        raise VenueUnavailable("invalid spot USD mid")
+                    try:
+                        mark = Decimal(str(mids[symbol]))
+                    except (KeyError, TypeError, ArithmeticError, ValueError):
+                        mark = None
+                    if mark is None or not mark.is_finite() or mark <= 0:
+                        unpriced.append(str(row["coin"]))
+                        continue
                     spot_value += total * mark
         observed_at = time.time_ns()
         self.__dict__["_last_account_ns"] = observed_at
@@ -1029,6 +1037,7 @@ class HyperliquidExchange:
             margin_used_usd=Decimal(str(summary["totalMarginUsed"])),
             spot_balances=tuple(balances),
             observed_at_ns=observed_at,
+            unpriced=tuple(unpriced),
         )
         return self._last_account
 

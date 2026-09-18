@@ -97,7 +97,11 @@ def _venue_accounts(account: Any, reason: str | None,
         margin_used_usd=str(account.margin_used_usd),
         positions=positions,
     )
-    return perps, observed(observed_at_ns, balances=spot)
+    unpriced = tuple(getattr(account, "unpriced", ()) or ())
+    # A token the venue gives no USD mark is held, listed, and named as unpriced:
+    # it is in no equity figure, and it is not hidden either.
+    return perps, observed(observed_at_ns, balances=spot,
+                           **({"unpriced": list(unpriced)} if unpriced else {}))
 
 
 def _pending(treasury: Any, observed_at_ns: int | None) -> dict[str, Any]:
