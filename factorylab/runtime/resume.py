@@ -781,6 +781,10 @@ def restore_runtime(rt, state: dict) -> None:
     running_digest = getattr(rt, "release_digest", None)  # read before the saved fields land
     running_facilitator = getattr(rt, "facilitator_url", None)
     # Identity validation precedes every mutation of the destination runtime.
+    # The saved world names the release that launched it. A different release does
+    # not continue that identity: it is a new kernel and must be a new world. It
+    # also names the x402 facilitator it launched under: the seller settles every
+    # paid call through it, so a different one is a steering lever outside the diary.
     saved_digest = saved_runtime.get("release_digest")
     if saved_digest is not None and saved_digest != running_digest:
         raise ResumeError("release digest differs from the saved world", code="release_mismatch")
@@ -830,25 +834,12 @@ def restore_runtime(rt, state: dict) -> None:
     # client order IDs rather than adopting this process's fresh nonce. The adapter
     # is rebound below, after a deterministic venue's own state has been restored.
     rt.launch_nonce = saved_runtime.get("launch_nonce")
-    # The saved world names the release that launched it. A different release does
-    # not continue that identity: it is a new kernel and must be a new world. A
-    # checkpoint written before release identity carries no digest; it keeps its
-    # historical Launch (no digest to replay) and, once launched, adopts the
-    # running release so every later resume is bound.
-    saved_digest = saved_runtime.get("release_digest")
-    if saved_digest is not None and saved_digest != running_digest:
-        raise ResumeError("release digest differs from the saved world",
-                          code="release_mismatch")
+    # Both identities were checked above, before any assignment. A checkpoint
+    # written before release identity (or before the facilitator pin) carries
+    # none; it keeps its historical Launch (nothing to replay) and, once
+    # launched, adopts the running value so every later resume is bound.
     rt.release_digest = saved_digest if saved_digest is not None or not rt.started else (
         running_digest)
-    # The saved world names the x402 facilitator it launched under. The seller
-    # settles every paid call through it, so a different one after launch is a
-    # steering lever outside the diary; a checkpoint written before the pin keeps
-    # its historical Launch and adopts the running value once launched.
-    saved_facilitator = saved_runtime.get("facilitator_url")
-    if saved_facilitator is not None and saved_facilitator != running_facilitator:
-        raise ResumeError("x402 facilitator differs from the saved world",
-                          code="facilitator_mismatch")
     rt.facilitator_url = (saved_facilitator if saved_facilitator is not None or not rt.started
                           else running_facilitator)
     rt.observer.predicates = rt.predicates
