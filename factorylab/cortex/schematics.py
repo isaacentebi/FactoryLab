@@ -927,13 +927,12 @@ class SchematicsMixin:
         """The seat's own note index and the artifacts it may read, bounded and paged."""
         notes = sorted(key for key, entry in self.notes.items()
                        if entry.get("owner") == seat)
-        artifacts = [row for row in self._artifact_index()
-                     if row.get("owner") == seat or row.get("public")]
+        count, artifacts = self._artifacts_visible_to(seat, DIRECTORY_PREVIEW)
         return {
             "notes": {"count": len(notes), "keys": notes[:DIRECTORY_PREVIEW]},
-            "artifacts": {"count": len(artifacts),
+            "artifacts": {"count": count,
                           "newest": [{k: row[k] for k in ("sha", "kind", "bytes", "owner")}
-                                     for row in artifacts[:DIRECTORY_PREVIEW]]},
+                                     for row in artifacts]},
             "paging": f"note.list and artifact.list return {DIRECTORY_PAGE} rows a page",
         }
 
@@ -1196,6 +1195,10 @@ class SchematicsMixin:
         inventory = self._provider_inventory()
         release = self._next_release()
         heads = set(self.budget.heads())
+        # Read once for every seat: both are pure reads, and each seat's rows are
+        # filtered from them exactly as its own call would have read them.
+        outstanding = self.queue.outstanding()
+        pending = self.book.pending()
         views: list[dict[str, Any]] = []
         for seat in self.budget.seats():
             assembly = self.assemblies.get(seat)
@@ -1233,7 +1236,8 @@ class SchematicsMixin:
                     "runway_at_observed_burn": runway,
                     "next_release_reachable": reachable,
                 },
-                "open_commitments": self._open_commitments(seat),
+                "open_commitments": self._open_commitments(seat, outstanding=outstanding,
+                                                            pending=pending),
                 # §8's ``spending_authority`` slot, kernel-serialised: the same three
                 # kernel numbers ``your_resources`` renders as USD text, in the
                 # micro-USD the budget book actually holds them in, so arithmetic on
@@ -1264,7 +1268,8 @@ class SchematicsMixin:
             })
         return views
 
-    def _open_commitments(self, seat: str) -> dict[str, Any]:
+    def _open_commitments(self, seat: str, *, outstanding: list | None = None,
+                          pending: list | None = None) -> dict[str, Any]:
         """This seat's outstanding decisions and sealed, unsettled forecasts.
 
         Handles are the seat's own, so naming them discloses nothing about
@@ -1274,13 +1279,14 @@ class SchematicsMixin:
         decisions = [
             {"handle": d.handle, "channel": d.channel, "deadline_utc": _utc(d.deadline_ns),
              "opened_utc": _utc(d.opened_ns), "cost_ceiling_usd": _usd(d.cost_ceiling)}
-            for d in self.queue.outstanding()
+            for d in (self.queue.outstanding() if outstanding is None else outstanding)
             if d.actor == seat or self.handle_to_assembly.get(d.handle) == seat
         ]
         forecasts = [
             {"handle": f.handle, "about_handle": f.about_handle, "predicate": f.predicate_id,
              "q": f.q, "due_at_event": f.due_at_event}
-            for f in self.book.pending() if f.evaluator_id == seat
+            for f in (self.book.pending() if pending is None else pending)
+            if f.evaluator_id == seat
         ]
         return {"open_decisions": decisions[-DIRECTORY_PAGE:],
                 "open_decision_count": len(decisions),
@@ -1308,13 +1314,13 @@ class SchematicsMixin:
               "owner": entry.get("owner"), "updated_window": entry.get("window")}
              for key, entry in self.notes.items()),
             key=lambda row: (-(row["updated_window"] or 0), row["key"]))
-        artifacts = self._artifact_index()
+        listing = self._artifact_listing()
         return {
             "notes": {"count": len(notes), "newest": notes[:DIRECTORY_PREVIEW]},
-            "artifacts": {"count": len(artifacts),
+            "artifacts": {"count": listing.count(),
                           "newest": [{k: row[k] for k in
                                       ("sha", "kind", "bytes", "owner", "public")}
-                                     for row in artifacts[:DIRECTORY_PREVIEW]]},
+                                     for row in listing.newest(DIRECTORY_PREVIEW)]},
             "paging": f"note.list and artifact.list return {DIRECTORY_PAGE} rows a page with "
                       "a cursor; both are indexes, not contents",
         }

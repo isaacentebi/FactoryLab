@@ -140,6 +140,33 @@ def canonical(value) -> bytes:
     ).encode("utf-8")
 
 
+def _canonical_decoded(value) -> bytes:
+    """``canonical(value)`` for a value ``json.loads`` just produced from canonical bytes.
+
+    Such a value holds only dicts with string keys, lists, str, int, float, bool and
+    None, and none of its strings carries a lone surrogate (canonical bytes are valid
+    UTF-8), so ``_plain`` would return it unchanged; the encoding is taken directly.
+    Callers may add str/int values to it first; nothing else.
+    """
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+
+
+def _item_digest(item: dict) -> str:
+    """``sha256(canonical(item))`` for an item decoded from the chain, without its walk.
+
+    A decoded item is plain JSON already, so ``_canonical_decoded`` gives the same
+    bytes, except for a string carrying a lone surrogate (which only a forged item
+    can hold): encoding refuses it, and ``canonical`` then answers as it always did.
+    """
+    try:
+        data = _canonical_decoded(item)
+    except UnicodeEncodeError:
+        data = canonical(item)
+    return hashlib.sha256(data).hexdigest()
+
+
 class KeyStore:
     """Public key access remains sealed until the bound Termination is final."""
 
@@ -462,7 +489,7 @@ class Ledger:
                 item = json.loads(self.__keys._decrypt(token))
                 claimed = item.pop("hash")
                 if (item["seq"] != count or item["prev_hash"] != previous
-                        or hashlib.sha256(canonical(item)).hexdigest() != claimed):
+                        or _item_digest(item) != claimed):
                     raise LedgerIntegrityError("ledger chain differs")
                 self._index_item(index, item)
                 decisions += item.get("kind") == "decision.handle"
@@ -683,8 +710,8 @@ class Ledger:
         if type(item["ts"]) is not int or item["ts"] < 0:
             raise ValueError("ts must be nonnegative integer nanoseconds")
         item.update(seq=self.__count, prev_hash=self.__head)
-        item["hash"] = hashlib.sha256(canonical(item)).hexdigest()
-        token = self.__keys._encrypt(canonical(item))
+        item["hash"] = hashlib.sha256(_canonical_decoded(item)).hexdigest()
+        token = self.__keys._encrypt(_canonical_decoded(item))
         if self.__path is not None:
             line = canonical({"item": token.decode("ascii")}) + b"\n"
             descriptor = os.open(self.__path,
@@ -735,9 +762,8 @@ class Ledger:
             if len(tokens) != self.__count:
                 return False
             prefix = self.__verified_tokens
-            if len(tokens) < len(prefix) or any(
-                token != tokens[seq] for seq, token in enumerate(prefix)
-            ):
+            # The whole stored prefix is still compared, element by element, at C speed.
+            if len(tokens) < len(prefix) or tuple(tokens[:len(prefix)]) != prefix:
                 return False
             previous = self.__verified_head
             for seq in range(len(prefix), len(tokens)):
@@ -746,7 +772,7 @@ class Ledger:
                 digest = item.pop("hash")
                 if item["seq"] != seq or item["prev_hash"] != previous:
                     return False
-                if hashlib.sha256(canonical(item)).hexdigest() != digest:
+                if _item_digest(item) != digest:
                     return False
                 previous = digest
             if previous != self.__head:

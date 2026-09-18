@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import bisect
 import hashlib
+import heapq
 import json
 import math
 from dataclasses import dataclass, replace
@@ -55,6 +57,143 @@ def _publishable(policy: dict[str, float]) -> dict[str, float]:
         return dict(policy)  # full precision rather than a rounding that left the simplex
     rounded[top] = adjusted
     return rounded
+
+
+class ArtifactListing:
+    """The archive's directory rows in listing order, kept sorted as the archive changes.
+
+    Listing order is newest reference first, then by hash, then by the order the
+    references were made: exactly the order a stable sort of ``store.entries()``
+    by ``(-created_ns, sha)`` produces. Each row is the dict the directory always
+    built for that reference. Rows are shared with the listing; the runtime hands
+    out copies.
+    """
+
+    def __init__(self, store: Any) -> None:
+        self.store = store
+        self.epoch: int | None = None
+        self.keys: list[tuple] = []                 # every row's sort key, sorted
+        self.row: dict[tuple, dict[str, Any]] = {}  # sort key -> row
+        self.by_sha: dict[str, list[tuple]] = {}
+        self.by_owner: dict[str, list[tuple]] = {}  # each sorted
+        self.public: list[tuple] = []               # sorted
+        self.owner_public: dict[str, int] = {}      # rows both owned and published
+
+    def sync(self) -> None:
+        """Fold every change the store reports into the listing."""
+        store = self.store
+        if not hasattr(store, "drain_changes"):
+            self._rebuild(self._rows_from_list(store))
+            return
+        epoch, changed = store.drain_changes()
+        if epoch != self.epoch:
+            self.epoch = epoch
+            self._rebuild(row for sha in list(store.index) for row in self._rows_for_sha(sha))
+            return
+        for sha in sorted(changed):
+            for key in self.by_sha.pop(sha, ()):
+                self._remove(key)
+            for key, row in self._rows_for_sha(sha):
+                self._insert(key, row)
+
+    def rows(self) -> list[dict[str, Any]]:
+        return [self.row[key] for key in self.keys]
+
+    def rows_for(self, owner: str) -> list[dict[str, Any]]:
+        return [self.row[key] for key in self.by_owner.get(owner, ())]
+
+    def count(self) -> int:
+        return len(self.keys)
+
+    def newest(self, limit: int) -> list[dict[str, Any]]:
+        return [self.row[key] for key in self.keys[:limit]]
+
+    def visible_to(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
+        """The count and newest rows a seat owns or that are published, in listing order."""
+        own = self.by_owner.get(seat, [])
+        count = len(own) + len(self.public) - self.owner_public.get(seat, 0)
+        newest: list[dict[str, Any]] = []
+        last = None
+        for key in heapq.merge(own, self.public):
+            if key == last:
+                continue
+            if len(newest) >= limit:
+                break
+            last = key
+            newest.append(self.row[key])
+        return count, newest
+
+    @staticmethod
+    def _key(row: dict[str, Any], position: int) -> tuple:
+        return (-(row["updated_ns"] or 0), str(row["sha"]), position)
+
+    def _rows_for_sha(self, sha: str):
+        store = self.store
+        record = store.index.get(sha)
+        if record is None:
+            return
+        kind = record.get("kind")
+        references = store.references(sha, record)
+        for position, (owner, reference) in enumerate(references.items()):
+            row = {"sha": sha, "owner": owner, "public": bool(reference.get("public")),
+                   "bytes": record["bytes"], "updated_ns": reference.get("ts", record["ts"])}
+            row["title"] = str(sha)[:12]
+            row["type"] = row["kind"] = kind
+            yield self._key(row, position), row
+
+    def _rows_from_list(self, store: Any):  # pragma: no cover - a store from before C1
+        kinds = {sha: record.get("kind") for sha, record in store.index.items()}
+        if hasattr(store, "entries"):
+            rows = [{"sha": sha, "owner": owner, "public": bool(public), "bytes": size,
+                     "updated_ns": ts} for sha, owner, public, size, ts in store.entries()]
+        else:
+            rows = [{"sha": row["sha"], "owner": row["owner"],
+                     "public": bool(row.get("public")), "bytes": row["bytes"],
+                     "updated_ns": row["ts"]} for row in store.list()]
+        for position, row in enumerate(rows):
+            row["title"] = str(row["sha"])[:12]
+            row["type"] = row["kind"] = kinds.get(row["sha"])
+            yield self._key(row, position), row
+
+    def _rebuild(self, keyed) -> None:
+        self.keys, self.row, self.by_sha = [], {}, {}
+        self.by_owner, self.public, self.owner_public = {}, [], {}
+        for key, row in keyed:
+            self.row[key] = row
+            self.keys.append(key)
+            self.by_sha.setdefault(row["sha"], []).append(key)
+            self.by_owner.setdefault(row["owner"], []).append(key)
+            if row["public"]:
+                self.public.append(key)
+                self.owner_public[row["owner"]] = self.owner_public.get(row["owner"], 0) + 1
+        self.keys.sort()
+        self.public.sort()
+        for keys in self.by_owner.values():
+            keys.sort()
+
+    def _insert(self, key: tuple, row: dict[str, Any]) -> None:
+        self.row[key] = row
+        bisect.insort(self.keys, key)
+        self.by_sha.setdefault(row["sha"], []).append(key)
+        bisect.insort(self.by_owner.setdefault(row["owner"], []), key)
+        if row["public"]:
+            bisect.insort(self.public, key)
+            self.owner_public[row["owner"]] = self.owner_public.get(row["owner"], 0) + 1
+
+    def _remove(self, key: tuple) -> None:
+        row = self.row.pop(key)
+        _discard_sorted(self.keys, key)
+        owned = self.by_owner[row["owner"]]
+        _discard_sorted(owned, key)
+        if not owned:
+            del self.by_owner[row["owner"]]
+        if row["public"]:
+            _discard_sorted(self.public, key)
+            self.owner_public[row["owner"]] -= 1
+
+
+def _discard_sorted(keys: list[tuple], key: tuple) -> None:
+    del keys[bisect.bisect_left(keys, key)]
 
 
 @dataclass
@@ -549,33 +688,48 @@ class ComputeMixin:
         is not scoped: C1 makes an artifact readable when it is published *or*
         listed in the directory, and an index of hashes, sizes and owners is what
         makes shared memory findable without disclosing a byte of any of it.
+
+        The rows are detached copies: a caller may change them freely.
+        """
+        return [dict(row) for row in self._artifact_listing().rows()]
+
+    def _artifact_listing(self) -> ArtifactListing:
+        """The directory's sorted view of the archive, brought up to date with it.
+
+        One listing lives as long as its store; each call folds in only the hashes
+        put or collected since the last one (``ArtifactStore.drain_changes``), so
+        a world block that lists the archive for every seat no longer re-reads
+        and re-sorts all of it once per seat. A store without change tracking is
+        listed from scratch on every call, as it always was.
         """
         store = self.artifacts
-        kinds = {sha: record.get("kind") for sha, record in store.index.items()}
-        if hasattr(store, "entries"):
-            rows = [{"sha": sha, "owner": owner, "public": bool(public), "bytes": size,
-                     "updated_ns": ts} for sha, owner, public, size, ts in store.entries()]
-        else:  # pragma: no cover - a store from before C1
-            rows = [{"sha": row["sha"], "owner": row["owner"],
-                     "public": bool(row.get("public")), "bytes": row["bytes"],
-                     "updated_ns": row["ts"]} for row in store.list()]
-        for row in rows:
-            row["title"] = str(row["sha"])[:12]
-            row["type"] = row["kind"] = kinds.get(row["sha"])
-        rows.sort(key=lambda row: (-(row["updated_ns"] or 0), str(row["sha"])))
-        return rows
+        listing = self.__dict__.get("_artifact_listing_view")
+        if listing is None or listing.store is not store:
+            listing = ArtifactListing(store)
+            if hasattr(store, "drain_changes"):
+                self._artifact_listing_view = listing
+        listing.sync()
+        return listing
 
     def _artifact_index(self, owner: str | None = None,
                         cursor: str | None = None) -> list[dict[str, Any]]:
         """The archive's rows, optionally one owner's; the full list for the world block."""
-        rows = self._artifact_entries()
-        if owner is not None:
-            rows = [row for row in rows if row["owner"] == owner]
+        listing = self._artifact_listing()
+        rows = listing.rows() if owner is None else listing.rows_for(owner)
         if cursor:
             shas = [row["sha"] for row in rows]
             start = shas.index(cursor) + 1 if cursor in shas else len(rows)
             rows = rows[start:]
-        return rows
+        return [dict(row) for row in rows]
+
+    def _artifacts_visible_to(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
+        """How many rows ``seat`` owns or sees published, and the newest ``limit`` of them.
+
+        Exactly ``[row for row in self._artifact_index() if row["owner"] == seat or
+        row["public"]]`` counted and truncated, without walking the whole archive.
+        """
+        count, rows = self._artifact_listing().visible_to(seat, limit)
+        return count, [dict(row) for row in rows]
 
     def _artifact_page(self, args: dict) -> dict[str, Any]:
         """One ``artifact.list`` page: rows, the total, and the cursor that continues it.

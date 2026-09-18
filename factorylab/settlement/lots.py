@@ -242,10 +242,20 @@ class LotTable:
 
     def account(self, handle: str) -> ReturnAccount:
         """Return the original account or fail for an unknown return."""
-        for account in self.returns:
-            if account.handle == handle:
-                return account
-        raise KeyError(handle)
+        # The table is immutable, so its handle index is built once, on first read,
+        # and never goes stale: every change is a new table with no index yet. The
+        # first account with a handle wins, exactly as the linear scan found it. It
+        # is not a field, so equality, ``fields()`` and checkpoints never see it.
+        index = self.__dict__.get("_accounts_by_handle")
+        if index is None:
+            index = {}
+            for account in self.returns:
+                index.setdefault(account.handle, account)
+            object.__setattr__(self, "_accounts_by_handle", index)
+        try:
+            return index[handle]
+        except KeyError:
+            raise KeyError(handle) from None
 
     def order(self, order_id: str, handle: str, size: str) -> "LotTable":
         """Bind an accepted order to its calling return; ownership cannot be replaced."""
@@ -452,4 +462,8 @@ class LotTable:
         return self._accounts(updates)
 
     def _accounts(self, updates: dict[str, ReturnAccount]) -> "LotTable":
+        if not updates:
+            # Nothing changes: the table is immutable, so it is its own successor
+            # (and keeps the handle index it has already built).
+            return self
         return replace(self, returns=tuple(updates.get(r.handle, r) for r in self.returns))
