@@ -187,8 +187,7 @@ def scripted_runtime_run(_scripted_run_cache):
 #   gate   every test that runs a world or reads a shared scripted run
 #   slow   kills and resumes real subprocesses
 # ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
-_SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run",
-                                    "w1_scripted_diary"})
+_SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run"})
 _WORLD_CLI_COMMANDS = frozenset({"run", "resume"})
 # A check-tier test whose call phase takes longer than this fails: it belongs in gate.
 CHECK_LIMIT_ENV = "FACTORYLAB_CHECK_LIMIT_S"

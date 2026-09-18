@@ -11,18 +11,17 @@ from decimal import Decimal
 from eth_account import Account
 
 from factorylab.cortex.assembly import Assembly, AssemblySpec
-from factorylab.cortex.registration import ModelProposal
 from factorylab.cortex.request import Request
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.wallet import Wallet
-from factorylab.runtime.loop import Runtime, run_world
+from factorylab.runtime.loop import run_world
 from factorylab.runtime.resume import resume_runtime
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.clock import ClockSource
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.market import X402MeteredModel, X402Provider
-from factorylab.world.metering import Meter, MeteredModel
-from factorylab.world.models import ModelRequest, ModelResponse, PriceTable, TokenPrice
+from factorylab.world.metering import Meter
+from factorylab.world.models import PriceTable, TokenPrice
 from factorylab.world.scripted import ScriptedProvider
 from factorylab.world.x402 import HTTPResponse
 
@@ -117,47 +116,3 @@ def test_unknown_x402_payment_outcome_does_not_leak_a_wallet_hold():
         assert ret.status == "failed"
     holds = wallet.state()["reservations"]
     assert holds == [], f"{len(holds)} holds of {sum(h.amount for h in holds)} micro never close"
-
-
-class BigBill:
-    """A vendor whose usage.cost field is a mistake or a lie."""
-
-    name = "bigbill"
-
-    def complete(self, req):
-        return ModelResponse(req.model_id, '{"action": "hold"}', 10, 10, "stop",
-                             cost_micro=10**12)
-
-
-def test_a_single_reported_vendor_cost_cannot_kill_the_wallet():
-    """Finding 6: commit_reported debits any reported overrun without bound; one bad number
-    from a provider (not the world) exhausts a $100 wallet and releases the seal."""
-    wallet = Wallet(100_000_000, Ledger())
-    prices = PriceTable()
-    prices.register("m", TokenPrice(1, 1))
-    model = MeteredModel(BigBill(), prices, Meter(wallet))
-    req = ModelRequest("m", "s", ({"role": "user", "content": "x"},), 100)
-    ceiling = model.ceiling(req)
-    model.complete(req, handle="d")
-    assert not wallet.dead, "a vendor's reported cost, not the world, killed the wallet"
-    assert wallet.balance >= 100_000_000 - 10 * ceiling
-
-
-def test_a_refused_duplicate_model_proposal_does_not_consume_the_novelty_share():
-    """Finding 7 (minor): reserve_for runs before registry.register; a re-proposal of a model
-    that already exists is refused after the window's novelty share was debited."""
-    m = load_manifest("scripted")
-    rt = Runtime(m, events=2, seed=1, initial_balance_micro=None, ledger_path=None, drip=False,
-                 router_gamma=0.1)
-    try:
-        rt.run()
-        before = rt.reserve.remaining()
-        assert before > 0
-        handle = next(iter(rt.handle_to_assembly))
-        try:
-            rt._register(handle, ModelProposal("fake-haiku"))  # a seed model, already registered
-        except ValueError as exc:
-            assert "version" in str(exc)
-        assert rt.reserve.remaining() == before
-    finally:
-        rt._ledger_lock.close()

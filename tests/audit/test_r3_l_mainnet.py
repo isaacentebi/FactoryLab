@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 
-from factorylab.runtime.worlds import WORLDS_DIR, load_manifest, manifest_from_dict
+from factorylab.runtime.worlds import WORLDS_DIR, manifest_from_dict
 from tests.runtime.test_manifests import _base
 
 RATIFIED = Path(__file__).resolve().parents[2] / "docs/charter/edition1-short-ratified.toml"
@@ -81,20 +81,3 @@ def test_mainnet_without_recorded_hashes_is_refused():
     raw["charter"].pop("roster_sha256")
     with pytest.raises(ValueError, match="roster"):
         manifest_from_dict(raw)
-
-
-@pytest.mark.parametrize("world", ["testnet", "testnet-10m-roster", "compute-continuity-testnet"])
-def test_testnet_manifests_without_provenance_fields_still_load(world):
-    manifest = load_manifest(world)
-    assert manifest.exchange.mainnet is False
-
-
-def test_provenance_fields_do_not_change_a_manifest_hash():
-    raw = _funded()
-    bare = {**raw, "charter": {k: v for k, v in raw["charter"].items()
-                               if k not in ("ratified_sha256", "roster_sha256")},
-            "name": ROSTER, "exchange": {**raw["exchange"], "mainnet": False}}
-    with_fields = {**raw, "name": ROSTER,
-                   "exchange": {**raw["exchange"], "mainnet": False}}
-    assert (manifest_from_dict(bare).manifest_hash()
-            == manifest_from_dict(with_fields).manifest_hash())

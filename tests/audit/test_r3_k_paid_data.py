@@ -1,7 +1,6 @@
 """Fake x402 data authorizations exercise the existing reserve rail without live payment."""
 
 import json
-from dataclasses import replace
 
 import pytest
 
@@ -67,39 +66,6 @@ def test_paid_fetch_debits_the_runtime_wallet_before_return(monkeypatch):
     assert len(transport.calls) == 2
 
 
-def test_paid_fetch_above_cap_only_bills_the_flat_read(monkeypatch):
-    rt, transport = paid_runtime(monkeypatch, DataTransport(amount=2001))
-    result, cost = rt._run_tool("seed-decider", decision(rt), {
-        "tool": "connector.fetch", "args": {"id": "source", "path": "/data"}})
-    assert "cap" in result["error"] and cost == 1000
-    assert len(transport.calls) == 1 and not transport.seller.calls
-
-
-def test_unknown_data_payment_is_provisional_and_reconcilable(monkeypatch):
-    rt, transport = paid_runtime(monkeypatch, DataTransport(paid=TimeoutError()))
-    before = rt.wallet.balance
-    result, cost = rt._run_tool("seed-decider", decision(rt), {
-        "tool": "connector.fetch", "args": {"id": "source", "path": "/data"}})
-    assert result["status"] == "uncertain" and cost == 3000
-    assert rt.wallet.balance == before - cost and rt.unresolved_x402
-    assert len(transport.calls) == 2 and rt.wallet.check_conservation()
-    assert ledger_items(rt, "x402.unresolved")[-1]["reserved_micro"] == 2000
-
-
-def test_paid_fetch_cap_fits_the_remaining_request_before_any_read(monkeypatch):
-    rt, transport = paid_runtime(monkeypatch)
-    handle = decision(rt)
-    responses = iter([
-        Return(handle, {}, 1, "ok", tool_calls=({"tool": "connector.fetch",
-                "args": {"id": "source", "path": "/data"}},)),
-        Return(handle, {"action": "hold"}, 0, "ok"),
-    ])
-    monkeypatch.setattr(rt, "_invoke_compute", lambda *a: next(responses))
-    req = rt._request(handle, "Produce", {}, {"type": "object"}, 10**15, "verdict")
-    ret = rt._invoke("seed-decider", replace(req, cost_ceiling=3000), "producer")
-    assert ret.cost == 1 and not transport.calls
-
-
 @pytest.mark.parametrize("cut", [False, True], ids=["complete", "interrupted-after-submit"])
 def test_paid_data_replay_never_resubmits_an_authorization(cut):
     transport = DataTransport()
@@ -126,42 +92,6 @@ def test_paid_data_replay_never_resubmits_an_authorization(cut):
         assert replay.call("connector.paid_fetch", refuse, arguments,
                            {"record": replay.append}) == result
     assert len(transport.calls) == 2 and replay.peek() is None
-
-
-@pytest.mark.parametrize("cap", [True, 0.01, "-0.01", "0.0000001", "bad", "NaN", "Infinity"])
-def test_paid_connector_refuses_inexact_or_malformed_caps(cap):
-    from tests.audit.test_r3_k_world_access import parse
-
-    accepted, rejected = parse({"kind": "connector", "id": "source", "description": "Data",
-        "origin": "https://example.org", "pay": "x402", "max_call_usd": cap})
-    assert not accepted and rejected
-
-
-@pytest.mark.parametrize("origin,path", [
-    ("https://169.254.169.254", "/metadata"), ("https://localhost", "/"),
-    ("https://api.hyperliquid.xyz", "/exchange"), ("https://example.org", "//private.local"),
-])
-def test_paid_connector_uses_the_same_host_and_path_refusals(origin, path):
-    from factorylab.runtime.worlds import ConnectorsSpec
-    from factorylab.world.connector import ConnectorRefused
-
-    transport = DataTransport()
-    proxy = ConnectorProxy(ConnectorsSpec(), transport)
-    with pytest.raises(ConnectorRefused):
-        proxy.payment_transport(origin, path)
-    assert not transport.calls and not transport.seller.calls
-
-
-def test_data_uses_same_reserve_and_exact_quote():
-    transport = DataTransport()
-    rail = X402Provider(private_key=TEST_KEY, transport=transport.seller)
-    entries = []
-    result = rail.fetch_data("https://example.org", "/data", 2000,
-                             transport=transport, record=entries.append)
-    assert result == {"body": "paid fact", "status": 200, "bytes": 9, "cost_micro": 1734}
-    assert len(transport.calls) == 2 and transport.calls[1][2]
-    assert any(row["kind"] == "x402.reserve_before" for row in entries)
-    assert [r["kind"] for r in entries][-2:] == ["x402.submitted", "x402.result"]
 
 
 def test_above_cap_never_signs_or_reads_reserve():

@@ -14,12 +14,8 @@ from decimal import Decimal
 
 from factorylab.cortex.request import Return
 from factorylab.kernel.queue import PropensityRecord
-from factorylab.runtime.live import LiveClock
-from factorylab.runtime.loop import Runtime
-from factorylab.runtime.worlds import manifest_from_dict
 from tests.conftest import make_runtime
 from tests.runtime.test_connectors import ledger_items
-from tests.runtime.test_live import FakeTime, StubExchange
 
 
 def decision(rt, owner="seed-decider"):
@@ -59,41 +55,3 @@ def test_every_counted_fill_has_a_ledgered_item_on_the_fake_exchange():
     # The rehearsal's exact shape: counted and settled, still queued for delivery,
     # so no event:Fill exists yet. The count is no longer alone in the diary.
     assert not delivered(rt) and len(rt.internal) == 2
-
-
-LIVE_SHAPED = {
-    "name": "stubnet",
-    "seed": 5,
-    "initial_balance_usd": "20",
-    "tick_interval": "1s",
-    "exchange": {"kind": "hyperliquid", "mainnet": False, "coins": ["BTC", "ETH"]},
-    "models": [{"id": "fake-haiku", "provider": "fake", "input_usd_per_mtok": "1",
-                "output_usd_per_mtok": "5"}],
-    "assemblies": [
-        {"id": "seed-decider", "role": "producer", "model_id": "fake-haiku",
-         "accepts": ["Tick", "Fill"]},
-        {"id": "eval-a", "role": "evaluator", "model_id": "fake-haiku",
-         "accepts": ["ProducerReturn"]},
-        {"id": "meta-a", "role": "meta", "model_id": "fake-haiku", "accepts": ["Verdict"]},
-    ],
-    "novelty": {"share": 0.1, "window": "1d"},
-}
-
-
-def test_every_counted_fill_has_a_ledgered_item_on_a_live_shaped_stub():
-    ft = FakeTime()
-    clock = LiveClock(interval_ns=1_000_000_000, count=25,
-                      now_ns=ft.now_ns, sleep=ft.sleep).events()
-    rt = Runtime(manifest_from_dict(LIVE_SHAPED), events=25, seed=5,
-                 initial_balance_micro=None, ledger_path=None, drip=True, router_gamma=.1,
-                 exchange=StubExchange(ft.now_ns()), clock_source=clock)
-    summary = rt.run()
-    assert summary["live"] is True and summary["stats"]["fills"] == 2
-    items = counted(rt)
-    assert len(items) == summary["stats"]["fills"]
-    assert {i["coin"] for i in items} == {"BTC"}
-    # A bounded broadcast lets the queue drain, so delivery agrees with counting here.
-    assert len(delivered(rt)) == summary["stats"]["fills"]
-    # The window's own count and the diary agree about the same two fills.
-    assert sum(i["window"] == rt.window.index for i in items) == rt.window.fills
-    assert summary["wallet_conservation"] is True

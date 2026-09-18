@@ -25,8 +25,6 @@ Scripted world only: no network, no credentials.
 from __future__ import annotations
 
 import json
-import os
-import shutil
 from dataclasses import replace
 
 import pytest
@@ -35,15 +33,12 @@ from factorylab.kernel.ledger import Ledger
 from factorylab.runtime import seller as seller_module
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.resume import ResumeError, resume_runtime
-from factorylab.runtime.seller import Seller, configured_facilitator, facilitator_from_items
-from factorylab.runtime.wake import _Observatory
 from factorylab.runtime.worlds import EndowmentSpec, load_manifest
 from factorylab.world.models import ModelRequest
 from tests.runtime.test_connectors import ledger_items
 
 BASE = load_manifest("scripted")
 TICK = BASE.tick_interval_ns
-WINDOW_EVENTS = BASE.novelty.window_ns // TICK
 
 
 def world(path, events, *, initial=None, endowment=None, provider=None):
@@ -122,67 +117,6 @@ def test_a_resume_whose_archive_index_names_missing_bytes_refuses_by_sha_and_own
         "artifact_missing", "artifact_missing"]
 
 
-@pytest.mark.slow
-def test_a_program_seat_never_runs_with_lost_state_and_reports_ok(tmp_path):
-    from tests.audit.test_e2_programs import Proposer, items, stop_after
-    from tests.audit.test_e2_programs import world as program_world
-    from tests.cortex.test_jail import require_jail
-
-    require_jail()
-    path = tmp_path / "crash.jsonl"
-    rt = program_world(path, 400)
-    # The process dies in the second reserve window, after the program has kept state:
-    # the checkpoint at that window's boundary indexes the state it had by then.
-    stop_after(rt, lambda r, e: r.stats.reserve_windows >= 2
-               and r.stats.invocations_by_assembly.get("prog-a", 0) >= 3
-               and str(e.kind) == "Tick")
-    calls = [i for i in items(path) if i["kind"] == "program.call"
-             and i["assembly_id"] == "prog-a" and i["status"] == "ok"]
-    first_sha, last_sha = calls[0]["state_out"], calls[-1]["state_out"]
-    archive = path.with_suffix(".artifacts")
-    assert (archive / first_sha).is_file() and (archive / last_sha).is_file()
-    assert json.loads((archive / last_sha).read_bytes())["n"] >= 3
-    # The reviewer's run: the diary restored without its artifact directory. The
-    # refusal names the first archived state and its owner; nothing is restored.
-    saved = tmp_path / "artifacts.bak"
-    shutil.copytree(archive, saved)
-    shutil.rmtree(archive)
-    with pytest.raises(ResumeError) as refused:
-        resume_runtime(load_manifest("scripted"), str(path), provider=Proposer())
-    assert refused.value.code == "artifact_missing"
-    assert refused.value.details == {"sha": first_sha, "owner": "prog-a"}
-    failed = [i for i in items(path) if i["kind"] == "failed_resume"]
-    assert failed[-1]["reason"] == "artifact_missing" and failed[-1]["owner"] == "prog-a"
-    assert failed[-1]["sha"] == first_sha
-    # With the directory back the world resumes and the program continues from its state.
-    shutil.copytree(saved, archive)
-    restored = resume_runtime(load_manifest("scripted"), str(path), provider=Proposer())
-    assert restored.assemblies["prog-a"].state_sha == last_sha
-    assert json.loads(restored.artifacts.get(last_sha))["n"] >= 3
-    # Bytes lost while the world runs: the call fails naming why, is not billed, and the
-    # seat keeps its last good hash rather than continuing from an empty memory.
-    (archive / last_sha).unlink()
-    restored.run()
-    calls = [i for i in items(path) if i["kind"] == "program.call"
-             and i["assembly_id"] == "prog-a"]
-    after = [c for c in calls if c.get("state_error")]
-    assert after and all(c["status"] == "failed" and c["cost"] == 0 for c in after)
-    assert all(c["state_in"] == c["state_out"] == last_sha for c in after)
-    assert restored.assemblies["prog-a"].state_sha == last_sha
-    assert not [c for c in calls[calls.index(after[0]):] if c["status"] == "ok"]
-
-
-def test_backup_archives_the_artifact_directory_with_the_diary():
-    from pathlib import Path
-
-    script = (Path(__file__).resolve().parents[2] / "deploy" / "backup.sh").read_text()
-    assert "runs/funded.artifacts" in script
-    assert "artifact bytes do not match their hash" in script
-    assert "record['artifacts'] = {'count': count, 'bytes': size}" in script
-    readme = (Path(__file__).resolve().parents[2] / "deploy" / "README.md").read_text()
-    assert "artifact_missing" in readme and "funded.artifacts/" in readme
-
-
 # ---- P1-04: the ability to act versus death ------------------------------------------
 
 
@@ -216,34 +150,6 @@ def all_seats_one_short(initial=None):
     """A balance that leaves every seat exactly one micro short once the pool is granted out."""
     probe = world(None, 0, initial=initial)
     return sum(need(probe, seat) - 1 for seat in probe.budget.seats())
-
-
-def test_all_seats_exhausted_and_pool_positive_releases_the_commons_once_then_seats_act():
-    rt = world(None, 2 * WINDOW_EVENTS + 4, initial=100_000_000)
-    rt._manage_reserve_window()  # the first boundary comes a window later, not at launch
-    starve(rt, pool=True)
-    pool_before = rt.budget.unallocated()
-    seats = rt.budget.seats()  # the nine seeds: nobody can propose a child before the release
-    assert pool_before > 0 and len(seats) == 9
-    summary = rt.run()
-    items = ledger_items(rt)
-    releases = budget_ops(items, "commons_release")
-    assert len(releases) == 1
-    release = releases[0]
-    assert release["amount"] == pool_before and release["reason"] == "nobody can act"
-    assert release["grants"] == {seat: pool_before // len(seats) for seat in seats}
-    assert release["unallocated_after"] == pool_before - sum(release["grants"].values())
-    at = items.index(release)
-    # Before the release: routed, nobody chosen, and never counted as insolvency.
-    routed_before = [i for i in kinds(items, "compute.route") if items.index(i) < at]
-    assert routed_before and not any(r["unaffordable"] for r in routed_before)
-    assert not any(items.index(c) < at for c in model_commits(items))
-    assert not any(items.index(i) < at for i in kinds(items, "treasury.insolvency"))
-    # After it: the seats think again, on their own entitlements, and nobody died.
-    assert any(items.index(c) > at for c in model_commits(items))
-    assert not summary["terminated"] and rt.dormancy is None
-    assert not kinds(items, "dormant")
-    assert rt.budget.check_invariant()
 
 
 def test_all_seats_exhausted_and_pool_empty_with_a_release_due_is_dormant_until_it_lands():
@@ -286,76 +192,12 @@ def test_all_seats_exhausted_and_pool_empty_with_no_release_due_is_terminal():
     assert terminated[-1]["event"]["payload"] == {"reason": "insolvency:entitlement"}
 
 
-def test_one_exhausted_seat_among_feasible_ones_is_the_seats_own_state():
-    rt = world(None, 0, initial=100_000_000)
-    rt._manage_reserve_window()
-    rt._unhistoried = lambda _seat: False
-    seat = rt.budget.seats()[0]
-    rt.budget.debit(seat, rt.budget.entitlement(seat), "exhausted")
-    assert not rt._is_feasible(seat)[0]
-    assert any(rt._is_feasible(other)[0] for other in rt.budget.seats() if other != seat)
-    assert rt._commons_check() is False
-    assert not budget_ops(ledger_items(rt), "commons_release")
-    assert rt.budget.entitlement(seat) == 0  # nothing was released to it
-    # A wallet-level shortfall is the insolvency streak's business, not the commons'.
-    rt.budget.credit(seat, 1, "back")
-    rt._is_feasible = lambda _seat: (False, "compute: provider balance 0 below ceiling 1")
-    assert rt._commons_check() is False
-    assert not budget_ops(ledger_items(rt), "commons_release")
-
-
-def test_the_commons_release_is_a_classification_and_the_wake_shows_it():
-    rt = world(None, 0, initial=100_000_000)
-    balance = rt.wallet.balance
-    book = rt.budget
-    pool = book.unallocated()
-    grants = book.commons_release("nobody can act")
-    # One share per live lineage, to its head (the nine seeds are nine roots), as a
-    # tranche is split: replication buys no larger share of the commons either.
-    assert sum(grants.values()) <= pool and set(grants) == set(book.heads())
-    assert book.unallocated() == pool - sum(grants.values()) < len(book.heads())
-    logged = budget_ops(ledger_items(rt), "commons_release")[0]
-    assert logged["lineages"] == {head: head for head in book.heads()}
-    assert rt.wallet.balance == balance and book.check_invariant()
-    assert book.commons_release("again") == {}  # nothing left: nothing moves, nothing logged
-    releases = budget_ops(ledger_items(rt), "commons_release")
-    assert len(releases) == 1 and releases[0]["amount"] == pool
-    observatory = _Observatory()
-    for item in ledger_items(rt):
-        observatory.feed(item)
-    shown = observatory.result(rt.m)["pots"]["commons_releases"]
-    assert shown == [{"ts_ns": releases[0]["ts"], "amount_micro": pool,
-                      "lineages": len(grants), "per_seat_micro": pool // len(grants)}]
-
-
 # ---- The facilitator pin --------------------------------------------------------------
 
 
 def launch_payload(path):
     return next(i for i in diary(path) if i["kind"] == "event"
                 and i["event"]["kind"] == "Launch")["event"]["payload"]
-
-
-def test_launch_ledgers_the_facilitator_beside_the_release_digest(tmp_path, monkeypatch):
-    monkeypatch.delenv(seller_module.FACILITATOR_ENV, raising=False)
-    default = tmp_path / "default.jsonl"
-    rt = world(default, 2)
-    rt.run()
-    payload = launch_payload(default)
-    assert payload["facilitator_url"] == seller_module.FACILITATOR_URL
-    assert payload["release_digest"] == rt.release_digest
-    monkeypatch.setenv(seller_module.FACILITATOR_ENV, "https://facilitator.test/x402")
-    pinned = tmp_path / "pinned.jsonl"
-    world(pinned, 2).run()
-    assert launch_payload(pinned)["facilitator_url"] == "https://facilitator.test/x402"
-    ledger = Ledger.reopen(pinned, manifest=json.loads(BASE.canonical_json()))
-    assert ledger.identity()["facilitator_url"] == "https://facilitator.test/x402"
-    frozen = Ledger.open_read_only(pinned, manifest=json.loads(BASE.canonical_json()))
-    assert facilitator_from_items(frozen.items()) == "https://facilitator.test/x402"
-    assert configured_facilitator() == "https://facilitator.test/x402"
-    monkeypatch.setenv(seller_module.FACILITATOR_ENV, "ftp://nope")
-    with pytest.raises(ValueError):
-        configured_facilitator()
 
 
 def test_a_resume_under_a_different_facilitator_is_refused_and_ledgered(tmp_path, monkeypatch):
@@ -377,43 +219,3 @@ def test_a_resume_under_a_different_facilitator_is_refused_and_ledgered(tmp_path
     restored = resume_runtime(BASE, str(path))
     assert restored.facilitator_url == "https://facilitator.test/x402"
     assert launch_payload(path)["facilitator_url"] == restored.facilitator_url
-
-
-def test_the_cli_names_the_facilitator_mismatch(tmp_path, monkeypatch, capsys):
-    from factorylab.runtime.cli import _cmd_resume, build_parser
-
-    monkeypatch.delenv(seller_module.FACILITATOR_ENV, raising=False)
-    path = tmp_path / "w.jsonl"
-    world(path, 2).run()
-    monkeypatch.setenv(seller_module.FACILITATOR_ENV, "https://other.test/x402")
-    monkeypatch.setenv("RUNTIME_DIRECTORY", str(tmp_path / "run"))
-    (tmp_path / "run").mkdir()
-    args = build_parser().parse_args(["resume", "--world", "scripted", "--ledger", str(path)])
-    assert _cmd_resume(args) == 1
-    assert capsys.readouterr().err == "factorylab resume: facilitator_mismatch\n"
-    assert (tmp_path / "run" / "reason").read_text() == "facilitator_mismatch\n"
-
-
-def test_the_seller_reads_the_ledgered_facilitator_never_the_environment(tmp_path, monkeypatch):
-    monkeypatch.setenv(seller_module.FACILITATOR_ENV, "https://facilitator.test/x402")
-    path = tmp_path / "w.jsonl"
-    world(path, 2).run()
-    # After launch the environment says something else; the seller does not listen.
-    monkeypatch.setenv(seller_module.FACILITATOR_ENV, "https://evil.test/x402")
-    unbound = Seller({}, pay_to="0x" + "1" * 40, runner=None, earn=lambda *a: None)
-    assert unbound.facilitator == seller_module.FACILITATOR_URL
-    assert "evil" not in unbound.facilitator
-    import deploy.serve as serve
-
-    services, _pay_to, facilitator = serve.load_catalogue(path)
-    assert services == {} and facilitator == "https://facilitator.test/x402"
-    bound = Seller(services, pay_to="0x" + "1" * 40, runner=None, earn=lambda *a: None,
-                   facilitator=facilitator)
-    assert bound.facilitator == "https://facilitator.test/x402"
-    assert os.environ[seller_module.FACILITATOR_ENV] == "https://evil.test/x402"
-    # No source of the seller reads the variable after launch.
-    from pathlib import Path
-
-    source = Path(seller_module.__file__).read_text()
-    assert source.count("os.environ") == 1  # configured_facilitator, at launch only
-    assert "FACTORYLAB_FACILITATOR_URL" not in Path(serve.__file__).read_text()

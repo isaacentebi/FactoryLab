@@ -343,7 +343,7 @@ def test_an_empty_thinking_pot_does_not_stop_an_order_the_venue_can_carry(mode):
     reserve had $107 left. C5 keeps the two pots apart by design: the wallet buys
     thoughts and the trading principal sits on the venue, so an empty wallet is not
     a reason to refuse an order the venue can collateralise. What refuses one now is
-    the venue's own free collateral; ``tests/audit/test_r1_venue_collateral`` pins
+    the venue's own free collateral; the collateral tests in ``tests/audit/test_r3b_money`` pin
     that, and the leverage wall below is still the hard cast.
     """
     from factorylab.cortex.request import Return

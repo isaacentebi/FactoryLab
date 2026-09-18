@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import factorylab.world.connector as connector_module
 from factorylab.runtime.worlds import ConnectorsSpec
 from factorylab.world.connector import (
     DEFAULT_DENYLIST,
@@ -240,3 +241,63 @@ def test_transport_caps_stream_read_without_content_length(monkeypatch):
                         SimpleNamespace(wrap_socket=lambda raw, **k: raw))
     response = HTTPSTransport().get("example.org", "/", max_bytes=8, timeout_s=10, denylist=())
     assert response.body == b"a" * 9
+
+
+class OneByteRaw:
+    """A socket file that hands out one byte per read and counts what was consumed."""
+
+    def __init__(self, data):
+        self.data, self.pos = data, 0
+
+    def readinto(self, buf):
+        if self.pos >= len(self.data):
+            return 0
+        buf[0] = self.data[self.pos]
+        self.pos += 1
+        return 1
+
+    def close(self):
+        pass
+
+
+class FramedSock:
+    def __init__(self, raw):
+        self.raw = raw
+
+    def settimeout(self, _s):
+        pass
+
+    def sendall(self, _data):
+        pass
+
+    def makefile(self, *_a, **_k):
+        return self.raw
+
+    def close(self):
+        pass
+
+
+def test_response_headers_are_bounded_with_the_body(monkeypatch):
+    """A hostile origin cannot make the transport read megabytes of headers.
+
+    ``http.client`` alone would buffer every header line before the body read starts
+    (its per-line and 100-header limits still allow megabytes); the transport bounds
+    what it consumes to 64 KiB of framing plus ``max_bytes`` (audit round three,
+    finding 11). The socket and resolver are replaced before any call."""
+    max_bytes = 1000
+    wire = (b"HTTP/1.1 200 OK\r\n"
+            + b"".join(b"X-Pad-%d: %s\r\n" % (i, b"a" * 60000) for i in range(90))
+            + b"Content-Length: 1\r\n\r\ny")
+    raw = OneByteRaw(wire)
+    monkeypatch.setattr(connector_module.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(stdout='["93.184.216.34"]'))
+    monkeypatch.setattr(connector_module.socket, "create_connection",
+                        lambda *a, **k: FramedSock(raw))
+    monkeypatch.setattr(connector_module.ssl, "create_default_context",
+                        lambda: SimpleNamespace(wrap_socket=lambda sock, **k: sock))
+    try:
+        HTTPSTransport().get("example.org", "/", max_bytes=max_bytes, timeout_s=10, denylist=())
+    except Exception:
+        pass  # a refusal is fine; what matters is how much the origin could make us read
+    assert raw.pos <= 64 * 1024 + max_bytes, (
+        f"the transport consumed {raw.pos} bytes of a response bounded to {max_bytes}")

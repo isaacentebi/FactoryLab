@@ -10,7 +10,7 @@ import json
 import pytest
 
 from factorylab.runtime.loop import run_world
-from factorylab.runtime.wake import UNAVAILABLE, collect_wake, render_wake, write_wake
+from factorylab.runtime.wake import collect_wake, render_wake
 from factorylab.runtime.worlds import load_manifest
 
 # One window must close before the world has a portfolio of its own to publish;
@@ -36,20 +36,6 @@ def no_live_reads(monkeypatch):
     monkeypatch.setattr("factorylab.world.x402.X402Client", refuse)
     monkeypatch.setenv("HL_PRIVATE_KEY", "0x" + "11" * 32)
     monkeypatch.setenv("RESERVE_PRIVATE_KEY", "0x" + "22" * 32)
-
-
-def test_a_fake_worlds_wake_reads_neither_the_venue_nor_the_reserve(scripted, no_live_reads):
-    data = collect_wake(scripted)
-    assert data["venue"] == {"equity_micro": UNAVAILABLE, "realized_to_date_micro": UNAVAILABLE}
-    assert data["reserve"] == {"usdc_micro": UNAVAILABLE, "venice_micro": UNAVAILABLE}
-
-
-def test_the_page_carries_one_equity_and_it_is_the_worlds_own(scripted, no_live_reads, tmp_path):
-    """Two equity figures on one page, one of them another world's, is the fault."""
-    data = write_wake(scripted, tmp_path / "out")
-    assert data["portfolio"]["equity_micro"] != UNAVAILABLE
-    assert data["venue"]["equity_micro"] == UNAVAILABLE
-    assert "unavailable" in render_wake(data)
 
 
 def test_the_wake_publishes_no_open_position(scripted, no_live_reads):

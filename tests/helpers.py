@@ -1,4 +1,4 @@
-"""Builders that several test files share and whose original home was deleted.
+"""Builders that several test files share.
 
 Each builder returns an independent, network-free object; none holds state between
 calls.
@@ -6,14 +6,13 @@ calls.
 
 from decimal import Decimal
 
-from factorylab.cortex.registration import parse_proposals
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
 
-# ---- spot inventory (from audit/test_c3_spot.py) ------------------------------------
+# ---- spot inventory ------------------------------------------------------
 
 
 def spot_venue():
@@ -39,7 +38,7 @@ def spot_producer(rt):
     return handle
 
 
-# ---- venue collateral (from audit/test_r1_venue_collateral.py) ----------------------
+# ---- venue collateral ---------------------------------------------------
 
 
 def venue_runtime(*, venue_usd="1000", wallet_micro=1_000_000) -> Runtime:
@@ -71,7 +70,7 @@ def place(rt, size, *, side="buy", **args):
         "args": {"coin": "BTC", "side": side, "size": size, **args}})[0]
 
 
-# ---- registration (from audit/test_r3_j_work.py) ------------------------------------
+# ---- registration ------------------------------------------------------
 
 
 def assembly(**changes):
@@ -83,11 +82,3 @@ def assembly(**changes):
         "schemas": {"WeatherForecast": {"type": "object", "properties": {}}},
         **changes,
     }
-
-
-def parse(item, *, jail=True):
-    """The accepted and rejected halves of registering ``item`` alone."""
-    return parse_proposals(
-        {"register": [item]}, event_kinds=frozenset({"Tick"}),
-        known_models=frozenset({"model"}), known_assemblies=frozenset(), tool_jail=jail,
-    )

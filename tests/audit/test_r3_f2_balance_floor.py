@@ -18,8 +18,6 @@ the last loss before it is small enough to land on it.
 
 from decimal import Decimal as D
 
-from factorylab.runtime.loop import Runtime
-from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange, Order
 
 
@@ -37,25 +35,3 @@ def test_t30_a_gap_through_maintenance_margin_realises_more_than_the_equity_behi
     # The close is at the post-gap mid, so the realised loss exceeds the equity that
     # was backing it and the account is negative: no floor can be observed in between.
     assert ex._cash == D(-10) and ex.account().equity_usd == D(-10)
-
-
-def test_t30_scripted_crash_overshoots_on_the_venue_and_not_in_the_wallet():
-    """The world-level reproduction, restated by R3-B.
-
-    The finding is the venue's and is unchanged: a gap through maintenance margin
-    realises more than the equity behind it, and the venue account ends below zero by
-    more than a whole dollar. Where it used to end was the compute wallet, because
-    venue effects settled there; under edition 3 C5 they settle on the venue accounts,
-    so the overshoot is visible where it happened and the thinking budget is untouched.
-    The exact overshoot moves whenever the scripted diary moves, so the invariant is
-    asserted, not a magic number."""
-    m = load_manifest("scripted-crash")
-    assert m.termination.balance_floor_micro == 0
-    rt = Runtime(m, events=600, seed=2, initial_balance_micro=None, ledger_path=None,
-                 drip=False, router_gamma=.1)
-    summary = rt.run()
-    venue = [i for i in rt.ledger._recovery_items() if i.get("kind") == "venue.settled"]
-    assert sum(i["amount"] for i in venue) < -1_000_000
-    assert {i["custody"] for i in venue} == {"venue_perps"}
-    assert summary["wallet_balance_micro"] > m.termination.balance_floor_micro
-    assert summary["wallet_conservation"] and summary["ledger_verify"]

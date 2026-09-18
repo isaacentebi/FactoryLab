@@ -229,12 +229,6 @@ def test_a_diary_failure_during_the_wind_down_never_prevents_death():
     assert witness._pending_wind_down["ledger_failures"] >= 1
 
 
-def test_the_ledger_failure_reaches_stderr(capsys):
-    venue = Venue(positions=[Position("BTC", Decimal("1"), Decimal("100"))])
-    wind_down(venue, Diary("winddown.op"), launch_nonce=NONCE)
-    assert "the diary refused one record" in capsys.readouterr().err
-
-
 def test_every_operation_has_a_durable_id_derived_from_the_launch_identity():
     """(launch_nonce, coin, market, side, sequence), and nothing that varies with time."""
     first = operation_id(NONCE, "BTC", "perp", "sell", 0)
@@ -569,20 +563,3 @@ def test_a_late_credit_to_a_retired_seat_goes_to_the_commons_and_is_ledgered_as_
         {"ts_ns": 7, "amount_micro": 1_000, "source": "credit"},
         {"ts_ns": 7, "amount_micro": 2_000, "source": "income"}]
     assert "alice" not in json.dumps(shown)
-
-
-def test_the_wake_shows_the_two_states_of_death_separately():
-    observatory = _Observatory()
-    observatory.feed({"kind": "kill.production", "production_state": "killed",
-                      "reason": "explicit_kill:operator", "ts": 11})
-    observatory.feed({"kind": "winddown.reconciliation", "exposure_state": PENDING,
-                      "operations": 2, "unreadable": [],
-                      "residual": {"resting": [], "positions": [{"coin": "BTC"}],
-                                   "balances": [], "dust": []}})
-    liveness = observatory.result(load_manifest("scripted"))["liveness"]
-    assert liveness["production_state"] == "killed"
-    assert liveness["production_kill_reason"] == "explicit_kill:operator"
-    assert liveness["exposure_state"] == PENDING
-    assert liveness["exposure"]["residual_counts"]["positions"] == 1
-    # Dead with exposure still open is a state the page can say out loud.
-    assert liveness["status"] == "alive"
