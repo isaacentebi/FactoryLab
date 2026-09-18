@@ -309,7 +309,9 @@ def test_damping_clips_at_zero_and_satisfaction_resets_history(ledger):
     for event, value in enumerate((18, 12, 10, 12)):
         prices.observe("cost", value, event)
     updates = evidence(ledger)
-    assert [i["lambda_after"] for i in updates] == [2, 0, 0, 0.5]
+    # Damping can stop the climb of a shrinking violation but never lower the price
+    # while the card is still violating; only the compliant window decays it.
+    assert [i["lambda_after"] for i in updates] == [2, 2, 1.75, 2]
     assert [i["damping"] for i in updates] == [0, 30, 0, 0]
     assert updates[-1]["previous_violation"] == 0
 

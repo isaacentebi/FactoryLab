@@ -277,8 +277,11 @@ class PriceController:
             self.__kappa * max(0.0, state.previous_violation - violation)
             if violation > 0 else 0.0
         )
+        # The penalty ratchets while the violation lasts and decays only once it
+        # stops: damping slows the climb for a shrinking violation, but it can never
+        # turn a card that is still out of its region into a falling price.
         requested = (
-            state.price + self.__eta * violation - damping
+            state.price + max(0.0, self.__eta * violation - damping)
             if violation > 0 else state.price - self.__decay
         )
         price = min(self.__lambda_max, max(0.0, requested))
