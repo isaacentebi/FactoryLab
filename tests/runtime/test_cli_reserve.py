@@ -96,17 +96,26 @@ def test_init_refuses_symlink_without_reading_or_overwriting(tmp_path, capsys):
     assert not capsys.readouterr().out
 
 
-def test_key_loading_preserves_environment_precedence_and_never_prints(
+def test_key_files_take_precedence_over_the_environment_and_never_print(
     monkeypatch, keyfile, capsys
 ):
+    """fix/venue-money #14: the key file wins; an exported key is in the process's
+    initial environment block, which other processes can read."""
     import os
+
+    from factorylab.cortex import sandbox
 
     _load_dotenv()
     assert os.environ["RESERVE_PRIVATE_KEY"] == TEST_KEY
-    monkeypatch.setenv("RESERVE_PRIVATE_KEY", "environment-wins")
-    _load_dotenv()
-    assert os.environ["RESERVE_PRIVATE_KEY"] == "environment-wins"
+    _load_dotenv()  # loading again is not a conflict
     assert capsys.readouterr() == ("", "")
+    monkeypatch.setattr(sandbox, "jail_installed", lambda: False)
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", "environment-loses")
+    _load_dotenv()
+    assert os.environ["RESERVE_PRIVATE_KEY"] == TEST_KEY
+    captured = capsys.readouterr()
+    assert captured.out == "" and "environment-loses" not in captured.err
+    assert TEST_KEY[2:] not in captured.err
 
 
 def test_insecure_key_permissions_fail_before_read(keyfile, monkeypatch, capsys):

@@ -182,7 +182,13 @@ scripts never source arbitrary shell from it. Test the receiver before launch
 using a synthetic payload, and configure its own retention and uptime before the
 covenant begins.
 
-The CLI loads the usual root key files; the ledger's existing
+The CLI loads the usual root key files (never following a symlink; owner and mode
+are checked on the file actually opened). A key file wins over the environment, and
+a key exported in the environment that differs from its file is refused while a jail
+is installed: an exported value sits in the process's initial environment, which
+other processes on the host can read. Do not put keys in `ops.env`. The world unit
+bounds itself with `MemoryMax=3G` and `TasksMax=256`, and each jailed call's `/tmp`
+is a 16 MiB tmpfs. The ledger's existing
 `runs/funded.jsonl.key` is created by `run`, mode 0600, and reused privately by
 resume and wake. No new viewing key is generated. Wake never releases the public
 seal. Do not use `postmortem`, `report`, summaries or key inspection as a live view.

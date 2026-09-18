@@ -190,7 +190,10 @@ def command(args) -> int:
                         cctp_forwarding=getattr(args, "forwarding", "on_empty_gas"))
     exchange = HyperliquidExchange(mainnet=False, coins=("ETH",))
     rail = LiveRail(exchange, spec)
-    assert rail.testnet and rail.hyper.chain.id == 998 and rail.base.chain.id == 84532
+    # A real check, not an assert: ``python -O`` strips asserts, and this is the
+    # only thing between the acceptance CLI and a mainnet rail.
+    if not (rail.testnet and rail.hyper.chain.id == 998 and rail.base.chain.id == 84532):
+        raise RailError("the acceptance CLI runs on testnet only (HyperEVM 998, Base Sepolia)")
     config = {"name": "treasury-testnet-acceptance", "format": 1, "venue": rail.venue_address,
               "reserve": reserve, "networks": [998, 84532],
               "max_transfer_fee_micro": spec.max_transfer_fee_micro,

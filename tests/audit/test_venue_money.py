@@ -921,3 +921,118 @@ class TestFix13DeathIsSettledReality:
         assert not restored.dead
         restored.settle_uncertain(hold.id, 1)
         assert restored.balance == 999 and not restored.dead
+
+
+# ------------------------------------------------------------------------------ 14
+
+
+class TestFix14Jail:
+    def test_the_macos_profile_grants_only_named_sysctls(self, monkeypatch, tmp_path):
+        import sys
+
+        from factorylab.cortex import sandbox
+
+        monkeypatch.setattr(sys, "platform", "darwin")
+        command = sandbox._command("/usr/bin/sandbox-exec", tmp_path, tmp_path,
+                                   tmp_path / "python", 3)
+        profile = command[2]
+        assert "(allow sysctl-read)" not in profile  # no unfiltered grant
+        assert "(sysctl-name" in profile and "kern.proc" not in profile
+
+    def test_the_jailed_interpreter_starts_and_cannot_read_the_process_table(self):
+        import sys
+
+        import pytest
+
+        from factorylab.cortex import sandbox
+
+        if sys.platform != "darwin" or not sandbox.jail_available():
+            pytest.skip("the macOS sandbox profile is exercised on macOS only")
+        code = ("import ctypes, os, platform\n"
+                "libc = ctypes.CDLL(None)\n"
+                "size = ctypes.c_size_t(0)\n"
+                "mib = (ctypes.c_int * 3)(1, 14, 0)  # CTL_KERN, KERN_PROC, KERN_PROC_ALL\n"
+                "print(libc.sysctl(mib, 3, None, ctypes.byref(size), None, 0),"
+                " os.cpu_count() > 0, platform.machine() != '')\n")
+        result = sandbox.run_python(code, timeout_s=5)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.split() == ["-1", "True", "True"]
+
+    def test_linux_tmp_is_a_bounded_tmpfs(self, monkeypatch, tmp_path):
+        import sys
+
+        from factorylab.cortex import sandbox
+
+        monkeypatch.setattr(sys, "platform", "linux")
+        command = sandbox._command("/usr/bin/bwrap", tmp_path, tmp_path, tmp_path / "python", 3)
+        at = command.index("--tmpfs")
+        assert command[at + 1] == "/tmp" and command[at - 2] == "--size"
+        assert 0 < int(command[at - 1]) <= 64 * 1024 * 1024
+
+    def test_the_world_unit_bounds_memory_and_tasks(self):
+        from pathlib import Path
+
+        unit = (Path(__file__).resolve().parents[2] / "deploy" / "factorylab.service")
+        text = unit.read_text()
+        assert "\nMemoryMax=" in text and "\nTasksMax=" in text
+
+    def test_a_key_file_wins_and_an_exported_conflicting_key_is_refused_under_a_jail(
+            self, tmp_path, monkeypatch, capsys):
+        import os
+
+        import pytest
+
+        from factorylab.cortex import sandbox
+        from factorylab.runtime import cli
+
+        monkeypatch.chdir(tmp_path)
+        for var in ("OPENROUTER_API_KEY", "HL_PRIVATE_KEY", "RESERVE_PRIVATE_KEY"):
+            monkeypatch.delenv(var, raising=False)
+        key = tmp_path / "openrouter.key"
+        key.write_text("sk-from-file\n")
+        key.chmod(0o600)
+        monkeypatch.setattr(sandbox, "jail_installed", lambda: False)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-exported")
+        cli._load_dotenv()
+        assert os.environ["OPENROUTER_API_KEY"] == "sk-from-file"  # the file wins
+        assert "sk-" not in capsys.readouterr().err  # a warning never prints a value
+        monkeypatch.setattr(sandbox, "jail_installed", lambda: True)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-exported")
+        with pytest.raises(cli.KeyFileModeError, match="exported"):
+            cli._load_dotenv()
+
+    def test_a_symlinked_key_file_is_never_followed(self, tmp_path, monkeypatch):
+        import os
+
+        import pytest
+
+        from factorylab.runtime import cli
+
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("RESERVE_PRIVATE_KEY", raising=False)
+        target = tmp_path / "elsewhere"
+        target.write_text("0xsecret\n")
+        target.chmod(0o600)
+        os.symlink(target, tmp_path / "reserve.key")
+        with pytest.raises(cli.KeyFileModeError):
+            cli._load_dotenv()
+        assert "RESERVE_PRIVATE_KEY" not in os.environ
+
+    def test_the_acceptance_cli_refuses_mainnet_even_under_python_O(self, monkeypatch):
+        from types import SimpleNamespace
+
+        import pytest
+
+        from factorylab.runtime import treasury_cli
+        from factorylab.world import exchange as exchange_module
+        from factorylab.world import treasury_rails
+
+        monkeypatch.setenv("RESERVE_PRIVATE_KEY", "0x" + "11" * 32)
+        monkeypatch.setattr(exchange_module, "HyperliquidExchange", lambda **kw: object())
+        mainnet = SimpleNamespace(testnet=False, hyper=SimpleNamespace(chain=SimpleNamespace(
+            id=999)), base=SimpleNamespace(chain=SimpleNamespace(id=8453)), venue_address="0x")
+        monkeypatch.setattr(treasury_rails, "LiveRail", lambda exchange, spec: mainnet)
+        source = __import__("inspect").getsource(treasury_cli.command)
+        assert "assert rail.testnet" not in source  # stripped by python -O
+        with pytest.raises(treasury_rails.RailError, match="testnet"):
+            treasury_cli.command(SimpleNamespace(treasury_command="probe", ledger="x", usd=None))

@@ -41,6 +41,20 @@ class SandboxResult:
 # neither hide it nor substitute an impostor from a user-writable directory.
 _SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
+#: The jail's private /tmp on Linux is a tmpfs of at most this many bytes: a tool that
+#: fills it fills its own bounded memory, not the host's.
+TMPFS_BYTES = 16 * 1024 * 1024
+
+#: The only sysctls the macOS development jail may read: what ``os.uname``,
+#: ``os.cpu_count`` and the page size need. An unfiltered ``sysctl-read`` also answers
+#: ``kern.proc`` (the host's whole process table) and ``kern.procargs2`` (any process's
+#: arguments and initial environment -- the parent runtime's included).
+_MACOS_SYSCTLS = (
+    "kern.ostype", "kern.osrelease", "kern.version", "kern.hostname", "kern.osversion",
+    "kern.osproductversion", "hw.machine", "hw.ncpu", "hw.logicalcpu", "hw.activecpu",
+    "hw.pagesize",
+)
+
 
 def _jail_executable() -> str:
     name = {"linux": "bwrap", "darwin": "sandbox-exec"}.get(sys.platform)
@@ -86,7 +100,8 @@ def _command(jail: str, work: Path, prefix: Path, python: Path, seccomp_fd: int)
             if path.exists():  # /lib64 is absent on some aarch64 distributions
                 command.extend(["--ro-bind", str(path), str(path)])
         command.extend([
-            "--tmpfs", "/tmp", "--bind", str(work), "/work", "--chdir", "/work",
+            "--size", str(TMPFS_BYTES), "--tmpfs", "/tmp",
+            "--bind", str(work), "/work", "--chdir", "/work",
             "--new-session", "--clearenv", "--setenv", "PATH", "/usr/bin",
             "--seccomp", str(seccomp_fd), "--", str(python), "-I", "-S", "-B",
             "/work/runner.py",
@@ -108,7 +123,8 @@ def _command(jail: str, work: Path, prefix: Path, python: Path, seccomp_fd: int)
         f'(allow file-read* (subpath {json.dumps(str(prefix))})'
         f' (subpath {json.dumps(str(work))}))'
         f'(allow file-write* (subpath {json.dumps(str(work))}))'
-        '(allow sysctl-read)'
+        '(allow sysctl-read (sysctl-name '
+        + " ".join(json.dumps(name) for name in _MACOS_SYSCTLS) + '))'
     )
     return [jail, "-p", profile, str(python), "-I", "-S", "-B", str(work / "runner.py")]
 
