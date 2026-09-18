@@ -634,6 +634,10 @@ class RoutingMixin:
         candidates = [a for a in universe if a != NOOP]
         excluded = dict(sample.excluded)
         if self._quiet_tick(ev, candidates, excluded):
+            if isinstance(state.learner, _KeyedLearner):
+                # A draw that opened no decision is no round: the snapshot the
+                # distribution froze for it would otherwise wait forever.
+                state.learner.inner.discard_for(key)
             return
         unaffordable = bool(candidates) and all(
             excluded.get(a, "").startswith("compute:") for a in candidates
