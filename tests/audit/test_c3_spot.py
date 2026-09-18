@@ -8,29 +8,10 @@ from decimal import Decimal
 
 import pytest
 
-from factorylab.runtime.loop import Runtime
-from factorylab.runtime.worlds import load_manifest
-from factorylab.world.exchange import FakeExchange, Order
-from factorylab.world.scripted import ScriptedProvider
-from tests.runtime.test_loop import _consequence_decision
-
-
-def _venue():
-    return FakeExchange(coins=("BTC", "ETH"), spot_pairs=("BTC/USDC",), start_cash_usd=Decimal(100),
-                        start_prices={"BTC": Decimal(100), "ETH": Decimal(10)},
-                        spread_bps=Decimal(0), fee_bps=Decimal(0), step_bps=Decimal(0))
-
-
-def _runtime(exchange):
-    return Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                   ledger_path=None, drip=False, router_gamma=.1, provider=ScriptedProvider(),
-                   exchange=exchange)
-
-
-def _producer(rt):
-    handle = _consequence_decision(rt, "seed-decider", "verdict")
-    rt.consequences.start(handle, 0)
-    return handle
+from factorylab.world.exchange import Order
+from tests.helpers import spot_producer as _producer
+from tests.helpers import spot_runtime as _runtime
+from tests.helpers import spot_venue as _venue
 
 
 def test_finding_4_closing_spot_inventory_the_world_did_not_buy_kills_the_world():

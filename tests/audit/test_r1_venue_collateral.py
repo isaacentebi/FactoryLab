@@ -19,39 +19,8 @@ from decimal import Decimal
 
 import pytest
 
-from factorylab.kernel.queue import PropensityRecord
-from factorylab.runtime.loop import Runtime
-from factorylab.runtime.worlds import load_manifest
-from factorylab.world.exchange import FakeExchange
-from factorylab.world.scripted import ScriptedProvider
+from tests.helpers import place, venue_runtime
 from tests.runtime.test_connectors import ledger_items
-
-
-def venue_runtime(*, venue_usd="1000", wallet_micro=1_000_000) -> Runtime:
-    """A scripted world whose venue is rich and whose compute wallet is not."""
-    rt = Runtime(load_manifest("scripted"), events=0, seed=1,
-                 initial_balance_micro=wallet_micro, ledger_path=None, drip=False,
-                 router_gamma=.1, provider=ScriptedProvider(),
-                 exchange=FakeExchange(start_cash_usd=Decimal(venue_usd)))
-    rt._manage_reserve_window()
-    return rt
-
-
-def decision(rt, owner="seed-decider"):
-    handle = rt.queue.open(
-        actor=owner, event_id="venue-collateral", propensity=PropensityRecord(
-            (owner,), (1.,), owner, 0, owner, "test"), channel="verdict",
-        deadline_ns=rt.clock.now_ns + 10**12, parent_handle=None, cost_ceiling=10_000_000,
-    )
-    rt.handle_to_assembly[handle] = owner
-    rt.consequences.start(handle, rt.n)
-    return handle
-
-
-def place(rt, size, *, side="buy", **args):
-    return rt._run_tool("seed-decider", decision(rt), {
-        "tool": "venue.place_market",
-        "args": {"coin": "BTC", "side": side, "size": size, **args}})[0]
 
 
 def infeasible(rt):

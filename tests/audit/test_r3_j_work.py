@@ -13,23 +13,7 @@ from factorylab.cortex.registration import measured_role, parse_proposals, rewar
 from factorylab.cortex.request import Return
 from factorylab.runtime.routing import RoutingMixin
 from factorylab.runtime.shared import return_channel, work_disclosure
-
-
-def assembly(**changes):
-    return {
-        "kind": "assembly", "id": "weather-desk", "model_id": "model",
-        "system_prompt": "Predict the weather.", "accepts": ["Tick"],
-        "emits": ["WeatherForecast"],
-        "schemas": {"WeatherForecast": {"type": "object", "properties": {}}},
-        **changes,
-    }
-
-
-def parse(item, *, jail=True):
-    return parse_proposals(
-        {"register": [item]}, event_kinds=frozenset({"Tick"}),
-        known_models=frozenset({"model"}), known_assemblies=frozenset(), tool_jail=jail,
-    )
+from tests.helpers import assembly, parse
 
 
 def test_card_names_emitted_kind_without_becoming_producer():

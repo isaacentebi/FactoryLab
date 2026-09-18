@@ -15,7 +15,7 @@ from factorylab.charter.measurement import CardSamples, measure_card
 from factorylab.charter.windows import MetricWindow
 from factorylab.cortex.registration import measured_role, output_contracts
 from factorylab.cortex.request import Return
-from tests.audit.test_r3_j_work import assembly, parse
+from tests.helpers import assembly, parse
 
 RESERVED = ("Producer", "PRODUCER", "producer", "Evaluator", "META", "Antagonist", "ALL", "all")
 

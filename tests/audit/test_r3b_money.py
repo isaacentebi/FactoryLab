@@ -23,8 +23,9 @@ from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange, Order, VenueUnavailable
 from factorylab.world.scripted import ScriptedProvider
-from tests.audit.test_c3_spot import _producer, _venue
-from tests.audit.test_r1_venue_collateral import place, venue_runtime
+from tests.helpers import place, venue_runtime
+from tests.helpers import spot_producer as _producer
+from tests.helpers import spot_venue as _venue
 from tests.runtime.test_connectors import ledger_items
 from tests.runtime.test_fidelity import runtime as scripted_runtime
 

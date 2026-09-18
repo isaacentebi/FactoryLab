@@ -7,8 +7,8 @@ import pytest
 from factorylab.cortex import sandbox
 from factorylab.runtime.shared import PredicateRunner
 from factorylab.settlement import vocabulary
-from tests.audit.test_r3_j_work import parse
 from tests.cortex.test_jail import require_jail
+from tests.helpers import parse
 
 
 def test_population_predicate_versions_preserve_sealed_meanings():

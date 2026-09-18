@@ -7,7 +7,9 @@ import pytest
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.settlement.lots import LotTable
 from factorylab.world.exchange import Order
-from tests.audit.test_c3_spot import _producer, _runtime, _venue
+from tests.helpers import spot_producer as _producer
+from tests.helpers import spot_runtime as _runtime
+from tests.helpers import spot_venue as _venue
 
 
 def test_launch_inventory_has_unowned_lots_and_survives_restore():

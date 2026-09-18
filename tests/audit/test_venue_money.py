@@ -14,7 +14,7 @@ from unittest.mock import Mock
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange, HyperliquidExchange
 from factorylab.world.venue_tools import VenueTools
-from tests.audit.test_r1_venue_collateral import place, venue_runtime
+from tests.helpers import place, venue_runtime
 from tests.runtime.test_connectors import ledger_items
 
 

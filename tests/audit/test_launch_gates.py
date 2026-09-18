@@ -104,7 +104,7 @@ from factorylab.world.scripted import (
     _description_from_prompt,
     _inputs_from_prompt,
 )
-from tests.audit.test_r1_venue_collateral import place
+from tests.helpers import place
 from tests.runtime.test_connectors import ledger_items
 
 # The workstream tests this gate calls rather than restates.

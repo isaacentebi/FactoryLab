@@ -14,7 +14,7 @@ from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.shared import PredicateRunner
 from factorylab.world.models import ModelResponse
 from tests.audit.test_a1_composition import items, make_runtime
-from tests.audit.test_r3_j_work import assembly
+from tests.helpers import assembly
 from tests.runtime.test_child_requests import parent_request
 
 
