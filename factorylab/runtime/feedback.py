@@ -1458,22 +1458,21 @@ class FeedbackMixin:
     def _close_assembly_rounds(self) -> None:
         """Close every assembly round whose decision now has an outcome.
 
-        The evidence is the same thin score the router receives: the first
-        settlement or timeout on the handle. A round is closed once, whatever
-        opened the decision — a router, a parent's child request, a continuation —
-        so nothing is left open for a decision that will never be scored again.
+        The evidence is the decision's first outcome, by the same rule the router
+        follows (``_deliver_returns``): a score that settled it before its cutoff,
+        or else nothing observed. A timeout is the cutoff, not a zero; a score
+        that arrives after it trains nothing. A round is closed once, whatever
+        opened the decision, so nothing is left open for a decision that will
+        never be scored again.
         """
         for handle in list(self.assembly_rounds):
             decision = self.queue.get(handle)
             if decision.status is SettleStatus.PENDING:
                 continue
-            scored = next((lr for lr in self.queue.history(handle)
-                           if lr.status in (SettleStatus.SETTLED, SettleStatus.TIMED_OUT)), None)
-            if scored is None:
-                self._close_assembly_round(handle, None)  # censored: no evidence
-                continue
-            reward = (min(1.0, max(0.0, float(scored.score)))
-                      if scored.status is SettleStatus.SETTLED else 0.0)
+            first = next(iter(self.queue.history(handle)), None)
+            reward = (min(1.0, max(0.0, float(first.score)))
+                      if first is not None and first.status is SettleStatus.SETTLED
+                      else None)
             self._close_assembly_round(handle, reward)
 
     def _close_assembly_round(self, handle: str, reward: float | None) -> None:
@@ -1482,7 +1481,10 @@ class FeedbackMixin:
         The reward is the same thin score the router receives; what differs is the
         distribution it is attributed to. The router's record prices the choice of
         who acted; this one prices what the actor chose to do, over the action set
-        the actor declared. A censored decision closes its round without evidence.
+        the actor declared. A decision with no observed score (censored,
+        inapplicable, or past its cutoff) is credited the learner's neutral
+        estimate for the action, as the router's are, or closes without evidence
+        when the learner has observed nothing yet.
         """
         assembly_id = self.assembly_rounds.pop(handle, None)
         if assembly_id is None:
@@ -1491,6 +1493,9 @@ class FeedbackMixin:
         if learner is None:
             return
         declared = self.queue.declared_propensity(handle)
+        imputed = reward is None
+        if declared is not None and reward is None:
+            reward = learner.observed.neutral(declared.chosen)
         if reward is None or declared is None:
             try:
                 learner.discard_for(handle)
@@ -1507,10 +1512,70 @@ class FeedbackMixin:
                                 "assembly_id": assembly_id, "reason": str(exc)[:200],
                                 "ts": self.clock.now_ns})
             return
+        if not imputed:
+            learner.observed.record(declared.chosen, reward)
         self.ledger.append({"kind": "propensity.learned", "handle": handle,
                             "assembly_id": assembly_id, "action": declared.chosen,
                             "propensity": declared.probs[index], "reward": reward,
-                            "ts": self.clock.now_ns})
+                            "imputed": imputed, "ts": self.clock.now_ns})
+
+    @staticmethod
+    def _router_sampled(decision: Any) -> bool:
+        """Whether the router that holds this decision drew it (defect 3).
+
+        A child request is opened under its parent's router so its score has an
+        addressable home, but the parent chose the target: its propensity of 1.0
+        is the parent's choice, not a probability the router sampled from, and a
+        router trained on it would learn from a round it never played.
+        """
+        prop = decision.propensity
+        return (decision.parent_handle is None and prop.source == "sampled"
+                and prop.learner_state_hash != "parent-selected")
+
+    def _learn_router_return(self, state: Any, lr: LearningReturn) -> None:
+        """Train a router once per decision it drew, on the evidence that decision has.
+
+        The rule (defects 2 and 4): a decision's cutoff is its kernel deadline. Its
+        first outcome is its one update. A score that settled it before the cutoff
+        is observed and trains the router at that score. A decision that closed
+        without an observed score (censored, inapplicable) or reached its cutoff
+        unscored (timed out) is not a zero: it is credited the router's neutral
+        estimate for the arm drawn (``ObservedRewards.neutral``), or nothing if
+        the router has observed nothing yet. A score that arrives after the
+        cutoff still settles the decision for the kernel -- its money, its
+        standing, its history -- but trains no learner a second time.
+        """
+        decision = self.queue.get(lr.handle)
+        prop = decision.propensity
+        keyed = isinstance(state.learner, _KeyedLearner)
+        key = self.snapshot_keys.pop(lr.handle, None) if keyed else None
+        if not self._router_sampled(decision):
+            if key is not None:
+                state.learner.inner.discard_for(key)
+            return
+        if lr.status is not SettleStatus.TIMED_OUT and any(
+                r.status is SettleStatus.TIMED_OUT for r in self.queue.history(lr.handle)):
+            return  # learned once already, neutrally, at its cutoff
+        if lr.status is SettleStatus.SETTLED:
+            reward = min(1.0, max(0.0, float(lr.score)))
+            state.observed.record(prop.chosen, reward)
+        else:
+            reward = state.observed.neutral(prop.chosen)
+        if reward is None:
+            if key is not None:
+                state.learner.inner.discard_for(key)
+            return
+        fb = BanditFeedback(prop.chosen, reward, prop.probs[prop.action_ids.index(prop.chosen)])
+        if keyed:
+            if key is not None:
+                state.learner.inner.update_for(key, fb)
+        elif set(prop.action_ids) <= set(state.universe):
+            state.learner.update(fb)
+        else:
+            self.ledger.append({"kind": "propensity.unlearned", "handle": lr.handle,
+                                "learner_id": state.learner.id,
+                                "reason": "the drawn arm is outside this router's universe",
+                                "ts": self.clock.now_ns})
 
     def _deliver_returns(self) -> None:
         self._close_assembly_rounds()
@@ -1524,30 +1589,7 @@ class FeedbackMixin:
                 returns = self.queue.returns_for(lid)
                 fresh, total = returns[seen:], len(returns)
             for lr in fresh:
-                if lr.status not in (SettleStatus.SETTLED, SettleStatus.TIMED_OUT):
-                    if isinstance(state.learner, _KeyedLearner):
-                        key = self.snapshot_keys.pop(lr.handle, None)
-                        if key is not None:
-                            state.learner.inner.discard_for(key)
-                    continue  # censored or inapplicable: no evidence, no update
-                decision = self.queue.get(lr.handle)
-                prop = decision.propensity
-                idx = prop.action_ids.index(prop.chosen)
-                reward = (
-                    min(1.0, max(0.0, float(lr.score)))
-                    if lr.status is SettleStatus.SETTLED
-                    else 0.0
-                )
-                fb = BanditFeedback(prop.chosen, reward, prop.probs[idx])
-                learner = state.learner
-                if isinstance(learner, _KeyedLearner):
-                    key = self.snapshot_keys.pop(lr.handle, None)
-                    if key is not None:
-                        learner.inner.update_for(key, fb)
-                elif set(prop.action_ids) <= set(state.universe):
-                    learner.update(fb)
-                else:  # an action this router cannot hold: settle it where it can be held
-                    self._settle_outside_universe(lr.handle, prop, fb)
+                self._learn_router_return(state, lr)
             self.delivered_seen[lid] = total
             if lid in self.retired_routers and not self.queue.outstanding(lid):
                 self.queue.retire_actor(lid)
