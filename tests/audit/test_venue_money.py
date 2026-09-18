@@ -485,3 +485,68 @@ class TestFix7LimitPriceRounding:
         # Spot allows 8 − szDecimals.
         assert self._sent_price("PURR/USDC", True, "0.000123456", sz_decimals=0,
                                 market="spot") == Decimal("0.00012345")
+
+
+# ------------------------------------------------------------------------------ 8
+
+
+class TestFix8X402AfterSignature:
+    """Once the signed authorization has left, the seller can settle it: never release."""
+
+    def _metered(self, paid_response, *, record_fails_on=None):
+        from factorylab.kernel.ledger import Ledger
+        from factorylab.kernel.wallet import Wallet
+        from factorylab.world.market import X402MeteredModel
+        from factorylab.world.metering import Meter
+        from factorylab.world.models import PriceTable, TokenPrice
+        from tests.world.test_market import MODEL, SellerHTTP, provider
+
+        fake = SellerHTTP()
+        fake.paid_response = paid_response
+        wallet = Wallet(10_000, Ledger())
+        events = []
+
+        def record(item):
+            if item["kind"] == record_fails_on:
+                raise OSError("diary refused")
+            events.append(item)
+
+        model = X402MeteredModel(provider(fake), PriceTable({MODEL: TokenPrice(0, 0, 2000)}),
+                                 Meter(wallet), record=record, on_unaffordable=lambda h: None)
+        return model, wallet, fake, events
+
+    def _run(self, model):
+        from factorylab.world.metering import BillingUncertain
+        from factorylab.world.models import ModelRequest
+        from tests.world.test_market import MODEL
+
+        try:
+            model.complete(ModelRequest(MODEL, "", ()), handle="decision-1")
+        except BillingUncertain:
+            return "uncertain"
+        except Exception as exc:  # noqa: BLE001
+            return type(exc).__name__
+        return "ok"
+
+    def test_a_402_after_payment_books_the_ceiling_as_uncertain(self):
+        from factorylab.world.x402 import HTTPResponse
+
+        model, wallet, fake, events = self._metered(HTTPResponse(402))
+        assert self._run(model) == "uncertain"
+        assert len(fake.payments) == 1
+        assert wallet.balance == 10_000 - 1734  # the authorization is held, not released
+        assert events[-1]["kind"] == "x402.unresolved"
+
+    def test_a_failed_settlement_receipt_books_the_ceiling_as_uncertain(self):
+        from factorylab.world.x402 import HTTPResponse
+        from tests.world.test_market import encoded
+
+        model, wallet, _, _ = self._metered(
+            HTTPResponse(200, {}, {"PAYMENT-RESPONSE": encoded({"success": False})}))
+        assert self._run(model) == "uncertain"
+        assert wallet.balance == 10_000 - 1734
+
+    def test_any_failure_after_the_send_is_uncertain_not_released(self):
+        model, wallet, _, _ = self._metered(None, record_fails_on="x402.result")
+        assert self._run(model) == "uncertain"
+        assert wallet.balance == 10_000 - 1734

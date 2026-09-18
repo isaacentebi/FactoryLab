@@ -334,6 +334,15 @@ class X402Provider:
             except Exception:
                 raise PaymentOutcomeUnknown("Data payment outcome is unknown") from None
             cost = quote.amount_micro
+            try:
+                return self._data_result(response, cost, record)
+            except Exception:
+                # Paid: whatever fails now cannot release what the seller can settle.
+                raise PaymentOutcomeUnknown("Data payment outcome is unknown") from None
+        return self._data_result(response, cost, record)
+
+    @staticmethod
+    def _data_result(response, cost: int, record) -> dict:
         result = {"body": response.body.decode("utf-8", errors="replace"),
                   "status": response.status, "bytes": len(response.body), "cost_micro": cost}
         if record:
@@ -419,7 +428,6 @@ class X402Provider:
                                   if quoted.extensions is not None else {})})
             if quoted is not None else _request(self._transport, "POST", url, payload)
         )
-        quote, settlement = None, None
         if response.status == 402:
             quote = parse_quote(response)
             if quote.amount_micro > self._ceilings[req.model_id]:
@@ -432,36 +440,45 @@ class X402Provider:
             if record:
                 record({"kind": "x402.submitted", "model_id": req.model_id,
                         "amount_micro": quote.amount_micro})
+            # From here the seller holds a valid signed authorization it can settle
+            # until the authorization expires, whatever it answers now. Nothing after
+            # the send can therefore mean "not paid": a refusal, a failed-settlement
+            # receipt, a bad receipt or any failure of our own is an unknown outcome,
+            # and the metering books the quote as uncertain rather than releasing it.
             try:
-                response = _request(self._transport, "POST", url, payload,
-                                    {"PAYMENT-SIGNATURE": encoded})
-            except X402Error:
+                return self._paid(req, url, payload, encoded, quote, client, record)
+            except PaymentOutcomeUnknown:
+                raise
+            except Exception:
                 raise PaymentOutcomeUnknown("Submitted payment outcome is unknown") from None
-            header = _header(response.headers, "payment-response", "x-payment-response")
-            if header is not None:
-                try:
-                    settlement = _decode(header)
-                    if settlement.get("success") is False:
-                        raise X402Error("Seller reported failed payment settlement")
-                    if (
-                        settlement.get("network", BASE_NETWORK) != BASE_NETWORK
-                        or settlement.get("success") is not True
-                        or str(settlement.get("payer", client.address)).lower()
-                        != client.address.lower()
-                    ):
-                        raise ValueError
-                except X402Error:
-                    if settlement is not None and settlement.get("success") is False:
-                        raise
-                    raise PaymentOutcomeUnknown("Invalid payment settlement receipt") from None
-                except ValueError:
-                    raise PaymentOutcomeUnknown("Invalid payment settlement receipt") from None
-            if not 200 <= response.status < 300 and settlement is None:
-                if response.status == 402:
-                    raise X402Error("Seller refused the payment; no retry")
-                raise PaymentOutcomeUnknown("Payment submitted; seller returned no settlement")
-        elif not 200 <= response.status < 300:
+        if not 200 <= response.status < 300:
             raise X402Error(f"Seller request failed (HTTP {response.status})")
+        return self._response(req, response, None, None, record)
+
+    def _paid(self, req: ModelRequest, url: str, payload: dict, encoded: str,
+              quote: PaymentQuote, client, record) -> ModelResponse:
+        """The paid half of ``complete``: one submission and its receipt. Every failure
+        raised here happens after the authorization was sent."""
+        response = _request(self._transport, "POST", url, payload,
+                            {"PAYMENT-SIGNATURE": encoded})
+        settlement = None
+        header = _header(response.headers, "payment-response", "x-payment-response")
+        if header is not None:
+            settlement = _decode(header)
+            if (
+                settlement.get("network", BASE_NETWORK) != BASE_NETWORK
+                or settlement.get("success") is not True
+                or str(settlement.get("payer", client.address)).lower()
+                != client.address.lower()
+            ):
+                raise PaymentOutcomeUnknown("Seller receipt does not confirm settlement")
+        if not 200 <= response.status < 300 and settlement is None:
+            raise PaymentOutcomeUnknown("Payment submitted; seller returned no settlement")
+        return self._response(req, response, quote, settlement, record)
+
+    def _response(self, req: ModelRequest, response: HTTPResponse, quote, settlement,
+                  record) -> ModelResponse:
+        """The completion a (paid or free) response carries; parsing never unpays it."""
         cost = quote.amount_micro if quote else 0
         body = self._clean(response.body)
         raw = {"cost_source": "x402-quote", "quote": self._clean(asdict(quote)) if quote else None,
