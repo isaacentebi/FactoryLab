@@ -745,3 +745,122 @@ class TestFix11NoSalesAfterDeath:
         assert not liveness()
         liveness.observe([{"kind": "event", "event": {"kind": "Launch"}}])
         assert not liveness()  # death is final: a later read cannot revive it
+
+
+# ------------------------------------------------------------------------------ 12
+
+
+class _NeverRail:
+    """A rail whose one step is submitted and then never evidenced."""
+
+    def __init__(self, wallet, *, expires_at_ns=None):
+        from factorylab.world.treasury import FakeRail
+
+        self.inner = FakeRail(wallet)
+        self.expires_at_ns = expires_at_ns
+        self.sent = []
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def send(self, step, reference):
+        self.sent.append(reference)
+
+    def poll(self, step, state):
+        return None
+
+    def expired(self, step, state, now_ns):
+        if self.expires_at_ns is not None and now_ns >= self.expires_at_ns:
+            return "authorization expired unused"
+        return None
+
+
+class TestFix12NoTransferBlocksForever:
+    def _treasury(self, rail_factory):
+        from factorylab.kernel.ledger import Ledger
+        from factorylab.kernel.wallet import Wallet
+        from factorylab.world.treasury import Treasury
+
+        ledger = Ledger(clock_ns=lambda: 0)
+        wallet = Wallet(100_000_000, ledger, clock_ns=lambda: 0)
+        rail = rail_factory(wallet)
+        return Treasury(ledger, wallet, rail, fee_ceiling_micro=10_000), wallet, rail
+
+    def test_an_expired_unused_authorization_is_abandoned_and_frees_the_slot(self):
+        hour = 3_600 * 10**9
+        treasury, wallet, rail = self._treasury(
+            lambda w: _NeverRail(w, expires_at_ns=5 * hour))
+        assert treasury.transfer("to_reserve", "10", handle="a", now_ns=1)["status"] == (
+            "submitted")
+        assert treasury.tick(hour) == []
+        assert treasury.transfer("to_reserve", "10", handle="b", now_ns=hour)["status"] == (
+            "refused")
+        treasury.tick(6 * hour)
+        assert treasury.state["status"] == "failed"
+        assert wallet.available == wallet.balance == 100_000_000  # principal released
+        assert treasury.transfer("to_reserve", "10", handle="c",
+                                 now_ns=6 * hour)["status"] == "submitted"
+
+    def test_the_live_rail_knows_when_a_top_up_or_a_withdrawal_can_no_longer_execute(self):
+        from factorylab.world.treasury_rails import LiveRail
+
+        rail = LiveRail.__new__(LiveRail)
+        top_up = {"reference": {"authorization": {"validBefore": 1_000}}, "nonce": 0}
+        assert rail.expired("venice_top_up", top_up, 1_000 * 10**9) is None
+        assert rail.expired("venice_top_up", top_up, (1_000 + 7_200) * 10**9)
+        day_ms = 86_400_000
+        withdraw = {"reference": {"nonce": 10 * day_ms}, "nonce": 10 * day_ms}
+        assert rail.expired("withdraw_burn", withdraw, 11 * day_ms * 10**6) is None
+        assert rail.expired("withdraw_burn", withdraw, 14 * day_ms * 10**6)
+        assert rail.expired("mint_base", withdraw, 99 * day_ms * 10**6) is None
+
+    def test_prepared_evm_transactions_carry_gas_price_headroom(self):
+        from tests.world.test_evm import setup as evm_setup
+
+        _, _, ref = evm_setup()
+        assert ref["tx"]["gasPrice"] >= 125  # the node quoted 100
+
+    def test_a_stuck_evm_transaction_is_replaced_at_the_same_nonce_with_a_bump(self):
+        from tests.world.test_evm import receipt as evm_receipt
+        from tests.world.test_evm import setup as evm_setup
+
+        rpc, chain, ref = evm_setup()
+        bumped = chain.replace(ref, gas_remaining_wei=10**15)
+        assert bumped["tx"]["nonce"] == ref["tx"]["nonce"]
+        assert bumped["tx"]["gasPrice"] * 8 >= ref["tx"]["gasPrice"] * 9  # at least +12.5%
+        assert bumped["tx_hash"] != ref["tx_hash"] and ref["tx_hash"] in bumped["replaces"]
+        # Whichever of the two the chain mined is found; an unmined hash has no receipt.
+        mined = evm_receipt(ref)
+        answer = rpc.__call__
+
+        def realistic(method, url, body, headers):
+            if (body["method"] == "eth_getTransactionReceipt"
+                    and body["params"][0] != mined["transactionHash"]):
+                from factorylab.world.x402 import HTTPResponse
+
+                return HTTPResponse(200, {"result": None}, {})
+            return answer(method, url, body, headers)
+
+        rpc.receipt = mined
+        chain.transport = realistic
+        assert chain.receipt(bumped)["transactionHash"] == ref["tx_hash"]
+
+    def test_the_treasury_replaces_a_step_the_chain_will_not_mine(self):
+        minute = 60 * 10**9
+
+        class Replacing(_NeverRail):
+            def prepare(self, step, state, gas_spent):
+                return {"network": "scripted", "tx_hash": "0x1", "tx": {"nonce": 7},
+                        "chain_key": "base", "fee_ceiling_micro": 0}
+
+            def replace(self, step, reference, gas_spent):
+                return {**reference, "tx_hash": reference["tx_hash"] + "1",
+                        "replaces": [reference["tx_hash"], *reference.get("replaces", [])]}
+
+        treasury, _, rail = self._treasury(lambda w: Replacing(w))
+        treasury.transfer("to_reserve", "10", handle="a", now_ns=1)
+        for k in range(1, 8):
+            treasury.tick(k * 2 * minute)
+        hashes = {r["tx_hash"] for r in rail.sent}
+        assert len(hashes) > 1  # it did not resend the one stuck transaction forever
+        assert all(r["tx"]["nonce"] == 7 for r in rail.sent)

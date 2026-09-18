@@ -19,6 +19,9 @@ PENDING_JOURNAL_EVERY = 10
 # The reason a forwarded exit strands when Circle's mint stays unobserved past the bound.
 FORWARD_WAIT_EXCEEDED = "forwarded mint not delivered within treasury.forward_wait_windows"
 TRANSFER_BLOCKED = "a previous transfer is still pending or stranded"
+# A step resent this many times without evidence is repriced at its own nonce (when the
+# rail can), and again every this many resends after that.
+REPLACE_AFTER_ATTEMPTS = 3
 # Money that entered the wallet's pots, by class: the architect's initial compute credit
 # (subsidy), Venice credit bought from trading capital (conversion), and x402 income.
 INCOME_CLASSES = ("earned_micro", "subsidy_micro", "converted_from_principal_micro")
@@ -837,6 +840,17 @@ class Treasury:
             self._prepare_next(now_ns)
             return []
         result = self.reconcile(now_ns)
+        if (self.state and self.state["status"] == "submitted" and self.state["reference"]
+                and "pending" not in self.state and not self.state["principal_moved"]):
+            # A clean poll found no evidence. If the rail says the step can no longer
+            # execute -- an authorization past its expiry, a withdrawal nonce outside
+            # the venue's window -- the transfer is over and its slot is free: a stuck
+            # transfer used to block every later transfer forever.
+            expired = getattr(self.rail, "expired", None)
+            step = self.state["steps"][self.state["index"]]
+            reason = expired(step, deepcopy(self.state), now_ns) if expired else None
+            if reason:
+                return [*result, self._fail(reason, now_ns)]
         if (
             self.state
             and self.state["status"] == "submitted"
@@ -846,8 +860,30 @@ class Treasury:
             updated = {**self.state, "last_send_ns": now_ns}
             self._write("retry", state=updated)
             self.state = updated
-            self._send()  # exactly the same nonce and transaction, never a replacement
+            attempts = updated["attempts"]
+            if (attempts >= REPLACE_AFTER_ATTEMPTS and attempts % REPLACE_AFTER_ATTEMPTS == 0
+                    and hasattr(self.rail, "replace")):
+                self._replace()
+            self._send()  # the same nonce: the original transaction or its replacement
         return result
+
+    def _replace(self) -> None:
+        """Reprice the current step at its own nonce, within the reserved fee, or keep it."""
+        state = self.state
+        step = state["steps"][state["index"]]
+        try:
+            ref = self.rail.replace(step, deepcopy(state["reference"]), dict(self.gas_spent))
+            self._check_fee(ref, state)
+            if ref.get("fee_ceiling_micro", 0) > (
+                    self.fee_hold.amount if self.fee_hold is not None else 0):
+                raise RailError("replacement fee exceeds the reserved fee")
+        except Exception as exc:  # noqa: BLE001 - the original stays; nothing is lost
+            reason = str(exc) if isinstance(exc, RailError) else type(exc).__name__
+            self._write("replace_refused", transfer_id=state["id"], reason=reason)
+            return
+        updated = {**state, "reference": ref}
+        self._write("replaced", state=updated, tx_refs=[ref])
+        self.state = updated
 
     def _fail(self, reason: str, now_ns: int | None = None, **detail) -> dict:
         state = self.state

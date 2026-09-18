@@ -696,6 +696,52 @@ class LiveRail(ClassTransferRail):
         if response.get("status") != "ok":
             raise RailError("venue rejected withdrawal")
 
+    #: A Venice authorization cannot be used after its ``validBefore``; a use mined just
+    #: before it is finalized on Base within minutes. Past this grace with no receipt,
+    #: it never executed and never will.
+    VENICE_EXPIRY_GRACE_S = 3_600
+    #: Hyperliquid accepts an action only while its nonce is within about two days of
+    #: the venue's clock. A withdrawal whose nonce is older than this and that no
+    #: ledger update shows can never execute.
+    WITHDRAWAL_NONCE_WINDOW_MS = 3 * 86_400_000
+
+    def expired(self, step: str, state: dict, now_ns: int) -> str | None:
+        """Why a submitted step can no longer execute, or ``None`` while it still could.
+
+        Only steps whose principal has not left are answered: the Venice top-up's
+        EIP-3009 authorization and the venue withdrawal's signed action. The
+        treasury abandons such a step only after a clean poll found no evidence.
+        """
+        reference = state.get("reference") or {}
+        if step == "venice_top_up":
+            valid_before = (reference.get("authorization") or {}).get("validBefore")
+            if valid_before is None:
+                return None
+            if now_ns // 1_000_000_000 > int(valid_before) + self.VENICE_EXPIRY_GRACE_S:
+                return "Venice authorization expired unused"
+            return None
+        if step == "withdraw_burn":
+            nonce = reference.get("nonce", state.get("nonce"))
+            if nonce is None:
+                return None
+            if now_ns // 1_000_000 > int(nonce) + self.WITHDRAWAL_NONCE_WINDOW_MS:
+                return "withdrawal nonce expired unexecuted"
+        return None
+
+    def replace(self, step: str, reference: dict, gas_spent: dict) -> dict:
+        """A repriced replacement for a stuck EVM step at its original nonce."""
+        if (reference.get("forwarded") or reference.get("pending_approval")
+                or "tx" not in reference or "chain_key" not in reference):
+            raise RailError("this step has no replaceable transaction")
+        chain = self._evm(reference["chain_key"])
+        replaced = chain.replace(reference, gas_remaining_wei=self.remaining(
+            reference["chain_key"], gas_spent))
+        replaced["fee_ceiling_micro"] = (
+            reference["fee_ceiling_micro"]
+            - gas_micro(reference["gas_ceiling_wei"], reference["gas_usd"])
+            + gas_micro(replaced["gas_ceiling_wei"], reference["gas_usd"]))
+        return replaced
+
     def _venice_client(self):
         """Use the existing reserve signer and x402 client on the committed Base mainnet rail."""
         from factorylab.world.x402 import X402Client
