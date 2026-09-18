@@ -100,13 +100,20 @@ class ReturnConsequences:
             return events
         return []
 
+    def _tick(self, event: int) -> int:
+        """The clock the backstop counts. Here the caller's event index; a runtime that
+        keeps world ticks overrides it, so the backstop is counted in ticks."""
+        return event
+
     def _apply(self, kind: str, evidence: dict, table: LotTable) -> None:
         self.ledger.append({"kind": f"consequence.{kind}", **evidence})
         self.table = table
 
     def start(self, handle: str, event: int) -> None:
         """Admit the return before any tool can create exposure on its behalf."""
-        self._apply("return", {"handle": handle, "event": event}, self.table.start(handle, event))
+        tick = self._tick(event)
+        self._apply("return", {"handle": handle, "event": event, "tick": tick},
+                    self.table.start(handle, event, tick))
 
     def finish(self, handle: str, cost_micro: int) -> None:
         """Persist the full metered cost before it becomes the payoff threshold."""
@@ -287,7 +294,7 @@ class ReturnConsequences:
         if self.pending_orders:
             return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         table = self.table.resolve(event, self.backstop, self.mids,
-                                   censored=self._unknown_portions())
+                                   censored=self._unknown_portions(), tick=self._tick(event))
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})
@@ -384,7 +391,10 @@ class ReturnConsequences:
                                 "event_id": event_id, "about_handle": about, "q": q,
                                 "event": event, "reason": reason})
             return None
-        horizon = max(1, account.opened_at_event + self.backstop - event)
+        # The backstop's remaining horizon, in the clock the backstop counts.
+        now = self._tick(event)
+        opened = account.opened_at_tick if account.opened_at_tick is not None else now
+        horizon = max(1, opened + self.backstop - now)
         handle = open_forecast_decision(
             queue,
             evaluator_id=forecaster_id,

@@ -1506,7 +1506,7 @@ class SchematicsMixin:
             "producer_or_antagonist_return": (
                 "ProducerReturn and custom return kinds settle on the verdict channel: "
                 "the score is the verdict (0 to 1) a judging return "
-                f"gives it within {ev.verdict_timeout_events} events, less the card penalty; "
+                f"gives it within {ev.verdict_timeout_ticks} ticks, less the card penalty; "
                 "unjudged returns are censored (no score, no learning)"
             ),
             "antagonist_exposure": (
@@ -1546,7 +1546,7 @@ class SchematicsMixin:
             ),
             "evaluator_return": (
                 "settles on the conformity channel: the score a meta gives the verdict within "
-                f"{ev.verdict_timeout_events} events, less the card penalty; metas judge one "
+                f"{ev.verdict_timeout_ticks} ticks, less the card penalty; metas judge one "
                 f"verdict in every {self.m.timing.min_ratio} (with jitter) as the window's "
                 "representative; the representative settles at the meta's score and each "
                 f"unread sibling at {ev.sibling_share} of it"

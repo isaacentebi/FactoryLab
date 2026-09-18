@@ -646,9 +646,10 @@ parameters; the observer never substitutes a second set of thresholds.
 | Key | Type | Seed default | Hard cast? |
 | --- | --- | --- | --- |
 | `timing.min_support` | positive integer, at most `timing.cadence_sample` | `30` | Yes: settled samples required before estimating p90; a larger support than the retained sample could never be reached, so it is refused at load. |
-| `timing.cadence_sample` | positive integer | `200` | Yes: retained event-latency sample length. |
+| `timing.cadence_sample` | positive integer | `200` | Yes: retained consequence-latency sample length (latencies in world ticks). |
 | `timing.min_ratio` | integer, at least 3 | `3` | Yes: cascade and governance separation. |
-| `evaluation.consequence_backstop_events` | positive integer | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
+| `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
+| `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a judgement waits for its judge (a verdict for a producer return, a meta verdict for a verdict) before it is censored. |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
 | `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation; absent from the manifest hash at its default. |
 | `immune.k` | integer, at least 2 | `3` | Yes: consecutive windows or changes required for diagnosis. |
@@ -670,20 +671,34 @@ pressure continues to ratchet.
 
 ## Timing interpretation
 
+The two evaluation horizons, `verdict_timeout_events` and
+`consequence_backstop_events`, count **world ticks consumed**, not internal events.
+The runtime's internal event counter advances for every fill, verdict, meta verdict,
+watcher firing and world update, about twenty times per tick in the scripted world,
+so a horizon counted in it lasted a fraction of what its number said: a 20-event
+verdict timeout was about one tick, shorter than the cascade window that releases
+verdicts to the metas, and nearly every evaluator decision was censored before a
+meta could read it. The keys keep their names and their numbers, now read as
+ticks; `verdict_timeout_ticks` and `consequence_backstop_ticks` are the same keys
+spelled for their unit (a manifest that gives both spellings must give one
+number). The judgement deadlines the decision queue enforces were already
+computed from these numbers times the tick interval, so the two now agree.
+
 The shipped testnet manifest sets `tick_interval = "120s"` and
 `evaluation.consequence_backstop_events = 60`. With `timing.min_ratio = 3`,
-the conservative activation floor is 180 events, or six hours at the declared
-tick interval. Both scripted manifests use a 20-event backstop so the
+the conservative activation floor is 180 ticks, or six hours at the declared
+tick interval. Both scripted manifests use a 20-tick backstop so the
 500-event demonstration can activate a card amendment and evaluator retirement
 on separate boundaries.
 
-All measured latencies are `settled_event - opened_event`. The ledger also retains
-nanoseconds as provenance, but nanoseconds never determine the measured period.
-The period is `max(backstop, supported_p90, oldest_outstanding_age)` in events;
-unsupported p90 contributes nothing. Multiply by the current tick interval for
-the corresponding duration. Both that duration and `min_ratio * period` fresh
-events must pass after the previous activation. Activations at one boundary
-therefore cannot chain.
+All measured latencies are `settled_event - opened_event` on the cadence's clock,
+which is world ticks consumed (the ledger's `cadence.*` items keep their field
+names). The ledger also retains nanoseconds as provenance, but nanoseconds never
+determine the measured period. The period is
+`max(backstop, supported_p90, oldest_outstanding_age)` in ticks; unsupported p90
+contributes nothing. Multiply by the current tick interval for the corresponding
+duration. Both that duration and `min_ratio * period` fresh ticks must pass after
+the previous activation. Activations at one boundary therefore cannot chain.
 
 `LiveClock` retains the latest 64 delivered tick gaps and exposes their integer
 mean through `measured_interval_ns()`. Before two ticks it returns the declared

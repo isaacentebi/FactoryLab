@@ -28,8 +28,9 @@ def test_crash_world_wipes_its_venue_without_spending_its_compute_authority() ->
     spent. Death and seal release are covered above, by compute starvation, which is
     what actually ends a world that has run out of money to think with."""
     m = load_manifest("scripted-crash")
-    # The four shocks land by event 120; the venue account is already below zero.
-    s = run_world(m, events=120, seed=2)
+    # The four shocks land by event 120; the venue account is already below zero. (Seed 3:
+    # with verdict horizons counted in ticks, seed 2's trader is flat through the shocks.)
+    s = run_world(m, events=120, seed=3)
     assert Decimal(s["exchange_equity_usd"]) < 0  # the venue was wiped
     assert s["terminated"] is False and s["termination_reason"] is None
     assert s["wallet_balance_micro"] > 0  # authority, not spent by the venue
@@ -170,9 +171,10 @@ def test_cascade_release_is_ledger_first_and_fast_fallback_keeps_timeout(monkeyp
     assert runtime.rng.getstate() == rng_before
     assert all(runtime.queue.get(h).status is SettleStatus.PENDING for h in handles)
     monkeypatch.setattr(runtime.ledger, "append", append)
-    runtime.n = runtime.ev.verdict_timeout_events + 1
-    runtime.pending[handles[1]].opened_at_event = runtime.n
-    runtime.pending[handles[2]].opened_at_event = runtime.n
+    # The verdict timeout counts world ticks consumed, not internal events (defect 1).
+    runtime.ticks_consumed = runtime.ev.verdict_timeout_ticks + 1
+    runtime.pending[handles[1]].opened_at_tick = runtime.ticks_consumed
+    runtime.pending[handles[2]].opened_at_tick = runtime.ticks_consumed
     released = runtime._cascade_arrival(events[2])
     assert released.id == events[2].id
     # Nothing settles at release: the window's siblings wait for the meta's score.

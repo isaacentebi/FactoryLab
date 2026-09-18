@@ -247,6 +247,10 @@ class ContractConsequences(ReturnConsequences):
         super().__init__(ledger, backstop)
         self.runtime = runtime
 
+    def _tick(self, event: int) -> int:
+        """The runtime's world ticks consumed: the unit the backstop counts (defect 1)."""
+        return self.runtime.ticks_consumed
+
     def resolve(self, event):
         resolved = super().resolve(event)
         return [payoff for payoff in resolved
@@ -1681,7 +1685,7 @@ class ComputeMixin:
                 self._apply_registrations(handle, ret)
             self.consequences.finish(handle, ret.cost)
             if emitted == "Exposure":
-                self.pending_exposure[handle] = self.n
+                self.pending_exposure[handle] = self.ticks_consumed
                 payoff = ret.outputs.get("payoff") if ret.status == "ok" else None
                 if payoff is not None and self.consequences.seal_self_forecast(
                         self.book, self.queue, handle=handle, assembly_id=target, payoff=payoff,
@@ -1689,7 +1693,8 @@ class ComputeMixin:
                         tick_ns=self.tick_clock.interval_ns) is not None:
                     self.stats.forecasts_sealed += 1
             else:
-                self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
+                self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
+                                                        opened_at_tick=self.ticks_consumed)
             self.stats.producer_returns += 1
             payload = {"about_handle": handle, "description": item.description,
                        "inputs": item.inputs, "outputs": public_return(ret.outputs),

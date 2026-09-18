@@ -260,7 +260,6 @@ class Runtime(
         self.n += 1
         self.clock.now_ns = max(self.clock.now_ns, ev.ts_ns)
         self.bus.publish(ev)
-        self.cadence.advance(self.n)
         self.stats.events += 1
         self.events_log.append({"kind": str(ev.kind), "payload": _to_plain(ev.payload)})
         self._fold_world_event(ev)
@@ -667,10 +666,14 @@ class Runtime(
             return "judgement needs a chosen return a seat authored, not an abstention"
         if account.payoff is not None:
             return "judgement needs a chosen return whose consequence is still open"
-        due = account.opened_at_event + self.consequences.backstop
-        if self.n >= due:
+        # The backstop counts world ticks consumed since the return opened (defect 1).
+        opened = (account.opened_at_tick if account.opened_at_tick is not None
+                  else self.ticks_consumed)
+        due = opened + self.consequences.backstop
+        if self.ticks_consumed >= due:
             return "judgement needs a chosen return inside its consequence backstop"
-        backstop_ns = self.clock.now_ns + (due - self.n) * self.tick_clock.interval_ns
+        backstop_ns = (self.clock.now_ns
+                       + (due - self.ticks_consumed) * self.tick_clock.interval_ns)
         if self.queue.get(handle).deadline_ns > backstop_ns:
             return "judgement would settle after the chosen return's consequence backstop"
         return None
@@ -905,9 +908,10 @@ class Runtime(
         self.window.revision_returns += int(revision)
         self.window.revision_handles.discard(handle)
         if self.queue.get(handle).channel == CH_EXPOSURE:
-            self.pending_exposure[handle] = self.n
+            self.pending_exposure[handle] = self.ticks_consumed
         else:
-            self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
+            self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
+                                                    opened_at_tick=self.ticks_consumed)
         self.stats.producer_returns += 1
         emitted = self.return_kinds.get(handle, "ProducerReturn" if sample.chosen == NOOP
                                         else self.assemblies[sample.chosen].spec.emits[0])
@@ -1173,7 +1177,8 @@ class Runtime(
             # under a kernel forecast it never made.
             self._commit_verdict_without_payoff(handle, sample.chosen, about, verdict)
         self._open_forecasts(handle, sample.chosen, about, ret.outputs.get("forecasts"))
-        self.pending[handle] = PendingJudgement(handle, CH_CONFORMITY, self.n)
+        self.pending[handle] = PendingJudgement(handle, CH_CONFORMITY, self.n,
+                                                opened_at_tick=self.ticks_consumed)
         self._emit(
             EventKind.VERDICT,
             {
@@ -1312,7 +1317,8 @@ class Runtime(
                     "ts": self.clock.now_ns,
                 }
             )
-            self.pending[handle] = PendingJudgement(handle, channel, self.n, tier)
+            self.pending[handle] = PendingJudgement(handle, channel, self.n, tier,
+                                                    opened_at_tick=self.ticks_consumed)
         if conformity is not None:
             emitted = self.return_kinds.get(handle, "MetaVerdict")
             self._emit(

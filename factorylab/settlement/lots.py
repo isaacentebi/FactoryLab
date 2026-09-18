@@ -92,6 +92,9 @@ class ReturnAccount:
     # never be admitted twice, but it owes no outcome — nothing resolves against it
     # and no payoff forecast may be sealed on it.
     voided: bool = False
+    # The world tick the return opened at, when the caller keeps a tick clock: the
+    # consequence backstop is then counted in ticks, never in internal events.
+    opened_at_tick: int | None = None
 
 
 @dataclass(frozen=True)
@@ -132,13 +135,16 @@ class LotTable:
             None, coin, True, quantity, price, Fraction(0), "spot",
         )))
 
-    def start(self, handle: str, event: int) -> "LotTable":
+    def start(self, handle: str, event: int, tick: int | None = None) -> "LotTable":
         """Admit a unique return before its orders can produce fills."""
         _require_id(handle)
         _require_event_index(event, "event")
+        if tick is not None:
+            _require_event_index(tick, "tick")
         if any(r.handle == handle for r in self.returns):
             raise ValueError("return already admitted")
-        return replace(self, returns=(*self.returns, ReturnAccount(handle, event)))
+        return replace(self, returns=(*self.returns,
+                                      ReturnAccount(handle, event, opened_at_tick=tick)))
 
     def finish(self, handle: str, cost_micro: int) -> "LotTable":
         """Fix a return's nonnegative total compute cost exactly once."""
@@ -401,14 +407,16 @@ class LotTable:
         )
 
     def resolve(self, event: int, backstop: int, mids: Mapping[str, str], *,
-                censored: Mapping[str, str] | None = None) -> "LotTable":
+                censored: Mapping[str, str] | None = None,
+                tick: int | None = None) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
-        The backstop counts runtime events from the return, including any time
-        awaiting a fill. Accepted unfilled orders defer early settlement. A return
-        pays off when the realised result credited to it, as opener or closer,
-        exceeds its own cost, carried liabilities included; a no-fill return
-        cannot inherit anyone's P&L.
+        The backstop counts from the return's opening, including any time awaiting
+        a fill: in world ticks when the caller passes ``tick`` and the account
+        recorded the tick it opened at, in the caller's events otherwise. Accepted
+        unfilled orders defer early settlement. A return pays off when the realised
+        result credited to it, as opener or closer, exceeds its own cost, carried
+        liabilities included; a no-fill return cannot inherit anyone's P&L.
 
         ``censored`` names returns that also sent an order nobody could observe
         (handle -> documented reason). Such a return resolves on its own schedule
@@ -424,7 +432,10 @@ class LotTable:
                 continue
             lots = [lot for lot in self.lots if lot.handle == account.handle]
             waiting = any(o.handle == account.handle and o.remaining for o in self.orders)
-            if (lots or waiting) and event < account.opened_at_event + backstop:
+            age = (tick - account.opened_at_tick
+                   if tick is not None and account.opened_at_tick is not None
+                   else event - account.opened_at_event)
+            if (lots or waiting) and age < backstop:
                 continue
             net = account.realized_micro
             if lots:

@@ -99,6 +99,12 @@ class PendingJudgement:
     # and every meta that conformed to it closes unmeasured with it, rather than
     # timing out at zero for a fact the runtime owed them and never delivered.
     unmeasured: bool = False
+    # The world tick this judgement opened at. Its horizons (the verdict timeout,
+    # the consequence backstop) count world ticks consumed, never internal events:
+    # a busy tick is many events and still one tick (defect 1). A judgement
+    # recorded without one is aged from the world's first tick, so it can never
+    # wait forever.
+    opened_at_tick: int | None = None
 
 
 class FeedbackMixin:
@@ -108,9 +114,9 @@ class FeedbackMixin:
     def meta_waiting_since(self) -> dict[str, int]:
         """When each judge's metas began waiting on a fact about it.
 
-        Derived timing state, rebuilt on demand: a restored runtime starts the
-        wait again from the event it restored at, which is the conservative
-        direction — a meta is closed unmeasured later, never sooner.
+        Counted in world ticks consumed, like the backstop it is compared with.
+        Checkpointed with the rest of the runtime, so a restored runtime carries
+        each wait over exactly rather than starting it again.
         """
         if not hasattr(self, "_meta_waiting_since"):
             self._meta_waiting_since: dict[str, int] = {}
@@ -416,7 +422,7 @@ class FeedbackMixin:
                                 >= fmean(evidence[f][1] for f in forecasts))
                         for meta_handle, conformity in self.pending_meta.pop(handle, []):
                             self._settle_meta_consequence(meta_handle, conformity, y, forecasts[0])
-                        self.verdict_outcomes[handle] = (y, self.n, forecasts[0])
+                        self.verdict_outcomes[handle] = (y, self.ticks_consumed, forecasts[0])
             del self.forecast_returns[handle]
 
     def _deliver_meta_verdict(self, ev: Event) -> None:
@@ -429,7 +435,7 @@ class FeedbackMixin:
             pend is None
             or pend.channel != CH_CONFORMITY
             or tier <= pend.tier
-            or self.n - pend.opened_at_event > self.ev.verdict_timeout_events
+            or self._tick_age(pend) > self.ev.verdict_timeout_ticks
             or self.queue.get(about).status is not SettleStatus.PENDING
         ):
             return
@@ -447,7 +453,7 @@ class FeedbackMixin:
             sib = self.pending.get(sibling)
             if (
                 sib is None
-                or self.n - sib.opened_at_event > self.ev.verdict_timeout_events
+                or self._tick_age(sib) > self.ev.verdict_timeout_ticks
                 or self.queue.get(sibling).status is not SettleStatus.PENDING
             ):
                 continue
@@ -556,7 +562,7 @@ class FeedbackMixin:
         backstop, a meta still waiting on it is waiting on nothing: it closes
         unmeasured while it can still be closed at all.
         """
-        backstop = self.ev.consequence_backstop_events
+        backstop = self.ev.consequence_backstop_ticks
         for judge_handle in list(self.pending_meta):
             waiting = [c for c in self.pending.values()
                        if c.channel == NORM_COMMITMENT and c.judge == judge_handle
@@ -565,9 +571,9 @@ class FeedbackMixin:
                 continue
             opened = self.meta_waiting_since.get(judge_handle)
             if opened is None:
-                self.meta_waiting_since[judge_handle] = self.n
+                self.meta_waiting_since[judge_handle] = self.ticks_consumed
                 continue
-            if self.n - opened > backstop:
+            if self.ticks_consumed - opened > backstop:
                 self._drain_pending_meta(
                     judge_handle, "the judged verdict produced no fact within its backstop")
                 self.meta_waiting_since.pop(judge_handle, None)
@@ -783,7 +789,7 @@ class FeedbackMixin:
         stale = [
             h
             for h, o in self.pending_exposure.items()
-            if self.n - o > self.ev.verdict_timeout_events and h not in waiting
+            if self.ticks_consumed - o > self.ev.verdict_timeout_ticks and h not in waiting
         ]
         for h in stale:
             self._settle_exposure(h, 0.0)
@@ -1051,7 +1057,6 @@ class FeedbackMixin:
             if top_level and payoff.censored is None:
                 self._count_consequence(self.handle_to_assembly.get(payoff.handle))
         self._commit_verdicts()
-        pending = {f.handle: f for f in self.book.pending()}
         settled = self.settler.settle_due(self.n, self._facts_for)
         settled.extend(self.settler.settle_consequences(self.consequences.payoff))
         for result in settled:
@@ -1065,12 +1070,11 @@ class FeedbackMixin:
         self._settle_due_verdicts(landing={result.handle for result in settled})
         self._expire_pending_meta()
         self._settle_exposures(settled)
-        backstop = self.ev.consequence_backstop_events
+        backstop = self.ev.consequence_backstop_ticks
         for judge_handle in [h for h, (_y, at, _f) in self.verdict_outcomes.items()
-                             if self.n - at > backstop]:
+                             if self.ticks_consumed - at > backstop]:
             del self.verdict_outcomes[judge_handle]
         for s in settled:
-            forecast = pending[s.handle]
             if s.predicate_id == RETURN_PAID_OFF.id and s.brier is None:
                 # A censored payoff is no fact: a verdict already closed that was
                 # waiting only on it is decided on what exists, or closes unmeasured.
@@ -1098,12 +1102,13 @@ class FeedbackMixin:
                         # grades the metas, as before the verdict had its own anchor.
                         for meta_handle, conformity in self.pending_meta.pop(judge_handle, []):
                             self._settle_meta_consequence(meta_handle, conformity, y, s.handle)
-                        self.verdict_outcomes[judge_handle] = (y, self.n, s.handle)
+                        self.verdict_outcomes[judge_handle] = (y, self.ticks_consumed, s.handle)
+            # The cadence's clock is world ticks consumed (defect 1).
             self.cadence.record(
                 handle=s.handle,
                 predicate_id=s.predicate_id,
-                opened_event=forecast.made_at_event,
-                settled_event=self.n,
+                opened_event=self.cadence.opened_at(s.handle, self.ticks_consumed),
+                settled_event=self.ticks_consumed,
                 opened_ns=self.queue.get(s.handle).opened_ns,
                 settled_ns=self.clock.now_ns,
                 status=str(s.status),
@@ -1175,10 +1180,7 @@ class FeedbackMixin:
             if q is None:
                 continue
             about = forecast.about_handle
-            try:
-                opened = self.consequences.table.account(about).opened_at_event
-            except KeyError:
-                opened = self.n
+            opened, opened_tick = self._account_opened(about)
             cards = _CARDS_FOR_CHANNEL.get(self.queue.get(about).channel, "producer")
             emitted = self.return_kinds.get(about)
             if emitted and emitted not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
@@ -1189,8 +1191,10 @@ class FeedbackMixin:
             self.pending[forecast.handle] = PendingJudgement(
                 forecast.handle, NORM_COMMITMENT, opened, about=about, judge=judge,
                 evaluator_id=forecast.evaluator_id, q=q, cards=cards, window=window,
+                opened_at_tick=opened_tick,
             )
-            self.pending.setdefault(about, PendingJudgement(about, NORM_SUBJECT, self.n))
+            self.pending.setdefault(about, PendingJudgement(
+                about, NORM_SUBJECT, self.n, opened_at_tick=self.ticks_consumed))
 
     def _commit_verdict_without_payoff(
         self, judge_handle: str, evaluator_id: str, about: str, verdict: float
@@ -1206,10 +1210,7 @@ class FeedbackMixin:
         key = f"{NORM_COMMITMENT}:{judge_handle}"
         if key in self.pending or judge_handle in self.verdicts_closed_out:
             return
-        try:
-            opened = self.consequences.table.account(about).opened_at_event
-        except KeyError:
-            opened = self.n
+        opened, opened_tick = self._account_opened(about)
         cards = _CARDS_FOR_CHANNEL.get(self.queue.get(about).channel, "producer")
         emitted = self.return_kinds.get(about)
         if emitted and emitted not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure"):
@@ -1218,12 +1219,30 @@ class FeedbackMixin:
         self.pending[key] = PendingJudgement(
             key, NORM_COMMITMENT, opened, about=about, judge=judge_handle,
             evaluator_id=evaluator_id, q=float(verdict), cards=cards, window=window,
-            awaits_payoff=False,
+            awaits_payoff=False, opened_at_tick=opened_tick,
         )
         self.ledger.append({"kind": "verdict.committed_without_payoff", "handle": judge_handle,
                             "about_handle": about, "evaluator_id": evaluator_id,
                             "q": float(verdict), "ts": self.clock.now_ns})
-        self.pending.setdefault(about, PendingJudgement(about, NORM_SUBJECT, self.n))
+        self.pending.setdefault(about, PendingJudgement(
+            about, NORM_SUBJECT, self.n, opened_at_tick=self.ticks_consumed))
+
+    def _tick_age(self, judgement: PendingJudgement) -> int:
+        """World ticks consumed since this judgement opened."""
+        return self.ticks_consumed - (judgement.opened_at_tick or 0)
+
+    def _account_opened(self, about: str) -> tuple[int, int]:
+        """The event and the world tick the judged return's account opened at.
+
+        A verdict's consequence backstop runs from its subject's own opening, so
+        it closes when the subject's outcome is fixed, not later.
+        """
+        try:
+            account = self.consequences.table.account(about)
+        except KeyError:
+            return self.n, self.ticks_consumed
+        tick = account.opened_at_tick
+        return account.opened_at_event, self.ticks_consumed if tick is None else tick
 
     def _verdicts_waiting(self) -> set[str]:
         """The judged returns with a verdict whose window has not yet judged it."""
@@ -1258,12 +1277,12 @@ class FeedbackMixin:
         verdict whose payoff fact is among them is decided by it when it is
         attached, rather than closing unmeasured a moment before.
         """
-        backstop = self.ev.consequence_backstop_events
+        backstop = self.ev.consequence_backstop_ticks
         due = [p for p in self.pending.values()
                if p.channel == NORM_COMMITMENT and not p.verdict_closed]
         for c in due:
             state = self._verdict_window(c)
-            if state == "open" and self.n < c.opened_at_event + backstop:
+            if state == "open" and self._tick_age(c) < backstop:
                 continue
             c.verdict_closed = True
             # Closed out once: the commitment pass may not re-open this judge.
@@ -1369,7 +1388,7 @@ class FeedbackMixin:
             self.meta_waiting_since.pop(commitment.judge, None)
             return
         y = int(all(bool(f) for f in facts))
-        self.verdict_outcomes[commitment.judge] = (y, self.n, commitment.handle)
+        self.verdict_outcomes[commitment.judge] = (y, self.ticks_consumed, commitment.handle)
         for meta_handle, conformity in self.pending_meta.pop(commitment.judge, []):
             self._settle_meta_consequence(meta_handle, conformity, y, commitment.handle)
         self.meta_waiting_since.pop(commitment.judge, None)
@@ -1419,7 +1438,7 @@ class FeedbackMixin:
             p
             for p in self.pending.values()
             if p.channel not in (NORM_COMMITMENT, NORM_SUBJECT)  # settled by the window
-            and self.n - p.opened_at_event > self.ev.verdict_timeout_events
+            and self._tick_age(p) > self.ev.verdict_timeout_ticks
         ]
         for p in stale:
             if self.queue.get(p.handle).status is SettleStatus.PENDING:

@@ -208,7 +208,6 @@ class PricingMixin:
         self.price_origins[handle]["turnover"] = self.window.index
 
     def _manage_reserve_window(self) -> None:
-        self.cadence.advance(self.n)
         if self.reserve_window_start is None:
             self.cadence.launch(self.clock.now_ns if self.live else 0)
         if (

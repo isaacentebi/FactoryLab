@@ -1252,7 +1252,7 @@ class GovernanceMixin:
             # Policy outcomes may await cadence and then a declared number of windows.
             # This covers the remaining experiment, rather than expiring after the ballot call.
             deadline = self.clock.now_ns + (
-                self.events_budget + self.ev.consequence_backstop_events
+                self.events_budget + self.ev.consequence_backstop_ticks
             ) * self.m.max_tick_ns + (
                 am.predicted_effect.window * self.m.novelty.window_ns)
             handle = self.queue.open(

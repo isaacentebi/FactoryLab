@@ -661,13 +661,13 @@ class RoutingMixin:
         channels = self._return_channels(sample.chosen, ev)
         channel = next(iter(channels.values()), CH_VERDICT)
         deadline = (
-            self.clock.now_ns + (self.ev.verdict_timeout_events + 2) * self.tick_clock.interval_ns
+            self.clock.now_ns + (self.ev.verdict_timeout_ticks + 2) * self.tick_clock.interval_ns
         )
         if set(channels.values()) & {CH_FAST, CH_CONSEQUENCE}:
             # A top meta is graded against the judged verdict's eventual consequence, so
             # its decision lives as long as the return's backstop, like a forecast.
             deadline = self.clock.now_ns + (
-                (self.ev.consequence_backstop_events + 2) * self.tick_clock.interval_ns * 4
+                (self.ev.consequence_backstop_ticks + 2) * self.tick_clock.interval_ns * 4
             )
         if CH_CONSEQUENCE in channels.values():
             # A population forecast may select any of the admitted 1..200 event

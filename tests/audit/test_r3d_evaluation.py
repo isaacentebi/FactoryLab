@@ -75,8 +75,9 @@ def test_a_restored_runtime_does_not_re_emit_a_verdict_it_already_closed_out():
     runtime.consequences.order_intent("cid-1", "decision-0", "BTC")
     _, event = _consequence_produce(runtime, "seed-decider")
     judge = _consequence_judge(runtime, event, "eval-a")
-    for _ in range(40):
+    for _ in range(40):  # forty world ticks: the backstop counts ticks, not events
         runtime.n += 1
+        runtime.ticks_consumed += 1
         runtime._settle_due_forecasts()
     assert len(_verdict_rows(runtime, "verdict.unread")) == 1
     state = runtime_state(runtime)
@@ -86,6 +87,7 @@ def test_a_restored_runtime_does_not_re_emit_a_verdict_it_already_closed_out():
     before = len(_verdict_rows(restored, "verdict.unread"))
     for _ in range(40):
         restored.n += 1
+        restored.ticks_consumed += 1
         restored._settle_due_forecasts()
     assert len(_verdict_rows(restored, "verdict.unread")) == before
     assert not [i for i in _verdict_rows(restored, "verdict.unmeasured") if i["handle"] == judge]
