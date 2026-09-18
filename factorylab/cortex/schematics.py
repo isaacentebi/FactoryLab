@@ -182,6 +182,18 @@ class SchematicsMixin:
             "optional state object to keep",
             "timeout_s": 10,
             "state_policy": "private",
+            "trigger": "optional; makes the seat a watcher the kernel wakes from world state "
+            "each tick, at the program price and without a model call: {\"kind\": "
+            "\"price_cross\", \"coin\", \"level\"} | {\"kind\": \"funding_sign\", "
+            "\"coin\"} | {\"kind\": \"equity_below\", \"level\"} | {\"kind\": "
+            "\"equity_above\", \"level\"}",
+        },
+        "predicate": {
+            "kind": "predicate",
+            "id": "slug",
+            "description": "what it resolves",
+            "code": "python defining resolve(facts) -> bool over the public window facts; "
+            "admitted only if it resolves on the last closed window, then nameable by forecasts",
         },
         "observation": {
             "kind": "observation",
@@ -278,7 +290,8 @@ class SchematicsMixin:
         "A retire proposal names an id from world.catalogue (any assembly, the seeds "
         "included) and removes it from every router; a retired id may be "
         "registered again as its next version. Effort: low, medium, high. An assembly with "
-        "model_id program is a program seat (proposal_shapes.program): its code runs in the "
+        "model_id program (or kind program) is a program seat (proposal_shapes.program): its "
+        "code runs in the "
         "tool jail instead of a model, reads one JSON object from stdin (prompt, description, "
         "inputs, outcome_schema, state) and prints the Return JSON a model would; it is "
         "routed, judged, paid and retired exactly like a model seat, each call costing "
@@ -602,6 +615,7 @@ class SchematicsMixin:
         "service": "sell a registered tool's output to outside buyers over x402",
         "tool": "register jailed code as a priced tool anyone may call",
         "program": "register a seat whose jailed code answers instead of a model",
+        "predicate": "register a forecast predicate over a closed window's public facts",
         "observation": "register a measurement over a closed window's public facts",
         "learner": "give one assembly a learner over an action set it declares",
         "amendment": "add, replace or remove charter cards, with a predicted effect",
@@ -1441,14 +1455,17 @@ class SchematicsMixin:
 
     @staticmethod
     def _register_schema() -> dict[str, Any]:
+        """Every kind a return may register is a kind the capability index names.
+
+        The enum is the index's own key set, so neither can list a kind the other
+        refuses: ``program`` is accepted here and registered as an assembly whose
+        model_id is program, and ``predicate`` is published with a shape.
+        """
         return {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"kind": {"enum": ["model", "assembly", "router", "tool",
-                                                   "observation", "predicate", "learner",
-                                                   "amendment", "retire", "connector",
-                                                   "market", "challenge", "service"]}},
+                "properties": {"kind": {"enum": sorted(SchematicsMixin.PROPOSAL_SHAPES)}},
                 "required": ["kind"],
             },
         }
