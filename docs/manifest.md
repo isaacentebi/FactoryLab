@@ -1912,7 +1912,12 @@ needs the base coin (`spot sell exceeds venue base balance`). Unknown collateral
 (`order collateral unavailable: <exception>`) and stale collateral (`order
 collateral is stale: venue account older than one tick`, which is how
 Hyperliquid's fallback to its last complete snapshot reads) block new risk, and
-neither ever blocks a cancellation or a `reduce_only` reduction.
+neither ever blocks a cancellation or a `reduce_only` reduction. A failed
+Hyperliquid mids read raises `VenueUnavailable` and is never answered with the last
+prices; an account fallback to the last complete snapshot is returned with
+`stale = true` and its original `observed_at_ns`, and the prompts (`StaleAccount`),
+the watchers, a window's opening equity and the wind-down's final reconciliation
+(`unknown`, never `flat`) all refuse it.
 
 `[venue] collateral_headroom_usd` is an exact nonnegative decimal string,
 default `"0"`: free collateral the world precommits to leaving unused, declared

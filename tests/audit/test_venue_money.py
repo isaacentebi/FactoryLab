@@ -309,3 +309,61 @@ class TestFix3ClientErrorsAreVenueWeather:
         monkeypatch.setattr(rt.exchange.target, "collateral_view", live.collateral_view)
         reason = rt._order_collateral("h", "BTC", Decimal("0.001"), True)
         assert reason == "order collateral unavailable: VenueUnavailable"
+
+
+# ------------------------------------------------------------------------------ 4
+
+
+class TestFix4StaleIsNeverLive:
+    """A snapshot the venue did not just give is marked stale and never read as live."""
+
+    def test_a_failed_mids_read_is_unavailable_not_the_last_prices(self, monkeypatch):
+        from factorylab.world.exchange import VenueUnavailable
+
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        ex = _live_stub()
+        assert ex.mids()["BTC"] == Decimal(60000)
+        ex._info.all_mids.side_effect = OSError("down")
+        try:
+            ex.mids()
+        except VenueUnavailable:
+            return
+        raise AssertionError("an old price was served as a live one")
+
+    def test_an_account_fallback_is_marked_stale_with_its_observation_time(self, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        ex = _live_stub()
+        fresh = ex.account()
+        assert fresh.stale is False and fresh.observed_at_ns is not None
+        ex._info.user_state.side_effect = OSError("down")
+        stale = ex.account()
+        assert stale.stale is True and stale.observed_at_ns == fresh.observed_at_ns
+        assert stale.positions == fresh.positions
+
+    def test_wind_down_never_reads_flat_from_a_stale_account(self):
+        from dataclasses import replace as dc_replace
+
+        from factorylab.runtime.venue import wind_down
+        from factorylab.runtime.winddown import UNKNOWN
+        from tests.audit.test_r3c_death import NONCE, Diary, Venue
+
+        venue = Venue()
+        live_account = venue.account
+        venue.account = lambda: dc_replace(live_account(), stale=True)
+        report = wind_down(venue, Diary(), launch_nonce=NONCE)
+        assert report["exposure_state"] == UNKNOWN
+
+    def test_a_watcher_never_settles_on_stale_equity_and_prompts_say_unavailable(self):
+        from dataclasses import replace as dc_replace
+
+        rt = venue_runtime(venue_usd="1000")
+        live_account = rt.exchange.target.account
+        rt.exchange.target.account = lambda: dc_replace(live_account(), stale=True)
+        try:
+            assert "equity_usd" not in rt._observed_world()
+            rt.ticks_consumed += 1
+            account, reason, _ = rt._tick_account_observation()
+            assert account is None and reason == "StaleAccount"
+            assert rt._equity_micro() is None
+        finally:
+            del rt.exchange.target.account

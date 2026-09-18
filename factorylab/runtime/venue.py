@@ -212,7 +212,11 @@ class VenueMixin:
         memo = getattr(self, "_account_memo", None)
         if memo is None or memo[0] != tick:
             try:
-                memo = (tick, self.exchange.account(), None, self.clock.now_ns)
+                account = self.exchange.account()
+                # A fallback to an older snapshot is not this tick's account.
+                memo = ((tick, None, "StaleAccount", self.clock.now_ns)
+                        if getattr(account, "stale", False)
+                        else (tick, account, None, self.clock.now_ns))
             except Exception as exc:  # noqa: BLE001 - every read failure is reportable
                 memo = (tick, None, type(exc).__name__, self.clock.now_ns)
             self._account_memo = memo
@@ -265,14 +269,20 @@ class VenueMixin:
         derived from it unmeasured, which is what it is.
         """
         try:
-            return usd_to_micro(self.exchange.account().equity_usd, rounding="nearest")
+            account = self.exchange.account()
         except RuntimeError:
             return None
+        if getattr(account, "stale", False):
+            return None  # an old snapshot is not the equity a window opens on
+        return usd_to_micro(account.equity_usd, rounding="nearest")
 
     def _observe_positions(self) -> None:
         """A new peak position notional is recorded before it enters the window."""
         try:
-            positions = self.exchange.account().positions
+            account = self.exchange.account()
+            if getattr(account, "stale", False):
+                return  # a peak is observed on a live account or not at all
+            positions = account.positions
             mids = self.exchange.mids() if positions else {}
         except RuntimeError:
             return

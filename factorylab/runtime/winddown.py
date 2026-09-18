@@ -484,6 +484,9 @@ class WindDownExecutor:
             resting, unreadable = [], [*unreadable, ("open_orders", type(exc).__name__)]
         try:
             account = self.exchange.account()
+            if getattr(account, "stale", False):
+                # An older snapshot cannot prove the account flat now.
+                account, unreadable = None, [*unreadable, ("account", "StaleAccount")]
         except Exception as exc:  # noqa: BLE001
             account, unreadable = None, [*unreadable, ("account", type(exc).__name__)]
         try:

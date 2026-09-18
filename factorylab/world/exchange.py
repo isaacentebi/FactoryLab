@@ -22,8 +22,9 @@ from factorylab.world.events import WorldEvent, WorldEventKind
 
 
 class VenueUnavailable(RuntimeError):
-    """The venue's API failed transiently after retries. Raised only when no last-good
-    value exists to fall back on; otherwise reads return the last good value."""
+    """The venue's API failed after retries. Prices are never served from an older
+    read; an account read may fall back to the last complete snapshot, and then says
+    so (``AccountState.stale``) and keeps its original ``observed_at_ns``."""
 
 
 NS_PER_MS = 1_000_000
@@ -150,6 +151,11 @@ class AccountState:
     # marked, and spot marks are not collateral for a perp. Custody keeps the two
     # apart, so the venue states the split rather than leaving it to be derived.
     perps_equity_usd: Decimal | None = None
+    # When the venue gave this account, and whether it is a fallback to an older
+    # snapshot rather than this read's answer. A stale account is never live: the
+    # wind-down's reconciliation, the watchers and the prompts refuse it.
+    observed_at_ns: int | None = None
+    stale: bool = False
 
 
 class Exchange(Protocol):
@@ -918,12 +924,13 @@ class HyperliquidExchange:
     # ---- reads
 
     def mids(self) -> dict[str, Decimal]:
-        try:
-            raw = self._guarded("all_mids", self._info.all_mids)
-        except VenueUnavailable:
-            if self._last_mids is None:
-                raise
-            return dict(self._last_mids)
+        import time
+
+        # A failed read is unavailable, never the last prices served as live ones:
+        # every caller already reads an unavailable price as unavailable, and a
+        # stale mid in a dict is indistinguishable from a fresh one.
+        raw = self._guarded("all_mids", self._info.all_mids)
+        self.__dict__["_last_mids_ns"] = time.time_ns()
         self._last_mids = {c: Decimal(str(raw[self._wire_coin(c)]))
                            for c in (*getattr(self, "_listed_coins", self.coins),
                                      *getattr(self, "_spot_names", {}))
@@ -979,7 +986,7 @@ class HyperliquidExchange:
             if self._last_account is None:
                 raise
             self.account_fallbacks = getattr(self, "account_fallbacks", 0) + 1
-            return self._last_account
+            return replace(self._last_account, stale=True)
         summary = st["marginSummary"]
         positions: list[Position] = []
         in_effect: dict[str, Decimal] = {}
@@ -1012,7 +1019,8 @@ class HyperliquidExchange:
                     if not mark.is_finite() or mark <= 0:
                         raise VenueUnavailable("invalid spot USD mid")
                     spot_value += total * mark
-        self.__dict__["_last_account_ns"] = time.time_ns()
+        observed_at = time.time_ns()
+        self.__dict__["_last_account_ns"] = observed_at
         self._last_account = AccountState(
             equity_usd=Decimal(str(summary["accountValue"])) + spot_value,
             perps_equity_usd=Decimal(str(summary["accountValue"])),
@@ -1020,6 +1028,7 @@ class HyperliquidExchange:
             positions=tuple(positions),
             margin_used_usd=Decimal(str(summary["totalMarginUsed"])),
             spot_balances=tuple(balances),
+            observed_at_ns=observed_at,
         )
         return self._last_account
 
