@@ -235,6 +235,14 @@ class RecoveryJournal:
         self.recovering = False
         self.failure: str | None = None
         self.connector_bodies: list[str] = []  # transient, never checkpointed
+        # How many calls that may change an external answer have been made through
+        # this journal, per adapter (the name before the first dot: ``exchange``,
+        # ``treasury``, ``provider``...), counting every call ``_read_only`` does not
+        # name. A view held above the recorded-I/O layer keys on the adapters its
+        # answer depends on, so any write to them in between makes the next read go
+        # out again. Transient, never checkpointed: memos keyed on it are dropped at
+        # every checkpoint, so only differences within one continuation count.
+        self.writes: dict[str, int] = {}
 
     def __getattr__(self, name):
         return getattr(self.ledger, name)
@@ -314,6 +322,9 @@ class RecoveryJournal:
 
     def call(self, name: str, function, args: tuple, kwargs: dict, *, deterministic=False):
         """Recorded calls return their original result; only deterministic fakes run in replay."""
+        if not _read_only(name):
+            adapter = name.split(".", 1)[0]
+            self.writes[adapter] = self.writes.get(adapter, 0) + 1
         if not self.active:
             return function(*args, **kwargs)
         # The x402 evidence callback appends ledger-only payment evidence inside complete().

@@ -81,6 +81,42 @@ class ArtifactStore:
         self.index: dict[str, dict[str, Any]] = {}
         self._memory: dict[str, bytes] = {}
 
+    # Change tracking, for views derived from the index (the runtime's directory
+    # listing) that would otherwise re-read the whole archive on every request:
+    # ``generation`` moves on every change; ``epoch`` moves when the index is
+    # replaced or edited from outside, which invalidates every derived row; and
+    # ``drain_changes`` names the hashes ``put``/``collect`` touched since it was
+    # last called. It has one consumer, the runtime that owns this store.
+
+    @property
+    def index(self) -> dict[str, dict[str, Any]]:
+        """The checkpointed index; ``generation`` says when it last changed."""
+        return self._index
+
+    @index.setter
+    def index(self, value: dict[str, dict[str, Any]]) -> None:
+        # A restore replaces the index whole; every derived view must be rebuilt.
+        self._index = value
+        self.touch()
+
+    def touch(self) -> None:
+        """Declare a change to ``index`` made outside ``put`` and ``collect``.
+
+        Every view derived from the index is rebuilt from scratch afterwards.
+        """
+        self.generation = getattr(self, "generation", 0) + 1
+        self.epoch = getattr(self, "epoch", 0) + 1
+        self._changed: set[str] = set()
+
+    def drain_changes(self) -> tuple[int, set[str]]:
+        """Return ``(epoch, hashes put or collected since the last drain)`` and forget them."""
+        changed, self._changed = self._changed, set()
+        return self.epoch, changed
+
+    def _changed_sha(self, sha: str) -> None:
+        self.generation += 1
+        self._changed.add(sha)
+
     def put(self, data: bytes, *, owner: str, kind: str, public: bool = False) -> str:
         """Archive ``data`` for ``owner`` and return its hash; the bytes precede the record."""
         if not isinstance(data, (bytes, bytearray)):
@@ -112,6 +148,7 @@ class ArtifactStore:
         # Publishing an existing sha publishes it: the blob is public when any
         # reference to it is.
         record["public"] = any(bool(r.get("public")) for r in refs.values())
+        self._changed_sha(sha)
         return sha
 
     def get(self, sha: str) -> bytes:
@@ -201,6 +238,7 @@ class ArtifactStore:
                 except OSError:
                     continue
             self.index.pop(sha, None)
+            self._changed_sha(sha)
             self.ledger.append({"kind": "artifact.collected", "sha": sha, "ts": self.clock()})
         return orphans
 

@@ -39,11 +39,20 @@ uv run factorylab run --world scripted-crash --events 600 --seed 2
 The first runs a deterministic world for 500 events, registers an assembly learner, activates a card amendment and a seed evaluator retirement on separate governance boundaries, and prints a summary. Its orders size from the world wallet, and its consequence backstop is 20 events. Every seat spends from its own entitlement (edition 2, C10): the seeded trader bears its own trading losses and runs its share down before the 500 events are out. A router that draws nobody now settles that draw as inapplicable instead of manufacturing a producer return for the judges to grade, so evaluation stops buying work nobody authored and the run reaches the scripted population observation, which the script places past its 1,600th producer call, inside these 500 events. The second halves the price of BTC four times under a leveraged long; gap liquidation can take the wallet below zero, and the world dies of `balance_zero` and releases its key. Then the tests:
 
 ```bash
-uv run pytest
+uv run pytest                                     # check: the inner loop, 2 workers, about a minute
+uv run pytest -m "check or gate" -n 4             # the merge gate: adds every test that runs a world
 uv run pytest -m slow -o addopts="" tests/runtime/test_resume.py
+uv run pytest -m gate tests/audit/test_r2a_lifecycle.py   # one gate file you touched
 ```
 
-The second set kills and resumes real processes at every ledger write. `uv run factorylab --help` lists the rest: validating a manifest, resuming a world, publishing the wake page, reading a dead world's diary, versioning it.
+Tests are in three tiers, assigned in `tests/conftest.py`. `check` runs no world, and a
+`check` test whose call takes over 2 s fails and asks to be marked `@pytest.mark.gate`
+(`FACTORYLAB_CHECK_LIMIT_S=5` raises the limit on a slow machine, `=off` disables it).
+`gate` is every test that runs a world or reads a shared scripted run. `slow` kills and
+resumes real processes at every ledger write. More workers: `-n 8`, or `-n auto` for
+every core (hot on a laptop); the last `-m` and `-n` given win over the defaults.
+`uv run python scripts/bench_scripted.py 50 100 200` times the scripted world and
+prints digests of its diary, so a performance change can show it changed nothing else. `uv run factorylab --help` lists the rest: validating a manifest, resuming a world, publishing the wake page, reading a dead world's diary, versioning it.
 
 Running against Hyperliquid testnet needs an exchange key and a model-provider key at the repository root (`hyperliquid.key`, `openrouter.key`, mode 0600, never committed). The shipped testnet manifest uses `PURR/USDC` spot, a configured reserve address, a 120-second tick and a 60-event consequence backstop. Running with real money additionally needs the reserve key and a manifest named `funded` with an explicit `[charter]`; the code refuses mainnet without them. The mainnet spot names for the re-draft are `UBTC/USDC` and `UETH/USDC`.
 

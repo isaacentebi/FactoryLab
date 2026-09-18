@@ -366,6 +366,9 @@ class Runtime(
         self._instruments_memo = None
         self._mids_memo = None
         self._account_memo = None
+        forget = getattr(self.treasury, "forget_observations", None)
+        if forget is not None:
+            forget()
         return True
 
     def _resume_at(self, now_ns: int) -> None:

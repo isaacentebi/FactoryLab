@@ -237,6 +237,7 @@ def test_the_runner_measures_a_window_under_the_tool_limits():
      "    import urllib.request\n"
      "    return urllib.request.urlopen('http://example.com').status\n", "exit"),
 ])
+@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_an_observation_that_cannot_measure_says_why(code, reason):
     require_jail()
     value, error = ObservationRunner(timeout_s=2).run(code, {"costs": [1]})

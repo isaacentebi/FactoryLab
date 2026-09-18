@@ -121,6 +121,7 @@ def test_echo_and_sum_execute_with_json_stdin(usable_jail):
     assert ToolRunner().run(summer, {"values": [1, 2, 3]}) == {"sum": 6}
 
 
+@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_timeout_returns_an_error(usable_jail):
     assert ToolRunner().run(_tool("import time; time.sleep(10)"), {}) == {"error": "timeout"}
 
