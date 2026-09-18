@@ -169,11 +169,11 @@ class Assembly:
         # journal can store them, so a live call and its replay parse the same text.
         resp = replace(resp, text=utf8_text(resp.text))
         parsed = _parse_json_object(resp.text)
+        dropped: tuple[dict[str, Any], ...] = ()
         if parsed is not None:
             try:
-                _validate_return(parsed, req.outcome_schema)
-                if self.validator is not None:
-                    self.validator(parsed, req)
+                parsed, dropped = validate_return_sections(
+                    parsed, req.outcome_schema, self.validator, req)
             except (ValueError, TypeError, ArithmeticError, RecursionError):
                 parsed = None
         if parsed is None:
@@ -212,6 +212,7 @@ class Assembly:
             stop_reason=resp.stop_reason,
             tool_calls=tool_calls,
             provider=provider,
+            dropped=dropped,
         )
 
     def _children(self, req: Request, parsed: dict[str, Any]) -> tuple[ChildRequest | Request, ...]:
@@ -418,6 +419,7 @@ class ProgramAssembly:
         text = utf8_text(result.get("stdout", "")) if isinstance(result.get("stdout"), str) else ""
         parsed = _parse_json_object(text)
         new_state: Any = None
+        dropped: tuple[dict[str, Any], ...] = ()
         if parsed is not None:
             # The state is the program's, not the return's: it never reaches the
             # outcome schema, the judges or the ledger's outputs field.
@@ -426,9 +428,8 @@ class ProgramAssembly:
                 parsed = None
             else:
                 try:
-                    _validate_return(parsed, req.outcome_schema)
-                    if self.validator is not None:
-                        self.validator(parsed, req)
+                    parsed, dropped = validate_return_sections(
+                        parsed, req.outcome_schema, self.validator, req)
                 except (ValueError, TypeError, ArithmeticError, RecursionError):
                     parsed = None
         if parsed is None:
@@ -457,7 +458,7 @@ class ProgramAssembly:
         outputs = {k: v for k, v in parsed.items() if k not in ("requests", "tool_calls")}
         return Return(
             req.handle, outputs, cost, "ok", children=children, served_by=PROGRAM_MODEL_ID,
-            stop_reason="stop", tool_calls=tool_calls, provider=provider,
+            stop_reason="stop", tool_calls=tool_calls, provider=provider, dropped=dropped,
         )
 
 
@@ -613,6 +614,145 @@ def reserved_return_fields(*, max_children: int | None = None,
     return properties
 
 
+class SectionError(ValueError):
+    """One optional section of a return, or one item of a list section, is invalid.
+
+    Raised by a return validator (the runtime's output contract) for a fault that
+    belongs to that section alone: the section or item is dropped with ``reason``
+    and the rest of the return is validated again. Anything else a validator
+    raises is a fault in the answer itself and voids the return.
+    """
+
+    def __init__(self, section: str, reason: str, index: int | None = None) -> None:
+        super().__init__(reason)
+        self.section, self.reason, self.index = section, reason, index
+
+
+#: What a return may carry beside its answer. A section here (or one item of a
+#: list section) that does not validate is dropped with its reason and the answer
+#: stands. Everything else — the action and its order, verdict, payoff,
+#: conformity, vote, emits, about_handle, status and the fields the outcome schema
+#: requires — is the answer, and is validated strictly.
+OPTIONAL_SECTIONS = ("rationale", "working_state", "ack_through", "propensity",
+                     "register", "tool_calls", "requests", "forecasts")
+_LIST_SECTIONS = frozenset({"register", "tool_calls", "requests", "forecasts"})
+#: List sections that are one batch of effects written together: a seat may pair a
+#: venue write with another call or a child with its sibling, so one bad item drops
+#: the whole batch and no part of it runs alone. Registrations and forecasts are
+#: admitted and scored one by one, so there only the bad item goes.
+_ATOMIC_SECTIONS = frozenset({"tool_calls", "requests"})
+_FAULTS = (ValueError, TypeError, ArithmeticError, RecursionError, KeyError, AttributeError)
+
+
+def validate_return_sections(parsed: dict, schema: dict, validator=None, req=None,
+                             ) -> tuple[dict, tuple[dict[str, Any], ...]]:
+    """Return the reply with invalid optional sections dropped, and what was dropped.
+
+    Guarantees the answer is validated exactly as strictly as a whole return was:
+    the pruned reply passes ``_validate_return`` and ``validator`` in full, or this
+    raises and the return is malformed. Only a section named in
+    ``OPTIONAL_SECTIONS``, or one item of a list section, is ever dropped, each
+    with a bounded reason and, for an item, its index in the reply as written. A
+    dropped section is gone from the reply, so nothing in it reaches an effect.
+    """
+    parsed = dict(parsed)
+    dropped: list[dict[str, Any]] = []
+    origin: dict[str, list[int]] = {}
+
+    def drop(section: str, reason: str, index: int | None = None) -> None:
+        entry: dict[str, Any] = {"section": section, "reason": str(reason)[:200]}
+        if index is not None:
+            entry["index"] = index
+        dropped.append(entry)
+
+    reserved = reserved_return_fields()
+    declared = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    for section in OPTIONAL_SECTIONS:
+        if section not in parsed:
+            continue
+        shapes = [s for s in (reserved.get(section), declared.get(section))
+                  if isinstance(s, dict)]
+        value = parsed[section]
+        if section not in _LIST_SECTIONS:
+            try:
+                for shape in shapes:
+                    validate_schema(value, shape)
+            except _FAULTS as exc:
+                drop(section, str(exc) or type(exc).__name__)
+                del parsed[section]
+            continue
+        if not isinstance(value, list):
+            drop(section, f"{section} must be a list")
+            del parsed[section]
+            continue
+        kept, where, faults = [], [], []
+        for index, item in enumerate(value):
+            try:
+                for shape in shapes:
+                    validate_schema(item, shape.get("items", {}))
+                if section == "requests":
+                    _check_child(item)
+            except _FAULTS as exc:
+                faults.append((index, str(exc) or type(exc).__name__))
+                continue
+            kept.append(item)
+            where.append(index)
+        limits = [s["maxItems"] for s in shapes if type(s.get("maxItems")) is int]
+        if limits and len(kept) > min(limits):
+            faults.extend((index, f"more than {min(limits)} {section}")
+                          for index in where[min(limits):])
+            kept, where = kept[:min(limits)], where[:min(limits)]
+        if faults and section in _ATOMIC_SECTIONS:
+            index, reason = min(faults)
+            drop(section, f"item {index}: {reason}")
+            del parsed[section]
+            continue
+        for index, reason in faults:
+            drop(section, reason, index)
+        if faults and not kept:
+            del parsed[section]  # every item went: the section is gone, not empty
+            continue
+        parsed[section], origin[section] = kept, where
+    # The answer, strictly; a validator names a fault that belongs to one section.
+    for _ in range(1 + sum(len(v) for v in origin.values()) + len(OPTIONAL_SECTIONS)):
+        try:
+            _validate_return(parsed, schema)
+            if validator is not None:
+                validator(parsed, req)
+        except SectionError as exc:
+            if exc.section not in OPTIONAL_SECTIONS or exc.section not in parsed:
+                raise ValueError(exc.reason) from None
+            if (exc.index is None or exc.section not in origin
+                    or exc.section in _ATOMIC_SECTIONS):
+                where = "" if exc.index is None else f"item {exc.index}: "
+                drop(exc.section, where + exc.reason)
+                del parsed[exc.section]
+                continue
+            if not 0 <= exc.index < len(parsed[exc.section]):
+                raise ValueError(exc.reason) from None
+            drop(exc.section, exc.reason, origin[exc.section].pop(exc.index))
+            parsed[exc.section] = [item for i, item in enumerate(parsed[exc.section])
+                                   if i != exc.index]
+            if not parsed[exc.section]:
+                del parsed[exc.section], origin[exc.section]
+            continue
+        if dropped and not parsed:
+            raise ValueError("nothing in the return validated")  # no answer to keep
+        dropped.sort(key=lambda d: (OPTIONAL_SECTIONS.index(d["section"]),
+                                    d.get("index", -1)))
+        return parsed, tuple(dropped)
+    raise ValueError("return sections did not settle")
+
+
+def _check_child(child: dict) -> None:
+    """A child request names a target and a task, carries no authorship, and a real schema."""
+    if not child["target"] or not child["description"].strip():
+        raise ValueError("child needs target and description")
+    if any(k in child["inputs"] for k in ("author", "author_id", "requester", "lineage")):
+        raise ValueError("child inputs contain author metadata")
+    _schema_definition(child["outcome_schema"])
+
+
 def _validate_return(parsed: dict, schema: dict) -> None:
     """Validate reply effects; each registration is admitted independently by the runtime."""
     properties = reserved_return_fields()
@@ -626,11 +766,7 @@ def _validate_return(parsed: dict, schema: dict) -> None:
     cannot = parsed.get("status") == "cannot" and isinstance(parsed.get("reason"), str)
     validate_schema(parsed, schema, partial=continuation or cannot)
     for child in parsed.get("requests", []):
-        if not child["target"] or not child["description"].strip():
-            raise ValueError("child needs target and description")
-        if any(k in child["inputs"] for k in ("author", "author_id", "requester", "lineage")):
-            raise ValueError("child inputs contain author metadata")
-        _schema_definition(child["outcome_schema"])
+        _check_child(child)
 
 
 def validate_proposal(proposal: dict) -> None:

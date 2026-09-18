@@ -651,3 +651,6 @@ class Return:
     # output_tokens, reasoning_tokens, cached_tokens (None when unreported) and the
     # max_tokens sent.
     provider: dict[str, Any] = field(default_factory=dict)
+    # Optional sections of the reply that did not validate and were dropped while
+    # the answer stood: ``{"section", "reason"[, "index"]}`` each, in section order.
+    dropped: tuple[dict[str, Any], ...] = ()

@@ -382,14 +382,26 @@ class ComputeMixin:
                 raise ValueError(f"event schema already declared differently: {kind}")
 
     def _validate_output_contract(self, parsed: dict, req: Request) -> None:
-        """Every tool argument and proposal bound is checked before any effect in a reply."""
+        """Every tool argument and proposal bound is checked before any effect in a reply.
+
+        A fault that belongs to one tool call, child request or forecast raises
+        ``SectionError`` naming it, so the return validator drops that item and
+        keeps the answer; a fault in the answer itself (its declared kind, its
+        custom schema) is a ``ValueError`` and voids the return.
+        """
         from factorylab.cortex.assembly import (
+            SectionError,
             positive_wire_decimal,
             reserved_return_fields,
             validate_schema,
         )
         from factorylab.world.venue_tools import _validate
 
+        for section, limit in (("requests", self.m.tools.max_children),
+                               ("tool_calls", self.m.tools.max_tool_calls)):
+            items = parsed.get(section)
+            if isinstance(items, list) and len(items) > limit:
+                raise SectionError(section, f"more than {limit} {section}", limit)
         validate_schema(parsed, {"type": "object", "properties": reserved_return_fields(
             max_children=self.m.tools.max_children, max_tool_calls=self.m.tools.max_tool_calls)})
         binding = self.return_bindings.get(req.handle)
@@ -419,9 +431,11 @@ class ComputeMixin:
                     partial=bool(parsed.get("requests") or parsed.get("tool_calls")
                                  or parsed.get("status") == "cannot"),
                 )
-        for call in parsed.get("tool_calls", []):
+        for index, call in enumerate(parsed.get("tool_calls", [])):
             spec = self.tool_specs.get(call["tool"])
-            if spec is not None:
+            if spec is None:
+                continue
+            try:
                 if spec["kind"] == "venue":
                     _validate(call["args"], spec["args_schema"])
                     for key in ("size", "price"):
@@ -429,13 +443,18 @@ class ComputeMixin:
                             positive_wire_decimal(call["args"][key])
                 else:
                     validate_schema(call["args"], spec["args_schema"])
+            except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
+                raise SectionError("tool_calls", f"{call['tool']}: {exc}", index) from None
         known = {p.id: p for p in SEED_VOCABULARY}
-        for forecast in parsed.get("forecasts", []):
+        for index, forecast in enumerate(parsed.get("forecasts", [])):
             if forecast["predicate"] not in known:
-                raise ValueError("unknown forecast predicate")
-            validate_schema(
-                forecast["params"], _to_plain(known[forecast["predicate"]].param_schema)
-            )
+                raise SectionError("forecasts", "unknown forecast predicate", index)
+            try:
+                validate_schema(
+                    forecast["params"], _to_plain(known[forecast["predicate"]].param_schema)
+                )
+            except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
+                raise SectionError("forecasts", str(exc), index) from None
 
     def _catalogue_search(self, substring: str, limit: int) -> list[dict[str, Any]]:
         """Case-insensitive substring over every catalogue the provider exposes plus registered
@@ -1132,6 +1151,7 @@ class ComputeMixin:
         # priced from this request and a parent cannot forge its child's.
         effects: list[str] = []  # venue and treasury writes, children: the action so far
         ret = self._invoke_compute(action_id, req)
+        dropped = list(ret.dropped)  # optional sections dropped while the answer stood
         self._check_compute_return(req.handle, ret)
         if (ret.status == "ok" and ret.outputs.get("status") == "cannot"
                 and isinstance(ret.outputs.get("reason"), str)):
@@ -1236,6 +1256,7 @@ class ComputeMixin:
             )
             ret = (Return(req.handle, {"reason": "wallet exhausted"}, 0, "failed")
                    if self.wallet.dead else self._invoke_compute(action_id, follow))
+            dropped.extend(ret.dropped)
             total_cost += tool_cost + ret.cost
             self._check_compute_return(req.handle, ret)
             tool_round += 1
@@ -1331,8 +1352,33 @@ class ComputeMixin:
                 self.window.costs.append(ret.cost)
         self._record_declared_propensity(action_id, req, ret, role, effects=tuple(effects))
         self._apply_continuity(action_id, req.handle, ret)
+        ret = replace(ret, dropped=tuple(dropped))
+        if dropped and ret.status == "ok":
+            self._report_dropped_sections(action_id, req.handle, ret.dropped)
         del self.ledger.connector_bodies[body_mark:]
         return ret
+
+    def _report_dropped_sections(self, seat: str, handle: str,
+                                 dropped: tuple[dict[str, Any], ...]) -> None:
+        """Tell a seat which optional sections of its answer were dropped, and why.
+
+        The answer stood; what did not validate beside it (a working state of the
+        wrong type, a malformed tool call, a proposal of a kind nobody registers)
+        was dropped rather than voiding it. The diary records it, and the seat's
+        own inbox carries it, so the next wake reads what was not done instead of
+        assuming it was.
+        """
+        items = [dict(d) for d in dropped]
+        self.ledger.append({"kind": "return.sections_dropped", "assembly_id": seat,
+                            "handle": handle, "dropped": items, "ts": self.clock.now_ns})
+        if seat in self.assemblies:
+            self.outcomes.append(
+                seat, handle=handle,
+                outcome={"kind": "return_sections_dropped", "status": "partial",
+                         "dropped": items},
+                delta_micro=0,
+                evidence={"kind": "return.sections_dropped", "handle": handle,
+                          "ts": self.clock.now_ns})
 
     def _apply_continuity(self, action_id: str, handle: str, ret: Return) -> None:
         """Advance the seat's own head and inbox cursor from its answer (C1).
