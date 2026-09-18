@@ -1912,25 +1912,23 @@ before the orders that would want it. It is not `[kill] dust_micro`, which is a
 different setting for a different thing. At its default the key is dropped from
 the canonical manifest JSON, so no world that predates it changes hash.
 
-`[venue] principal_usd` is an exact positive decimal string, default absent: the
-risk-bearing trading principal this world declares it may use at the venue. It
-is a gate, not a balance. GPT-6 Pro's third reading §11 offers the experimenter
-two ways to launch at the proposed size — withdraw the rest of the testnet
-balance, or declare the principal so "the runtime refuses to use more" — and
-this key is the second. `_collateral_view` reads the venue's own
-`collateral_view` and lowers it to the declaration before `_order_collateral`
-does any arithmetic, so an account funded with $966 that declares `"120"` is
-collateralised as if it held $120. The venue holds eligible USD in two pools
-the runtime checks separately (the perps account's eligible equity and the spot
-account's quote balance), so the declared principal is shared between them in
-proportion to what each actually holds, floored to the micro; with an empty spot
-quote balance that is exactly "eligible equity capped at the principal". The cap
-only lowers a figure, and the capped view carries `principal_cap_usd` beside
-`uncapped_eligible_equity_usd` and `uncapped_spot_available` so a refusal can say
-which of the two — the venue or the declaration — refused it. Custody still
-reports what the venue actually holds. Where the key is absent it is dropped from
-the canonical manifest JSON, so no world that predates it changes hash;
-`worlds/edition3-testnet.toml` declares `principal_usd = "120"`.
+`[venue] principal_usd` and `[tools] max_leverage` are **deprecated and inert**
+(architect decision D1: a cap on the principal or the leverage the population may use
+is an objective supplied from outside, a Class-2 imposition). Both keys are still
+read and validated, and both still enter the canonical manifest JSON exactly as
+before, so every manifest that declares them loads and keeps its historical hash;
+nothing enforces either. `_collateral_view` is the venue's own view, unchanged, and
+`venue.set_leverage` takes any positive integer and lets the venue accept or refuse
+it. The first launch gate is met by holding only the proposed principal at the venue.
+
+The margin an order needs is charged at the leverage the venue has in effect for the
+instrument: `leverage_for_instrument` is what Hyperliquid's `clearinghouseState`
+reports for an open position on the coin, or failing that the venue's acknowledgement
+of this account's `set_leverage` (the fake reports its own per-coin setting). When the
+venue has not said — a coin with no position and no acknowledged `set_leverage`, or a
+resting order on such a coin (`open_order_holds_usd` is then `null`) — the local check
+does not guess a 1x requirement: it admits the order and the venue's acceptance or
+rejection is the answer.
 
 ### The reward line
 

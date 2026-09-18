@@ -469,7 +469,6 @@ class BootstrapMixin:
             self.exchange,
             coins=manifest.exchange.coins,
             spot_pairs=manifest.exchange.spot_pairs,
-            max_leverage=manifest.tools.max_leverage,
         )
         for spec in self.venue_tools.contracts():
             self.tool_specs[spec.id] = {

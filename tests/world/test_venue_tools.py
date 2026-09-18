@@ -97,7 +97,6 @@ def test_contracts_are_complete_zero_priced_and_schema_copies(venue):
         ("cancel", {"coin": "BTC", "order_id": 1}),
         ("close", {"coin": "BTC", "size": 0}),
         ("close", {"coin": "BTC", "size": -1}),
-        ("set_leverage", {"coin": "BTC", "leverage": 4}),
         ("set_leverage", {"coin": "BTC", "leverage": 0}),
         ("set_leverage", {"coin": "BTC", "leverage": True}),
     ],
@@ -281,11 +280,13 @@ def test_leverage_changes_margin_and_preserves_other_coins(exchange, venue):
     assert exchange.account().margin_used_usd == Decimal(200) / 3 + 30
 
 
-def test_manifest_leverage_limit_is_in_contract_and_validation(exchange):
+def test_the_manifest_sets_no_leverage_ceiling_only_the_venue_does(exchange):
+    """Architect decision D1: the deprecated ``max_leverage`` is accepted and ignored."""
     venue = VenueTools(exchange, coins=("BTC",), max_leverage=2)
     spec = next(s for s in venue.contracts() if s.id == "venue.set_leverage")
-    assert spec.args_schema["properties"]["leverage"]["maximum"] == 2
-    assert "error" in venue.call(spec.id, {"coin": "BTC", "leverage": 3})
+    assert "maximum" not in spec.args_schema["properties"]["leverage"]
+    assert venue.call(spec.id, {"coin": "BTC", "leverage": 3})["status"] == "ok"
+    assert venue.call(spec.id, {"coin": "BTC", "leverage": 4})["status"] == "rejected"
 
 
 def test_funding_history_contains_applied_events_only(exchange, venue):

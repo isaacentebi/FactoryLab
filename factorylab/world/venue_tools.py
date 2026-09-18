@@ -122,10 +122,12 @@ class VenueTools:
     PUBLIC_READS = frozenset({"venue.instruments", "venue.mids", "venue.funding",
                               "venue.candles", "venue.order_book", "venue.funding_history"})
 
-    def __init__(self, exchange: Exchange, *, coins: tuple[str, ...], max_leverage: int = 3,
-                 spot_pairs: tuple[str, ...] = ()):
-        if type(max_leverage) is not int or max_leverage < 1:
-            raise ValueError("max_leverage must be a positive integer")
+    def __init__(self, exchange: Exchange, *, coins: tuple[str, ...],
+                 max_leverage: int | None = None, spot_pairs: tuple[str, ...] = ()):
+        # ``max_leverage`` is accepted and ignored (architect decision D1): leverage is
+        # whatever the venue allows, and the venue's refusal is the only ceiling.
+        # Callers that still pass the deprecated ``[tools] max_leverage`` keep working.
+        del max_leverage
         if not coins or any(not isinstance(coin, str) or not coin for coin in coins):
             raise ValueError("coins must contain nonempty coin names")
         self.exchange = exchange
@@ -218,7 +220,7 @@ class VenueTools:
                 {
                     "coin": coin,
                     "market": market,
-                    "leverage": {"type": "integer", "minimum": 1, "maximum": max_leverage},
+                    "leverage": {"type": "integer", "minimum": 1},
                 },
                 ["coin", "leverage"],
             ),

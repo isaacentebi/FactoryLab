@@ -329,6 +329,7 @@ max_transfer_fee_usd = "2"
 # withdrawing the rest of the testnet balance or by declaring the principal so "the
 # runtime refuses to use more". A testnet account funded far above $120 is therefore
 # collateralised as if it held $120, which is `[exchange] start_cash_usd` above.
+# (Historical: the cap is inert since architect decision D1; the key keeps the hash.)
 principal_usd = "120"
 # Testnet spot, unchanged from edition 2: PURR/USDC is the only testnet pair with a
 # canonical name and a rehearsable lot, and HYPE/USDC is the spot HYPE that pays the

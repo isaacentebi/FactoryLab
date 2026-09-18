@@ -34,6 +34,16 @@ NS_PER_HOUR = 3_600 * 1_000_000_000
 MIN_ORDER_VALUE_USD = "10"
 
 
+def _position_leverage(raw: Any) -> Decimal | None:
+    """Hyperliquid's per-position ``leverage`` object (``{"type", "value"}``) as a number."""
+    value = raw.get("value") if isinstance(raw, dict) else raw
+    try:
+        leverage = Decimal(str(value))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    return leverage if leverage.is_finite() and leverage > 0 else None
+
+
 def _interval_ns(interval: str) -> int:
     return {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}[interval] * 1_000_000_000
 
@@ -960,6 +970,7 @@ class HyperliquidExchange:
             return self._last_account
         summary = st["marginSummary"]
         positions: list[Position] = []
+        in_effect: dict[str, Decimal] = {}
         for ap in st.get("assetPositions", []):
             p = ap["position"]
             size = Decimal(str(p["szi"]))
@@ -967,6 +978,11 @@ class HyperliquidExchange:
                 continue
             entry = Decimal(str(p["entryPx"])) if p.get("entryPx") else Decimal(0)
             positions.append(Position(p["coin"], size, entry))
+            leverage = _position_leverage(p.get("leverage"))
+            if leverage is not None:
+                in_effect[p["coin"]] = leverage
+        # The leverage the venue reports in effect for each open position, as read.
+        self.__dict__["_position_leverage"] = in_effect
         balances = []
         spot_value = Decimal(0)
         if spot is not None:
@@ -1006,7 +1022,9 @@ class HyperliquidExchange:
         ``margin_used_usd`` is ``totalMarginUsed``, which covers open positions
         and not resting orders, so ``holds_included_in_margin_used`` is False and
         ``open_order_holds_usd`` is the margin those resting orders hold, at the
-        leverage this account has acknowledged for each coin.
+        leverage the venue has in effect for each coin, or ``None`` when that is
+        not known for some coin. ``leverage_for_instrument`` is likewise the
+        venue's own figure or ``None``; nothing here assumes 1x (decision D1).
 
         ``observed_at_ns`` is the moment of the account read this view is built
         from -- including a fallback to the last complete snapshot when the spot
@@ -1016,12 +1034,16 @@ class HyperliquidExchange:
         account = self.account()
         spot = "/" in coin or market == "spot"
         leverage = self._acknowledged_leverage(coin)
-        holds = Decimal(0)
+        holds: Decimal | None = Decimal(0)
         for order in self.open_orders():
             if "/" in order["coin"]:
                 continue
+            order_leverage = self._acknowledged_leverage(order["coin"])
+            if order_leverage is None:
+                holds = None  # the venue has not said what this order holds
+                break
             holds += (Decimal(str(order["size"])) * Decimal(str(order["price"]))
-                      / self._acknowledged_leverage(order["coin"]))
+                      / order_leverage)
         usdc = next((b.available for b in account.spot_balances if b.coin == "USDC"), Decimal(0))
         base = coin.split("/")[0] if spot else None
         available = {"USDC": usdc}
@@ -1043,13 +1065,19 @@ class HyperliquidExchange:
             "observed_at_ns": getattr(self, "_last_account_ns", None),
         }
 
-    def _acknowledged_leverage(self, coin: str) -> Decimal:
-        """The leverage this account has actually set for a coin; unknown means one.
+    def _acknowledged_leverage(self, coin: str) -> Decimal | None:
+        """The leverage the venue has in effect for a coin, or ``None`` when it has not said.
 
-        A discount for leverage the venue has not confirmed is a discount on a
-        promise, so an unread leverage charges full notional.
+        The venue's own account read wins: ``clearinghouseState`` reports the
+        leverage of every open position. Failing that, the venue's acknowledgement
+        of this account's ``set_leverage``. Neither is a guess, and an unknown
+        leverage is reported as unknown rather than as 1x (architect decision D1):
+        the venue then decides whether it can carry the order.
         """
-        return self.__dict__.get("_leverage", {}).get(coin, Decimal(1))
+        read = self.__dict__.get("_position_leverage", {}).get(coin)
+        if read is not None:
+            return read
+        return self.__dict__.get("_leverage", {}).get(coin)
 
     def funding_payments(self, since_ns: int) -> list[FundingPayment]:
         """Read inclusive, paginated user cash flows; never infer payments from funding rates.
