@@ -6,7 +6,9 @@ and so is everything the population wrote: the ``returns`` view publishes every
 answer live and unredacted, because darkness is not secrecy. Learner state,
 router weights and sampling propensities, private memories, prompts and
 per-decision scores stay sealed until death, and every section other than
-``returns`` still folds to role totals without an id or a handle.
+``returns`` still folds to role totals without an id or a handle. Round three,
+group F1 (T28): the wake publishes no positions, and a coin with a side is a
+position; a key in the host environment is not an account the world owns (T19).
 """
 
 import json
@@ -21,10 +23,10 @@ from factorylab.runtime.wake import (
 )
 from factorylab.runtime.worlds import load_manifest
 
-# One window must close for the standing sections to exist; the scripted world
-# closes its first at event 121 and exercises registration, retirement, an
-# amendment and a refused transfer before then.
-EVENTS = 150
+# One window must close for the standing sections and the world's own portfolio to
+# exist; the scripted world closes its first at event 121 and exercises
+# registration, retirement, an amendment and a refused transfer before then.
+EVENTS = 125
 
 # Keys the essay keeps private. They are asserted absent as *keys*: a public
 # observation may legitimately be named "verdict_mean" in a charter card.
@@ -43,9 +45,16 @@ def scripted(scripted_run):
     return scripted_run("scripted", EVENTS, 1).ledger_path
 
 
-@pytest.fixture(scope="module")
-def wake(scripted):
-    return collect_wake(scripted)
+@pytest.fixture
+def no_live_reads(monkeypatch):
+    """Any live account read from a fake world's wake is the defect itself."""
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("a fake world's wake read a live account")
+
+    monkeypatch.setattr("factorylab.world.exchange.live_exchange", refuse)
+    monkeypatch.setattr("factorylab.world.x402.X402Client", refuse)
+    monkeypatch.setenv("HL_PRIVATE_KEY", "0x" + "11" * 32)
+    monkeypatch.setenv("RESERVE_PRIVATE_KEY", "0x" + "22" * 32)
 
 
 def _keys(value):
@@ -93,3 +102,11 @@ def test_a17_no_sealed_field_appears_anywhere_in_the_output(scripted, tmp_path):
     assert not _keys(data["returns"]) & {"propensities", "chosen", "weights", "gamma",
                                          "learner", "learner_id", "memory", "memories",
                                          "prompt", "system_prompt", "prompt_text"}
+
+
+def test_the_wake_publishes_no_open_position(scripted, no_live_reads):
+    data = collect_wake(scripted)
+    assert set(data["portfolio"]) == {"equity_micro", "realized_to_date_micro"}
+    assert isinstance(data["portfolio"]["equity_micro"], int)  # a window has closed
+    assert "open_positions" not in json.dumps(data)
+    assert "open_positions" not in render_wake(data)

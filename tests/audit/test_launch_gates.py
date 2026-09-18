@@ -156,13 +156,13 @@ def _seats_that_leak(sink: list) -> type:
 def leaky_world(tmp_path_factory):
     """One scripted run in which every seat writes a marked private state.
 
-    Sixty world events is enough for the routers to commission judges and metas
-    many times over (the assertions check that they did), and the whole run is
-    under half a minute with no network, no venue and no key.
+    Thirty world events is enough for the routers to commission judges and metas
+    many times over (the assertions check that they did), with no network, no venue
+    and no key.
     """
     sink: list[tuple[str, str, str]] = []
     path = tmp_path_factory.mktemp("launch-gates") / "leaky.jsonl"
-    run_world(load_manifest("scripted"), events=60, seed=1, ledger_path=str(path),
+    run_world(load_manifest("scripted"), events=30, seed=1, ledger_path=str(path),
               drip=False, provider=_seats_that_leak(sink)())
     return sink, path
 

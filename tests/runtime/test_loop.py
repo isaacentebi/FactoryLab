@@ -1,4 +1,5 @@
 from dataclasses import replace
+from decimal import Decimal
 
 import pytest
 
@@ -12,7 +13,7 @@ from factorylab.world.scripted import ScriptedProvider
 
 def test_scripted_world_compute_starvation_is_final_under_phase4() -> None:
     m = load_manifest("scripted")
-    s = run_world(m, events=600, seed=2, initial_balance_micro=1, drip=False)
+    s = run_world(m, events=60, seed=2, initial_balance_micro=1, drip=False)
     assert s["terminated"] and s["termination_reason"] == "insolvency:compute"
     assert s["seal_key_released"] and s["wallet_balance_micro"] == 1
     assert s["stats"]["exclusions"] > 0
@@ -27,7 +28,9 @@ def test_crash_world_wipes_its_venue_without_spending_its_compute_authority() ->
     spent. Death and seal release are covered above, by compute starvation, which is
     what actually ends a world that has run out of money to think with."""
     m = load_manifest("scripted-crash")
-    s = run_world(m, events=600, seed=2)
+    # The four shocks land by event 120; the venue account is already below zero.
+    s = run_world(m, events=120, seed=2)
+    assert Decimal(s["exchange_equity_usd"]) < 0  # the venue was wiped
     assert s["terminated"] is False and s["termination_reason"] is None
     assert s["wallet_balance_micro"] > 0  # authority, not spent by the venue
     assert s["wallet_conservation"] is True
@@ -36,8 +39,11 @@ def test_crash_world_wipes_its_venue_without_spending_its_compute_authority() ->
 def test_determinism_same_seed_same_summary() -> None:
     base = load_manifest("scripted")
     m = replace(base, novelty=replace(base.novelty, window_ns=20_000_000_000))
-    a = run_world(m, events=60, seed=7)
-    b = run_world(m, events=60, seed=7)
+    a = run_world(m, events=30, seed=7)
+    b = run_world(m, events=30, seed=7)
+    # Thirty events reach an immune window, a router replacement and a price update.
+    assert a["stats"]["immune_windows"] and a["stats"]["routers_replaced"]
+    assert a["stats"]["price_updates"]
     a.pop("aggregates", None)
     b.pop("aggregates", None)
     assert a == b
