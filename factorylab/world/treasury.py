@@ -924,6 +924,7 @@ class Treasury:
                 "last_nonce": self.last_nonce,
                 "gas_spent": self.gas_spent,
                 "pots": self._pots,
+                "pots_observed_ns": self.pots_observed_ns,
                 "principal_hold_id": self.principal_hold.id if self.principal_hold else None,
                 "fee_hold_id": self.fee_hold.id if self.fee_hold else None,
                 "stranded": [{"state": entry["state"],
@@ -962,6 +963,9 @@ class Treasury:
         self.state = saved["state"]
         self.next_id, self.last_nonce = saved["next_id"], saved["last_nonce"]
         self.gas_spent, self._pots = saved["gas_spent"], saved["pots"]
+        # When those pots were read: a restored view reports the read it holds,
+        # not a fresh one. Checkpoints predating the stamp keep it unknown.
+        self.pots_observed_ns = saved.get("pots_observed_ns")
         self.venice_window, self.venice_spent = saved["venice_window"], saved["venice_spent"]
         self.forward_spent = saved.get("forward_spent", 0)  # checkpoints predate forwarding
         self.income = {**_fresh_income(), **saved.get("income", {})}  # and income classes
