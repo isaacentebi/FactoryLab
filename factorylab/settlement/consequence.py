@@ -244,6 +244,15 @@ class ReturnConsequences:
                     order_size=str(payload["size"]),
                 )
             except ValueError as exc:
+                if "exceeds the order" in str(exc):
+                    # An execution beyond what the order ordered is an inconsistency
+                    # between the venue's report and the order it answers. It is
+                    # quarantined with its evidence, attributed to nobody, and moves
+                    # no lot; the order's consistent fills remain its owner's.
+                    self.ledger.append({"kind": "consequence.quarantined", "event": event,
+                                        "order_id": str(payload["order_id"]),
+                                        "reason": str(exc), "payload": dict(payload)})
+                    return
                 if "open consequence account" not in str(exc):
                     raise
                 # A fill nobody with an account ordered never enters the shared FIFO.

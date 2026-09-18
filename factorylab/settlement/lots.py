@@ -96,11 +96,19 @@ class ReturnAccount:
 
 @dataclass(frozen=True)
 class LotOrder:
-    """Even a fully filled order retains its owner for subsequent venue observations."""
+    """Even a fully filled order retains its owner for subsequent venue observations.
+
+    ``ordered`` is the quantity the venue accepted and ``executed`` what has
+    filled against it since. ``remaining`` is the unfilled liability, cleared by
+    a cancel; ``ordered`` is not, so a fill that executed before a cancel took
+    effect is still accepted, up to the original size and never beyond it.
+    """
 
     order_id: str
     handle: str
     remaining: Fraction
+    ordered: Fraction | None = None  # None: an order bound before sizes were tracked
+    executed: Fraction = Fraction(0)
 
 
 @dataclass(frozen=True)
@@ -268,7 +276,7 @@ class LotTable:
             raise ValueError("order already attributed")
         if not any(r.handle == handle for r in self.returns):
             raise ValueError("order requires an open consequence account")
-        return replace(self, orders=(*self.orders, LotOrder(order_id, handle, quantity)))
+        return replace(self, orders=(*self.orders, LotOrder(order_id, handle, quantity, quantity)))
 
     def cancel(self, order_id: str) -> "LotTable":
         """Clear unfilled liability without deleting the order's historical ownership."""
@@ -306,7 +314,8 @@ class LotTable:
         keeps the whole P&L and pays the fee. Venue average-entry realized P&L
         is not an allocation key: FIFO P&L is computed from actual
         opening/closing prices. A fill whose order belongs to no open account
-        is refused rather than pooled.
+        is refused rather than pooled, and so is one that would execute more
+        against its order than the order's original quantity.
         """
         _require_id(order_id)
         if "/" in coin:
@@ -331,6 +340,14 @@ class LotTable:
             Fraction(0),
         ):
             raise ValueError("spot sell exceeds long inventory")
+        executed = quantity if order_size is None else exact(order_size)
+        if executed <= 0:
+            raise ValueError("executed order size must be positive")
+        if (not liquidation and order is not None and order.ordered is not None
+                and order.executed + executed > order.ordered):
+            # More has executed against the order than it ever ordered: the fill is
+            # an inconsistency, not a consequence, and is refused before any lot moves.
+            raise ValueError("fill exceeds the order's ordered quantity")
         remainder = quantity
         lots = []
         closer_net = Fraction(0)
@@ -381,11 +398,9 @@ class LotTable:
                 accounts[owner] = replace(
                     accounts[owner], opened_lots=accounts[owner].opened_lots + 1
                 )
-        executed = quantity if order_size is None else exact(order_size)
-        if executed <= 0:
-            raise ValueError("executed order size must be positive")
         orders = tuple(
-            replace(o, remaining=max(Fraction(0), o.remaining - executed))
+            replace(o, remaining=max(Fraction(0), o.remaining - executed),
+                    executed=o.executed + executed)
             if o.order_id == order_id
             else o
             for o in self.orders
