@@ -1060,7 +1060,9 @@ class FeedbackMixin:
                 self.forecast_returns[parent]["results"][result.handle] = (
                     result.brier, result.baseline_brier)
         self._settle_forecast_returns()
-        self._settle_due_verdicts()
+        # Which payoff forecasts this pass settled, so a verdict whose window closes
+        # unread in the same pass waits for its payoff fact below.
+        self._settle_due_verdicts(landing={result.handle for result in settled})
         self._expire_pending_meta()
         self._settle_exposures(settled)
         backstop = self.ev.consequence_backstop_events
@@ -1069,6 +1071,14 @@ class FeedbackMixin:
             del self.verdict_outcomes[judge_handle]
         for s in settled:
             forecast = pending[s.handle]
+            if s.predicate_id == RETURN_PAID_OFF.id and s.brier is None:
+                # A censored payoff is no fact: a verdict already closed that was
+                # waiting only on it is decided on what exists, or closes unmeasured.
+                commitment = self.pending.get(s.handle)
+                if (commitment is not None and commitment.channel == NORM_COMMITMENT
+                        and commitment.verdict_closed):
+                    self._finalize_verdict(commitment)
+                    del self.pending[commitment.handle]
             if s.predicate_id == RETURN_PAID_OFF.id and s.brier is not None:
                 event_id = self.queue.get(s.handle).event_id
                 if event_id.startswith("verdict-"):
@@ -1227,7 +1237,7 @@ class FeedbackMixin:
             return "released"
         return "closed" if window.closed_values is not None else "open"
 
-    def _settle_due_verdicts(self) -> None:
+    def _settle_due_verdicts(self, landing: frozenset[str] | set[str] = frozenset()) -> None:
         """A verdict settles once, when the judged return's window has closed, against the
         share of that window's charter blame the pricing pass attributed to the return.
 
@@ -1243,6 +1253,10 @@ class FeedbackMixin:
         performance). Where the fact is real, the Brier enters the judge's
         standing beside payoff skill; a high verdict on a blamed return exposes
         the judge to the antagonist that made it; the judge is told, privately.
+
+        ``landing`` names the payoff forecasts this same pass settled: an unread
+        verdict whose payoff fact is among them is decided by it when it is
+        attached, rather than closing unmeasured a moment before.
         """
         backstop = self.ev.consequence_backstop_events
         due = [p for p in self.pending.values()
@@ -1266,6 +1280,12 @@ class FeedbackMixin:
                 # is unmeasured, not scored on payoff. The judge's own payoff
                 # forecast still settles on its own handle, against the world;
                 # what it may not do is stand in for the charter's judgement.
+                if c.awaits_payoff and c.payoff_beat is None and c.handle in landing:
+                    # The payoff fact settled in this same pass (a return judged while
+                    # its position was open resolves at the same backstop that closes
+                    # this window unread): it decides the verdict below, rather than
+                    # the verdict closing unmeasured a moment before it is attached.
+                    continue
                 self._finalize_verdict(c)
                 del self.pending[c.handle]
                 continue

@@ -765,6 +765,7 @@ class Runtime(
     def _producer_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
                        *, returned: Return | None = None) -> None:
         self._start_return(handle)
+        self_forecast = None  # an antagonist's own payoff claim, sealed once it is finished
         payload = _to_plain(ev.payload)
         if ev.kind is EventKind.TICK:
             try:
@@ -877,13 +878,17 @@ class Runtime(
             self.handle_to_assembly[handle] = sample.chosen
             payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
             if adversarial and payoff is not None:
-                self.consequences.seal_self_forecast(
-                    self.book, self.queue, handle=handle, assembly_id=sample.chosen,
-                    payoff=payoff, event=self.n, now_ns=self.clock.now_ns,
-                    tick_ns=self.tick_clock.interval_ns,
-                )
-                self.stats.forecasts_sealed += 1
+                self_forecast = payoff
         self.consequences.finish(handle, ret.cost)
+        if self_forecast is not None:
+            # Sealed once the return is finished, so a return that left nothing open
+            # (its outcome already determined) is refused rather than scored.
+            if self.consequences.seal_self_forecast(
+                self.book, self.queue, handle=handle, assembly_id=sample.chosen,
+                payoff=self_forecast, event=self.n, now_ns=self.clock.now_ns,
+                tick_ns=self.tick_clock.interval_ns,
+            ) is not None:
+                self.stats.forecasts_sealed += 1
         noop = str(ret.outputs.get("action", "")).lower() in ("noop", "hold")
         revision = handle in self.window.revision_handles
         self.ledger.append(
@@ -1146,6 +1151,9 @@ class Runtime(
             self._deliver_verdict_to_inbox(about, verdict, judge_handle=handle)
         forecast = None
         if payoff is not None:
+            # None when the judged return's outcome was already fixed or determined:
+            # a claim about an answer is refused (defect 7), and the verdict stands
+            # on its own commitment below like one that made no payoff claim.
             forecast = self.consequences.seal_verdict(
                 self.book,
                 self.queue,
@@ -1157,8 +1165,8 @@ class Runtime(
                 now_ns=self.clock.now_ns,
                 tick_ns=self.tick_clock.interval_ns,
             )
-            self.stats.forecasts_sealed += 1
-        else:
+            self.stats.forecasts_sealed += int(forecast is not None)
+        if forecast is None:
             # §7: the payoff privilege is gone. A verdict with no payoff forecast
             # is still a commitment about the charter's blame on the return it
             # judged, so it is committed here under its own handle rather than

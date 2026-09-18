@@ -1683,11 +1683,10 @@ class ComputeMixin:
             if emitted == "Exposure":
                 self.pending_exposure[handle] = self.n
                 payoff = ret.outputs.get("payoff") if ret.status == "ok" else None
-                if payoff is not None:
-                    self.consequences.seal_self_forecast(
+                if payoff is not None and self.consequences.seal_self_forecast(
                         self.book, self.queue, handle=handle, assembly_id=target, payoff=payoff,
                         event=self.n, now_ns=self.clock.now_ns,
-                        tick_ns=self.tick_clock.interval_ns)
+                        tick_ns=self.tick_clock.interval_ns) is not None:
                     self.stats.forecasts_sealed += 1
             else:
                 self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)

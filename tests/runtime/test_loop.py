@@ -39,9 +39,10 @@ def test_crash_world_wipes_its_venue_without_spending_its_compute_authority() ->
 def test_determinism_same_seed_same_summary() -> None:
     base = load_manifest("scripted")
     m = replace(base, novelty=replace(base.novelty, window_ns=20_000_000_000))
-    a = run_world(m, events=30, seed=7)
-    b = run_world(m, events=30, seed=7)
-    # Thirty events reach an immune window, a router replacement and a price update.
+    a = run_world(m, events=45, seed=7)
+    b = run_world(m, events=45, seed=7)
+    # Forty-five events reach an immune window, a router replacement and a price update
+    # (thirty did while judges were scored for forecasting holds already resolved).
     assert a["stats"]["immune_windows"] and a["stats"]["routers_replaced"]
     assert a["stats"]["price_updates"]
     a.pop("aggregates", None)
