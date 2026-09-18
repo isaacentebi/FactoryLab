@@ -26,8 +26,9 @@ class ReturnConsequences:
         # forgotten: an order the venue may still be holding can still own a
         # fill, so it keeps its return's attribution alive.
         self.unresolved_orders: dict[str, dict] = {}
-        # Outcomes fixed outside ``resolve`` -- censored ones -- waiting to be
-        # handed to the runtime with everything else it fixed this event.
+        # Outcomes fixed outside ``resolve``, waiting to be handed to the runtime
+        # with everything else it fixed this event. A released hold no longer fixes
+        # one early (its return resolves in ``resolve``); a checkpoint may carry some.
         self.censored_payoffs: list[Payoff] = []
         self.deferred_events: list[tuple[str, dict, int]] = []
         # §6.A: an execution receipt is a fact about the world — a fill, a
@@ -55,36 +56,37 @@ class ReturnConsequences:
 
     def release_unresolved(self, client_id: str, event: int,
                            reason: str = "external_unobservable") -> list[tuple[str, dict, int]]:
-        """Release a hold no answer will ever lift, and censor the return that took it.
+        """Release a hold no answer will ever lift; the order's portion becomes unknown.
 
         Rehearsal 5 (PR #105): one order timed out on submit and the venue never
         reported it, so the intent stayed pending and every later return's
         outcome stayed unfixed behind it. The polling is bounded; this is what
-        the bound means for the return that placed the order. The venue was
-        asked and did not answer, and the owner could not have made it answer,
-        so the necessary observation is unavailable: the return's
-        ``return_paid_off`` settles censored with that documented reason -- an
-        excluded sample, no standing, an ``unknown`` outcome for its owner --
-        and the hold is lifted so every later return resolves normally.
+        the bound means. The hold is lifted so every later return resolves
+        normally, and the intent is kept as unresolved exposure, so an order the
+        venue was holding all along can still own its fill and the money that
+        fill realises reaches the owner late rather than never.
 
-        The intent itself is not forgotten. It stays tracked as exposure, so an
-        order the venue was holding all along can still own its fill, and the
-        money that fill realises reaches the owner late rather than never.
+        Only the unresolved order's portion is unknown (defect 10). The return
+        that sent it is not closed here: it resolves on its own schedule, its
+        observed fills and open lots accounted like any other's, and its money
+        is what those observed orders produced. What cannot be known is whether
+        the return paid off, since the missing order could have changed that, so
+        its ``return_paid_off`` settles censored with the documented reason -- an
+        excluded sample, no standing, an ``unknown`` outcome for its owner --
+        unless the venue answers before the return resolves.
         """
         item = self.pending_orders.get(client_id)
         if item is None:
             return []
         self.ledger.append({"kind": "order.unresolved_released", "handle": item["handle"],
                             "coin": item["coin"], "client_id": client_id, "reason": reason})
-        self.unresolved_orders[client_id] = dict(item)
-        handle = item["handle"]
-        if self.account_open(handle):
-            table = self.table.censor(handle, event, reason)
-            self._apply("censored", {"handle": handle, "reason": reason, "event": event}, table)
-            payoff = table.account(handle).payoff
-            self.ledger.append({"kind": "consequence.outcome", **asdict(payoff)})
-            self.censored_payoffs.append(payoff)
+        self.unresolved_orders[client_id] = {**item, "reason": reason}
         return self._release(client_id)
+
+    def _unknown_portions(self) -> dict[str, str]:
+        """Returns with an order nobody observed, and the documented reason for each."""
+        return {item["handle"]: item.get("reason", "external_unobservable")
+                for item in self.unresolved_orders.values()}
 
     def _release(self, client_id: str) -> list[tuple[str, dict, int]]:
         """Drop one hold and, if it was the last, replay what it was holding back."""
@@ -284,7 +286,8 @@ class ReturnConsequences:
         fixed, self.censored_payoffs = self.censored_payoffs, []
         if self.pending_orders:
             return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
-        table = self.table.resolve(event, self.backstop, self.mids)
+        table = self.table.resolve(event, self.backstop, self.mids,
+                                   censored=self._unknown_portions())
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})

@@ -901,27 +901,34 @@ class FeedbackMixin:
         """Tell the owner that its return's consequence is unknown, and why (R4-C).
 
         The OUTCOME CONTRACT has three answers, and this is the third: the
-        necessary observation is unavailable. The venue would not say whether the
-        order filled, so no payoff is claimed in either direction, nothing is
-        scored and no money moves here. The venue's last answer rides with the
-        item so the seat reads the fact rather than a silence, and if the fill is
-        observed later its money reaches the same seat through ``_settle_late``.
+        necessary observation is unavailable. The venue would not say whether one
+        order filled, so no payoff is claimed in either direction and nothing is
+        scored. Only that order's portion is unknown (defect 10): what the
+        return's observed orders realised is booked to the owner exactly as a
+        settled outcome's would be, and a marked one books nothing until it is
+        real. The venue's last answer rides with the item so the seat reads the
+        fact rather than a silence, and if the missing fill is observed later its
+        money reaches the same seat through ``_settle_late``.
         """
         owner = self.handle_to_assembly.get(payoff.handle) or self.outcomes.seat_of(payoff.handle)
         if owner is None:
             return self._undeliverable("return_paid_off", payoff.handle,
                                        "no seat owns that decision")
         self.outcomes.append(
-            owner, handle=payoff.handle, evidence=payoff.handle,
+            owner, handle=payoff.handle, delta_micro=0 if payoff.marked else payoff.net_micro,
+            evidence=payoff.handle,
             outcome={"outcome": "unknown", "reason": payoff.censored,
                      "return_paid_off": None,
+                     "known_net_micro": payoff.net_micro,
                      "provider_cost_micro": payoff.cost_micro,
                      "cost_micro": payoff.cost_micro,
                      "earned_micro": payoff.earned_micro,
                      "venue_answer": self._venue_last_answer(payoff.handle),
                      "venue_delta_micro": self.venue_deltas.pop(payoff.handle, {}),
                      "position_open": True, "commitment_settled": False,
-                     "marked": False, "liquidated": payoff.liquidated})
+                     "marked": payoff.marked, "liquidated": payoff.liquidated})
+        if not payoff.marked and owner in self.assemblies:
+            self._book_consequence(owner, payoff.net_micro, "return_known_portion")
 
     def _venue_last_answer(self, handle: str) -> dict | None:
         """The last thing the venue said about this return's unresolved intent."""

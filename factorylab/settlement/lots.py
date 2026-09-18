@@ -164,29 +164,6 @@ class LotTable:
             raise ValueError("only a return that authored nothing may be voided")
         return self._accounts({handle: replace(account, voided=True)})
 
-    def censor(self, handle: str, event: int, reason: str) -> "LotTable":
-        """Close an open return whose consequence the world never let anyone observe.
-
-        A venue that will not say whether an order filled leaves the return's
-        ``return_paid_off`` question unanswered, not answered "no": there is no
-        fill status, so there is no payoff anybody could be right or wrong
-        about. The account is closed with the reason attached so every later
-        return resolves normally, the outcome is scored by nobody, and the late
-        baseline starts at zero, so whatever the account realises afterwards is
-        booked late in full -- the money is never lost, only late.
-        """
-        _require_event_index(event, "event")
-        if type(reason) is not str or not reason:
-            raise ValueError("a censored outcome requires a documented reason")
-        account = self.account(handle)
-        if account.voided or account.payoff is not None:
-            raise ValueError("only an open return may be censored")
-        outcome = Payoff(
-            account.handle, 0, 0, (account.cost_micro or 0) + account.carried_micro, event,
-            False, account.liquidated, account.earned_micro, censored=reason,
-        )
-        return self._accounts({handle: replace(account, payoff=outcome, late_micro=0)})
-
     def carry(self, handle: str, cost_micro: int) -> "LotTable":
         """Add a nonnegative retained liability to a return whose outcome is still open.
 
@@ -423,7 +400,8 @@ class LotTable:
             ),
         )
 
-    def resolve(self, event: int, backstop: int, mids: Mapping[str, str]) -> "LotTable":
+    def resolve(self, event: int, backstop: int, mids: Mapping[str, str], *,
+                censored: Mapping[str, str] | None = None) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
         The backstop counts runtime events from the return, including any time
@@ -431,6 +409,12 @@ class LotTable:
         pays off when the realised result credited to it, as opener or closer,
         exceeds its own cost, carried liabilities included; a no-fill return
         cannot inherit anyone's P&L.
+
+        ``censored`` names returns that also sent an order nobody could observe
+        (handle -> documented reason). Such a return resolves on its own schedule
+        like any other, and its outcome carries the money its observed orders
+        produced; only the answer to whether it paid off is unknown, because the
+        unobserved order could have changed it, so the outcome is censored.
         """
         _require_event_index(event, "event")
         _require_event_index(backstop, "backstop", positive=True)
@@ -458,15 +442,17 @@ class LotTable:
             # liability it was still carrying when the outcome was fixed.
             cost = account.cost_micro + account.carried_micro
             acted = account.opened_lots > 0 or account.closes > 0 or account.earnings > 0
+            reason = (censored or {}).get(account.handle)
             outcome = Payoff(
                 account.handle,
-                int(acted and micro + account.earned_micro > cost),
+                0 if reason else int(acted and micro + account.earned_micro > cost),
                 micro,
                 cost,
                 event,
                 bool(lots),
                 account.liquidated,
                 account.earned_micro,
+                censored=reason,
             )
             # An unmarked outcome is settled money, booked to the owner when it is
             # fixed: the late baseline starts there. A marked outcome books nothing
