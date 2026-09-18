@@ -550,3 +550,42 @@ class TestFix8X402AfterSignature:
         model, wallet, _, _ = self._metered(None, record_fails_on="x402.result")
         assert self._run(model) == "uncertain"
         assert wallet.balance == 10_000 - 1734
+
+
+# ------------------------------------------------------------------------------ 9
+
+
+class TestFix9SellerIsHttpsAndPublic:
+    """A seller registered without a vote cannot point the kernel at a private host."""
+
+    def test_plaintext_and_private_seller_urls_are_refused(self):
+        import pytest
+
+        from factorylab.world.market import split_model_id
+        from factorylab.world.x402 import X402Error
+
+        for url in ("http://seller.test", "https://localhost", "https://127.0.0.1",
+                    "https://10.0.0.5", "https://[::1]", "https://169.254.169.254",
+                    "https://metadata.internal", "https://printer.local",
+                    "https://seller.test:8443"):
+            with pytest.raises(X402Error):
+                split_model_id(f"x402:{url}#model")
+        assert split_model_id("x402:https://seller.test/v1#model")[0] == "https://seller.test"
+
+    def test_a_public_name_that_resolves_privately_is_refused_before_any_request(self):
+        import pytest
+
+        from factorylab.world.market import X402Provider
+        from factorylab.world.x402 import X402Error
+
+        requests = []
+        provider = X402Provider(transport=lambda *a: requests.append(a),
+                                resolver=lambda host: ["10.0.0.5"])
+        with pytest.raises(X402Error, match="public"):
+            provider.registration_price("x402:https://rebind.example#model")
+        assert requests == []
+        # A public answer passes the check (and then reaches the seller's catalogue).
+        ok = X402Provider(transport=lambda *a: (_ for _ in ()).throw(RuntimeError("io")),
+                          resolver=lambda host: ["93.184.216.34"])
+        with pytest.raises(X402Error, match="transport"):
+            ok.registration_price("x402:https://seller.example#model")

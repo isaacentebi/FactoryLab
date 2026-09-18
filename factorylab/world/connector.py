@@ -184,6 +184,21 @@ class _DeadlineSocket:
         return self.sock.sendall(data)
 
 
+def resolve_addresses(host: str, timeout_s: int = 10) -> list[str]:
+    """Every address ``host`` resolves to for HTTPS, within ``timeout_s``.
+
+    libc DNS has no deadline API. Only resolution uses a disposable, bounded helper
+    process; HTTP, TLS and policy remain in this runtime process.
+    """
+    resolved = subprocess.run(
+        [sys.executable, "-I", "-c",
+         "import json,socket,sys; print(json.dumps(sorted({r[4][0] for r in "
+         "socket.getaddrinfo(sys.argv[1],443,type=socket.SOCK_STREAM)})))", host],
+        capture_output=True, text=True, timeout=timeout_s, check=True, env={},
+    )
+    return list(json.loads(resolved.stdout))
+
+
 class HTTPSTransport:
     """GET stays in the runtime process, with checked DNS, pinned IP and verified TLS."""
 
@@ -191,15 +206,7 @@ class HTTPSTransport:
             denylist: tuple[str, ...], payment_signature: str | None = None) -> ConnectorResponse:
         """DNS, connect, headers and body share one deadline and one total byte budget."""
         deadline = time.monotonic() + timeout_s
-        # libc DNS has no deadline API. Only resolution uses a disposable, bounded
-        # helper process; HTTP, TLS and policy remain in this runtime process.
-        resolved = subprocess.run(
-            [sys.executable, "-I", "-c",
-             "import json,socket,sys; print(json.dumps(sorted({r[4][0] for r in "
-             "socket.getaddrinfo(sys.argv[1],443,type=socket.SOCK_STREAM)})))", host],
-            capture_output=True, text=True, timeout=timeout_s, check=True, env={},
-        )
-        addresses = json.loads(resolved.stdout)
+        addresses = resolve_addresses(host, timeout_s)
         if not addresses:
             raise ConnectorRefused("DNS returned no addresses")
         for address in addresses:

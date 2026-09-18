@@ -66,18 +66,34 @@ def metered_data(meter, handle: str, ceiling: int, execute, record) -> tuple[dic
 
 
 def seller_root(seller_url: str) -> str:
-    """A seller URL has no embedded credentials, query, fragment or ambiguous API suffix."""
+    """A seller URL is https to a public host name, with no credentials, port, query,
+    fragment or ambiguous API suffix.
+
+    A seller is registered without a committee vote, and the kernel then sends it
+    requests and signed payments on the population's behalf. Plain http let anyone on
+    the path rewrite the quote's ``payTo``; an address literal, ``localhost`` or an
+    internal name pointed the kernel at the host it runs on. The host rules are the
+    connector's (``world/connector.py``); a name that resolves to a private address is
+    refused at registration by ``X402Provider.registration_price``.
+    """
     if not isinstance(seller_url, str) or any(c.isspace() for c in seller_url):
         raise X402Error("Invalid seller URL")
     try:
         url = parse.urlsplit(seller_url)
         if (
-            url.scheme not in {"https", "http"} or not url.hostname or url.port == 0
+            url.scheme != "https" or not url.hostname or url.port not in (None, 443)
             or url.username is not None or url.password is not None or url.query or url.fragment
         ):
             raise ValueError
     except ValueError:
-        raise X402Error("Seller URL requires HTTP(S) and no credentials/query/fragment") from None
+        raise X402Error("Seller URL requires https, a host, and no credentials, port, "
+                        "query or fragment") from None
+    from factorylab.world.connector import ConnectorRefused, check_host
+
+    try:
+        check_host(url.hostname.lower(), ())
+    except (ConnectorRefused, ValueError):
+        raise X402Error("Seller URL must name a public host") from None
     return seller_url.rstrip("/").removesuffix("/chat/completions").removesuffix("/v1")
 
 
@@ -251,12 +267,21 @@ class X402Provider:
         discovery_url: str = DISCOVERY_URL,
         extra_body: Mapping[str, Any] | None = None,
         max_request_micro: int = 500_000,
+        resolver: Callable[[str], list[str]] | None = None,
     ) -> None:
         if type(max_request_micro) is not int or max_request_micro < 0:
             raise X402Error("Request cap must be nonnegative integer micro-USD")
         self.max_request_micro = max_request_micro
         self._private_key = private_key
         self._transport = transport or http_request
+        # How a seller's host name is resolved for the registration-time address check.
+        # The live default is the connector's bounded DNS helper; an injected transport
+        # reaches no network, so without an injected resolver there is nothing to check.
+        if resolver is None and transport is None:
+            from factorylab.world.connector import resolve_addresses
+
+            resolver = resolve_addresses
+        self._resolver = resolver
         self.rpc = rpc
         self.discovery_url = discovery_url
         self._ceilings: dict[str, int] = {}
@@ -380,6 +405,7 @@ class X402Provider:
         Actual calls still require a quote no higher than this fixed ceiling.
         """
         seller, model = split_model_id(model_id)
+        self._check_public(seller)
         entry = next((e for e in self.seller_models(seller) if e.id == model), None)
         if entry is not None and entry.pricing is not None:
             input_tokens = entry.context_length or 4096
@@ -398,6 +424,29 @@ class X402Provider:
             "seller": seller, "model": model, "network": BASE_NETWORK,
             "per_request_micro": ceiling, **metadata,
         })
+
+    def _check_public(self, seller: str) -> None:
+        """Every address the seller's name resolves to is public, or it is not registered.
+
+        The connector's address rule (``check_address``): no private, loopback,
+        link-local, multicast or mapped address. Checked before the first request to
+        the seller, so a public name that resolves inward is refused unread.
+        """
+        if self._resolver is None:
+            return
+        from factorylab.world.connector import ConnectorRefused, check_address
+
+        host = parse.urlsplit(seller).hostname or ""
+        try:
+            addresses = list(self._resolver(host))
+            if not addresses:
+                raise ConnectorRefused("DNS returned no addresses")
+            for address in addresses:
+                check_address(address, ())
+        except (ConnectorRefused, ValueError):
+            raise X402Error("Seller host must resolve only to public addresses") from None
+        except Exception:
+            raise X402Error("Seller host could not be resolved") from None
 
     def affordable(self, model_id: str, ceiling_micro: int) -> tuple[bool, str]:
         """Affordability uses the reserve's Base USDC balance, never Venice credit endpoints."""
