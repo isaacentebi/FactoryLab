@@ -864,3 +864,60 @@ class TestFix12NoTransferBlocksForever:
         hashes = {r["tx_hash"] for r in rail.sent}
         assert len(hashes) > 1  # it did not resend the one stuck transaction forever
         assert all(r["tx"]["nonce"] == 7 for r in rail.sent)
+
+
+# ------------------------------------------------------------------------------ 13
+
+
+class TestFix13DeathIsSettledReality:
+    """A provisional ceiling is not a cost: it cannot kill the wallet on its own."""
+
+    def _wallet(self, balance=1_000, floor=0):
+        from factorylab.kernel.ledger import Ledger
+        from factorylab.kernel.wallet import Wallet
+
+        return Wallet(balance, Ledger(clock_ns=lambda: 0), clock_ns=lambda: 0,
+                      balance_floor_micro=floor)
+
+    def test_an_uncertain_bill_at_the_whole_balance_does_not_kill_and_settling_revives(self):
+        wallet = self._wallet()
+        hold = wallet.reserve(1_000, "h", "model:x")
+        wallet.commit_uncertain(hold)
+        assert not wallet.dead  # its true cost may be anything from 0 to 1,000
+        wallet.settle_uncertain(hold.id, 10)
+        assert not wallet.dead and wallet.balance == 990
+        assert wallet.check_conservation()
+
+    def test_a_settled_cost_that_reaches_the_floor_is_death(self):
+        wallet = self._wallet()
+        hold = wallet.reserve(1_000, "h", "model:x")
+        wallet.commit_uncertain(hold)
+        wallet.settle_uncertain(hold.id, 1_000)
+        assert wallet.dead
+
+    def test_death_is_still_final_once_settled_reality_reaches_the_floor(self):
+        wallet = self._wallet()
+        hold = wallet.reserve(400, "h", "model:x")
+        wallet.commit_uncertain(hold)
+        wallet.settle(-600, "fill:1", "exchange_pnl")  # 1000 - 400 - 600 = 0, best case 400
+        assert not wallet.dead
+        wallet.settle_uncertain(hold.id, 400)
+        assert wallet.dead
+        # The floor was reached on settled money: a later gain does not revive it.
+        import pytest
+
+        from factorylab.kernel.wallet import Infeasible
+
+        with pytest.raises(Infeasible):
+            wallet.settle(500, "fill:2", "exchange_pnl")
+
+    def test_a_checkpoint_in_limbo_restores_alive(self):
+        wallet = self._wallet()
+        hold = wallet.reserve(1_000, "h", "model:x")
+        wallet.commit_uncertain(hold)
+        state = wallet.state()
+        restored = self._wallet()
+        restored._restore_state(state)
+        assert not restored.dead
+        restored.settle_uncertain(hold.id, 1)
+        assert restored.balance == 999 and not restored.dead
