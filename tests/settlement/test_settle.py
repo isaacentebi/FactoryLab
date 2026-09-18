@@ -89,17 +89,20 @@ def test_three_forecasts_two_evaluators_settle_at_due_events_with_ledger_first(
     remaining = settler.settle_due(4, facts_for)
     assert [result.handle for result in remaining] == [second.handle, third.handle]
     assert [result.y for result in remaining] == [0, 0]
-    assert [result.baseline_brier for result in remaining] == [0.0, 0.75]
+    # Defect 8: the second and third forecasts ask one question (same subject, predicate,
+    # parameters and interval), so both are scored against the base rate before its
+    # answer, and the answer enters that base rate once.
+    assert [result.baseline_brier for result in remaining] == [0.0, 0.0]
     assert [result.brier for result in remaining] == pytest.approx([0.96, 0.19])
     assert seen == [first, second, third]
-    assert baseline.baseline_q("wallet_up") == pytest.approx(1 / 3)
+    assert baseline.baseline_q("wallet_up") == pytest.approx(1 / 2)
     assert [standing.snapshot()[j]["settled"] for j in ("judge-a", "judge-b")] == [2, 1]
     # Coverage is every forecast this judge was asked for, not one privileged predicate.
     assert standing.coverage("judge-a") == 1.0 and standing.coverage("judge-b") == 1.0
-    # The judge whose public-predicate claims beat their baseline is weighted up and the
-    # one whose claims lost is weighted down: standing now follows every claim.
-    assert standing.skill("judge-a") == pytest.approx(-0.175)
-    assert standing.weight("judge-a") == pytest.approx(0.325)
+    # Standing follows every claim. Scored against the pre-answer base rate, both judges'
+    # claims beat it; judge-b's by more, so judge-a is weighted below judge-b.
+    assert standing.skill("judge-a") == pytest.approx(0.2)
+    assert standing.weight("judge-a") == pytest.approx(0.7)
     assert standing.weight("judge-b") == 1.0
     assert book.outstanding() == 0
     assert book.requested("judge-a") == 2 and book.requested("judge-b") == 1
