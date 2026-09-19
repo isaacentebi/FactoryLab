@@ -112,8 +112,8 @@ def test_a_replayed_return_delivers_once_and_is_charged_once(open_world):
 
 @pytest.mark.parametrize("args, reason", [
     ({"recipient": "nobody-here", "text": SECRET}, "unknown recipient"),
-    ({"recipient": None, "text": SECRET}, "unknown recipient"),
-    ({"text": SECRET}, "unknown recipient"),
+    ({"recipient": None, "text": SECRET}, "invalid address arguments"),
+    ({"text": SECRET}, "invalid address arguments"),
 ])
 def test_a_refused_message_is_free_and_carries_nothing(open_world, args, reason):
     rt = open_world
@@ -134,6 +134,28 @@ def test_a_seat_cannot_address_itself_and_pays_nothing_to_learn_it(open_world):
     result, cost = send(rt, sender, sender)
     assert cost == 0 and "itself" in result["error"]
     assert rt.budget.entitlement(sender) == before
+
+
+@pytest.mark.parametrize("invalid", ["extra", "list", "wrong_type"])
+def test_invalid_address_schema_is_refused_before_transport(open_world, invalid):
+    rt = open_world
+    sender, recipient = parties(rt)
+    args = {"recipient": recipient, "text": "hi"}
+    if invalid == "extra":
+        args["private_memory"] = SECRET
+    elif invalid == "list":
+        args = [args]
+    else:
+        args["text"] = 42
+    before = rt.budget.entitlement(sender), rt.budget.entitlement(recipient)
+    result, cost = rt._run_tool(
+        sender, "decision-schema", {"tool": "address.send", "args": args})
+    assert result == {"error": "invalid address arguments"}
+    assert cost == 0
+    assert (rt.budget.entitlement(sender), rt.budget.entitlement(recipient)) == before
+    assert not inbox(rt, recipient)
+    assert not any(row["kind"] == "address.delivered" for row in rt.ledger._recovery_items())
+    assert SECRET not in json.dumps(result)
 
 
 def test_one_slot_is_one_message_and_a_changed_body_is_a_conflict(open_world):

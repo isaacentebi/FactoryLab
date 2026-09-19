@@ -113,6 +113,16 @@ def _safe_scalar(value: Any) -> Any:
     return None
 
 
+def _safe_identifier(value: Any) -> str | None:
+    """Return a bounded single-line identifier or no retained value."""
+    if not isinstance(value, (str, int)):
+        return None
+    text = str(value)
+    if not text or len(text) > _MAX_TEXT or any(char in text for char in "\r\n\x00"):
+        return None
+    return text
+
+
 def _safe_mapping(source: Mapping[str, Any], keys: frozenset[str]) -> dict[str, Any]:
     clean: dict[str, Any] = {}
     for key in keys:
@@ -167,6 +177,25 @@ def _whitelist_row(entry: Mapping[str, Any], seq: int | None) -> dict[str, Any] 
     if kind == "consequence.finding" and clean.get("status") not in {"supported", "contrary"}:
         # A score without a resolved finding is not enough to manufacture a revision.
         clean.pop("score", None)
+    if kind == "income.earned":
+        receipt_id = _safe_identifier(entry.get("receipt_id"))
+        micro = entry.get("micro")
+        if receipt_id is not None and type(micro) is int and micro > 0:
+            # Treasury emits this row only after it verifies the external receipt.
+            clean.update(
+                {
+                    "handle": receipt_id,
+                    "receipt_id": receipt_id,
+                    "amount_micro": micro,
+                    "source": "external",
+                    "confirmed": True,
+                }
+            )
+    elif kind == "wallet.settle" and entry.get("reason") == "income":
+        # The settlement is an internal wallet view until the observer correlates
+        # it with the preceding verified receipt.  Reason alone is not proof that
+        # an independent party paid the factory.
+        clean["income_class"] = "wallet_income_settlement"
 
     receipt = entry.get("receipt")
     if isinstance(receipt, Mapping):
@@ -260,6 +289,7 @@ def _admission_snapshot(source: Any) -> dict[str, Any] | None:
 
 def _admission_costs(report: dict[str, Any], admission: dict[str, Any] | None) -> None:
     """Replace cost totals with the authoritative supplied admission view."""
+    report["cost_per_useful_decision_micro"] = None
     if admission is None:
         report["costs"] = {
             **report["costs"],
@@ -299,6 +329,30 @@ def _admission_costs(report: dict[str, Any], admission: dict[str, Any] | None) -
         "root_p50_micro": None,
         "root_p90_micro": None,
     }
+
+
+def _authoritative_cost_per_useful(
+    report: dict[str, Any], rows: list[Mapping[str, Any]]
+) -> None:
+    """Derive useful-decision cost only from complete authoritative billing."""
+    useful = sum(
+        1
+        for row in rows
+        if (row.get("useful_decision") is True or row.get("useful_outcome") is True)
+        and (
+            row.get("independently_supported") is True
+            or row.get("outcome_supported") is True
+        )
+    )
+    costs = report.get("costs")
+    if not useful or not isinstance(costs, Mapping):
+        report["cost_per_useful_decision_micro"] = None
+        return
+    known = costs.get("known_micro_total")
+    unknown = costs.get("unknown_bill_count")
+    report["cost_per_useful_decision_micro"] = (
+        known // useful if type(known) is int and unknown == 0 else None
+    )
 
 
 def _question_title(name: str) -> str:
@@ -390,6 +444,7 @@ class RehearsalObserver:
         self._dropped_rows = 0
         self._total_entries = 0
         self._ignored_rows = 0
+        self._income_receipts: dict[str, str] = {}
         self._pending_tick: tuple[int | None, int] | None = None
         self._last_report: dict[str, Any] | None = None
         self._write_error: str | None = None
@@ -433,6 +488,30 @@ class RehearsalObserver:
         self._total_entries += 1
         seq = result if type(result) is int else None
         clean = _whitelist_row(entry, seq)
+        kind = entry.get("kind")
+        if clean is not None and kind == "income.earned":
+            service = _safe_identifier(entry.get("service"))
+            tx = _safe_identifier(entry.get("tx"))
+            receipt_id = _safe_identifier(entry.get("receipt_id"))
+            if (
+                service is not None
+                and tx is not None
+                and receipt_id is not None
+                and clean.get("receipt_id") == receipt_id
+            ):
+                settlement_handle = f"income:{service}:{tx}"
+                if len(settlement_handle) <= _MAX_TEXT:
+                    if len(self._income_receipts) >= self.max_rows:
+                        self._income_receipts.pop(next(iter(self._income_receipts)))
+                    self._income_receipts[settlement_handle] = receipt_id
+        elif clean is not None and kind == "wallet.settle" and entry.get("reason") == "income":
+            handle = entry.get("handle")
+            receipt_id = (
+                self._income_receipts.pop(handle, None) if isinstance(handle, str) else None
+            )
+            if receipt_id is not None:
+                clean["handle"] = receipt_id
+                clean["reason"] = "income"
         if clean is not None and _meaningful(clean):
             if len(self._rows) == self.max_rows:
                 self._rows.popleft()
@@ -458,6 +537,7 @@ class RehearsalObserver:
             report = build_report(list(self._rows))
             admission = _admission_snapshot(self.admission_report)
             _admission_costs(report, admission)
+            _authoritative_cost_per_useful(report, list(self._rows))
             report["report_kind"] = "edition4_rehearsal_observer_report"
             report["status"] = "rehearsal_observer_static_snapshot"
             coverage = {

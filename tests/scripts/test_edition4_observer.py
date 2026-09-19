@@ -108,6 +108,96 @@ def test_unknown_admission_billing_remains_unknown_not_zero(tmp_path):
     assert report["costs"]["unknown_bill_count"] == 1
 
 
+def test_authoritative_admission_recomputes_or_clears_useful_decision_cost(tmp_path):
+    def observe(admission, directory):
+        ledger = FakeLedger()
+        observer = RehearsalObserver(ledger, directory, admission_report=lambda: admission)
+        observer.attach()
+        ledger.append({"kind": "invocation", "handle": "root", "cost_micro": 7})
+        ledger.append(
+            {
+                "kind": "evidence",
+                "id": "useful-1",
+                "useful_decision": True,
+                "independently_supported": True,
+            }
+        )
+        _tick(ledger, 0)
+        ledger.append({"kind": "runtime.event_done", "n": 1})
+        return json.loads((directory / "report.json").read_text(encoding="utf-8"))
+
+    known = observe(
+        {"attempted": 1, "known_calls": 1, "known_micro": 100, "uncertain_calls": 0},
+        tmp_path / "known",
+    )
+    assert known["cost_per_useful_decision_micro"] == 100
+
+    unknown = observe(
+        {"attempted": 1, "known_calls": 0, "known_micro": 0, "uncertain_calls": 1},
+        tmp_path / "unknown",
+    )
+    assert unknown["cost_per_useful_decision_micro"] is None
+
+
+def test_verified_income_receipt_and_wallet_view_are_counted_once(tmp_path):
+    ledger = FakeLedger()
+    observer = RehearsalObserver(ledger, tmp_path, admission_report=_admission)
+    observer.attach()
+    ledger.append(
+        {
+            "kind": "income.earned",
+            "service": "doubler",
+            "tx": "tx-1",
+            "micro": 25,
+            "receipt_id": "income-receipt-1",
+            "reason": "private arbitrary text",
+            "payload": "private body",
+        }
+    )
+    ledger.append(
+        {
+            "kind": "wallet.settle",
+            "handle": "income:doubler:tx-1",
+            "reason": "income",
+            "amount": 25,
+            "payload": "private settlement body",
+        }
+    )
+    _tick(ledger, 0)
+    ledger.append({"kind": "runtime.event_done", "n": 1})
+
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["income"]["external_confirmed_refs"] == ["income-receipt-1"]
+    assert report["income"]["external_confirmed_count"] == 1
+    assert report["income"]["external_confirmed_micro"] == 25
+    assert report["income"]["unknown_provenance"] == 0
+    assert report["five_questions"]["external_income_funded_operation"]["status"] == "unknown"
+    raw = json.dumps(report)
+    assert "private arbitrary text" not in raw
+    assert "private body" not in raw
+    assert "private settlement body" not in raw
+
+
+def test_unmatched_wallet_income_settlement_is_not_independent_income(tmp_path):
+    ledger = FakeLedger()
+    observer = RehearsalObserver(ledger, tmp_path, admission_report=_admission)
+    observer.attach()
+    ledger.append(
+        {
+            "kind": "wallet.settle",
+            "handle": "income:self-funded:tx-1",
+            "reason": "income",
+            "amount": 25,
+        }
+    )
+    _tick(ledger, 0)
+    ledger.append({"kind": "runtime.event_done", "n": 1})
+
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["income"]["external_confirmed_count"] == 0
+    assert report["income"]["unknown_provenance"] == 1
+
+
 def test_message_delivery_keeps_unknown_and_delivered_counts(tmp_path):
     ledger = FakeLedger()
     observer = RehearsalObserver(ledger, tmp_path, admission_report=_admission)

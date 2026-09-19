@@ -1092,6 +1092,13 @@ class ComputeMixin:
         price = int(spec["price_micro_per_call"])
 
         if spec["kind"] == "address":
+            from factorylab.cortex.assembly import validate_schema
+
+            try:
+                validate_schema(call.get("args"), spec["args_schema"])
+            except (ValueError, TypeError, RecursionError):
+                # Do not echo an invalid field name or value into the receipt.
+                return {"error": "invalid address arguments"}, 0
             return self._address_send(action_id, handle, args, slot=slot, price=price)
 
         def execute() -> dict:

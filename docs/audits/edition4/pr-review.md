@@ -121,3 +121,22 @@ Integrated verification: Ruff passed; `uv run pytest` reported
 `23 passed in 13.57s`. Cost regressions include missing parents, standalone
 invocations mixed with linked trees, and provider/summary precedence without
 negative coverage counts. No paid or live run was made.
+
+## Follow-up review of `e6e8422`
+
+- Codex 4052446957: address execution now validates the published argument schema
+  before preparation, metering or delivery. Undeclared properties, nonobject
+  arguments and wrong types are refused without charge or inbox mutation; the
+  refusal does not echo private values or field names.
+- Codex 4052446962: the rehearsal observer preserves bounded authoritative income
+  amount and receipt facts from the actual runtime row shapes, without retaining
+  arbitrary private payload or free-text reasons.
+- Codex 4052446966: the observer refreshes the useful-decision cost after installing
+  authoritative admission billing; unknown billing cannot retain a stale numeric
+  estimate derived from invocation rows.
+
+Integrated verification: Ruff passed; `uv run pytest` reported
+`2080 passed in 21.44s`; the selected gate command reported
+`23 passed in 13.61s`. No paid or live run was made. The latest Cursor review
+attempt was unavailable because its usage limit was reached; its neutral check
+was not treated as an approval. Codex findings were handled as recorded above.
