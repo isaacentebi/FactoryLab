@@ -672,6 +672,8 @@ class BootstrapMixin:
 
         # loop state
         self.pending: dict[str, PendingJudgement] = {}
+        self._grounded_pending = {}
+        self._grounded_closed = set()
         # A verdict commitment is closed out once and never re-opened. The judge's
         # payoff forecast stays pending in the book after an unread close, so
         # without these the per-event commitment pass would re-create the same

@@ -1,0 +1,28 @@
+{
+  "status": "completed",
+  "terminated": true,
+  "seal_key_released": true,
+  "ticks": 48,
+  "measured_interval_ns": 37893087234,
+  "calls": 98,
+  "cost_micro": 540781,
+  "producer_actions": {
+    "defer": 36,
+    "hold": 15,
+    "order": 1,
+    "investigate": 1
+  },
+  "sandbox_available": true,
+  "registration_attempts": 0,
+  "venue_before": {
+    "equity_usd": "965.96560941",
+    "positions": [],
+    "open_orders": []
+  },
+  "venue_after": {
+    "equity_usd": "965.94307941",
+    "positions": [],
+    "open_orders": []
+  },
+  "comparison": "consequence arm deferred after independent recursive feedback audit; not a matched pair"
+}

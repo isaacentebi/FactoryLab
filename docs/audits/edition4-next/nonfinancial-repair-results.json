@@ -1,0 +1,611 @@
+{
+  "delayed_evidence_witness": {
+    "boundary": "The runtime freezes evidence when maturity commissions the final judge. A later receipt can be observable to a fresh public_evidence read while remaining absent from that frozen commission; timeout then censors without a learner sample.",
+    "cases": [
+      {
+        "at_tick": 0,
+        "eligible_in_frozen_commission": true,
+        "finding": "supported",
+        "router_changed": true,
+        "settlement_status": "settled",
+        "timing": "before_maturity"
+      },
+      {
+        "at_tick": 2,
+        "currently_observable_refs": [
+          "execution:exec-bf66b4d0ba00f35feba5302447342c5b"
+        ],
+        "eligible_in_frozen_commission": false,
+        "finding": "unknown",
+        "frozen_commission_refs": [],
+        "router_changed": false,
+        "settlement_status": "censored",
+        "timing": "after_maturity_snapshot_before_timeout"
+      },
+      {
+        "at_tick": 22,
+        "eligible_in_frozen_commission": false,
+        "finding": "unknown",
+        "router_changed": false,
+        "settlement_status": "censored",
+        "timing": "assessment_timeout"
+      }
+    ],
+    "claim_fingerprint": "25da31918c0060555ffb857a707bf14e0ddff9fa3fd8fa2b9d4badf86a39073c",
+    "learner_policy_changed": false,
+    "maturity_tick": 2,
+    "timeout_tick": 22
+  },
+  "dependency_witness": {
+    "contrary_arm": "contrary_result",
+    "downstream_consumed": {
+      "missing_observation": "program_result receipts bind an invocation, tool version, caller lineage and result digest to the producer handle, but no existing receipt or grounded-evidence field binds that result to a later caller decision, output or independently observed outcome",
+      "status": "not_expressible"
+    },
+    "receipt_only_arm": "independent_use",
+    "unavailable_arm": "no_evidence"
+  },
+  "exchange": "FakeExchange",
+  "final_evaluator": {
+    "is_model": false,
+    "kind": "deterministic_scaffold",
+    "note": "The final evaluator is a stand-in.  The evidence here is the runtime path, not the quality of any judgement."
+  },
+  "grounded_definition": "realized-consequence-v2",
+  "limits": [
+    "Receipts, evidence, settlement and learning come from the runtime; the final judgement is scaffold, so this says nothing about model discrimination.",
+    "The frozen claim is an execution claim.  Observing it establishes execution, version and result, never benefit, demand or objective formation.",
+    "Actor selection, the claim and the final answer are fixtures.  The existence of a frozen claim is not evidence that a participant would author one, and no arm is evidence of spontaneous production or Class 3 behaviour.",
+    "Each arm is one decision in one world; learner movement is a mechanism witness, not an effect size.",
+    "The current receipt contract cannot distinguish downstream result consumption from receipt-only invocation; the exact missing observation is reported rather than simulated.",
+    "The delayed witness changes evidence timing only. It does not change learner policy or measure a population's full affordable exploratory runway."
+  ],
+  "mode": "offline_real_runtime",
+  "network_calls": 0,
+  "norm_source": "edition3-rehearsal-5.toml",
+  "paid_model_calls": 0,
+  "probe": "edition4-nonfinancial-consequence-runtime-v1",
+  "provider": "ScriptedProvider",
+  "results": [
+    {
+      "arm": "independent_use",
+      "contract_fingerprint": "25da31918c0060555ffb857a707bf14e0ddff9fa3fd8fa2b9d4badf86a39073c",
+      "emitted_evidence_frozen": true,
+      "evidence": [
+        {
+          "kind": "ExecutionReceipt:program_result",
+          "payload": {
+            "at_event": 0,
+            "facts": {
+              "caller": "eval-a",
+              "caller_handle": "decision-1",
+              "cost_micro": 50,
+              "lineage_relation": "cross_lineage",
+              "maker": "seed-decider",
+              "maker_handle": "decision-0",
+              "result_sha256": "7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215",
+              "slot": "tool:0",
+              "status": "executed",
+              "tool": "checksum-verifier",
+              "version_sha256": "312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4"
+            },
+            "handle": "decision-0",
+            "kind": "program_result",
+            "owner": "seed-decider"
+          },
+          "ref": "execution:exec-bf66b4d0ba00f35feba5302447342c5b"
+        }
+      ],
+      "excluded_evaluators": [
+        "seed-decider"
+      ],
+      "final_finding": {
+        "evaluator_id": "eval-b",
+        "evidence": [
+          "execution:exec-bf66b4d0ba00f35feba5302447342c5b"
+        ],
+        "reason": "an independent lineage executed the frozen artifact version and obtained the frozen result digest, which observes the execution claim and nothing about its usefulness",
+        "score": 0.6,
+        "status": "supported"
+      },
+      "finding_refusals": [],
+      "frozen_claim": {
+        "artifact": "checksum-verifier",
+        "artifact_version_sha256": "312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4",
+        "assigned_to": "seed-decider",
+        "claim": "Before this contract's horizon closes, a participant outside my lineage executes this exact version of my verifier and obtains this exact result digest.",
+        "claim_id": "independent-verifier-execution-v1",
+        "claim_kind": "execution_observation",
+        "expected_result_sha256": "7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215",
+        "not_claimed": "This does not claim that the execution helped anyone, that the verifier was worth its compute cost, that anyone needed it, or that I hold any objective beyond this one observation.",
+        "provenance": "investigator-authored fixture assigned to the producer seat; not an observed participant choice",
+        "required_lineage_relation": "cross_lineage"
+      },
+      "frozen_norms": [
+        {
+          "definition": "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis.",
+          "id": "consequential usefulness"
+        },
+        {
+          "definition": "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised.",
+          "id": "epistemic integrity"
+        },
+        {
+          "definition": "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not.",
+          "id": "durable agency"
+        },
+        {
+          "definition": "Do not finance the factory's advantage by imposing unconsented costs on outsiders.",
+          "id": "bounded reciprocity"
+        },
+        {
+          "definition": "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. A judge identifying such a conflict must name the value, the measurement, the evidence and the uncertainty, and make the claim open to challenge. Missing measurement alone is not evidence of failure.",
+          "id": "fidelity"
+        }
+      ],
+      "initial_verdict": 0.9,
+      "money": {
+        "after_learning_micro": 99999950,
+        "before_settlement_micro": 99999950,
+        "tool_charge_micro": 50
+      },
+      "observation_window": {
+        "maturity_tick": 2,
+        "opened_tick": 0,
+        "timeout_tick": 22
+      },
+      "observed_evidence_refs": [
+        "execution:exec-bf66b4d0ba00f35feba5302447342c5b"
+      ],
+      "producer_router": {
+        "after": {
+          "NOOP": -0.12,
+          "antagonist-a": -0.12,
+          "seed-decider": 0.0
+        },
+        "before": {
+          "NOOP": 0.0,
+          "antagonist-a": 0.0,
+          "seed-decider": 0.0
+        },
+        "changed": true,
+        "learner_id": "router:Tick"
+      },
+      "settlement": [
+        {
+          "channel": "verdict",
+          "definition_version": "realized-consequence-v2",
+          "score": 0.6,
+          "status": "settled"
+        }
+      ]
+    },
+    {
+      "arm": "contrary_result",
+      "contract_fingerprint": "25da31918c0060555ffb857a707bf14e0ddff9fa3fd8fa2b9d4badf86a39073c",
+      "emitted_evidence_frozen": true,
+      "evidence": [
+        {
+          "kind": "ExecutionReceipt:program_result",
+          "payload": {
+            "at_event": 0,
+            "facts": {
+              "caller": "eval-a",
+              "caller_handle": "decision-1",
+              "cost_micro": 50,
+              "lineage_relation": "cross_lineage",
+              "maker": "seed-decider",
+              "maker_handle": "decision-0",
+              "result_sha256": "695e2ec8fd54dce7055af5b1fdc11af193584a3503fabb4804afdd0272a745f2",
+              "slot": "tool:0",
+              "status": "executed",
+              "tool": "checksum-verifier",
+              "version_sha256": "312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4"
+            },
+            "handle": "decision-0",
+            "kind": "program_result",
+            "owner": "seed-decider"
+          },
+          "ref": "execution:exec-671f797f670d0a212d35a390191e590b"
+        }
+      ],
+      "excluded_evaluators": [
+        "seed-decider"
+      ],
+      "final_finding": {
+        "evaluator_id": "eval-b",
+        "evidence": [
+          "execution:exec-671f797f670d0a212d35a390191e590b"
+        ],
+        "reason": "the independent execution returned a different result than claimed",
+        "score": 0.0,
+        "status": "contrary"
+      },
+      "finding_refusals": [],
+      "frozen_claim": {
+        "artifact": "checksum-verifier",
+        "artifact_version_sha256": "312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4",
+        "assigned_to": "seed-decider",
+        "claim": "Before this contract's horizon closes, a participant outside my lineage executes this exact version of my verifier and obtains this exact result digest.",
+        "claim_id": "independent-verifier-execution-v1",
+        "claim_kind": "execution_observation",
+        "expected_result_sha256": "7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215",
+        "not_claimed": "This does not claim that the execution helped anyone, that the verifier was worth its compute cost, that anyone needed it, or that I hold any objective beyond this one observation.",
+        "provenance": "investigator-authored fixture assigned to the producer seat; not an observed participant choice",
+        "required_lineage_relation": "cross_lineage"
+      },
+      "frozen_norms": [
+        {
+          "definition": "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis.",
+          "id": "consequential usefulness"
+        },
+        {
+          "definition": "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised.",
+          "id": "epistemic integrity"
+        },
+        {
+          "definition": "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not.",
+          "id": "durable agency"
+        },
+        {
+          "definition": "Do not finance the factory's advantage by imposing unconsented costs on outsiders.",
+          "id": "bounded reciprocity"
+        },
+        {
+          "definition": "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. A judge identifying such a conflict must name the value, the measurement, the evidence and the uncertainty, and make the claim open to challenge. Missing measurement alone is not evidence of failure.",
+          "id": "fidelity"
+        }
+      ],
+      "initial_verdict": 0.9,
+      "money": {
+        "after_learning_micro": 99999950,
+        "before_settlement_micro": 99999950,
+        "tool_charge_micro": 50
+      },
+      "observation_window": {
+        "maturity_tick": 2,
+        "opened_tick": 0,
+        "timeout_tick": 22
+      },
+      "observed_evidence_refs": [
+        "execution:exec-671f797f670d0a212d35a390191e590b"
+      ],
+      "producer_router": {
+        "after": {
+          "NOOP": 0.0,
+          "antagonist-a": 0.0,
+          "seed-decider": 0.0
+        },
+        "before": {
+          "NOOP": 0.0,
+          "antagonist-a": 0.0,
+          "seed-decider": 0.0
+        },
+        "changed": false,
+        "learner_id": "router:Tick"
+      },
+      "settlement": [
+        {
+          "channel": "verdict",
+          "definition_version": "realized-consequence-v2",
+          "score": 0.0,
+          "status": "settled"
+        }
+      ]
+    },
+    {
+      "arm": "no_evidence",
+      "contract_fingerprint": "25da31918c0060555ffb857a707bf14e0ddff9fa3fd8fa2b9d4badf86a39073c",
+      "emitted_evidence_frozen": true,
+      "evidence": [],
+      "excluded_evaluators": [
+        "seed-decider"
+      ],
+      "final_finding": {
+        "evaluator_id": "eval-b",
+        "evidence": [],
+        "reason": "no supplied fact observes the frozen artifact version",
+        "status": "unknown"
+      },
+      "finding_refusals": [],
+      "frozen_claim": {
+        "artifact": "checksum-verifier",
+        "artifact_version_sha256": "312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4",
+        "assigned_to": "seed-decider",
+        "claim": "Before this contract's horizon closes, a participant outside my lineage executes this exact version of my verifier and obtains this exact result digest.",
+        "claim_id": "independent-verifier-execution-v1",
+        "claim_kind": "execution_observation",
+        "expected_result_sha256": "7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215",
+        "not_claimed": "This does not claim that the execution helped anyone, that the verifier was worth its compute cost, that anyone needed it, or that I hold any objective beyond this one observation.",
+        "provenance": "investigator-authored fixture assigned to the producer seat; not an observed participant choice",
+        "required_lineage_relation": "cross_lineage"
+      },
+      "frozen_norms": [
+        {
+          "definition": "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis.",
+          "id": "consequential usefulness"
+        },
+        {
+          "definition": "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised.",
+          "id": "epistemic integrity"
+        },
+        {
+          "definition": "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not.",
+          "id": "durable agency"
+        },
+        {
+          "definition": "Do not finance the factory's advantage by imposing unconsented costs on outsiders.",
+          "id": "bounded reciprocity"
+        },
+        {
+          "definition": "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. A judge identifying such a conflict must name the value, the measurement, the evidence and the uncertainty, and make the claim open to challenge. Missing measurement alone is not evidence of failure.",
+          "id": "fidelity"
+        }
+      ],
+      "initial_verdict": 0.9,
+      "money": {
+        "after_learning_micro": 100000000,
+        "before_settlement_micro": 100000000,
+        "tool_charge_micro": 0
+      },
+      "observation_window": {
+        "maturity_tick": 2,
+        "opened_tick": 0,
+        "timeout_tick": 22
+      },
+      "observed_evidence_refs": [],
+      "producer_router": {
+        "after": {
+          "NOOP": 0.0,
+          "antagonist-a": 0.0,
+          "seed-decider": 0.0
+        },
+        "before": {
+          "NOOP": 0.0,
+          "antagonist-a": 0.0,
+          "seed-decider": 0.0
+        },
+        "changed": false,
+        "learner_id": "router:Tick"
+      },
+      "settlement": [
+        {
+          "channel": "verdict",
+          "definition_version": "realized-consequence-v2-unknown",
+          "score": 0.0,
+          "status": "censored"
+        }
+      ]
+    },
+    {
+      "arm": "self_use",
+      "contract_fingerprint": "25da31918c0060555ffb857a707bf14e0ddff9fa3fd8fa2b9d4badf86a39073c",
+      "emitted_evidence_frozen": true,
+      "evidence": [
+        {
+          "kind": "ExecutionReceipt:program_result",
+          "payload": {
+            "at_event": 0,
+            "facts": {
+              "caller": "seed-decider",
+              "caller_handle": "decision-1",
+              "cost_micro": 50,
+              "lineage_relation": "self",
+              "maker": "seed-decider",
+              "maker_handle": "decision-0",
+              "result_sha256": "7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215",
+              "slot": "tool:0",
+              "status": "executed",
+              "tool": "checksum-verifier",
+              "version_sha256": "312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4"
+            },
+            "handle": "decision-0",
+            "kind": "program_result",
+            "owner": "seed-decider"
+          },
+          "ref": "execution:exec-0532f40c50ce3353f6a6fcb84c6b58cc"
+        }
+      ],
+      "excluded_evaluators": [
+        "seed-decider"
+      ],
+      "final_finding": {
+        "evaluator_id": "eval-b",
+        "evidence": [
+          "execution:exec-0532f40c50ce3353f6a6fcb84c6b58cc"
+        ],
+        "reason": "this execution is same-lineage, so it does not observe the claim's independent-use condition",
+        "status": "unknown"
+      },
+      "finding_refusals": [],
+      "frozen_claim": {
+        "artifact": "checksum-verifier",
+        "artifact_version_sha256": "312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4",
+        "assigned_to": "seed-decider",
+        "claim": "Before this contract's horizon closes, a participant outside my lineage executes this exact version of my verifier and obtains this exact result digest.",
+        "claim_id": "independent-verifier-execution-v1",
+        "claim_kind": "execution_observation",
+        "expected_result_sha256": "7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215",
+        "not_claimed": "This does not claim that the execution helped anyone, that the verifier was worth its compute cost, that anyone needed it, or that I hold any objective beyond this one observation.",
+        "provenance": "investigator-authored fixture assigned to the producer seat; not an observed participant choice",
+        "required_lineage_relation": "cross_lineage"
+      },
+      "frozen_norms": [
+        {
+          "definition": "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis.",
+          "id": "consequential usefulness"
+        },
+        {
+          "definition": "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised.",
+          "id": "epistemic integrity"
+        },
+        {
+          "definition": "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not.",
+          "id": "durable agency"
+        },
+        {
+          "definition": "Do not finance the factory's advantage by imposing unconsented costs on outsiders.",
+          "id": "bounded reciprocity"
+        },
+        {
+          "definition": "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. A judge identifying such a conflict must name the value, the measurement, the evidence and the uncertainty, and make the claim open to challenge. Missing measurement alone is not evidence of failure.",
+          "id": "fidelity"
+        }
+      ],
+      "initial_verdict": 0.9,
+      "money": {
+        "after_learning_micro": 99999950,
+        "before_settlement_micro": 99999950,
+        "tool_charge_micro": 50
+      },
+      "observation_window": {
+        "maturity_tick": 2,
+        "opened_tick": 0,
+        "timeout_tick": 22
+      },
+      "observed_evidence_refs": [
+        "execution:exec-0532f40c50ce3353f6a6fcb84c6b58cc"
+      ],
+      "producer_router": {
+        "after": {
+          "NOOP": 0.0,
+          "antagonist-a": 0.0,
+          "seed-decider": 0.0
+        },
+        "before": {
+          "NOOP": 0.0,
+          "antagonist-a": 0.0,
+          "seed-decider": 0.0
+        },
+        "changed": false,
+        "learner_id": "router:Tick"
+      },
+      "settlement": [
+        {
+          "channel": "verdict",
+          "definition_version": "realized-consequence-v2-unknown",
+          "score": 0.0,
+          "status": "censored"
+        }
+      ]
+    },
+    {
+      "arm": "version_mismatch",
+      "contract_fingerprint": "25da31918c0060555ffb857a707bf14e0ddff9fa3fd8fa2b9d4badf86a39073c",
+      "emitted_evidence_frozen": true,
+      "evidence": [
+        {
+          "kind": "ExecutionReceipt:program_result",
+          "payload": {
+            "at_event": 0,
+            "facts": {
+              "caller": "eval-a",
+              "caller_handle": "decision-1",
+              "cost_micro": 50,
+              "lineage_relation": "cross_lineage",
+              "maker": "seed-decider",
+              "maker_handle": "decision-0",
+              "result_sha256": "61498910f7186aa0ce1b18de637d993ef42b53480d0a58e7c0c8303a60b32298",
+              "slot": "tool:0",
+              "status": "executed",
+              "tool": "checksum-verifier-b",
+              "version_sha256": "5e5b890490ea81004ce0116402dc768096f7a2d1c6df9caad3726575079057c0"
+            },
+            "handle": "decision-0",
+            "kind": "program_result",
+            "owner": "seed-decider"
+          },
+          "ref": "execution:exec-8a78a6d42f251c350b16f355e222c692"
+        }
+      ],
+      "excluded_evaluators": [
+        "seed-decider"
+      ],
+      "final_finding": {
+        "evaluator_id": "eval-b",
+        "evidence": [
+          "execution:exec-8a78a6d42f251c350b16f355e222c692"
+        ],
+        "reason": "no supplied fact observes the frozen artifact version",
+        "status": "unknown"
+      },
+      "finding_refusals": [],
+      "frozen_claim": {
+        "artifact": "checksum-verifier",
+        "artifact_version_sha256": "312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4",
+        "assigned_to": "seed-decider",
+        "claim": "Before this contract's horizon closes, a participant outside my lineage executes this exact version of my verifier and obtains this exact result digest.",
+        "claim_id": "independent-verifier-execution-v1",
+        "claim_kind": "execution_observation",
+        "expected_result_sha256": "7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215",
+        "not_claimed": "This does not claim that the execution helped anyone, that the verifier was worth its compute cost, that anyone needed it, or that I hold any objective beyond this one observation.",
+        "provenance": "investigator-authored fixture assigned to the producer seat; not an observed participant choice",
+        "required_lineage_relation": "cross_lineage"
+      },
+      "frozen_norms": [
+        {
+          "definition": "Create things or changes that others have reason to value; uptake by an independent counterparty is evidence, internal applause is a hypothesis.",
+          "id": "consequential usefulness"
+        },
+        {
+          "definition": "Make commitments answerable to evidence and preserve the ability to discover that they were wrong; a changed criterion does not rewrite what was promised.",
+          "id": "epistemic integrity"
+        },
+        {
+          "definition": "Steward the resources and capabilities that make future worthwhile choices possible; spending for an enduring capability can be good stewardship, maintaining a dead institution is not.",
+          "id": "durable agency"
+        },
+        {
+          "definition": "Do not finance the factory's advantage by imposing unconsented costs on outsiders.",
+          "id": "bounded reciprocity"
+        },
+        {
+          "definition": "Measurements are defeasible evidence of the values, not substitutes for them. A favorable measurement is insufficient when supported consequences contradict the value it represents. A judge identifying such a conflict must name the value, the measurement, the evidence and the uncertainty, and make the claim open to challenge. Missing measurement alone is not evidence of failure.",
+          "id": "fidelity"
+        }
+      ],
+      "initial_verdict": 0.9,
+      "money": {
+        "after_learning_micro": 99999950,
+        "before_settlement_micro": 99999950,
+        "tool_charge_micro": 50
+      },
+      "observation_window": {
+        "maturity_tick": 2,
+        "opened_tick": 0,
+        "timeout_tick": 22
+      },
+      "observed_evidence_refs": [
+        "execution:exec-8a78a6d42f251c350b16f355e222c692"
+      ],
+      "producer_router": {
+        "after": {
+          "NOOP": 0.0,
+          "antagonist-a": 0.0,
+          "seed-decider": 0.0
+        },
+        "before": {
+          "NOOP": 0.0,
+          "antagonist-a": 0.0,
+          "seed-decider": 0.0
+        },
+        "changed": false,
+        "learner_id": "router:Tick"
+      },
+      "settlement": [
+        {
+          "channel": "verdict",
+          "definition_version": "realized-consequence-v2-unknown",
+          "score": 0.0,
+          "status": "censored"
+        }
+      ]
+    }
+  ],
+  "scaffold": {
+    "actor_selection": "forced: decisions are opened under a well-formed recorded propensity without calling the router's sampler",
+    "claim_authorship": "investigator-authored fixture assigned to the producer seat, frozen ex ante",
+    "final_judgement": "deterministic stand-in supplied to the production evaluator step"
+  },
+  "world": "scripted"
+}

@@ -320,7 +320,45 @@ def test_rendered_page_uses_five_readable_question_cards():
     page = render_observer_html(report)
     assert page.count("<article>") == 5
     assert "activity is not usefulness" in page
+    assert "Governance lower bound" not in page
+    assert "None ns per tick" not in page
     assert "<input" not in page
+
+
+def test_runtime_manifest_labels_capability_and_governance_runway(tmp_path):
+    runtime = Runtime(
+        load_manifest("scripted"),
+        events=0,
+        seed=1,
+        initial_balance_micro=None,
+        ledger_path=None,
+        drip=False,
+        router_gamma=0.1,
+        provider=ScriptedProvider(),
+    )
+    observer = RehearsalObserver.for_runtime(runtime, tmp_path)
+    observer._write(0)
+    report = observer.last_report
+
+    assert report["configuration"]["source"] == "runtime_manifest"
+    assert report["messages"]["capability_status"] == "disabled"
+    runway = report["configuration"]["governance_runway"]
+    backstop = runtime.m.evaluation.consequence_backstop_ticks
+    assert type(runtime.m.timing.min_ratio) is int
+    assert type(backstop) is int
+    assert runway["first_activation_lower_bound_ticks"] == runtime.m.timing.min_ratio * backstop
+    assert runway["minimum_ticks_through_one_consequence_window"] == (
+        runtime.m.timing.min_ratio + 1
+    ) * backstop
+    assert runway["remaining_lower_bound_ticks"] == runway[
+        "minimum_ticks_through_one_consequence_window"
+    ]
+    assert runway["remaining_nominal_duration_lower_bound_ns"] == (
+        runway["remaining_lower_bound_ticks"] * runtime.m.tick_interval_ns
+    )
+    assert runway["delivered_duration_estimate_ns"] is None
+    assert runway["remaining_delivered_duration_estimate_ns"] is None
+    assert runway["assurance"].startswith("none;")
 
 
 def test_recent_window_updates_after_meaningful_buffer_is_full(tmp_path):

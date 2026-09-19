@@ -386,7 +386,7 @@ head is the hash of the ledger file's bytes.
 A population program registered as a tool can be put up for sale with a
 `service` proposal (`program_id`, `price_micro`, `description`). Registration
 costs one novelty trial, freezes the program's source in a `service.registered`
-ledger item, and makes `POST /service/<program_id>` a paid endpoint under x402:
+ledger item, and supplies `POST /service/<program_id>` to an existing seller host under x402:
 an unpaid request gets the v2 quote (exact canonical Base USDC, the manifest's
 `treasury.reserve_address` as `payTo`, the price as the amount); a paid request
 carries the buyer's signed EIP-3009 authorization, which `runtime/seller.py`
@@ -395,7 +395,11 @@ recovering its signer, then hands to the facilitator for settlement. Only an
 explicit, matching settlement runs the program, in the same jail population
 tools use, and returns its output with a `PAYMENT-RESPONSE` header.
 `GET /services` lists the catalogue (id, description, price, version, argument
-schema; never source).
+schema; never source). Registration alone provides no hosting or public index
+listing. For a launched world, configure the seller, public HTTPS route and
+income spool before launch. The host then refreshes population registrations
+without requiring the architect to select or publish each product. Running
+that fixed interface is infrastructure, not permission to steer the population.
 
 The facilitator is pinned at launch. The runtime reads
 `FACTORYLAB_FACILITATOR_URL` (default `https://x402.org/facilitator`) once, when
@@ -420,17 +424,23 @@ the `factory` user and reads the sealed ledger the way the wake does:
 
 Each settled call is appended to the receipt spool before the program runs, and
 the runtime (started with `FACTORYLAB_INCOME_SPOOL=/srv/factorylab/runs/funded.income.jsonl`
-in its environment) books every complete receipt line on its next tick as an
-`income.earned {service, micro, tx, payer, program, version}` ledger item, through
-the recovery journal, with the consumed offset in the treasury snapshot so no
-receipt is booked twice. A paid call served in-process (tests, or a future loop
-hook) books through `Treasury.earn` directly. The pots view gains three classes:
+in its environment) collects complete receipt lines as claims through the
+recovery journal. Independent chain confirmation makes them `income.earned`;
+the consumed spool offset and payment identity prevent duplicate booking.
+Confirmed income increases the owner's compute entitlement and reserve custody,
+but purchasing provider credit remains a separate operation. The pots view gains three classes:
 `earned_micro` (x402 income), `subsidy_micro` (the first complete observation of
 the architect's compute credit, ledgered once as `treasury.subsidy`) and
 `converted_from_principal_micro` (Venice tranches confirmed from trading capital).
-Crediting the earning seat's entitlement is C10's job and lands with it. Publish
-the port through a reverse proxy of your own choosing; the server itself never
+Publish the port through a reverse proxy configured before launch; the server itself never
 reads a key, never signs, and exits 2 when the manifest names no reserve address.
+
+`GET /services` is local catalogue discovery, not evidence of public x402 index
+listing or external demand. Before claiming self-support, verify separately:
+public reachability, index discovery, an unrelated buyer's payment, delivery,
+chain-confirmed income, and a later inference purchase funded from that income.
+An offline fake rail proves bookkeeping only. No paid settlement or provider
+purchase is authorized by this runbook.
 
 ### The one control: kill
 

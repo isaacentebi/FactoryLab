@@ -141,7 +141,7 @@ def evaluator_answer_schema(
     return {
         "type": "object",
         "properties": properties,
-        "required": ["rationale"],
+        "required": ["rationale", "verdict"] if include_realized else ["rationale"],
     }
 
 

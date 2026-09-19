@@ -467,7 +467,9 @@ def _internal_metered_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any
     }
 
 
-def _message_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+def _message_report(
+    rows: Iterable[Mapping[str, Any]], address_enabled: bool | None = None
+) -> dict[str, Any]:
     messages = [
         row for row in rows
         if "message" in _kind(row)
@@ -486,6 +488,24 @@ def _message_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         if _kind(row) not in {"address.delivered", "address.refused", "address.replayed"}
         and _truth(row, "delivered") is None and _status(row) == "unknown"
     ]
+    if address_enabled is False:
+        capability_status = "disabled"
+        capability_label = "address capability not published in this run"
+    elif address_enabled is True and not messages:
+        capability_status = "enabled_but_unused"
+        capability_label = (
+            "address capability published but no use observed in the supplied/recent "
+            "evidence window"
+        )
+    elif address_enabled is True:
+        capability_status = "enabled_and_used"
+        capability_label = "address capability published and use observed"
+    elif messages:
+        capability_status = "observed_use_metadata_unknown"
+        capability_label = "address use observed; configuration metadata unavailable"
+    else:
+        capability_status = "unknown_metadata"
+        capability_label = "address configuration metadata unavailable; zero is not non-use"
     return {
         "attempted": len(messages),
         "delivered": len(delivered),
@@ -495,6 +515,8 @@ def _message_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         "refs": [_ref(row) for row in messages if _ref(row) is not None],
         "delivery_evidence_refs": [_ref(row) for row in delivered if _ref(row) is not None],
         "explicit_unknown_refs": [_ref(row) for row in explicit_unknown if _ref(row) is not None],
+        "capability_status": capability_status,
+        "capability_label": capability_label,
     }
 
 
@@ -806,9 +828,17 @@ def _questions(
     return result
 
 
-def build_report(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def build_report(
+    rows: Sequence[Mapping[str, Any]], *, configuration: Mapping[str, Any] | None = None
+) -> dict[str, Any]:
     """Aggregate exported facts into a static report without making causal claims."""
     rows = [row for row in rows if isinstance(row, Mapping)]
+    configuration = dict(configuration) if isinstance(configuration, Mapping) else None
+    address_enabled = (
+        configuration.get("address_enabled")
+        if configuration is not None and type(configuration.get("address_enabled")) is bool
+        else None
+    )
     income = _income_report(rows)
     costs = _cost_report(rows)
     reusable = _reusable_report(rows)
@@ -824,7 +854,11 @@ def build_report(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             "explicit normalized status fields on supplied action/outcome rows; "
             "routine rows without status are excluded"
         ),
-        "messages": _message_report(rows),
+        "configuration": configuration or {
+            "source": "unavailable",
+            "address_enabled": None,
+        },
+        "messages": _message_report(rows, address_enabled),
         "reusable_calls": reusable,
         "assessment_changes": assessments,
         "forecast_learning": _forecast_learning(rows),

@@ -1488,6 +1488,24 @@ class FeedbackMixin:
             if self.ticks_consumed < contract.due_tick or contract.final_requested:
                 continue
             evidence = public_evidence(self, contract)
+            # What the evidence set is, and when it was taken. Frozen here, at
+            # assembly, and carried unchanged in the emitted event: a judge that
+            # cannot tell a complete record from a partial one reads absence as
+            # refutation. A later commission for the same contract (a bounded
+            # retry) assembles its evidence again and takes its own snapshot;
+            # this one is never re-timed.
+            evidence_snapshot = {
+                "as_of_tick": self.ticks_consumed,
+                "event_cursor": len(self.events_log),
+                "receipt_cursor": self.consequences.receipts.execution_count(),
+                "observation_due_tick": contract.due_tick,
+                "assessment_timeout_tick": contract.close_tick,
+                "scope": (
+                    "Attributable public observations addressed to this contract since its "
+                    "frozen baseline, as of as_of_tick. Not an exhaustive record of the "
+                    "external world and not a proof that anything else did not happen."
+                ),
+            }
             excluded = {contract.producer_id}
             excluded.update(filter(None, (
                 self.handle_to_assembly.get(ancestor)
@@ -1513,11 +1531,12 @@ class FeedbackMixin:
                 "excluded_evaluators": sorted(excluded),
                 "contract": asdict(contract),
                 "evidence": evidence,
+                "evidence_snapshot": evidence_snapshot,
             })
 
     def _complete_grounded_evaluation(
         self, judge_handle: str, evaluator_id: str, about: str | None, ret: Any,
-        evidence: Any,
+        evidence: Any, snapshot: Any = None,
     ) -> None:
         """Settle a producer only from a fresh judge's cited, supplied public evidence."""
         contract = self.grounded_pending.get(str(about))
@@ -1564,9 +1583,19 @@ class FeedbackMixin:
             "status": status, "score": score, "evidence": list(cited),
             "reason": reason, "ts": self.clock.now_ns,
         })
+        finding = {"status": status, "score": score,
+                   "evidence": list(cited), "reason": reason}
         if score is None:
-            self._settle_unmeasured(judge_handle, CH_CONFORMITY, reason)
             self._grounded_unknown(contract, reason)
+            # An unknown answered with facts in hand is still a claim, and it is
+            # released for review so an evasive one can be answered where it counts.
+            # The producer stays unmeasured either way. An unknown with nothing
+            # supplied to read keeps §6.B's no-penalty answer.
+            if evidence and self._release_grounded_finding(
+                contract, judge_handle, evaluator_id, ret, evidence, snapshot, finding
+            ):
+                return
+            self._settle_unmeasured(judge_handle, CH_CONFORMITY, reason)
             return
         if self.queue.get(contract.handle).status in (
             SettleStatus.PENDING, SettleStatus.TIMED_OUT
@@ -1579,16 +1608,36 @@ class FeedbackMixin:
         self.pending.pop(contract.handle, None)
         self.grounded_pending.pop(contract.handle, None)
         self.grounded_closed.add(contract.handle)
-        verdict = _as_unit(ret.outputs.get("verdict"))
-        if verdict is None:
+        if not self._release_grounded_finding(
+            contract, judge_handle, evaluator_id, ret, evidence, snapshot, finding
+        ):
             self.queue.settle(judge_handle, channel=CH_CONFORMITY, score=0.0,
                               status=SettleStatus.SETTLED,
                               definition_version=DEF_CONFORMITY, sampling_ref=None)
             self.stats.conformities += 1
             self.window.outcomes += 1
-            return
+
+    def _release_grounded_finding(
+        self, contract: GroundedContract, judge_handle: str, evaluator_id: str, ret: Any,
+        evidence: Any, snapshot: Any, finding: dict[str, Any],
+    ) -> bool:
+        """Release one final grounded finding for review, under a delayed outside fact.
+
+        Guarantees the announced verdict carries the frozen facts, snapshot and
+        contract the finding rests on, that its conformity stays open for a
+        reviewer, and that the judge is committed under the ordinary normative key:
+        it settles against the charter's later blame on the return it judged, never
+        against its own number. That fact bears on the return, not on whether this
+        reading of the evidence was right; nothing here validates the finding.
+        Answers whether a verdict was stated at all.
+        """
+        verdict = _as_unit(ret.outputs.get("verdict"))
+        if verdict is None:
+            return False
         self.pending[judge_handle] = PendingJudgement(
             judge_handle, CH_CONFORMITY, self.n, opened_at_tick=self.ticks_consumed)
+        self._commit_verdict_without_payoff(
+            judge_handle, evaluator_id, contract.handle, verdict)
         self._emit(EventKind.VERDICT, {
             "about_handle": contract.handle,
             "evaluator_handle": judge_handle,
@@ -1597,13 +1646,14 @@ class FeedbackMixin:
             "payoff_handle": None,
             "rationale": str(ret.outputs.get("rationale", ""))[:2000],
             "producer_outputs": contract.producer_outputs,
-            "realized_finding": {"status": status, "score": score,
-                                   "evidence": list(cited), "reason": reason},
+            "realized_finding": finding,
             "grounded_contract": asdict(contract),
             "grounded_evidence": evidence,
+            "grounded_evidence_snapshot": snapshot,
             "propensity": self._public_propensity(judge_handle),
             "grounded_consequence": True,
         })
+        return True
 
     def _censor_stale_judgements(self) -> None:
         stale = [

@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from factorylab.charter.charter import Norm
+from factorylab.charter.windows import MetricWindow
+from factorylab.cortex.assembly import _validate_return, validate_schema
 from factorylab.cortex.registration import AssemblyProposal
 from factorylab.cortex.request import ChildRequest, Return
 from factorylab.kernel.events import Event, EventKind
@@ -17,9 +19,9 @@ from factorylab.runtime.grounded import (
     parse_finding,
     public_evidence,
 )
-from factorylab.runtime.loop import Runtime
+from factorylab.runtime.loop import Runtime, _grounded_review
 from factorylab.runtime.resume import decode, encode, restore_runtime, runtime_state
-from factorylab.runtime.shared import CH_CONFORMITY, CH_VERDICT
+from factorylab.runtime.shared import CH_CONFORMITY, CH_FAST, CH_VERDICT
 from factorylab.runtime.worlds import load_manifest
 from factorylab.settlement.lots import Payoff
 from factorylab.settlement.receipts import execution_receipt
@@ -611,12 +613,20 @@ def test_failed_final_evaluator_is_rejected_even_if_called_post_hoc():
     assert rt.queue.history(judge)[-1].status is SettleStatus.INAPPLICABLE
 
 
-def test_realized_field_is_published_only_on_the_final_commission_schema():
+@pytest.mark.parametrize("status", ["supported", "contrary", "unknown"])
+def test_realized_field_is_published_only_on_the_final_commission_schema(status):
     legacy = evaluator_answer_schema({}, {})
     realized = evaluator_answer_schema({}, {}, include_realized=True)
     assert "realized_consequence" not in legacy["properties"]
     assert "realized_consequence" in realized["properties"]
     assert "realized_consequence" not in realized["required"]
+    assert "verdict" not in legacy["required"]
+    answer = {"rationale": "Read the supplied evidence", "realized_consequence": {
+        "status": status, "score": 0.8, "evidence": ["event:7"], "reason": "Evidence"}}
+    with pytest.raises(ValueError, match="required field absent"):
+        validate_schema(answer, realized)
+    validate_schema({**answer, "verdict": 0.8}, realized)
+    _validate_return({"status": "cannot", "reason": "declined"}, realized)
 
 
 def test_one_malformed_final_gets_one_bounded_fresh_retry():
@@ -744,3 +754,220 @@ def test_child_producer_freezes_before_invoke_and_waits_for_grounded_feedback():
     assert rt.grounded_pending[child].event_cursor < len(rt.events_log) + 1
     assert rt.queue.get(child).status is SettleStatus.PENDING
     assert not rt.queue.history(child)
+
+
+class _EvidenceReadingJudge(_GroundedProvider):
+    """A final judge whose words never change and whose finding follows the evidence."""
+
+    meta_inputs = None
+
+    def _evaluate(self, req, inputs):
+        grounded = inputs.get("realized_consequence")
+        if grounded is None:
+            return {"verdict": 0.5, "rationale": "provisional opinion", "forecasts": []}
+        rows = grounded["evidence"]
+        adopted = any(
+            (row.get("payload") or {}).get("facts", {}).get("result") == "adopted"
+            for row in rows
+        )
+        return {
+            "verdict": 0.8,
+            "rationale": "the same words either way",
+            "realized_consequence": {
+                "status": "supported" if adopted else "contrary",
+                "score": 0.8 if adopted else 0.0,
+                "evidence": [row["ref"] for row in rows],
+                "reason": "read from the supplied receipts",
+            },
+        }
+
+    def _meta(self, inputs):
+        self.meta_inputs = inputs
+        return {"conformity": 0.7, "rationale": "scripted meta"}
+
+
+class _UnknownWithEvidence(_EvidenceReadingJudge):
+    def _meta(self, inputs):
+        self.meta_inputs = inputs
+        return {"conformity": 0.2, "rationale": "the evidence was not read"}
+
+    def _evaluate(self, req, inputs):
+        grounded = inputs.get("realized_consequence")
+        if grounded is None:
+            return {"verdict": 0.5, "rationale": "provisional opinion", "forecasts": []}
+        return {
+            "verdict": 0.8,
+            "rationale": "the same words either way",
+            "realized_consequence": {
+                "status": "unknown", "evidence": [],
+                "reason": "the receipts do not decide the frozen claim",
+            },
+        }
+
+
+def _final_judgement(rt, result=None, *, action="eval-b"):
+    """Run the production route: commission, real final evaluator, cascade release."""
+    producer, contract = _open_contract(rt)
+    rt._start_return(producer)
+    if result is not None:
+        execution_receipt(rt.consequences.receipts, kind="program_result", handle=producer,
+                          owner="seed-decider", at_event=rt.n, facts={"result": result})
+    rt.ticks_consumed = contract.due_tick
+    rt._settle_due_grounded()
+    commission = next(e for e in reversed(rt.internal)
+                      if e.payload.get("grounded_consequence")
+                      and e.payload.get("about_handle") == producer)
+    judge = _consequence_decision(rt, action, CH_CONFORMITY)
+    rt._evaluator_step(commission, judge, SimpleNamespace(chosen=action),
+                       rt.queue.get(judge).deadline_ns)
+    verdict = next((e for e in reversed(rt.internal)
+                    if e.kind is EventKind.VERDICT
+                    and e.payload.get("about_handle") == producer), None)
+    return producer, judge, verdict
+
+
+def _release(rt, event):
+    """Release one verdict through the real cascade, as the loop routes it upward."""
+    assert rt._cascade_arrival(event) is None
+    later = replace(event, id=f"{event.id}-later", payload=dict(event.payload),
+                    ts_ns=event.ts_ns + 1000 * rt.tick_clock.interval_ns)
+    released = rt._cascade_arrival(later)
+    assert released is not None
+    return released
+
+
+def _meta_review(rt, released, *, action="meta-a", channel=CH_FAST):
+    handle = _consequence_decision(rt, action, channel)
+    rt._meta_step(released, handle, SimpleNamespace(chosen=action),
+                  rt.queue.get(handle).deadline_ns)
+    return handle
+
+
+def test_the_meta_reads_the_final_judges_evidence_and_frozen_norms_not_the_live_charter():
+    supported, contradicted = {}, {}
+    for result, seen in (("adopted", supported), ("ignored", contradicted)):
+        provider = _EvidenceReadingJudge()
+        rt = _runtime(provider=provider)
+        _producer, judge, verdict = _final_judgement(rt, result)
+        _meta_review(rt, _release(rt, verdict))
+        seen.update(provider.meta_inputs)
+        assert seen["verdict"]["verdict"] == 0.8
+        assert seen["verdict"]["rationale"] == "the same words either way"
+        assert seen["realized_consequence"]["frozen_norms"]
+        assert "charter" not in seen and "world" not in seen
+        assert seen["realized_consequence"]["producer_claim"] == {"action": "investigate"}
+        commission = next(e for e in rt.internal if e.payload.get("evidence_snapshot"))
+        snapshot = seen["realized_consequence"]["evidence_snapshot"]
+        assert snapshot == dict(commission.payload["evidence_snapshot"])
+        assert (seen["realized_consequence"]["observation_contract"]["due_tick"]
+                == commission.payload["contract"]["due_tick"])
+        assert seen["realized_consequence"]["evidence_omitted"] == 0
+        assert judge
+    assert supported["realized_consequence"]["finding"]["status"] == "supported"
+    assert contradicted["realized_consequence"]["finding"]["status"] == "contrary"
+    assert (supported["realized_consequence"]["evidence"]
+            != contradicted["realized_consequence"]["evidence"])
+    # A finding that cites more rows than the context bound keeps every cited row.
+    rows = [{"ref": f"execution:{i}", "kind": "ExecutionReceipt:program_result"}
+            for i in range(60)]
+    wide = _grounded_review({
+        "realized_finding": {"status": "supported", "score": 0.5,
+                             "evidence": [row["ref"] for row in rows[:50]]},
+        "grounded_contract": {"norms": [], "producer_outputs": {}},
+        "grounded_evidence": rows,
+    })
+    assert [row["ref"] for row in wide["evidence"][:50]] == [row["ref"] for row in rows[:50]]
+    assert wide["evidence_omitted"] == 60 - len(wide["evidence"])
+
+
+def _priced_runtime(provider):
+    """A runtime whose cards measure one window, so a window can really close."""
+    manifest = load_manifest("scripted")
+    manifest = replace(
+        manifest,
+        charter=replace(manifest.charter, cards=tuple(
+            replace(card, window=MetricWindow("windows", 1, None))
+            for card in manifest.charter.cards)),
+        evaluation=replace(
+            manifest.evaluation, producer_feedback="realized",
+            grounded_horizon_ticks=2, verdict_timeout_events=3),
+    )
+    return _consequence_runtime(manifest=manifest, provider=provider)
+
+
+def _close_subjects_window(rt, handle, *, ok):
+    """Close the judged return's own pricing window on a real, attributable measurement."""
+    sample = rt._contribution(handle, "producer")
+    sample["invocations"], sample["ok"], sample["cost"] = 10, ok, 1_000
+    rt.window.invocations, rt.window.ok = 10, ok
+    rt._derive_regions()
+    rt._close_price_window()
+
+
+def test_the_final_grounded_judge_settles_against_an_independent_normative_fact():
+    rt = _runtime(provider=_EvidenceReadingJudge())
+    _producer, judge, verdict = _final_judgement(rt, "adopted")
+    meta = _meta_review(rt, _release(rt, verdict))
+    commitment = rt.pending.get(f"verdict.norm:{judge}")
+    assert commitment is not None and commitment.judge == judge
+    assert commitment.awaits_payoff is False and commitment.q == 0.8
+    # The commitment is keyed to the judged return's own opening and window, taken
+    # when that return opened, not to the tick the late judge spoke at.
+    assert commitment.opened_at_tick == 0 and rt.ticks_consumed == 2
+    assert rt.pending_meta.get(judge) == [(meta, 0.7)]
+    rt.ticks_consumed += rt.ev.consequence_backstop_ticks + 1
+    rt._settle_due_verdicts()
+    # No window ever judged this return, so there is no fact: the judge is graded
+    # once, unmeasured, and the meta waiting on it is released with it rather than
+    # left for the expiration path to censor. Nothing is imputed.
+    assert judge in rt.verdicts_graded and judge not in rt.pending_meta
+    assert judge not in rt.verdict_outcomes
+    assert rt.queue.get(meta).status is not SettleStatus.PENDING
+    assert not any(item.definition_version == "censored-v1"
+                   for item in rt.queue.history(meta))
+
+
+@pytest.mark.parametrize("ok, blamed, outcome", [(10, 0.0, 1), (2, 1.0, 0)])
+def test_a_closed_window_decides_the_final_judge_and_the_meta_that_conformed(
+    ok, blamed, outcome
+):
+    rt = _priced_runtime(_EvidenceReadingJudge())
+    producer, judge, verdict = _final_judgement(rt, "adopted")
+    _close_subjects_window(rt, producer, ok=ok)
+    meta = _meta_review(rt, _release(rt, verdict))
+    commitment = rt.pending[f"verdict.norm:{judge}"]
+    terms = rt._penalty_terms(commitment.cards, commitment.about)
+    weight = sum(term["weight"] for term in terms)
+    share = sum(term["weight"] * term["share"] for term in terms) / weight if weight else 0.0
+    assert [term["window"] for term in terms] == [rt.price_origins[producer]["origin"]]
+    assert share == blamed
+    rt.ticks_consumed += rt.ev.consequence_backstop_ticks + 1
+    rt._settle_due_verdicts()
+    y, _at, anchor = rt.verdict_outcomes[judge]
+    assert y == outcome and anchor == commitment.handle
+    graded = rt.queue.history(meta)[-1]
+    assert graded.definition_version == "meta-consequence-v1"
+    assert graded.status is SettleStatus.SETTLED
+    assert (graded.score > 0.75) is bool(outcome)
+
+
+def test_an_evidence_present_unknown_stays_reviewable_without_scoring_the_producer():
+    rt = _runtime(provider=_UnknownWithEvidence())
+    producer, judge, verdict = _final_judgement(rt, "adopted")
+    assert verdict is not None and verdict.payload["realized_finding"]["status"] == "unknown"
+    assert verdict.payload["realized_finding"]["score"] is None
+    assert rt.queue.history(producer)[0].definition_version == f"{GROUNDED_DEFINITION}-unknown"
+    assert f"verdict.norm:{judge}" in rt.pending
+    _meta_review(rt, _release(rt, verdict))
+
+
+def test_an_evasive_unknown_can_be_corrected_where_it_counts():
+    rt = _runtime(provider=_UnknownWithEvidence())
+    _producer, judge, verdict = _final_judgement(rt, "adopted")
+    assert rt.queue.get(judge).status is SettleStatus.PENDING
+    meta = _meta_review(rt, _release(rt, verdict))
+    meta_event = next(e for e in reversed(rt.internal) if e.kind is EventKind.META_VERDICT)
+    rt._deliver_meta_verdict(meta_event)
+    settled = rt.queue.history(judge)[-1]
+    assert settled.status is SettleStatus.SETTLED and settled.sampling_ref == meta
+    assert settled.score <= 0.3 and meta

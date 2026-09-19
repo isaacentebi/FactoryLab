@@ -1616,8 +1616,9 @@ status survive checkpoints.
 ### The service seller
 
 A `service` proposal, `{"kind": "service", "program_id", "price_micro",
-"description"}` with exactly those keys, sells a registered population tool's
-output to outside buyers over x402 (contract C11). `program_id` must be the
+"description"}` with exactly those keys, registers a frozen, priced population
+tool for sale over x402 (contract C11). Registration does not start a seller
+host or publish it to a discovery index. `program_id` must be the
 slug of a tool the population registered (a `population_tools` entry, not a
 program seat), `price_micro` an integer in `[1, 10,000,000]`, and the host
 must have the jail. Admission costs one novelty trial, registers
@@ -1657,21 +1658,16 @@ the spool on every treasury tick through the recovery journal
 its snapshot carries: only newline-terminated lines are read, a spool shorter
 than the offset is treated as replaced and read from nowhere, and the consumed
 offset is part of the treasury snapshot, so no receipt is booked twice. Each
-complete receipt becomes `income.earned {service, micro, tx, payer, program,
-version, served_ns}` through `Treasury.earn`, which a paid call served
-in-process (tests, or a future loop hook) reaches directly. `earn` ledgers the
-item and adds to `earned_micro`; it does not credit the integer wallet
-balance. The USDC itself arrived at the reserve address and appears in the
-reserve pot when the rail is next observed. On `main` the loop books the same
-receipts through `_collect_income` and credits the seat that owns the
-service's program (`_book_income`, reason `income.earned:<service>`) as a
-pool-to-seat reclassification bounded by the pool, like a paid-off credit: the
-root wallet does not grow, and a service whose program has no live owner
-leaves the income in the pool (reviewer P2-05). The R2-B economy change
-(`docs/audits/v5/gpt6-second-reading-triage.md`) books earned income into the
-root wallet as new money, like venue P&L, credits the seller from that new
-money, and treats a settled receipt as a paid-off consequence; landing in the
-R2-B economy PR, not merged at the time of writing.
+complete receipt first becomes a claim, not earned income. Only independent
+chain confirmation promotes it to `income.earned`. `_collect_income` books that
+confirmed payment once through `_book_income`: compute authority grows by the
+verified amount, custody remains `base_reserve`, and the live owner of the
+service's program receives the corresponding entitlement. Without a live owner,
+the authority remains in the pool. Duplicate receipts cannot mint another
+payment. This does not replenish provider credit: a separate confirmed purchase
+must convert reserve USDC into usable inference. Venue P&L is a venue-custody
+claim and does not itself increase compute authority. See the receipt identity
+and verification contracts below for the current rules.
 
 ### The three income classes
 

@@ -3,13 +3,13 @@
 from types import SimpleNamespace
 
 from factorylab.cortex.registration import AssemblyProposal
-from factorylab.cortex.request import ChildRequest
+from factorylab.cortex.request import ChildRequest, Return
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.learners.router import Sample
 from factorylab.runtime.grounded import public_evidence
 from factorylab.runtime.resume import decode, encode
-from factorylab.runtime.shared import CH_VERDICT, NOOP
+from factorylab.runtime.shared import CH_CONFORMITY, CH_FAST, CH_VERDICT, NOOP
 from tests.runtime.test_grounded_feedback import (
     _GroundedProvider,
     _open_contract,
@@ -243,3 +243,52 @@ def test_final_commission_uses_one_additive_router_but_recursive_verdict_uses_al
     rt._route(recursive)
     assert routed == [state.learner.id for state in rt.routers["Verdict"]]
     assert "meta-a" in rt._universe_for("Verdict", recursive)
+
+
+def test_recursive_grounded_prompt_reviews_the_immediate_meta(monkeypatch):
+    rt = _runtime()
+    immediate = _consequence_decision(rt, "meta-a", CH_CONFORMITY)
+    rt.handle_to_assembly[immediate] = "meta-a"
+    event = Event(
+        "recursive-grounded-meta", EventKind.META_VERDICT, rt.clock.now_ns,
+        {
+            "about": "original-final-judge",
+            "by": immediate,
+            "tier": 2,
+            "score": 0.7,
+            "rationale": "the final judge used the frozen evidence correctly",
+            "evaluator_handle": "original-final-judge",
+            "realized_finding": {
+                "status": "supported", "score": 0.9,
+                "evidence": ["event:7"], "reason": "receipt supports the claim",
+            },
+            "grounded_contract": {
+                "norms": ["useful inquiry"],
+                "producer_outputs": {"action": "investigate"},
+            },
+            "grounded_evidence": [{"ref": "event:7", "kind": "ForecastSettled"}],
+        },
+        "runtime",
+    )
+    captured = []
+    request = rt._request
+
+    def capture(*args, **kwargs):
+        result = request(*args, **kwargs)
+        captured.append(result)
+        return result
+
+    monkeypatch.setattr(rt, "_request", capture)
+    reviewer = _consequence_decision(rt, "meta-b", CH_FAST)
+    rt._meta_step(
+        event, reviewer, SimpleNamespace(chosen="meta-b"),
+        rt.queue.get(reviewer).deadline_ns,
+        returned=Return(reviewer, {"conformity": 0.8, "rationale": "conforms"}, 0, "ok"),
+    )
+
+    req = captured[-1]
+    assert req.inputs["meta_verdict"]["by"] == immediate
+    assert req.inputs["realized_consequence"]["finding"]["score"] == 0.9
+    assert "Assess the immediate meta verdict in meta_verdict" in req.description
+    assert "original finding as a new first-tier review" in req.description
+    assert "Assess the final grounded judgement" not in req.description

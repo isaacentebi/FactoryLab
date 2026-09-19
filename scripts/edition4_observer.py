@@ -355,6 +355,53 @@ def _authoritative_cost_per_useful(
     )
 
 
+def _runtime_configuration(runtime: Any) -> dict[str, Any]:
+    """Return only manifest facts needed to interpret this rehearsal's diagnostics."""
+    manifest = runtime.m
+    backstop = manifest.evaluation.consequence_backstop_ticks
+    min_ratio = manifest.timing.min_ratio
+    activation = min_ratio * backstop
+    intervals = {"declared_ns": manifest.tick_interval_ns, "measured_ns": None, "samples": 0}
+    clock = getattr(runtime, "tick_clock", None)
+    method = getattr(clock, "intervals", None)
+    if callable(method):
+        observed = method()
+        if isinstance(observed, Mapping):
+            intervals = {
+                "declared_ns": observed.get("declared_ns", manifest.tick_interval_ns),
+                "measured_ns": observed.get("measured_ns"),
+                "samples": observed.get("samples", 0),
+            }
+    delivered = intervals["measured_ns"]
+    if type(delivered) is not int or delivered <= 0:
+        delivered = None
+    nominal = intervals["declared_ns"]
+    if type(nominal) is not int or nominal <= 0:
+        nominal = manifest.tick_interval_ns
+    total = activation + backstop
+    return {
+        "source": "runtime_manifest",
+        "address_enabled": manifest.tools.address_enabled,
+        "governance_runway": {
+            "basis": "manifest lower bound plus delivered tick interval evidence",
+            "first_activation_lower_bound_ticks": activation,
+            "post_activation_consequence_window_ticks": backstop,
+            "minimum_ticks_through_one_consequence_window": total,
+            "nominal_interval_ns": nominal,
+            "delivered_interval_ns": delivered,
+            "delivered_interval_samples": intervals["samples"],
+            "nominal_duration_lower_bound_ns": total * nominal,
+            "delivered_duration_estimate_ns": (
+                total * max(nominal, delivered) if delivered is not None else None
+            ),
+            "assurance": (
+                "none; elapsed ticks do not assure a proposal, approval, activation, "
+                "or observed consequence"
+            ),
+        },
+    }
+
+
 def _question_title(name: str) -> str:
     return name.replace("_", " ").capitalize()
 
@@ -398,6 +445,31 @@ def render_observer_html(report: Mapping[str, Any]) -> str:
         f"Known cost (micro-USD): {html.escape(str(costs.get('known_micro_total', 'unknown')))}</p>"
         f"<p>Status counts: {status_text}</p>"
     )
+    configuration = report.get("configuration", {})
+    messages = report.get("messages", {})
+    runway = (
+        configuration.get("governance_runway", {})
+        if isinstance(configuration, Mapping)
+        else {}
+    )
+    if isinstance(messages, Mapping):
+        summary += (
+            "<p>Addressing: "
+            + html.escape(str(messages.get("capability_label", "metadata unavailable")))
+            + "</p>"
+        )
+    if isinstance(runway, Mapping) and runway:
+        summary += (
+            "<p>Governance lower bound: "
+            + html.escape(str(runway.get("minimum_ticks_through_one_consequence_window")))
+            + " ticks through one post-activation consequence window · nominal/delivered "
+            + html.escape(str(runway.get("nominal_interval_ns")))
+            + "/"
+            + html.escape(str(runway.get("delivered_interval_ns")))
+            + " ns per tick. "
+            + html.escape(str(runway.get("assurance", "No assurance.")))
+            + "</p>"
+        )
     caveats = report.get("caveats", [])
     caveat_html = "".join(f"<li>{html.escape(str(item))}</li>" for item in caveats)
     title = html.escape(str(report.get("report_kind", "Edition 4 rehearsal observer")))
@@ -425,6 +497,7 @@ class RehearsalObserver:
         output_dir: str | Path,
         *,
         admission_report: Callable[[], Mapping[str, Any]] | Any | None = None,
+        configuration_report: Callable[[], Mapping[str, Any]] | None = None,
         write_every_ticks: int = 1,
         max_rows: int = _MAX_ROWS,
     ) -> None:
@@ -435,6 +508,7 @@ class RehearsalObserver:
         self.ledger = ledger
         self.output_dir = Path(output_dir)
         self.admission_report = admission_report
+        self.configuration_report = configuration_report
         self.write_every_ticks = write_every_ticks
         self.max_rows = max_rows
         self._rows: deque[dict[str, Any]] = deque(maxlen=max_rows)
@@ -454,7 +528,12 @@ class RehearsalObserver:
         cls, runtime: Any, output_dir: str | Path, **kwargs: Any
     ) -> RehearsalObserver:
         """Attach only when explicitly requested by a rehearsal caller."""
-        observer = cls(runtime.ledger, output_dir, **kwargs)
+        observer = cls(
+            runtime.ledger,
+            output_dir,
+            configuration_report=lambda: _runtime_configuration(runtime),
+            **kwargs,
+        )
         observer.attach()
         return observer
 
@@ -534,7 +613,10 @@ class RehearsalObserver:
 
     def _write(self, boundary: int) -> None:
         try:
-            report = build_report(list(self._rows))
+            configuration = (
+                self.configuration_report() if self.configuration_report is not None else None
+            )
+            report = build_report(list(self._rows), configuration=configuration)
             admission = _admission_snapshot(self.admission_report)
             _admission_costs(report, admission)
             _authoritative_cost_per_useful(report, list(self._rows))
@@ -564,6 +646,23 @@ class RehearsalObserver:
                 "coverage": coverage,
                 "write_cost": "bounded recent-window report at tick boundary",
             }
+            runway = report.get("configuration", {}).get("governance_runway")
+            if isinstance(runway, dict):
+                runway["completed_ticks"] = self._ticks
+                remaining = max(
+                    0,
+                    runway["minimum_ticks_through_one_consequence_window"] - self._ticks,
+                )
+                runway["remaining_lower_bound_ticks"] = remaining
+                runway["remaining_nominal_duration_lower_bound_ns"] = (
+                    remaining * runway["nominal_interval_ns"]
+                )
+                delivered = runway["delivered_interval_ns"]
+                runway["remaining_delivered_duration_estimate_ns"] = (
+                    remaining * max(runway["nominal_interval_ns"], delivered)
+                    if delivered is not None
+                    else None
+                )
             for question in report.get("five_questions", {}).values():
                 if not isinstance(question, dict):
                     continue
