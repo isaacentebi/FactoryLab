@@ -874,6 +874,102 @@ def build_report(
     }
 
 
+def compare_rehearsals(
+    control: Mapping[str, Any], treatment: Mapping[str, Any], *, factors: Sequence[str]
+) -> dict[str, Any]:
+    """Reject unmatched screens rather than attribute their differences to a treatment."""
+    paths = {
+        "prompt": "prompt.mode",
+        "feedback": "evaluation.producer_feedback",
+        "address": "tools.address_enabled",
+        "reasoning": "models.*.reasoning",
+    }
+    if not factors or any(factor not in paths for factor in factors):
+        raise ReportInputError("name at least one factor: prompt, feedback, address, reasoning")
+
+    def flatten(value, prefix=""):
+        if isinstance(value, Mapping):
+            return {path: item for key, child in value.items()
+                    for path, item in flatten(child, f"{prefix}.{key}".strip(".")).items()}
+        if isinstance(value, list):
+            return {path: item for index, child in enumerate(value)
+                    for path, item in flatten(child, f"{prefix}.{index}").items()}
+        return {prefix: value}
+
+    problems = []
+    manifests = []
+    for label, report in (("control", control), ("treatment", treatment)):
+        manifest = report.get("world", {}).get("manifest")
+        if not isinstance(manifest, Mapping) or not manifest:
+            problems.append(f"{label}: missing effective manifest")
+            manifest = {}
+        manifests.append(flatten(manifest))
+        if report.get("status") != "completed":
+            problems.append(f"{label}: run did not complete")
+        cost = report.get("cost", {})
+        if (type(cost.get("known_micro")) is not int
+                or type(cost.get("attempted")) is not int
+                or cost.get("attempted") != cost.get("known_calls")
+                or cost.get("uncertain_calls") != 0 or cost.get("uncertain_micro") != 0
+                or cost.get("overruns", 0) != 0):
+            problems.append(f"{label}: billing is incomplete or uncertain")
+        for phase in ("venue_before", "venue_after"):
+            venue = report.get(phase, {})
+            if venue.get("positions") != [] or venue.get("open_orders") != []:
+                problems.append(f"{label}: {phase} is not confirmed flat")
+    for key in ("sha256", "runner_sha256"):
+        left, right = (r.get("source", {}).get(key) for r in (control, treatment))
+        if not isinstance(left, str) or not left or left != right:
+            problems.append(f"source {key} missing or different")
+    for key in ("cap_micro", "max_calls"):
+        left, right = (r.get("cost", {}).get(key) for r in (control, treatment))
+        if type(left) is not int or left <= 0 or left != right:
+            problems.append(f"admission {key} missing or different")
+    common_protocol = ("duration_ns", "planned_tick_ceiling", "minimum_delivered_ticks",
+                       "no_live_parameter_changes", "no_horizon_extension")
+    if "feedback" not in factors:
+        common_protocol += ("minimum_assessed_grounded_samples",
+                            "minimum_contrary_grounded_samples")
+    for key in common_protocol:
+        left, right = (r.get("protocol", {}).get(key) for r in (control, treatment))
+        if left is None or left != right:
+            problems.append(f"protocol {key} missing or different")
+    ignored = {"name", "exchange.client_namespace"}
+    missing = object()
+    differences = sorted(path for path in manifests[0].keys() | manifests[1].keys()
+                         if path not in ignored
+                         and manifests[0].get(path, missing) != manifests[1].get(path, missing))
+
+    def matches(path, factor):
+        if factor == "reasoning":
+            parts = path.split(".")
+            return len(parts) >= 3 and parts[0] == "models" and parts[2] == "reasoning"
+        return path == paths[factor]
+
+    unexpected = [path for path in differences
+                  if not any(matches(path, factor) for factor in factors)]
+    if unexpected:
+        problems.append("effective manifests differ outside declared factors")
+    for factor in dict.fromkeys(factors):
+        if not any(matches(path, factor) for path in differences):
+            problems.append(f"declared factor {factor} did not change")
+    if not differences:
+        problems.append("no treatment difference")
+    sufficient = all(r.get("behavioral_screen", {}).get("status") == "sufficient"
+                     for r in (control, treatment))
+    return {
+        "report_kind": "edition4_matched_screen",
+        "status": "unmatched" if problems else "screen_complete" if sufficient else "inconclusive",
+        "factors": list(dict.fromkeys(factors)), "manifest_difference_paths": differences,
+        "unexpected_difference_paths": unexpected, "problems": problems,
+        "arms": {label: {"cost": report.get("cost"), "timing": report.get("timing"),
+                         "behavioral_screen": report.get("behavioral_screen")}
+                 for label, report in (("control", control), ("treatment", treatment))},
+        "caveat": ("A sequential screening pair is not a randomized causal estimate; "
+                   "venue conditions differ."),
+    }
+
+
 def render_html(report: Mapping[str, Any]) -> str:
     """Render aggregate report values as inert escaped HTML with no controls or inputs."""
     data = json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False)
@@ -904,14 +1000,33 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Build one offline report from explicit input files and exit successfully."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--input", action="append", required=True, type=Path, help="explicit JSON export"
+        "--input", action="append", type=Path, help="explicit JSON export"
     )
     parser.add_argument(
         "--out", required=True, type=Path,
         help="output directory for report.json and index.html",
     )
+    parser.add_argument("--control", type=Path, help="completed control rehearsal report")
+    parser.add_argument("--treatment", type=Path, help="completed treatment rehearsal report")
+    parser.add_argument("--factor", action="append",
+                        choices=("prompt", "feedback", "address", "reasoning"))
     args = parser.parse_args(argv)
-    report = build_report(load_rows(args.input))
+    if args.control or args.treatment or args.factor:
+        if args.input or not (args.control and args.treatment and args.factor):
+            parser.error("comparison requires --control, --treatment and --factor, without --input")
+        reports = []
+        for path in (args.control, args.treatment):
+            if path.suffix != ".json":
+                parser.error("comparison inputs must be explicit JSON reports")
+            value = json.loads(path.read_text())
+            if not isinstance(value, dict):
+                parser.error("comparison reports must be JSON objects")
+            reports.append(value)
+        report = compare_rehearsals(*reports, factors=args.factor)
+    else:
+        if not args.input:
+            parser.error("provide --input or a comparison pair")
+        report = build_report(load_rows(args.input))
     paths = write_report(report, args.out)
     print(json.dumps({"json": str(paths[0]), "html": str(paths[1])}, sort_keys=True))
     return 0

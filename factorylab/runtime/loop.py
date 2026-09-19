@@ -478,6 +478,7 @@ class Runtime(
         self._instruments_memo = None
         self._mids_memo = None
         self._account_memo = None
+        self._peak_observed = None
         forget = getattr(self.treasury, "forget_observations", None)
         if forget is not None:
             forget()

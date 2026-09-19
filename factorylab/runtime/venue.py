@@ -276,8 +276,35 @@ class VenueMixin:
             return None  # an old snapshot is not the equity a window opens on
         return usd_to_micro(account.equity_usd, rounding="nearest")
 
+    def _venue_moved(self) -> None:
+        """Drop what was observed of the venue: its books may have moved since.
+
+        The one invalidation for same-tick observation reuse. Called before every
+        venue write, after every recovered acknowledgement, and by every settlement
+        that carries a fill, a funding payment or a liquidation; a treasury class
+        transfer moves the key itself. It is deliberately not called for a mid: a
+        price the venue published in the batch being settled is not a change the
+        runtime made, and it is the reason there was anything to collapse.
+        """
+        self._peak_observed = None
+
     def _observe_positions(self) -> None:
-        """A new peak position notional is recorded before it enters the window."""
+        """Record one marked position sample per window/tick and after known venue moves.
+
+        Repeated MarketMid events from the same batch reuse the observation. Orders,
+        recovered acknowledgements, fills, funding, liquidations and class transfers
+        invalidate it. Failed or incomplete reads remain eligible for retry.
+
+        This is a sampled peak, not a continuous one: a price spike between reads
+        may be missed. Collateral checks, equity reads and paid population reads
+        still query the venue independently.
+        """
+        transfer = getattr(self.treasury, "state", None)
+        key = (self.window.index, self.ticks_consumed,
+               (transfer.get("status"), transfer.get("direction"),
+                transfer.get("amount_micro")) if isinstance(transfer, dict) else None)
+        if getattr(self, "_peak_observed", None) == key:
+            return
         try:
             account = self.exchange.account()
             if getattr(account, "stale", False):
@@ -294,6 +321,7 @@ class VenueMixin:
                 notionals[position.coin] = notionals.get(position.coin, Decimal(0)) + (
                     position.size * Decimal(str(mids[position.coin]))
                 )
+        self._peak_observed = key
         if not notionals:
             return
         peak = max(usd_to_micro(abs(value), rounding="nearest") for value in notionals.values())
@@ -348,6 +376,9 @@ class VenueMixin:
 
     def _settle_exchange_effects(self, evs: list[WorldEvent], *,
                                  observe_positions: bool = True) -> None:
+        if any(we.kind is not WorldEventKind.MARKET_MID for we in evs):
+            # A fill, a funding payment or a liquidation is the venue's books moving.
+            self._venue_moved()
         settlements = []
         spot_table = self.consequences.table
         refused = set()
@@ -509,6 +540,9 @@ class VenueMixin:
         self.ledger.append({"kind": "order.intent", **intent})
         self.order_intents[client_id] = intent
         self.consequences.order_intent(client_id, handle, args["coin"])
+        # Submitted or lost, a write is the venue possibly moving: nothing observed
+        # before it describes the account an order is weighed against afterwards.
+        self._venue_moved()
         try:
             if operation == "venue.cancel":
                 result = self.exchange.cancel(args["order_id"], coin=args["coin"],
@@ -571,6 +605,8 @@ class VenueMixin:
     def _recover_order(self, client_id: str) -> dict:
         """Query an ambiguous intent; never resubmit it or replace its originating handle."""
         intent = self.order_intents[client_id]
+        # What the venue says about this identity can be a fill nobody had observed.
+        self._venue_moved()
         try:
             cancel = intent["operation"] == "venue.cancel"
             result = self.exchange.lookup(client_id, **(
