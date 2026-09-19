@@ -246,8 +246,11 @@ class GovernanceMixin:
             from factorylab.settlement.vocabulary import _validate_params
 
             for index, forecast in enumerate(parsed.get("forecasts", [])):
-                predicate = self.predicates.get(forecast["predicate"])
                 try:
+                    # The lookup answers for the forecast too: an id the book cannot
+                    # resolve (empty, or a stored definition that no longer builds) is
+                    # that forecast's fault, not the return's.
+                    predicate = self.predicates.get(forecast["predicate"])
                     _validate_params(forecast["predicate"], forecast["params"],
                                      predicate=predicate)
                 except (ValueError, TypeError, ArithmeticError, RecursionError) as fault:

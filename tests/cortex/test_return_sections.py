@@ -139,6 +139,23 @@ def test_the_runtime_contract_drops_an_unknown_forecast_but_keeps_the_order():
     assert sections(ret) == [("forecasts", 0)]
 
 
+def test_a_predicate_the_book_cannot_resolve_drops_only_its_forecast():
+    """The lookup answers for the forecast as much as the parameters do.
+
+    ``PredicateBook.get`` raises a plain ``ValueError`` on an id it cannot
+    resolve — an empty one the forecast schema allows, or a stored definition
+    that no longer builds. Outside the per-forecast guard that fault reached
+    ``validate_return_sections`` as a bare ``ValueError`` and voided the order
+    beside it.
+    """
+    rt = make_runtime()
+    forecast = {"predicate": "", "q": 0.5, "params": {"horizon_events": 3}}
+    ret = invoke({**ORDER, "forecasts": [forecast]}, validator=rt._validate_output_contract)
+    assert ret.status == "ok" and {k: ret.outputs[k] for k in ORDER} == ORDER
+    assert "forecasts" not in ret.outputs
+    assert sections(ret) == [("forecasts", 0)]
+
+
 def test_a_valid_forecast_survives_the_governance_contract():
     """A seed predicate with good parameters is not collateral damage of the override."""
     rt = make_runtime()
