@@ -1342,10 +1342,14 @@ class ComputeMixin:
                 # error is a failure.
                 ok = uncertain or not (isinstance(result, dict)
                                        and result.get("error") is not None)
-                # Text reached from outside — fetched or searched — earns one more
+                # Catalogue model names can also come from a remote provider. Treat
+                # any model-bearing result as outside text; schema-only discovery
+                # retains the ordinary continuation. Outside text earns one more
                 # round of ordinary jailed tools, so a seat can read and then act
                 # within the same wake instead of spending another decision on it.
-                if call["tool"] in ("connector.fetch", "web.search") and ok:
+                if ok and (call["tool"] in ("connector.fetch", "web.search")
+                           or (call["tool"] == "catalogue.search"
+                               and isinstance(result, dict) and result.get("models"))):
                     round_limit = 2
                     outside_text = True
                 # A retrieved contract arrives in a tool result, so without a

@@ -1498,9 +1498,14 @@ class Runtime(
             },
             "required": ["conformity"],
         }
-        req = self._request(
-            handle,
-            ("Assess the final grounded judgement in realized_consequence: whether its "
+        grounded_prompt = (
+            "Assess the immediate meta verdict in meta_verdict, identified by "
+            "meta_verdict.by, for conformity using realized_consequence as its preserved "
+            "grounded record. Judge that meta verdict's score and rationale, not the "
+            "original finding as a new first-tier review. Do not reconstruct the norms "
+            "from the current charter."
+            if review is not None and recursive else
+            "Assess the final grounded judgement in realized_consequence: whether its "
              "finding is what the cited evidence supports under the complete frozen_norms, "
              "and whether those norms bear on producer_claim. evidence lists the cited rows "
              "first and evidence_supplied says how many the judge was shown. A finding of "
@@ -1510,7 +1515,11 @@ class Runtime(
              "Assess the public return addressed by about_handle for conformity with the charter. "
              "The input's subject_handle is the default when present." if generic else
              "Assess the released representative verdict for conformity with the charter, "
-             "using its window as context."),
+             "using its window as context."
+        )
+        req = self._request(
+            handle,
+            grounded_prompt,
             inputs,
             schema,
             deadline,
