@@ -321,7 +321,7 @@ def test_the_executor_cannot_reach_the_population():
     executor = WindDownExecutor(Venue(), Diary(), launch_nonce=NONCE)
     assert set(vars(executor)) == {"exchange", "ledger", "launch_nonce", "dust_micro",
                                    "reader", "report", "_known", "_submitted",
-                                   "_owed", "_minimums"}
+                                   "_requested", "_owed", "_minimums"}
 
 
 def test_the_witness_line_carries_both_states_and_the_operation_count(tmp_path):

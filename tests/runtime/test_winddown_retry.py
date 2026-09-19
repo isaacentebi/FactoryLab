@@ -109,3 +109,15 @@ def test_a_reconciled_refusal_is_retried_inside_the_same_kill():
     # next attempt goes out in this kill, under its own identity.
     assert [call[3] for call in venue.closes()] == [_attempt(1)]
     assert report["residual"]["positions"] == []
+
+
+def test_a_partial_fill_is_judged_against_the_size_the_attempt_asked_for():
+    """0.6 of 1 BTC filled leaves 0.4; the recorded 0.6 must not pass for the 0.4 residual."""
+    diary = Diary()
+    venue = Venue(results=[OrderResult("o1", "filled", Decimal("0.6"), None),
+                           OrderResult("o2", "filled", Decimal("0.4"), None)])
+    report = WindDownExecutor(venue, diary, launch_nonce=NONCE).run()
+
+    assert [call[3] for call in venue.closes()] == [_attempt(0), _attempt(1)]
+    assert venue.size == Decimal("0")
+    assert report["residual"]["positions"] == []

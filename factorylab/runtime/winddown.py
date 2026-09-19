@@ -154,7 +154,7 @@ class WindDownExecutor:
             # the first kill contract (and GPT-6's converted regressions) still read.
             "exposure_status": UNKNOWN,
         }
-        self._known, self._submitted = self._replay()
+        self._known, self._submitted, self._requested = self._replay()
         # Targets whose attempt in this kill was definitively refused or only partly
         # done; the next round re-reads the venue and sends their next attempt.
         self._owed: set[tuple] = set()
@@ -179,8 +179,9 @@ class WindDownExecutor:
             print(f"factorylab wind-down: the diary refused one record "
                   f"({type(exc).__name__}); the kill proceeds", file=sys.stderr)
 
-    def _replay(self) -> tuple[dict[str, dict], set[str]]:
-        """What this diary already knows: results by operation id, and ids still in flight."""
+    def _replay(self) -> tuple[dict[str, dict], set[str], dict[str, dict]]:
+        """What this diary already knows: results by operation id, ids still in flight, and
+        what each of those ids actually asked the venue for."""
         try:
             items = list(self.reader() if self.reader is not None else self.ledger.items())
         except Exception:  # noqa: BLE001 - a diary that cannot be read knows nothing
@@ -188,6 +189,7 @@ class WindDownExecutor:
                      if isinstance(row, dict)]
         known: dict[str, dict] = {}
         submitted: set[str] = set()
+        requested: dict[str, dict] = {}
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -196,14 +198,32 @@ class WindDownExecutor:
                 continue
             if item.get("kind") == OP:
                 submitted.add(op_id)
+                # The size that identity asked for, as its own record stated it. A
+                # later round must judge it against this, never against whatever
+                # residual a fresh account read happens to show.
+                if "size" in item:
+                    requested[op_id] = {"size": item["size"]}
             elif item.get("kind") == OP_RESULT:
                 known[op_id] = item.get("result") or {}
-        return known, submitted
+        return known, submitted, requested
 
     # ---- one operation
 
+    def _asked(self, op_id: str, detail: dict) -> dict:
+        """What the attempt ``op_id`` asked the venue for, as its own record stated it.
+
+        Completeness is a fact about one attempt: a close of 1 BTC that filled 0.6
+        did not do what it named, however small the residual a later account read
+        shows. Judging the recorded 0.6 against a fresh 0.4 residual would call it
+        complete and leave the 0.4 on the venue.
+        """
+        return self._requested.get(op_id) or detail
+
     def _complete(self, op: str, result: dict, detail: dict) -> bool:
-        """The venue's answer says the operation did all it names: nothing is owed."""
+        """The venue's answer says the operation did all it names: nothing is owed.
+
+        ``detail`` is the attempt's own request, not the present state of the target.
+        """
         status = result.get("status")
         if status not in _SUCCESS[op]:
             return False
@@ -261,10 +281,11 @@ class WindDownExecutor:
                 self._append({"kind": OP_RESULT, "disposition": "reconciled", **record,
                               "result": result})
                 self._count(op, result, record)
-                self._owe(op, coin, market, side, target, result, detail, retry)
+                self._owe(op, coin, market, side, target, result,
+                          self._asked(latest, detail), retry)
                 return
             result = self._known[latest]
-            if self._complete(op, result, detail) or not retry:
+            if self._complete(op, result, self._asked(latest, detail)) or not retry:
                 # The result is in the diary. This attempt happened once and is
                 # never sent a second time.
                 self._note(record, "known")
@@ -279,11 +300,13 @@ class WindDownExecutor:
                 self._append({"kind": OP_RESULT, "disposition": "reconciled", **record,
                               "result": result})
                 self._count(op, result, record)
-                self._owe(op, coin, market, side, target, result, detail, retry)
+                self._owe(op, coin, market, side, target, result,
+                          self._asked(latest, detail), retry)
                 return
         record = record_for(attempt)
         op_id = record["op_id"]
         self._append({"kind": OP, **record})
+        self._requested[op_id] = dict(detail)
         self._note(record, "submitted")
         try:
             result = _plain(call(op_id))
