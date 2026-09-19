@@ -62,3 +62,21 @@ uv run pytest -m gate -n 2 tests/runtime/test_grounded_feedback.py tests/runtime
 venue actions or deployments accompanied this revision. Earlier paid probes and
 rehearsals retain their recorded source identity; they do not validate this new
 prompt or clock split live. Fresh corrected-C and nonfinancial tests remain gates.
+
+## Follow-up review of `ccd1ae1`
+
+- Cursor 4052338450: accepted. The return projection now preserves recursively
+  redacted argument values rather than replacing them with raw values. Tests cover
+  all three argument aliases, nested calls, inline bodies alongside arguments,
+  malformed argument lists, public metadata and nonmutation of the source. The
+  child-input path uses the same preservation rule.
+- Codex 4052338872: accepted. A timed-out grounded decision still owns delayed
+  feedback. Its router must survive replacement or a shrinking action universe
+  until that feedback is delivered, including across restore; it may then drain.
+- Older repaired review threads were explicitly resolved. The NOOP thread was
+  resolved with the documented voluntary-evaluation rationale and its regression,
+  not by silently changing participation policy.
+
+Integrated follow-up verification: Ruff passed; `uv run pytest` reported
+`2036 passed in 22.46s`; the same selected gate command above reported
+`23 passed in 13.88s`. `git diff --check` passed. No paid or live run was made.

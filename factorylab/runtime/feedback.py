@@ -1795,7 +1795,11 @@ class FeedbackMixin:
             for lr in fresh:
                 self._learn_router_return(state, lr)
             self.delivered_seen[lid] = total
-            if lid in self.retired_routers and not self.queue.outstanding(lid):
+            if (
+                lid in self.retired_routers
+                and not self.queue.outstanding(lid)
+                and not self._router_owns_grounded_pending(lid)
+            ):
                 self.queue.retire_actor(lid)
                 self.ledger.append({"kind": "router.drained", "learner_id": lid})
                 del self.retired_routers[lid]

@@ -349,11 +349,16 @@ class RoutingMixin:
         lid = state.learner.id
         if self.queue.outstanding(lid) or (
             len(self.queue.returns_for(lid)) > self.delivered_seen.get(lid, 0)
-        ):
+        ) or self._router_owns_grounded_pending(lid):
             self.ledger.append({"kind": "router.retained", "learner_id": lid})
             self.retired_routers[lid] = state
         else:
             self.queue.retire_actor(lid)
+
+    def _router_owns_grounded_pending(self, learner_id: str) -> bool:
+        """Keep a router addressable until every grounded decision it sampled is final."""
+        pending = getattr(self, "grounded_pending", {})
+        return any(self.queue.get(handle).actor == learner_id for handle in pending)
 
     def _fresh_router_id(self, base: str) -> str:
         """Fresh learners never receive an active or retired learner's delayed returns."""

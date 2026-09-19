@@ -79,6 +79,37 @@ def test_a_root_address_call_is_redacted_without_exposing_continuity():
     assert root["args"]["body"]["fields"] == ["text"]
 
 
+@pytest.mark.parametrize("field", ["args", "arguments", "inputs"])
+@pytest.mark.parametrize("project", [public_return, public_child_inputs])
+def test_outer_address_preserves_nested_redaction_and_public_metadata(field, project):
+    inner = {"tool": ADDRESS_TOOL, "args": {"to": "seat-c", "text": SECRET}}
+    outer = {
+        "tool": ADDRESS_TOOL,
+        "text": "inline private body",
+        field: {"to": "seat-b", "text": "outer private body",
+                "nested": [inner], "cost_micro": 1},
+    }
+    original = rendered(outer)
+    projected = project(outer)
+    visible = rendered(projected)
+    assert SECRET not in visible
+    assert "inline private body" not in visible
+    assert "outer private body" not in visible
+    assert projected[field]["nested"][0]["args"]["to"] == "seat-c"
+    assert projected[field]["nested"][0]["args"]["body"]["fields"] == ["text"]
+    assert projected[field]["to"] == "seat-b"
+    assert projected[field]["cost_micro"] == 1
+    assert rendered(outer) == original
+    assert public_tool_calls([outer]) == [public_return(outer)]
+
+
+@pytest.mark.parametrize("project", [public_return, public_child_inputs])
+def test_malformed_argument_list_does_not_restore_nested_private_body(project):
+    projected = project({"tool": ADDRESS_TOOL, "args": [call()]})
+    assert SECRET not in rendered(projected)
+    assert projected["args"][0]["args"]["to"] == "seat-b"
+
+
 @pytest.mark.parametrize(
     ("recipient_field", "body_field"),
     [

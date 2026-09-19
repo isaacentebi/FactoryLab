@@ -116,11 +116,14 @@ def _project(value: Any, depth: int = 0) -> Any:
         if _names_address(value):
             for field in _ARGUMENT_FIELDS:
                 if field in out:
-                    out[field] = _redact_body(value[field])
+                    raw = value[field]
+                    if isinstance(raw, dict) and isinstance(out[field], dict):
+                        out[field] = _redact_projected_body(out[field], raw)
+                    else:
+                        out[field] = _redact_body(out[field])
             # A call that inlined its body beside the tool name rather than under
             # arguments is the same call and is redacted the same way.
-            if not any(field in out for field in _ARGUMENT_FIELDS):
-                out = _redact_body(out)
+            out = _redact_projected_body(out, value)
         return out
     if isinstance(value, (list, tuple)):
         return [_project(item, depth + 1) for item in value]
@@ -169,9 +172,8 @@ def _project_child_inputs(value: Any, depth: int = 0) -> Any:
                 if isinstance(raw, dict) and isinstance(out[field], dict):
                     out[field] = _redact_projected_body(out[field], raw)
                 else:
-                    out[field] = _redact_body(raw)
-            if not argument_fields:
-                return _redact_projected_body(out, value)
+                    out[field] = _redact_body(out[field])
+            return _redact_projected_body(out, value)
         if _address_shaped(value):
             return _redact_projected_body(out, value)
         return out
