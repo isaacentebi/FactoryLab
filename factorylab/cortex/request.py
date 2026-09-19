@@ -25,11 +25,106 @@ from typing import Any
 Money = int
 
 
+#: The capability whose payload is private even from the judge who prices the act.
+#: A message is addressed to a participant who may ignore it; a judge that reads
+#: every body turns a private channel into a broadcast, and a sender that knows it
+#: will be read writes for the judge instead of the recipient.
+ADDRESS_TOOL = "address.send"
+
+#: The argument names that carry a body rather than an address. Everything else an
+#: address call declares -- who it went to, what it cost, whether it was delivered
+#: -- survives the projection, because that a message occurred is a public fact and
+#: what it said is not.
+ADDRESS_BODY_FIELDS = frozenset({"text", "body", "message", "content", "payload"})
+
+#: Where an address call keeps its arguments, whatever the caller named them.
+_ARGUMENT_FIELDS = ("args", "arguments", "inputs")
+
+#: A projection walks model-authored JSON, which is shallow. Past this depth it
+#: drops the subtree rather than passing it through unread: a redaction that gives
+#: up quietly is not one.
+_PROJECTION_DEPTH = 24
+
+
+def _names_address(value: dict[str, Any]) -> bool:
+    """True when this mapping is a record of a call to the addressing capability."""
+    return any(value.get(key) == ADDRESS_TOOL for key in ("tool", "tool_id", "name"))
+
+
+def _redact_body(args: Any) -> Any:
+    """One address call's arguments with its body replaced by the fact of a body.
+
+    Guarantees the recipient, and every other argument the call declared, is kept:
+    a reader can still see that this seat addressed that seat and what it paid.
+    Guarantees no body field survives, and that the size of what was dropped is
+    reported rather than the text, so a judge can weigh that a message was sent
+    without reading it.
+    """
+    if not isinstance(args, dict):
+        return args
+    kept = {k: v for k, v in args.items() if k not in ADDRESS_BODY_FIELDS}
+    dropped = [k for k in args if k in ADDRESS_BODY_FIELDS]
+    if dropped:
+        kept["body"] = {
+            "redacted": "the recipient holds the only readable copy",
+            "fields": sorted(dropped),
+            "bytes": sum(len(json.dumps(args[k], sort_keys=True, default=str).encode("utf-8"))
+                         for k in dropped),
+        }
+    return kept
+
+
+def _project(value: Any, depth: int = 0) -> Any:
+    """A structure with every addressed body redacted, at any nesting a return reached.
+
+    Guarantees an address call is redacted wherever it sits -- at the top of a
+    return, inside a list of calls, or inside the result a child handed back --
+    because a model chooses where to put it and a projection that only checked one
+    place would be a convention rather than a guarantee.
+    """
+    if depth >= _PROJECTION_DEPTH:
+        return {"omitted": "nested deeper than this projection reads"}
+    if isinstance(value, dict):
+        out = {k: _project(v, depth + 1) for k, v in value.items()}
+        if _names_address(value):
+            for field in _ARGUMENT_FIELDS:
+                if field in out:
+                    out[field] = _redact_body(value[field])
+            # A call that inlined its body beside the tool name rather than under
+            # arguments is the same call and is redacted the same way.
+            if not any(field in out for field in _ARGUMENT_FIELDS):
+                out = _redact_body(out)
+        return out
+    if isinstance(value, (list, tuple)):
+        return [_project(item, depth + 1) for item in value]
+    return value
+
+
+def public_tool_calls(calls: Any) -> list[Any]:
+    """The executed tool calls of a return, as a reader across the boundary may see them.
+
+    Guarantees every call is still listed -- which capability ran, with what
+    address and at what price -- and that an addressed body is not among what is
+    listed. Nothing here is the caller's own record: a seat keeps what it wrote in
+    its own working state, which no projection touches.
+    """
+    if not isinstance(calls, (list, tuple)):
+        return []
+    return [_project(call) for call in calls]
+
+
 def public_return(outputs: Any) -> dict[str, Any]:
-    """Project a return across a contract boundary, excluding continuity internals."""
+    """Project a return across a contract boundary, excluding continuity internals.
+
+    Guarantees the continuity fields never cross, as before, and that the body of
+    an addressed message does not cross either, wherever in the return it was
+    written. What crosses is that the message happened: the capability, the
+    recipient and the size of what was said. A judge prices an act it can see the
+    shape of; it does not read the population's post.
+    """
     if not isinstance(outputs, dict):
         return {"invalid_return": True}
-    return {k: v for k, v in outputs.items()
+    return {k: _project(v) for k, v in outputs.items()
             if k not in {"working_state", "ack_through", "raw"}}
 
 
@@ -147,6 +242,17 @@ PREFIX_CONSTANT_KEYS = frozenset({
 # Every world key the prefix renders, and therefore every world key ``INPUTS`` must
 # not render again: the capability index's sources and the institutional block's.
 PREFIX_SOURCE_KEYS = PREFIX_INDEX_KEYS | PREFIX_CONSTANT_KEYS
+
+# These keys are suppressed from ``INPUTS`` in both prompt modes, and the mode
+# decides only where the prefix puts them. Under ``[prompt] mode = "compact"`` the
+# prefix renders the sections a return is validated against and, in place of the
+# rest, a directory naming every section it left out with the route that reads it
+# (``INSTITUTION_INLINE_KEYS`` and ``institution_section`` in
+# ``factorylab.cortex.schematics``). So the partition below holds in either mode:
+# a compacted key is named in the prefix and read on demand, never moved into
+# ``INPUTS``, where it would cost more and cache nothing, and never dropped, which
+# would make a capability invisible. The world block keeps every section whatever
+# the mode, because the validators, the wake page and the diary read it there.
 
 # The moving world block (§8's WORLD UPDATE). ``world_update`` is the rendered
 # block; the keys beside it are the sources it is built from, and they are

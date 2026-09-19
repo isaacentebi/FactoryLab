@@ -1,0 +1,10 @@
+uv run ruff check .
+All checks passed!
+
+uv run pytest
+============================ 1997 passed in 20.04s =============================
+
+uv run pytest -m gate -n 2 tests/runtime/test_grounded_feedback.py tests/runtime/test_tool_use_evidence.py tests/audit/test_edition4_rehearsal.py tests/scripts/test_edition4_report.py tests/scripts/test_edition4_observer.py tests/runtime/test_loop.py tests/audit/test_r2a_lifecycle.py tests/audit/test_r3d_evaluation.py
+============================= 23 passed in 13.74s ==============================
+
+Exact terminal summary lines; progress rows omitted. Full gate suite not run.

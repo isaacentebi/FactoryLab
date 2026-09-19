@@ -1,0 +1,1613 @@
+{
+  "status": "completed",
+  "source": {
+    "requested_root": "/tmp/factorylab-edition4-treatment-v2",
+    "imported_root": "/private/tmp/factorylab-edition4-treatment-v2",
+    "sha256": "0cd78b3ef330bddc38ca8e6374286743b1ce6fc1cd01e50bb35ad5522e0bea38",
+    "runner_sha256": "39cecfd1a4c7df9a107af6ecdbb30aebe14e4c4f98654583dbf6ab92c8f5b3d7"
+  },
+  "world": {
+    "path": "/tmp/factorylab-edition4-treatment-v2/worlds/realized/edition3-rehearsal-5.toml",
+    "original_hash": "60fe3eff3a679bf837876da940989f8d1cdbcaee4f68127bce47214bdf25dc75",
+    "effective_hash": "75f75c6d8842800d620b000b3f0804a22a7815a4e69564e4556b82730d0b6b05",
+    "original_manifest": {
+      "assemblies": [
+        {
+          "accepts": [
+            "WorldUpdate",
+            "Fill"
+          ],
+          "effort": "low",
+          "emits": [
+            "ProducerReturn"
+          ],
+          "id": "mechanism",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Your starting lens is mechanisms rather than short-term price narratives. Look for an understandable source and recipient of a cash flow, a constraint that creates it, and the conditions under which it disappears. Funding, basis and service demand are possible subjects, not assigned strategies. Account for both sides of a hedge, fees and implementation risk. You may conclude that no mechanism is worth investigating or that another objective is better.",
+            "open_questions": []
+          },
+          "max_tokens": 4096,
+          "memory_policy": "none",
+          "model_id": "venice:z-ai-glm-5-3-flash",
+          "role": "producer",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "WorldUpdate",
+            "Fill"
+          ],
+          "effort": "low",
+          "emits": [
+            "ProducerReturn"
+          ],
+          "id": "empirical",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Your starting lens is discrimination among explanations. Separate a pattern from evidence that the pattern will persist or matter. Prefer a small informative test to a confident story when its information is worth its cost. Retain the hypothesis, observation interval and result so the next wake does not repeat the same inquiry. You may trade, build, investigate or stop; no particular statistical method is obligatory.",
+            "open_questions": []
+          },
+          "max_tokens": 4096,
+          "memory_policy": "none",
+          "model_id": "venice:z-ai-glm-5-3-flash",
+          "role": "producer",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "WorldUpdate",
+            "Fill"
+          ],
+          "effort": "low",
+          "emits": [
+            "ProducerReturn"
+          ],
+          "id": "constructor",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. That is a starting hypothesis, not an obligation to build. You may abandon it. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+            "open_questions": []
+          },
+          "max_tokens": 4096,
+          "memory_policy": "none",
+          "model_id": "venice:z-ai-glm-5-3-flash",
+          "role": "producer",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "WorldUpdate",
+            "Fill"
+          ],
+          "effort": "low",
+          "emits": [
+            "ProducerReturn"
+          ],
+          "id": "opportunity",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Your starting lens is the best available alternative use of resources. Ask what would make the current decision wrong, including a decision to keep waiting. Investigate apparent consensus without assuming disagreement is valuable. A useful refusal identifies what evidence or event would make the opportunity worth reconsidering when that can be specified. Do not protect inaction as an identity; you may adopt another objective or method.",
+            "open_questions": []
+          },
+          "max_tokens": 1500,
+          "memory_policy": "none",
+          "model_id": "openai/gpt-5.6-luna",
+          "role": "producer",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "ProducerReturn"
+          ],
+          "effort": "low",
+          "emits": [
+            "Verdict"
+          ],
+          "id": "judge-consequence",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Evaluate the submission against its accepted promises, the evidence available at decision time and the outcomes that actually arrived. Separate a sensible decision from a lucky outcome, and a poor decision from an unlucky one. State checkable probabilities only for defined claims with an observation rule. Do not turn an unobserved outcome into a failure or endorse a conclusion merely because another judge endorsed it. Your methods and commission remain replaceable.",
+            "open_questions": []
+          },
+          "max_tokens": 1500,
+          "memory_policy": "none",
+          "model_id": "openai/gpt-5.6-luna",
+          "role": "evaluator",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "ProducerReturn"
+          ],
+          "effort": "low",
+          "emits": [
+            "Verdict"
+          ],
+          "id": "judge-fidelity",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+            "open_questions": []
+          },
+          "max_tokens": 4096,
+          "memory_policy": "none",
+          "model_id": "venice:z-ai-glm-5-3-flash",
+          "role": "evaluator",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "Verdict"
+          ],
+          "effort": "low",
+          "emits": [
+            "MetaVerdict"
+          ],
+          "id": "meta-calibration",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Examine whether a judge's apparent skill survives comparison with its matched baseline, available information and resolved sample. Look for leaked outcomes, duplicated evidence, selective coverage and credit assigned to the wrong decision. Prefer attributable observations to confident prose. Distinguish a forecast's calibration from the usefulness of the question chosen. Do not reward consensus or disagreement as ends in themselves.",
+            "open_questions": []
+          },
+          "max_tokens": 2000,
+          "memory_policy": "none",
+          "model_id": "openai/gpt-5.6-luna",
+          "role": "meta",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "Verdict"
+          ],
+          "effort": "low",
+          "emits": [
+            "MetaVerdict"
+          ],
+          "id": "meta-countercase",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Seek a plausible alternative explanation for apparent evaluator competence or failure. Test denominator choices, missing cases and dependence among observations. Present the strongest countercase supported by the record, including the possibility that the evaluation was correct. Uncertainty or a lack of an informative case is a valid result. Do not manufacture a dispute to justify your existence.",
+            "open_questions": []
+          },
+          "max_tokens": 4096,
+          "memory_policy": "none",
+          "model_id": "venice:z-ai-glm-5-3-flash",
+          "role": "meta",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "Tick",
+            "MarketMid"
+          ],
+          "effort": "low",
+          "emits": [
+            "Exposure"
+          ],
+          "id": "antagonist",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Within the world's permissions and your budget, test whether a judge will approve work whose apparent success is unsupported. Use a concrete, attributable discrepancy and keep a checkable record of what your test establishes. Do not invent an external execution or impose unconsented costs on outsiders to create the test. A failed attack is evidence about the judge, not a reason to relabel the outcome. You may decide that another test or no test is worth buying.",
+            "open_questions": []
+          },
+          "max_tokens": 2500,
+          "memory_policy": "none",
+          "model_id": "openai/gpt-5.6-luna",
+          "role": "antagonist",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        }
+      ],
+      "charter": {
+        "cards": [
+          {
+            "acceptable_region": "at most 0.30",
+            "answers_for": "all",
+            "description": "Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope, with a ceiling, so a seat answers for the promises it never let the world settle. A commitment not yet due is not in the sample; documented external unobservability without owner fault, and events the seat never committed to observe, are excluded; no eligible sample is unmeasured, never zero. Accountability is the commitment owner, including responsibility delegated at acceptance. Explicitly provisional: replace, reprice or remove it.",
+            "id": "censorship-bound",
+            "norm": "epistemic integrity",
+            "observation": "avoidably_unresolved_share",
+            "units": "fraction",
+            "window": {
+              "kind": "forecasts",
+              "n": 25,
+              "per": "assembly"
+            }
+          }
+        ],
+        "edition": 1,
+        "norms": [
+          "consequential usefulness",
+          "epistemic integrity",
+          "durable agency",
+          "bounded reciprocity",
+          "fidelity"
+        ]
+      },
+      "charter_prices": [
+        [
+          "censorship-bound",
+          0.1
+        ]
+      ],
+      "clock": {
+        "min_tick_ns": 10000000000
+      },
+      "committee": {
+        "min_settled": 5,
+        "seats": 5
+      },
+      "connectors": {
+        "call_price_micro": 1000,
+        "max_bytes": 262144,
+        "max_calls_per_window": 60,
+        "origin_denylist": [
+          "api.hyperliquid.xyz",
+          "api.hyperliquid-testnet.xyz",
+          "rpc.hyperliquid.xyz",
+          "rpc.hyperliquid-testnet.xyz",
+          "mainnet.base.org",
+          "sepolia.base.org",
+          "openrouter.ai",
+          "api.anthropic.com",
+          "api.venice.ai",
+          "api.cdp.coinbase.com"
+        ],
+        "timeout_s": 10
+      },
+      "drip": null,
+      "endowment": {
+        "base_share": 0.8,
+        "locked_micro": 180000000,
+        "releases": [
+          [
+            604800000000000,
+            60000000
+          ],
+          [
+            1209600000000000,
+            60000000
+          ],
+          [
+            1814400000000000,
+            60000000
+          ]
+        ]
+      },
+      "evaluation": {
+        "adversarial_share": 0.15,
+        "consequence_backstop_events": 60,
+        "consequence_share": 0.3,
+        "forecast_horizon_events": 10,
+        "max_forecasts_per_verdict": 2,
+        "min_coverage": 0.5,
+        "producer_feedback": "realized",
+        "sampling_cap": 0.7,
+        "sampling_step": 0.1,
+        "sibling_share": 0.5,
+        "trial_amount_micro": 50000,
+        "verdict_timeout_events": 20
+      },
+      "exchange": {
+        "client_namespace": "bb32e4c5cd094e71849b53942a5ed52c",
+        "coins": [
+          "BTC",
+          "ETH"
+        ],
+        "kind": "hyperliquid",
+        "mainnet": false,
+        "principal_usd": "120",
+        "seed": 3,
+        "shocks": [],
+        "spot_pairs": [
+          "PURR/USDC",
+          "HYPE/USDC"
+        ],
+        "start_cash_usd": "120"
+      },
+      "extra": {},
+      "immune": {
+        "bins": 3,
+        "decay_step": 0.1,
+        "gain_step": 0.05,
+        "gamma_max": 0.5,
+        "gap_threshold": 0.8,
+        "k": 3,
+        "registration_bins": [
+          0.0,
+          2.0
+        ],
+        "revision_bins": [
+          0.0
+        ],
+        "tv_threshold": 0.2
+      },
+      "initial_balance_micro": 300000000,
+      "kill": {
+        "dust_micro": 1000000,
+        "wind_down": true
+      },
+      "models": [
+        {
+          "extra_body": [
+            [
+              "provider",
+              {
+                "require_parameters": true
+              }
+            ]
+          ],
+          "id": "deepseek/deepseek-v4.1-flash",
+          "input_usd_per_mtok": "0.15",
+          "output_usd_per_mtok": "0.60",
+          "provider": "openrouter",
+          "reasoning": [
+            [
+              "enabled",
+              false
+            ]
+          ],
+          "web": []
+        },
+        {
+          "extra_body": [
+            [
+              "provider",
+              {
+                "require_parameters": true
+              }
+            ]
+          ],
+          "id": "openai/gpt-5.6-sol",
+          "input_usd_per_mtok": "2.00",
+          "output_usd_per_mtok": "10.00",
+          "provider": "openrouter",
+          "reasoning": [
+            [
+              "effort",
+              "low"
+            ]
+          ],
+          "web": []
+        },
+        {
+          "id": "venice:z-ai-glm-5-3-flash",
+          "input_usd_per_mtok": "0.15",
+          "output_usd_per_mtok": "0.50",
+          "provider": "venice",
+          "reasoning": [
+            [
+              "effort",
+              "low"
+            ]
+          ],
+          "web": []
+        },
+        {
+          "id": "venice:qwen-3-8-flash",
+          "input_usd_per_mtok": "0.14",
+          "output_usd_per_mtok": "0.49",
+          "provider": "venice",
+          "reasoning": [
+            [
+              "enabled",
+              false
+            ]
+          ],
+          "web": []
+        },
+        {
+          "extra_body": [
+            [
+              "provider",
+              {
+                "require_parameters": true
+              }
+            ]
+          ],
+          "id": "openai/gpt-5.6-luna",
+          "input_usd_per_mtok": "0.20",
+          "output_usd_per_mtok": "1.20",
+          "provider": "openrouter",
+          "reasoning": [
+            [
+              "effort",
+              "low"
+            ]
+          ],
+          "web": []
+        },
+        {
+          "extra_body": [
+            [
+              "provider",
+              {
+                "require_parameters": true
+              }
+            ]
+          ],
+          "id": "openai/gpt-5.6-luna:online",
+          "input_usd_per_mtok": "0.20",
+          "output_usd_per_mtok": "1.20",
+          "provider": "openrouter",
+          "reasoning": [
+            [
+              "effort",
+              "low"
+            ]
+          ],
+          "web": [
+            [
+              "engine",
+              "exa"
+            ],
+            [
+              "max_results",
+              5
+            ],
+            [
+              "mode",
+              "fast"
+            ],
+            [
+              "usd_per_request",
+              "0.007"
+            ]
+          ]
+        }
+      ],
+      "name": "edition3-rehearsal-5",
+      "notes": {
+        "byte_window_micro": 1,
+        "max_bytes": 262144,
+        "max_keys": 128
+      },
+      "novelty": {
+        "max_lifetime_windows": 6,
+        "share": 0.1,
+        "trials": 3,
+        "window_ns": 3600000000000
+      },
+      "prices": {
+        "decay": 0.1,
+        "eta": 0.5,
+        "kappa": 0.5,
+        "lambda_max": 1.0,
+        "min_window_events": 1,
+        "penalty_cap": 0.5
+      },
+      "providers": {
+        "openrouter_micro": 220000000,
+        "venice_micro": 80000000
+      },
+      "seed": 3,
+      "termination": {
+        "balance_floor_micro": 0,
+        "max_events": null
+      },
+      "tick_interval_ns": 120000000000,
+      "timing": {
+        "cadence_sample": 200,
+        "jitter_fraction": 0.2,
+        "min_ratio": 3,
+        "min_support": 30
+      },
+      "tools": {
+        "max_children": 3,
+        "max_depth": 4,
+        "max_leverage": 3,
+        "max_routers_per_kind": 3,
+        "max_tool_calls": 4,
+        "population_tool_micro_per_call": 50
+      },
+      "treasury": {
+        "base_gas_budget_wei": 1000000000000000,
+        "cctp_max_fee_micro": 100000,
+        "discovery_url": "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources",
+        "fake_fee_micro": 10000,
+        "hyperevm_gas_budget_wei": 100000000000000000,
+        "insolvency_events": 20,
+        "max_request_micro": 500000,
+        "max_transfer_fee_micro": 2000000,
+        "max_venice_per_window": 10000000,
+        "reported_cost_multiple": 10,
+        "reserve_address": "0x1228e5620944a79D268Afc7522E00891526EdEBb",
+        "withdrawal_fee_micro": 1000000
+      },
+      "web": {
+        "call_price_micro": 2000,
+        "max_call_micro": 50000,
+        "search_model": "openai/gpt-5.6-luna"
+      }
+    },
+    "manifest": {
+      "assemblies": [
+        {
+          "accepts": [
+            "WorldUpdate",
+            "Fill"
+          ],
+          "effort": "low",
+          "emits": [
+            "ProducerReturn"
+          ],
+          "id": "mechanism",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Your starting lens is mechanisms rather than short-term price narratives. Look for an understandable source and recipient of a cash flow, a constraint that creates it, and the conditions under which it disappears. Funding, basis and service demand are possible subjects, not assigned strategies. Account for both sides of a hedge, fees and implementation risk. You may conclude that no mechanism is worth investigating or that another objective is better.",
+            "open_questions": []
+          },
+          "max_tokens": 4096,
+          "memory_policy": "none",
+          "model_id": "venice:z-ai-glm-5-3-flash",
+          "role": "producer",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "WorldUpdate",
+            "Fill"
+          ],
+          "effort": "low",
+          "emits": [
+            "ProducerReturn"
+          ],
+          "id": "empirical",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Your starting lens is discrimination among explanations. Separate a pattern from evidence that the pattern will persist or matter. Prefer a small informative test to a confident story when its information is worth its cost. Retain the hypothesis, observation interval and result so the next wake does not repeat the same inquiry. You may trade, build, investigate or stop; no particular statistical method is obligatory.",
+            "open_questions": []
+          },
+          "max_tokens": 4096,
+          "memory_policy": "none",
+          "model_id": "venice:z-ai-glm-5-3-flash",
+          "role": "producer",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "WorldUpdate",
+            "Fill"
+          ],
+          "effort": "low",
+          "emits": [
+            "ProducerReturn"
+          ],
+          "id": "constructor",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Reusable capability may be a valuable use of resources. Look for an operation, observation, or coordination problem whose solution could remain useful after this invocation. That is a starting hypothesis, not an obligation to build. You may abandon it. Test the value of a capability against its costs, its actual users, and what would make its continued existence unnecessary.",
+            "open_questions": []
+          },
+          "max_tokens": 4096,
+          "memory_policy": "none",
+          "model_id": "venice:z-ai-glm-5-3-flash",
+          "role": "producer",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "WorldUpdate",
+            "Fill"
+          ],
+          "effort": "low",
+          "emits": [
+            "ProducerReturn"
+          ],
+          "id": "opportunity",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Your starting lens is the best available alternative use of resources. Ask what would make the current decision wrong, including a decision to keep waiting. Investigate apparent consensus without assuming disagreement is valuable. A useful refusal identifies what evidence or event would make the opportunity worth reconsidering when that can be specified. Do not protect inaction as an identity; you may adopt another objective or method.",
+            "open_questions": []
+          },
+          "max_tokens": 1500,
+          "memory_policy": "none",
+          "model_id": "openai/gpt-5.6-luna",
+          "role": "producer",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "ProducerReturn"
+          ],
+          "effort": "low",
+          "emits": [
+            "Verdict"
+          ],
+          "id": "judge-consequence",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Evaluate the submission against its accepted promises, the evidence available at decision time and the outcomes that actually arrived. Separate a sensible decision from a lucky outcome, and a poor decision from an unlucky one. State checkable probabilities only for defined claims with an observation rule. Do not turn an unobserved outcome into a failure or endorse a conclusion merely because another judge endorsed it. Your methods and commission remain replaceable.",
+            "open_questions": []
+          },
+          "max_tokens": 1500,
+          "memory_policy": "none",
+          "model_id": "openai/gpt-5.6-luna",
+          "role": "evaluator",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "ProducerReturn"
+          ],
+          "effort": "low",
+          "emits": [
+            "Verdict"
+          ],
+          "id": "judge-fidelity",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.",
+            "open_questions": []
+          },
+          "max_tokens": 4096,
+          "memory_policy": "none",
+          "model_id": "venice:z-ai-glm-5-3-flash",
+          "role": "evaluator",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "Verdict"
+          ],
+          "effort": "low",
+          "emits": [
+            "MetaVerdict"
+          ],
+          "id": "meta-calibration",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Examine whether a judge's apparent skill survives comparison with its matched baseline, available information and resolved sample. Look for leaked outcomes, duplicated evidence, selective coverage and credit assigned to the wrong decision. Prefer attributable observations to confident prose. Distinguish a forecast's calibration from the usefulness of the question chosen. Do not reward consensus or disagreement as ends in themselves.",
+            "open_questions": []
+          },
+          "max_tokens": 2000,
+          "memory_policy": "none",
+          "model_id": "openai/gpt-5.6-luna",
+          "role": "meta",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "Verdict"
+          ],
+          "effort": "low",
+          "emits": [
+            "MetaVerdict"
+          ],
+          "id": "meta-countercase",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Seek a plausible alternative explanation for apparent evaluator competence or failure. Test denominator choices, missing cases and dependence among observations. Present the strongest countercase supported by the record, including the possibility that the evaluation was correct. Uncertainty or a lack of an informative case is a valid result. Do not manufacture a dispute to justify your existence.",
+            "open_questions": []
+          },
+          "max_tokens": 4096,
+          "memory_policy": "none",
+          "model_id": "venice:z-ai-glm-5-3-flash",
+          "role": "meta",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        },
+        {
+          "accepts": [
+            "Tick",
+            "MarketMid"
+          ],
+          "effort": "low",
+          "emits": [
+            "Exposure"
+          ],
+          "id": "antagonist",
+          "initial_state": {
+            "active_commitments": [],
+            "lens": "Within the world's permissions and your budget, test whether a judge will approve work whose apparent success is unsupported. Use a concrete, attributable discrepancy and keep a checkable record of what your test establishes. Do not invent an external execution or impose unconsented costs on outsiders to create the test. A failed attack is evidence about the judge, not a reason to relabel the outcome. You may decide that another test or no test is worth buying.",
+            "open_questions": []
+          },
+          "max_tokens": 2500,
+          "memory_policy": "none",
+          "model_id": "openai/gpt-5.6-luna",
+          "role": "antagonist",
+          "schemas": {},
+          "system_prompt": "You are a continuing participant with a private working state and bounded\nauthority in this world.\n\nAnswer the current request with one JSON object satisfying its outcome schema.\nWhen you cannot satisfy that contract, return exactly:\n{\"status\":\"cannot\",\"reason\":\"<specific reason>\"}\nA refusal written inside an otherwise required answer field is not a valid\nrefusal.\n\nThe fixed norms describe values, not a required strategy. Your starting lens is\neditable working state, not a permanent role. You may revise your objectives and\nmethods through the available contracts. Holding, investigating, constructing,\ntrading, cooperating, or declining work can be appropriate. None earns credit\nmerely by being named.\n\nUse only supplied or retrieved evidence for claims about this world's state.\nDistinguish an intention, a submitted operation, an acknowledgement, and a\nsettled consequence. Missing evidence means unknown, not success, failure, or an\nempty account.\n\nYour working_state replaces your private working-state head when accepted.\nOmitting it retains the existing head. Keep what a future invocation needs to\ncontinue, including unresolved questions and the conditions that would change\nyour current decision. Do not copy the entire world into it.\n\nworking_state and ack_through are continuity fields. They are not part of the\npublic work product and must not be used to instruct a judge.\n\nAn outcome is addressed to the decision that caused it. Use its outcome_id to\nretrieve or acknowledge the exact item. Acknowledge through an item only after\nyou have processed the preceding delivered items. Acknowledgement changes inbox\ndelivery; it does not earn a score.\n\nsubscribe.cadence_floor and defer are nonnegative whole numbers of ticks, never\nduration strings. Read the current tick duration from the clock. A tick count is\nnot a wall-clock duration unless multiplied by that duration. A deferred\ninvocation does not execute a future exit rule; register an available watcher or\nprogram when the rule must operate without a model invocation.\n\nSpending authority, provider credit, and venue collateral are different\nresources. Use the named account and its freshness. A venue profit does not\nrefill provider credit without a confirmed conversion.\n\nThe catalogue is an index. Use catalogue.search to retrieve the current schema\nbefore using an unfamiliar tool or proposal. Do not invent an unavailable\ncapability.\n\nA propensity is a record of an actual sampling distribution, not confidence in\nyour answer. Do not manufacture one retrospectively. Kernel-recorded sampling\nfacts remain distinct from your stated beliefs."
+        }
+      ],
+      "charter": {
+        "cards": [
+          {
+            "acceptable_region": "at most 0.30",
+            "answers_for": "all",
+            "description": "Attributable, avoidably unresolved accepted commitments over the eligible commitments due in the responsible scope, with a ceiling, so a seat answers for the promises it never let the world settle. A commitment not yet due is not in the sample; documented external unobservability without owner fault, and events the seat never committed to observe, are excluded; no eligible sample is unmeasured, never zero. Accountability is the commitment owner, including responsibility delegated at acceptance. Explicitly provisional: replace, reprice or remove it.",
+            "id": "censorship-bound",
+            "norm": "epistemic integrity",
+            "observation": "avoidably_unresolved_share",
+            "units": "fraction",
+            "window": {
+              "kind": "forecasts",
+              "n": 25,
+              "per": "assembly"
+            }
+          }
+        ],
+        "edition": 1,
+        "norms": [
+          "consequential usefulness",
+          "epistemic integrity",
+          "durable agency",
+          "bounded reciprocity",
+          "fidelity"
+        ]
+      },
+      "charter_prices": [
+        [
+          "censorship-bound",
+          0.1
+        ]
+      ],
+      "clock": {
+        "min_tick_ns": 10000000000
+      },
+      "committee": {
+        "min_settled": 5,
+        "seats": 5
+      },
+      "connectors": {
+        "call_price_micro": 1000,
+        "max_bytes": 262144,
+        "max_calls_per_window": 60,
+        "origin_denylist": [
+          "api.hyperliquid.xyz",
+          "api.hyperliquid-testnet.xyz",
+          "rpc.hyperliquid.xyz",
+          "rpc.hyperliquid-testnet.xyz",
+          "mainnet.base.org",
+          "sepolia.base.org",
+          "openrouter.ai",
+          "api.anthropic.com",
+          "api.venice.ai",
+          "api.cdp.coinbase.com"
+        ],
+        "timeout_s": 10
+      },
+      "drip": null,
+      "endowment": {
+        "base_share": 0.8,
+        "locked_micro": 180000000,
+        "releases": [
+          [
+            604800000000000,
+            60000000
+          ],
+          [
+            1209600000000000,
+            60000000
+          ],
+          [
+            1814400000000000,
+            60000000
+          ]
+        ]
+      },
+      "evaluation": {
+        "adversarial_share": 0.15,
+        "consequence_backstop_events": 60,
+        "consequence_share": 0.3,
+        "forecast_horizon_events": 10,
+        "max_forecasts_per_verdict": 2,
+        "min_coverage": 0.5,
+        "producer_feedback": "realized",
+        "sampling_cap": 0.7,
+        "sampling_step": 0.1,
+        "sibling_share": 0.5,
+        "trial_amount_micro": 50000,
+        "verdict_timeout_events": 20
+      },
+      "exchange": {
+        "client_namespace": "52344a7ac13741b1847f811de38c67a8",
+        "coins": [
+          "BTC",
+          "ETH"
+        ],
+        "kind": "hyperliquid",
+        "mainnet": false,
+        "principal_usd": "120",
+        "seed": 3,
+        "shocks": [],
+        "spot_pairs": [
+          "PURR/USDC",
+          "HYPE/USDC"
+        ],
+        "start_cash_usd": "120"
+      },
+      "extra": {},
+      "immune": {
+        "bins": 3,
+        "decay_step": 0.1,
+        "gain_step": 0.05,
+        "gamma_max": 0.5,
+        "gap_threshold": 0.8,
+        "k": 3,
+        "registration_bins": [
+          0.0,
+          2.0
+        ],
+        "revision_bins": [
+          0.0
+        ],
+        "tv_threshold": 0.2
+      },
+      "initial_balance_micro": 300000000,
+      "kill": {
+        "dust_micro": 1000000,
+        "wind_down": true
+      },
+      "models": [
+        {
+          "extra_body": [
+            [
+              "provider",
+              {
+                "require_parameters": true
+              }
+            ]
+          ],
+          "id": "deepseek/deepseek-v4.1-flash",
+          "input_usd_per_mtok": "0.15",
+          "output_usd_per_mtok": "0.60",
+          "provider": "openrouter",
+          "reasoning": [
+            [
+              "enabled",
+              false
+            ]
+          ],
+          "web": []
+        },
+        {
+          "extra_body": [
+            [
+              "provider",
+              {
+                "require_parameters": true
+              }
+            ]
+          ],
+          "id": "openai/gpt-5.6-sol",
+          "input_usd_per_mtok": "2.00",
+          "output_usd_per_mtok": "10.00",
+          "provider": "openrouter",
+          "reasoning": [
+            [
+              "effort",
+              "low"
+            ]
+          ],
+          "web": []
+        },
+        {
+          "id": "venice:z-ai-glm-5-3-flash",
+          "input_usd_per_mtok": "0.15",
+          "output_usd_per_mtok": "0.50",
+          "provider": "venice",
+          "reasoning": [
+            [
+              "effort",
+              "low"
+            ]
+          ],
+          "web": []
+        },
+        {
+          "id": "venice:qwen-3-8-flash",
+          "input_usd_per_mtok": "0.14",
+          "output_usd_per_mtok": "0.49",
+          "provider": "venice",
+          "reasoning": [
+            [
+              "enabled",
+              false
+            ]
+          ],
+          "web": []
+        },
+        {
+          "extra_body": [
+            [
+              "provider",
+              {
+                "require_parameters": true
+              }
+            ]
+          ],
+          "id": "openai/gpt-5.6-luna",
+          "input_usd_per_mtok": "0.20",
+          "output_usd_per_mtok": "1.20",
+          "provider": "openrouter",
+          "reasoning": [
+            [
+              "effort",
+              "low"
+            ]
+          ],
+          "web": []
+        },
+        {
+          "extra_body": [
+            [
+              "provider",
+              {
+                "require_parameters": true
+              }
+            ]
+          ],
+          "id": "openai/gpt-5.6-luna:online",
+          "input_usd_per_mtok": "0.20",
+          "output_usd_per_mtok": "1.20",
+          "provider": "openrouter",
+          "reasoning": [
+            [
+              "effort",
+              "low"
+            ]
+          ],
+          "web": [
+            [
+              "engine",
+              "exa"
+            ],
+            [
+              "max_results",
+              5
+            ],
+            [
+              "mode",
+              "fast"
+            ],
+            [
+              "usd_per_request",
+              "0.007"
+            ]
+          ]
+        }
+      ],
+      "name": "edition3-rehearsal-5-edition4-rehearsal",
+      "notes": {
+        "byte_window_micro": 1,
+        "max_bytes": 262144,
+        "max_keys": 128
+      },
+      "novelty": {
+        "max_lifetime_windows": 6,
+        "share": 0.1,
+        "trials": 3,
+        "window_ns": 3600000000000
+      },
+      "prices": {
+        "decay": 0.1,
+        "eta": 0.5,
+        "kappa": 0.5,
+        "lambda_max": 1.0,
+        "min_window_events": 1,
+        "penalty_cap": 0.5
+      },
+      "providers": {
+        "openrouter_micro": 220000000,
+        "venice_micro": 80000000
+      },
+      "seed": 3,
+      "termination": {
+        "balance_floor_micro": 0,
+        "max_events": null
+      },
+      "tick_interval_ns": 10000000000,
+      "timing": {
+        "cadence_sample": 200,
+        "jitter_fraction": 0.2,
+        "min_ratio": 3,
+        "min_support": 30
+      },
+      "tools": {
+        "max_children": 3,
+        "max_depth": 4,
+        "max_leverage": 3,
+        "max_routers_per_kind": 3,
+        "max_tool_calls": 4,
+        "population_tool_micro_per_call": 50
+      },
+      "treasury": {
+        "base_gas_budget_wei": 0,
+        "cctp_forwarding": "never",
+        "cctp_max_fee_micro": 100000,
+        "discovery_url": "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources",
+        "fake_fee_micro": 10000,
+        "hyperevm_gas_budget_wei": 0,
+        "insolvency_events": 20,
+        "max_request_micro": 500000,
+        "max_transfer_fee_micro": 2000000,
+        "max_venice_per_window": 10000000,
+        "reported_cost_multiple": 10,
+        "reserve_address": null,
+        "withdrawal_fee_micro": 1000000
+      },
+      "web": {
+        "call_price_micro": 2000,
+        "max_call_micro": 50000,
+        "search_model": "openai/gpt-5.6-luna"
+      }
+    }
+  },
+  "preserved": {
+    "roster_sha256": {
+      "from": "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434",
+      "to": "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434"
+    },
+    "charter_sha256": {
+      "from": "74371c671f57c8315aa1c667dba6d92cbc51d9eb3b6ad6fa10f1012473a2a775",
+      "to": "74371c671f57c8315aa1c667dba6d92cbc51d9eb3b6ad6fa10f1012473a2a775"
+    },
+    "initial_balance_micro": {
+      "from": 300000000,
+      "to": 300000000
+    },
+    "venue_start_cash_usd": {
+      "from": "120",
+      "to": "120"
+    },
+    "endowment": {
+      "from": {
+        "locked_micro": 180000000,
+        "releases": [
+          [
+            604800000000000,
+            60000000
+          ],
+          [
+            1209600000000000,
+            60000000
+          ],
+          [
+            1814400000000000,
+            60000000
+          ]
+        ]
+      },
+      "to": {
+        "locked_micro": 180000000,
+        "releases": [
+          [
+            604800000000000,
+            60000000
+          ],
+          [
+            1209600000000000,
+            60000000
+          ],
+          [
+            1814400000000000,
+            60000000
+          ]
+        ]
+      }
+    }
+  },
+  "differences": {
+    "tick_interval_ns": {
+      "from": 120000000000,
+      "to": 10000000000
+    },
+    "exchange.client_namespace": {
+      "from": "bb32e4c5cd094e71849b53942a5ed52c",
+      "to": "52344a7ac13741b1847f811de38c67a8"
+    },
+    "treasury.reserve_address": {
+      "from": true,
+      "to": false
+    },
+    "treasury.cctp_forwarding": {
+      "from": "on_empty_gas",
+      "to": "never"
+    },
+    "treasury.gas_budgets": {
+      "from": {
+        "hyperevm": 100000000000000000,
+        "base": 1000000000000000
+      },
+      "to": {
+        "hyperevm": 0,
+        "base": 0
+      }
+    }
+  },
+  "denied_rails": [
+    "x402",
+    "treasury.to_reserve",
+    "treasury.to_venue",
+    "treasury.to_venice"
+  ],
+  "cost": {
+    "cap_micro": 5000000,
+    "max_calls": 1000,
+    "attempted": 49,
+    "known_calls": 49,
+    "known_micro": 246074,
+    "uncertain_calls": 0,
+    "uncertain_micro": 0,
+    "overruns": 0,
+    "refusals": 0,
+    "remaining_micro": 4753926,
+    "known_mean_micro": 5021.918367346939,
+    "stop_reason": null
+  },
+  "venue_before": {
+    "equity_usd": "965.999916405",
+    "positions": [],
+    "open_orders": []
+  },
+  "venue_confounds": {
+    "declared_start_cash_usd": "120",
+    "observed_equity_usd": "965.999916405"
+  },
+  "summary": {
+    "world": "edition3-rehearsal-5-edition4-rehearsal",
+    "manifest_hash": "75f75c6d8842800d620b000b3f0804a22a7815a4e69564e4556b82730d0b6b05",
+    "seed": 3,
+    "drip": false,
+    "terminated": true,
+    "termination_reason": "explicit_kill:budget",
+    "seal_key_released": true,
+    "wallet_balance_micro": 299750876,
+    "wallet_conservation": true,
+    "venue_custody": {
+      "booked_micro": -4715,
+      "claimed_micro": 0,
+      "unattributed_micro": -4715
+    },
+    "ledger_verify": true,
+    "outstanding_decisions": 7,
+    "execution": {
+      "intents": 1,
+      "statuses": {
+        "filled": 1,
+        "resting": 0,
+        "cancelled": 0,
+        "rejected": 0,
+        "uncertain": 0
+      },
+      "polled_fills": 1,
+      "terminal_reconciliation": {
+        "attempted": true,
+        "fill_read_error": null
+      },
+      "positions_closed_at_exit": false
+    },
+    "exchange_equity_usd": "965.989286405",
+    "live": true,
+    "evaluation_boundary": "registered accepts \u2192 selected emits \u2192 return channel",
+    "charter_edition": 1,
+    "tools": [
+      "artifact.get",
+      "artifact.list",
+      "calc",
+      "catalogue.search",
+      "connector.fetch",
+      "market.discover",
+      "note.get",
+      "note.list",
+      "note.put",
+      "outcome.get",
+      "treasury.transfer",
+      "venue.cancel",
+      "venue.candles",
+      "venue.close",
+      "venue.funding",
+      "venue.funding_history",
+      "venue.instruments",
+      "venue.mids",
+      "venue.open_orders",
+      "venue.order_book",
+      "venue.place_limit",
+      "venue.place_market",
+      "venue.positions",
+      "venue.set_leverage",
+      "web.search"
+    ],
+    "standing": {
+      "judge-fidelity": {
+        "n": 4,
+        "sum_brier": 3.9450000000000003,
+        "sum_baseline_brier": 3.5,
+        "settled": 4,
+        "requested": 4,
+        "weight_sum": 4.0,
+        "verdict_n": 0,
+        "sum_verdict_brier": 0.0,
+        "sum_verdict_baseline_brier": 0.0,
+        "mean_brier": 0.9862500000000001,
+        "mean_baseline_brier": 0.875,
+        "mean_verdict_brier": 0.0,
+        "mean_verdict_baseline_brier": 0.0,
+        "skill": 0.11125000000000007,
+        "payoff_skill": 0.11125000000000007,
+        "verdict_skill": 0.0,
+        "coverage": 1.0,
+        "weight": 0.6112500000000001
+      }
+    },
+    "prices": {
+      "parameters": {
+        "eta": 0.5,
+        "kappa": 0.5,
+        "decay": 0.1,
+        "lambda_max": 1.0,
+        "min_window_events": 1
+      },
+      "cards": {
+        "censorship-bound": {
+          "lambda": 0.1,
+          "effective_lambda": 0.1,
+          "relief_window": null,
+          "updates": 0,
+          "saturations": 0,
+          "max_step": 0.0,
+          "last_window_end_event": null
+        }
+      }
+    },
+    "routers": {
+      "router:Fill": {
+        "event_kind": "Fill",
+        "universe": [
+          "constructor",
+          "empirical",
+          "mechanism",
+          "opportunity",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      },
+      "router:MarketMid": {
+        "event_kind": "MarketMid",
+        "universe": [
+          "antagonist",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      },
+      "router:ProducerReturn": {
+        "event_kind": "ProducerReturn",
+        "universe": [
+          "judge-consequence",
+          "judge-fidelity",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      },
+      "router:Tick": {
+        "event_kind": "Tick",
+        "universe": [
+          "antagonist",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      },
+      "router:Verdict": {
+        "event_kind": "Verdict",
+        "universe": [
+          "meta-calibration",
+          "meta-countercase",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      },
+      "router:WorldUpdate": {
+        "event_kind": "WorldUpdate",
+        "universe": [
+          "constructor",
+          "empirical",
+          "mechanism",
+          "opportunity",
+          "NOOP"
+        ],
+        "epoch": 1,
+        "learner": "EXP3"
+      }
+    },
+    "stats": {
+      "resumes": 0,
+      "events": 224,
+      "decisions": 145,
+      "invocations": 47,
+      "noops": 98,
+      "orders_placed": 1,
+      "orders_rejected": 0,
+      "fills": 1,
+      "producer_returns": 24,
+      "verdicts": 0,
+      "meta_verdicts": {
+        "2": 1
+      },
+      "conformities": 1,
+      "censored": 5,
+      "fast_settlements": 0,
+      "forecasts_sealed": 4,
+      "forecasts_settled": 4,
+      "timeouts": 26,
+      "upward_releases": 1,
+      "reserve_windows": 1,
+      "exclusions": 41,
+      "registrations_accepted": 0,
+      "registrations_rejected": 0,
+      "epochs": 0,
+      "routers_replaced": 0,
+      "reconciliations": 2,
+      "tool_calls": 4,
+      "tool_call_failures": 0,
+      "population_tools_registered": 0,
+      "observations_registered": 0,
+      "assembly_learners_registered": 0,
+      "amendments_proposed": 0,
+      "amendments_passed": 0,
+      "amendments_activated": 0,
+      "clock_changes": 0,
+      "votes_cast": 0,
+      "transfer_intents": 0,
+      "exposures_settled": 0,
+      "exposures_won": 0,
+      "price_updates": 0,
+      "price_skipped": 0,
+      "penalized_settlements": 0,
+      "max_settlement_latency_events": 3,
+      "last_window_values": {},
+      "sample_propensity": {
+        "handle": "decision-5",
+        "action_ids": [
+          "constructor",
+          "empirical",
+          "mechanism",
+          "opportunity",
+          "NOOP"
+        ],
+        "probs": [
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2
+        ],
+        "chosen": "opportunity",
+        "rng_seed": 184083873824634217319400988394440004726
+      },
+      "invocation_status": {
+        "ok": 42,
+        "malformed": 5
+      },
+      "invocations_by_role": {
+        "producer": 24,
+        "evaluator": 22,
+        "meta": 1
+      },
+      "stop_reasons": {
+        "stop": 43,
+        "reasoning_only": 2,
+        "length": 2
+      },
+      "invocations_by_assembly": {
+        "opportunity": 3,
+        "judge-fidelity": 12,
+        "antagonist": 11,
+        "empirical": 1,
+        "mechanism": 5,
+        "judge-consequence": 10,
+        "constructor": 6,
+        "meta-calibration": 1
+      },
+      "spend_buckets": {
+        "opportunity": {
+          "41430": 16708
+        },
+        "judge-fidelity": {
+          "41430": 46610
+        },
+        "antagonist": {
+          "41430": 66682
+        },
+        "empirical": {
+          "41430": 2265
+        },
+        "mechanism": {
+          "41430": 22299
+        },
+        "judge-consequence": {
+          "41430": 67126
+        },
+        "constructor": {
+          "41430": 21754
+        },
+        "meta-calibration": {
+          "41430": 5680
+        }
+      },
+      "spend_observed_from_ns": 1789789715451044000,
+      "consequences_by_assembly": {
+        "opportunity": 3,
+        "antagonist": 11,
+        "empirical": 1,
+        "mechanism": 3,
+        "constructor": 5
+      },
+      "registered_window": {
+        "mechanism": 0,
+        "empirical": 0,
+        "constructor": 0,
+        "opportunity": 0,
+        "judge-consequence": 0,
+        "judge-fidelity": 0,
+        "meta-calibration": 0,
+        "meta-countercase": 0,
+        "antagonist": 0
+      },
+      "immune_windows": [],
+      "pathologies": {
+        "stable_failure": false,
+        "thrash": false,
+        "learning_death": false
+      },
+      "paid_off": 0,
+      "not_paid_off": 46,
+      "marked": 0,
+      "censored_outcomes": 0,
+      "consequences_pending": 1,
+      "lots_opened": 1,
+      "lots_closed": 0,
+      "closes_credited": 0
+    },
+    "process_io_metrics": {
+      "exchange": {
+        "account": {
+          "calls": 139,
+          "elapsed_ns": 138822772336
+        },
+        "mids": {
+          "calls": 27,
+          "elapsed_ns": 13410638707
+        },
+        "funding": {
+          "calls": 22,
+          "elapsed_ns": 8802087043
+        },
+        "funding_payments": {
+          "calls": 22,
+          "elapsed_ns": 5824478710
+        },
+        "fills": {
+          "calls": 23,
+          "elapsed_ns": 5948754959
+        },
+        "instruments": {
+          "calls": 23,
+          "elapsed_ns": 527637122
+        },
+        "funding_history": {
+          "calls": 2,
+          "elapsed_ns": 456437458
+        },
+        "order_book": {
+          "calls": 1,
+          "elapsed_ns": 405796125
+        },
+        "collateral_view": {
+          "calls": 1,
+          "elapsed_ns": 1354054917
+        },
+        "place": {
+          "calls": 1,
+          "elapsed_ns": 1766645625
+        },
+        "open_orders": {
+          "calls": 2,
+          "elapsed_ns": 477171959
+        },
+        "close": {
+          "calls": 1,
+          "elapsed_ns": 1543565834
+        }
+      },
+      "provider": {
+        "catalogue": {
+          "calls": 2,
+          "elapsed_ns": 2262951417
+        },
+        "balance_of": {
+          "calls": 2,
+          "elapsed_ns": 913019917
+        },
+        "affordable": {
+          "calls": 205,
+          "elapsed_ns": 61722930002
+        },
+        "complete": {
+          "calls": 49,
+          "elapsed_ns": 694352214081
+        }
+      },
+      "scope": "this process only; includes journal overhead, excludes replay"
+    },
+    "aggregates": {
+      "action_frequencies": {
+        "counts": {
+          "0.1": 3,
+          "0.2": 1,
+          "NOOP": 98,
+          "antagonist": 11,
+          "constructor": 5,
+          "empirical": 1,
+          "judge-consequence": 10,
+          "judge-fidelity": 12,
+          "mechanism": 4,
+          "meta-calibration": 1,
+          "opportunity": 3
+        }
+      },
+      "invocations_by_assembly": {
+        "counts": {
+          "antagonist": 11,
+          "constructor": 5,
+          "empirical": 1,
+          "judge-consequence": 10,
+          "judge-fidelity": 12,
+          "mechanism": 4,
+          "meta-calibration": 1,
+          "opportunity": 3
+        }
+      },
+      "spend_by_capability": {
+        "spend": {
+          "antagonist": 66682,
+          "constructor": 21754,
+          "empirical": 2265,
+          "judge-consequence": 67126,
+          "judge-fidelity": 46610,
+          "mechanism": 22299,
+          "meta-calibration": 5680,
+          "opportunity": 16708
+        }
+      },
+      "settlement_latency": {
+        "count": 121,
+        "total_ns": 2146982017000,
+        "min_ns": 0,
+        "max_ns": 478242120000
+      }
+    }
+  },
+  "venue_after": {
+    "equity_usd": "965.989286405",
+    "positions": [],
+    "open_orders": []
+  },
+  "timing": {
+    "declared_interval_ns": 10000000000,
+    "ticks": 22,
+    "events": 224,
+    "measured_interval_ns": 40589286285
+  }
+}

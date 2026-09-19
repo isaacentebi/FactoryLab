@@ -1,0 +1,127 @@
+{
+  "assessment_changes": [],
+  "caveats": [
+    "activity is not usefulness; references establish provenance only",
+    "correlation is not causality; causal questions require explicit resolved receipts",
+    "unknown bills, delivery, settlement, and income provenance are retained as unknown"
+  ],
+  "cost_per_useful_decision_micro": null,
+  "costs": {
+    "basis": "call_only",
+    "call_cost_basis": "invocation_inclusive",
+    "call_cost_label": "invocation-only; inclusive of tools and children",
+    "call_p50_micro": 5021,
+    "call_p90_micro": 6559,
+    "calls": 41,
+    "known_bill_count": 41,
+    "known_micro_total": 213672,
+    "known_unit_count": 41,
+    "label": "call-only; root linkage unavailable",
+    "orphan_child_count": 0,
+    "p50_micro": 5021,
+    "p90_micro": 6559,
+    "root_cost_basis": "unavailable",
+    "root_count": null,
+    "root_known_micro": null,
+    "root_p50_micro": null,
+    "root_p90_micro": null,
+    "roots_with_unknown_bills": null,
+    "unknown_bill_count": 0,
+    "unknown_unit_count": 0,
+    "unlinked_call_count": 41
+  },
+  "five_questions": {
+    "criterion_changed_costly_action": {
+      "evidence_refs": [],
+      "reason": "no independently resolved evidence supplied",
+      "status": "unknown"
+    },
+    "exploration_reached_horizon": {
+      "evidence_refs": [],
+      "reason": "no independently resolved evidence supplied",
+      "status": "unknown"
+    },
+    "external_income_funded_operation": {
+      "evidence_refs": [],
+      "reason": "no independently resolved evidence supplied",
+      "status": "unknown"
+    },
+    "resolved_evidence_changed_decision": {
+      "evidence_refs": [],
+      "reason": "no independently resolved evidence supplied",
+      "status": "unknown"
+    },
+    "subsequent_consumption": {
+      "evidence_refs": [],
+      "reason": "no independently resolved evidence supplied",
+      "status": "unknown"
+    }
+  },
+  "forecast_learning": {
+    "forecast": {
+      "settled_observed": 13,
+      "unmeasured": 33
+    },
+    "learning": {
+      "settled_observed": 0,
+      "unmeasured": 13
+    }
+  },
+  "funded_children": {
+    "children": 13,
+    "funded_confirmed": 0,
+    "funded_refs": [],
+    "funding_unknown": 13
+  },
+  "income": {
+    "external_confirmed_count": 0,
+    "external_confirmed_micro": null,
+    "external_confirmed_refs": [],
+    "funding_injection_count": 1,
+    "funding_injection_micro": 300000000,
+    "funding_injection_refs": [
+      ""
+    ],
+    "internal_count": 0,
+    "internal_micro": null,
+    "internal_refs": [],
+    "unknown_provenance": 13,
+    "unverified_records": []
+  },
+  "internal_metered_costs": {
+    "basis": "wallet.commit",
+    "known_micro_total": 213672,
+    "rows": 41,
+    "unknown_amount_rows": 0
+  },
+  "messages": {
+    "attempted": 0,
+    "delivered": 0,
+    "delivery_evidence_refs": [],
+    "explicit_unknown_refs": [],
+    "refs": [],
+    "refused": 0,
+    "replayed": 0,
+    "unknown_delivery": 0
+  },
+  "report_kind": "edition4_static_rehearsal_report",
+  "reusable_calls": {
+    "cross_lineage_refs": [],
+    "same_lineage_refs": [],
+    "unknown_relation": 0
+  },
+  "rows_read": 3256,
+  "status": "static_report_not_live_observer",
+  "status_count_basis": "explicit normalized status fields on supplied action/outcome rows; routine rows without status are excluded",
+  "status_counts": {
+    "accepted": 0,
+    "attempted": 0,
+    "executed": 36,
+    "failed": 0,
+    "malformed": 136,
+    "refused": 0,
+    "settled": 0,
+    "uncertain": 0,
+    "unknown": 0
+  }
+}

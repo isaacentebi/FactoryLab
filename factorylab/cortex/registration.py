@@ -149,6 +149,9 @@ class AssemblyProposal:
     # A watcher (edition 3, C2): the predicate over world state the kernel settles
     # each tick without a model call. Empty for every seat that is not one.
     trigger: dict[str, Any] = field(default_factory=dict)
+    # An optional founder-selected endowment, in exact integer micro-USD. ``None``
+    # keeps the historical trial amount selected by the runtime.
+    endowment_micro: int | None = None
 
     def __post_init__(self) -> None:
         """``reward_shapes`` holds the resolved contract for the kinds this proposal emits.
@@ -549,10 +552,16 @@ def _assembly(
         raise ValueError("effort must be low, medium or high")
     if "reward_shapes" in item and not isinstance(item["reward_shapes"], dict):
         raise ValueError("reward_shapes must map declared emits kinds to reward shapes")
+    if "endowment_micro" in item:
+        endowment_micro = item["endowment_micro"]
+        if type(endowment_micro) is not int or endowment_micro <= 0:
+            raise ValueError("endowment_micro must be a positive integer")
+    else:
+        endowment_micro = None
     return AssemblyProposal(
         aid, role, model_id, prompt, accepts, max_tokens, effort, emits, schemas,
         reward_contracts(emits, item.get("reward_shapes", {}), registered=known_reward_shapes),
-        code, timeout_s, state_policy, trigger,
+        code, timeout_s, state_policy, trigger, endowment_micro,
     )
 
 

@@ -12,13 +12,21 @@ from decimal import Decimal
 from typing import Any
 
 from factorylab.cortex.assembly import Assembly, AssemblySpec
-from factorylab.cortex.request import ChildRequest, Request, Return, public_return
+from factorylab.cortex.request import (
+    ADDRESS_TOOL,
+    ChildRequest,
+    Request,
+    Return,
+    public_return,
+    public_tool_calls,
+)
 from factorylab.kernel.artifacts import PRIVATE_REFUSAL
 from factorylab.kernel.budget import SeatWallet
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
+from factorylab.runtime.grounded import freeze_contract
 from factorylab.runtime.reasons import Reason
 from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, _to_plain
 from factorylab.runtime.summary import _price_str
@@ -902,6 +910,75 @@ class ComputeMixin:
         "venue.place_market", "venue.place_limit", "venue.close", "venue.cancel",
         "venue.set_leverage", "treasury.transfer",
     })
+
+    def _address_send(self, action_id: str, handle: str, args: dict, *,
+                      slot: Any, price: int) -> tuple[dict, int]:
+        """Deliver one addressed message: validated free, delivered once, paid once.
+
+        Guarantees a refused message costs nothing. Validation runs before the
+        seat's meter is touched, so a seat that names an unknown recipient, writes
+        too much text or addresses itself pays no transport for a message that was
+        never carried.
+
+        Guarantees a fresh delivery is paid exactly once, by the sender. The charge
+        is the transport price and it is settled around the one append that puts
+        the message in the recipient's inbox.
+
+        Guarantees a replay is free. The slot is this decision's own tool index, so
+        a return replayed after an interruption prepares the same message id, finds
+        the item already in the inbox, and pays nothing to learn that it arrived.
+
+        Guarantees the recipient is not charged and not woken. Nothing here opens a
+        decision, meters another seat or touches a router: the message waits in an
+        inbox the recipient reads when it next decides to.
+
+        Guarantees the sender's receipt carries no body. What comes back is that the
+        message was delivered, to whom, under which id and at what size -- the text
+        the sender wrote is already the sender's own, and the copy that matters now
+        belongs to the recipient.
+        """
+        from factorylab.runtime import address as addressing
+
+        def refused(reason: str, cost: int = 0) -> tuple[dict, int]:
+            self.ledger.append({"kind": "address.refused", "handle": handle,
+                                "assembly_id": action_id, "reason": reason[:200],
+                                "cost": cost, "ts": self.clock.now_ns})
+            return {"error": reason}, cost
+
+        try:
+            prepared = addressing.prepare(self, action_id, handle, args, slot)
+        except addressing.AddressRefused as exc:
+            return refused(str(exc))
+        receipt = {"status": "delivered", "message_id": prepared.message_id,
+                   "recipient": prepared.recipient,
+                   "text_bytes": len(prepared.text.encode("utf-8"))}
+        if prepared.replay:
+            self.ledger.append({"kind": "address.replayed", "handle": handle,
+                                "assembly_id": action_id, "recipient": prepared.recipient,
+                                "message_id": prepared.message_id, "ts": self.clock.now_ns})
+            return {**receipt, "replay": True}, 0
+        try:
+            metered = self._seat_meter(action_id).run(
+                handle=handle,
+                reason="tool:address.send",
+                ceiling=price,
+                execute=lambda: addressing.deliver(self, prepared),
+                cost_of=lambda _r: price,
+            )
+        except addressing.AddressRefused as exc:
+            # The recipient retired or filled up between validation and delivery.
+            # Nothing was appended, so nothing is owed.
+            return refused(str(exc))
+        except Exception as exc:  # reservation refused: the seat cannot afford transport
+            return refused(f"{type(exc).__name__}: {exc}"[:200])
+        record = metered.result if isinstance(metered.result, dict) else {}
+        self.ledger.append({"kind": "address.delivered", "handle": handle,
+                            "assembly_id": action_id, "recipient": prepared.recipient,
+                            "message_id": prepared.message_id,
+                            "text_bytes": receipt["text_bytes"],
+                            "item": record.get("seq"), "cost": metered.cost,
+                            "ts": self.clock.now_ns})
+        return {**receipt, "replay": False}, metered.cost
     WRITE_REFUSAL = ("venue and treasury writes require a producing return kind and an open "
                      "consequence account; judging decisions and their children cannot write")
 
@@ -1013,7 +1090,16 @@ class ComputeMixin:
         spec = self.tool_specs[tool_id]
         price = int(spec["price_micro_per_call"])
 
+        if spec["kind"] == "address":
+            return self._address_send(action_id, handle, args, slot=slot, price=price)
+
         def execute() -> dict:
+            if spec["kind"] == "institution":
+                from factorylab.world.venue_tools import _validate
+
+                _validate(args, spec["args_schema"])
+                section = args["section"]
+                return {"section": section, "value": self.institution_section(section)}
             if spec["kind"] == "venue":
                 from factorylab.world.venue_tools import _validate
 
@@ -1099,7 +1185,45 @@ class ComputeMixin:
                 record_venue_facts(self.window, tool_id, args, metered.result, self.clock.now_ns)
             if hasattr(self.exchange, "drain_events"):
                 self._settle_exchange_effects(self.exchange.drain_events())
+        elif (spec["kind"] == "population"
+              and getattr(self.ev, "producer_feedback", "verdict") == "realized"):
+            self._record_tool_use(action_id, handle, tool_id, slot, metered.result, metered.cost)
         return metered.result, metered.cost
+
+    def _record_tool_use(self, caller: str, handle: str, tool_id: str, slot: str,
+                         result: Any, cost: int) -> None:
+        """Address actual paid tool execution to maker and caller without publishing their data.
+
+        A receipt establishes execution, version and provenance, never usefulness.
+        Arguments and output bodies stay private; hashes bind the observed result.
+        Same-lineage use remains explicitly distinguishable from independent use.
+        """
+        from factorylab.kernel.ledger import canonical
+        from factorylab.settlement.receipts import execution_receipt
+
+        tool = self.population_tools.get(tool_id)
+        if tool is None:
+            return
+        maker = self.tool_owner.get(tool_id)
+        caller_lineage = self.budget.lineage(caller)
+        maker_lineage = self.budget.lineage(maker) if maker is not None else None
+        relation = ("self" if caller == maker else "unknown" if maker is None
+                    else "same_lineage" if caller_lineage == maker_lineage else "cross_lineage")
+        facts = {
+            "tool": tool_id, "maker": maker, "caller": caller,
+            "maker_handle": tool.provenance, "caller_handle": handle, "slot": slot,
+            "lineage_relation": relation,
+            "version_sha256": hashlib.sha256(canonical({
+                "code": tool.code, "args_schema": tool.args_schema,
+                "timeout_s": tool.timeout_s})).hexdigest(),
+            "result_sha256": hashlib.sha256(canonical(result)).hexdigest(),
+            "status": "failed" if isinstance(result, dict) and result.get("error") else "executed",
+            "cost_micro": cost,
+        }
+        for subject in sorted({handle, tool.provenance} - {"", None}):
+            execution_receipt(self.consequences.receipts, kind="program_result",
+                              handle=subject, owner=maker if subject == tool.provenance else caller,
+                              at_event=self.n, facts=facts)
 
     def _invoke_compute(self, action_id: str, req: Request) -> Return:
         """Each model call is metered and counted; lifetime trials count settled consequences.
@@ -1217,8 +1341,13 @@ class ComputeMixin:
                 if not ok:
                     self.stats.tool_call_failures += 1
                 # Parser arguments can contain a connector body. They are transient.
+                # An addressed body belongs to its recipient, and the wake page is
+                # built from these rows: what is logged is that the message went,
+                # to whom and how large it was, never what it said.
+                visible = (public_tool_calls([call])[0].get("args")
+                           if call.get("tool") == ADDRESS_TOOL else call.get("args"))
                 logged_args = ("[connector continuation]" if tool_round else
-                               json.dumps(self.ledger.without_connector_bodies(call.get("args")),
+                               json.dumps(self.ledger.without_connector_bodies(visible),
                                           default=str)[:1000])
                 self.ledger.append({
                     "kind": "tool.call", "handle": req.handle, "assembly_id": action_id,
@@ -1577,6 +1706,14 @@ class ComputeMixin:
                             "outcome_schema": item.outcome_schema})
         self.stats.decisions += 1
         self.consequences.start(handle, self.n)
+        grounded_contract = None
+        if (
+            getattr(self.ev, "producer_feedback", "verdict") == "realized"
+            and CH_VERDICT in channels.values()
+            and target in self.assemblies
+            and target not in self.retired_assemblies
+        ):
+            grounded_contract = freeze_contract(self, handle, target, {})
         req = Request(handle, item.description, {**item.inputs, "world": self._world_block()},
                       {}, item.outcome_schema,
                       parent.deadline_ns, ceiling, parent.handle,
@@ -1620,11 +1757,27 @@ class ComputeMixin:
                         tick_ns=self.tick_clock.interval_ns) is not None:
                     self.stats.forecasts_sealed += 1
             else:
+                if (grounded_contract is not None
+                        and self.queue.get(handle).channel == CH_VERDICT):
+                    self.grounded_pending[handle] = grounded_contract.with_outputs(
+                        public_return(ret.outputs))
+                    contract = self.grounded_pending[handle]
+                    self.ledger.append({
+                        "kind": "consequence.contract", "handle": handle,
+                        "opened_tick": contract.opened_tick, "due_tick": contract.due_tick,
+                        "close_tick": contract.close_tick,
+                        "charter_edition": contract.charter_edition,
+                        "predicate_versions": list(contract.predicate_versions),
+                        "ts": self.clock.now_ns,
+                    })
                 self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
                                                         opened_at_tick=self.ticks_consumed)
             self.stats.producer_returns += 1
             payload = {"about_handle": handle, "description": item.description,
-                       "inputs": item.inputs, "outputs": public_return(ret.outputs),
+                       # A parent may hand its child the text of a message to send.
+                       # The judge that prices the child sees the task, not the body.
+                       "inputs": public_return(item.inputs),
+                       "outputs": public_return(ret.outputs),
                        "cost": ret.cost, "status": ret.status,
                        "propensity": self._public_propensity(handle)}
             self._emit("ProducerReturn" if emitted == "Exposure" else emitted, payload)

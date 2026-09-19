@@ -1,0 +1,2919 @@
+{
+  "schema": "factorylab.edition4.paired-context-calibration.v1",
+  "status": "completed",
+  "run_id": "20260919T031731Z-45327",
+  "created_at_utc": "2026-09-19T03:28:14Z",
+  "purpose": "matched synthetic task calibration; not spontaneous population behavior",
+  "authorization": {
+    "total_assignment_cap_micro": 3000000,
+    "per_arm_cap_micro": 1500000,
+    "max_calls_per_arm": 2000,
+    "payment_effects": "model completion only; fake exchange and no venue/payment returns"
+  },
+  "source": {
+    "requested_root_literal": "/tmp/factorylab-edition4-treatment-source",
+    "requested_root": "/private/tmp/factorylab-edition4-treatment-source",
+    "imported_root": "/private/tmp/factorylab-edition4-treatment-source",
+    "sha256": "fd1eaaf4caa232548092ad850228074ed7fedd5444f54d3a4a3219cbbcb96755",
+    "calibration_module": "/private/tmp/factorylab-edition4-treatment-source/scripts/calibrate_seats.py",
+    "rehearsal_module": "/private/tmp/factorylab-edition4-treatment-source/scripts/edition4_rehearsal.py",
+    "runner_sha256": "39cecfd1a4c7df9a107af6ecdbb30aebe14e4c4f98654583dbf6ab92c8f5b3d7"
+  },
+  "design": {
+    "arms": {
+      "reference": "/private/tmp/factorylab-edition4-treatment-source/worlds/control/edition3-rehearsal-5.toml",
+      "compact": "/private/tmp/factorylab-edition4-treatment-source/worlds/compact/edition3-rehearsal-5.toml"
+    },
+    "reference_label": "control",
+    "compact_label": "treatment",
+    "models": [
+      "venice:z-ai-glm-5-3-flash",
+      "openai/gpt-5.6-luna"
+    ],
+    "repeats": 3,
+    "scenarios": [
+      "produce",
+      "judge",
+      "meta",
+      "tool",
+      "fail",
+      "continuation",
+      "long_context"
+    ],
+    "planned_trees_per_arm": 42,
+    "planned_trees_total": 84,
+    "preserved_settings": "manifest model reasoning, role output max_tokens, prompts, initial money/endowment",
+    "interleaving": "reference repeat then compact repeat for each repeat index",
+    "order_confound": "provider/cache and wall-clock order remain; API has no paired two-arm call"
+  },
+  "arms": {
+    "reference": {
+      "manifest": {
+        "name": "edition3-rehearsal-5",
+        "path": "/private/tmp/factorylab-edition4-treatment-source/worlds/control/edition3-rehearsal-5.toml",
+        "sha256": "2a7fe5c279251807537fa96ee5f6d94d27257d622b4e1b8621c6e2d4400cf49f",
+        "roster_sha256": "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434",
+        "tick_interval_ns": 120000000000,
+        "initial_balance_micro": 300000000,
+        "endowment_locked_micro": 180000000,
+        "exchange_kind": "hyperliquid",
+        "exchange_mainnet": false,
+        "start_cash_usd": "120",
+        "menu_models": [
+          "deepseek/deepseek-v4.1-flash",
+          "openai/gpt-5.6-luna",
+          "openai/gpt-5.6-luna:online",
+          "openai/gpt-5.6-sol",
+          "venice:qwen-3-8-flash",
+          "venice:z-ai-glm-5-3-flash"
+        ]
+      },
+      "source_sha256": "fd1eaaf4caa232548092ad850228074ed7fedd5444f54d3a4a3219cbbcb96755",
+      "provider": "edition4-prepaid-admission",
+      "models": {
+        "venice:z-ai-glm-5-3-flash": {
+          "trees_attempted": 21,
+          "trees_budget_refused": 0,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro_by_repeat": [
+            4111.0,
+            3317.0,
+            2103.0
+          ],
+          "cost_p95_micro_by_repeat": [
+            6147.0,
+            5338.4,
+            5580.4
+          ],
+          "latency_p50_ms_by_repeat": [
+            8182.4,
+            10082.1,
+            10608.3
+          ],
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ]
+        },
+        "openai/gpt-5.6-luna": {
+          "trees_attempted": 21,
+          "trees_budget_refused": 0,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro_by_repeat": [
+            5832.0,
+            5677.0,
+            5779.0
+          ],
+          "cost_p95_micro_by_repeat": [
+            14791.8,
+            14737.0,
+            14824.3
+          ],
+          "latency_p50_ms_by_repeat": [
+            2479.2,
+            3503.1,
+            3220.1
+          ],
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ]
+        }
+      },
+      "trees": [
+        {
+          "scenario": "produce",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-0",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5930,
+          "wallet_delta_micro": 5930,
+          "latency_ms": 18960.0,
+          "calls": 1,
+          "tool_calls": 2,
+          "children": 0,
+          "input_tokens": 22868,
+          "output_tokens": 775,
+          "cached_tokens": 13824,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80796
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:evaluator",
+          "handle": "decision-1",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 1482,
+          "wallet_delta_micro": 1482,
+          "latency_ms": 7270.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 23320,
+          "output_tokens": 943,
+          "cached_tokens": 20736,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 85889
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:meta",
+          "handle": "decision-2",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 1664,
+          "wallet_delta_micro": 1664,
+          "latency_ms": 7325.8,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 22733,
+          "output_tokens": 931,
+          "cached_tokens": 18432,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 83276
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:tool",
+          "handle": "decision-3",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 4111,
+          "wallet_delta_micro": 4111,
+          "latency_ms": 8182.4,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 22498,
+          "output_tokens": 162,
+          "cached_tokens": 13824,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80125
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:fail",
+          "handle": "decision-4",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "The inputs name client_id 'calibration-unplaced' with the explicit note that this client id was never sent to the venue, so no fill exists for it: there is no venue fill id and no settlement time to r",
+          "cost_micro": 1187,
+          "wallet_delta_micro": 1187,
+          "latency_ms": 2759.5,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 22001,
+          "output_tokens": 196,
+          "cached_tokens": 18432,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80083
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:parent",
+          "handle": "decision-5",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 4882,
+          "wallet_delta_micro": 4882,
+          "latency_ms": 9639.0,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 44472,
+          "output_tokens": 383,
+          "cached_tokens": 27648,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80140
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-6",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 6240,
+          "wallet_delta_micro": 6240,
+          "latency_ms": 15572.2,
+          "calls": 1,
+          "tool_calls": 2,
+          "children": 0,
+          "input_tokens": 22868,
+          "output_tokens": 888,
+          "cached_tokens": 13824,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80796
+        },
+        {
+          "scenario": "produce",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-8",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5431,
+          "wallet_delta_micro": 5431,
+          "latency_ms": 1945.7,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21282,
+          "output_tokens": 92,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 81254
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:openai/gpt-5.6-luna:evaluator",
+          "handle": "decision-9",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5832,
+          "wallet_delta_micro": 5832,
+          "latency_ms": 2479.2,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 22423,
+          "output_tokens": 188,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 86347
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:openai/gpt-5.6-luna:meta",
+          "handle": "decision-10",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5895,
+          "wallet_delta_micro": 5895,
+          "latency_ms": 4029.2,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21831,
+          "output_tokens": 364,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 83736
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:openai/gpt-5.6-luna:tool",
+          "handle": "decision-11",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 11814,
+          "wallet_delta_micro": 11814,
+          "latency_ms": 4484.3,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 21598,
+          "output_tokens": 21,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80585
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:openai/gpt-5.6-luna:fail",
+          "handle": "decision-12",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "The order with client_id \"calibration-unplaced\" was never submitted to the venue, and no fill or settlement observation exists; therefore no fill_id or settled_at_ns can be established.",
+          "cost_micro": 5339,
+          "wallet_delta_micro": 5339,
+          "latency_ms": 1811.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21102,
+          "output_tokens": 53,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80543
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:openai/gpt-5.6-luna:parent",
+          "handle": "decision-13",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 16068,
+          "wallet_delta_micro": 16068,
+          "latency_ms": 6038.5,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 42415,
+          "output_tokens": 24,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80588
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-14",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5443,
+          "wallet_delta_micro": 5443,
+          "latency_ms": 2460.4,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21282,
+          "output_tokens": 102,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 81255
+        },
+        {
+          "scenario": "produce",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-0",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3744,
+          "wallet_delta_micro": 3744,
+          "latency_ms": 6937.7,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 22178,
+          "output_tokens": 834,
+          "cached_tokens": 0,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80796
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:evaluator",
+          "handle": "decision-1",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 1461,
+          "wallet_delta_micro": 1461,
+          "latency_ms": 10082.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 23320,
+          "output_tokens": 902,
+          "cached_tokens": 20736,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 85889
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:meta",
+          "handle": "decision-2",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 1647,
+          "wallet_delta_micro": 1647,
+          "latency_ms": 11146.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 22733,
+          "output_tokens": 896,
+          "cached_tokens": 18432,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 83276
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:tool",
+          "handle": "decision-3",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3317,
+          "wallet_delta_micro": 3317,
+          "latency_ms": 5710.5,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 22497,
+          "output_tokens": 84,
+          "cached_tokens": 18432,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80125
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:fail",
+          "handle": "decision-4",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "The request names order client_id 'calibration-unplaced', whose own note states it was never sent to the venue. No fill exists for it: my venue account shows no positions (venue_accounts.venue_perps.p",
+          "cost_micro": 1193,
+          "wallet_delta_micro": 1193,
+          "latency_ms": 3662.9,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 22001,
+          "output_tokens": 209,
+          "cached_tokens": 18432,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80083
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:parent",
+          "handle": "decision-5",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5267,
+          "wallet_delta_micro": 5267,
+          "latency_ms": 20390.4,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 44327,
+          "output_tokens": 145,
+          "cached_tokens": 27648,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80140
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-6",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5369,
+          "wallet_delta_micro": 5369,
+          "latency_ms": 18995.3,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 22428,
+          "output_tokens": 829,
+          "cached_tokens": 13824,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80796
+        },
+        {
+          "scenario": "produce",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-8",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5329,
+          "wallet_delta_micro": 5329,
+          "latency_ms": 1551.4,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21215,
+          "output_tokens": 21,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 81074
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:openai/gpt-5.6-luna:evaluator",
+          "handle": "decision-9",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5898,
+          "wallet_delta_micro": 5898,
+          "latency_ms": 3503.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 22356,
+          "output_tokens": 257,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 86167
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:openai/gpt-5.6-luna:meta",
+          "handle": "decision-10",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5677,
+          "wallet_delta_micro": 5677,
+          "latency_ms": 3331.9,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21764,
+          "output_tokens": 196,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 83556
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:openai/gpt-5.6-luna:tool",
+          "handle": "decision-11",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 11797,
+          "wallet_delta_micro": 11797,
+          "latency_ms": 4506.6,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 21531,
+          "output_tokens": 21,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80405
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:openai/gpt-5.6-luna:fail",
+          "handle": "decision-12",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "The order client_id \"calibration-unplaced\" was never submitted to the venue, so no fill_id or settled_at_ns exists.",
+          "cost_micro": 5425,
+          "wallet_delta_micro": 5425,
+          "latency_ms": 2272.8,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21035,
+          "output_tokens": 138,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80363
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:openai/gpt-5.6-luna:parent",
+          "handle": "decision-13",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 15997,
+          "wallet_delta_micro": 15997,
+          "latency_ms": 5253.5,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 42274,
+          "output_tokens": 24,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80408
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-14",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5466,
+          "wallet_delta_micro": 5466,
+          "latency_ms": 3505.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21215,
+          "output_tokens": 135,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 81075
+        },
+        {
+          "scenario": "produce",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-0",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5932,
+          "wallet_delta_micro": 5932,
+          "latency_ms": 34998.3,
+          "calls": 1,
+          "tool_calls": 2,
+          "children": 0,
+          "input_tokens": 22868,
+          "output_tokens": 880,
+          "cached_tokens": 13824,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80796
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:evaluator",
+          "handle": "decision-1",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 1440,
+          "wallet_delta_micro": 1440,
+          "latency_ms": 10608.3,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 23320,
+          "output_tokens": 860,
+          "cached_tokens": 20736,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 85889
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:meta",
+          "handle": "decision-2",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 1727,
+          "wallet_delta_micro": 1727,
+          "latency_ms": 10730.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 22733,
+          "output_tokens": 1056,
+          "cached_tokens": 18432,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 83276
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:tool",
+          "handle": "decision-3",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3971,
+          "wallet_delta_micro": 3971,
+          "latency_ms": 7614.4,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 22498,
+          "output_tokens": 49,
+          "cached_tokens": 13824,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80125
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:fail",
+          "handle": "decision-4",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "The order named in inputs has client_id \"calibration-unplaced\" and its own note states it was never sent to the venue. No addressed receipt, fill event, or outcome establishes any fill for it, and ven",
+          "cost_micro": 1178,
+          "wallet_delta_micro": 1178,
+          "latency_ms": 2741.8,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 22001,
+          "output_tokens": 178,
+          "cached_tokens": 18432,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80083
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:parent",
+          "handle": "decision-5",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 4760,
+          "wallet_delta_micro": 4760,
+          "latency_ms": 12320.6,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 44402,
+          "output_tokens": 393,
+          "cached_tokens": 27648,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80140
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-6",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 2103,
+          "wallet_delta_micro": 2103,
+          "latency_ms": 8128.8,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 22178,
+          "output_tokens": 869,
+          "cached_tokens": 13824,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80796
+        },
+        {
+          "scenario": "produce",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-8",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5501,
+          "wallet_delta_micro": 5501,
+          "latency_ms": 2622.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21298,
+          "output_tokens": 147,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 81286
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:openai/gpt-5.6-luna:evaluator",
+          "handle": "decision-9",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 6011,
+          "wallet_delta_micro": 6011,
+          "latency_ms": 4484.8,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 22439,
+          "output_tokens": 334,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 86379
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:openai/gpt-5.6-luna:meta",
+          "handle": "decision-10",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5779,
+          "wallet_delta_micro": 5779,
+          "latency_ms": 3220.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21847,
+          "output_tokens": 264,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 83768
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:openai/gpt-5.6-luna:tool",
+          "handle": "decision-11",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 11801,
+          "wallet_delta_micro": 11801,
+          "latency_ms": 4026.6,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 21614,
+          "output_tokens": 21,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80617
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:openai/gpt-5.6-luna:fail",
+          "handle": "decision-12",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "The order has client_id \"calibration-unplaced\" and was never submitted to the venue; therefore no fill_id or settled_at_ns exists.",
+          "cost_micro": 5384,
+          "wallet_delta_micro": 5384,
+          "latency_ms": 3142.5,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21118,
+          "output_tokens": 87,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80575
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:openai/gpt-5.6-luna:parent",
+          "handle": "decision-13",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 16120,
+          "wallet_delta_micro": 16120,
+          "latency_ms": 5864.2,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 42486,
+          "output_tokens": 24,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 80620
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-14",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5457,
+          "wallet_delta_micro": 5457,
+          "latency_ms": 2394.9,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 21298,
+          "output_tokens": 110,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 81287
+        }
+      ],
+      "repeats": 3,
+      "scenarios": [
+        "produce",
+        "judge",
+        "meta",
+        "tool",
+        "fail",
+        "continuation",
+        "long_context"
+      ],
+      "admission": {
+        "cap_micro": 1500000,
+        "max_calls": 2000,
+        "attempted": 64,
+        "known_calls": 64,
+        "known_micro": 223069,
+        "uncertain_calls": 0,
+        "uncertain_micro": 0,
+        "overruns": 0,
+        "refusals": 0,
+        "remaining_micro": 1276931,
+        "known_mean_micro": 3485.453125,
+        "stop_reason": null
+      },
+      "calibration_reports": [
+        {
+          "repeat": 0,
+          "seed": 700,
+          "manifest": {
+            "name": "edition3-rehearsal-5",
+            "manifest_sha256": "2a7fe5c279251807537fa96ee5f6d94d27257d622b4e1b8621c6e2d4400cf49f",
+            "roster_sha256": "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434",
+            "menu": [
+              "deepseek/deepseek-v4.1-flash",
+              "openai/gpt-5.6-luna",
+              "openai/gpt-5.6-luna:online",
+              "openai/gpt-5.6-sol",
+              "venice:qwen-3-8-flash",
+              "venice:z-ai-glm-5-3-flash"
+            ]
+          },
+          "budget": {
+            "budget_micro": 1500000,
+            "spent_micro": 81318,
+            "remaining_micro": 1418682,
+            "refused_calls": 0,
+            "stopped": null
+          },
+          "provider": "edition4-prepaid-admission",
+          "scripted_exchange": true,
+          "production_effects": false
+        },
+        {
+          "repeat": 1,
+          "seed": 701,
+          "manifest": {
+            "name": "edition3-rehearsal-5",
+            "manifest_sha256": "2a7fe5c279251807537fa96ee5f6d94d27257d622b4e1b8621c6e2d4400cf49f",
+            "roster_sha256": "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434",
+            "menu": [
+              "deepseek/deepseek-v4.1-flash",
+              "openai/gpt-5.6-luna",
+              "openai/gpt-5.6-luna:online",
+              "openai/gpt-5.6-sol",
+              "venice:qwen-3-8-flash",
+              "venice:z-ai-glm-5-3-flash"
+            ]
+          },
+          "budget": {
+            "budget_micro": 1500000,
+            "spent_micro": 77587,
+            "remaining_micro": 1422413,
+            "refused_calls": 0,
+            "stopped": null
+          },
+          "provider": "edition4-prepaid-admission",
+          "scripted_exchange": true,
+          "production_effects": false
+        },
+        {
+          "repeat": 2,
+          "seed": 702,
+          "manifest": {
+            "name": "edition3-rehearsal-5",
+            "manifest_sha256": "2a7fe5c279251807537fa96ee5f6d94d27257d622b4e1b8621c6e2d4400cf49f",
+            "roster_sha256": "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434",
+            "menu": [
+              "deepseek/deepseek-v4.1-flash",
+              "openai/gpt-5.6-luna",
+              "openai/gpt-5.6-luna:online",
+              "openai/gpt-5.6-sol",
+              "venice:qwen-3-8-flash",
+              "venice:z-ai-glm-5-3-flash"
+            ]
+          },
+          "budget": {
+            "budget_micro": 1500000,
+            "spent_micro": 77164,
+            "remaining_micro": 1422836,
+            "refused_calls": 0,
+            "stopped": null
+          },
+          "provider": "edition4-prepaid-admission",
+          "scripted_exchange": true,
+          "production_effects": false
+        }
+      ]
+    },
+    "compact": {
+      "manifest": {
+        "name": "edition3-rehearsal-5",
+        "path": "/private/tmp/factorylab-edition4-treatment-source/worlds/compact/edition3-rehearsal-5.toml",
+        "sha256": "0967b8547e366640b53376ae7c6ffca4a479514134d219bf113e5c0d38e21210",
+        "roster_sha256": "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434",
+        "tick_interval_ns": 120000000000,
+        "initial_balance_micro": 300000000,
+        "endowment_locked_micro": 180000000,
+        "exchange_kind": "hyperliquid",
+        "exchange_mainnet": false,
+        "start_cash_usd": "120",
+        "menu_models": [
+          "deepseek/deepseek-v4.1-flash",
+          "openai/gpt-5.6-luna",
+          "openai/gpt-5.6-luna:online",
+          "openai/gpt-5.6-sol",
+          "venice:qwen-3-8-flash",
+          "venice:z-ai-glm-5-3-flash"
+        ]
+      },
+      "source_sha256": "fd1eaaf4caa232548092ad850228074ed7fedd5444f54d3a4a3219cbbcb96755",
+      "provider": "edition4-prepaid-admission",
+      "models": {
+        "venice:z-ai-glm-5-3-flash": {
+          "trees_attempted": 21,
+          "trees_budget_refused": 0,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro_by_repeat": [
+            4192.0,
+            3427.0,
+            3554.0
+          ],
+          "cost_p95_micro_by_repeat": [
+            5202.3,
+            4694.8,
+            5525.2
+          ],
+          "latency_p50_ms_by_repeat": [
+            9844.7,
+            11744.4,
+            7840.4
+          ],
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ]
+        },
+        "openai/gpt-5.6-luna": {
+          "trees_attempted": 21,
+          "trees_budget_refused": 0,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro_by_repeat": [
+            3558.0,
+            3503.0,
+            3489.0
+          ],
+          "cost_p95_micro_by_repeat": [
+            8695.6,
+            8706.0,
+            8685.5
+          ],
+          "latency_p50_ms_by_repeat": [
+            4162.3,
+            3032.5,
+            3309.0
+          ],
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ]
+        }
+      },
+      "trees": [
+        {
+          "scenario": "produce",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-0",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5409,
+          "wallet_delta_micro": 5409,
+          "latency_ms": 18601.1,
+          "calls": 1,
+          "tool_calls": 3,
+          "children": 0,
+          "input_tokens": 19466,
+          "output_tokens": 681,
+          "cached_tokens": 2304,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45348
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:evaluator",
+          "handle": "decision-1",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 2029,
+          "wallet_delta_micro": 2029,
+          "latency_ms": 7334.6,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 14112,
+          "output_tokens": 930,
+          "cached_tokens": 4608,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 50441
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:meta",
+          "handle": "decision-2",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 2203,
+          "wallet_delta_micro": 2203,
+          "latency_ms": 12576.6,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 13525,
+          "output_tokens": 1454,
+          "cached_tokens": 4608,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 47828
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:tool",
+          "handle": "decision-3",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 4192,
+          "wallet_delta_micro": 4192,
+          "latency_ms": 9187.7,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 13290,
+          "output_tokens": 51,
+          "cached_tokens": 4608,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44677
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:fail",
+          "handle": "decision-4",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "The order in inputs (client_id \"calibration-unplaced\") carries an explicit note that it was never sent to the venue, so no venue fill id or settlement time exists for it. The outcome schema requires a",
+          "cost_micro": 1439,
+          "wallet_delta_micro": 1439,
+          "latency_ms": 2344.4,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12793,
+          "output_tokens": 145,
+          "cached_tokens": 4608,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44635
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:parent",
+          "handle": "decision-5",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 4613,
+          "wallet_delta_micro": 4613,
+          "latency_ms": 9844.7,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 26337,
+          "output_tokens": 294,
+          "cached_tokens": 9216,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44692
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-6",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 4720,
+          "wallet_delta_micro": 4720,
+          "latency_ms": 19607.1,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 13220,
+          "output_tokens": 753,
+          "cached_tokens": 4608,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45348
+        },
+        {
+          "scenario": "produce",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-8",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3145,
+          "wallet_delta_micro": 3145,
+          "latency_ms": 1613.0,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12126,
+          "output_tokens": 94,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45790
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:openai/gpt-5.6-luna:evaluator",
+          "handle": "decision-9",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3701,
+          "wallet_delta_micro": 3701,
+          "latency_ms": 4162.3,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 13267,
+          "output_tokens": 320,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 50883
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:openai/gpt-5.6-luna:meta",
+          "handle": "decision-10",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3558,
+          "wallet_delta_micro": 3558,
+          "latency_ms": 3665.5,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12675,
+          "output_tokens": 324,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 48272
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:openai/gpt-5.6-luna:tool",
+          "handle": "decision-11",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 7206,
+          "wallet_delta_micro": 7206,
+          "latency_ms": 4590.9,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 12442,
+          "output_tokens": 21,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45121
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:openai/gpt-5.6-luna:fail",
+          "handle": "decision-12",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "The order with client_id \"calibration-unplaced\" was never submitted to the venue, so no fill_id or settled_at_ns exists.",
+          "cost_micro": 3038,
+          "wallet_delta_micro": 3038,
+          "latency_ms": 1714.4,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 11946,
+          "output_tokens": 43,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45079
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:openai/gpt-5.6-luna:parent",
+          "handle": "decision-13",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 9334,
+          "wallet_delta_micro": 9334,
+          "latency_ms": 6792.1,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 24115,
+          "output_tokens": 100,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45124
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-14",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3227,
+          "wallet_delta_micro": 3227,
+          "latency_ms": 4813.8,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12126,
+          "output_tokens": 163,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45791
+        },
+        {
+          "scenario": "produce",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-0",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 4729,
+          "wallet_delta_micro": 4729,
+          "latency_ms": 34632.2,
+          "calls": 1,
+          "tool_calls": 4,
+          "children": 0,
+          "input_tokens": 24964,
+          "output_tokens": 655,
+          "cached_tokens": 4608,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45348
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:evaluator",
+          "handle": "decision-1",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 1137,
+          "wallet_delta_micro": 1137,
+          "latency_ms": 10141.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 14112,
+          "output_tokens": 805,
+          "cached_tokens": 11520,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 50441
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:meta",
+          "handle": "decision-2",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 1672,
+          "wallet_delta_micro": 1672,
+          "latency_ms": 14661.6,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 13525,
+          "output_tokens": 1497,
+          "cached_tokens": 9216,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 47828
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:tool",
+          "handle": "decision-3",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3427,
+          "wallet_delta_micro": 3427,
+          "latency_ms": 5250.8,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 13290,
+          "output_tokens": 80,
+          "cached_tokens": 4608,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44677
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:fail",
+          "handle": "decision-4",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "No venue fill exists for this order: inputs.order.client_id 'calibration-unplaced' is explicitly annotated as never sent to the venue, so there is no fill_id or settlement time to report, and inventin",
+          "cost_micro": 969,
+          "wallet_delta_micro": 969,
+          "latency_ms": 2686.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12793,
+          "output_tokens": 311,
+          "cached_tokens": 9216,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44635
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:parent",
+          "handle": "decision-5",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 4100,
+          "wallet_delta_micro": 4100,
+          "latency_ms": 11744.4,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 26127,
+          "output_tokens": 595,
+          "cached_tokens": 9216,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44692
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-6",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 4615,
+          "wallet_delta_micro": 4615,
+          "latency_ms": 16894.3,
+          "calls": 1,
+          "tool_calls": 3,
+          "children": 0,
+          "input_tokens": 19466,
+          "output_tokens": 918,
+          "cached_tokens": 4608,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45348
+        },
+        {
+          "scenario": "produce",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-8",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3116,
+          "wallet_delta_micro": 3116,
+          "latency_ms": 1633.5,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12102,
+          "output_tokens": 75,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45672
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:openai/gpt-5.6-luna:evaluator",
+          "handle": "decision-9",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3503,
+          "wallet_delta_micro": 3503,
+          "latency_ms": 2266.0,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 13243,
+          "output_tokens": 160,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 50765
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:openai/gpt-5.6-luna:meta",
+          "handle": "decision-10",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3531,
+          "wallet_delta_micro": 3531,
+          "latency_ms": 3032.5,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12651,
+          "output_tokens": 307,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 48154
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:openai/gpt-5.6-luna:tool",
+          "handle": "decision-11",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 7187,
+          "wallet_delta_micro": 7187,
+          "latency_ms": 4022.5,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 12418,
+          "output_tokens": 21,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45003
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:openai/gpt-5.6-luna:fail",
+          "handle": "decision-12",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "The order with client_id \"calibration-unplaced\" was never submitted to the venue, so no fill_id or settlement time exists.",
+          "cost_micro": 3078,
+          "wallet_delta_micro": 3078,
+          "latency_ms": 3147.4,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 11922,
+          "output_tokens": 81,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44961
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:openai/gpt-5.6-luna:parent",
+          "handle": "decision-13",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 9357,
+          "wallet_delta_micro": 9357,
+          "latency_ms": 6283.6,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 24172,
+          "output_tokens": 107,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45006
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-14",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3113,
+          "wallet_delta_micro": 3113,
+          "latency_ms": 2405.9,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12102,
+          "output_tokens": 73,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45673
+        },
+        {
+          "scenario": "produce",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-0",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5087,
+          "wallet_delta_micro": 5087,
+          "latency_ms": 15902.2,
+          "calls": 1,
+          "tool_calls": 2,
+          "children": 0,
+          "input_tokens": 13394,
+          "output_tokens": 752,
+          "cached_tokens": 4608,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45348
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:evaluator",
+          "handle": "decision-1",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 1136,
+          "wallet_delta_micro": 1136,
+          "latency_ms": 5467.5,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 14112,
+          "output_tokens": 802,
+          "cached_tokens": 11520,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 50441
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:meta",
+          "handle": "decision-2",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 1757,
+          "wallet_delta_micro": 1757,
+          "latency_ms": 9319.5,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 13525,
+          "output_tokens": 1667,
+          "cached_tokens": 9216,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 47828
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:tool",
+          "handle": "decision-3",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3554,
+          "wallet_delta_micro": 3554,
+          "latency_ms": 6635.4,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 13289,
+          "output_tokens": 51,
+          "cached_tokens": 4608,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44677
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:fail",
+          "handle": "decision-4",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "The order named in inputs (client_id \"calibration-unplaced\") was never sent to the venue, as the input itself states. No venue fill id or settlement time exists for it; inventing values for fill_id an",
+          "cost_micro": 937,
+          "wallet_delta_micro": 937,
+          "latency_ms": 7532.1,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12793,
+          "output_tokens": 246,
+          "cached_tokens": 9216,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44635
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:parent",
+          "handle": "decision-5",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3831,
+          "wallet_delta_micro": 3831,
+          "latency_ms": 7840.4,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 26188,
+          "output_tokens": 67,
+          "cached_tokens": 9216,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44692
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:venice:z-ai-glm-5-3-flash:producer",
+          "handle": "decision-6",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 5713,
+          "wallet_delta_micro": 5713,
+          "latency_ms": 19418.3,
+          "calls": 1,
+          "tool_calls": 4,
+          "children": 0,
+          "input_tokens": 24963,
+          "output_tokens": 907,
+          "cached_tokens": 4608,
+          "served_by": [
+            "venice:z-ai-glm-5-3-flash"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45348
+        },
+        {
+          "scenario": "produce",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-8",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3104,
+          "wallet_delta_micro": 3104,
+          "latency_ms": 2140.8,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12078,
+          "output_tokens": 70,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45649
+        },
+        {
+          "scenario": "judge",
+          "seat": "cal:openai/gpt-5.6-luna:evaluator",
+          "handle": "decision-9",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3646,
+          "wallet_delta_micro": 3646,
+          "latency_ms": 3309.0,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 13219,
+          "output_tokens": 284,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 50742
+        },
+        {
+          "scenario": "meta",
+          "seat": "cal:openai/gpt-5.6-luna:meta",
+          "handle": "decision-10",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3489,
+          "wallet_delta_micro": 3489,
+          "latency_ms": 3737.3,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12627,
+          "output_tokens": 277,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 48131
+        },
+        {
+          "scenario": "tool",
+          "seat": "cal:openai/gpt-5.6-luna:tool",
+          "handle": "decision-11",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 7317,
+          "wallet_delta_micro": 7317,
+          "latency_ms": 4871.6,
+          "calls": 1,
+          "tool_calls": 1,
+          "children": 0,
+          "input_tokens": 12394,
+          "output_tokens": 21,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44980
+        },
+        {
+          "scenario": "fail",
+          "seat": "cal:openai/gpt-5.6-luna:fail",
+          "handle": "decision-12",
+          "status": "refused",
+          "expected": "refused",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": "The order with client_id \"calibration-unplaced\" was never submitted to the venue, and no fill or settlement receipt exists; therefore fill_id and settled_at_ns are unknown.",
+          "cost_micro": 3036,
+          "wallet_delta_micro": 3036,
+          "latency_ms": 1711.6,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 11898,
+          "output_tokens": 51,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44938
+        },
+        {
+          "scenario": "continuation",
+          "seat": "cal:openai/gpt-5.6-luna:parent",
+          "handle": "decision-13",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 9272,
+          "wallet_delta_micro": 9272,
+          "latency_ms": 6713.6,
+          "calls": 2,
+          "tool_calls": 0,
+          "children": 1,
+          "input_tokens": 24058,
+          "output_tokens": 113,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 44983
+        },
+        {
+          "scenario": "long_context",
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "handle": "decision-14",
+          "status": "ok",
+          "expected": "ok",
+          "completed": true,
+          "well_formed": true,
+          "task_met": true,
+          "budget_refused": false,
+          "entitlement_refused": false,
+          "reason": null,
+          "cost_micro": 3109,
+          "wallet_delta_micro": 3109,
+          "latency_ms": 2195.7,
+          "calls": 1,
+          "tool_calls": 0,
+          "children": 0,
+          "input_tokens": 12078,
+          "output_tokens": 74,
+          "cached_tokens": 0,
+          "served_by": [
+            "openai/gpt-5.6-luna"
+          ],
+          "finish_reasons": [
+            "stop"
+          ],
+          "prompt_bytes": 45650
+        }
+      ],
+      "repeats": 3,
+      "scenarios": [
+        "produce",
+        "judge",
+        "meta",
+        "tool",
+        "fail",
+        "continuation",
+        "long_context"
+      ],
+      "admission": {
+        "cap_micro": 1500000,
+        "max_calls": 2000,
+        "attempted": 66,
+        "known_calls": 66,
+        "known_micro": 157336,
+        "uncertain_calls": 0,
+        "uncertain_micro": 0,
+        "overruns": 0,
+        "refusals": 0,
+        "remaining_micro": 1342664,
+        "known_mean_micro": 2383.878787878788,
+        "stop_reason": null
+      },
+      "calibration_reports": [
+        {
+          "repeat": 0,
+          "seed": 700,
+          "manifest": {
+            "name": "edition3-rehearsal-5",
+            "manifest_sha256": "0967b8547e366640b53376ae7c6ffca4a479514134d219bf113e5c0d38e21210",
+            "roster_sha256": "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434",
+            "menu": [
+              "deepseek/deepseek-v4.1-flash",
+              "openai/gpt-5.6-luna",
+              "openai/gpt-5.6-luna:online",
+              "openai/gpt-5.6-sol",
+              "venice:qwen-3-8-flash",
+              "venice:z-ai-glm-5-3-flash"
+            ]
+          },
+          "budget": {
+            "budget_micro": 1500000,
+            "spent_micro": 57814,
+            "remaining_micro": 1442186,
+            "refused_calls": 0,
+            "stopped": null
+          },
+          "provider": "edition4-prepaid-admission",
+          "scripted_exchange": true,
+          "production_effects": false
+        },
+        {
+          "repeat": 1,
+          "seed": 701,
+          "manifest": {
+            "name": "edition3-rehearsal-5",
+            "manifest_sha256": "0967b8547e366640b53376ae7c6ffca4a479514134d219bf113e5c0d38e21210",
+            "roster_sha256": "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434",
+            "menu": [
+              "deepseek/deepseek-v4.1-flash",
+              "openai/gpt-5.6-luna",
+              "openai/gpt-5.6-luna:online",
+              "openai/gpt-5.6-sol",
+              "venice:qwen-3-8-flash",
+              "venice:z-ai-glm-5-3-flash"
+            ]
+          },
+          "budget": {
+            "budget_micro": 1500000,
+            "spent_micro": 53534,
+            "remaining_micro": 1446466,
+            "refused_calls": 0,
+            "stopped": null
+          },
+          "provider": "edition4-prepaid-admission",
+          "scripted_exchange": true,
+          "production_effects": false
+        },
+        {
+          "repeat": 2,
+          "seed": 702,
+          "manifest": {
+            "name": "edition3-rehearsal-5",
+            "manifest_sha256": "0967b8547e366640b53376ae7c6ffca4a479514134d219bf113e5c0d38e21210",
+            "roster_sha256": "81de4911c5ba27eeeca65435cba461c31862bcc2a3f29c16ebb5e75c1005f434",
+            "menu": [
+              "deepseek/deepseek-v4.1-flash",
+              "openai/gpt-5.6-luna",
+              "openai/gpt-5.6-luna:online",
+              "openai/gpt-5.6-sol",
+              "venice:qwen-3-8-flash",
+              "venice:z-ai-glm-5-3-flash"
+            ]
+          },
+          "budget": {
+            "budget_micro": 1500000,
+            "spent_micro": 54988,
+            "remaining_micro": 1445012,
+            "refused_calls": 0,
+            "stopped": null
+          },
+          "provider": "edition4-prepaid-admission",
+          "scripted_exchange": true,
+          "production_effects": false
+        }
+      ]
+    }
+  },
+  "denied_rails": [
+    "x402",
+    "treasury transfers",
+    "venue order/payment returns",
+    "topups",
+    "gas funding"
+  ],
+  "uncertainty": {
+    "cost": "Admission known_micro is authoritative reported cost; uncertain_micro includes table/unknown bills and is terminal.",
+    "behavior": "Results measure scripted calibration task completion, not spontaneous world behavior or production reliability.",
+    "venue": "The calibration harness converts both manifests to a fake exchange; no venue account effects are possible."
+  },
+  "commands": [
+    {
+      "arm": "reference",
+      "repeat": 1,
+      "command": "uv run python -u /tmp/run_edition4_paired_calibration.py",
+      "world": "/private/tmp/factorylab-edition4-treatment-source/worlds/control/edition3-rehearsal-5.toml",
+      "source_root": "/private/tmp/factorylab-edition4-treatment-source",
+      "sys_path_inserted": "/private/tmp/factorylab-edition4-treatment-source"
+    },
+    {
+      "arm": "compact",
+      "repeat": 1,
+      "command": "uv run python -u /tmp/run_edition4_paired_calibration.py",
+      "world": "/private/tmp/factorylab-edition4-treatment-source/worlds/compact/edition3-rehearsal-5.toml",
+      "source_root": "/private/tmp/factorylab-edition4-treatment-source",
+      "sys_path_inserted": "/private/tmp/factorylab-edition4-treatment-source"
+    },
+    {
+      "arm": "reference",
+      "repeat": 2,
+      "command": "uv run python -u /tmp/run_edition4_paired_calibration.py",
+      "world": "/private/tmp/factorylab-edition4-treatment-source/worlds/control/edition3-rehearsal-5.toml",
+      "source_root": "/private/tmp/factorylab-edition4-treatment-source",
+      "sys_path_inserted": "/private/tmp/factorylab-edition4-treatment-source"
+    },
+    {
+      "arm": "compact",
+      "repeat": 2,
+      "command": "uv run python -u /tmp/run_edition4_paired_calibration.py",
+      "world": "/private/tmp/factorylab-edition4-treatment-source/worlds/compact/edition3-rehearsal-5.toml",
+      "source_root": "/private/tmp/factorylab-edition4-treatment-source",
+      "sys_path_inserted": "/private/tmp/factorylab-edition4-treatment-source"
+    },
+    {
+      "arm": "reference",
+      "repeat": 3,
+      "command": "uv run python -u /tmp/run_edition4_paired_calibration.py",
+      "world": "/private/tmp/factorylab-edition4-treatment-source/worlds/control/edition3-rehearsal-5.toml",
+      "source_root": "/private/tmp/factorylab-edition4-treatment-source",
+      "sys_path_inserted": "/private/tmp/factorylab-edition4-treatment-source"
+    },
+    {
+      "arm": "compact",
+      "repeat": 3,
+      "command": "uv run python -u /tmp/run_edition4_paired_calibration.py",
+      "world": "/private/tmp/factorylab-edition4-treatment-source/worlds/compact/edition3-rehearsal-5.toml",
+      "source_root": "/private/tmp/factorylab-edition4-treatment-source",
+      "sys_path_inserted": "/private/tmp/factorylab-edition4-treatment-source"
+    }
+  ]
+}

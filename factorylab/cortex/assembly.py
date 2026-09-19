@@ -785,6 +785,7 @@ def validate_proposal(proposal: dict) -> None:
                    "emits": {"type": "array", "items": {"type": "string"}},
                    "schemas": {"type": "object"},
                    "trigger": {"type": "object"},
+                   "endowment_micro": {"type": "integer", "minimum": 1},
                    "range": {"type": "array", "items": {"type": "number"}},
                    "actions": {"type": "array", "items": {"type": "string"}},
                    "args_schema": {"type": "object"}})

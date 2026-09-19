@@ -597,6 +597,33 @@ class BootstrapMixin:
             "price_micro_per_call": 0,
             "kind": "outcome",
         }
+        if getattr(getattr(manifest, "prompt", None), "mode", "reference") == "compact":
+            from factorylab.cortex.schematics import INSTITUTION_SECTIONS
+
+            self.tool_specs["world.read"] = {
+                "id": "world.read",
+                "description": "Read one current public institutional section by its "
+                "directory handle. Returns its authoritative contract, not private "
+                "participant state. Free; the next model call still costs inference.",
+                "args_schema": {
+                    "type": "object",
+                    "properties": {"section": {"type": "string",
+                                                "enum": sorted(INSTITUTION_SECTIONS)}},
+                    "required": ["section"], "additionalProperties": False,
+                },
+                "price_micro_per_call": 0, "kind": "institution",
+            }
+            examples["world.read"] = [{"section": "composition"}]
+        if getattr(manifest.tools, "address_enabled", False):
+            from factorylab.runtime.address import specs as address_specs
+
+            # The transport is priced like every other population tool this world
+            # publishes, so addressing is a call a seat pays for out of its own
+            # entitlement rather than a free channel that rewards volume.
+            self.tool_specs.update(
+                address_specs(manifest.tools.population_tool_micro_per_call))
+            examples["address.send"] = [{"recipient": "another-live-participant",
+                                        "text": "Your funding series is the one I lack."}]
         # Every published tool carries examples its own schema accepts (B1). Stamping
         # after the whole seed set is assembled keeps that total: a seed tool added
         # without an example fails at launch rather than reaching the population.

@@ -1,0 +1,21 @@
+All checks passed!
+============================= test session starts ==============================
+platform darwin -- Python 3.13.11, pytest-9.1.1, pluggy-1.6.0
+rootdir: /private/var/folders/f5/7kp8jy796_b3tvgq6rsf4j7h0000gn/T/factorylab-audit-20260918-w7fz8380
+configfile: pyproject.toml
+testpaths: tests
+plugins: xdist-3.8.0, anyio-4.15.1
+created: 2/2 workers
+2 workers [3296 items]
+
+........................................................................ [  2%]
+..............................................................s......... [  4%]
+........................................................................ [  6%]
+........................................................................ [  8%]
+........................................................................ [ 10%]
+........................................................................ [ 13%]
+.........................................
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! KeyboardInterrupt !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+/Users/isaacentebi/.local/share/uv/python/cpython-3.13.11-macos-aarch64-none/lib/python3.13/threading.py:363: KeyboardInterrupt
+(to show a full traceback on KeyboardInterrupt use --full-trace)
+================== 472 passed, 1 skipped in 582.60s (0:09:42) ==================
