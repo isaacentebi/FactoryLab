@@ -340,6 +340,35 @@ class TestFix4StaleIsNeverLive:
         assert stale.stale is True and stale.observed_at_ns == fresh.observed_at_ns
         assert stale.positions == fresh.positions
 
+    def test_a_stale_account_refuses_new_risk_even_with_this_tick_s_stamp(self, monkeypatch):
+        """A read that succeeded, then an endpoint failure in the same tick.
+
+        The fallback keeps the successful read's observation time, so an age check
+        alone sees a fresh account. The snapshot is still one the venue declined to
+        refresh, and new exposure cannot be authorised on it.
+        """
+        monkeypatch.setattr("time.sleep", lambda s: None)
+        ex = _live_stub()
+        fresh = ex.collateral_view("BTC")
+        assert fresh["stale"] is False
+        ex._info.user_state.side_effect = OSError("down")
+        view = ex.collateral_view("BTC")
+        assert view["stale"] is True
+        assert view["observed_at_ns"] == fresh["observed_at_ns"]
+
+        rt = venue_runtime(venue_usd="1000")
+        rt.exchange.deterministic = False
+        rt.exchange.target.collateral_view = lambda coin, market="perp": {
+            **view, "observed_at_ns": rt.clock.now_ns}
+        try:
+            assert rt._order_collateral("h", "BTC", Decimal("0.001"), True) == (
+                "order collateral is stale: the venue did not refresh the account")
+            # It is still never a reason to block a reduction.
+            assert rt._order_collateral("h", "BTC", Decimal("0.001"), False,
+                                        reduce_only=True) is None
+        finally:
+            del rt.exchange.target.collateral_view
+
     def test_wind_down_never_reads_flat_from_a_stale_account(self):
         from dataclasses import replace as dc_replace
 

@@ -767,15 +767,22 @@ class VenueMixin:
         return dict(self.exchange.collateral_view(coin, market))
 
     def _collateral_stale(self, view: dict) -> str | None:
-        """An observation older than one tick cannot authorise new risk.
+        """An observation the venue did not just make cannot authorise new risk.
 
         A deterministic venue computes the view from its own books at the moment
         it is asked, so there is nothing for it to be stale about. A live venue
         stamps the account read the view is built from, and Hyperliquid's adapter
         keeps that stamp when it falls back to its last complete snapshot: the
         fallback is exactly the case worth refusing.
+
+        A timestamp alone does not catch it. A read that succeeded and then an
+        endpoint failure inside the same tick falls back to a snapshot whose
+        observation time is this tick's, so the view's own ``stale`` marker is
+        the fact, and it is refused whatever the age says.
         """
         observed_at = view.get("observed_at_ns")
+        if view.get("stale"):
+            return "order collateral is stale: the venue did not refresh the account"
         if observed_at is None:
             return "order collateral unavailable: venue reported no observation time"
         if getattr(self.exchange, "deterministic", False):

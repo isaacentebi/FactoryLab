@@ -1076,7 +1076,10 @@ class HyperliquidExchange:
         ``observed_at_ns`` is the moment of the account read this view is built
         from -- including a fallback to the last complete snapshot when the spot
         endpoint was out -- so a caller can refuse to open new risk on a stale
-        answer rather than treating an old number as current.
+        answer rather than treating an old number as current. ``stale`` says that
+        this view came from such a fallback: a read that succeeded and then an
+        endpoint failure in the same tick leaves ``observed_at_ns`` recent, so the
+        timestamp alone does not carry the fact.
         """
         account = self.account()
         spot = "/" in coin or market == "spot"
@@ -1110,6 +1113,11 @@ class HyperliquidExchange:
                 (p.size for p in account.positions if p.coin == coin), Decimal(0))),
             "spot_available": available,
             "observed_at_ns": getattr(self, "_last_account_ns", None),
+            # The account read this view is built from was a fallback to the last
+            # complete snapshot, not this read's answer. Its observation time is
+            # the earlier read's and can be this very tick, so the marker travels
+            # with the view: an age check alone would not see it.
+            "stale": bool(getattr(account, "stale", False)),
         }
 
     def _acknowledged_leverage(self, coin: str) -> Decimal | None:
