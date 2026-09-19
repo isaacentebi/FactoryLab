@@ -1493,8 +1493,7 @@ class FeedbackMixin:
                 self.handle_to_assembly.get(ancestor)
                 for ancestor in self._ancestry(contract.handle)
             )))
-            if contract.initial_evaluator is not None:
-                excluded.add(contract.initial_evaluator)
+            excluded.update(contract.initial_evaluators)
             excluded.update(contract.final_evaluators)
             self.ledger.append({
                 "kind": "consequence.final_requested", "handle": handle,
@@ -1502,7 +1501,7 @@ class FeedbackMixin:
                 "excluded_evaluators": sorted(excluded), "ts": self.clock.now_ns,
             })
             self.grounded_pending[handle] = contract.requested()
-            self._emit(EventKind.PRODUCER_RETURN, {
+            self._emit(contract.subject_kind, {
                 "about_handle": handle,
                 "description": "Final independent evaluation of a frozen producer contract",
                 "inputs": {"kind": "RealizedConsequence", "payload": {}},
@@ -1526,7 +1525,8 @@ class FeedbackMixin:
             self._settle_unmeasured(judge_handle, CH_CONFORMITY,
                                     "the grounded contract is no longer open")
             return
-        excluded = {contract.producer_id, contract.initial_evaluator}
+        excluded = {contract.producer_id}
+        excluded.update(contract.initial_evaluators)
         excluded.update(contract.final_evaluators)
         excluded.update(filter(None, (
             self.handle_to_assembly.get(ancestor)

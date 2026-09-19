@@ -2024,6 +2024,16 @@ numeric score and produce no learner update; a timed-out pending assessment also
 train early. One malformed final finding can be retried by a different evaluator,
 within the close horizon. Both top-level and child producer decisions use this path.
 
+Additive routers may commission several provisional opinions; all participating
+provisional evaluators and their eligible forecasts remain attached to the contract.
+None of those evaluators may supply its final independent finding. The final
+commission uses the producer's selected emitted kind, including custom judged kinds.
+It uses the first active router in that kind's checkpointed registration order for
+one ordinary, propensity-logged draw. A NOOP ends that commission without forcing
+a judge or trying the other routers. This single-router rule applies only to the
+final commission, not the subsequent recursive evaluation of its finding. Historical
+contracts lacking the emitted-kind field retain the old `ProducerReturn` fallback.
+
 `grounded_horizon_ticks` is an exact positive integer, default `10`. It controls when
 the first final consequence-grounded commission becomes due and is independent of
 `forecast_horizon_events`, which continues to govern ordinary forecasts. Closure is

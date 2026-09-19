@@ -148,7 +148,7 @@ class Runtime(
         if ev is None:
             return universe
         excluded = self._subject_authors(kind, ev)
-        if ev.payload.get("grounded_consequence"):
+        if self._is_final_grounded_commission(ev):
             excluded |= set(ev.payload.get("excluded_evaluators", ()))
             # This event is a kernel commission for a final independent evaluator,
             # not a new opportunity for producers to answer and recursively create
@@ -932,7 +932,7 @@ class Runtime(
         self.window.revision_handles.discard(handle)
         if grounded_contract is not None and self.queue.get(handle).channel == CH_VERDICT:
             self.grounded_pending[handle] = grounded_contract.with_outputs(
-                public_return(ret.outputs))
+                public_return(ret.outputs), subject_kind=emitted)
             self.ledger.append({
                 "kind": "consequence.contract",
                 "handle": handle,
@@ -1229,7 +1229,10 @@ class Runtime(
         if (
             pend is not None
             and about_decision.channel in (CH_VERDICT, CH_CONFORMITY)
-            and about_decision.status is SettleStatus.PENDING
+            and (
+                about_decision.status is SettleStatus.PENDING
+                or (grounded_subject and about_decision.status is SettleStatus.TIMED_OUT)
+            )
         ):
             if not grounded_subject:
                 self._settle_priced(

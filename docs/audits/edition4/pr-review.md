@@ -80,3 +80,26 @@ prompt or clock split live. Fresh corrected-C and nonfinancial tests remain gate
 Integrated follow-up verification: Ruff passed; `uv run pytest` reported
 `2036 passed in 22.46s`; the same selected gate command above reported
 `23 passed in 13.88s`. `git diff --check` passed. No paid or live run was made.
+
+## Follow-up review of `f66464a`
+
+- Codex 4052378300: retain all provisional evaluators and eligible forecast claims
+  across additive routers; exclude every provisional evaluator from final selection
+  and preserve all resolved forecast evidence. The singular historical evaluator
+  field remains recoverable.
+- Codex 4052378303: freeze the producer's selected emitted kind alongside its
+  returned claim, for both top-level and child decisions; use that kind for its
+  final commission. Historical checkpoints without the field keep the previous
+  `ProducerReturn` fallback.
+- Codex 4052378304: each final commission uses one ordinary draw from the first
+  active router in checkpointed registration order. The routing policy is ledgered,
+  and evaluator propensity remains logged by the ordinary draw. NOOP remains a
+  refusal, not a request to try further routers. Recursive evaluation of the final
+  finding is a separate event and retains its normal routing behavior.
+
+Integrated verification for this revision: Ruff passed; `uv run pytest` reported
+`2041 passed in 21.34s`; the same selected gate command reported
+`23 passed in 13.71s`. Regression cases include accumulated forecast evidence,
+legacy checkpoint fields, late provisional opinions, custom top-level and child
+returns, actual custom-evaluator dispatch, one final NOOP draw with additive routers,
+and preserved recursive meta eligibility. No paid or live run was made.

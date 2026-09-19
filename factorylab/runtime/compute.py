@@ -1761,7 +1761,7 @@ class ComputeMixin:
                 if (grounded_contract is not None
                         and self.queue.get(handle).channel == CH_VERDICT):
                     self.grounded_pending[handle] = grounded_contract.with_outputs(
-                        public_return(ret.outputs))
+                        public_return(ret.outputs), subject_kind=emitted)
                     contract = self.grounded_pending[handle]
                     self.ledger.append({
                         "kind": "consequence.contract", "handle": handle,

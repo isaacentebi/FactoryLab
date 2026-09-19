@@ -38,6 +38,7 @@ class GroundedContract:
     receipt_cursor: int
     initial_judge: str | None = None
     initial_evaluator: str | None = None
+    initial_evaluators: tuple[str, ...] = ()
     forecast_handles: tuple[str, ...] = ()
     forecasts: tuple[dict[str, Any], ...] = ()
     final_requested: bool = False
@@ -46,6 +47,9 @@ class GroundedContract:
     # Added after the first realized-feedback checkpoints. An empty tuple means
     # that historical contract did not freeze norms; it never means current norms.
     norms: tuple[dict[str, str], ...] = ()
+    # Historical checkpoints omitted the frozen emitted kind; preserve their
+    # final-commission fallback through the built-in producer-return route.
+    subject_kind: str = "ProducerReturn"
 
     def __post_init__(self) -> None:
         if not self.handle or not self.producer_id:
@@ -55,6 +59,10 @@ class GroundedContract:
         object.__setattr__(self, "criteria", tuple(_plain(v) for v in self.criteria))
         object.__setattr__(self, "predicate_versions", tuple(self.predicate_versions))
         object.__setattr__(self, "producer_outputs", _plain(self.producer_outputs))
+        evaluators = tuple(self.initial_evaluators)
+        if self.initial_evaluator is not None:
+            evaluators = tuple(dict.fromkeys((self.initial_evaluator, *evaluators)))
+        object.__setattr__(self, "initial_evaluators", evaluators)
         object.__setattr__(self, "forecast_handles", tuple(self.forecast_handles))
         object.__setattr__(self, "forecasts", tuple(_plain(v) for v in self.forecasts))
         object.__setattr__(self, "final_evaluators", tuple(self.final_evaluators))
@@ -65,9 +73,18 @@ class GroundedContract:
         forecasts: Iterable[Mapping] = (),
     ) -> GroundedContract:
         """Attach the independently sampled first interpretation without changing its horizon."""
-        return replace(self, initial_judge=judge_handle, initial_evaluator=evaluator_id,
-                       forecast_handles=tuple(forecast_handles),
-                       forecasts=tuple(dict(v) for v in forecasts))
+        evaluators = tuple(dict.fromkeys((*self.initial_evaluators, evaluator_id)))
+        handles = tuple(dict.fromkeys((*self.forecast_handles, *forecast_handles)))
+        claims = {str(v.get("handle")): dict(v) for v in self.forecasts}
+        claims.update({str(v.get("handle")): dict(v) for v in forecasts})
+        return replace(
+            self,
+            initial_judge=self.initial_judge or judge_handle,
+            initial_evaluator=self.initial_evaluator or evaluator_id,
+            initial_evaluators=evaluators,
+            forecast_handles=handles,
+            forecasts=tuple(claims.values()),
+        )
 
     def requested(self) -> GroundedContract:
         """Mark the final commission as emitted; retries retain one request."""
@@ -78,9 +95,11 @@ class GroundedContract:
         evaluators = tuple(dict.fromkeys((*self.final_evaluators, evaluator_id)))
         return replace(self, final_requested=False, final_evaluators=evaluators)
 
-    def with_outputs(self, outputs: Mapping) -> GroundedContract:
+    def with_outputs(
+        self, outputs: Mapping, *, subject_kind: str = "ProducerReturn"
+    ) -> GroundedContract:
         """Attach the public returned claim without moving its pre-action baseline."""
-        return replace(self, producer_outputs=dict(outputs))
+        return replace(self, producer_outputs=dict(outputs), subject_kind=subject_kind)
 
 
 def freeze_contract(
