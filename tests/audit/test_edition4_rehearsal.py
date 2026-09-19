@@ -1,7 +1,7 @@
 """Bounded edition 4 rehearsal admission and provenance checks."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -72,6 +72,70 @@ def test_effective_manifest_preserves_roster_charter_and_endowment():
     assert effective.kill.wind_down is original.kill.wind_down is True
 
 
+def test_launch_factors_are_explicit_and_reasoning_changes_roster_with_provenance():
+    original = load_manifest(WORLD)
+    factored = rehearsal.effective_manifest(
+        original,
+        prompt_mode="compact",
+        producer_feedback="realized",
+        address_enabled=True,
+        reasoning="off",
+    )
+
+    assert factored.prompt.mode == "compact"
+    assert factored.evaluation.producer_feedback == "realized"
+    assert factored.tools.address_enabled is True
+    assert all(dict(model.reasoning) == {"enabled": False} for model in factored.models)
+    assert factored.charter.norms == original.charter.norms
+    assert factored.assemblies == original.assemblies
+    assert rehearsal.roster_hash(factored) != rehearsal.roster_hash(original)
+
+    enabled = rehearsal.effective_manifest(original, reasoning="on")
+    assert dict(enabled.models[0].reasoning) == {"enabled": True}
+    assert dict(enabled.models[1].reasoning) == {"effort": "low"}
+    declared_on = replace(
+        original,
+        models=tuple(replace(model, reasoning=(("effort", "low"),))
+                     for model in original.models),
+    )
+    supported = rehearsal.effective_manifest(declared_on, reasoning="on")
+    assert all(dict(model.reasoning) == {"effort": "low"} for model in supported.models)
+
+
+def test_omitted_factors_preserve_the_supplied_manifest_values():
+    original = load_manifest(WORLD)
+    supplied = replace(
+        original,
+        prompt=replace(original.prompt, mode="compact"),
+        evaluation=replace(original.evaluation, producer_feedback="realized"),
+        tools=replace(original.tools, address_enabled=True),
+    )
+
+    effective = rehearsal.effective_manifest(supplied)
+
+    assert effective.prompt == supplied.prompt
+    assert effective.evaluation.producer_feedback == "realized"
+    assert effective.tools.address_enabled is True
+
+
+def test_dangerous_or_unsupported_worlds_are_refused_before_runtime():
+    original = load_manifest(WORLD)
+    with pytest.raises(rehearsal.RehearsalRefused, match="testnet_hyperliquid_required"):
+        rehearsal.effective_manifest(
+            replace(original, exchange=replace(original.exchange, mainnet=True))
+        )
+    with pytest.raises(rehearsal.RehearsalRefused, match="unsupported_or_x402_model_rail"):
+        rehearsal.effective_manifest(
+            replace(original, models=(replace(original.models[0], provider="x402"),))
+        )
+    with pytest.raises(rehearsal.RehearsalRefused,
+                       match="reasoning_on_requires_declared_tier_support"):
+        rehearsal.effective_manifest(
+            replace(original, models=(replace(original.models[0], reasoning=()),)),
+            reasoning="on",
+        )
+
+
 def test_admission_counts_attempts_and_stops_on_overrun_or_unknown_bill():
     manifest = rehearsal.effective_manifest(load_manifest(WORLD))
     probe = rehearsal.PrepaidProvider(
@@ -126,7 +190,15 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
 
     class FakeLedger:
         def _recovery_items(self):
-            return [{"kind": "Launch"}, {"kind": "snapshot", "state": "omitted"}]
+            return [
+                {"kind": "Launch"},
+                {"kind": "consequence.finding", "handle": "ok", "status": "supported",
+                 "evidence": ["receipt:1"]},
+                {"kind": "consequence.finding", "handle": "bad", "status": "contrary",
+                 "evidence": []},
+                {"kind": "consequence.unknown", "handle": "censored"},
+                {"kind": "snapshot", "state": "omitted"},
+            ]
 
     class FakeRuntime:
         def __init__(self, manifest, **kwargs):
@@ -135,6 +207,7 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
             assert kwargs["kill_at_end"] is True
             self.ledger = FakeLedger()
             self.ticks_consumed = 1
+            self.grounded_pending = {"pending": object()}
             self.exchange = FakeExchange(
                 seed=1, coins=("BTC", "ETH"), spot_pairs=(), start_cash_usd="120"
             )
@@ -146,7 +219,16 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
 
         def run(self):
             return {"terminated": True, "termination_reason": "explicit_kill:budget",
-                    "stats": {"events": 1}}
+                    "outstanding_decisions": 2,
+                    "stats": {"events": 1, "decisions": 3},
+                    "process_io_metrics": {
+                        "provider": {"complete": {"calls": 2, "elapsed_ns": 50}},
+                        "exchange": {
+                            "account": {"calls": 4, "elapsed_ns": 20},
+                            "mids": {"calls": 3, "elapsed_ns": 35},
+                        },
+                        "scope": "stub process",
+                    }}
 
     monkeypatch.setattr(rehearsal, "Runtime", FakeRuntime)
     provider = StubProvider(ModelResponse("openai/gpt-5.6-luna", "{}", 1, 1, "stop", cost_micro=1))
@@ -154,11 +236,12 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
     report = rehearsal.run_rehearsal(
         WORLD,
         out=out,
-        duration_ns=rehearsal.SHORT_TICK_NS,
+        duration_ns=2 * rehearsal.SHORT_TICK_NS,
         cap_micro=10_000,
         max_calls=2,
         provider=provider,
         source_root="/Users/isaacentebi/Desktop/FactoryLab",
+        minimum_ticks=2,
     )
 
     assert report["status"] == "completed"
@@ -172,6 +255,78 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
         report["preserved"]["roster_sha256"]["from"]
         == report["preserved"]["roster_sha256"]["to"]
     )
+    assert report["behavioral_screen"]["status"] == "inconclusive"
+    assert report["behavioral_screen"]["criteria_met"]["delivered_ticks"] is False
+    assert report["behavioral_screen"]["delivered"]["grounded"] == {
+        "assessed": 1,
+        "supported": 1,
+        "contrary": 0,
+        "unknown": 0,
+        "censored": 1,
+        "outstanding": 1,
+        "malformed_or_uncited_excluded": 1,
+    }
+    critical = report["behavioral_screen"]["critical_path_io"]
+    assert critical["provider_complete_calls"] == 2
+    assert critical["exchange_account_calls"] == 4
+    assert critical["exchange_mids_calls"] == 3
+    assert critical["selected_total_calls"] == 9
+    assert critical["selected_total_elapsed_ns"] == 105
+    assert critical["selected_mean_elapsed_ns"] == "35/3"
+    assert report["factors"]["roster_preserved"] is True
+    assert report["factors"]["reasoning"]["actual_reasoning_provenance"] == {
+        "status": "unknown",
+        "reason": (
+            "provider request configuration does not establish that the upstream model "
+            "generated or exposed hidden reasoning"
+        ),
+    }
+    assert report["protocol"] == {
+        "duration_ns": 2 * rehearsal.SHORT_TICK_NS,
+        "cap_micro": 10_000,
+        "max_calls": 2,
+        "planned_tick_ceiling": 2,
+        "minimum_delivered_ticks": 2,
+        "minimum_assessed_grounded_samples": 0,
+        "minimum_contrary_grounded_samples": 0,
+        "no_live_parameter_changes": True,
+        "no_horizon_extension": True,
+    }
+
+
+def test_cli_passes_frozen_factors_and_reports_an_incomplete_screen(monkeypatch, tmp_path, capsys):
+    seen = {}
+
+    def fake_run(world, **kwargs):
+        seen.update({"world": world, **kwargs})
+        return {
+            "status": "completed",
+            "cost": {"attempted": 4},
+            "behavioral_screen": {"status": "inconclusive"},
+        }
+
+    monkeypatch.setattr(rehearsal, "run_rehearsal", fake_run)
+    code = rehearsal.main([
+        "--out", str(tmp_path / "run"),
+        "--duration", "30m",
+        "--prompt", "compact",
+        "--producer-feedback", "realized",
+        "--address-enabled",
+        "--reasoning", "on",
+        "--minimum-ticks", "60",
+        "--minimum-grounded-samples", "12",
+        "--minimum-contrary-samples", "2",
+    ])
+
+    assert code == 0
+    assert seen["prompt_mode"] == "compact"
+    assert seen["producer_feedback"] == "realized"
+    assert seen["address_enabled"] is True
+    assert seen["reasoning"] == "on"
+    assert seen["minimum_ticks"] == 60
+    assert seen["minimum_grounded_samples"] == 12
+    assert seen["minimum_contrary_samples"] == 2
+    assert json.loads(capsys.readouterr().out)["behavioral_screen"]["status"] == "inconclusive"
 
 
 @pytest.mark.gate
@@ -194,6 +349,7 @@ def test_runner_consumes_injected_clock_and_persists_dead_diary(tmp_path):
         clock_source=clock,
         source_root=Path(rehearsal.__file__).resolve().parents[1],
         observe=True,
+        minimum_ticks=1,
     )
 
     assert report["status"] == "completed"

@@ -24,7 +24,9 @@ from decimal import Decimal
 
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.runtime.loop import Runtime
+from factorylab.runtime.pricing import MeasureWindow
 from factorylab.runtime.worlds import load_manifest
+from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
 
@@ -82,10 +84,74 @@ def test_an_order_and_its_settlement_in_the_same_tick_read_the_account_fresh():
     rt._tick_mids(), rt._world_block()
     before = reads(rt, "exchange.account")
     assert place(rt, "0.002")["status"] == "filled"
-    # The collateral check reads the account itself, and so does every settlement
-    # path that follows the fill.
+    # The collateral check reads the account itself, and so does the settlement
+    # path that follows the fill: the write dropped whatever the tick had observed.
     assert reads(rt, "exchange.account") > before
     marked = reads(rt, "exchange.account")
+    assert rt._equity_micro() and reads(rt, "exchange.account") == marked + 1
+
+
+def test_a_tick_s_repeated_position_observations_read_the_venue_once():
+    """The peak is observed once a window and tick, and again after every venue move.
+
+    Every ``MarketMid`` the tick delivers used to mark positions again against a
+    venue that had published those very mids in the batch already settled. The hold
+    is keyed on the window, the tick and any pending class transfer, and every write
+    drops it, so what is reused is an observation nothing has happened since -- and
+    what it records is a per-tick sample of the marked notional, never a continuous peak.
+    """
+    rt = venue_runtime()
     rt._observe_positions()
+    held = (reads(rt, "exchange.account"), reads(rt, "exchange.mids"))
+    for _ in range(4):
+        rt._observe_positions()
+    assert (reads(rt, "exchange.account"), reads(rt, "exchange.mids")) == held
+
+    # A window that opens inside the tick marks its own peak: the closed window's
+    # observation is not the opened one's.
+    rt.window = MeasureWindow(rt.window.index + 1, rt.window.equity_start_micro)
+    rt._observe_positions()
+    assert reads(rt, "exchange.account") == held[0] + 1
+
+    # An order later in the same tick reads afresh, and so does the settlement of
+    # the fill it produced. No balance after a write is served from before it.
+    marked = reads(rt, "exchange.account")
+    assert place(rt, "0.002")["status"] == "filled"
     assert reads(rt, "exchange.account") > marked
-    assert rt._equity_micro() and reads(rt, "exchange.account") > marked + 1
+    settled = reads(rt, "exchange.account")
+    rt._observe_positions()
+    assert reads(rt, "exchange.account") == settled
+
+    # A mid the venue published is not the runtime moving the books: the hold stands.
+    rt._settle_exchange_effects([WorldEvent(WorldEventKind.MARKET_MID, rt.clock.now_ns,
+                                            rt.exchange.name, {"coin": "BTC", "mid": "1"})])
+    assert reads(rt, "exchange.account") == settled
+
+    # The next tick is a new sample, traded or not.
+    rt.ticks_consumed += 1
+    rt._observe_positions()
+    assert reads(rt, "exchange.account") == settled + 1
+    assert reads(rt, "exchange.mids") > held[1]
+
+
+def test_failed_position_observation_can_recover_in_the_same_tick(monkeypatch):
+    rt = venue_runtime()
+    assert place(rt, "0.002")["status"] == "filled"
+    rt._venue_moved()
+    account = rt.exchange.account
+    attempts = 0
+
+    def flaky_account():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient read failure")
+        return account()
+
+    monkeypatch.setattr(rt.exchange, "account", flaky_account)
+    rt._observe_positions()
+    rt._observe_positions()
+    assert attempts == 2
+    assert rt.window.max_position_notional_micro > 0
+    rt._observe_positions()
+    assert attempts == 2

@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from fractions import Fraction
@@ -26,7 +27,7 @@ from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.cli import _load_dotenv
 from factorylab.runtime.live import LiveClock
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.worlds import WorldManifest, load_manifest
+from factorylab.runtime.worlds import PromptSpec, WorldManifest, load_manifest
 from factorylab.world.metering import UnbilledFailure
 from factorylab.world.models import ModelRequest, ModelResponse
 
@@ -36,6 +37,9 @@ DEFAULT_CAP_MICRO = 5_000_000
 DEFAULT_DURATION_NS = 30 * 60 * 1_000_000_000
 SHORT_TICK_NS = 10 * 1_000_000_000
 ALLOWED_PREPAID = frozenset(("openrouter", "venice"))
+FACTOR_PROMPTS = frozenset(("reference", "compact"))
+FACTOR_FEEDBACK = frozenset(("verdict", "realized"))
+FACTOR_REASONING = frozenset(("preserve", "off", "on"))
 
 
 class RehearsalRefused(UnbilledFailure):
@@ -359,22 +363,185 @@ def runner_hash() -> str:
     return hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest()
 
 
-def effective_manifest(base: WorldManifest) -> WorldManifest:
-    """Make one fresh short-tick testnet identity while preserving roster and endowment."""
+def _factor_models(base: WorldManifest, reasoning: str):
+    """Return the roster's model tiers with one explicit, provenance-visible override."""
+    if reasoning == "preserve":
+        return base.models
+    models = []
+    for model in base.models:
+        configured = dict(model.reasoning)
+        if reasoning == "off":
+            effective = {"enabled": False}
+        else:
+            if not configured:
+                raise RehearsalRefused("reasoning_on_requires_declared_tier_support")
+            # A declared disabled toggle is explicit support for the provider adapter's
+            # boolean control. Enabling it is the arm under test, not proof that the
+            # upstream model generated or exposed reasoning.
+            effective = {"enabled": True} if configured.get("enabled") is False else configured
+        models.append(replace(model, reasoning=tuple(sorted(effective.items()))))
+    return tuple(models)
+
+
+def effective_manifest(
+    base: WorldManifest,
+    *,
+    prompt_mode: str | None = None,
+    producer_feedback: str | None = None,
+    address_enabled: bool | None = None,
+    reasoning: str = "preserve",
+) -> WorldManifest:
+    """Freeze one factorized short-tick testnet identity before any paid work."""
     if base.exchange.kind != "hyperliquid" or base.exchange.mainnet:
         raise RehearsalRefused("testnet_hyperliquid_required")
     providers = {m.provider for m in base.models}
     if not providers <= ALLOWED_PREPAID:
         raise RehearsalRefused("unsupported_or_x402_model_rail")
+    if prompt_mode is not None and prompt_mode not in FACTOR_PROMPTS:
+        raise ValueError("prompt_mode must be reference or compact")
+    if producer_feedback is not None and producer_feedback not in FACTOR_FEEDBACK:
+        raise ValueError("producer_feedback must be verdict or realized")
+    if address_enabled is not None and type(address_enabled) is not bool:
+        raise ValueError("address_enabled must be boolean")
+    if reasoning not in FACTOR_REASONING:
+        raise ValueError("reasoning must be preserve, off, or on")
     exchange = replace(base.exchange, client_namespace=uuid4().hex)
     # An absent reserve selects UnconfiguredRail. It refuses transfers and does not
     # construct a signer; the charter, seed roster, $300 endowment and venue cash stay.
     treasury = replace(base.treasury, reserve_address=None, cctp_forwarding="never",
                        hyperevm_gas_budget_wei=0, base_gas_budget_wei=0)
-    manifest = replace(base, name=f"{base.name}-edition4-rehearsal", tick_interval_ns=SHORT_TICK_NS,
-                       exchange=exchange, treasury=treasury)
+    manifest = replace(
+        base,
+        name=f"{base.name}-edition4-rehearsal",
+        tick_interval_ns=SHORT_TICK_NS,
+        exchange=exchange,
+        treasury=treasury,
+        prompt=base.prompt if prompt_mode is None else PromptSpec(mode=prompt_mode),
+        evaluation=(base.evaluation if producer_feedback is None else
+                    replace(base.evaluation, producer_feedback=producer_feedback)),
+        tools=(base.tools if address_enabled is None else
+               replace(base.tools, address_enabled=address_enabled)),
+        models=_factor_models(base, reasoning),
+    )
     manifest.validate()
     return manifest
+
+
+def _grounded_coverage(items: list[dict[str, Any]], runtime: Any) -> dict[str, int]:
+    """Count final grounded findings without treating unknown or malformed work as samples."""
+    findings = [row for row in items if row.get("kind") == "consequence.finding"]
+    valid = [
+        row for row in findings
+        if row.get("status") in ("supported", "contrary")
+        and isinstance(row.get("evidence"), list) and bool(row["evidence"])
+    ]
+    statuses = Counter(str(row.get("status")) for row in valid)
+    unknown_handles = {
+        str(row.get("handle")) for row in findings if row.get("status") == "unknown"
+    }
+    censored = {
+        str(row.get("handle")) for row in items
+        if row.get("kind") == "consequence.unknown"
+        and str(row.get("handle")) not in unknown_handles
+    }
+    pending = getattr(runtime, "grounded_pending", {})
+    return {
+        "assessed": len(valid),
+        "supported": statuses["supported"],
+        "contrary": statuses["contrary"],
+        "unknown": len(unknown_handles),
+        "censored": len(censored),
+        "outstanding": len(pending) if isinstance(pending, dict) else 0,
+        "malformed_or_uncited_excluded": len(findings) - len(valid) - len(unknown_handles),
+    }
+
+
+def _ratio(numerator: int, denominator: int) -> str | None:
+    """Return an exact report ratio, or no value when its denominator is absent."""
+    return str(Fraction(numerator, denominator)) if denominator else None
+
+
+def _behavioral_screen(
+    manifest: WorldManifest,
+    runtime: Any,
+    summary: dict[str, Any],
+    items: list[dict[str, Any]],
+    admission: Admission,
+    *,
+    planned_ticks: int,
+    minimum_ticks: int,
+    minimum_grounded_samples: int,
+    minimum_contrary_samples: int,
+) -> dict[str, Any]:
+    """Report whether the preregistered tick and grounded-evidence screen was delivered."""
+    delivered = int(getattr(runtime, "ticks_consumed", 0))
+    grounded = _grounded_coverage(items, runtime)
+    criteria = {
+        "delivered_ticks": delivered >= minimum_ticks,
+        "assessed_grounded_samples": grounded["assessed"] >= minimum_grounded_samples,
+        "contrary_grounded_samples": grounded["contrary"] >= minimum_contrary_samples,
+        "authoritative_bills": admission.uncertain_bills == 0 and admission.overruns == 0,
+    }
+    decisions = int(summary.get("stats", {}).get("decisions") or 0)
+    io = summary.get("process_io_metrics") or {}
+    complete = (io.get("provider") or {}).get("complete") or {}
+    account = (io.get("exchange") or {}).get("account") or {}
+    mids = (io.get("exchange") or {}).get("mids") or {}
+    selected_calls = sum(int(metric.get("calls") or 0)
+                         for metric in (complete, account, mids))
+    selected_elapsed_ns = sum(int(metric.get("elapsed_ns") or 0)
+                              for metric in (complete, account, mids))
+    sufficient = all(criteria.values())
+    backstop = manifest.evaluation.consequence_backstop_ticks
+    return {
+        "status": "sufficient" if sufficient else "inconclusive",
+        "criteria_met": criteria,
+        "declared_before_run": {
+            "planned_tick_ceiling": planned_ticks,
+            "minimum_delivered_ticks": minimum_ticks,
+            "minimum_assessed_grounded_samples": minimum_grounded_samples,
+            "minimum_contrary_grounded_samples": minimum_contrary_samples,
+        },
+        "horizons_ticks": {
+            "grounded_due": manifest.evaluation.grounded_horizon_ticks,
+            "grounded_close_from_open": (
+                manifest.evaluation.grounded_horizon_ticks
+                + max(manifest.evaluation.grounded_horizon_ticks + 1,
+                      manifest.evaluation.verdict_timeout_ticks)
+            ),
+            "consequence_backstop": backstop,
+            "governance_activation_floor": backstop * manifest.timing.min_ratio,
+            "observe_backstop_then_governance_floor": backstop * (manifest.timing.min_ratio + 1),
+        },
+        "delivered": {
+            "ticks": delivered,
+            "grounded": grounded,
+            "outstanding_decisions": int(summary.get("outstanding_decisions") or 0),
+            "calls": admission.attempted,
+            "decisions": decisions,
+            "known_micro_per_tick": _ratio(admission.known_micro, delivered),
+            "known_micro_per_decision": _ratio(admission.known_micro, decisions),
+            "calls_per_tick": _ratio(admission.attempted, delivered),
+            "decisions_per_tick": _ratio(decisions, delivered),
+        },
+        "critical_path_io": {
+            "provider_complete_calls": int(complete.get("calls") or 0),
+            "provider_complete_elapsed_ns": int(complete.get("elapsed_ns") or 0),
+            "exchange_account_calls": int(account.get("calls") or 0),
+            "exchange_account_elapsed_ns": int(account.get("elapsed_ns") or 0),
+            "exchange_mids_calls": int(mids.get("calls") or 0),
+            "exchange_mids_elapsed_ns": int(mids.get("elapsed_ns") or 0),
+            "selected_total_calls": selected_calls,
+            "selected_total_elapsed_ns": selected_elapsed_ns,
+            "selected_mean_elapsed_ns": _ratio(selected_elapsed_ns, selected_calls),
+            "scope": io.get("scope", "unavailable for injected/non-live runtime"),
+        },
+        "interpretation": (
+            "coverage contract met; behavioral interpretation still requires comparison"
+            if sufficient else
+            "coverage contract not met; do not interpret absence or rates as behavior"
+        ),
+    }
 
 
 def _venice_reserve_transport():
@@ -464,6 +631,13 @@ def run_rehearsal(
     source_root: str | Path | None = None,
     now_ns: Callable[[], int] = time.time_ns,
     observe: bool = False,
+    prompt_mode: str | None = None,
+    producer_feedback: str | None = None,
+    address_enabled: bool | None = None,
+    reasoning: str = "preserve",
+    minimum_ticks: int | None = None,
+    minimum_grounded_samples: int | None = None,
+    minimum_contrary_samples: int | None = None,
 ) -> dict[str, Any]:
     """Run a fresh 30-minute testnet rehearsal and persist a sanitized evidence report."""
     if type(duration_ns) is not int or duration_ns <= 0:
@@ -474,6 +648,12 @@ def run_rehearsal(
         raise ValueError("max_calls must be positive integer")
     if type(observe) is not bool or (observe and out is None):
         raise ValueError("observe must be boolean and requires an output directory")
+    if minimum_ticks is not None and (type(minimum_ticks) is not int or minimum_ticks <= 0):
+        raise ValueError("minimum_ticks must be a positive integer")
+    for name, value in (("minimum_grounded_samples", minimum_grounded_samples),
+                        ("minimum_contrary_samples", minimum_contrary_samples)):
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError(f"{name} must be a nonnegative integer")
     output_dir = None
     report_path = None
     if out is not None:
@@ -483,7 +663,13 @@ def run_rehearsal(
     admission = Admission(cap_micro, max_calls)
     try:
         base = load_manifest(str(world))
-        manifest = effective_manifest(base)
+        manifest = effective_manifest(
+            base,
+            prompt_mode=prompt_mode,
+            producer_feedback=producer_feedback,
+            address_enabled=address_enabled,
+            reasoning=reasoning,
+        )
         source_path, frozen_hash = source_hash(Path(source_root) if source_root else None)
     except Exception as exc:
         report = {"status": "failed", "error": _safe_exception(exc),
@@ -493,6 +679,33 @@ def run_rehearsal(
         if report_path is not None:
             report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
         return report
+    planned_ticks = max(1, duration_ns // manifest.tick_interval_ns)
+    minimum_ticks = minimum_ticks or manifest.evaluation.consequence_backstop_ticks
+    if minimum_ticks > planned_ticks:
+        raise ValueError("minimum_ticks exceeds the fixed duration's planned tick ceiling")
+    if manifest.evaluation.producer_feedback == "realized":
+        minimum_grounded_samples = (
+            10 if minimum_grounded_samples is None else minimum_grounded_samples
+        )
+        minimum_contrary_samples = (
+            1 if minimum_contrary_samples is None else minimum_contrary_samples
+        )
+        if minimum_grounded_samples < 10 or minimum_contrary_samples < 1:
+            raise ValueError(
+                "realized feedback requires at least 10 assessed and 1 contrary sample"
+            )
+    else:
+        minimum_grounded_samples = (
+            0 if minimum_grounded_samples is None else minimum_grounded_samples
+        )
+        minimum_contrary_samples = (
+            0 if minimum_contrary_samples is None else minimum_contrary_samples
+        )
+        if minimum_grounded_samples or minimum_contrary_samples:
+            raise ValueError("grounded sample targets require realized producer feedback")
+    before_reasoning = {model.id: dict(model.reasoning) for model in base.models}
+    after_reasoning = {model.id: dict(model.reasoning) for model in manifest.models}
+    roster_changed = roster_hash(base) != roster_hash(manifest)
     report: dict[str, Any] = {
         "status": "prepared",
         "source": {"requested_root": str(Path(source_root) if source_root else DEFAULT_SOURCE),
@@ -519,6 +732,46 @@ def run_rehearsal(
                           "to": {"locked_micro": manifest.endowment.locked_micro,
                                   "releases": list(manifest.endowment.releases)}},
         },
+        "factors": {
+            "fixed_at_launch": True,
+            "prompt_mode": manifest.prompt.mode,
+            "producer_feedback": manifest.evaluation.producer_feedback,
+            "address_enabled": manifest.tools.address_enabled,
+            "requested": {
+                "prompt_mode": prompt_mode or "preserve",
+                "producer_feedback": producer_feedback or "preserve",
+                "address_enabled": (
+                    "preserve" if address_enabled is None else address_enabled
+                ),
+                "reasoning": reasoning,
+            },
+            "reasoning": {
+                "requested_reasoning": reasoning,
+                "from": before_reasoning,
+                "provider_effective_request": after_reasoning,
+                "roster_digest_changes": roster_changed,
+                "actual_reasoning_provenance": {
+                    "status": "unknown",
+                    "reason": (
+                        "provider request configuration does not establish that the upstream "
+                        "model generated or exposed hidden reasoning"
+                    ),
+                },
+            },
+            "norms_preserved": base.charter.norms == manifest.charter.norms,
+            "roster_preserved": not roster_changed,
+        },
+        "protocol": {
+            "duration_ns": duration_ns,
+            "cap_micro": cap_micro,
+            "max_calls": max_calls,
+            "planned_tick_ceiling": planned_ticks,
+            "minimum_delivered_ticks": minimum_ticks,
+            "minimum_assessed_grounded_samples": minimum_grounded_samples,
+            "minimum_contrary_grounded_samples": minimum_contrary_samples,
+            "no_live_parameter_changes": True,
+            "no_horizon_extension": True,
+        },
         "differences": {
             "tick_interval_ns": {"from": base.tick_interval_ns, "to": manifest.tick_interval_ns},
             "exchange.client_namespace": {"from": base.exchange.client_namespace,
@@ -539,7 +792,7 @@ def run_rehearsal(
             provider = build_prepaid_provider(manifest)
         guarded = provider if isinstance(provider, PrepaidProvider) else PrepaidProvider(
             provider, manifest, admission)
-        events = max(1, duration_ns // manifest.tick_interval_ns)
+        events = planned_ticks
         if clock_source is None and manifest.exchange.kind != "fake":
             clock_source = LiveClock(manifest.tick_interval_ns, events,
                                      now_ns=now_ns, deadline_ns=now_ns() + duration_ns)
@@ -586,8 +839,19 @@ def run_rehearsal(
                 and hasattr(clock_source.base, "measured_interval_ns") else None
             ),
         }
+        items = runtime.ledger._recovery_items()
+        report["behavioral_screen"] = _behavioral_screen(
+            manifest,
+            runtime,
+            summary,
+            items,
+            admission,
+            planned_ticks=planned_ticks,
+            minimum_ticks=minimum_ticks,
+            minimum_grounded_samples=minimum_grounded_samples,
+            minimum_contrary_samples=minimum_contrary_samples,
+        )
         if output_dir is not None:
-            items = runtime.ledger._recovery_items()
             selected = [item for item in items if item.get("kind") != "snapshot"]
             (output_dir / "events.json").write_text(
                 json.dumps(selected, indent=2, default=str) + "\n"
@@ -611,6 +875,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--duration", default="30m")
     parser.add_argument("--cap-usd", default="5")
     parser.add_argument("--max-calls", type=int, default=2_000)
+    parser.add_argument("--prompt", choices=sorted(FACTOR_PROMPTS))
+    parser.add_argument("--producer-feedback", choices=sorted(FACTOR_FEEDBACK),
+                        default=None)
+    parser.add_argument("--address-enabled", action=argparse.BooleanOptionalAction,
+                        default=None)
+    parser.add_argument("--reasoning", choices=sorted(FACTOR_REASONING), default="preserve")
+    parser.add_argument("--minimum-ticks", type=int)
+    parser.add_argument("--minimum-grounded-samples", type=int)
+    parser.add_argument("--minimum-contrary-samples", type=int)
     parser.add_argument("--source-root", type=Path, default=None)
     parser.add_argument("--observe", action="store_true",
                         help="write an opt-in rehearsal dashboard at completed ticks")
@@ -620,9 +893,15 @@ def main(argv: list[str] | None = None) -> int:
     report = run_rehearsal(args.world, out=args.out, duration_ns=duration_ns(args.duration),
                            cap_micro=usd_to_micro(args.cap_usd, rounding="floor"),
                            max_calls=args.max_calls, source_root=args.source_root,
-                           observe=args.observe)
+                           observe=args.observe, prompt_mode=args.prompt,
+                           producer_feedback=args.producer_feedback,
+                           address_enabled=args.address_enabled, reasoning=args.reasoning,
+                           minimum_ticks=args.minimum_ticks,
+                           minimum_grounded_samples=args.minimum_grounded_samples,
+                           minimum_contrary_samples=args.minimum_contrary_samples)
     print(json.dumps({"status": report["status"], "out": str(args.out),
-                      "cost": report["cost"]}, indent=2))
+                      "cost": report["cost"],
+                      "behavioral_screen": report.get("behavioral_screen")}, indent=2))
     return 0 if report["status"] == "completed" else 1
 
 

@@ -603,6 +603,8 @@ _DERIVED_STATE = {
     "Runtime._instruments_memo": "the venue's instrument listing, held for the tick that read it",
     "Runtime._mids_memo": "the venue's mid prices, held for the tick that read them",
     "Runtime._account_memo": "the venue account read, held for the tick that read it",
+    "Runtime._peak_observed": "the window and tick whose position peak was already "
+                              "observed; a venue write drops it and a restore re-reads",
     "Runtime._prefix_memo": "the rendered cacheable prompt prefix, keyed on what it renders",
     "Runtime._world_chars_cache": "the world block's size, keyed on the event that measured it",
     "Runtime._artifact_listing_view": "the artifact listing, rebuilt from the archive index",

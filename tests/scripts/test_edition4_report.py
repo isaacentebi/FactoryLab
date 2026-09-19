@@ -1,6 +1,7 @@
 """Offline checks for the bounded Edition 4 report."""
 
 import json
+from copy import deepcopy
 from dataclasses import replace
 
 import pytest
@@ -12,6 +13,7 @@ from factorylab.world.scripted import ScriptedProvider
 from scripts.edition4_report import (
     ReportInputError,
     build_report,
+    compare_rehearsals,
     load_rows,
     main,
     render_html,
@@ -540,3 +542,63 @@ def test_cli_requires_explicit_files_and_writes_only_static_outputs(tmp_path):
     assert main(["--input", str(source), "--out", str(output)]) == 0
     assert sorted(path.name for path in output.iterdir()) == ["index.html", "report.json"]
     assert "payload" not in (output / "report.json").read_text()
+
+
+def _screen_pair():
+    control = {
+        "status": "completed", "source": {"sha256": "code", "runner_sha256": "runner"},
+        "world": {"manifest": {"name": "control", "exchange": {"client_namespace": "one"},
+                               "evaluation": {"producer_feedback": "verdict"},
+                               "charter": {"norms": ["truth"]}}},
+        "cost": {"cap_micro": 3_000_000, "max_calls": 500, "attempted": 20,
+                 "known_calls": 20, "known_micro": 5000,
+                 "uncertain_calls": 0, "uncertain_micro": 0},
+        "venue_before": {"positions": [], "open_orders": []},
+        "venue_after": {"positions": [], "open_orders": []},
+        "protocol": {"duration_ns": 1800, "planned_tick_ceiling": 180,
+                     "minimum_delivered_ticks": 60, "no_live_parameter_changes": True,
+                     "no_horizon_extension": True},
+        "behavioral_screen": {"status": "sufficient"},
+    }
+    treatment = deepcopy(control)
+    treatment["world"]["manifest"]["evaluation"]["producer_feedback"] = "realized"
+    treatment["world"]["manifest"]["exchange"]["client_namespace"] = "two"
+    return control, treatment
+
+
+def test_comparison_requires_matching_physics_and_known_bills():
+    control, treatment = _screen_pair()
+    result = compare_rehearsals(control, treatment, factors=["feedback"])
+    assert result["status"] == "screen_complete"
+    assert result["manifest_difference_paths"] == ["evaluation.producer_feedback"]
+    result = compare_rehearsals(control, treatment, factors=["feedback", "address"])
+    assert result["status"] == "unmatched"
+    assert "declared factor address did not change" in result["problems"]
+    treatment["world"]["manifest"]["charter"]["norms"] = ["profit"]
+    result = compare_rehearsals(control, treatment, factors=["feedback"])
+    assert result["status"] == "unmatched"
+    assert result["unexpected_difference_paths"] == ["charter.norms.0"]
+    assert "profit" not in json.dumps(result)  # no population-facing text exported
+    control, treatment = _screen_pair()
+    treatment["cost"]["known_calls"] = 19
+    assert compare_rehearsals(control, treatment, factors=["feedback"])["status"] == "unmatched"
+
+
+def test_comparison_distinguishes_unfinished_evidence_from_unmatched_source():
+    control, treatment = _screen_pair()
+    treatment["behavioral_screen"]["status"] = "inconclusive"
+    assert compare_rehearsals(control, treatment, factors=["feedback"])["status"] == "inconclusive"
+    treatment["source"]["sha256"] = "different"
+    assert compare_rehearsals(control, treatment, factors=["feedback"])["status"] == "unmatched"
+    control, treatment = _screen_pair()
+    treatment["venue_after"]["positions"] = [{"size": "1"}]
+    assert compare_rehearsals(control, treatment, factors=["feedback"])["status"] == "unmatched"
+    control, treatment = _screen_pair()
+    del treatment["cost"]["cap_micro"]
+    assert compare_rehearsals(control, treatment, factors=["feedback"])["status"] == "unmatched"
+
+    control, treatment = _screen_pair()
+    treatment["protocol"]["duration_ns"] *= 2
+    result = compare_rehearsals(control, treatment, factors=["feedback"])
+    assert result["status"] == "unmatched"
+    assert "protocol duration_ns missing or different" in result["problems"]
