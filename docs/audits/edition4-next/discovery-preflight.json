@@ -1,0 +1,63 @@
+{
+  "frozen_at_utc": "2026-09-19T17:04:07Z",
+  "preflight": {
+    "allowed_tools": [
+      "calc",
+      "catalogue.search",
+      "world.read"
+    ],
+    "cap_micro": 1000000,
+    "expected_value": "4321.625000",
+    "fixed_clock_ns": 1800000000000000000,
+    "max_calls": 12,
+    "models": {
+      "mechanism": "venice:z-ai-glm-5-3-flash",
+      "opportunity": "openai/gpt-5.6-luna"
+    },
+    "outcome_schema": {
+      "properties": {
+        "evidence": {
+          "type": "string"
+        },
+        "notional_usd": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "notional_usd",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "rendered_masked_fields": [
+      "observed_at_ns"
+    ],
+    "rendered_requests": {
+      "mechanism": "043b9ca0b898c0c4435f141c6c74e0de0fa8f5ae26e28d1f390218c7510c0468",
+      "opportunity": "dcee5a146b37cca173c91df9108ac3364b04f9abb046c4596e5904bb252333be"
+    },
+    "seat_ceiling_micro": 500000,
+    "seats": [
+      "mechanism",
+      "opportunity"
+    ],
+    "source": {
+      "probe_sha256": "15ce442bd219a1589d46e6017f98303c02ce87d6521d388a2eeaeb29cec17a35",
+      "root": "/Users/isaacentebi/Desktop/FactoryLab",
+      "runner_sha256": "a1c61fa98ab78d6c5bfb05d804ab4c2a26584f15fa540bf924c17b5118275a8c",
+      "sha256": "8d2b777a14852bc1e8d9f42d94f2a98b0fde01910003a7567074f9f1c0181cf6"
+    },
+    "task": "Report the exact notional value in United States dollars of a position of 3.5 base units at a price of 1234.75 dollars per base unit, to six decimal places, in the field notional_usd. Obtain that figure from a capability this world publishes rather than from arithmetic you perform yourself, and name in the field evidence the capability you used and the exact value it returned. This question is asked of you directly; it is not a trading instruction, and no order, transfer or message is wanted.",
+    "task_inputs": {
+      "price": "1234.75",
+      "size": "3.5"
+    },
+    "world": {
+      "effective_hash": "ab2188b29364bb958f571b1f1a5489f68a87077bf74e7840105768338aec063e",
+      "original_hash": "2a7fe5c279251807537fa96ee5f6d94d27257d622b4e1b8621c6e2d4400cf49f",
+      "path": "worlds/edition3-rehearsal-5.toml",
+      "prompt_mode": "compact"
+    }
+  },
+  "preflight_digest": "23483c542b0130ef99124f7e3db17d2247280a35266a83c51a314532687f655d"
+}

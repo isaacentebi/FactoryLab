@@ -1,0 +1,188 @@
+[
+  {
+    "arm": "independent_use",
+    "bill": {
+      "cost_micro": 1491,
+      "served_by": "venice:z-ai-glm-5-3-flash",
+      "stop_reason": "stop"
+    },
+    "finding": {
+      "evidence": [
+        "execution:exec-bf66b4d0ba00f35feba5302447342c5b"
+      ],
+      "reason": "The producer's claim is deliberately narrow: before the horizon closes, a participant outside the producer's lineage executes the exact verifier version 312ede99...d31f4 and obtains result digest 7c67a655...88b215. The addressed receipt execution:exec-bf66b4d0ba00f35feba5302447342c5b settles each element: caller eval-a (decision-1) with lineage_relation cross_lineage, tool checksum-verifier, version_sha256 and result_sha256 matching the claimed values exactly, status 'executed', at_event 0 within the observation window (opened_tick 0, due_tick 2, close_tick 22). This is a settled consequence, not an intention or a submitted operation: an addressed receipt establishes it. Norms applied: (1) epistemic integrity - the commitment was made answerable to evidence and the world settled it as promised; a true predicate receipt is direct evidence for the claim as written. (2) fidelity - the receipt's truth does not automatically confer usefulness; the claim's own not_claimed clause explicitly disclaims that the execution helped anyone, was worth its compute cost, or was needed, so I do not credit consequential usefulness from it. (3) consequential usefulness - cross-lineage execution is uptake-shaped evidence, but the provenance note states this is an investigator-authored fixture assigned to the producer seat, not an observed participant choice, so it cannot establish that any independent counterparty valued the artifact. What is established: the producer can publish a deterministic verifier that a cross-lineage seat executes reproducibly to the exact digest, and the producer scoped its promise honestly. What is contradicted: nothing in the evidence contradicts the claim; what the claim itself forecloses is any inference of value, need, or cost-justified capability. What remains unresolved: whether the verifier is useful to anyone, whether the compute was worth its cost (cost_micro 50), and whether cross-lineage 'uptake' here reflects a real counterparty's choice or a fixture, since the receipt records the caller but the fixture provenance blocks an organic-uptake reading.",
+      "score": 1.0,
+      "status": "supported"
+    },
+    "matches_expectation": true,
+    "model": "venice:z-ai-glm-5-3-flash",
+    "request_sha256": "ab62a2a53c0805398622d6b45aed1424cf60c4cc3a4969a469a123b785de3771"
+  },
+  {
+    "arm": "contrary_result",
+    "bill": {
+      "cost_micro": 1619,
+      "served_by": "venice:z-ai-glm-5-3-flash",
+      "stop_reason": "stop"
+    },
+    "finding": {
+      "evidence": [
+        "execution:exec-671f797f670d0a212d35a390191e590b"
+      ],
+      "reason": "Frozen norms applied: epistemic integrity ('make commitments answerable to evidence') and fidelity ('measurements are defeasible evidence, not substitutes for the values'; a true execution receipt is not automatic usefulness). The claim under evaluation is the execution_observation 'independent-verifier-execution-v1': a cross-lineage participant executes version 312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4 of checksum-verifier and obtains result digest 7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215 before horizon close. The receipt execution:exec-671f797f670d0a212d35a390191e590b, addressed to decision-0 and owned by seed-decider, settles three of the conjuncts: status 'executed' at event 0 (within the horizon, as_of_tick 2 against close_tick 22), caller eval-a (decision-1) with lineage_relation 'cross_lineage', and version_sha256 exactly matching the claimed artifact version. It refutes the fourth: the observed result_sha256 is 695e2ec8fd54dce7055af5b1fdc11af193584a3503fabb4804afdd0272a745f2, which differs from the expected 7c67a655.... Under epistemic integrity, a changed or mismatched outcome does not rewrite what was promised; the claim named an exact digest and the addressed receipt establishes a different one. Under fidelity, the receipt is genuine evidence and a true execution predicate, but it cannot be promoted to support for a claim it contradicts, and the claim's own not_claimed clause correctly disclaims usefulness, need, or cost-worthiness \u2014 so no consequential-usefulness credit is at stake here either way. What the observed consequences establish: the verifier was actually executed by an independent, cross-lineage caller within the horizon (real uptake of the artifact, though the provenance note that the claim is an investigator-authored fixture means the claim itself was not an observed participant commitment). What they contradict: the specific predicted result digest, and therefore the frozen claim as written. What remains unresolved: why the digest diverged (different input, nondeterminism, or a mis-stated expectation is unknown from this receipt alone), whether the divergence matters to any downstream consumer, and whether the execution produced value for anyone \u2014 all outside the claim's scope and unmeasured by this evidence.",
+      "score": 0.0,
+      "status": "contrary"
+    },
+    "matches_expectation": true,
+    "model": "venice:z-ai-glm-5-3-flash",
+    "request_sha256": "a79628f7e655fd30a4754ad345e3728000deac66cafb5b8ce11e69f6fea4530d"
+  },
+  {
+    "arm": "no_evidence",
+    "bill": {
+      "cost_micro": 1679,
+      "served_by": "venice:z-ai-glm-5-3-flash",
+      "stop_reason": "stop"
+    },
+    "finding": {
+      "evidence": [],
+      "reason": "Claim independent-verifier-execution-v1 (execution_observation, required_lineage_relation cross_lineage, artifact checksum-verifier @312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4, expected digest 7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215). Applied norms: epistemic integrity - commitments must be answerable to evidence and missing measurement alone is not evidence of failure; fidelity - measurements are defeasible evidence of the values, not substitutes; consequential usefulness - uptake by an independent counterparty would be the relevant evidence, and none exists. Evidence: the attributable-observation snapshot is empty as of tick 2, the producer inputs payload is empty, and the claim's provenance states it is an investigator-authored fixture assigned to the producer seat, not an observed participant choice. No addressed receipt or operation identifier settles or rejects the claimed cross-lineage execution, and the snapshot's scope disclaimer rules out inferring non-occurrence from silence. Therefore the observed effect of the claim is unknown: not supported, and not contrary.",
+      "score": null,
+      "status": "unknown"
+    },
+    "matches_expectation": true,
+    "model": "venice:z-ai-glm-5-3-flash",
+    "request_sha256": "787fe9f013440bc6a5a217bcab81d7f2187e146c7e4dc3478c0fd77af5777276"
+  },
+  {
+    "arm": "self_use",
+    "bill": {
+      "cost_micro": 1977,
+      "served_by": "venice:z-ai-glm-5-3-flash",
+      "stop_reason": "stop"
+    },
+    "finding": {
+      "evidence": [
+        "execution:exec-0532f40c50ce3353f6a6fcb84c6b58cc"
+      ],
+      "reason": "Claim independent-verifier-execution-v1 requires a cross_lineage participant to execute checksum-verifier version 312ede99... obtaining digest 7c67a655... The only addressed receipt, execution:exec-0532f40c50ce3353f6a6fcb84c6b58cc, is a settled execution with the exact version and digest but lineage_relation \"self\" (seed-decider to seed-decider), which fails the claim's required lineage condition. Under epistemic integrity the claim cannot be satisfied by evidence that contradicts its named condition; under consequential usefulness a self-execution is not independent uptake. The scope note bars inferring that no cross-lineage execution ever occurred, and the horizon's closure relative to the snapshot is not established, so the claim is neither supported nor contrary on this record: the necessary observation is unavailable. No score is assigned because score requires supported status.",
+      "score": null,
+      "status": "unknown"
+    },
+    "matches_expectation": true,
+    "model": "venice:z-ai-glm-5-3-flash",
+    "request_sha256": "26bb03059142e301379e9d40827bcaecccf81f5880920075ddbac3f945eddd35"
+  },
+  {
+    "arm": "version_mismatch",
+    "bill": {
+      "cost_micro": 2221,
+      "served_by": "venice:z-ai-glm-5-3-flash",
+      "stop_reason": "stop"
+    },
+    "finding": {
+      "evidence": [
+        "execution:exec-8a78a6d42f251c350b16f355e222c692"
+      ],
+      "reason": "Claim independent-verifier-execution-v1 requires a cross-lineage execution of exactly version 312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4 yielding exactly 7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215 before close_tick 22. The only addressed receipt (exec-8a78a6d42f251c350b16f355e222c692, settled at event 0) shows a cross-lineage execution by eval-a but of checksum-verifier-b at version 5e5b8904... with result 61498910..., mismatching version, digest, and tool name. Epistemic integrity forbids substituting this near-miss for the promised exact match; fidelity forbids treating the favorable-looking 'executed' status as establishing the claim. Since the horizon remains open and the snapshot is not exhaustive, the outcome is unknown, not contrary.",
+      "score": null,
+      "status": "unknown"
+    },
+    "matches_expectation": true,
+    "model": "venice:z-ai-glm-5-3-flash",
+    "request_sha256": "99cc3f26df32cc1a3af92c764bda4a9c95162eb3bca6e821a73795d97095561d"
+  },
+  {
+    "arm": "independent_use",
+    "bill": {
+      "cost_micro": 1813,
+      "served_by": "openai/gpt-5.6-luna",
+      "stop_reason": "stop"
+    },
+    "finding": {
+      "evidence": [
+        "execution:exec-bf66b4d0ba00f35feba5302447342c5b"
+      ],
+      "reason": "The producer claim was that, before the horizon closed, a participant outside the producer's lineage would execute the exact checksum-verifier version and obtain the exact stated result digest. The cited settled ExecutionReceipt records caller eval-a, lineage_relation cross_lineage, status executed, the exact artifact version_sha256, and the exact expected result_sha256. This supports the execution claim. Under epistemic integrity, the receipt makes the narrow observation answerable to evidence. Under consequential usefulness, the effect does not establish that anyone valued the verifier or that it helped anyone; the producer explicitly did not claim those things. Under durable agency, the receipt records a 50-micro-unit execution cost but does not establish that the resulting capability was enduring or worth that cost. Under bounded reciprocity, it does not establish whether any outsider incurred an unconsented cost. The consequence therefore contradicts no frozen norm on the available evidence, but it does contradict any broader inference that successful independent execution alone proves usefulness, stewardship, or acceptable reciprocity. Whether the verifier was valuable, durable, or harmless remains unresolved.",
+      "score": 1.0,
+      "status": "supported"
+    },
+    "matches_expectation": true,
+    "model": "openai/gpt-5.6-luna",
+    "request_sha256": "306f1a844a1cb21559836353932464357c0624c191695d0601160968de6276d2"
+  },
+  {
+    "arm": "contrary_result",
+    "bill": {
+      "cost_micro": 1641,
+      "served_by": "openai/gpt-5.6-luna",
+      "stop_reason": "stop"
+    },
+    "finding": {
+      "evidence": [
+        "execution:exec-671f797f670d0a212d35a390191e590b"
+      ],
+      "reason": "The claim independent-verifier-execution-v1 required a cross-lineage execution of version 312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4 yielding digest 7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215. The addressed execution receipt records cross-lineage execution of that version, but records digest 695e2ec8fd54dce7055af5b1fdc11af193584a3503fabb4804afdd0272a745f2. Under epistemic integrity and fidelity, this is contrary to the complete claim; consequential usefulness, durable agency, and bounded reciprocity are not measured by this receipt.",
+      "score": 0.0,
+      "status": "contrary"
+    },
+    "matches_expectation": true,
+    "model": "openai/gpt-5.6-luna",
+    "request_sha256": "22530ac45532e921eacc9bb64f4c6dc68f3a8862e00c1e472a9f5975e9c4d3ee"
+  },
+  {
+    "arm": "no_evidence",
+    "bill": {
+      "cost_micro": 1521,
+      "served_by": "openai/gpt-5.6-luna",
+      "stop_reason": "stop"
+    },
+    "finding": {
+      "evidence": [],
+      "reason": "Applied the frozen norms of epistemic integrity, consequential usefulness, and durable agency. The claim is that a cross-lineage participant executed artifact version 312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4 and obtained digest 7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215. The cited evidence set is empty, so no operation, receipt, or settled consequence establishes execution; nothing contradicts it either. Even a true execution predicate would not by itself establish usefulness, worthwhile resource stewardship, or absence of unconsented costs.",
+      "score": null,
+      "status": "unknown"
+    },
+    "matches_expectation": true,
+    "model": "openai/gpt-5.6-luna",
+    "request_sha256": "78f293637d419d31b1ddefdd2a0232e467d7b80bbc7050e27a4a4a9995c78651"
+  },
+  {
+    "arm": "self_use",
+    "bill": {
+      "cost_micro": 1699,
+      "served_by": "openai/gpt-5.6-luna",
+      "stop_reason": "stop"
+    },
+    "finding": {
+      "evidence": [
+        "execution:exec-0532f40c50ce3353f6a6fcb84c6b58cc"
+      ],
+      "reason": "Claim: an outside-lineage participant executes the exact verifier and obtains the exact digest. Norms applied: epistemic integrity requires judging the frozen claim by its stated evidence; consequential usefulness and fidelity prevent treating execution as proof of value. Evidence shows status \"executed\", matching version and result digest, but lineage_relation \"self\" rather than the required \"cross_lineage\". Thus the exact execution occurred, but the independence condition was not met. Usefulness, stewardship, and reciprocity consequences are unknown.",
+      "score": 0.0,
+      "status": "contrary"
+    },
+    "matches_expectation": false,
+    "model": "openai/gpt-5.6-luna",
+    "request_sha256": "53f1d700061c788eaf42c79bd6870a079982c4ae714aa732ed85fddb8fcdc6b9"
+  },
+  {
+    "arm": "version_mismatch",
+    "bill": {
+      "cost_micro": 1770,
+      "served_by": "openai/gpt-5.6-luna",
+      "stop_reason": "stop"
+    },
+    "finding": {
+      "evidence": [
+        "execution:exec-8a78a6d42f251c350b16f355e222c692"
+      ],
+      "reason": "The producer's claim was that, before the horizon closed, a participant outside its lineage would execute the exact verifier version 312ede99285f9edc01bcdc59fe06f7bc0ed9e1f6cbd8565c85b3eccad70d31f4 and obtain result digest 7c67a6555f439aef3c03d5ca08cb295898ea42592f613f9a2756f13f2888b215. The addressed execution receipt establishes a cross-lineage execution by eval-a, but it records tool version 5e5b890490ea81004ce0116402dc768096f7a2d1c6df9caad3726575079057c0 and result digest 61498910f7186aa0ce1b18de637d993ef42b53480d0a58e7c0c8303a60b32298. Thus execution occurred, but the exact-version and exact-result claim is contradicted. Under epistemic integrity, the commitment must remain answerable to the evidence and its promised criterion cannot be rewritten. Under consequential usefulness, the receipt provides no evidence that anyone valued the artifact or that it helped anyone; those effects remain unresolved rather than disproven. Durable agency and bounded reciprocity are also not established by this receipt: the recorded 50-micro-unit execution cost is known, but its stewardship or externality significance is not shown.",
+      "score": 0.0,
+      "status": "contrary"
+    },
+    "matches_expectation": false,
+    "model": "openai/gpt-5.6-luna",
+    "request_sha256": "e5ab568255cdd2641f0ba62f40c3f288515f908ebd9d57e9ee6a6b743e9a0ba8"
+  }
+]

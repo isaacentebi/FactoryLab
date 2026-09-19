@@ -218,6 +218,22 @@ def test_actual_address_rows_count_replays_as_attempts_but_not_new_delivery():
     assert report["messages"]["unknown_delivery"] == 0
 
 
+def test_address_zero_is_labeled_from_configuration_not_inferred_as_non_use():
+    unknown = build_report([])
+    disabled = build_report(
+        [], configuration={"source": "runtime_manifest", "address_enabled": False}
+    )
+    enabled = build_report(
+        [], configuration={"source": "runtime_manifest", "address_enabled": True}
+    )
+
+    assert unknown["messages"]["capability_status"] == "unknown_metadata"
+    assert disabled["messages"]["capability_status"] == "disabled"
+    assert enabled["messages"]["capability_status"] == "enabled_but_unused"
+    assert "supplied/recent evidence window" in enabled["messages"]["capability_label"]
+    assert "zero is not non-use" in unknown["messages"]["capability_label"]
+
+
 def test_offline_runtime_address_export_reaches_the_dashboard():
     manifest = load_manifest("worlds/scripted.toml")
     manifest = replace(manifest, tools=replace(manifest.tools, address_enabled=True))

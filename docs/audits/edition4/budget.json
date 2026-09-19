@@ -1,9 +1,11 @@
 {
   "authorized_total_micro": 50000000,
-  "known_inference_micro": 2510298,
-  "remaining_authorization_micro": 47489702,
+  "known_inference_micro": 3101702,
+  "remaining_authorization_micro": 46898298,
+  "active_rehearsal_caps_micro": {},
+  "remaining_unreserved_authorization_micro": 46898298,
   "uncertain_micro": 0,
-  "accounting": "Provider-reported inference bills including superseded probe attempts. No additional run scheduled. Not a statement about subscription costs of the coding committee.",
+  "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [
     {
       "work": "menu calibration",
@@ -49,10 +51,30 @@
       "work": "corrected C discrimination",
       "known_micro": 36012,
       "evidence": "discrimination-v3/report.json"
+    },
+    {
+      "work": "repaired discovery diagnostic",
+      "known_micro": 12794,
+      "evidence": "../edition4-next/discovery-paid.jsonl"
+    },
+    {
+      "work": "nonfinancial model discrimination diagnostic",
+      "known_micro": 20398,
+      "evidence": "../edition4-next/nonfinancial-model/report.json"
+    },
+    {
+      "work": "citation and evidence-snapshot model recheck",
+      "known_micro": 17431,
+      "evidence": "../edition4-next/nonfinancial-model-v2/report.json"
+    },
+    {
+      "work": "September 19 repaired control",
+      "known_micro": 540781,
+      "evidence": "../edition4-next/live-control/report.json"
     }
   ],
   "venue_end": {
-    "equity_usd": "965.989286405",
+    "equity_usd": "965.94307941",
     "positions": [],
     "open_orders": []
   }

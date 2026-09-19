@@ -81,6 +81,110 @@ from factorylab.world.clock import ClockSource, DripSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.market import X402Provider
 
+#: What a grounded commission's evidence was read at, as the settling code froze
+#: it. The names are that snapshot's own; nothing here is recomputed from the
+#: runtime's current position.
+SNAPSHOT_FIELDS = ("as_of_tick", "event_cursor", "receipt_cursor", "observation_due_tick",
+                   "assessment_timeout_tick", "scope")
+
+#: The frozen record a released grounded verdict carries for its reviewers.
+GROUNDED_FIELDS = ("realized_finding", "grounded_contract", "grounded_evidence",
+                   "grounded_evidence_snapshot")
+
+#: How many uncited rows one review carries as context. Cited rows are never cut.
+GROUNDED_REVIEW_CONTEXT = 24
+
+
+def _grounded_review(payload: Any) -> dict[str, Any] | None:
+    """The frozen facts a final grounded finding rests on, for the judge above it.
+
+    Guarantees the reviewer reads every row the finding cited, the norms and
+    horizon frozen with the contract, and the commission's own evidence-time
+    snapshot — not a fresh charter, a fresh world block or a fresh reading of
+    when the evidence was taken. Uncited rows are context and are bounded; the
+    number dropped is stated, so a short list is visibly short rather than
+    absent. Nothing here scores the finding or repairs it.
+    """
+    finding = payload.get("realized_finding")
+    contract = payload.get("grounded_contract")
+    if not isinstance(finding, dict) or not isinstance(contract, dict):
+        return None
+    supplied = payload.get("grounded_evidence")
+    rows = [row for row in supplied if isinstance(row, dict)] if isinstance(supplied, list) else []
+    cited = {ref for ref in finding.get("evidence", []) if isinstance(ref, str)}
+    shown = ([row for row in rows if row.get("ref") in cited]
+             + [row for row in rows if row.get("ref") not in cited][:GROUNDED_REVIEW_CONTEXT])
+    return {
+        "finding": finding,
+        "frozen_norms": contract.get("norms", []),
+        "producer_claim": contract.get("producer_outputs", {}),
+        "price_constraints": contract.get("criteria", []),
+        "observation_contract": {key: contract.get(key) for key in
+                                 ("handle", "producer_id", "opened_tick", "due_tick",
+                                  "close_tick", "charter_edition")},
+        "evidence_snapshot": _evidence_snapshot(payload.get("grounded_evidence_snapshot")),
+        "evidence": shown,
+        "evidence_supplied": len(rows),
+        "evidence_omitted": len(rows) - len(shown),
+    }
+
+
+def _evidence_snapshot(snapshot: Any) -> dict[str, Any]:
+    """Copy the commission's frozen evidence-time metadata, or say it is unknown.
+
+    Guarantees every field is the one the commission carried and none is filled
+    in from the runtime's current tick, cursor or clock: a commission emitted
+    before this metadata existed reports each field as null, which is what a
+    judge needs in order to treat the reading time as unknown rather than as now.
+    """
+    source = snapshot if isinstance(snapshot, dict) else {}
+    return {key: source.get(key) for key in SNAPSHOT_FIELDS}
+
+
+def _citable_evidence_schema(schema: dict[str, Any], evidence: Any) -> dict[str, Any]:
+    """Bind a grounded finding's evidence field to the refs its commission supplied.
+
+    Guarantees the answer contract names every reference this finding may cite and
+    nothing else, by the same rule settlement checks the citations against: the
+    ref of each supplied evidence row, in the order supplied. A commission that
+    supplied no evidence admits the empty list alone.
+
+    The field was an array of any string, so a judge with a real receipt beside a
+    claim and a contract had no way to tell which of them was a reference, and one
+    invented string refused an otherwise sound finding. Nothing here interprets
+    the evidence, scores it, or repairs a citation after the fact.
+
+    Guarantees the contract narrows which strings are references and nothing else
+    about the answer: a citation repeated is as valid as it was before, because
+    settlement drops the repeat and reads the same set. No length bound is stated
+    where there is anything to cite.
+    """
+    refs = [row["ref"] for row in evidence
+            if isinstance(row, dict) and isinstance(row.get("ref"), str)
+            ] if isinstance(evidence, list) else []
+    refs = list(dict.fromkeys(refs))
+    realized = schema["properties"]["realized_consequence"]
+    # With nothing supplied the only valid answer is the empty list, and that is
+    # said with a length of zero rather than an empty set of allowed strings,
+    # which reads as a field whose every value is wrong.
+    evidence_field: dict[str, Any] = (
+        {"type": "array", "items": {"type": "string", "enum": refs}} if refs
+        else {"type": "array", "items": {"type": "string"}, "maxItems": 0}
+    )
+    properties = {
+        **realized["properties"],
+        "evidence": {
+            **evidence_field,
+            "description": (
+                "The references above, copied exactly; nothing else is one. Name the "
+                "claim, the norms you applied and what the evidence shows in reason."
+            ),
+        },
+    }
+    return {**schema, "properties": {**schema["properties"],
+                                     "realized_consequence": {**realized,
+                                                              "properties": properties}}}
+
 
 class Runtime(
     SchematicsMixin,
@@ -1114,6 +1218,11 @@ class Runtime(
                     for key in ("handle", "producer_id", "opened_tick", "due_tick",
                                 "close_tick", "charter_edition", "predicate_versions")
                 },
+                "observation_contract_ticks": (
+                    "due_tick is when this observation first matures; close_tick is when "
+                    "this assessment times out, not a deadline the producer's claim named"
+                ),
+                "evidence_snapshot": _evidence_snapshot(payload.get("evidence_snapshot")),
                 "evidence": payload.get("evidence", []),
                 "answer_with": (
                     "realized_consequence: {status: supported|contrary|unknown, "
@@ -1125,6 +1234,8 @@ class Runtime(
             inputs["subject_handle"] = about
         schema = evaluator_answer_schema(
             self._forecast_schema(), self._register_schema(), include_realized=grounded)
+        if grounded:
+            schema = _citable_evidence_schema(schema, payload.get("evidence", []))
         if grounded:
             instruction = (
                 "Evaluate independently the observed effect of producer_claim under the "
@@ -1174,7 +1285,8 @@ class Runtime(
         self._resolve_adjudication(sample.chosen, handle, ret.outputs.get("fidelity_finding"))
         if grounded:
             self._complete_grounded_evaluation(
-                handle, sample.chosen, about, ret, payload.get("evidence", []))
+                handle, sample.chosen, about, ret, payload.get("evidence", []),
+                payload.get("evidence_snapshot"))
             return
         answered = str(ret.outputs.get("status", "")).strip().lower()
         reason = str(ret.outputs.get("reason", ""))[:500]
@@ -1359,7 +1471,16 @@ class Runtime(
         if "window" in payload:
             inputs["window"] = payload["window"]
         if recursive:
-            inputs["meta_verdict"] = payload
+            # The grounded record is given once, below.
+            inputs["meta_verdict"] = {key: value for key, value in payload.items()
+                                      if key not in GROUNDED_FIELDS}
+        review = _grounded_review(payload)
+        if review is not None:
+            # The judge answered under frozen norms; the current charter and a fresh
+            # world block would grade it against a standard it was not answering to.
+            for key in ("charter", "world"):
+                inputs.pop(key, None)
+            inputs["realized_consequence"] = review
         generic = ev.kind not in (EventKind.VERDICT, EventKind.META_VERDICT)
         if generic:
             inputs["event"] = {"kind": str(ev.kind), "payload": payload}
@@ -1379,7 +1500,14 @@ class Runtime(
         }
         req = self._request(
             handle,
-            ("Assess the public return addressed by about_handle for conformity with the charter. "
+            ("Assess the final grounded judgement in realized_consequence: whether its "
+             "finding is what the cited evidence supports under the complete frozen_norms, "
+             "and whether those norms bear on producer_claim. evidence lists the cited rows "
+             "first and evidence_supplied says how many the judge was shown. A finding of "
+             "unknown is reviewable like any other; evidence_snapshot says when the facts "
+             "were read. Do not reconstruct the norms from the current charter."
+             if review is not None else
+             "Assess the public return addressed by about_handle for conformity with the charter. "
              "The input's subject_handle is the default when present." if generic else
              "Assess the released representative verdict for conformity with the charter, "
              "using its window as context."),
@@ -1460,6 +1588,9 @@ class Runtime(
                     "evaluator_handle": judge_handle,
                     "propensity": self._public_propensity(handle),
                     "rationale": str(ret.outputs.get("rationale", ""))[:2000],
+                    # The frozen record travels with the judgement, so a higher tier
+                    # reads the same facts rather than an opinion about them.
+                    **{key: payload[key] for key in GROUNDED_FIELDS if key in payload},
                     **({"about_handle": handle} if emitted != "MetaVerdict" else {}),
                 },
             )

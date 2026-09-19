@@ -137,6 +137,44 @@ def test_an_unreadable_chain_leaves_the_claim_standing(monkeypatch):
     assert treasury.pots()["claimed_micro"] == 4_000  # still a claim, not a refusal
 
 
+def test_verified_income_can_purchase_credit_without_seed_reserve(tmp_path, monkeypatch):
+    """The existing receipt-to-credit path conserves earned funds on the scripted rail."""
+    import json
+
+    rt = scripted_runtime()
+    treasury = rt.treasury
+    owner = "seed-decider"
+    rt.tool_owner["oracle"] = owner
+    spool = tmp_path / "income.jsonl"
+    spool.write_text(json.dumps({"service": "oracle", "program": "oracle",
+                                "micro": 5_000_000, "tx": "0xearned",
+                                "payer": "0xbuyer"}) + "\n")
+    treasury.income_spool = str(spool)
+    before = rt.wallet.balance
+    entitlement = rt.budget.entitlement(owner)
+    assert treasury.pots()["reserve"] == treasury.pots()["sellers"]["venice"] == 0
+    verify = treasury.rail.target.verify_receipt
+    monkeypatch.setattr(treasury.rail.target, "verify_receipt", lambda receipt: None)
+    rt._collect_income()
+    assert rt.wallet.balance == before and treasury.pots()["reserve"] == 0
+    monkeypatch.setattr(treasury.rail.target, "verify_receipt", verify)
+    rt._collect_income()
+    assert rt.wallet.balance == before + 5_000_000
+    assert rt.budget.entitlement(owner) == entitlement + 5_000_000
+    assert treasury.pots()["reserve"] == 5_000_000
+    rt._collect_income()
+    assert rt.wallet.balance == before + 5_000_000  # replay cannot mint another payment
+    treasury.open_window(1)
+    assert treasury.transfer("to_venice", "5", handle="earned-credit", now_ns=1)[
+        "status"] == "submitted"
+    assert treasury.tick(2)[0]["status"] == "confirmed"
+    assert treasury.pots()["reserve"] == 0
+    assert treasury.pots()["sellers"]["venice"] == 5_000_000
+    assert treasury.income["earned_micro"] == 5_000_000
+    assert len(ledger_items(rt, "income.custody")) == 1
+    assert rt.wallet.check_conservation()
+
+
 # --- 3. a confirmed Venice purchase moves reserve to venice_credit exactly ---------------
 
 def test_a_confirmed_venice_purchase_moves_reserve_to_venice_credit_exactly():

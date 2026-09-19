@@ -1310,6 +1310,8 @@ class ComputeMixin:
         seen_results: list[dict] = []
         tool_round = 0
         round_limit = 1
+        discovery_continuation = False
+        outside_text = False
         while (not self.wallet.dead and ret.status == "ok" and (ret.tool_calls or ret.children)
                and tool_round < round_limit):
             results = []
@@ -1345,6 +1347,17 @@ class ComputeMixin:
                 # within the same wake instead of spending another decision on it.
                 if call["tool"] in ("connector.fetch", "web.search") and ok:
                     round_limit = 2
+                    outside_text = True
+                # A retrieved contract arrives in a tool result, so without a
+                # further round it is read by a decision that can no longer act on
+                # it: a seat could learn a contract and never be able to use it.
+                # One more round, then the final answer as usual. The ceiling is two
+                # rounds whatever is retrieved, so repeating a lookup cannot extend
+                # the wake, and this is continuation of the same decision rather than
+                # a scheduler, an objective, or a reward for having called something.
+                if call["tool"] in ("catalogue.search", "world.read") and ok:
+                    round_limit = 2
+                    discovery_continuation = True
                 self.stats.tool_calls += 1
                 if not ok:
                     self.stats.tool_call_failures += 1
@@ -1390,8 +1403,13 @@ class ComputeMixin:
             note = ("Return the final answer; this request's continuation has been "
                     "consumed. Further tool calls and requests are refused.")
             if tool_round + 1 < round_limit:
-                note = ("You may call population tools once more to parse what you "
-                        "retrieved, then return the final answer. Requests are refused.")
+                note = (
+                    "You may call tools once more to use what you retrieved, then return "
+                    "the final answer. Requests are refused."
+                    if discovery_continuation and not outside_text else
+                    "You may call population tools once more to parse what you retrieved, "
+                    "then return the final answer. Requests are refused."
+                )
             follow = req.continuation(
                 inputs={**req.inputs, "tool_results": results,
                         "seen_tool_results": seen_results, "continuation": note},
@@ -1410,11 +1428,17 @@ class ComputeMixin:
                 self.ledger.append({"kind": "requests.refused", "handle": req.handle,
                                     "reason": "continuation already consumed"})
                 ret = replace(ret, children=())
-            # The extra round composes the retrieved text through ordinary jailed tools.
+            # The extra round composes the retrieved text through ordinary jailed
+            # tools. Text from outside keeps that narrow: fetched or searched bytes
+            # cannot reach the venue, the treasury or a transport inside the same
+            # wake that read them. A schema this world answered with itself is not
+            # outside text, so a seat that looked a capability up may call the
+            # capability it looked up, which is the whole point of looking.
             if tool_round < round_limit and ret.tool_calls:
-                if any(self.tool_specs.get(c["tool"], {}).get("kind")
-                       not in ("population", "note", "artifact", "outcome")
-                       for c in ret.tool_calls):
+                if ((outside_text or not discovery_continuation)
+                        and any(self.tool_specs.get(c["tool"], {}).get("kind")
+                                not in ("population", "note", "artifact", "outcome")
+                                for c in ret.tool_calls)):
                     round_limit = tool_round
             if ret.tool_calls and tool_round >= round_limit:
                 self.ledger.append({"kind": "tool.calls_ignored", "handle": req.handle,
