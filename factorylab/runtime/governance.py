@@ -224,7 +224,18 @@ class GovernanceMixin:
                    for k, v in assembly_rewards(a.spec).items()}, **self.kind_reward_shapes}
 
     def _validate_output_contract(self, parsed, req) -> None:
-        """Registered predicates extend forecast validation without relaxing any return schema."""
+        """Registered predicates extend forecast validation without relaxing any return schema.
+
+        The fault a rejected forecast raises stays scoped to that forecast. The
+        inherited validator names the section with a ``SectionError``, which is a
+        ``ValueError`` and is caught here so a registered predicate can answer for
+        a predicate the seed vocabulary does not know; when it cannot, the failure
+        is re-raised as a ``SectionError`` on the same item. A plain ``ValueError``
+        here would void the whole return, discarding a valid order because one
+        optional forecast beside it was bad.
+        """
+        from factorylab.cortex.assembly import SectionError
+
         try:
             super()._validate_output_contract(parsed, req)
         except ValueError as exc:
@@ -234,9 +245,13 @@ class GovernanceMixin:
             # binding, custom schema and tool arguments before its seed lookup.
             from factorylab.settlement.vocabulary import _validate_params
 
-            for forecast in parsed.get("forecasts", []):
+            for index, forecast in enumerate(parsed.get("forecasts", [])):
                 predicate = self.predicates.get(forecast["predicate"])
-                _validate_params(forecast["predicate"], forecast["params"], predicate=predicate)
+                try:
+                    _validate_params(forecast["predicate"], forecast["params"],
+                                     predicate=predicate)
+                except (ValueError, TypeError, ArithmeticError, RecursionError) as fault:
+                    raise SectionError("forecasts", str(fault), index) from None
 
     @property
     def predicates(self):

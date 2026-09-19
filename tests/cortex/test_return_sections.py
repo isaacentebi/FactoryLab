@@ -123,6 +123,30 @@ def test_the_runtime_contract_drops_a_bad_tool_argument_but_keeps_the_order():
     assert ret.dropped[0]["reason"].startswith("item 0: venue.place_market")
 
 
+def test_the_runtime_contract_drops_an_unknown_forecast_but_keeps_the_order():
+    """The governance override must name the section, not void the whole return.
+
+    ``GovernanceMixin._validate_output_contract`` catches the seed lookup's
+    ``SectionError`` as a plain ``ValueError`` so a registered predicate can
+    extend the vocabulary. When the predicate is not registered either, the
+    fault still belongs to that one forecast: the order beside it stands.
+    """
+    rt = make_runtime()
+    forecast = {"predicate": "the_moon_is_cheese", "q": 0.5, "params": {"horizon_events": 3}}
+    ret = invoke({**ORDER, "forecasts": [forecast]}, validator=rt._validate_output_contract)
+    assert ret.status == "ok" and {k: ret.outputs[k] for k in ORDER} == ORDER
+    assert "forecasts" not in ret.outputs
+    assert sections(ret) == [("forecasts", 0)]
+
+
+def test_a_valid_forecast_survives_the_governance_contract():
+    """A seed predicate with good parameters is not collateral damage of the override."""
+    rt = make_runtime()
+    forecast = {"predicate": "wallet_up", "q": 0.5, "params": {"horizon_events": 3}}
+    ret = invoke({**ORDER, "forecasts": [forecast]}, validator=rt._validate_output_contract)
+    assert ret.status == "ok" and ret.outputs["forecasts"] == [forecast] and not ret.dropped
+
+
 def test_the_seat_is_told_what_was_dropped_and_why():
     rt = make_runtime()
     seat = next(a.spec.id for a in rt.assemblies.values() if a.spec.role == "producer")
