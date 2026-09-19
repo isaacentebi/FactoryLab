@@ -341,6 +341,26 @@ def test_recent_window_updates_after_meaningful_buffer_is_full(tmp_path):
     assert "private body" not in json.dumps(report)
 
 
+def test_cumulative_cost_is_not_divided_by_a_truncated_useful_window(tmp_path):
+    ledger = FakeLedger()
+    observer = RehearsalObserver(
+        ledger, tmp_path, max_rows=2,
+        admission_report=lambda: {"attempted": 2, "known_calls": 2,
+                                  "known_micro": 100, "uncertain_calls": 0},
+    )
+    observer.attach()
+    for handle in ("useful-first", "useful-second"):
+        ledger.append({"kind": "invocation", "handle": handle, "cost_micro": 7,
+                       "useful_decision": True, "independently_supported": True})
+    observer._write(0)
+    assert observer.last_report["cost_per_useful_decision_micro"] == 50
+    ledger.append({"kind": "invocation", "handle": "later", "cost_micro": 0})
+    observer._write(1)
+    assert observer.last_report["costs"]["known_micro_total"] == 100
+    assert observer.last_report["observer"]["coverage"]["status"] == "window_truncated"
+    assert observer.last_report["cost_per_useful_decision_micro"] is None
+
+
 def test_unwritable_output_cannot_change_append_semantics(tmp_path):
     output_file = tmp_path / "already-a-file"
     output_file.write_text("sealed", encoding="utf-8")

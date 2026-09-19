@@ -538,6 +538,10 @@ class RehearsalObserver:
             admission = _admission_snapshot(self.admission_report)
             _admission_costs(report, admission)
             _authoritative_cost_per_useful(report, list(self._rows))
+            if self._dropped_rows:
+                # Admission bills cover the whole run; the bounded window can no
+                # longer supply a matching lifetime useful-decision denominator.
+                report["cost_per_useful_decision_micro"] = None
             report["report_kind"] = "edition4_rehearsal_observer_report"
             report["status"] = "rehearsal_observer_static_snapshot"
             coverage = {

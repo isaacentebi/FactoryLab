@@ -140,3 +140,22 @@ Integrated verification: Ruff passed; `uv run pytest` reported
 `23 passed in 13.61s`. No paid or live run was made. The latest Cursor review
 attempt was unavailable because its usage limit was reached; its neutral check
 was not treated as an approval. Codex findings were handled as recorded above.
+
+The independent local review of `8d6c01a` found a cumulative/window mismatch in
+useful-decision cost once the observer evicts meaningful rows. That metric now
+becomes unavailable after truncation; a regression proves the complete-window
+value is 50 for two useful decisions and 100 micro-USD, then becomes null after
+one useful decision is evicted rather than changing spuriously to 100.
+Integrated verification passed Ruff, `2081 passed in 21.23s`, and
+`23 passed in 13.64s` for the selected gates.
+
+Codex's completed review of `8d6c01a` added 4052464496: a provisional numeric
+opinion was not tracked when the subject had no measurable commitment. Tracking
+now precedes that early return, with a regression proving the evaluator stays
+excluded from the final commission despite its provisional decision closing
+unmeasured. The final corrections received a bounded independent local review;
+the completed full-PR review's published findings are addressed before merge.
+
+Final integrated validation: Ruff passed; `2082 passed in 22.78s` in the check
+tier and `23 passed in 13.57s` in the selected gate files. The independent review
+of the last corrections found no further issues and passed 20 focused tests.

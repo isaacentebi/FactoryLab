@@ -111,6 +111,22 @@ def test_late_provisional_judge_is_retained_for_open_grounded_contract():
     assert rt.grounded_pending[producer].initial_evaluators == ("eval-a",)
 
 
+def test_unmeasurable_commitment_does_not_make_provisional_judge_fresh(monkeypatch):
+    rt = _runtime()
+    producer, event = _consequence_produce(rt)
+    monkeypatch.setattr(rt, "_judged_commitment", lambda *_args: None)
+    judge = _consequence_judge(rt, event, "eval-a")
+    assert rt.queue.get(judge).status is SettleStatus.INAPPLICABLE
+    contract = rt.grounded_pending[producer]
+    assert contract.initial_evaluators == ("eval-a",)
+    assert contract.forecast_handles == ()
+    rt.ticks_consumed = contract.due_tick
+    rt._settle_due_grounded()
+    final = rt.internal[-1]
+    assert "eval-a" in final.payload["excluded_evaluators"]
+    assert "eval-a" not in rt._universe_for(str(final.kind), final)
+
+
 def test_custom_judged_kind_is_frozen_and_receives_the_final_commission():
     rt = _runtime(provider=_CustomProducer())
     _register_custom_producer(rt)
