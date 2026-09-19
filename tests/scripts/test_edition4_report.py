@@ -107,13 +107,84 @@ def test_request_child_links_invocations_to_root_cost_tree():
                 "resource_liability": "root",
             },
             {"kind": "invocation", "handle": "child", "cost": 5, "status": "ok"},
+            {
+                "kind": "evidence",
+                "id": "useful-1",
+                "useful_decision": True,
+                "independently_supported": True,
+            },
         ]
     )
 
     assert report["costs"]["basis"] == "root_decision_trees"
     assert report["costs"]["root_count"] == 1
     assert report["costs"]["root_known_micro"] == {"root": 10}
+    assert report["costs"]["known_micro_total"] == 10
     assert report["costs"]["p50_micro"] == 10
+    assert report["cost_per_useful_decision_micro"] == 10
+
+
+def test_linked_invocations_do_not_substitute_child_cost_for_unknown_root_bill():
+    report = build_report(
+        [
+            {
+                "kind": "request.child",
+                "handle": "child",
+                "resource_liability": "root",
+            },
+            {"kind": "invocation", "handle": "child", "cost": 5, "status": "ok"},
+        ]
+    )
+
+    assert report["costs"]["known_micro_total"] is None
+    assert report["costs"]["known_bill_count"] == 0
+    assert report["costs"]["unknown_bill_count"] == 1
+    assert report["costs"]["roots_with_unknown_bills"] == ["root"]
+
+
+def test_linked_cost_total_keeps_unlinked_top_level_invocations_once():
+    report = build_report(
+        [
+            {"kind": "invocation", "handle": "root", "cost": 10, "status": "ok"},
+            {"kind": "request.child", "handle": "child", "resource_liability": "root"},
+            {"kind": "invocation", "handle": "child", "cost": 5, "status": "ok"},
+            {"kind": "invocation", "handle": "standalone", "cost": 7, "status": "ok"},
+        ]
+    )
+
+    assert report["costs"]["known_micro_total"] == 17
+    assert report["costs"]["known_bill_count"] == 2
+    assert report["costs"]["unknown_bill_count"] == 0
+    assert report["costs"]["unlinked_call_count"] == 1
+
+
+def test_provider_journal_and_admission_summary_precede_root_invocation_costs():
+    linked = [
+        {"kind": "invocation", "handle": "root", "cost": 10, "status": "ok"},
+        {"kind": "request.child", "handle": "child", "resource_liability": "root"},
+        {"kind": "invocation", "handle": "child", "cost": 5, "status": "ok"},
+        {"kind": "model_call", "id": "provider-1", "cost_micro": 70, "status": "settled"},
+    ]
+
+    provider_report = build_report(linked)
+    assert provider_report["costs"]["known_micro_total"] == 70
+    assert provider_report["costs"]["unknown_unit_count"] == 0
+
+    admission_report = build_report(
+        linked
+        + [
+            {
+                "kind": "report.summary",
+                "summary_cost": {
+                    "attempted": 1,
+                    "known_calls": 1,
+                    "known_micro": 100,
+                    "uncertain_calls": 0,
+                },
+            }
+        ]
+    )
+    assert admission_report["costs"]["known_micro_total"] == 100
 
 
 def test_invocation_cost_is_authoritative_and_tool_rows_are_not_double_counted():

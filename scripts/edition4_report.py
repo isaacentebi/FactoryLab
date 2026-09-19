@@ -257,6 +257,7 @@ def _cost_report(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
     calls = _call_rows(rows)
     invocations = _invocation_rows(rows)
     provider_journal = any(_kind(row) in _PROVIDER_CALL_KINDS for row in rows)
+    uncertain_metering = sum(_kind(row) == "metering.uncertain" for row in rows)
     summary = _summary_cost(rows)
     if not calls and summary is not None:
         known_calls = summary.get("known_calls")
@@ -315,19 +316,30 @@ def _cost_report(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
     basis = "root_decision_trees" if linked else "call_only"
     tree_costs: dict[str, int] = defaultdict(int)
     tree_unknown: Counter[str] = Counter()
+    linked_root_rows: set[str] = set()
+    unlinked_costs: list[int] = []
+    unlinked_unknown = 0
     if linked:
         for row, root in zip(invocations, roots, strict=False):
             if root in (None, ""):
+                cost = _cost(row)
+                if cost is None:
+                    unlinked_unknown += 1
+                else:
+                    unlinked_costs.append(cost)
                 continue
             cost = _cost(row)
             handle = _value(row, "handle", "id", "call_id")
             is_root_invocation = handle is not None and str(handle) == str(root)
             if not is_root_invocation:
                 continue
+            linked_root_rows.add(str(root))
             if cost is None:
                 tree_unknown[str(root)] += 1
             else:
                 tree_costs[str(root)] += cost
+        for root in set(linked) - linked_root_rows:
+            tree_unknown[root] += 1
     unit_costs = known
     unknown_units = unknown
     call_p50 = _percentile(known, 0.50)
@@ -335,13 +347,29 @@ def _cost_report(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
     root_p50 = None
     root_p90 = None
     if linked:
-        unit_costs = [cost for root, cost in tree_costs.items() if root not in tree_unknown]
-        unknown_units = len(set(tree_unknown))
+        unit_costs = [
+            cost for root, cost in tree_costs.items() if root not in tree_unknown
+        ] + unlinked_costs
+        unknown_units = (
+            len(set(tree_unknown)) + unlinked_unknown + uncertain_metering
+        )
         root_p50 = _percentile(unit_costs, 0.50)
         root_p90 = _percentile(unit_costs, 0.90)
     summary_known = summary.get("known_calls") if summary is not None else None
     summary_unknown = summary.get("uncertain_calls") if summary is not None else None
     summary_total = summary.get("known_micro") if summary is not None else None
+    if type(summary_total) is int:
+        known_micro_total = summary_total
+    elif provider_journal:
+        known_micro_total = sum(known) if known else None
+    elif linked:
+        # Return.cost is inclusive of child invocations.  Linked trees contribute
+        # only their roots; unlinked top-level invocations still contribute once.
+        known_micro_total = sum(unit_costs) if unit_costs else None
+    else:
+        known_micro_total = sum(known) if known else None
+    fallback_known_count = len(unit_costs) if linked and not provider_journal else len(known)
+    fallback_unknown_count = unknown_units if linked and not provider_journal else unknown
     return {
         "basis": basis,
         "label": (
@@ -350,13 +378,15 @@ def _cost_report(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
             else "call-only; root linkage unavailable"
         ),
         "calls": summary.get("attempted", len(calls)) if summary is not None else len(calls),
-        "known_bill_count": summary_known if type(summary_known) is int else len(known),
-        "unknown_bill_count": summary_unknown if type(summary_unknown) is int else unknown,
+        "known_bill_count": (
+            summary_known if type(summary_known) is int else fallback_known_count
+        ),
+        "unknown_bill_count": (
+            summary_unknown if type(summary_unknown) is int else fallback_unknown_count
+        ),
         "known_unit_count": len(unit_costs),
         "unknown_unit_count": unknown_units,
-        "known_micro_total": (
-            summary_total if type(summary_total) is int else (sum(known) if known else None)
-        ),
+        "known_micro_total": known_micro_total,
         "call_p50_micro": call_p50,
         "call_p90_micro": call_p90,
         "call_cost_basis": "provider_complete" if provider_journal else "invocation_inclusive",

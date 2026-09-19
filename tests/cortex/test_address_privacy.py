@@ -110,6 +110,22 @@ def test_malformed_argument_list_does_not_restore_nested_private_body(project):
     assert projected["args"][0]["args"]["to"] == "seat-b"
 
 
+@pytest.mark.parametrize("argument", ["args", "arguments", "inputs"])
+@pytest.mark.parametrize("body", ["text", "body", "message", "content", "payload"])
+@pytest.mark.parametrize("recipient", ["recipient", "to"])
+def test_address_lists_redact_bare_mappings_at_any_depth(argument, body, recipient):
+    envelope = {recipient: "seat-b", body: SECRET, "cost_micro": 3}
+    raw = {"tool": ADDRESS_TOOL, argument: [envelope, {"nested": [[envelope]]}]}
+    original = rendered(raw)
+    for projected in (public_return(raw), public_child_inputs(raw), public_tool_calls([raw])[0]):
+        assert SECRET not in rendered(projected)
+        assert projected[argument][0][recipient] == "seat-b"
+        assert projected[argument][0]["cost_micro"] == 3
+        assert projected[argument][0]["body"]["fields"] == [body]
+        assert projected[argument][1]["nested"][0][0]["body"]["fields"] == [body]
+    assert rendered(raw) == original
+
+
 @pytest.mark.parametrize(
     ("recipient_field", "body_field"),
     [

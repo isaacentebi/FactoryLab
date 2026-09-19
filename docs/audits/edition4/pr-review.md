@@ -103,3 +103,21 @@ Integrated verification for this revision: Ruff passed; `uv run pytest` reported
 legacy checkpoint fields, late provisional opinions, custom top-level and child
 returns, actual custom-evaluator dispatch, one final NOOP draw with additive routers,
 and preserved recursive meta eligibility. No paid or live run was made.
+
+## Follow-up review of `9e0369f`
+
+- Codex 4052423366: accepted. Return, tool-call and delegated-input projection now
+  share one recursive implementation. Inside addressed argument containers it
+  recognizes bare recipient/body mappings through lists and nested dictionaries.
+  Tests cover all argument aliases, body aliases and recipient aliases, metadata
+  preservation and source nonmutation. Removed the duplicate shallow redactor and
+  child-only walker that allowed the paths to diverge.
+- Codex 4052423368: accepted. Invocation-only cost totals must count root-inclusive
+  invocation costs once, rather than adding descendants already paid by their
+  parent's return. Provider billing and admission summaries retain precedence.
+
+Integrated verification: Ruff passed; `uv run pytest` reported
+`2074 passed in 22.50s`; the selected gate command reported
+`23 passed in 13.57s`. Cost regressions include missing parents, standalone
+invocations mixed with linked trees, and provider/summary precedence without
+negative coverage counts. No paid or live run was made.

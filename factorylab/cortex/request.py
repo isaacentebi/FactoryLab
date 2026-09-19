@@ -55,29 +55,6 @@ def _names_address(value: dict[str, Any]) -> bool:
     return any(value.get(key) == ADDRESS_TOOL for key in ("tool", "tool_id", "name"))
 
 
-def _redact_body(args: Any) -> Any:
-    """One address call's arguments with its body replaced by the fact of a body.
-
-    Guarantees the recipient, and every other argument the call declared, is kept:
-    a reader can still see that this seat addressed that seat and what it paid.
-    Guarantees no body field survives, and that the size of what was dropped is
-    reported rather than the text, so a judge can weigh that a message was sent
-    without reading it.
-    """
-    if not isinstance(args, dict):
-        return args
-    kept = {k: v for k, v in args.items() if k not in ADDRESS_BODY_FIELDS}
-    dropped = [k for k in args if k in ADDRESS_BODY_FIELDS]
-    if dropped:
-        kept["body"] = {
-            "redacted": "the recipient holds the only readable copy",
-            "fields": sorted(dropped),
-            "bytes": sum(len(json.dumps(args[k], sort_keys=True, default=str).encode("utf-8"))
-                         for k in dropped),
-        }
-    return kept
-
-
 def _address_shaped(value: dict[str, Any]) -> bool:
     """True when a child-input mapping contains both an address and a body."""
     return bool(_ADDRESS_RECIPIENT_FIELDS & value.keys()) and bool(
@@ -101,7 +78,7 @@ def _redact_projected_body(projected: dict[str, Any], raw: dict[str, Any]) -> di
     return kept
 
 
-def _project(value: Any, depth: int = 0) -> Any:
+def _project(value: Any, depth: int = 0, *, address_shapes: bool = False) -> Any:
     """A structure with every addressed body redacted, at any nesting a return reached.
 
     Guarantees an address call is redacted wherever it sits -- at the top of a
@@ -112,21 +89,28 @@ def _project(value: Any, depth: int = 0) -> Any:
     if depth >= _PROJECTION_DEPTH:
         return {"omitted": "nested deeper than this projection reads"}
     if isinstance(value, dict):
-        out = {k: _project(v, depth + 1) for k, v in value.items()}
-        if _names_address(value):
+        addressed = _names_address(value)
+        out = {k: _project(v, depth + 1, address_shapes=(
+                   address_shapes or (addressed and k in _ARGUMENT_FIELDS)))
+               for k, v in value.items()}
+        if addressed:
             for field in _ARGUMENT_FIELDS:
                 if field in out:
                     raw = value[field]
-                    if isinstance(raw, dict) and isinstance(out[field], dict):
-                        out[field] = _redact_projected_body(out[field], raw)
-                    else:
-                        out[field] = _redact_body(out[field])
+                    projected = out[field]
+                    out[field] = (
+                        _redact_projected_body(projected, raw)
+                        if isinstance(raw, dict) and isinstance(projected, dict)
+                        else projected
+                    )
             # A call that inlined its body beside the tool name rather than under
             # arguments is the same call and is redacted the same way.
             out = _redact_projected_body(out, value)
+        elif address_shapes and _address_shaped(value):
+            out = _redact_projected_body(out, value)
         return out
     if isinstance(value, (list, tuple)):
-        return [_project(item, depth + 1) for item in value]
+        return [_project(item, depth + 1, address_shapes=address_shapes) for item in value]
     return value
 
 
@@ -159,29 +143,6 @@ def public_return(outputs: Any) -> dict[str, Any]:
     return _project(visible)
 
 
-def _project_child_inputs(value: Any, depth: int = 0) -> Any:
-    """Project delegated inputs, including address arguments without a tool marker."""
-    if depth >= _PROJECTION_DEPTH:
-        return {"omitted": "nested deeper than this projection reads"}
-    if isinstance(value, dict):
-        out = {k: _project_child_inputs(v, depth + 1) for k, v in value.items()}
-        if _names_address(value):
-            argument_fields = [field for field in _ARGUMENT_FIELDS if field in out]
-            for field in argument_fields:
-                raw = value[field]
-                if isinstance(raw, dict) and isinstance(out[field], dict):
-                    out[field] = _redact_projected_body(out[field], raw)
-                else:
-                    out[field] = _redact_body(out[field])
-            return _redact_projected_body(out, value)
-        if _address_shaped(value):
-            return _redact_projected_body(out, value)
-        return out
-    if isinstance(value, (list, tuple)):
-        return [_project_child_inputs(item, depth + 1) for item in value]
-    return value
-
-
 def public_child_inputs(inputs: Any) -> dict[str, Any]:
     """Project delegated inputs for a public child-evaluation event.
 
@@ -195,7 +156,7 @@ def public_child_inputs(inputs: Any) -> dict[str, Any]:
     visible = {
         k: v for k, v in inputs.items() if k not in {"working_state", "ack_through", "raw"}
     }
-    return _project_child_inputs(visible)
+    return _project(visible, address_shapes=True)
 
 
 def _utc(ns: Any) -> str | None:
