@@ -163,7 +163,7 @@ def test_unrepresentable_order_size_is_rejected_without_raising():
     assert result.status == 'rejected' and calls == []
 
 
-@pytest.mark.parametrize('price', ['1e9999', '1e-9999', '1.123456789'])
+@pytest.mark.parametrize('price', ['1e9999', '1e-9999'])
 def test_unrepresentable_limit_price_never_enters_dispatch(price):
     from factorylab.world.exchange import OrderKind
 
@@ -171,3 +171,13 @@ def test_unrepresentable_limit_price_never_enters_dispatch(price):
     result = exchange.place(Order('BTC', True, Decimal(1), OrderKind.LIMIT,
                                   Decimal(price), client_id='bad-limit'))
     assert result.status == 'rejected' and calls == []
+
+
+def test_an_over_precise_limit_price_is_rounded_passively_before_dispatch():
+    """It used to be refused; the venue's precision rule is now applied (fix 7)."""
+    from factorylab.world.exchange import OrderKind
+
+    exchange, calls = preparing_exchange()
+    exchange.place(Order('BTC', True, Decimal(1), OrderKind.LIMIT,
+                         Decimal('1.123456789'), client_id='precise-limit'))
+    assert calls and calls[0][0][3] == 1.123  # BTC szDecimals 3: three decimals, a buy down

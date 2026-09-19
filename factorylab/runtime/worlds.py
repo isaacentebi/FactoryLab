@@ -71,12 +71,11 @@ class ExchangeSpec:
     # it cannot be reasoned away by the order that wants it. Zero by default: a
     # world that wants a cushion says so.
     collateral_headroom_usd: str = "0"
-    # The risk-bearing trading principal this world declares it may use at the venue,
-    # as an exact USD decimal string. A launch gate, not a balance: a testnet account
-    # funded with $966 that declares "120" is collateralised as if it held $120, so the
-    # rehearsal is the size of the real proposal without withdrawing anything first.
-    # ``None`` means "whatever the venue holds", which is every world that predates the
-    # key, and it is dropped from the canonical JSON at that default.
+    # DEPRECATED and inert (architect decision D1: a principal cap is a Class-2
+    # imposition). Still read, validated and hashed exactly as declared, so the
+    # manifests that carry it load and keep their historical manifest hashes; nothing
+    # enforces it. The venue's own account is the only limit on the principal used.
+    # Dropped from the canonical JSON at its ``None`` default, as it always was.
     principal_usd: str | None = None
 
 
@@ -134,6 +133,8 @@ class AssemblySeed:
 @dataclass(frozen=True)
 class ToolsSpec:
     population_tool_micro_per_call: int = 50
+    # DEPRECATED and inert (architect decision D1): leverage is whatever the venue
+    # allows. Kept only because every manifest hash was computed with it.
     max_leverage: int = 3
     max_routers_per_kind: int = 3
     max_depth: int = 4
@@ -252,6 +253,32 @@ class EvaluationSpec:
     sibling_share: float = 0.5  # share of the representative's meta score a sibling settles at
     sampling_step: float = 0.1  # consequence-mix step per divergent window
     sampling_cap: float = 0.7  # ceiling of the raised consequence mix
+
+    # Both horizons count world ticks consumed, not internal events (defect 1). The
+    # field names predate that and are kept so every manifest keeps its meaning; the
+    # manifest may also spell them ``verdict_timeout_ticks`` and
+    # ``consequence_backstop_ticks``.
+    @property
+    def verdict_timeout_ticks(self) -> int:
+        """World ticks a judgement waits for its judge before it is censored."""
+        return self.verdict_timeout_events
+
+    @property
+    def consequence_backstop_ticks(self) -> int:
+        """World ticks a return's consequence may stay open before it is marked."""
+        return self.consequence_backstop_events
+
+
+def _tick_horizon(ev: dict, name: str, default: int) -> Any:
+    """Read one evaluation horizon under its tick name or its original name.
+
+    ``<name>_ticks`` and ``<name>_events`` are one key in two spellings, both
+    counted in world ticks; a manifest that gives both must give one number.
+    """
+    ticks, events = ev.get(f"{name}_ticks"), ev.get(f"{name}_events")
+    if ticks is not None and events is not None and ticks != events:
+        raise ValueError(f"evaluation.{name}_ticks and evaluation.{name}_events disagree")
+    return ticks if ticks is not None else events if events is not None else default
 
 
 @dataclass(frozen=True)
@@ -945,11 +972,11 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     evaluation = EvaluationSpec(
         consequence_share=float(ev.get("consequence_share", 0.3)),
         max_forecasts_per_verdict=int(ev.get("max_forecasts_per_verdict", 2)),
-        verdict_timeout_events=int(ev.get("verdict_timeout_events", 20)),
+        verdict_timeout_events=int(_tick_horizon(ev, "verdict_timeout", 20)),
         min_coverage=float(ev.get("min_coverage", 0.5)),
         trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10"), rounding="exact"),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
-        consequence_backstop_events=ev.get("consequence_backstop_events", 200),
+        consequence_backstop_events=_tick_horizon(ev, "consequence_backstop", 200),
         adversarial_share=ev.get("adversarial_share", 0.15),
         sibling_share=ev.get("sibling_share", 0.5),
         sampling_step=ev.get("sampling_step", 0.1),

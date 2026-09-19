@@ -167,28 +167,62 @@ def test_contract_serialization_is_supported(ledger, contract_factory):
     assert ledger.verify()
 
 
-def test_default_mode_catches_tail_tampers_immediately_and_earlier_edits_periodically(
+def test_default_mode_catches_tail_tampers_immediately_and_earlier_edits_at_every_full_walk(
     tmp_path, clock
 ):
+    """Restated for the incremental health check (perf/linear-runtime).
+
+    This test used to assert that the periodic walk inside ``healthy()`` catches a
+    same-size edit to an earlier line. That walk re-hashed the whole diary every
+    ``full_verify_every`` items, which made a long run quadratic; it now reads only
+    the items appended since the last walk, chained to the last authenticated head.
+    So an edit to a line an earlier walk already covered is, by design, *not* seen
+    by ``healthy()`` or ``append()``. It is seen by every full walk: an explicit
+    ``verify()``, ``aggregate()`` (and the run's closing summary, which calls both),
+    and reopening the diary, which is what open and resume do.
+    """
     path = tmp_path / "ledger.jsonl"
-    ledger = Ledger(path, clock_ns=clock, full_verify_every=4)
-    for i in range(3):
+    # A key file beside it, as a world's diary has, so it can be reopened.
+    ledger = Ledger(path, clock_ns=clock, full_verify_every=4, key_path=f"{path}.key")
+    for i in range(5):  # the 5th append runs the periodic walk over items 0-3
         ledger.append({"kind": f"k{i}"})
     lines = path.read_bytes().splitlines(keepends=True)
-    # same-size edit of an earlier line: flip one byte inside the token in place
+    # same-size edit of an earlier, already-walked line: flip one byte in its token
+    original = lines[1]
     raw = bytearray(lines[1])
     pos = raw.index(b'"item":"') + len(b'"item":"') + 20
     raw[pos] = ord("A") if raw[pos] != ord("A") else ord("B")
     lines[1] = bytes(raw)
     path.write_bytes(b"".join(lines))
-    assert ledger.healthy()  # cheap check passes, by design
-    assert not ledger.verify()  # the full walk does not
+    assert ledger.healthy()  # the cheap check passes, by design
+    for i in range(5, 9):  # and so does the next periodic walk, which starts past it
+        ledger.append({"kind": f"k{i}"})
+    assert ledger.healthy()
+    # every full walk sees it: explicit verify, the aggregates, and open/resume
+    assert not ledger.verify()
     with pytest.raises(LedgerIntegrityError):
         ledger.aggregate("wallet_series")
-    # the 4th append passes the cheap check; the 5th (4 stored items) runs the full walk
-    ledger.append({"kind": "k3"})
     with pytest.raises(LedgerIntegrityError):
-        ledger.append({"kind": "periodic"})
+        Ledger.reopen(path, manifest={}, read_only=True)
+    # (the same diary with that one line restored reopens: it is the edit that is refused)
+    lines = path.read_bytes().splitlines(keepends=True)
+    lines[1] = original
+    path.write_bytes(b"".join(lines))
+    assert Ledger.reopen(path, manifest={}, read_only=True).verify()
+    # an edit to an item the periodic walk has not reached yet is caught by that walk
+    fresh = Ledger(tmp_path / "fresh.jsonl", clock_ns=clock, full_verify_every=4)
+    for i in range(3):
+        fresh.append({"kind": f"k{i}"})
+    fresh_path = tmp_path / "fresh.jsonl"
+    lines = fresh_path.read_bytes().splitlines(keepends=True)
+    raw = bytearray(lines[2])
+    pos = raw.index(b'"item":"') + len(b'"item":"') + 20
+    raw[pos] = ord("A") if raw[pos] != ord("A") else ord("B")
+    lines[2] = bytes(raw)
+    fresh_path.write_bytes(b"".join(lines))
+    fresh.append({"kind": "k3"})  # the 4th append passes the cheap check
+    with pytest.raises(LedgerIntegrityError):
+        fresh.append({"kind": "periodic"})  # the 5th walks items 0-3 and finds it
     # tail tampers are caught immediately
     ledger2 = Ledger(tmp_path / "l2.jsonl", clock_ns=clock)
     ledger2.append({"kind": "a"})

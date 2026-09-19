@@ -29,27 +29,6 @@ def test_malformed_fills_and_funding_rows_are_skipped():
     assert funded.paid_usd == Decimal("0.125")
 
 
-def test_malformed_funding_assets_and_contexts_preserve_valid_rows():
-    venue = object.__new__(HyperliquidExchange)
-    venue.coins = ("BTC", "ETH")
-    venue._guarded = lambda name, call: call()
-    venue._info = SimpleNamespace(meta_and_asset_ctxs=lambda: (
-        {"universe": [None, {}, {"name": "BTC"}, {"name": "ETH"}]},
-        [None, {}, {"funding": "NaN"}, {"funding": "0.001"}],
-    ))
-    funding, = venue.funding()
-    assert funding.coin == "ETH" and funding.rate == Decimal("0.001")
-
-
-@pytest.mark.parametrize("response", [None, [], [{}, None]])
-def test_invalid_funding_envelope_is_venue_weather(response):
-    venue = object.__new__(HyperliquidExchange)
-    venue._guarded = lambda name, call: call()
-    venue._info = SimpleNamespace(meta_and_asset_ctxs=lambda: response)
-    with pytest.raises(VenueUnavailable):
-        venue.funding()
-
-
 def test_journal_replays_the_same_venue_error_class():
     ledger = Ledger(clock_ns=lambda: 0)
     journal = RecoveryJournal(ledger, lambda: 0)

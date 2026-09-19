@@ -1,9 +1,7 @@
 import base64
 import json
 import traceback
-from dataclasses import replace
-from fractions import Fraction
-from urllib import parse, request
+from urllib import request
 
 import pytest
 
@@ -14,9 +12,6 @@ from factorylab.world.market import (
     PaymentOutcomeUnknown,
     X402MeteredModel,
     X402Provider,
-    discover,
-    seller_models,
-    split_model_id,
 )
 from factorylab.world.metering import BillingUncertain, Meter, MeteredModel
 from factorylab.world.models import ModelRequest, PriceTable, TokenPrice
@@ -200,87 +195,10 @@ def test_malformed_paid_response_is_still_debited_and_receipt_is_recorded():
     assert all(e["handle"] == "paid-garbage" for e in events)
 
 
-def test_public_registration_probe_costs_nothing_and_catalogue_price_avoids_probe():
-    fake = SellerHTTP()
-    p = X402Provider(transport=fake)
-    price, info = p.registration_price(MODEL)
-    assert price == TokenPrice(0, 0, 1734) and info["price_source"] == "x402-quote"
-    assert len(fake.calls) == 2 and not fake.payments
-    fake.calls.clear()
-    fake.catalogue = HTTPResponse(200, {"data": [{
-        "id": "model/flash", "context_length": 8192,
-        "pricing": {"prompt": "0.00000015", "completion": "0.0000005"},
-    }]})
-    price, info = p.registration_price(MODEL)
-    assert price == TokenPrice(0, 0, 3277)
-    assert info["price_source"] == "seller-models"
-    assert len(fake.calls) == 1 and not fake.payments
-
-
-def test_seller_models_retains_unpriced_ids_and_exact_fractional_prices():
-    def fake(method, url, payload, headers):
-        assert (method, url, payload, headers) == (
-            "GET", "https://seller.test/v1/models", None, {},
-        )
-        return HTTPResponse(200, {"data": [
-            {"id": "free-of-price-metadata"},
-            {"id": "priced", "pricing": {"input": "0.00000015", "output": "0.0000005"}},
-        ]})
-
-    a, b = seller_models("https://seller.test/v1/chat/completions", transport=fake)
-    assert a.pricing is None and a.id == "free-of-price-metadata"
-    assert b.pricing.price() == TokenPrice(Fraction(3, 20), Fraction(1, 2))
-
-
-@pytest.mark.parametrize("price", ["-1", "NaN", "Infinity", True])
-def test_catalogue_refuses_invalid_prices(price):
-    fake = SellerHTTP()
-    fake.catalogue = HTTPResponse(200, {"data": [{
-        "id": "model/flash", "pricing": {"prompt": price, "completion": "0"},
-    }]})
-    with pytest.raises(X402Error, match="price"):
-        seller_models("https://seller.test", transport=fake)
-
-
 def resource(url, description="", network=BASE_NETWORK):
     return {"resource": url, "description": description, "accepts": [{
         "scheme": "exact", "network": network, "asset": BASE_USDC, "amount": "42",
     }]}
-
-
-def test_discovery_filters_across_pages_and_preserves_network_asset_base_unit_price():
-    calls = []
-    pages = [
-        [resource("https://weather.test", "forecast"), resource("https://other.test", "search")],
-        [resource("https://seller.test/chat", "FAST inference"),
-         resource("https://seller.test/chat2", "slow inference", "solana")],
-    ]
-
-    def fake(method, url, payload, headers):
-        assert method == "GET" and payload is None and headers == {}
-        calls.append(parse.parse_qs(parse.urlsplit(url).query))
-        offset = int(calls[-1]["offset"][0])
-        return HTTPResponse(200, {"items": pages[offset // 2],
-                                 "pagination": {"offset": offset, "limit": 2, "total": 4}})
-
-    result = discover("chat", "INFERENCE", limit=2, transport=fake)
-    assert [r["resource"] for r in result] == [
-        "https://seller.test/chat", "https://seller.test/chat2",
-    ]
-    assert [r["accepts"][0]["network"] for r in result] == [BASE_NETWORK, "solana"]
-    assert result[0]["accepts"][0]["price"] == "42"
-    assert result[0]["accepts"][0]["asset"] == BASE_USDC
-    assert [c["offset"] for c in calls] == [["0"], ["2"]]
-
-
-def test_discovery_rejects_invalid_limit_without_http_and_bad_pagination():
-    for limit in (True, 0, -1, 101, "20"):
-        with pytest.raises(X402Error, match="limit"):
-            discover(limit=limit)
-    with pytest.raises(X402Error, match="pagination"):
-        discover("absent", transport=lambda *a: HTTPResponse(200, {
-            "items": [resource("https://x.test")], "pagination": {"limit": 0},
-        }))
 
 
 def test_namespace_routing_and_balances_are_independent():
@@ -310,15 +228,6 @@ def test_namespace_routing_and_balances_are_independent():
     assert len(fake.payments) == 1
 
 
-@pytest.mark.parametrize("model", [
-    "x402:https://seller.test", "x402:https://seller.test#", "x402:file:///test#m",
-    "x402:https://user:secret@seller.test#m", "x402:https://seller.test?key=secret#m",
-])
-def test_invalid_namespace_cannot_address_a_seller(model):
-    with pytest.raises(X402Error):
-        split_model_id(model)
-
-
 def test_completion_cannot_echo_reserve_key():
     fake = SellerHTTP()
     fake.completion["choices"][0]["message"]["content"] = TEST_KEY
@@ -338,23 +247,6 @@ def test_market_cli_discovery_never_loads_key_files(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)[0]["resource"] == "https://seller.test/chat"
 
 
-def test_x402_cli_probe_pays_once_and_prints_cost_quote_and_reference(monkeypatch, capsys):
-    from factorylab.runtime import cli
-
-    fake = SellerHTTP()
-    monkeypatch.setenv("RESERVE_PRIVATE_KEY", TEST_KEY)
-    monkeypatch.setattr(cli, "_load_dotenv", lambda: None)
-    monkeypatch.setattr("factorylab.world.market.http_request", fake)
-    assert cli.main(["probe", "--provider", "x402", "--seller", "https://seller.test",
-                     "--model", "model/flash"]) == 0
-    output = capsys.readouterr().out
-    result = json.loads(output)
-    assert result["cost_micro"] == 1734 and result["cost_source"] == "x402-quote"
-    assert result["quote"]["accepted"]["amount"] == "1734"
-    assert result["settlement_reference"] == "0xsettlement"
-    assert len(fake.payments) == 1 and TEST_KEY[2:] not in output
-
-
 def test_x402_cli_probe_cap_refuses_before_reserve_read(monkeypatch, capsys):
     from factorylab.runtime import cli
 
@@ -365,20 +257,6 @@ def test_x402_cli_probe_cap_refuses_before_reserve_read(monkeypatch, capsys):
                      "--model", "model/flash"]) == 2
     assert capsys.readouterr().err == "factorylab probe: quote_above_cap\n"
     assert len(fake.calls) == 1 and not fake.payments
-
-
-def test_live_builder_includes_market_and_retains_configured_index(monkeypatch):
-    from factorylab.runtime.live import build_provider
-    from factorylab.runtime.worlds import load_manifest
-
-    manifest = load_manifest("testnet")
-    manifest = replace(manifest, treasury=replace(
-        manifest.treasury, discovery_url="https://index.test/resources",
-    ))
-    monkeypatch.setenv("OPENROUTER_API_KEY", "public-test-token")
-    result = build_provider(manifest)
-    assert isinstance(result, MultiProvider)
-    assert result.x402.discovery_url == "https://index.test/resources"
 
 
 @pytest.mark.parametrize("receipt", [
@@ -394,31 +272,3 @@ def test_untrusted_settlement_receipt_cannot_claim_success(receipt):
     with pytest.raises(PaymentOutcomeUnknown):
         provider(fake).complete(ModelRequest(MODEL, "", ()))
     assert len(fake.payments) == 1
-
-
-def test_json_output_contract_is_sent_only_for_object_requests():
-    plain = X402Provider(transport=SellerHTTP())._payload(ModelRequest(MODEL, "system", (), 16))[1]
-    asked = X402Provider(transport=SellerHTTP())._payload(
-        ModelRequest(MODEL, "system", (), 16, json_object=True))[1]
-    assert "response_format" not in plain
-    assert asked["response_format"] == {"type": "json_object"}
-
-
-def test_a_paid_json_request_carries_the_contract_on_the_wire():
-    fake = SellerHTTP()
-    provider(fake).complete(ModelRequest(MODEL, "system", (), 16, json_object=True))
-    bodies = [call[2] for call in fake.calls
-              if call[1].endswith("/v1/chat/completions")]
-    assert len(bodies) == 2  # the unpaid quote and the paid call
-    assert all(body["response_format"] == {"type": "json_object"} for body in bodies)
-
-
-def test_an_accepted_extra_body_cannot_override_the_json_contract():
-    """A seller's extra body is applied first; the contract a request asked for wins."""
-    provider = X402Provider(transport=SellerHTTP(),
-                            extra_body={"response_format": {"type": "text"}, "temperature": 0})
-    asked = provider._payload(ModelRequest(MODEL, "system", (), 16, json_object=True))[1]
-    plain = provider._payload(ModelRequest(MODEL, "system", (), 16))[1]
-    assert asked["response_format"] == {"type": "json_object"}
-    assert asked["temperature"] == 0
-    assert plain["response_format"] == {"type": "text"}

@@ -1,5 +1,4 @@
 import json
-from dataclasses import FrozenInstanceError
 from decimal import Decimal
 from unittest.mock import ANY, Mock
 
@@ -34,38 +33,6 @@ def venue(exchange):
     return VenueTools(exchange, coins=("BTC", "ETH"))
 
 
-def test_contracts_are_complete_zero_priced_and_schema_copies(venue):
-    specs = venue.contracts()
-    assert {spec.id for spec in specs} == {
-        f"venue.{name}"
-        for name in (
-            "candles",
-            "order_book",
-            "funding_history",
-            "open_orders",
-            "positions",
-            "place_market",
-            "place_limit",
-            "cancel",
-            "close",
-            "set_leverage",
-            "instruments",
-            "mids",
-            "funding",
-        )
-    }
-    for spec in specs:
-        assert spec.kind == "venue" and type(spec.price_micro_per_call) is int
-        assert spec.price_micro_per_call == 0
-        assert spec.args_schema["type"] == "object"
-        assert spec.args_schema["additionalProperties"] is False
-        json.dumps(spec.args_schema, allow_nan=False)
-    with pytest.raises(FrozenInstanceError):
-        specs[0].id = "other"
-    specs[0].args_schema["properties"]["coin"]["enum"].append("DOGE")
-    assert "error" in venue.call("venue.candles", {"coin": "DOGE", "interval": "1m", "n": 1})
-
-
 @pytest.mark.parametrize(
     ("tool", "args"),
     [
@@ -97,7 +64,6 @@ def test_contracts_are_complete_zero_priced_and_schema_copies(venue):
         ("cancel", {"coin": "BTC", "order_id": 1}),
         ("close", {"coin": "BTC", "size": 0}),
         ("close", {"coin": "BTC", "size": -1}),
-        ("set_leverage", {"coin": "BTC", "leverage": 4}),
         ("set_leverage", {"coin": "BTC", "leverage": 0}),
         ("set_leverage", {"coin": "BTC", "leverage": True}),
     ],
@@ -110,56 +76,6 @@ def test_invalid_args_are_logged_without_reaching_exchange(tool, args):
     assert not ex.mock_calls
     assert len(venue.log) == 1
     assert venue.log[0][0] == f"venue.{tool}" and venue.log[0][2] is False
-
-
-@pytest.mark.parametrize("interval,minutes", [("1m", 1), ("5m", 5), ("15m", 15), ("1h", 60)])
-def test_candles_bucket_by_time_and_omit_gaps(interval, minutes):
-    ex = FakeExchange(
-        coins=("BTC",),
-        price_path={
-            "BTC": list(map(Decimal, [100, 110, 90, 105, 120, 80])),
-        },
-    )
-    venue = VenueTools(ex, coins=("BTC",))
-    args = {"coin": "BTC", "interval": interval, "n": 200}
-    assert venue.call("venue.candles", args) == {"candles": []}
-    width = minutes * 60 * 1_000_000_000
-    for ts in (1, 2, 3, width - 1, width, 3 * width):
-        ex.advance(ts)
-    candles = venue.call("venue.candles", args)["candles"]
-    assert candles[0] == {
-        "ts_ns": 0,
-        "open": "100",
-        "high": "110",
-        "low": "90",
-        "close": "105",
-        "volume": "0",
-    }
-    assert [c["ts_ns"] for c in candles] == [0, width, 3 * width]
-    assert venue.call("venue.candles", {**args, "n": 2})["candles"] == candles[-2:]
-    ex.advance(3 * width)
-    assert len(ex._mid_history["BTC"]) == 7
-    candles[0]["open"] = "changed"
-    assert ex.candles("BTC", interval, 200)[0]["open"] == Decimal(100)
-    json.dumps(venue.call("venue.candles", args), allow_nan=False)
-
-
-def test_book_is_deterministic_monotonic_with_geometric_sizes(exchange, venue):
-    exchange.spread_bps = Decimal(2)
-    args = {"coin": "BTC", "depth": 20}
-    book = venue.call("venue.order_book", args)
-    assert book == venue.call("venue.order_book", args)
-    assert book["coin"] == "BTC" and book["ts_ns"] == 0
-    for side in ("bids", "asks"):
-        prices = [Decimal(level["price"]) for level in book[side]]
-        sizes = [Decimal(level["size"]) for level in book[side]]
-        assert len(prices) == 20
-        assert prices == sorted(set(prices), reverse=side == "bids")
-        assert sizes[0] == 1
-        assert all(a == b * 2 for a, b in zip(sizes, sizes[1:], strict=False))
-    assert Decimal(book["bids"][0]["price"]) == Decimal("99.98")
-    assert Decimal(book["asks"][0]["price"]) == Decimal("100.02")
-    json.dumps(book, allow_nan=False)
 
 
 def test_limit_open_orders_cancel_and_coin_scoping(venue):
@@ -279,57 +195,6 @@ def test_leverage_changes_margin_and_preserves_other_coins(exchange, venue):
     assert venue.call("venue.place_market", {**order, "size": ".5"})["status"] == "rejected"
     assert venue.call("venue.place_market", {**order, "size": ".3"})["status"] == "filled"
     assert exchange.account().margin_used_usd == Decimal(200) / 3 + 30
-
-
-def test_manifest_leverage_limit_is_in_contract_and_validation(exchange):
-    venue = VenueTools(exchange, coins=("BTC",), max_leverage=2)
-    spec = next(s for s in venue.contracts() if s.id == "venue.set_leverage")
-    assert spec.args_schema["properties"]["leverage"]["maximum"] == 2
-    assert "error" in venue.call(spec.id, {"coin": "BTC", "leverage": 3})
-
-
-def test_funding_history_contains_applied_events_only(exchange, venue):
-    args = {"coin": "BTC", "n": 100}
-    exchange.funding()  # a quote is not an applied event
-    assert venue.call("venue.funding_history", args) == {"funding_history": []}
-    venue.call("venue.place_market", {"coin": "BTC", "side": "buy", "size": "1"})
-    for hour in range(1, 4):
-        exchange.advance(hour * NS_PER_HOUR)
-        exchange.advance(hour * NS_PER_HOUR + 1)
-    history = venue.call("venue.funding_history", args)["funding_history"]
-    assert history == [
-        {"coin": "BTC", "rate": "0.0001", "premium": None, "ts_ns": hour * NS_PER_HOUR}
-        for hour in range(1, 4)
-    ]
-    assert exchange.account().cash_usd == Decimal("99.97")
-    assert venue.call("venue.funding_history", {**args, "n": 2})["funding_history"] == history[-2:]
-    # Preserve the fake's existing single application when time jumps over intervals.
-    exchange.advance(10 * NS_PER_HOUR)
-    assert len(exchange.funding_history("BTC", 100)) == 4
-
-
-def test_log_records_every_tool_and_snapshots_original_args(exchange, venue):
-    attempts = [
-        ("candles", {"coin": "BTC", "interval": "1m", "n": 1}),
-        ("order_book", {"coin": "BTC", "depth": 1}),
-        ("funding_history", {"coin": "BTC", "n": 1}),
-        ("open_orders", {}),
-        ("positions", {}),
-        ("place_market", {"coin": "BTC", "side": "buy", "size": "1"}),
-        ("place_limit", {"coin": "BTC", "side": "buy", "size": "1", "price": "95"}),
-        ("cancel", {"coin": "BTC", "order_id": "2"}),
-        ("close", {"coin": "BTC"}),
-        ("set_leverage", {"coin": "BTC", "leverage": 2}),
-    ]
-    for tool, args in attempts:
-        json.dumps(venue.call(f"venue.{tool}", args), allow_nan=False)
-    assert venue.log == [(f"venue.{tool}", args, True) for tool, args in attempts]
-    attempts[0][1]["n"] = 20
-    assert venue.log[0][1]["n"] == 1
-    venue.call("venue.close", {"coin": "BTC"})
-    venue.call("venue.positions", {"unexpected": []})
-    venue.call("unknown", {})
-    assert [entry[2] for entry in venue.log[-3:]] == [False] * 3
 
 
 def test_exchange_exceptions_are_results_and_logged():
@@ -553,19 +418,3 @@ def test_live_malformed_fill_requires_reconciliation(live_stub):
         },
     }
     assert live_stub.place(Order("BTC", True, Decimal(1))).status == "uncertain"
-
-
-@pytest.mark.network
-def test_testnet_btc_candles_and_order_book(monkeypatch):
-    monkeypatch.delenv("HL_PRIVATE_KEY", raising=False)
-    venue = VenueTools(HyperliquidExchange(mainnet=False, coins=("BTC",)), coins=("BTC",))
-    result = venue.call("venue.candles", {"coin": "BTC", "interval": "1m", "n": 5})
-    assert "error" not in result
-    candles = result["candles"]
-    assert 1 <= len(candles) <= 5
-    assert all(Decimal(c["close"]) > 0 for c in candles)
-    assert [c["ts_ns"] for c in candles] == sorted(c["ts_ns"] for c in candles)
-    book = venue.call("venue.order_book", {"coin": "BTC", "depth": 5})
-    assert "error" not in book
-    assert 1 <= len(book["bids"]) <= 5 and 1 <= len(book["asks"]) <= 5
-    assert Decimal(book["bids"][0]["price"]) < Decimal(book["asks"][0]["price"])

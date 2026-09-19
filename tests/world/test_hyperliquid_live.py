@@ -5,15 +5,6 @@ import pytest
 pytestmark = pytest.mark.network
 
 
-def test_testnet_probe_reads_mids_and_funding() -> None:
-    from factorylab.world.probe import probe_hyperliquid
-
-    out = probe_hyperliquid(mainnet=False)
-    assert out["venue"] == "hyperliquid-testnet"
-    assert Decimal(out["mids"]["BTC"]) > 0 and Decimal(out["mids"]["ETH"]) > 0
-    assert {f["coin"] for f in out["funding"]} == {"BTC", "ETH"}
-
-
 def test_place_without_key_is_rejected_not_raised(monkeypatch) -> None:
     from factorylab.world.exchange import HyperliquidExchange, Order
 

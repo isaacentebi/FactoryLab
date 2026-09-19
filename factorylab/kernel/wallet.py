@@ -287,8 +287,23 @@ class Wallet:
 
     @property
     def dead(self) -> bool:
-        """Reaching the floor is final, even when later observed settlements recover cash."""
-        return self.__exhausted or self.__balance <= self.__balance_floor_micro
+        """Reaching the floor on settled money is final, even when later settlements recover.
+
+        Death is decided on settled reality, never on a provisional ceiling: an
+        uncertain bill is booked at its ceiling, but its true cost is anywhere from
+        zero to that ceiling, so the wallet is dead only when it would be at or
+        below the floor even if every outstanding uncertain bill settled at zero.
+        """
+        return self.__exhausted or self._settled_floor_reached(self.__balance)
+
+    def _provisional(self) -> Money:
+        """The ceilings booked for uncertain bills whose true cost is still unknown."""
+        return sum(bill["provisional_micro"] for bill in self.__uncertain_bills.values())
+
+    def _settled_floor_reached(self, balance: Money, extra_provisional: Money = 0) -> bool:
+        """At or below the floor even if every uncertain bill were to settle at zero."""
+        return (balance + self._provisional() + extra_provisional
+                <= self.__balance_floor_micro)
 
     def _live(self) -> None:
         if self.dead or self.__ledger.final:
@@ -376,7 +391,8 @@ class Wallet:
         self._commit(reservation, actual)
         return actual
 
-    def _commit(self, reservation: Reservation, actual: Money) -> None:
+    def _commit(self, reservation: Reservation, actual: Money, *,
+                provisional: bool = False) -> None:
         balance = self.balance - actual
         self._log(
             "commit",
@@ -388,7 +404,9 @@ class Wallet:
             released=max(0, reservation.amount - actual),
         )
         self.__balance = balance
-        self.__exhausted |= balance <= self.__balance_floor_micro
+        # A provisional commit's amount is a ceiling, not a cost: it cannot latch death.
+        self.__exhausted |= self._settled_floor_reached(
+            balance, actual if provisional else 0)
         self.__commits += actual
         self._refund_novelty(reservation, actual)
         del self.__reservations[reservation.id]
@@ -399,7 +417,7 @@ class Wallet:
         bill = {"handle": reservation.handle, "reason": reservation.reason,
                 "reservation_id": reservation.id, "provisional_micro": reservation.amount}
         self.__ledger.append({"kind": "metering.uncertain", **bill, "ts": self.__clock()})
-        self._commit(reservation, reservation.amount)
+        self._commit(reservation, reservation.amount, provisional=True)
         self.__uncertain_bills[reservation.id] = bill
 
     @property
@@ -444,6 +462,9 @@ class Wallet:
         self.__balance = balance
         self.__commits -= released
         del self.__uncertain_bills[reservation_id]
+        # The bill is now settled reality: if the balance is at the floor on it (and
+        # on whatever else is still settled), that is death, and final.
+        self.__exhausted |= self._settled_floor_reached(balance)
         return released
 
     def release_hold(self, reservation: Reservation) -> None:
@@ -491,7 +512,7 @@ class Wallet:
             if not isinstance(handle, str) or not handle:
                 raise ValueError("settlement handle is required")
             balance += delta
-            exhausted |= balance <= self.__balance_floor_micro
+            exhausted |= self._settled_floor_reached(balance)
             entries.append((delta, balance, handle, reason))
         for delta, after, handle, reason in entries:
             self._log("settle", delta, after, handle, reason)
@@ -579,9 +600,9 @@ class Wallet:
             setattr(self, f"_Wallet__{name}", state[name])
         self.__reservations = holds
         self.__locked, self.__released, self.__launch_ns = locked, released, launch_ns
-        self.__exhausted = exhausted or self.__balance <= self.__balance_floor_micro
         self.__novelty_holds = dict(state.get("novelty_holds", {}))
         self.__uncertain_bills = dict(state.get("uncertain_bills", {}))
+        self.__exhausted = exhausted or self._settled_floor_reached(self.__balance)
 
     def _reservation_for_resume(self, reservation_id: str) -> Reservation:
         """Rebind an authenticated owner's saved hold to this wallet's actual reservation."""

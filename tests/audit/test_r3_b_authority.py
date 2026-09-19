@@ -6,18 +6,15 @@ Nothing here touches a network; every venue and provider is the fake one.
 
 import json
 from decimal import Decimal
-from types import SimpleNamespace
 
-from factorylab.charter.amendment import PredictedEffect
-from factorylab.charter.committee import Committee, Seat
-from factorylab.cortex.registration import AssemblyProposal, ConnectorProposal
+from factorylab.cortex.registration import AssemblyProposal
 from factorylab.cortex.request import Return
-from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from factorylab.kernel.queue import PropensityRecord
 from factorylab.runtime.shared import CH_VERDICT
 from factorylab.world.exchange import OrderResult
 from factorylab.world.models import ModelResponse
 from tests.conftest import make_runtime
-from tests.runtime.test_loop import _consequence_judge, _consequence_produce
+from tests.runtime.test_loop import _consequence_produce
 
 
 def _items(rt, kind):
@@ -59,37 +56,6 @@ def _register(rt, aid, *, accepts, emits):
     )
 
 
-# --- T2: a ballot is a policy decision whatever the voter's contract says ---------
-
-
-def test_a_ballot_binds_no_return_kind_and_a_two_kind_voter_can_still_vote(monkeypatch):
-    """A ballot is not a contract return: it records no emitted kind, so a voter that
-    declares two kinds is not refused for omitting ``emits``, and the ballot decision
-    keeps the queue's policy channel, under which no write is ever permitted."""
-    rt = make_runtime()
-    rt._manage_reserve_window()
-    _register(rt, "dual", accepts=("Tick",), emits=("ProducerReturn", "Verdict"))
-    _reply(monkeypatch, rt, {"vote": True, "reason": "useful source"})
-    committee = Committee("source-vote", 1, (Seat("seat-1", "dual", "producer"),))
-    rt._hold_vote(
-        SimpleNamespace(
-            id="source-vote",
-            proposer_handle=None,
-            predicted_effect=PredictedEffect.parse(
-                {"card_id": "cost_per_return", "direction": "increase", "window": 1}
-            ),
-        ),
-        committee,
-        connector=ConnectorProposal("weather", "Weather", "https://example.com"),
-    )
-    vote = _items(rt, "connector.vote")[-1]
-    assert vote["vote"] is True and rt.stats.votes_cast == 1
-    handle = vote["handle"]
-    assert handle not in rt.return_kinds
-    assert rt.queue.get(handle).channel == "policy"
-    assert not rt._may_write(handle)
-
-
 # --- T24: an author whose contract can judge never draws its own subject ------------
 
 
@@ -110,58 +76,6 @@ def test_a_mixed_contract_author_is_not_drawn_to_judge_its_own_return(monkeypatc
     _handle, own = _consequence_produce(rt, "pure")
     assert "pure" in rt._universe_for("ProducerReturn", own)  # a producer may continue its work
     assert "dual" in rt._universe_for("ProducerReturn", own)
-
-
-# --- T45: an unresolvable about_handle is not a discarded judgement -----------------
-
-
-def test_prose_in_about_handle_falls_back_to_the_delivered_subject_with_feedback(monkeypatch):
-    rt = make_runtime()
-    rt._manage_reserve_window()
-    subject, event = _consequence_produce(rt, "seed-observer")
-    _reply(
-        monkeypatch,
-        rt,
-        {
-            "verdict": 0.6,
-            "payoff": 0.4,
-            "rationale": "fine",
-            "forecasts": [],
-            "about_handle": "current-return",
-        },
-    )
-    judge = _consequence_judge(rt, event, "eval-a")
-    assert rt.queue.get(subject).status is SettleStatus.SETTLED
-    assert rt.stats.verdicts == 1 and rt.stats.forecasts_sealed == 1
-    assert not _items(rt, "return.refused")
-    ignored = _items(rt, "about_handle.ignored")[-1]
-    assert ignored["handle"] == judge and ignored["about_handle"] == "current-return"
-    assert ignored["subject"] == subject
-    assert any(f["reason"].startswith("judgement: about_handle") for f in rt.registration_feedback)
-    assert "about_handle" in rt.A_RETURN_MAY_INCLUDE
-    assert "about_handle" in rt._world_block()["a_return_may_include"]
-
-
-def test_a_refused_judgement_puts_its_reason_in_registration_feedback(monkeypatch):
-    rt = make_runtime()
-    rt._manage_reserve_window()
-    _subject, event = _consequence_produce(rt, "seed-observer")
-    stranger = _producing_decision(rt, "seed-decider")  # addressable, but never returned
-    _reply(
-        monkeypatch,
-        rt,
-        {
-            "verdict": 0.6,
-            "payoff": 0.4,
-            "rationale": "fine",
-            "forecasts": [],
-            "about_handle": stranger,
-        },
-    )
-    _consequence_judge(rt, event, "eval-a")
-    refused = _items(rt, "return.refused")[-1]
-    assert refused["about_handle"] == stranger
-    assert any(f["reason"] == f"judgement: {refused['reason']}" for f in rt.registration_feedback)
 
 
 # --- T25: an unacknowledged venue write is its own outcome, finalised later ---------

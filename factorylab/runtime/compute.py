@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import bisect
 import hashlib
+import heapq
 import json
 import math
 from dataclasses import dataclass, replace
@@ -18,8 +20,7 @@ from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
 from factorylab.runtime.reasons import Reason
-from factorylab.runtime.routing import _KeyedLearner
-from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, NOOP, _to_plain
+from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, _to_plain
 from factorylab.runtime.summary import _price_str
 from factorylab.settlement import SEED_VOCABULARY
 from factorylab.settlement.consequence import ReturnConsequences
@@ -55,6 +56,143 @@ def _publishable(policy: dict[str, float]) -> dict[str, float]:
         return dict(policy)  # full precision rather than a rounding that left the simplex
     rounded[top] = adjusted
     return rounded
+
+
+class ArtifactListing:
+    """The archive's directory rows in listing order, kept sorted as the archive changes.
+
+    Listing order is newest reference first, then by hash, then by the order the
+    references were made: exactly the order a stable sort of ``store.entries()``
+    by ``(-created_ns, sha)`` produces. Each row is the dict the directory always
+    built for that reference. Rows are shared with the listing; the runtime hands
+    out copies.
+    """
+
+    def __init__(self, store: Any) -> None:
+        self.store = store
+        self.epoch: int | None = None
+        self.keys: list[tuple] = []                 # every row's sort key, sorted
+        self.row: dict[tuple, dict[str, Any]] = {}  # sort key -> row
+        self.by_sha: dict[str, list[tuple]] = {}
+        self.by_owner: dict[str, list[tuple]] = {}  # each sorted
+        self.public: list[tuple] = []               # sorted
+        self.owner_public: dict[str, int] = {}      # rows both owned and published
+
+    def sync(self) -> None:
+        """Fold every change the store reports into the listing."""
+        store = self.store
+        if not hasattr(store, "drain_changes"):
+            self._rebuild(self._rows_from_list(store))
+            return
+        epoch, changed = store.drain_changes()
+        if epoch != self.epoch:
+            self.epoch = epoch
+            self._rebuild(row for sha in list(store.index) for row in self._rows_for_sha(sha))
+            return
+        for sha in sorted(changed):
+            for key in self.by_sha.pop(sha, ()):
+                self._remove(key)
+            for key, row in self._rows_for_sha(sha):
+                self._insert(key, row)
+
+    def rows(self) -> list[dict[str, Any]]:
+        return [self.row[key] for key in self.keys]
+
+    def rows_for(self, owner: str) -> list[dict[str, Any]]:
+        return [self.row[key] for key in self.by_owner.get(owner, ())]
+
+    def count(self) -> int:
+        return len(self.keys)
+
+    def newest(self, limit: int) -> list[dict[str, Any]]:
+        return [self.row[key] for key in self.keys[:limit]]
+
+    def visible_to(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
+        """The count and newest rows a seat owns or that are published, in listing order."""
+        own = self.by_owner.get(seat, [])
+        count = len(own) + len(self.public) - self.owner_public.get(seat, 0)
+        newest: list[dict[str, Any]] = []
+        last = None
+        for key in heapq.merge(own, self.public):
+            if key == last:
+                continue
+            if len(newest) >= limit:
+                break
+            last = key
+            newest.append(self.row[key])
+        return count, newest
+
+    @staticmethod
+    def _key(row: dict[str, Any], position: int) -> tuple:
+        return (-(row["updated_ns"] or 0), str(row["sha"]), position)
+
+    def _rows_for_sha(self, sha: str):
+        store = self.store
+        record = store.index.get(sha)
+        if record is None:
+            return
+        kind = record.get("kind")
+        references = store.references(sha, record)
+        for position, (owner, reference) in enumerate(references.items()):
+            row = {"sha": sha, "owner": owner, "public": bool(reference.get("public")),
+                   "bytes": record["bytes"], "updated_ns": reference.get("ts", record["ts"])}
+            row["title"] = str(sha)[:12]
+            row["type"] = row["kind"] = kind
+            yield self._key(row, position), row
+
+    def _rows_from_list(self, store: Any):  # pragma: no cover - a store from before C1
+        kinds = {sha: record.get("kind") for sha, record in store.index.items()}
+        if hasattr(store, "entries"):
+            rows = [{"sha": sha, "owner": owner, "public": bool(public), "bytes": size,
+                     "updated_ns": ts} for sha, owner, public, size, ts in store.entries()]
+        else:
+            rows = [{"sha": row["sha"], "owner": row["owner"],
+                     "public": bool(row.get("public")), "bytes": row["bytes"],
+                     "updated_ns": row["ts"]} for row in store.list()]
+        for position, row in enumerate(rows):
+            row["title"] = str(row["sha"])[:12]
+            row["type"] = row["kind"] = kinds.get(row["sha"])
+            yield self._key(row, position), row
+
+    def _rebuild(self, keyed) -> None:
+        self.keys, self.row, self.by_sha = [], {}, {}
+        self.by_owner, self.public, self.owner_public = {}, [], {}
+        for key, row in keyed:
+            self.row[key] = row
+            self.keys.append(key)
+            self.by_sha.setdefault(row["sha"], []).append(key)
+            self.by_owner.setdefault(row["owner"], []).append(key)
+            if row["public"]:
+                self.public.append(key)
+                self.owner_public[row["owner"]] = self.owner_public.get(row["owner"], 0) + 1
+        self.keys.sort()
+        self.public.sort()
+        for keys in self.by_owner.values():
+            keys.sort()
+
+    def _insert(self, key: tuple, row: dict[str, Any]) -> None:
+        self.row[key] = row
+        bisect.insort(self.keys, key)
+        self.by_sha.setdefault(row["sha"], []).append(key)
+        bisect.insort(self.by_owner.setdefault(row["owner"], []), key)
+        if row["public"]:
+            bisect.insort(self.public, key)
+            self.owner_public[row["owner"]] = self.owner_public.get(row["owner"], 0) + 1
+
+    def _remove(self, key: tuple) -> None:
+        row = self.row.pop(key)
+        _discard_sorted(self.keys, key)
+        owned = self.by_owner[row["owner"]]
+        _discard_sorted(owned, key)
+        if not owned:
+            del self.by_owner[row["owner"]]
+        if row["public"]:
+            _discard_sorted(self.public, key)
+            self.owner_public[row["owner"]] -= 1
+
+
+def _discard_sorted(keys: list[tuple], key: tuple) -> None:
+    del keys[bisect.bisect_left(keys, key)]
 
 
 @dataclass
@@ -108,6 +246,10 @@ class ContractConsequences(ReturnConsequences):
         super().__init__(ledger, backstop)
         self.runtime = runtime
 
+    def _tick(self, event: int) -> int:
+        """The runtime's world ticks consumed: the unit the backstop counts (defect 1)."""
+        return self.runtime.ticks_consumed
+
     def resolve(self, event):
         resolved = super().resolve(event)
         return [payoff for payoff in resolved
@@ -137,11 +279,14 @@ class ComputeMixin:
     def _novelty_protection(self, handle: str, reason: str) -> int:
         """The protected share for one reservation: the seat's, for exactly the calls
         the wallet already classifies as protected (an unhistoried seat's own model
-        calls), plus any pool bridge routing granted this call; nothing otherwise."""
+        calls), or the pool bridge routing granted this call where that is larger; the
+        bridge alone otherwise."""
         bridged = self.entitlement_bridges.get(handle, 0)
         if not self._novelty_compute(handle, reason):
             return bridged
-        return self._protected_share(self.queue.get(handle).propensity.chosen) + bridged
+        # Both are drawn on the same unallocated pool, so the cover is the larger of
+        # the two, never their sum: adding them let one call spend the pool twice.
+        return max(self._protected_share(self.queue.get(handle).propensity.chosen), bridged)
 
     @staticmethod
     def _world_chars(world: Any) -> int:
@@ -243,14 +388,26 @@ class ComputeMixin:
                 raise ValueError(f"event schema already declared differently: {kind}")
 
     def _validate_output_contract(self, parsed: dict, req: Request) -> None:
-        """Every tool argument and proposal bound is checked before any effect in a reply."""
+        """Every tool argument and proposal bound is checked before any effect in a reply.
+
+        A fault that belongs to one tool call, child request or forecast raises
+        ``SectionError`` naming it, so the return validator drops that item and
+        keeps the answer; a fault in the answer itself (its declared kind, its
+        custom schema) is a ``ValueError`` and voids the return.
+        """
         from factorylab.cortex.assembly import (
+            SectionError,
             positive_wire_decimal,
             reserved_return_fields,
             validate_schema,
         )
         from factorylab.world.venue_tools import _validate
 
+        for section, limit in (("requests", self.m.tools.max_children),
+                               ("tool_calls", self.m.tools.max_tool_calls)):
+            items = parsed.get(section)
+            if isinstance(items, list) and len(items) > limit:
+                raise SectionError(section, f"more than {limit} {section}", limit)
         validate_schema(parsed, {"type": "object", "properties": reserved_return_fields(
             max_children=self.m.tools.max_children, max_tool_calls=self.m.tools.max_tool_calls)})
         binding = self.return_bindings.get(req.handle)
@@ -280,9 +437,11 @@ class ComputeMixin:
                     partial=bool(parsed.get("requests") or parsed.get("tool_calls")
                                  or parsed.get("status") == "cannot"),
                 )
-        for call in parsed.get("tool_calls", []):
+        for index, call in enumerate(parsed.get("tool_calls", [])):
             spec = self.tool_specs.get(call["tool"])
-            if spec is not None:
+            if spec is None:
+                continue
+            try:
                 if spec["kind"] == "venue":
                     _validate(call["args"], spec["args_schema"])
                     for key in ("size", "price"):
@@ -290,13 +449,18 @@ class ComputeMixin:
                             positive_wire_decimal(call["args"][key])
                 else:
                     validate_schema(call["args"], spec["args_schema"])
+            except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
+                raise SectionError("tool_calls", f"{call['tool']}: {exc}", index) from None
         known = {p.id: p for p in SEED_VOCABULARY}
-        for forecast in parsed.get("forecasts", []):
+        for index, forecast in enumerate(parsed.get("forecasts", [])):
             if forecast["predicate"] not in known:
-                raise ValueError("unknown forecast predicate")
-            validate_schema(
-                forecast["params"], _to_plain(known[forecast["predicate"]].param_schema)
-            )
+                raise SectionError("forecasts", "unknown forecast predicate", index)
+            try:
+                validate_schema(
+                    forecast["params"], _to_plain(known[forecast["predicate"]].param_schema)
+                )
+            except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
+                raise SectionError("forecasts", str(exc), index) from None
 
     def _catalogue_search(self, substring: str, limit: int) -> list[dict[str, Any]]:
         """Case-insensitive substring over every catalogue the provider exposes plus registered
@@ -549,33 +713,48 @@ class ComputeMixin:
         is not scoped: C1 makes an artifact readable when it is published *or*
         listed in the directory, and an index of hashes, sizes and owners is what
         makes shared memory findable without disclosing a byte of any of it.
+
+        The rows are detached copies: a caller may change them freely.
+        """
+        return [dict(row) for row in self._artifact_listing().rows()]
+
+    def _artifact_listing(self) -> ArtifactListing:
+        """The directory's sorted view of the archive, brought up to date with it.
+
+        One listing lives as long as its store; each call folds in only the hashes
+        put or collected since the last one (``ArtifactStore.drain_changes``), so
+        a world block that lists the archive for every seat no longer re-reads
+        and re-sorts all of it once per seat. A store without change tracking is
+        listed from scratch on every call, as it always was.
         """
         store = self.artifacts
-        kinds = {sha: record.get("kind") for sha, record in store.index.items()}
-        if hasattr(store, "entries"):
-            rows = [{"sha": sha, "owner": owner, "public": bool(public), "bytes": size,
-                     "updated_ns": ts} for sha, owner, public, size, ts in store.entries()]
-        else:  # pragma: no cover - a store from before C1
-            rows = [{"sha": row["sha"], "owner": row["owner"],
-                     "public": bool(row.get("public")), "bytes": row["bytes"],
-                     "updated_ns": row["ts"]} for row in store.list()]
-        for row in rows:
-            row["title"] = str(row["sha"])[:12]
-            row["type"] = row["kind"] = kinds.get(row["sha"])
-        rows.sort(key=lambda row: (-(row["updated_ns"] or 0), str(row["sha"])))
-        return rows
+        listing = self.__dict__.get("_artifact_listing_view")
+        if listing is None or listing.store is not store:
+            listing = ArtifactListing(store)
+            if hasattr(store, "drain_changes"):
+                self._artifact_listing_view = listing
+        listing.sync()
+        return listing
 
     def _artifact_index(self, owner: str | None = None,
                         cursor: str | None = None) -> list[dict[str, Any]]:
         """The archive's rows, optionally one owner's; the full list for the world block."""
-        rows = self._artifact_entries()
-        if owner is not None:
-            rows = [row for row in rows if row["owner"] == owner]
+        listing = self._artifact_listing()
+        rows = listing.rows() if owner is None else listing.rows_for(owner)
         if cursor:
             shas = [row["sha"] for row in rows]
             start = shas.index(cursor) + 1 if cursor in shas else len(rows)
             rows = rows[start:]
-        return rows
+        return [dict(row) for row in rows]
+
+    def _artifacts_visible_to(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
+        """How many rows ``seat`` owns or sees published, and the newest ``limit`` of them.
+
+        Exactly ``[row for row in self._artifact_index() if row["owner"] == seat or
+        row["public"]]`` counted and truncated, without walking the whole archive.
+        """
+        count, rows = self._artifact_listing().visible_to(seat, limit)
+        return count, [dict(row) for row in rows]
 
     def _artifact_page(self, args: dict) -> dict[str, Any]:
         """One ``artifact.list`` page: rows, the total, and the cursor that continues it.
@@ -978,6 +1157,7 @@ class ComputeMixin:
         # priced from this request and a parent cannot forge its child's.
         effects: list[str] = []  # venue and treasury writes, children: the action so far
         ret = self._invoke_compute(action_id, req)
+        dropped = list(ret.dropped)  # optional sections dropped while the answer stood
         self._check_compute_return(req.handle, ret)
         if (ret.status == "ok" and ret.outputs.get("status") == "cannot"
                 and isinstance(ret.outputs.get("reason"), str)):
@@ -1082,6 +1262,7 @@ class ComputeMixin:
             )
             ret = (Return(req.handle, {"reason": "wallet exhausted"}, 0, "failed")
                    if self.wallet.dead else self._invoke_compute(action_id, follow))
+            dropped.extend(ret.dropped)
             total_cost += tool_cost + ret.cost
             self._check_compute_return(req.handle, ret)
             tool_round += 1
@@ -1177,8 +1358,33 @@ class ComputeMixin:
                 self.window.costs.append(ret.cost)
         self._record_declared_propensity(action_id, req, ret, role, effects=tuple(effects))
         self._apply_continuity(action_id, req.handle, ret)
+        ret = replace(ret, dropped=tuple(dropped))
+        if dropped and ret.status == "ok":
+            self._report_dropped_sections(action_id, req.handle, ret.dropped)
         del self.ledger.connector_bodies[body_mark:]
         return ret
+
+    def _report_dropped_sections(self, seat: str, handle: str,
+                                 dropped: tuple[dict[str, Any], ...]) -> None:
+        """Tell a seat which optional sections of its answer were dropped, and why.
+
+        The answer stood; what did not validate beside it (a working state of the
+        wrong type, a malformed tool call, a proposal of a kind nobody registers)
+        was dropped rather than voiding it. The diary records it, and the seat's
+        own inbox carries it, so the next wake reads what was not done instead of
+        assuming it was.
+        """
+        items = [dict(d) for d in dropped]
+        self.ledger.append({"kind": "return.sections_dropped", "assembly_id": seat,
+                            "handle": handle, "dropped": items, "ts": self.clock.now_ns})
+        if seat in self.assemblies:
+            self.outcomes.append(
+                seat, handle=handle,
+                outcome={"kind": "return_sections_dropped", "status": "partial",
+                         "dropped": items},
+                delta_micro=0,
+                evidence={"kind": "return.sections_dropped", "handle": handle,
+                          "ts": self.clock.now_ns})
 
     def _apply_continuity(self, action_id: str, handle: str, ret: Return) -> None:
         """Advance the seat's own head and inbox cursor from its answer (C1).
@@ -1332,76 +1538,6 @@ class ComputeMixin:
             return
         self.assembly_rounds[handle] = action_id
 
-    def _settle_outside_universe(self, handle: str, prop: PropensityRecord, feedback) -> None:
-        """Deliver a settled score whose action the router holding the decision cannot hold.
-
-        A parent may request a target its own router never offers — a Tick
-        producer asking for an evaluator that only accepts ProducerReturn — and
-        the parent's router cannot be trained on an arm outside its universe.
-        Guarantees the score still reaches a learner that can use it: the router
-        whose universe holds the target, found by the kinds the target accepts,
-        else the requesting assembly's own learner over the request action it
-        registered. The ledger names whichever was trained, or why neither was,
-        so no settlement is dropped in silence.
-        """
-        target = prop.chosen
-        spec = self.assemblies[target].spec if target in self.assemblies else None
-        for kind in (sorted(spec.accepts) if spec is not None else sorted(self.routers)):
-            for state in self.routers.get(kind, []):
-                if target in state.universe:
-                    self._settle_on_router(handle, state, kind, target, feedback)
-                    return
-        self._settle_on_requester(handle, target, feedback)
-
-    def _settle_on_router(self, handle: str, state, kind: str, target: str, feedback) -> None:
-        """Train the router that owns the target's kind on the child it did not select."""
-        learner = state.learner
-        try:
-            if isinstance(learner, _KeyedLearner):
-                # A keyed learner scores frozen rounds, so the settlement needs one
-                # opened under this handle before it can be applied.
-                learner.inner.distribution_for(
-                    handle, [a for a in state.universe if a != NOOP])
-                learner.inner.update_for(handle, feedback)
-            else:
-                learner.update(feedback)
-        except (KeyError, ValueError, RuntimeError, TypeError, AssertionError) as exc:
-            self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
-                                "learner_id": learner.id, "reason": str(exc)[:200],
-                                "ts": self.clock.now_ns})
-            return
-        self.ledger.append({"kind": "request.settled", "handle": handle,
-                            "target": target, "learner_id": learner.id,
-                            "learner": "router", "event_kind": kind,
-                            "reward": feedback.reward, "ts": self.clock.now_ns})
-
-    def _settle_on_requester(self, handle: str, target: str, feedback) -> None:
-        """Train the assembly that asked for the child, over the request action it declared."""
-        parent = self.queue.get(handle).parent_handle
-        assembly_id = self.handle_to_assembly.get(parent) if parent is not None else None
-        learner = self.assembly_learners.get(assembly_id)
-        action = f"request:{target}"[:64]
-        reason = None
-        if learner is None:
-            reason = f"no router holds {target} and the requester registered no learner"
-        elif action not in set(getattr(learner.inner, "actions", ())):
-            reason = f"no router holds {target} and {action} is outside the requester's actions"
-        if reason is None:
-            try:
-                learner.distribution_for(handle, list(learner.inner.actions))
-                learner.update_for(handle, replace(feedback, action=action))
-            except (KeyError, ValueError, RuntimeError, TypeError, AssertionError) as exc:
-                reason = str(exc)[:200]
-        if reason is not None:
-            self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
-                                "assembly_id": assembly_id, "reason": reason,
-                                "ts": self.clock.now_ns})
-            return
-        self.ledger.append({"kind": "request.settled", "handle": handle, "target": target,
-                            "learner_id": learner.id, "learner": "assembly",
-                            "assembly_id": assembly_id, "action": action,
-                            "reward": feedback.reward, "ts": self.clock.now_ns})
-
     def _invoke_child(
         self, action_id: str, parent: Request, item: ChildRequest, ceiling: int,
     ) -> tuple[dict, int]:
@@ -1422,12 +1558,10 @@ class ComputeMixin:
         # ceiling says, the ceiling never exceeds what the parent's own decision may
         # spend now, so a fresh target cannot be bought compute the parent lacks.
         ceiling = min(ceiling, max(0, self._compute_available(parent.handle)))
-        # The child is opened under the learner that woke its parent, so the score
-        # its return settles at reaches a router that exists: the parent's router
-        # learns what the target it chose was worth on this kind of work. A target
-        # that router never offers is settled on the router that owns the target's
-        # kind instead (_settle_outside_universe). The propensity is still the
-        # parent's choice, recorded as such.
+        # The child is opened under the learner that woke its parent, so its
+        # returns have an addressable home. Its propensity is the parent's choice,
+        # recorded as such ("parent-selected"): no router sampled it, so no router
+        # is trained on it (defect 3, ``FeedbackMixin._router_sampled``).
         actor = self.queue.get(parent.handle).actor
         channels = self._return_channels(target) if target in self.assemblies else {}
         handle = self.queue.open(
@@ -1478,16 +1612,16 @@ class ComputeMixin:
                 self._apply_registrations(handle, ret)
             self.consequences.finish(handle, ret.cost)
             if emitted == "Exposure":
-                self.pending_exposure[handle] = self.n
+                self.pending_exposure[handle] = self.ticks_consumed
                 payoff = ret.outputs.get("payoff") if ret.status == "ok" else None
-                if payoff is not None:
-                    self.consequences.seal_self_forecast(
+                if payoff is not None and self.consequences.seal_self_forecast(
                         self.book, self.queue, handle=handle, assembly_id=target, payoff=payoff,
                         event=self.n, now_ns=self.clock.now_ns,
-                        tick_ns=self.tick_clock.interval_ns)
+                        tick_ns=self.tick_clock.interval_ns) is not None:
                     self.stats.forecasts_sealed += 1
             else:
-                self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
+                self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
+                                                        opened_at_tick=self.ticks_consumed)
             self.stats.producer_returns += 1
             payload = {"about_handle": handle, "description": item.description,
                        "inputs": item.inputs, "outputs": public_return(ret.outputs),

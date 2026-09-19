@@ -8,6 +8,7 @@ import pytest
 
 @pytest.mark.parametrize("owner", ["run", "resume"])
 @pytest.mark.parametrize("contender", ["run", "resume"])
+@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_two_processes_cannot_own_one_world(tmp_path, owner, contender):
     repo = str(Path(__file__).resolve().parents[2])
     env = {**os.environ, "PYTHONPATH": repo}

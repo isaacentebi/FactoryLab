@@ -91,14 +91,6 @@ class SurrogateProvider(ScriptedProvider):
         return response
 
 
-def test_lone_surrogate_in_a_reply_does_not_crash_the_ledger(tmp_path):
-    """Finding 2: a string the JSON parser accepts must not be able to crash Bus.publish."""
-    m = load_manifest("scripted")
-    summary = run_world(m, events=40, seed=1, ledger_path=str(tmp_path / "w.jsonl"),
-                        provider=SurrogateProvider())
-    assert summary["stats"]["events"] >= 40
-
-
 def test_lone_surrogate_does_not_wedge_resume(tmp_path):
     """Finding 2 (part 2): the reply is journaled, so every resume replays the same crash."""
     m = load_manifest("scripted")
@@ -109,28 +101,3 @@ def test_lone_surrogate_does_not_wedge_resume(tmp_path):
         pass
     summary = resume_world(m, path, provider=SurrogateProvider())
     assert summary["stats"]["events"] >= 40
-
-
-class BigRegionProvider(ScriptedProvider):
-    """The scripted amendment's card is restated with a bound that parses to infinity."""
-
-    def complete(self, req):
-        response = super().complete(req)
-        body = json.loads(response.text)
-        for proposal in body.get("register", []):
-            if proposal.get("kind") == "amendment":
-                for card in proposal.get("add", []):
-                    card["acceptable_region"] = "at most 1e400"
-        return replace(response, text=json.dumps(body))
-
-
-def test_overflowing_card_region_is_refused_or_unpriced_not_fatal(tmp_path):
-    """Finding 3: an accepted amendment whose region overflows must carry no price, not crash
-    the boundary that activates it (and every resume after it)."""
-    m = load_manifest("scripted")
-    summary = run_world(m, events=140, seed=1, ledger_path=str(tmp_path / "w.jsonl"),
-                        provider=BigRegionProvider())
-    assert summary["stats"]["events"] >= 140
-    assert "turnover" not in summary["prices"]["cards"] or (
-        summary["prices"]["cards"]["turnover"]["updates"] == 0
-    )

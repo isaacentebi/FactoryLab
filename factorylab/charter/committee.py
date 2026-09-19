@@ -58,7 +58,11 @@ class Ballot:
 
 
 def experienced(roles: dict[str, str], settled: dict[str, int], min_settled: int) -> dict[str, str]:
-    """Fresh identities cannot affect the draw; only completed decisions qualify a seat."""
+    """Fresh identities cannot affect the draw; only completed decisions qualify a seat.
+
+    ``settled`` counts decisions whose outcome was observed; the caller never
+    counts a censored (unknown) outcome as a completed decision.
+    """
     if type(min_settled) is not int or min_settled < 1:
         raise ValueError("committee.min_settled must be a positive integer")
     return {assembly: role for assembly, role in roles.items()

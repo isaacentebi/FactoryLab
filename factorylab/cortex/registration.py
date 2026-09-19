@@ -421,7 +421,9 @@ def parse_proposals(
         try:
             if kind == "model":
                 accepted.append(_model(item))
-            elif kind == "assembly":
+            elif kind in ("assembly", "program"):
+                if kind == "program":
+                    item = _program_alias(item)
                 accepted.append(_assembly(item, event_kinds, known_models,
                                           known_assemblies - retired_assemblies,
                                           known_reward_shapes, jail=tool_jail))
@@ -455,6 +457,19 @@ def parse_proposals(
         except ValueError as exc:
             rejected.append(Rejected(i, str(exc)))
     return accepted, rejected
+
+
+def _program_alias(item: dict[str, Any]) -> dict[str, Any]:
+    """``kind: program`` names a program seat: an assembly whose model_id is ``program``.
+
+    The capability index publishes the kind under that name, so a return may use it;
+    it registers exactly as the assembly it abbreviates. A program proposal that names
+    another model is refused rather than silently turned into a model seat.
+    """
+    model_id = item.get("model_id", "program")
+    if model_id != "program":
+        raise ValueError("a program proposal's model_id is program; a model seat is an assembly")
+    return {**item, "kind": "assembly", "model_id": "program"}
 
 
 def _model(item: dict[str, Any]) -> ModelProposal:

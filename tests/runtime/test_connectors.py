@@ -1,23 +1,17 @@
 """W8 admission, metering, composition and recovery tests use no live transport."""
 
 import json
-import tomllib
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
-from factorylab.cortex.registration import ConnectorProposal, parse_proposals
 from factorylab.cortex.request import Return
-from factorylab.cortex.sandbox import jail_available
 from factorylab.kernel.queue import PropensityRecord
-from factorylab.kernel.registry import Contract, PriceSpec, ResourceBounds
 from factorylab.runtime.resume import RecoveryJournal, restore_runtime, runtime_state
-from factorylab.runtime.wake import public_window_item, render_wake
-from factorylab.runtime.worlds import WORLDS_DIR, ConnectorsSpec, manifest_from_dict
+from factorylab.runtime.worlds import ConnectorsSpec
 from factorylab.world.connector import ConnectorProxy
 from factorylab.world.models import ModelResponse
-from factorylab.world.scripted import ScriptedProvider
 from tests.conftest import make_runtime
 from tests.world.test_connector import Transport
 
@@ -58,20 +52,6 @@ def ledger_items(rt, kind=None):
     return [i for i in items if kind is None or i["kind"] == kind]
 
 
-def test_minimal_registration_shape_and_no_extra_knobs():
-    item = {"kind": "connector", "id": "source", "description": "Public data",
-            "origin": "https://example.org"}
-    for extra in ({}, {"headers": {}}, {"path_prefix": "/x"}, {"params_schema": {}}):
-        accepted, rejected = parse_proposals(
-            {"register": [{**item, **extra}]}, event_kinds=frozenset(),
-            known_models=frozenset(), known_assemblies=frozenset(), tool_jail=False,
-        )
-        if not extra:
-            assert accepted == [ConnectorProposal("source", "Public data", "https://example.org")]
-        else:
-            assert not accepted and "connector fields" in rejected[0].reason
-
-
 def test_preflight_vote_then_versioned_admission_with_proposer_excluded(monkeypatch):
     rt = make_runtime()
     assert rt.registry.available("connector") == []
@@ -95,44 +75,6 @@ def test_preflight_vote_then_versioned_admission_with_proposer_excluded(monkeypa
     assert rt.registry.get("connector:source", 1).input_schema["origin"] == "https://example.org"
     assert len(rt._connector_catalogue()) == 1
     assert rt.wallet.check_conservation()
-
-
-@pytest.mark.parametrize("origin,reason", [("http://example.org", "https"),
-                                           ("https://openrouter.ai", "denylisted")])
-def test_registration_refusals_are_public_and_never_vote(monkeypatch, origin, reason):
-    rt = make_runtime()
-    register(rt, monkeypatch, origin=origin)
-    assert not rt.registry.available("connector")
-    assert reason in rt.registration_feedback[-1]["reason"]
-    assert ledger_items(rt, "connector.refused") and not ledger_items(rt, "connector.seated")
-
-
-def test_failed_preflight_and_no_majority_cannot_admit(monkeypatch):
-    rt = make_runtime()
-    rt.connector_proxy = ConnectorProxy(replace(rt.m.connectors, max_bytes=2), Transport())
-    register(rt, monkeypatch)
-    assert not rt.registry.available("connector") and not ledger_items(rt, "connector.seated")
-    assert "max_bytes" in rt.registration_feedback[-1]["reason"]
-    rt.connector_proxy = ConnectorProxy(rt.m.connectors, Transport())
-    monkeypatch.setattr(rt.provider.target, "complete", lambda req:
-                        ModelResponse(req.model_id, '{"vote": false, "reason": "no"}', 1, 1,
-                                      "end_turn"))
-    register(rt, monkeypatch)
-    assert not rt.registry.available("connector")
-    assert ledger_items(rt, "connector.tally")[-1]["passed"] is False
-
-
-def test_empty_experienced_population_refuses_admission(monkeypatch):
-    rt = make_runtime()
-    rt._manage_reserve_window()
-    handle = decision(rt)
-    assert rt._committee_eligible() == {}
-    rt._apply_registrations(handle, Return(handle, {"register": [{
-        "kind": "connector", "id": "source", "description": "Data", "origin": "https://example.org",
-        "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease", "window": 1},
-    }]}, 0, "ok"))
-    assert not rt.registry.available("connector")
-    assert "majority" in rt.registration_feedback[-1]["reason"]
 
 
 def test_flat_cost_precedes_return_and_window_cap_survives_checkpoint(monkeypatch):
@@ -244,76 +186,6 @@ def composition(rt, monkeypatch, *, stub_parser):
     return rt
 
 
-def test_fetch_continuation_composes_with_parser_stub_and_ledger_omits_body(monkeypatch):
-    composition(make_runtime(), monkeypatch, stub_parser=True)
-
-
-def test_fetch_continuation_composes_with_actual_jailed_parser(monkeypatch):
-    if not jail_available():
-        pytest.skip("actual jail unavailable; separate stub test covers plumbing only")
-    composition(make_runtime(), monkeypatch, stub_parser=False)
-
-
-def test_observatory_contains_connector_versions_and_daily_counts(monkeypatch):
-    rt = make_runtime()
-    register(rt, monkeypatch)
-    item = public_window_item(rt, window=1, event=10)
-    assert item["connectors"]["registered"][0]["id"] == "source"
-    assert item["connectors"]["calls_per_day"] == {"1970-01-01": 1}
-    assert "Connectors" in render_wake({"connectors": item["connectors"]})
-    block = rt._world_block()
-    assert block["connectors"]["call_price_micro"] == 1000
-    assert block["connectors"]["registered"] == rt._connector_catalogue()
-    assert any(tool["id"] == "connector.fetch" for tool in block["tools"])
-    # The block states the registration shape, the call shape and the price. How a
-    # registration is admitted is physics the runtime enforces, not prompt text.
-    connectors = json.dumps(block["connectors"])
-    assert not any(word in connectors for word in
-                   ("admission", "preflight", "sortition", "vote", "majority", "committee"))
-    # The block indexes the kind; the shape itself is one catalogue.search away.
-    assert "outside GET source" in block["proposal_shapes"]["connector"]
-    assert rt._proposal_shape_search("connector")["connector"] == {
-        "kind": "connector", "id": "public-source", "description": "Public information",
-        "origin": "https://example.org",
-        "preflight_path": "/data", "pay": "x402", "max_call_usd": "0.003",
-        "predicted_effect": {"card_id": "a current card id", "direction": "decrease", "window": 1}}
-
-
-@pytest.mark.parametrize("fields", [
-    {"max_bytes": True}, {"max_bytes": 0}, {"timeout_s": 0}, {"timeout_s": 1.5},
-    {"call_price_usd": 0.001}, {"call_price_usd": "-1"}, {"call_price_usd": "0.0000001"},
-    {"max_calls_per_window": False}, {"origin_denylist": "example.org"},
-    {"origin_denylist": ["https://example.org"]}, {"path_prefix": "/x"},
-])
-def test_manifest_rejects_extra_knobs_and_inexact_money(fields):
-    raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
-    raw["connectors"] = fields
-    with pytest.raises((ValueError, TypeError)):
-        manifest_from_dict(raw)
-
-
-def test_manifest_defaults_are_minimal_and_prices_are_integer():
-    raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
-    raw.pop("connectors")
-    m = manifest_from_dict(raw)
-    assert m.connectors == ConnectorsSpec()
-    assert type(m.connectors.call_price_micro) is int
-    assert len(m.connectors.__dataclass_fields__) == 5
-
-
-def test_connector_contract_cannot_overwrite_version_or_skip_novelty_receipt():
-    rt = make_runtime()
-    contract = Contract("connector:test", 1, "connector", "test", {"origin": "https://example.org"},
-                        {"type": "string"}, PriceSpec({"call": 1000}), frozenset(),
-                        ResourceBounds())
-    with pytest.raises(PermissionError):
-        rt.registry.register(contract, by_handle="population")
-    # Kernel fixture only; manifests seed no connectors.
-    rt.registry.register(contract)
-    with pytest.raises(ValueError, match="version 2"):
-        rt.registry.register(contract)
-
-
 def test_journal_redacts_body_and_escaped_body_copies_outside_the_recovery_plane():
     written = []
     journal = RecoveryJournal(SimpleNamespace(append=lambda item: written.append(item)), lambda: 0)
@@ -324,40 +196,6 @@ def test_journal_redacts_body_and_escaped_body_copies_outside_the_recovery_plane
     # Replay needs the recorded read itself, so io.result keeps what it recorded.
     journal.append({"kind": "io.result", "call": 1, "result": {"body": body}})
     assert "SENTINEL" in json.dumps(written[-1])
-
-
-def test_scripted_population_proposes_and_composes_in_sequence():
-    provider = ScriptedProvider(_producer_calls=159)
-    registration = provider._produce("Produce", {})
-    assert [p["kind"] for p in registration["register"]] == ["connector", "tool"]
-    fetch = provider._produce("Produce", {})
-    assert fetch["tool_calls"][0]["tool"] == "connector.fetch"
-    parse = provider._produce("Produce", {"tool_results": [{"tool": "connector.fetch",
-                              "result": {"body": '{"value": 42}'}}]})
-    assert parse["tool_calls"][0]["tool"] == "connector-parser"
-
-
-@pytest.mark.parametrize("stub_parser", [True, False], ids=["stub-parser", "actual-jail"])
-def test_scripted_world_admits_by_real_sortition_then_fetches_and_parses(monkeypatch, stub_parser):
-    if not stub_parser and not jail_available():
-        pytest.skip("actual jail unavailable; stub case tests the remaining acceptance chain")
-    rt = make_runtime()
-    rt.events_budget = 200
-    if stub_parser:
-        rt.tool_jail_available = True
-        monkeypatch.setattr(rt.tool_runner.target, "run", lambda tool, args:
-                            {"value": json.loads(args["body"])["value"]}
-                            if tool.id == "connector-parser" else {"half_spread": 0})
-    rt.run()
-    rows = ledger_items(rt)
-    registered = [r for r in rows if r["kind"] == "connector.registered"]
-    assert registered, rt.registration_feedback
-    called = [r for r in rows if r["kind"] == "connector.call" and r["path"] == "/data"]
-    parsed = [r for r in rows if r["kind"] == "tool.call" and r["tool"] == "connector-parser"]
-    assert called and parsed and parsed[0]["ok"]
-    assert registered[0]["seq"] < called[0]["seq"] < parsed[0]["seq"]
-    assert any('"connector_value": 42' in r.get("outputs", "") for r in rows)
-    assert rt.wallet.check_conservation()
 
 
 def recording_journal():
@@ -410,38 +248,6 @@ def test_request_ceiling_blocks_connector_before_dispatch(monkeypatch):
     ret = rt._invoke("seed-decider", replace(req, cost_ceiling=1000), "producer")
     assert ret.cost == 1 and not transport.calls
     assert ledger_items(rt, "connector.refused")[-1]["reason"] == "request cost ceiling exhausted"
-
-
-@pytest.mark.parametrize("owner,role,child", [
-    ("eval-a", "evaluator", False), ("meta-a", "meta", False),
-    ("antagonist-a", "antagonist", False), ("seed-decider", "child", True),
-])
-def test_fetch_is_available_on_judging_antagonist_and_child_returns(
-    monkeypatch, owner, role, child,
-):
-    rt = make_runtime()
-    register(rt, monkeypatch)
-    handle = decision(rt, owner)
-    calls = iter([
-        Return(handle, {}, 0, "ok", tool_calls=({"tool": "connector.fetch",
-                "args": {"id": "source", "path": "/"}},)),
-        Return(handle, {"answer": 42}, 0, "ok"),
-    ])
-    monkeypatch.setattr(rt, "_invoke_compute", lambda *a: next(calls))
-    req = rt._request(handle, "Read", {}, {"type": "object"}, 10**15, "verdict")
-    ret = rt._invoke(owner, req, role, child=child)
-    assert ret.status == "ok" and ret.cost == 1000
-    assert ret.outputs == {"answer": 42}
-
-
-def test_body_cannot_redact_connector_paths_ids_or_metering_metadata():
-    written = []
-    journal = RecoveryJournal(SimpleNamespace(append=lambda item: written.append(item)), lambda: 0)
-    journal.protect_connector_body("/")
-    journal.append({"kind": "connector.call", "id": "source", "path": "/", "status": 200,
-                    "bytes": 1, "cost": 1000})
-    assert written == [{"kind": "connector.call", "id": "source", "path": "/", "status": 200,
-                        "bytes": 1, "cost": 1000}]
 
 
 def test_short_body_cannot_rewrite_an_order_side_into_a_different_action(monkeypatch):

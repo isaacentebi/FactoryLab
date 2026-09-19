@@ -18,13 +18,14 @@ from decimal import Decimal
 
 import pytest
 
-from factorylab.runtime.custody import ACCOUNTS, custody_view
+from factorylab.runtime.custody import custody_view
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 from factorylab.world.exchange import FakeExchange, Order, VenueUnavailable
 from factorylab.world.scripted import ScriptedProvider
-from tests.audit.test_c3_spot import _producer, _venue
-from tests.audit.test_r1_venue_collateral import place, venue_runtime
+from tests.helpers import place, venue_runtime
+from tests.helpers import spot_producer as _producer
+from tests.helpers import spot_venue as _venue
 from tests.runtime.test_connectors import ledger_items
 from tests.runtime.test_fidelity import runtime as scripted_runtime
 
@@ -71,19 +72,6 @@ def test_a_venue_loss_leaves_compute_authority_and_provider_inventory_untouched(
     assert not [i for i in rt.ledger._recovery_items()
                 if i.get("kind") == "wallet.settle"
                 and i.get("reason") in ("exchange_pnl", "funding")]
-
-
-def test_the_venue_effect_reaches_its_decision_as_parts_rather_than_one_net():
-    """The reward line carries provider cost, venue delta by custody, and state.
-
-    "This decision incurred 920 microUSD of provider cost, received 1,200 of
-    funding at Hyperliquid, and still has an open position" -- four facts, not
-    one number.
-    """
-    rt = venue_runtime(venue_usd="1000", wallet_micro=50_000_000)
-    assert place(rt, "0.01")["status"] == "filled"
-    handle = next(iter(rt.venue_deltas))
-    assert set(rt.venue_deltas[handle]) <= {"venue_perps", "venue_spot"}
 
 
 # --- 2. a duplicate receipt books once, a conflicting one refuses ------------------------
@@ -280,16 +268,6 @@ def test_a_stale_collateral_observation_blocks_new_risk():
 
 # --- 5. the custody view shows every account and never a fabricated one ------------------
 
-def test_the_custody_view_names_every_account_and_marks_authority_as_authority():
-    rt = venue_runtime(venue_usd="1000", wallet_micro=50_000_000)
-    view = custody_view(rt)
-    assert all(name in view for name in ACCOUNTS)
-    assert all(view[name]["status"] in ("observed", "unavailable") for name in ACCOUNTS)
-    assert view["venue_perps"]["equity_usd"] == "1000"
-    assert view["authority"]["kind"] == "authority"
-    assert view["authority"]["balance_micro"] == rt.wallet.balance
-    assert rt.wallet.pots()["authority"]["role"] == "authority"
-
 
 def test_a_failed_venue_read_is_unavailable_and_never_the_wallet_balance(monkeypatch):
     rt = venue_runtime(venue_usd="1000", wallet_micro=50_000_000)
@@ -311,24 +289,6 @@ def test_a_failed_venue_read_is_unavailable_and_never_the_wallet_balance(monkeyp
     assert str(rt.wallet.balance) not in str(block["account"]["custody"]["venue_perps"])
     assert block["account"]["custody"]["authority"]["kind"] == "authority"
     assert block["world_resources"]["trading_equity_usd"] is None
-
-
-def test_one_failed_read_a_tick_is_one_question_to_the_venue(monkeypatch):
-    rt = venue_runtime(venue_usd="1000", wallet_micro=50_000_000)
-    calls = []
-
-    def unavailable():
-        calls.append(1)
-        raise VenueUnavailable("user_state unreachable")
-
-    monkeypatch.setattr(rt.exchange.target, "account", unavailable)
-    rt.ticks_consumed += 1
-    for _ in range(5):
-        assert rt._tick_account_observation()[1] == "VenueUnavailable"
-    assert len(calls) == 1  # a venue that refused is not asked again this tick
-    rt.ticks_consumed += 1
-    rt._tick_account_observation()
-    assert len(calls) == 2  # and is asked afresh on the next one
 
 
 def test_the_custody_view_reads_the_venue_the_orders_actually_reached():

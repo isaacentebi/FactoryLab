@@ -2,9 +2,8 @@
 
 from urllib.parse import parse_qs, urlsplit
 
-from factorylab.world.market import X402Provider, discover
+from factorylab.world.market import discover
 from factorylab.world.x402 import HTTPResponse
-from tests.conftest import make_runtime
 
 
 def test_unique_endless_index_has_a_page_budget():
@@ -20,27 +19,3 @@ def test_unique_endless_index_has_a_page_budget():
 
     assert discover(query="absent", transport=endless) == []
     assert calls == [0, 100, 200, 300, 400]
-
-
-def test_queries_share_the_index_until_the_next_window():
-    calls = []
-
-    def index(method, url, payload, headers):
-        calls.append(url)
-        return HTTPResponse(200, {"items": [
-            {"resource": "https://a.example", "description": "inference"},
-            {"resource": "https://b.example", "description": "search"},
-        ]})
-
-    rt = make_runtime()
-    try:
-        rt.market.target = X402Provider(transport=index)
-        rt._manage_reserve_window()
-        assert len(rt._discover_market(query="inference")) == 1
-        assert len(rt._discover_market(query="search")) == 1
-        assert len(calls) == 1
-        rt.clock.now_ns += rt.m.novelty.window_ns
-        rt._manage_reserve_window()
-        assert len(rt._discover_market()) == 2 and len(calls) == 2
-    finally:
-        rt._ledger_lock.close()

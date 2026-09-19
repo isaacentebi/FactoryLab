@@ -50,6 +50,22 @@ class ForecastBook:
         self.__forecasts: dict[str, Forecast] = {}
         self.__settled: set[str] = set()
         self.__requested: dict[str, int] = {}
+        self.__open_cache: tuple | None = None
+
+    def _open(self) -> dict[str, None]:
+        """The unsettled handles in seal order, kept as forecasts are sealed and settled.
+
+        Rebuilt whenever the forecast map or the settled set is a different object
+        than the one it was built from (a checkpoint restore replaces both), so it
+        can never describe a book it was not built from.
+        """
+        cache = self.__open_cache
+        if cache is None or cache[0] is not self.__forecasts or cache[1] is not self.__settled:
+            settled = self.__settled
+            cache = (self.__forecasts, settled,
+                     {handle: None for handle in self.__forecasts if handle not in settled})
+            self.__open_cache = cache
+        return cache[2]
 
     def seal(self, forecast: Forecast) -> Forecast:
         """Persist before admission; identical retries preserve the seal, order and counts."""
@@ -70,16 +86,18 @@ class ForecastBook:
         # Ledger.append supplies ts using the ledger's own injected nanosecond clock.
         self.__ledger.append({"kind": "forecast.seal", **payload, "seal": digest})
         self.__forecasts[sealed.handle] = sealed
+        self._open()[sealed.handle] = None
         self.__requested[sealed.evaluator_id] = self.requested(sealed.evaluator_id) + 1
         return sealed
 
     def due(self, n: int) -> list[Forecast]:
         """Return only unsettled forecasts due by n, in their original seal order."""
         _require_event_index(n, "n")
+        forecasts = self.__forecasts
         return [
             forecast
-            for handle, forecast in self.__forecasts.items()
-            if handle not in self.__settled and forecast.due_at_event <= n
+            for forecast in map(forecasts.__getitem__, self._open())
+            if forecast.due_at_event <= n
         ]
 
     def mark_settled(self, handle: str) -> None:
@@ -87,12 +105,14 @@ class ForecastBook:
         if handle not in self.__forecasts:
             raise KeyError(handle)
         self.__settled.add(handle)
+        self._open().pop(handle, None)
 
     def pending(self, *, predicate_id: str | None = None) -> list[Forecast]:
         """Return unsettled commitments in seal order, optionally restricted by predicate."""
+        forecasts = self.__forecasts
         return [
-            f for h, f in self.__forecasts.items()
-            if h not in self.__settled and (predicate_id is None or f.predicate_id == predicate_id)
+            f for f in map(forecasts.__getitem__, self._open())
+            if predicate_id is None or f.predicate_id == predicate_id
         ]
 
     def record_consequence(self, handle: str, evidence: dict) -> None:

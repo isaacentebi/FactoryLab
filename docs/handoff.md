@@ -64,7 +64,7 @@ uv run pytest -m slow -o addopts="" tests/runtime/test_resume.py
 30 passed (2:13)
 ```
 
-Only the experimenter runs the gate; agents run targeted files. Pull requests #58 to #64 were merged on real-jail verification without bot reviews; Codex then reviewed them cold and its four findings were fixed in #65 (seven Codex review rounds, mostly on note rent entering cost measurement without ever counting as a response) and #66 (three rounds, one of which caught population-authored text reaching the system role and was reverted). `tests/cache_contract_check.py::test_marker_partition_includes_transitive_fixtures` fails on main and is never collected by the gate; fix or delete it.
+Only the experimenter runs the gate; agents run targeted files. Pull requests #58 to #64 were merged on real-jail verification without bot reviews; Codex then reviewed them cold and its four findings were fixed in #65 (seven Codex review rounds, mostly on note rent entering cost measurement without ever counting as a response) and #66 (three rounds, one of which caught population-authored text reaching the system role and was reverted). `tests/cache_contract_check.py`, which failed on main and was never collected, has been deleted.
 
 ## Secrets and money
 

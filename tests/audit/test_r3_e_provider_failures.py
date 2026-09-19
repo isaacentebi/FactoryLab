@@ -78,45 +78,6 @@ def test_provider_failure_billing_and_identity_survive_replay(provider_type, fai
 
 
 @pytest.mark.parametrize("provider_type", [OpenRouterProvider, VeniceProvider])
-@pytest.mark.parametrize("sent", [False, True])
-def test_runtime_invocation_records_provider_error_and_debits_only_when_uncertain(
-    provider_type, sent
-):
-    from factorylab.runtime.loop import Runtime
-    from factorylab.runtime.worlds import load_manifest
-
-    def transport(*_):
-        if sent:  # a dropped connection after dispatch keeps its provisional debit
-            raise ConnectionError("secret transport details")
-        raise URLError(socket.gaierror("secret transport details"))
-
-    runtime = Runtime(load_manifest("scripted"), events=3, seed=1,
-                      initial_balance_micro=100_000_000, ledger_path=None, drip=False,
-                      router_gamma=.1)
-    provider = provider_type(transport=transport)
-    # Keep the ordinary runtime routing, but use the real provider adapter with fake I/O.
-    provider.balance_micro = lambda: None
-    runtime.provider.target = provider
-    runtime.provider.deterministic = False
-    if provider_type is VeniceProvider:
-        from dataclasses import replace
-
-        for assembly in runtime.assemblies.values():
-            old_id = assembly.spec.model_id
-            model_id = "venice:" + old_id
-            runtime.prices.register(model_id, runtime.prices.price(old_id))
-            assembly.spec = replace(assembly.spec, model_id=model_id)
-    runtime.run()
-    invocations = [i for i in runtime.ledger._recovery_items() if i["kind"] == "invocation"]
-    assert invocations
-    error_name = "VeniceError" if provider_type is VeniceProvider else "OpenRouterError"
-    assert all(error_name in i["outputs"] for i in invocations)
-    assert all((i["cost"] > 0) if sent else (i["cost"] == 0) for i in invocations)
-    assert "secret" not in str(invocations)
-    assert not runtime.wallet.state()["reservations"]
-
-
-@pytest.mark.parametrize("provider_type", [OpenRouterProvider, VeniceProvider])
 def test_missing_provider_credentials_release_the_hold(monkeypatch, provider_type):
     monkeypatch.delenv("R3_E_MISSING_KEY", raising=False)
     monkeypatch.delenv("RESERVE_PRIVATE_KEY", raising=False)

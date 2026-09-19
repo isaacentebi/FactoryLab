@@ -92,15 +92,26 @@ class ReturnAccount:
     # never be admitted twice, but it owes no outcome — nothing resolves against it
     # and no payoff forecast may be sealed on it.
     voided: bool = False
+    # The world tick the return opened at, when the caller keeps a tick clock: the
+    # consequence backstop is then counted in ticks, never in internal events.
+    opened_at_tick: int | None = None
 
 
 @dataclass(frozen=True)
 class LotOrder:
-    """Even a fully filled order retains its owner for subsequent venue observations."""
+    """Even a fully filled order retains its owner for subsequent venue observations.
+
+    ``ordered`` is the quantity the venue accepted and ``executed`` what has
+    filled against it since. ``remaining`` is the unfilled liability, cleared by
+    a cancel; ``ordered`` is not, so a fill that executed before a cancel took
+    effect is still accepted, up to the original size and never beyond it.
+    """
 
     order_id: str
     handle: str
     remaining: Fraction
+    ordered: Fraction | None = None  # None: an order bound before sizes were tracked
+    executed: Fraction = Fraction(0)
 
 
 @dataclass(frozen=True)
@@ -124,13 +135,16 @@ class LotTable:
             None, coin, True, quantity, price, Fraction(0), "spot",
         )))
 
-    def start(self, handle: str, event: int) -> "LotTable":
+    def start(self, handle: str, event: int, tick: int | None = None) -> "LotTable":
         """Admit a unique return before its orders can produce fills."""
         _require_id(handle)
         _require_event_index(event, "event")
+        if tick is not None:
+            _require_event_index(tick, "tick")
         if any(r.handle == handle for r in self.returns):
             raise ValueError("return already admitted")
-        return replace(self, returns=(*self.returns, ReturnAccount(handle, event)))
+        return replace(self, returns=(*self.returns,
+                                      ReturnAccount(handle, event, opened_at_tick=tick)))
 
     def finish(self, handle: str, cost_micro: int) -> "LotTable":
         """Fix a return's nonnegative total compute cost exactly once."""
@@ -155,29 +169,6 @@ class LotTable:
                 or any(order.handle == handle for order in self.orders)):
             raise ValueError("only a return that authored nothing may be voided")
         return self._accounts({handle: replace(account, voided=True)})
-
-    def censor(self, handle: str, event: int, reason: str) -> "LotTable":
-        """Close an open return whose consequence the world never let anyone observe.
-
-        A venue that will not say whether an order filled leaves the return's
-        ``return_paid_off`` question unanswered, not answered "no": there is no
-        fill status, so there is no payoff anybody could be right or wrong
-        about. The account is closed with the reason attached so every later
-        return resolves normally, the outcome is scored by nobody, and the late
-        baseline starts at zero, so whatever the account realises afterwards is
-        booked late in full -- the money is never lost, only late.
-        """
-        _require_event_index(event, "event")
-        if type(reason) is not str or not reason:
-            raise ValueError("a censored outcome requires a documented reason")
-        account = self.account(handle)
-        if account.voided or account.payoff is not None:
-            raise ValueError("only an open return may be censored")
-        outcome = Payoff(
-            account.handle, 0, 0, (account.cost_micro or 0) + account.carried_micro, event,
-            False, account.liquidated, account.earned_micro, censored=reason,
-        )
-        return self._accounts({handle: replace(account, payoff=outcome, late_micro=0)})
 
     def carry(self, handle: str, cost_micro: int) -> "LotTable":
         """Add a nonnegative retained liability to a return whose outcome is still open.
@@ -242,10 +233,20 @@ class LotTable:
 
     def account(self, handle: str) -> ReturnAccount:
         """Return the original account or fail for an unknown return."""
-        for account in self.returns:
-            if account.handle == handle:
-                return account
-        raise KeyError(handle)
+        # The table is immutable, so its handle index is built once, on first read,
+        # and never goes stale: every change is a new table with no index yet. The
+        # first account with a handle wins, exactly as the linear scan found it. It
+        # is not a field, so equality, ``fields()`` and checkpoints never see it.
+        index = self.__dict__.get("_accounts_by_handle")
+        if index is None:
+            index = {}
+            for account in self.returns:
+                index.setdefault(account.handle, account)
+            object.__setattr__(self, "_accounts_by_handle", index)
+        try:
+            return index[handle]
+        except KeyError:
+            raise KeyError(handle) from None
 
     def order(self, order_id: str, handle: str, size: str) -> "LotTable":
         """Bind an accepted order to its calling return; ownership cannot be replaced."""
@@ -258,7 +259,7 @@ class LotTable:
             raise ValueError("order already attributed")
         if not any(r.handle == handle for r in self.returns):
             raise ValueError("order requires an open consequence account")
-        return replace(self, orders=(*self.orders, LotOrder(order_id, handle, quantity)))
+        return replace(self, orders=(*self.orders, LotOrder(order_id, handle, quantity, quantity)))
 
     def cancel(self, order_id: str) -> "LotTable":
         """Clear unfilled liability without deleting the order's historical ownership."""
@@ -296,7 +297,8 @@ class LotTable:
         keeps the whole P&L and pays the fee. Venue average-entry realized P&L
         is not an allocation key: FIFO P&L is computed from actual
         opening/closing prices. A fill whose order belongs to no open account
-        is refused rather than pooled.
+        is refused rather than pooled, and so is one that would execute more
+        against its order than the order's original quantity.
         """
         _require_id(order_id)
         if "/" in coin:
@@ -321,6 +323,14 @@ class LotTable:
             Fraction(0),
         ):
             raise ValueError("spot sell exceeds long inventory")
+        executed = quantity if order_size is None else exact(order_size)
+        if executed <= 0:
+            raise ValueError("executed order size must be positive")
+        if (not liquidation and order is not None and order.ordered is not None
+                and order.executed + executed > order.ordered):
+            # More has executed against the order than it ever ordered: the fill is
+            # an inconsistency, not a consequence, and is refused before any lot moves.
+            raise ValueError("fill exceeds the order's ordered quantity")
         remainder = quantity
         lots = []
         closer_net = Fraction(0)
@@ -371,11 +381,9 @@ class LotTable:
                 accounts[owner] = replace(
                     accounts[owner], opened_lots=accounts[owner].opened_lots + 1
                 )
-        executed = quantity if order_size is None else exact(order_size)
-        if executed <= 0:
-            raise ValueError("executed order size must be positive")
         orders = tuple(
-            replace(o, remaining=max(Fraction(0), o.remaining - executed))
+            replace(o, remaining=max(Fraction(0), o.remaining - executed),
+                    executed=o.executed + executed)
             if o.order_id == order_id
             else o
             for o in self.orders
@@ -398,14 +406,23 @@ class LotTable:
             ),
         )
 
-    def resolve(self, event: int, backstop: int, mids: Mapping[str, str]) -> "LotTable":
+    def resolve(self, event: int, backstop: int, mids: Mapping[str, str], *,
+                censored: Mapping[str, str] | None = None,
+                tick: int | None = None) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
-        The backstop counts runtime events from the return, including any time
-        awaiting a fill. Accepted unfilled orders defer early settlement. A return
-        pays off when the realised result credited to it, as opener or closer,
-        exceeds its own cost, carried liabilities included; a no-fill return
-        cannot inherit anyone's P&L.
+        The backstop counts from the return's opening, including any time awaiting
+        a fill: in world ticks when the caller passes ``tick`` and the account
+        recorded the tick it opened at, in the caller's events otherwise. Accepted
+        unfilled orders defer early settlement. A return pays off when the realised
+        result credited to it, as opener or closer, exceeds its own cost, carried
+        liabilities included; a no-fill return cannot inherit anyone's P&L.
+
+        ``censored`` names returns that also sent an order nobody could observe
+        (handle -> documented reason). Such a return resolves on its own schedule
+        like any other, and its outcome carries the money its observed orders
+        produced; only the answer to whether it paid off is unknown, because the
+        unobserved order could have changed it, so the outcome is censored.
         """
         _require_event_index(event, "event")
         _require_event_index(backstop, "backstop", positive=True)
@@ -415,7 +432,10 @@ class LotTable:
                 continue
             lots = [lot for lot in self.lots if lot.handle == account.handle]
             waiting = any(o.handle == account.handle and o.remaining for o in self.orders)
-            if (lots or waiting) and event < account.opened_at_event + backstop:
+            age = (tick - account.opened_at_tick
+                   if tick is not None and account.opened_at_tick is not None
+                   else event - account.opened_at_event)
+            if (lots or waiting) and age < backstop:
                 continue
             net = account.realized_micro
             if lots:
@@ -433,15 +453,17 @@ class LotTable:
             # liability it was still carrying when the outcome was fixed.
             cost = account.cost_micro + account.carried_micro
             acted = account.opened_lots > 0 or account.closes > 0 or account.earnings > 0
+            reason = (censored or {}).get(account.handle)
             outcome = Payoff(
                 account.handle,
-                int(acted and micro + account.earned_micro > cost),
+                0 if reason else int(acted and micro + account.earned_micro > cost),
                 micro,
                 cost,
                 event,
                 bool(lots),
                 account.liquidated,
                 account.earned_micro,
+                censored=reason,
             )
             # An unmarked outcome is settled money, booked to the owner when it is
             # fixed: the late baseline starts there. A marked outcome books nothing
@@ -452,4 +474,8 @@ class LotTable:
         return self._accounts(updates)
 
     def _accounts(self, updates: dict[str, ReturnAccount]) -> "LotTable":
+        if not updates:
+            # Nothing changes: the table is immutable, so it is its own successor
+            # (and keeps the handle index it has already built).
+            return self
         return replace(self, returns=tuple(updates.get(r.handle, r) for r in self.returns))

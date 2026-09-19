@@ -176,18 +176,29 @@ class LiveRail(ClassTransferRail):
                     or len(topics) < 3 or topics[0] != topic.lower()
                     or topics[2] != to_word.lower() or log.get("removed", False)):
                 continue
-            matches.append((log.get("logIndex", hex(index)), int(log["data"], 16)))
+            matches.append((int(str(log.get("logIndex", hex(index))), 0),
+                            int(log["data"], 16)))
         claimed_index = receipt.get("log_index")
         if claimed_index is not None:
-            matches = [m for m in matches if int(str(m[0]), 0) == int(claimed_index)]
+            matches = [m for m in matches if m[0] == int(str(claimed_index), 0)]
         if not matches:
             return {"confirmed": False, "reason": "no USDC transfer to the reserve in this "
                                                   "transaction"}
-        if not any(value == amount for _index, value in matches):
+        exact = [m for m in matches if m[1] == amount]
+        if not exact:
             return {"confirmed": False, "reason": "transferred amount differs from the receipt"}
+        if len(exact) > 1:
+            # Two equal transfers to the reserve in one transaction and a claim that
+            # does not say which: confirming either would let the other be claimed and
+            # confirmed again. The claim stands unresolved until it names its log.
+            return None
+        # The identity is the chain's: chain id, transaction, the log the transfer is
+        # at, the token contract and the recipient, whatever the claim spelled.
         return {"confirmed": True, "evidence": {"chain": self.base.chain.id, "tx": tx_hash,
+                                                "log_index": exact[0][0],
+                                                "token": self.base.chain.usdc.lower(),
                                                 "asset": "USDC",
-                                                "recipient": self.reserve_address,
+                                                "recipient": self.reserve_address.lower(),
                                                 "micro": amount}}
 
     def balances(self) -> dict:
@@ -684,6 +695,52 @@ class LiveRail(ClassTransferRail):
             raise Pending("withdrawal outcome unknown; reconcile the existing nonce") from None
         if response.get("status") != "ok":
             raise RailError("venue rejected withdrawal")
+
+    #: A Venice authorization cannot be used after its ``validBefore``; a use mined just
+    #: before it is finalized on Base within minutes. Past this grace with no receipt,
+    #: it never executed and never will.
+    VENICE_EXPIRY_GRACE_S = 3_600
+    #: Hyperliquid accepts an action only while its nonce is within about two days of
+    #: the venue's clock. A withdrawal whose nonce is older than this and that no
+    #: ledger update shows can never execute.
+    WITHDRAWAL_NONCE_WINDOW_MS = 3 * 86_400_000
+
+    def expired(self, step: str, state: dict, now_ns: int) -> str | None:
+        """Why a submitted step can no longer execute, or ``None`` while it still could.
+
+        Only steps whose principal has not left are answered: the Venice top-up's
+        EIP-3009 authorization and the venue withdrawal's signed action. The
+        treasury abandons such a step only after a clean poll found no evidence.
+        """
+        reference = state.get("reference") or {}
+        if step == "venice_top_up":
+            valid_before = (reference.get("authorization") or {}).get("validBefore")
+            if valid_before is None:
+                return None
+            if now_ns // 1_000_000_000 > int(valid_before) + self.VENICE_EXPIRY_GRACE_S:
+                return "Venice authorization expired unused"
+            return None
+        if step == "withdraw_burn":
+            nonce = reference.get("nonce", state.get("nonce"))
+            if nonce is None:
+                return None
+            if now_ns // 1_000_000 > int(nonce) + self.WITHDRAWAL_NONCE_WINDOW_MS:
+                return "withdrawal nonce expired unexecuted"
+        return None
+
+    def replace(self, step: str, reference: dict, gas_spent: dict) -> dict:
+        """A repriced replacement for a stuck EVM step at its original nonce."""
+        if (reference.get("forwarded") or reference.get("pending_approval")
+                or "tx" not in reference or "chain_key" not in reference):
+            raise RailError("this step has no replaceable transaction")
+        chain = self._evm(reference["chain_key"])
+        replaced = chain.replace(reference, gas_remaining_wei=self.remaining(
+            reference["chain_key"], gas_spent))
+        replaced["fee_ceiling_micro"] = (
+            reference["fee_ceiling_micro"]
+            - gas_micro(reference["gas_ceiling_wei"], reference["gas_usd"])
+            + gas_micro(replaced["gas_ceiling_wei"], reference["gas_usd"]))
+        return replaced
 
     def _venice_client(self):
         """Use the existing reserve signer and x402 client on the committed Base mainnet rail."""

@@ -4,6 +4,7 @@ import ast
 import fcntl
 import hashlib
 import json
+import os
 import pickle
 import shutil
 from dataclasses import dataclass, is_dataclass, replace
@@ -33,24 +34,31 @@ def _manifest_with_changes(manifest, changes):
 class ScriptedRun:
     """A read-only cached result; data access returns detached, consumer-owned values.
 
+    Each field is pickled on its own, so reading ``summary`` decodes the summary and
+    nothing else; every read decodes afresh, so a test that mutates what it got
+    cannot change what the next reader gets.
+
     The ledger directory is shared evidence. Use copy_to before reopening for writes,
     resuming, killing, truncating, or changing any file, including its sidecars.
     """
 
     ledger_path: Path | None
-    _payload: bytes
+    _fields: dict[str, bytes]
+
+    def _field(self, name):
+        return pickle.loads(self._fields[name])
 
     @property
     def summary(self):
-        return pickle.loads(self._payload)["summary"]
+        return self._field("summary")
 
     @property
     def entries(self):
-        return pickle.loads(self._payload)["entries"]
+        return self._field("entries")
 
     @property
     def requests(self):
-        return pickle.loads(self._payload)["requests"]
+        return self._field("requests")
 
     def copy_to(self, directory):
         """Return a private ledger with every sidecar and original permission preserved."""
@@ -61,7 +69,7 @@ class ScriptedRun:
 
     def runtime(self, manifest):
         """Return an independent in-memory runtime restored without replaying any event."""
-        state = pickle.loads(self._payload)["state"]
+        state = self._field("state")
         rt = Runtime(manifest, ledger_path=None, **state["config"])
         restore_runtime(rt, state)
         return rt
@@ -120,12 +128,26 @@ def _cached_scripted_run(directory, manifest, events, seed, *, mode, drip=True):
                     rt._ledger_lock.close()
                 result = dict(summary=summary, entries=entries, requests=requests,
                               state=runtime_state(rt))
+            fields = {name: pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+                      for name, value in result.items()}
             temporary = result_path.with_suffix(".tmp")
-            temporary.write_bytes(pickle.dumps(result, protocol=pickle.HIGHEST_PROTOCOL))
+            temporary.write_bytes(pickle.dumps(fields, protocol=pickle.HIGHEST_PROTOCOL))
             temporary.replace(result_path)
-        payload = result_path.read_bytes()
+        fields = _decoded_fields(result_path)
     path = run_directory / "ledger" / "scripted.jsonl" if mode == "run_world" else None
-    return ScriptedRun(path, payload)
+    return ScriptedRun(path, fields)
+
+
+# One read of each cached result file per worker process: the outer pickle is a map of
+# field name to that field's own pickle, so holding it costs bytes, not objects.
+_FIELDS_BY_PATH: dict[Path, dict[str, bytes]] = {}
+
+
+def _decoded_fields(result_path: Path) -> dict[str, bytes]:
+    fields = _FIELDS_BY_PATH.get(result_path)
+    if fields is None:
+        fields = _FIELDS_BY_PATH[result_path] = pickle.loads(result_path.read_bytes())
+    return fields
 
 
 @pytest.fixture(scope="session")
@@ -160,26 +182,139 @@ def scripted_runtime_run(_scripted_run_cache):
     return run
 
 
+# Test tiers (see README "Try it" and AGENTS.md):
+#   check  the developer inner loop, the default; no test here runs a world
+#   gate   every test that runs a world or reads a shared scripted run
+#   slow   kills and resumes real subprocesses
+# ``fast`` and ``world`` are the old names of ``check`` and ``gate`` and are still set.
+_SHARED_WORLD_FIXTURES = frozenset({"scripted_run", "scripted_runtime_run"})
+_WORLD_CLI_COMMANDS = frozenset({"run", "resume"})
+# A check-tier test whose call phase takes longer than this fails: it belongs in gate.
+CHECK_LIMIT_ENV = "FACTORYLAB_CHECK_LIMIT_S"
+CHECK_LIMIT_DEFAULT_S = 2.0
+
+
+def _call_name(node: ast.Call) -> str | None:
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _runs_world_here(call: ast.Call) -> bool:
+    """Whether one call, read on its own, starts a world's event loop."""
+    name = _call_name(call)
+    if name == "run_world":
+        return True
+    if name == "Runtime":
+        # ``Runtime(..., events=0)`` builds a runtime without running one; any other
+        # events budget, or one passed positionally, is a world.
+        events = next((k.value for k in call.keywords if k.arg == "events"), None)
+        return not (isinstance(events, ast.Constant) and events.value == 0)
+    if (name == "run" and isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name) and call.func.value.id != "subprocess"
+            and not call.args and not call.keywords):
+        return True  # ``rt.run()``: the loop itself
+    # The CLI, in process or as a child: ``main(["run", ...])`` or ``[..., "resume", ...]``.
+    for argument in call.args:
+        if isinstance(argument, (ast.List, ast.Tuple)):
+            words = {e.value for e in argument.elts
+                     if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+            if words & _WORLD_CLI_COMMANDS and (
+                    name == "main" or any("factorylab" in word for word in words)):
+                return True
+    return False
+
+
+def _world_functions(tree: ast.Module) -> set[str]:
+    """Names of this module's functions that run a world, directly or through a helper."""
+    functions = {node.name: node for node in ast.walk(tree)
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    calls = {name: [n for n in ast.walk(node) if isinstance(n, ast.Call)]
+             for name, node in functions.items()}
+    world = {name for name, found in calls.items() if any(map(_runs_world_here, found))}
+    changed = True
+    while changed:
+        changed = False
+        for name, found in calls.items():
+            if name not in world and any(_call_name(c) in world for c in found
+                                         if isinstance(c.func, ast.Name)):
+                world.add(name)
+                changed = True
+    return world
+
+
+def _module_facts(path: Path) -> tuple[bool, set[str]]:
+    tree = ast.parse(path.read_text())
+    imports_run_world = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "factorylab.runtime.loop"
+        and any(alias.name == "run_world" for alias in node.names)
+        for node in ast.walk(tree)
+    )
+    return imports_run_world, _world_functions(tree)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(items):
-    """Partition collected tests without changing selection or existing markers."""
+    """Partition collected tests into tiers without changing selection or existing markers.
+
+    A test is ``gate`` when it is marked so (or ``world``), when its module imports
+    ``run_world``, when it uses a shared scripted run, or when its body, a helper in
+    its module, or a fixture in its module runs a world (``Runtime`` with a nonzero
+    events budget, ``rt.run()``, ``run_world``, or the CLI's ``run``/``resume``).
+    Everything else that is not ``network`` or ``slow`` is ``check``. The static read
+    can miss a world; the check-tier time limit below catches what it misses.
+    """
     modules = {}
     for item in items:
         path = Path(item.path)
         if path not in modules:
-            tree = ast.parse(path.read_text())
-            modules[path] = any(
-                isinstance(node, ast.ImportFrom)
-                and node.module == "factorylab.runtime.loop"
-                and any(alias.name == "run_world" for alias in node.names)
-                for node in ast.walk(tree)
-            )
-        shared = {"scripted_run", "scripted_runtime_run", "w1_scripted_diary"}
-        world = modules[path] or bool(shared.intersection(getattr(item, "fixturenames", ())))
-        if world:
+            modules[path] = _module_facts(path)
+        imports_run_world, world_functions = modules[path]
+        if any(item.get_closest_marker(m) for m in ("network", "slow")):
+            continue
+        fixtures = set(getattr(item, "fixturenames", ()))
+        name = getattr(item, "originalname", None) or item.name.split("[")[0]
+        gate = (bool(item.get_closest_marker("gate") or item.get_closest_marker("world"))
+                or imports_run_world
+                or bool(_SHARED_WORLD_FIXTURES & fixtures)
+                or name in world_functions
+                or bool(world_functions & fixtures))
+        if gate:
+            item.add_marker(pytest.mark.gate)
             item.add_marker(pytest.mark.world)
-        elif not any(item.get_closest_marker(m) for m in ("network", "slow")):
+        else:
+            item.add_marker(pytest.mark.check)
             item.add_marker(pytest.mark.fast)
+
+
+def _check_limit_s() -> float | None:
+    raw = os.environ.get(CHECK_LIMIT_ENV, "").strip()
+    if not raw:
+        return CHECK_LIMIT_DEFAULT_S
+    if raw.lower() in ("0", "off", "none"):
+        return None
+    return float(raw)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """A ``check`` test that runs longer than the limit fails, naming the fix."""
+    outcome = yield
+    report = outcome.get_result()
+    limit = _check_limit_s()
+    if (limit is None or report.when != "call" or not report.passed
+            or item.get_closest_marker("check") is None or report.duration <= limit):
+        return
+    report.outcome = "failed"
+    report.longrepr = (
+        f"{item.nodeid} is in the check tier but its call took {report.duration:.2f}s "
+        f"(limit {limit:.1f}s). The check tier is the inner loop and runs no world: mark "
+        "this test @pytest.mark.gate (or make it faster). On a slow machine raise the "
+        f"limit with {CHECK_LIMIT_ENV}=<seconds>, or disable it with {CHECK_LIMIT_ENV}=off.")
 
 
 def make_runtime(*, balance=100_000_000, live=False, clock_source=None):

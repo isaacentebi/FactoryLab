@@ -3,6 +3,7 @@
 import fcntl
 import hashlib
 import json
+import operator
 import os
 import tempfile
 from collections import Counter
@@ -140,6 +141,33 @@ def canonical(value) -> bytes:
     ).encode("utf-8")
 
 
+def _canonical_decoded(value) -> bytes:
+    """``canonical(value)`` for a value ``json.loads`` just produced from canonical bytes.
+
+    Such a value holds only dicts with string keys, lists, str, int, float, bool and
+    None, and none of its strings carries a lone surrogate (canonical bytes are valid
+    UTF-8), so ``_plain`` would return it unchanged; the encoding is taken directly.
+    Callers may add str/int values to it first; nothing else.
+    """
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+
+
+def _item_digest(item: dict) -> str:
+    """``sha256(canonical(item))`` for an item decoded from the chain, without its walk.
+
+    A decoded item is plain JSON already, so ``_canonical_decoded`` gives the same
+    bytes, except for a string carrying a lone surrogate (which only a forged item
+    can hold): encoding refuses it, and ``canonical`` then answers as it always did.
+    """
+    try:
+        data = _canonical_decoded(item)
+    except UnicodeEncodeError:
+        data = canonical(item)
+    return hashlib.sha256(data).hexdigest()
+
+
 class KeyStore:
     """Public key access remains sealed until the bound Termination is final."""
 
@@ -215,9 +243,15 @@ class Ledger:
         self.__genesis = hashlib.sha256(canonical({"manifest": manifest or {}})).hexdigest()
         self.__header = {"format": 1, "genesis_hash": self.__genesis}
         self.__head = self.__genesis
-        self.__verified_tokens: tuple[bytes, ...] = ()
+        # A private copy of the ciphertexts the last full walk authenticated. It is
+        # extended, never shared, so a later change to ``__tokens`` cannot reach it.
+        self.__verified_tokens: list[bytes] = []
         self.__verified_head = self.__genesis
-        self.__verified_count = -1  # No item count has had its full walk yet.
+        self.__verified_count = -1  # No item count has had its periodic walk yet.
+        # Where this process last authenticated the disk chain up to: ``(offset,
+        # head, count, digest of every byte before offset)``. The periodic walk
+        # starts here, so it reads only what was appended since (see ``healthy``).
+        self.__walked: tuple[int, str, int, object] | None = None
         self.__path = Path(path) if path is not None else None
         self.__world = manifest.get("name") if isinstance(manifest, dict) else None
         self.__final = False
@@ -234,6 +268,7 @@ class Ledger:
             self.__size = len(line)
             self.__last_line = line
             self.__raw_hash.update(line)
+            self.__walked = (self.__size, self.__genesis, 0, self.__raw_hash.copy())
 
     @staticmethod
     def _persist_key(key_path: str | Path | None) -> bytes | None:
@@ -286,6 +321,7 @@ class Ledger:
             ledger.__decision_count = checked["decisions"]
             ledger.__index = checked["index"]
             ledger.__checkpoint, ledger.__raw_hash = checked, hasher
+            ledger.__walked = (boundary, checked["head"], checked["count"], hasher.copy())
             if ledger.__index["terminated"] and not read_only:
                 raise LedgerIntegrityError("cannot resume a terminated world")
             ledger.__last_line = next(ledger._reverse_lines(), b"")
@@ -351,9 +387,12 @@ class Ledger:
             choice = item["propensity"]["chosen"]
             index["choices"][item["handle"]] = choice
             index["actions"][choice] = index["actions"].get(choice, 0) + 1
-        if kind == "wallet.commit":
+        if kind in ("wallet.commit", "wallet.settle_uncertain"):
+            # An uncertain bill is committed at its ceiling; its settlement returns the
+            # over-charge, so spend is the commit less that refund, never the ceiling.
             choice = index["choices"].get(item["handle"], item["reason"])
-            index["spend"][choice] = index["spend"].get(choice, 0) + item["amount"]
+            sign = -1 if kind == "wallet.settle_uncertain" else 1
+            index["spend"][choice] = index["spend"].get(choice, 0) + sign * item["amount"]
         if kind == "invocation":
             name = item["assembly_id"]
             index["invocations"][name] = index["invocations"].get(name, 0) + 1
@@ -462,7 +501,7 @@ class Ledger:
                 item = json.loads(self.__keys._decrypt(token))
                 claimed = item.pop("hash")
                 if (item["seq"] != count or item["prev_hash"] != previous
-                        or hashlib.sha256(canonical(item)).hexdigest() != claimed):
+                        or _item_digest(item) != claimed):
                     raise LedgerIntegrityError("ledger chain differs")
                 self._index_item(index, item)
                 decisions += item.get("kind") == "decision.handle"
@@ -628,20 +667,59 @@ class Ledger:
     def healthy(self) -> bool:
         """Cheap integrity check: persisted size and tail match what this ledger wrote.
 
-        Every ``full_verify_every`` items it also walks the whole chain, once. A
-        second question about the same unappended prefix is answered by the walk
-        that prefix already had, so the cadence is one walk per
-        ``full_verify_every`` items rather than one per caller, and the cheap
-        check still runs on every call. Same-size in-place edits to an earlier
-        line are caught by that periodic walk, by ``verify()``, and by
-        ``aggregate()``; size changes, truncation, reordering of the tail and a
-        forged header are caught immediately.
+        Every ``full_verify_every`` items it also walks the items appended since
+        the last walk, once: each is decrypted and its sequence, predecessor hash
+        and digest are checked, and the bytes on disk since the last walk must
+        hash, continuing from it, to exactly what this ledger wrote. Each item
+        names its predecessor's hash, so the walked chain is one unbroken chain
+        from the last authenticated head; the cost is the new items, not the diary.
+
+        What this does not re-read is the prefix already walked. A same-size
+        in-place edit to an earlier line is caught by the full walks: ``verify()``
+        (which ``aggregate()``, ``event_times()`` and the run's closing summary
+        call), and every open and resume, which authenticates every byte before it
+        continues. Size changes, truncation, reordering of the tail and a torn
+        last line are caught here, immediately.
         """
         if self.__count % self.__full_every == 0 and self.__verified_count != self.__count:
-            if not self.verify():
+            if not self._verify_appended():
                 return False
             self.__verified_count = self.__count
         return self._tail_intact()
+
+    def _verify_appended(self) -> bool:
+        """Authenticate the items appended since the last walk, and nothing before them."""
+        if self.__path is None:
+            return self._verify_memory(compare_prefix=False)
+        walked = self.__walked
+        if walked is None:
+            return self.verify()
+        offset, previous, count, hasher = walked
+        hasher = hasher.copy()
+        try:
+            if self.__path.stat().st_size != self.__size or offset > self.__size:
+                return False
+            with self.__path.open("rb") as stream:
+                stream.seek(offset)
+                while stream.tell() < self.__size:
+                    line = stream.readline()
+                    if not line or stream.tell() > self.__size:
+                        return False
+                    item = json.loads(self.__keys._decrypt(self._token(line)))
+                    claimed = item.pop("hash")
+                    if (item["seq"] != count or item["prev_hash"] != previous
+                            or _item_digest(item) != claimed):
+                        return False
+                    previous, count = claimed, count + 1
+                    hasher.update(line)
+            if (count != self.__count or previous != self.__head
+                    or hasher.hexdigest() != self.__raw_hash.hexdigest()):
+                return False
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, InvalidToken,
+                LedgerIntegrityError):
+            return False
+        self.__walked = (self.__size, previous, count, hasher)
+        return True
 
     def _tail_intact(self) -> bool:
         if self.__path is None:
@@ -683,8 +761,8 @@ class Ledger:
         if type(item["ts"]) is not int or item["ts"] < 0:
             raise ValueError("ts must be nonnegative integer nanoseconds")
         item.update(seq=self.__count, prev_hash=self.__head)
-        item["hash"] = hashlib.sha256(canonical(item)).hexdigest()
-        token = self.__keys._encrypt(canonical(item))
+        item["hash"] = hashlib.sha256(_canonical_decoded(item)).hexdigest()
+        token = self.__keys._encrypt(_canonical_decoded(item))
         if self.__path is not None:
             line = canonical({"item": token.decode("ascii")}) + b"\n"
             descriptor = os.open(self.__path,
@@ -730,14 +808,32 @@ class Ledger:
                     return False
                 self.__checkpoint, self.__raw_hash = checked, hasher
                 self.__index = self._copy_index(checked["index"])
+                self.__walked = (self.__size, checked["head"], checked["count"], hasher.copy())
                 return True
+            return self._verify_memory(compare_prefix=True)
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            AttributeError,
+            InvalidToken,
+            LedgerIntegrityError,
+        ):
+            return False
+
+    def _verify_memory(self, *, compare_prefix: bool) -> bool:
+        """Authenticate the memory chain past the walked prefix, comparing that prefix too
+        when asked; the full ``verify()`` always asks."""
+        try:
             tokens = self.__tokens
             if len(tokens) != self.__count:
                 return False
             prefix = self.__verified_tokens
-            if len(tokens) < len(prefix) or any(
-                token != tokens[seq] for seq, token in enumerate(prefix)
-            ):
+            if len(tokens) < len(prefix):
+                return False
+            # The whole stored prefix is compared, element by element, at C speed.
+            if compare_prefix and not all(map(operator.eq, prefix, tokens)):
                 return False
             previous = self.__verified_head
             for seq in range(len(prefix), len(tokens)):
@@ -746,12 +842,12 @@ class Ledger:
                 digest = item.pop("hash")
                 if item["seq"] != seq or item["prev_hash"] != previous:
                     return False
-                if hashlib.sha256(canonical(item)).hexdigest() != digest:
+                if _item_digest(item) != digest:
                     return False
                 previous = digest
             if previous != self.__head:
                 return False
-            self.__verified_tokens = tuple(tokens)
+            prefix.extend(tokens[len(prefix):])
             self.__verified_head = previous
             return True
         except (
@@ -843,9 +939,10 @@ class Ledger:
             }
             amounts: Counter = Counter()
             for item in selected:
-                if item.get("kind") == "wallet.commit":
+                if item.get("kind") in ("wallet.commit", "wallet.settle_uncertain"):
                     capability = choices.get(item["handle"], item["reason"])
-                    amounts[capability] += item["amount"]
+                    sign = -1 if item["kind"] == "wallet.settle_uncertain" else 1
+                    amounts[capability] += sign * item["amount"]
             return {"spend": dict(sorted(amounts.items()))}
         if view == "invocations_by_assembly":
             counts = Counter(

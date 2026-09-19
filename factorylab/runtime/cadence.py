@@ -53,6 +53,14 @@ class GovernanceCadence:
             raise ValueError("event clock must be nondecreasing")
         self._current_event = event
 
+    def is_open(self, handle: str) -> bool:
+        """Whether an opening is already recorded for this forecast."""
+        return handle in self._outstanding
+
+    def opened_at(self, handle: str, default: int) -> int:
+        """The clock index this forecast was first seen open at, or ``default``."""
+        return self._outstanding.get(handle, default)
+
     def record_open(self, handle: str, opened_event: int) -> None:
         """An outstanding forecast contributes age before it can contribute a settlement."""
         if type(opened_event) is not int or opened_event < 0:
@@ -193,9 +201,15 @@ class GovernanceCadence:
 
 
 def settle_forecasts(rt, settle) -> None:
-    """Record openings before resolution, including forecasts that close inside one tick."""
-    rt.cadence.advance(rt.n)
-    pending = rt.book.pending()
-    for forecast in pending:
-        rt.cadence.record_open(forecast.handle, forecast.made_at_event)
+    """Record openings before resolution, including forecasts that close inside one tick.
+
+    The cadence's clock is world ticks consumed, the unit its backstop floor and
+    the tick-interval conversion both assume (defect 1). A forecast is first seen
+    in the settlement pass of the event that sealed it, so its first-seen tick is
+    the tick it was sealed in.
+    """
+    rt.cadence.advance(rt.ticks_consumed)
+    for forecast in rt.book.pending():
+        if not rt.cadence.is_open(forecast.handle):
+            rt.cadence.record_open(forecast.handle, rt.ticks_consumed)
     settle()

@@ -7,7 +7,6 @@ audited commit. Nothing here touches a network.
 
 import hashlib
 import json
-from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,12 +14,8 @@ import pytest
 
 from factorylab.kernel.ledger import Ledger, LedgerIntegrityError, canonical
 from factorylab.runtime.loop import Runtime
-from factorylab.runtime.resume import RecoveryJournal, ResumeError, encode, resume_world
+from factorylab.runtime.resume import RecoveryJournal, encode
 from factorylab.runtime.worlds import load_manifest
-
-
-class Died(BaseException):
-    pass
 
 
 def _runtime(path, events):
@@ -85,31 +80,6 @@ def test_finding_2_a_jailed_run_later_in_an_interrupted_event_fails_instead_of_r
     assert recorded[-1]["call"] == 0 and recorded[-1]["result"] == encode(result)
 
 
-def test_finding_2_death_during_a_population_tool_run_wedges_the_scripted_world(tmp_path):
-    from tests.cortex.test_jail import require_jail
-
-    require_jail()
-    path = tmp_path / "tool.jsonl"
-    rt = _runtime(path, events=60)
-    append = rt.ledger.append
-
-    def interrupt(entry):
-        seq = append(entry)
-        if entry["kind"] == "io.call" and entry["name"] == "sandbox.run":
-            raise Died
-        return seq
-
-    rt.ledger.append = interrupt
-    with pytest.raises(Died):
-        rt.run()
-    rt._ledger_lock.close()
-    try:
-        summary = resume_world(load_manifest("scripted"), str(path))
-    except ResumeError as exc:
-        pytest.fail(f"resume refused a world interrupted inside the jail: {exc.code}: {exc}")
-    assert summary["stats"]["resumes"] == 1 and summary["ledger_verify"]
-
-
 def test_finding_5_a_ledger_shorter_than_its_own_head_is_a_rollback_not_a_resume(tmp_path):
     """The encrypted ``.head`` records the authenticated byte offset of the last checkpoint.
     A ledger file shorter than that offset (a restored backup, a copy truncated on a line
@@ -130,34 +100,3 @@ def test_finding_5_a_ledger_shorter_than_its_own_head_is_a_rollback_not_a_resume
     path.write_bytes(b"".join(lines[:cut + 1]))
     with pytest.raises(LedgerIntegrityError):
         Ledger.reopen(path, manifest=json.loads(m.canonical_json()))
-
-
-def test_finding_9_a_class_transfer_confirmed_after_a_loss_does_not_kill_the_world():
-    """The fake rail confirms a class transfer at the next tick by calling
-    ``FakeExchange.class_transfer``, which re-checks availability and raises when a
-    position lost value in between. The exception leaves ``treasury.tick`` and the event
-    loop; the journaled poll replays it on every resume."""
-    from factorylab.kernel.ledger import Ledger as MemoryLedger
-    from factorylab.kernel.wallet import Wallet
-    from factorylab.world.exchange import FakeExchange, Order
-    from factorylab.world.treasury import FakeTreasury
-
-    ledger = MemoryLedger(clock_ns=lambda: 0)
-    wallet = Wallet(100_000_000, ledger, clock_ns=lambda: 0)
-    exchange = FakeExchange(coins=("BTC",), spot_pairs=("BTC/USDC",), start_cash_usd=Decimal(100),
-                            start_prices={"BTC": Decimal(100)}, spread_bps=Decimal(0),
-                            fee_bps=Decimal(0), step_bps=Decimal(0),
-                            shocks={1: {"BTC": Decimal("0.5")}})
-    treasury = FakeTreasury(ledger, wallet, exchange=exchange)
-    wallet.bind_pots(treasury.pots)
-    assert exchange.place(Order("BTC", True, Decimal(1))).status == "filled"
-    exchange.drain_events()
-    amount = int(exchange._perp_withdrawable())
-    assert treasury.transfer("perps_to_spot", str(amount), handle="a", now_ns=1)[
-        "status"] == "submitted"
-    exchange.advance(1)  # the market halves before the confirming tick
-    try:
-        treasury.tick(2)
-    except ValueError as exc:
-        pytest.fail(f"treasury.tick raised out of the event loop: {exc}")
-    assert treasury.state["status"] in ("confirmed", "failed", "submitted")

@@ -128,6 +128,9 @@ class DecisionQueue:
         self.__ledger = ledger
         self.__clock = clock_ns
         self.__decisions: dict[str, Decision] = {}
+        # The handles whose decision is PENDING, in opening order: ``outstanding``
+        # reads these instead of walking every decision the world ever opened.
+        self.__pending: dict[str, None] = {}
         self.__retired: set[str] = set()
         self.__successors: dict[str, tuple[str, dict[str, str]]] = {}
         self.__deliveries: dict[str, list[LearningReturn]] = {}
@@ -180,6 +183,7 @@ class DecisionQueue:
         )
         self.__ledger.append({"kind": "decision.open", "ts": now, **vars(decision)})
         self.__decisions[handle] = decision
+        self.__pending[handle] = None
         self.__returns[handle] = []
         return handle
 
@@ -218,11 +222,11 @@ class DecisionQueue:
 
     def outstanding(self, actor: str | None = None) -> list[Decision]:
         """Return pending decisions in opening order, optionally filtered by original actor."""
+        decisions = self.__decisions
         return [
             decision
-            for decision in self.__decisions.values()
-            if decision.status == SettleStatus.PENDING
-            and (actor is None or decision.actor == actor)
+            for decision in map(decisions.__getitem__, self.__pending)
+            if actor is None or decision.actor == actor
         ]
 
     def retire_actor(self, actor: str) -> None:
@@ -315,6 +319,7 @@ class DecisionQueue:
             }
         )
         self.__decisions[handle] = replace(decision, status=retained.status)
+        self.__pending.pop(handle, None)  # no outcome status is PENDING
         self.__returns[handle].append(retained)
         if status == SettleStatus.SETTLED:
             self.__settled_contracts.add(decision.propensity.chosen)
@@ -338,6 +343,7 @@ class DecisionQueue:
                 {"kind": "decision.timeout", "ts": now_ns, "return": penalty, "recipient": actor}
             )
             self.__decisions[decision.handle] = replace(decision, status=SettleStatus.TIMED_OUT)
+            self.__pending.pop(decision.handle, None)
             self.__returns[decision.handle].append(penalty)
             if actor is not None:
                 self.__deliveries.setdefault(actor, []).append(penalty)
@@ -375,3 +381,5 @@ class DecisionQueue:
                      "settled_contracts"):
             setattr(self, f"_DecisionQueue__{name}", state[name])
         self.__declared = state.get("declared", {})
+        self.__pending = {handle: None for handle, decision in self.__decisions.items()
+                          if decision.status == SettleStatus.PENDING}

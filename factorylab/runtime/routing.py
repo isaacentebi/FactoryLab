@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from factorylab.cortex.assembly import PROGRAM_MODEL_ID
@@ -10,6 +10,7 @@ from factorylab.cortex.registration import reward_contracts
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.registry import Contract
+from factorylab.learners.base import ObservedRewards
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
 from factorylab.runtime.immune import gamma
@@ -130,6 +131,11 @@ class ContractQueue:
     def returns_for(self, actor):
         return tuple(self._mapped(r.handle, r) for r in self.queue.returns_for(actor))
 
+    def returns_since(self, actor, start):
+        """``(returns_for(actor)[start:], len(returns_for(actor)))``, mapping only the tail."""
+        raw = self.queue.returns_for(actor)
+        return tuple(self._mapped(r.handle, r) for r in raw[start:]), len(raw)
+
 
 @dataclass
 class RouterState:
@@ -139,6 +145,9 @@ class RouterState:
     router: Router
     epoch: int = 1
     seed_gamma: float = 0.1
+    # The rewards this router's own draws observed, per arm: what a censored draw
+    # is credited instead of a zero (defect 2).
+    observed: ObservedRewards = field(default_factory=ObservedRewards)
 
     def state(self) -> dict:
         """Retain the exact learner, public universe order and comparator epoch."""
@@ -148,6 +157,7 @@ class RouterState:
             "router": self.router.state(),
             "epoch": self.epoch,
             "seed_gamma": self.seed_gamma,
+            "observed": self.observed.state(),
         }
 
     @classmethod
@@ -164,7 +174,7 @@ class RouterState:
         universe = list(state["universe"])
         router = Router(learner, lambda _k: [a for a in universe if a != NOOP])
         return cls(state["kind"], universe, learner, router, state["epoch"],
-                   state.get("seed_gamma", 0.1))
+                   state.get("seed_gamma", 0.1), ObservedRewards(state.get("observed")))
 
 
 class _KeyedLearner:
@@ -629,6 +639,10 @@ class RoutingMixin:
         candidates = [a for a in universe if a != NOOP]
         excluded = dict(sample.excluded)
         if self._quiet_tick(ev, candidates, excluded):
+            if isinstance(state.learner, _KeyedLearner):
+                # A draw that opened no decision is no round: the snapshot the
+                # distribution froze for it would otherwise wait forever.
+                state.learner.inner.discard_for(key)
             return
         unaffordable = bool(candidates) and all(
             excluded.get(a, "").startswith("compute:") for a in candidates
@@ -652,13 +666,13 @@ class RoutingMixin:
         channels = self._return_channels(sample.chosen, ev)
         channel = next(iter(channels.values()), CH_VERDICT)
         deadline = (
-            self.clock.now_ns + (self.ev.verdict_timeout_events + 2) * self.tick_clock.interval_ns
+            self.clock.now_ns + (self.ev.verdict_timeout_ticks + 2) * self.tick_clock.interval_ns
         )
         if set(channels.values()) & {CH_FAST, CH_CONSEQUENCE}:
             # A top meta is graded against the judged verdict's eventual consequence, so
             # its decision lives as long as the return's backstop, like a forecast.
             deadline = self.clock.now_ns + (
-                (self.ev.consequence_backstop_events + 2) * self.tick_clock.interval_ns * 4
+                (self.ev.consequence_backstop_ticks + 2) * self.tick_clock.interval_ns * 4
             )
         if CH_CONSEQUENCE in channels.values():
             # A population forecast may select any of the admitted 1..200 event
@@ -781,6 +795,8 @@ class RoutingMixin:
                     Router(fresh, lambda _k, u=universe: [x for x in u if x != NOOP]),
                     state.epoch + 1,
                     state.seed_gamma,
+                    # The new identity learns on the same arms' evidence it inherits.
+                    ObservedRewards(state.observed.state()),
                 )
             self.stats.epochs += 1
 

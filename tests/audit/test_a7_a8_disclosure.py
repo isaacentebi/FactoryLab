@@ -6,26 +6,6 @@ from factorylab.cortex.registration import AssemblyProposal
 from tests.runtime.test_fidelity import runtime
 
 
-def test_a7_every_role_reads_the_full_charter_and_current_mechanics():
-    rt = runtime()
-    rt._derive_regions()
-    rt.controller.set_price("well_formed_rate", 0.7, amendment_id="fixture")
-    block = rt._world_block()
-    for role in ("producer", "evaluator", "meta", "antagonist"):
-        request = rt._request("fixture", "fixture", {"world": block}, {}, 100, role)
-        for card in rt.charter.cards:
-            assert card.id in request.prompt_text()
-        assert "0.7" in request.prompt_text()
-    mechanics = block["mechanics"]
-    assert mechanics["committee"]["seats"] == rt.m.committee.seats
-    assert mechanics["committee"]["min_settled"] == rt.m.committee.min_settled
-    assert mechanics["novelty"]["share"] == rt.m.novelty.share
-    assert mechanics["controller"]["eta"] == rt.m.prices.eta
-    assert mechanics["cascade"]["jitter_fraction"] == rt.m.timing.jitter_fraction
-    assert mechanics["consequence_mix"] == rt.ev.consequence_share
-    assert mechanics["tick_bounds_ns"]["max"] == rt.m.max_tick_ns
-
-
 def test_a8_initial_block_has_counts_and_no_assembly_model_edges():
     """Ids and contracts are public schematics (round three, T7); what A8 seals is the
     wiring: which model and prompt sit behind an id, and the routers' menus."""

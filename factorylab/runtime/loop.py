@@ -260,7 +260,6 @@ class Runtime(
         self.n += 1
         self.clock.now_ns = max(self.clock.now_ns, ev.ts_ns)
         self.bus.publish(ev)
-        self.cadence.advance(self.n)
         self.stats.events += 1
         self.events_log.append({"kind": str(ev.kind), "payload": _to_plain(ev.payload)})
         self._fold_world_event(ev)
@@ -366,6 +365,9 @@ class Runtime(
         self._instruments_memo = None
         self._mids_memo = None
         self._account_memo = None
+        forget = getattr(self.treasury, "forget_observations", None)
+        if forget is not None:
+            forget()
         return True
 
     def _resume_at(self, now_ns: int) -> None:
@@ -664,10 +666,14 @@ class Runtime(
             return "judgement needs a chosen return a seat authored, not an abstention"
         if account.payoff is not None:
             return "judgement needs a chosen return whose consequence is still open"
-        due = account.opened_at_event + self.consequences.backstop
-        if self.n >= due:
+        # The backstop counts world ticks consumed since the return opened (defect 1).
+        opened = (account.opened_at_tick if account.opened_at_tick is not None
+                  else self.ticks_consumed)
+        due = opened + self.consequences.backstop
+        if self.ticks_consumed >= due:
             return "judgement needs a chosen return inside its consequence backstop"
-        backstop_ns = self.clock.now_ns + (due - self.n) * self.tick_clock.interval_ns
+        backstop_ns = (self.clock.now_ns
+                       + (due - self.ticks_consumed) * self.tick_clock.interval_ns)
         if self.queue.get(handle).deadline_ns > backstop_ns:
             return "judgement would settle after the chosen return's consequence backstop"
         return None
@@ -762,6 +768,7 @@ class Runtime(
     def _producer_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
                        *, returned: Return | None = None) -> None:
         self._start_return(handle)
+        self_forecast = None  # an antagonist's own payoff claim, sealed once it is finished
         payload = _to_plain(ev.payload)
         if ev.kind is EventKind.TICK:
             try:
@@ -874,13 +881,17 @@ class Runtime(
             self.handle_to_assembly[handle] = sample.chosen
             payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
             if adversarial and payoff is not None:
-                self.consequences.seal_self_forecast(
-                    self.book, self.queue, handle=handle, assembly_id=sample.chosen,
-                    payoff=payoff, event=self.n, now_ns=self.clock.now_ns,
-                    tick_ns=self.tick_clock.interval_ns,
-                )
-                self.stats.forecasts_sealed += 1
+                self_forecast = payoff
         self.consequences.finish(handle, ret.cost)
+        if self_forecast is not None:
+            # Sealed once the return is finished, so a return that left nothing open
+            # (its outcome already determined) is refused rather than scored.
+            if self.consequences.seal_self_forecast(
+                self.book, self.queue, handle=handle, assembly_id=sample.chosen,
+                payoff=self_forecast, event=self.n, now_ns=self.clock.now_ns,
+                tick_ns=self.tick_clock.interval_ns,
+            ) is not None:
+                self.stats.forecasts_sealed += 1
         noop = str(ret.outputs.get("action", "")).lower() in ("noop", "hold")
         revision = handle in self.window.revision_handles
         self.ledger.append(
@@ -897,9 +908,10 @@ class Runtime(
         self.window.revision_returns += int(revision)
         self.window.revision_handles.discard(handle)
         if self.queue.get(handle).channel == CH_EXPOSURE:
-            self.pending_exposure[handle] = self.n
+            self.pending_exposure[handle] = self.ticks_consumed
         else:
-            self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n)
+            self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
+                                                    opened_at_tick=self.ticks_consumed)
         self.stats.producer_returns += 1
         emitted = self.return_kinds.get(handle, "ProducerReturn" if sample.chosen == NOOP
                                         else self.assemblies[sample.chosen].spec.emits[0])
@@ -1143,6 +1155,9 @@ class Runtime(
             self._deliver_verdict_to_inbox(about, verdict, judge_handle=handle)
         forecast = None
         if payoff is not None:
+            # None when the judged return's outcome was already fixed or determined:
+            # a claim about an answer is refused (defect 7), and the verdict stands
+            # on its own commitment below like one that made no payoff claim.
             forecast = self.consequences.seal_verdict(
                 self.book,
                 self.queue,
@@ -1154,15 +1169,16 @@ class Runtime(
                 now_ns=self.clock.now_ns,
                 tick_ns=self.tick_clock.interval_ns,
             )
-            self.stats.forecasts_sealed += 1
-        else:
+            self.stats.forecasts_sealed += int(forecast is not None)
+        if forecast is None:
             # §7: the payoff privilege is gone. A verdict with no payoff forecast
             # is still a commitment about the charter's blame on the return it
             # judged, so it is committed here under its own handle rather than
             # under a kernel forecast it never made.
             self._commit_verdict_without_payoff(handle, sample.chosen, about, verdict)
         self._open_forecasts(handle, sample.chosen, about, ret.outputs.get("forecasts"))
-        self.pending[handle] = PendingJudgement(handle, CH_CONFORMITY, self.n)
+        self.pending[handle] = PendingJudgement(handle, CH_CONFORMITY, self.n,
+                                                opened_at_tick=self.ticks_consumed)
         self._emit(
             EventKind.VERDICT,
             {
@@ -1301,7 +1317,8 @@ class Runtime(
                     "ts": self.clock.now_ns,
                 }
             )
-            self.pending[handle] = PendingJudgement(handle, channel, self.n, tier)
+            self.pending[handle] = PendingJudgement(handle, channel, self.n, tier,
+                                                    opened_at_tick=self.ticks_consumed)
         if conformity is not None:
             emitted = self.return_kinds.get(handle, "MetaVerdict")
             self._emit(

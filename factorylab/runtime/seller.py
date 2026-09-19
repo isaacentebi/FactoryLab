@@ -297,8 +297,14 @@ class Seller:
     def __init__(self, services: Mapping[str, Service], *, pay_to: str, runner: Any,
                  earn: Earn, facilitator: str | None = None,
                  transport: Transport | None = None,
-                 clock_ns: Callable[[], int] = time.time_ns) -> None:
+                 clock_ns: Callable[[], int] = time.time_ns,
+                 live: Callable[[], bool] | None = None) -> None:
         self.services = dict(services)
+        # Whether the world that owns these services is alive. A dead world sells
+        # nothing -- no quote, no settlement, no program run -- and a seller that
+        # cannot tell fails closed: the caller's ``live`` answers False when its
+        # own view of the world is stale.
+        self.live = live
         self.pay_to = _address(pay_to)
         self.runner = runner
         self.earn = earn
@@ -327,6 +333,8 @@ class Seller:
     def handle(self, service_id: str, body: bytes, headers: Mapping[str, str],
                resource_url: str) -> tuple[int, dict[str, str], dict]:
         """One request, one answer: status, response headers, JSON body."""
+        if not self._alive():
+            return 503, {}, {"error": "the world is not live"}
         service = self.services.get(service_id)
         if service is None:
             return 404, {}, {"error": "unknown service"}
@@ -349,6 +357,10 @@ class Seller:
             return self._challenge(service, resource_url, str(exc))
         if self._replayed(verified["nonce"]):
             return self._challenge(service, resource_url, "Authorization already used")
+        if not self._alive():
+            # Checked again at the last moment before money moves: the world may
+            # have died while this request was being verified.
+            return 503, {}, {"error": "the world is not live"}
         try:
             settlement = settle_payment(verified, facilitator=self.facilitator,
                                         transport=self.transport)
@@ -361,6 +373,14 @@ class Seller:
                   settlement["payer"], served_ns)
         output = self.runner.run(service.tool, args)
         return 200, {"PAYMENT-RESPONSE": _encode(settlement)}, output
+
+    def _alive(self) -> bool:
+        if self.live is None:
+            return True
+        try:
+            return bool(self.live())
+        except Exception:  # noqa: BLE001 - a liveness that cannot answer is not alive
+            return False
 
     def _challenge(self, service: Service, resource_url: str,
                    error: str | None) -> tuple[int, dict[str, str], dict]:
@@ -392,8 +412,26 @@ def seller_from_runtime(rt, **options) -> Seller:
             rt._book_income(item)  # A repeated receipt never credits money twice.
         return item
 
+    def live() -> bool:
+        """Production alive, the world not final, the wallet not dead."""
+        from factorylab.runtime.winddown import KILLED
+
+        return (getattr(rt, "production_state", None) != KILLED
+                and not rt.termination.final and not rt.wallet.dead)
+
+    options.setdefault("live", live)
     return Seller(services_from_runtime(rt), pay_to=pay_to, runner=rt.tool_runner,
                   earn=earn, clock_ns=lambda: rt.clock.now_ns, **options)
+
+
+def world_is_dead(items) -> bool:
+    """Whether a diary records the world's death: a production kill or ``Terminated``."""
+    for item in items:
+        if item.get("kind") == "kill.production":
+            return True
+        if item.get("kind") == "event" and (item.get("event") or {}).get("kind") == "Terminated":
+            return True
+    return False
 
 
 def spool_earn(spool: IncomeSpool, *, pay_to: str | None = None) -> Earn:

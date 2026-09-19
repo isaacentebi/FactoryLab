@@ -22,7 +22,15 @@ process recovery cannot reopen a spent handle.
 from collections.abc import Sequence
 from dataclasses import replace
 
-from .base import Feedback, Learner, _probabilities, _state, _support, restore_learner
+from .base import (
+    Feedback,
+    Learner,
+    ObservedRewards,
+    _probabilities,
+    _state,
+    _support,
+    restore_learner,
+)
 from .blum_mansour import BlumMansour, BlumMansourSnapshot
 
 
@@ -35,6 +43,8 @@ class SnapshotLearner:
         self.id = inner.id if id is None else id
         self._snapshots: dict[str, dict[str, float] | BlumMansourSnapshot] = {}
         self._used_handles: set[str] = set()
+        # The rewards this learner's rounds actually observed, for neutral censoring.
+        self.observed = ObservedRewards()
 
     def distribution(self, feasible: Sequence[str]) -> dict[str, float]:
         """Delegate the plain protocol query without creating a handle snapshot."""
@@ -98,6 +108,7 @@ class SnapshotLearner:
             inner=self.inner.state(),
             snapshots=snapshots,
             used_handles=sorted(self._used_handles),
+            observed=self.observed.state(),
         )
 
     @classmethod
@@ -113,6 +124,7 @@ class SnapshotLearner:
         if not set(state["snapshots"]) <= set(used):
             raise ValueError("snapshot without a handle tombstone")
         learner._used_handles = set(used)
+        learner.observed = ObservedRewards(state.get("observed"))
         for handle, saved in state["snapshots"].items():
             if isinstance(inner, BlumMansour):
                 support = _support(saved["support"], inner.actions)

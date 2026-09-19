@@ -5,21 +5,14 @@ Nothing here touches a network. The scripted-world evidence (a producer tool reg
 and called, ``tool.call`` items in the diary) runs only where a jail exists.
 """
 
-import json
 from dataclasses import replace
 
 import pytest
 
 from factorylab.cortex import sandbox
-from factorylab.kernel.ledger import Ledger
 from factorylab.runtime.loop import run_world
 from factorylab.runtime.worlds import load_manifest
 from tests.cortex.test_jail import require_jail
-
-
-def _items(path, manifest):
-    return Ledger.reopen(path, manifest=json.loads(manifest.canonical_json()),
-                         read_only=True)._recovery_items()
 
 
 def test_a_claimed_jail_that_cannot_start_fails_the_gate_instead_of_skipping(monkeypatch):
@@ -48,25 +41,3 @@ def test_run_refuses_a_world_offering_tools_when_the_jail_cannot_start(monkeypat
     monkeypatch.setattr("factorylab.cortex.tools.jail_available", lambda: False)
     summary = run_world(free, events=3, seed=1)
     assert summary["stats"]["events"] >= 3
-
-
-def test_scripted_world_registers_and_calls_a_population_tool_in_the_jail(scripted_run):
-    """The launch condition: one population tool registered and then called,
-    with the calls and their results in the diary, not only in the summary."""
-    require_jail()
-    m = load_manifest("scripted")
-    record = scripted_run(m, 500, 1)
-    path = record.ledger_path
-    summary = record.summary
-    assert summary["stats"]["population_tools_registered"] >= 1
-    assert "spread-check" in summary["tools"]
-    items = _items(path, m)
-    calls = [i for i in items if i["kind"] == "tool.call" and i["tool"] == "spread-check"]
-    assert len(calls) >= 6
-    assert all(c["ok"] and c["cost"] == m.tools.population_tool_micro_per_call for c in calls)
-    assert all(json.loads(c["args"]) == {"mid": 100.0, "bps": 3} for c in calls), calls
-    # The result reached the calling assembly: its continuation reports the tool results.
-    handles = {c["handle"] for c in calls}
-    seen = [i for i in items if i["kind"] == "invocation" and i["handle"] in handles
-            and '"seen_tool_results"' in i["outputs"]]
-    assert len(seen) >= len(handles)

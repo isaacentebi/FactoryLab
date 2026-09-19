@@ -22,8 +22,9 @@ from factorylab.world.events import WorldEvent, WorldEventKind
 
 
 class VenueUnavailable(RuntimeError):
-    """The venue's API failed transiently after retries. Raised only when no last-good
-    value exists to fall back on; otherwise reads return the last good value."""
+    """The venue's API failed after retries. Prices are never served from an older
+    read; an account read may fall back to the last complete snapshot, and then says
+    so (``AccountState.stale``) and keeps its original ``observed_at_ns``."""
 
 
 NS_PER_MS = 1_000_000
@@ -32,6 +33,33 @@ NS_PER_HOUR = 3_600 * 1_000_000_000
 # Hyperliquid refuses any perp or spot order worth less than this, on both networks.
 # Published with lot and tick size so a size is known to be legal before it is paid for.
 MIN_ORDER_VALUE_USD = "10"
+
+
+def _position_leverage(raw: Any) -> Decimal | None:
+    """Hyperliquid's per-position ``leverage`` object (``{"type", "value"}``) as a number."""
+    value = raw.get("value") if isinstance(raw, dict) else raw
+    try:
+        leverage = Decimal(str(value))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    return leverage if leverage.is_finite() and leverage > 0 else None
+
+
+def _funding_identity(row: dict, coin: str, stamp_ms: int) -> str:
+    """One funding payment's identity, from the row itself.
+
+    Hyperliquid's ``userFunding`` rows carry an all-zero ``hash`` (funding is not a
+    transaction), so ``hash:coin`` named every payment of a coin the same thing: a
+    page kept one of them and the live cursor refused every later one as seen. A
+    real hash keeps its historical ``hash:coin`` identity; a zero or missing one is
+    replaced by the row's full identity -- time, coin, amount and position size --
+    which is what distinguishes two payments at all.
+    """
+    raw = str(row.get("hash") or "")
+    if raw and raw.lower().removeprefix("0x").strip("0"):
+        return f"{raw}:{coin}"
+    delta = row["delta"]
+    return f"funding:{stamp_ms}:{coin}:{delta.get('usdc')}:{delta.get('szi')}"
 
 
 def _interval_ns(interval: str) -> int:
@@ -140,6 +168,16 @@ class AccountState:
     # marked, and spot marks are not collateral for a perp. Custody keeps the two
     # apart, so the venue states the split rather than leaving it to be derived.
     perps_equity_usd: Decimal | None = None
+    # When the venue gave this account, and whether it is a fallback to an older
+    # snapshot rather than this read's answer. A stale account is never live: the
+    # wind-down's reconciliation, the watchers and the prompts refuse it.
+    observed_at_ns: int | None = None
+    stale: bool = False
+    # Spot tokens held that the venue gives no usable USD mark for. They are listed
+    # in ``spot_balances`` and excluded from ``equity_usd``: an equity that counts
+    # them at a guessed price is invented, and one unpriceable token must not make
+    # the whole account unreadable.
+    unpriced: tuple[str, ...] = ()
 
 
 class Exchange(Protocol):
@@ -879,15 +917,27 @@ class HyperliquidExchange:
         import time
 
         import requests
-        from hyperliquid.utils.error import ServerError
+        from hyperliquid.utils.error import ClientError, ServerError
 
         delay = 0.5
         for attempt in range(attempts):
             try:
                 return call()
+            except ClientError as exc:
+                # A 4xx is the SDK's ClientError, which is not a RuntimeError and used
+                # to escape every catch site and kill the tick. A 429 is the venue
+                # asking us to slow down: back off harder and ask again. Any other 4xx
+                # is an answer that asking again will not change.
+                status = getattr(exc, "status_code", None)
+                if status != 429 or attempt == attempts - 1:
+                    self.transient_failures = getattr(self, "transient_failures", 0) + 1
+                    raise VenueUnavailable(
+                        f"{what}: ClientError {status}") from exc
+                time.sleep(delay * 4)
+                delay *= 2
             except (requests.RequestException, OSError, TimeoutError, ServerError) as exc:
                 if attempt == attempts - 1:
-                    self.transient_failures += 1
+                    self.transient_failures = getattr(self, "transient_failures", 0) + 1
                     raise VenueUnavailable(f"{what}: {type(exc).__name__}: {exc}") from exc
                 time.sleep(delay)
                 delay *= 2
@@ -896,12 +946,13 @@ class HyperliquidExchange:
     # ---- reads
 
     def mids(self) -> dict[str, Decimal]:
-        try:
-            raw = self._guarded("all_mids", self._info.all_mids)
-        except VenueUnavailable:
-            if self._last_mids is None:
-                raise
-            return dict(self._last_mids)
+        import time
+
+        # A failed read is unavailable, never the last prices served as live ones:
+        # every caller already reads an unavailable price as unavailable, and a
+        # stale mid in a dict is indistinguishable from a fresh one.
+        raw = self._guarded("all_mids", self._info.all_mids)
+        self.__dict__["_last_mids_ns"] = time.time_ns()
         self._last_mids = {c: Decimal(str(raw[self._wire_coin(c)]))
                            for c in (*getattr(self, "_listed_coins", self.coins),
                                      *getattr(self, "_spot_names", {}))
@@ -957,9 +1008,10 @@ class HyperliquidExchange:
             if self._last_account is None:
                 raise
             self.account_fallbacks = getattr(self, "account_fallbacks", 0) + 1
-            return self._last_account
+            return replace(self._last_account, stale=True)
         summary = st["marginSummary"]
         positions: list[Position] = []
+        in_effect: dict[str, Decimal] = {}
         for ap in st.get("assetPositions", []):
             p = ap["position"]
             size = Decimal(str(p["szi"]))
@@ -967,7 +1019,13 @@ class HyperliquidExchange:
                 continue
             entry = Decimal(str(p["entryPx"])) if p.get("entryPx") else Decimal(0)
             positions.append(Position(p["coin"], size, entry))
+            leverage = _position_leverage(p.get("leverage"))
+            if leverage is not None:
+                in_effect[p["coin"]] = leverage
+        # The leverage the venue reports in effect for each open position, as read.
+        self.__dict__["_position_leverage"] = in_effect
         balances = []
+        unpriced: list[str] = []
         spot_value = Decimal(0)
         if spot is not None:
             for row in spot.get("balances", []):
@@ -978,13 +1036,16 @@ class HyperliquidExchange:
                     spot_value += total
                 elif total:
                     symbol = self._spot_marks.get(row["coin"])
-                    if symbol is None or symbol not in mids:
-                        raise VenueUnavailable("spot balance has no USD mid")
-                    mark = Decimal(str(mids[symbol]))
-                    if not mark.is_finite() or mark <= 0:
-                        raise VenueUnavailable("invalid spot USD mid")
+                    try:
+                        mark = Decimal(str(mids[symbol]))
+                    except (KeyError, TypeError, ArithmeticError, ValueError):
+                        mark = None
+                    if mark is None or not mark.is_finite() or mark <= 0:
+                        unpriced.append(str(row["coin"]))
+                        continue
                     spot_value += total * mark
-        self.__dict__["_last_account_ns"] = time.time_ns()
+        observed_at = time.time_ns()
+        self.__dict__["_last_account_ns"] = observed_at
         self._last_account = AccountState(
             equity_usd=Decimal(str(summary["accountValue"])) + spot_value,
             perps_equity_usd=Decimal(str(summary["accountValue"])),
@@ -992,6 +1053,8 @@ class HyperliquidExchange:
             positions=tuple(positions),
             margin_used_usd=Decimal(str(summary["totalMarginUsed"])),
             spot_balances=tuple(balances),
+            observed_at_ns=observed_at,
+            unpriced=tuple(unpriced),
         )
         return self._last_account
 
@@ -1006,22 +1069,31 @@ class HyperliquidExchange:
         ``margin_used_usd`` is ``totalMarginUsed``, which covers open positions
         and not resting orders, so ``holds_included_in_margin_used`` is False and
         ``open_order_holds_usd`` is the margin those resting orders hold, at the
-        leverage this account has acknowledged for each coin.
+        leverage the venue has in effect for each coin, or ``None`` when that is
+        not known for some coin. ``leverage_for_instrument`` is likewise the
+        venue's own figure or ``None``; nothing here assumes 1x (decision D1).
 
         ``observed_at_ns`` is the moment of the account read this view is built
         from -- including a fallback to the last complete snapshot when the spot
         endpoint was out -- so a caller can refuse to open new risk on a stale
-        answer rather than treating an old number as current.
+        answer rather than treating an old number as current. ``stale`` says that
+        this view came from such a fallback: a read that succeeded and then an
+        endpoint failure in the same tick leaves ``observed_at_ns`` recent, so the
+        timestamp alone does not carry the fact.
         """
         account = self.account()
         spot = "/" in coin or market == "spot"
         leverage = self._acknowledged_leverage(coin)
-        holds = Decimal(0)
+        holds: Decimal | None = Decimal(0)
         for order in self.open_orders():
             if "/" in order["coin"]:
                 continue
+            order_leverage = self._acknowledged_leverage(order["coin"])
+            if order_leverage is None:
+                holds = None  # the venue has not said what this order holds
+                break
             holds += (Decimal(str(order["size"])) * Decimal(str(order["price"]))
-                      / self._acknowledged_leverage(order["coin"]))
+                      / order_leverage)
         usdc = next((b.available for b in account.spot_balances if b.coin == "USDC"), Decimal(0))
         base = coin.split("/")[0] if spot else None
         available = {"USDC": usdc}
@@ -1041,21 +1113,32 @@ class HyperliquidExchange:
                 (p.size for p in account.positions if p.coin == coin), Decimal(0))),
             "spot_available": available,
             "observed_at_ns": getattr(self, "_last_account_ns", None),
+            # The account read this view is built from was a fallback to the last
+            # complete snapshot, not this read's answer. Its observation time is
+            # the earlier read's and can be this very tick, so the marker travels
+            # with the view: an age check alone would not see it.
+            "stale": bool(getattr(account, "stale", False)),
         }
 
-    def _acknowledged_leverage(self, coin: str) -> Decimal:
-        """The leverage this account has actually set for a coin; unknown means one.
+    def _acknowledged_leverage(self, coin: str) -> Decimal | None:
+        """The leverage the venue has in effect for a coin, or ``None`` when it has not said.
 
-        A discount for leverage the venue has not confirmed is a discount on a
-        promise, so an unread leverage charges full notional.
+        The venue's own account read wins: ``clearinghouseState`` reports the
+        leverage of every open position. Failing that, the venue's acknowledgement
+        of this account's ``set_leverage``. Neither is a guess, and an unknown
+        leverage is reported as unknown rather than as 1x (architect decision D1):
+        the venue then decides whether it can carry the order.
         """
-        return self.__dict__.get("_leverage", {}).get(coin, Decimal(1))
+        read = self.__dict__.get("_position_leverage", {}).get(coin)
+        if read is not None:
+            return read
+        return self.__dict__.get("_leverage", {}).get(coin)
 
     def funding_payments(self, since_ns: int) -> list[FundingPayment]:
         """Read inclusive, paginated user cash flows; never infer payments from funding rates.
 
         Hyperliquid's delta.usdc is a credit to the user, so paid_usd negates it.
-        The boundary millisecond is reread and deduplicated by hash plus coin.
+        The boundary millisecond is reread and deduplicated by ``_funding_identity``.
         A stalled full page fails closed instead of silently skipping its tail.
         """
         if type(since_ns) is not int or since_ns < 0:
@@ -1083,9 +1166,9 @@ class HyperliquidExchange:
                     if ts_ns < since_ns:
                         continue
                     coin = delta["coin"]
-                    if not isinstance(coin, str) or not coin or not row["hash"]:
+                    if not isinstance(coin, str) or not coin:
                         continue
-                    ident = f"{row['hash']}:{coin}"
+                    ident = _funding_identity(row, coin, stamp)
                     paid = -Decimal(str(delta["usdc"]))
                     rate = Decimal(str(delta["fundingRate"]))
                     if not paid.is_finite() or not rate.is_finite():
@@ -1156,7 +1239,8 @@ class HyperliquidExchange:
         width_ms = _interval_ns(interval) // NS_PER_MS
         end_ms = time.time_ns() // NS_PER_MS
         start_ms = end_ms - end_ms % width_ms - (n - 1) * width_ms
-        raw = self._info.candles_snapshot(self._wire_coin(coin), interval, start_ms, end_ms)
+        raw = self._guarded("candles", lambda: self._info.candles_snapshot(
+            self._wire_coin(coin), interval, start_ms, end_ms))
         return [
             {
                 "ts_ns": int(c["t"]) * NS_PER_MS,
@@ -1172,7 +1256,7 @@ class HyperliquidExchange:
     def order_book(self, coin: str, depth: int) -> dict:
         """Return at most depth levels per side, bids descending and asks ascending."""
         _check_count(depth, 20)
-        raw = self._info.l2_snapshot(self._wire_coin(coin))
+        raw = self._guarded("l2_snapshot", lambda: self._info.l2_snapshot(self._wire_coin(coin)))
         sides = [
             sorted(
                 [
@@ -1197,7 +1281,8 @@ class HyperliquidExchange:
 
         _check_count(n, 100)
         end_ms = time.time_ns() // NS_PER_MS
-        raw = self._info.funding_history(coin, end_ms - n * NS_PER_HOUR // NS_PER_MS, end_ms)
+        raw = self._guarded("funding_history", lambda: self._info.funding_history(
+            coin, end_ms - n * NS_PER_HOUR // NS_PER_MS, end_ms))
         return [
             FundingEvent(
                 coin,
@@ -1220,7 +1305,7 @@ class HyperliquidExchange:
                 "size": Decimal(str(o["sz"])),
                 "price": Decimal(str(o["limitPx"])),
             }
-            for o in self._info.open_orders(self._address)
+            for o in self._guarded("open_orders", lambda: self._info.open_orders(self._address))
         ]
 
     # ---- writes
@@ -1325,7 +1410,8 @@ class HyperliquidExchange:
         try:
             rounded = self._round_size(order.coin, order.size)
             sz = self._wire_number(rounded)
-            price = (self._wire_number(order.limit_px)
+            price = (self._wire_number(self._round_price(
+                order.coin, order.limit_px, order.is_buy, spot=order.market == "spot"))
                      if order.kind is OrderKind.LIMIT else None)
         except Exception as exc:
             return OrderResult(None, "rejected", Decimal(0), None,
@@ -1505,6 +1591,27 @@ class HyperliquidExchange:
         if not isfinite(number) or number <= 0 or Decimal(float_to_wire(number)) <= 0:
             raise ValueError("invalid SDK wire number")
         return number
+
+    def _round_price(self, coin: str, price: Decimal, is_buy: bool, *, spot: bool) -> Decimal:
+        """A limit price Hyperliquid will accept, never more aggressive than the one asked.
+
+        The venue's rule: at most five significant figures -- an integer price is
+        always allowed whatever its figures -- and at most ``6 - szDecimals``
+        decimals for a perp, ``8 - szDecimals`` for spot. A price that breaks it is
+        rejected outright, so it is rounded here, toward the passive side: a buy
+        down, a sell up. Guarantees a positive result or raises ``ValueError``.
+        """
+        from decimal import ROUND_UP
+
+        if not price.is_finite() or price <= 0:
+            raise ValueError("limit price must be finite and positive")
+        decimals = (8 if spot else 6) - self._sz_decimals.get(coin, 4)
+        figures = Decimal(1).scaleb(price.adjusted() - 4)  # the fifth significant figure
+        quantum = max(min(figures, Decimal(1)), Decimal(1).scaleb(-max(decimals, 0)))
+        rounded = price.quantize(quantum, rounding=ROUND_DOWN if is_buy else ROUND_UP)
+        if rounded <= 0:
+            raise ValueError("limit price below the venue's price precision")
+        return rounded
 
     def _round_size(self, coin: str, size: Decimal) -> Decimal:
         d = self._sz_decimals.get(coin, 4)

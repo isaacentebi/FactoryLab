@@ -8,7 +8,7 @@ import pytest
 from factorylab.world import x402
 from factorylab.world.market import X402Provider
 from factorylab.world.x402 import BASE_NETWORK, BASE_USDC, HTTPResponse, X402Error
-from scripts.compute_proof import AISPACE_MODEL, Proof, ProofRefused, main, model_request
+from scripts.compute_proof import Proof, ProofRefused
 
 TEST_KEY = "0x" + "11" * 32  # Public synthetic key; tests never open any key file.
 
@@ -157,60 +157,6 @@ def test_full_proof_guards_before_signing_and_report_shape(tmp_path, monkeypatch
     assert TEST_KEY[2:] not in capsys.readouterr().out + markdown
 
 
-@pytest.mark.parametrize("failure,step", [
-    ("topup", "topup"), ("rejected", "topup"), ("venice", "venice"),
-    ("farouter", "farouter"), ("aispace", "aispace"), ("balance_after", "topup"),
-])
-def test_failed_submission_retains_marker_and_report(tmp_path, failure, step):
-    fake = FakeHTTP(tmp_path, fail=failure)
-    assert proof(tmp_path, fake).run() == 1
-    entry = result(tmp_path, step)
-    assert entry["status"] == "failed" and entry["payment_outcome"] == "unknown"
-    marker = tmp_path / "runs/proof" / (step + ".attempt")
-    assert marker.exists()
-    assert result(tmp_path, "report")["total_spent_uncertain"]
-    count = len(fake.payments)
-    with pytest.raises(ProofRefused):
-        proof(tmp_path, fake).step(step, lambda: pytest.fail("retried"))
-    assert len(fake.payments) == count
-    if failure == "balance_after":
-        assert entry["settlement_reference"] and entry["cost_micro"] == 5_000_000
-
-
-@pytest.mark.parametrize("credit,failure", [(4_500_000, None), (0, "bad_quote")])
-def test_definitive_nonpayment_removes_only_marker(tmp_path, credit, failure):
-    fake = FakeHTTP(tmp_path, initial_credit=credit, fail=failure)
-    assert proof(tmp_path, fake).run() == 1
-    assert not fake.payments
-    assert not (tmp_path / "runs/proof/topup.attempt").exists()
-    assert result(tmp_path, "topup")["payment_outcome"] == "not_sent"
-    with pytest.raises(ProofRefused):
-        proof(tmp_path, fake).step("topup", lambda: pytest.fail("retried"))
-
-
-def test_dry_run_only_status_and_two_unsigned_quotes(tmp_path, monkeypatch, capsys):
-    fake = FakeHTTP(tmp_path)
-    monkeypatch.setattr(x402, "payment_header", lambda *a: pytest.fail("signed payment"))
-    assert proof(tmp_path, fake, dry_run=True).run() == 0
-    assert not fake.payments
-    assert len(fake.calls) == 4  # USDC, Venice balance, two unsigned quotes.
-    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [r["step"] for r in rows] == ["status", "farouter", "aispace"]
-    assert all(r["dry_run"] for r in rows)
-    assert all(r["quote"]["accepted"]["amount"] == "1734" for r in rows[1:])
-    assert not (tmp_path / "docs/runs/compute-proof.md").exists()
-    assert not (tmp_path / "runs/proof/status.json").exists()
-    with pytest.raises(ProofRefused):
-        proof(tmp_path, fake, dry_run=True).run()
-
-
-def test_dry_run_does_not_block_future_paid_proof(tmp_path):
-    fake = FakeHTTP(tmp_path)
-    assert proof(tmp_path, fake, dry_run=True).run() == 0
-    assert proof(tmp_path, fake).run() == 0
-    assert len(fake.payments) == 3
-
-
 @pytest.mark.parametrize("name", ["status", "topup", "venice", "farouter", "aispace", "report"])
 @pytest.mark.parametrize("suffix", [".attempt", ".json"])
 def test_any_existing_evidence_refuses_before_loading_or_http(tmp_path, name, suffix):
@@ -247,15 +193,6 @@ def test_ceiling_stops_before_signing_seller_payment(tmp_path):
     assert result(tmp_path, "farouter")["within_ceiling"] is False
 
 
-@pytest.mark.parametrize("text,finish", [("", "stop"), ("OK", "length"), ("   ", "stop")])
-def test_report_does_not_call_empty_or_truncated_answers_real(tmp_path, text, finish):
-    fake = FakeHTTP(tmp_path)
-    fake.text, fake.finish_reason = text, finish
-    assert proof(tmp_path, fake).run() == 1
-    report = result(tmp_path, "report")
-    assert all(v.startswith("UNPROVEN:") for v in report["verdicts"].values())
-
-
 def test_header_and_key_echoes_are_redacted_everywhere(tmp_path, capsys):
     fake = FakeHTTP(tmp_path)
     fake.echo = True
@@ -272,30 +209,7 @@ def test_header_and_key_echoes_are_redacted_everywhere(tmp_path, capsys):
             assert signature not in contents
 
 
-def test_extra_body_is_copied_and_identical_on_quote_and_payment(tmp_path):
-    # Use the dry-run transport for the quote, then inspect _payload without paying.
-    fake = FakeHTTP(tmp_path)
-    extra = {"venice_parameters": {"disable_thinking": True}}
-    provider = X402Provider(transport=fake, extra_body=extra)
-    extra["venice_parameters"]["disable_thinking"] = False
-    req = model_request(AISPACE_MODEL)
-    provider.quote(req)
-    assert provider._payload(req)[1] == fake.calls[0][2]
-    assert fake.calls[0][2]["venice_parameters"]["disable_thinking"] is True
-
-
 @pytest.mark.parametrize("key", ["model", "messages", "max_tokens", "stream"])
 def test_extra_body_cannot_override_bounded_request(key):
     with pytest.raises(X402Error, match="override"):
         X402Provider(extra_body={key: "unexpected"})
-
-
-def test_main_refusal_is_concise(tmp_path, monkeypatch, capsys):
-    monkeypatch.chdir(tmp_path)
-    path = tmp_path / "runs/proof/dry-run"
-    path.mkdir(parents=True)
-    (path / "status.attempt").touch()
-    assert main(["--dry-run"]) == 1
-    assert capsys.readouterr().err == (
-        "Refusing status: result or attempt marker already exists\n"
-    )

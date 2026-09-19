@@ -26,8 +26,9 @@ class ReturnConsequences:
         # forgotten: an order the venue may still be holding can still own a
         # fill, so it keeps its return's attribution alive.
         self.unresolved_orders: dict[str, dict] = {}
-        # Outcomes fixed outside ``resolve`` -- censored ones -- waiting to be
-        # handed to the runtime with everything else it fixed this event.
+        # Outcomes fixed outside ``resolve``, waiting to be handed to the runtime
+        # with everything else it fixed this event. A released hold no longer fixes
+        # one early (its return resolves in ``resolve``); a checkpoint may carry some.
         self.censored_payoffs: list[Payoff] = []
         self.deferred_events: list[tuple[str, dict, int]] = []
         # §6.A: an execution receipt is a fact about the world — a fill, a
@@ -55,36 +56,37 @@ class ReturnConsequences:
 
     def release_unresolved(self, client_id: str, event: int,
                            reason: str = "external_unobservable") -> list[tuple[str, dict, int]]:
-        """Release a hold no answer will ever lift, and censor the return that took it.
+        """Release a hold no answer will ever lift; the order's portion becomes unknown.
 
         Rehearsal 5 (PR #105): one order timed out on submit and the venue never
         reported it, so the intent stayed pending and every later return's
         outcome stayed unfixed behind it. The polling is bounded; this is what
-        the bound means for the return that placed the order. The venue was
-        asked and did not answer, and the owner could not have made it answer,
-        so the necessary observation is unavailable: the return's
-        ``return_paid_off`` settles censored with that documented reason -- an
-        excluded sample, no standing, an ``unknown`` outcome for its owner --
-        and the hold is lifted so every later return resolves normally.
+        the bound means. The hold is lifted so every later return resolves
+        normally, and the intent is kept as unresolved exposure, so an order the
+        venue was holding all along can still own its fill and the money that
+        fill realises reaches the owner late rather than never.
 
-        The intent itself is not forgotten. It stays tracked as exposure, so an
-        order the venue was holding all along can still own its fill, and the
-        money that fill realises reaches the owner late rather than never.
+        Only the unresolved order's portion is unknown (defect 10). The return
+        that sent it is not closed here: it resolves on its own schedule, its
+        observed fills and open lots accounted like any other's, and its money
+        is what those observed orders produced. What cannot be known is whether
+        the return paid off, since the missing order could have changed that, so
+        its ``return_paid_off`` settles censored with the documented reason -- an
+        excluded sample, no standing, an ``unknown`` outcome for its owner --
+        unless the venue answers before the return resolves.
         """
         item = self.pending_orders.get(client_id)
         if item is None:
             return []
         self.ledger.append({"kind": "order.unresolved_released", "handle": item["handle"],
                             "coin": item["coin"], "client_id": client_id, "reason": reason})
-        self.unresolved_orders[client_id] = dict(item)
-        handle = item["handle"]
-        if self.account_open(handle):
-            table = self.table.censor(handle, event, reason)
-            self._apply("censored", {"handle": handle, "reason": reason, "event": event}, table)
-            payoff = table.account(handle).payoff
-            self.ledger.append({"kind": "consequence.outcome", **asdict(payoff)})
-            self.censored_payoffs.append(payoff)
+        self.unresolved_orders[client_id] = {**item, "reason": reason}
         return self._release(client_id)
+
+    def _unknown_portions(self) -> dict[str, str]:
+        """Returns with an order nobody observed, and the documented reason for each."""
+        return {item["handle"]: item.get("reason", "external_unobservable")
+                for item in self.unresolved_orders.values()}
 
     def _release(self, client_id: str) -> list[tuple[str, dict, int]]:
         """Drop one hold and, if it was the last, replay what it was holding back."""
@@ -98,13 +100,20 @@ class ReturnConsequences:
             return events
         return []
 
+    def _tick(self, event: int) -> int:
+        """The clock the backstop counts. Here the caller's event index; a runtime that
+        keeps world ticks overrides it, so the backstop is counted in ticks."""
+        return event
+
     def _apply(self, kind: str, evidence: dict, table: LotTable) -> None:
         self.ledger.append({"kind": f"consequence.{kind}", **evidence})
         self.table = table
 
     def start(self, handle: str, event: int) -> None:
         """Admit the return before any tool can create exposure on its behalf."""
-        self._apply("return", {"handle": handle, "event": event}, self.table.start(handle, event))
+        tick = self._tick(event)
+        self._apply("return", {"handle": handle, "event": event, "tick": tick},
+                    self.table.start(handle, event, tick))
 
     def finish(self, handle: str, cost_micro: int) -> None:
         """Persist the full metered cost before it becomes the payoff threshold."""
@@ -244,6 +253,15 @@ class ReturnConsequences:
                     order_size=str(payload["size"]),
                 )
             except ValueError as exc:
+                if "exceeds the order" in str(exc):
+                    # An execution beyond what the order ordered is an inconsistency
+                    # between the venue's report and the order it answers. It is
+                    # quarantined with its evidence, attributed to nobody, and moves
+                    # no lot; the order's consistent fills remain its owner's.
+                    self.ledger.append({"kind": "consequence.quarantined", "event": event,
+                                        "order_id": str(payload["order_id"]),
+                                        "reason": str(exc), "payload": dict(payload)})
+                    return
                 if "open consequence account" not in str(exc):
                     raise
                 # A fill nobody with an account ordered never enters the shared FIFO.
@@ -275,7 +293,8 @@ class ReturnConsequences:
         fixed, self.censored_payoffs = self.censored_payoffs, []
         if self.pending_orders:
             return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
-        table = self.table.resolve(event, self.backstop, self.mids)
+        table = self.table.resolve(event, self.backstop, self.mids,
+                                   censored=self._unknown_portions(), tick=self._tick(event))
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})
@@ -299,8 +318,10 @@ class ReturnConsequences:
         event: int,
         now_ns: int,
         tick_ns: int,
-    ) -> Forecast:
-        """Bind q to the judge's raw payoff probability on a separate original-judge decision."""
+    ) -> Forecast | None:
+        """Bind q to the judge's raw payoff probability on a separate original-judge decision.
+
+        None when the forecast would not precede the outcome (``hindsight``)."""
         return self._seal_payoff(
             book, queue, forecaster_id=evaluator_id, event_id=f"verdict-{evaluator_handle}",
             parent_handle=evaluator_handle, about=about, q=payoff, event=event,
@@ -318,22 +339,62 @@ class ReturnConsequences:
         event: int,
         now_ns: int,
         tick_ns: int,
-    ) -> Forecast:
-        """Bind q to a return's own payoff probability, scored like a judge's on the same y."""
+    ) -> Forecast | None:
+        """Bind q to a return's own payoff probability, scored like a judge's on the same y.
+
+        None when the forecast would not precede the outcome (``hindsight``)."""
         return self._seal_payoff(
             book, queue, forecaster_id=assembly_id, event_id=f"self-{handle}",
             parent_handle=handle, about=handle, q=payoff, event=event,
             now_ns=now_ns, tick_ns=tick_ns,
         )
 
+    def hindsight(self, about: str) -> str | None:
+        """Why a payoff forecast on this return would not precede its outcome, or None.
+
+        A forecast is a claim about something not yet determined. A return whose
+        outcome is fixed has been answered; a finished return (its cost is final,
+        so it will take no further action) that holds no lot, no unfilled order and
+        no unanswered intent has nothing left that could move it, so its outcome
+        was determined when it finished. Either way a forecast of it would be
+        scored on an answer, not a forecast.
+        """
+        account = self.table.account(about)
+        if account.payoff is not None:
+            return "the return's outcome is already fixed"
+        if account.cost_micro is None:
+            return None
+        exposed = (any(lot.handle == about for lot in self.table.lots)
+                   or any(o.handle == about and o.remaining for o in self.table.orders)
+                   or any(item["handle"] == about for item in self.pending_orders.values())
+                   or about in self._unresolved_handles())
+        if not exposed:
+            return ("the return's outcome was determined at sealing: it is finished and "
+                    "holds no position, order or unanswered intent")
+        return None
+
     def _seal_payoff(
         self, book, queue, *, forecaster_id, event_id, parent_handle, about, q, event, now_ns,
         tick_ns,
-    ) -> Forecast:
+    ) -> Forecast | None:
+        """Seal a payoff forecast, or refuse one whose outcome it could not precede.
+
+        A refusal is ledgered as ``forecast.refused`` with its reason and returns
+        None: no decision is opened and nothing is ever scored for it.
+        """
         account = self.table.account(about)
         if account.voided:
             raise ValueError("a voided return carries no payoff forecast")
-        horizon = max(1, account.opened_at_event + self.backstop - event)
+        reason = self.hindsight(about)
+        if reason is not None:
+            self.ledger.append({"kind": "forecast.refused", "forecaster": forecaster_id,
+                                "event_id": event_id, "about_handle": about, "q": q,
+                                "event": event, "reason": reason})
+            return None
+        # The backstop's remaining horizon, in the clock the backstop counts.
+        now = self._tick(event)
+        opened = account.opened_at_tick if account.opened_at_tick is not None else now
+        horizon = max(1, opened + self.backstop - now)
         handle = open_forecast_decision(
             queue,
             evaluator_id=forecaster_id,

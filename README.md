@@ -6,7 +6,7 @@ The essay's claim is that a factory whose objectives are supplied from outside i
 
 ## How it works
 
-**The world.** A world is a wallet in integer micro-dollars, an exchange (Hyperliquid, or a deterministic fake), a clock, and a sealed ledger. Every event the world produces (a tick, a price, a fill, a funding payment) is delivered to the population. Every state change is a ledger item first: encrypted, hash-chained, append-only. The ledger's key is released only when the world dies. Public data is readable for any coin the venue lists, and a connector may pay for data through x402 under a per-call cap.
+**The world.** A world is a wallet in integer micro-dollars, an exchange (Hyperliquid, or a deterministic fake), a clock, and a sealed ledger. Every event the world produces (a tick, a price, a fill, a funding payment) is delivered to the population. Every state change is a ledger item first: encrypted, hash-chained, append-only. The ledger's key is released only when the world dies. The world sets no leverage ceiling and no principal cap of its own: the population uses whatever leverage and collateral the venue allows, and the venue's refusal is the only limit (the manifest keys `[tools] max_leverage` and `[venue] principal_usd` are deprecated and inert). Public data is readable for any coin the venue lists, and a connector may pay for data through x402 under a per-call cap.
 
 **The population.** An assembly is a model, a prompt, a contract saying which events it accepts and what it returns, and a budget. Assemblies are not processes; they exist only while answering an event. Each answer is a model call paid from the wallet at the vendor's price, so thinking is a cost like any other, and an assembly that spends more than it is worth to the factory is selected against. The seed population is nine assemblies of four kinds: producers, which act on the market or decline to; evaluators, which judge a producer's return; metas, which judge the judges; and an antagonist, paid for exposing judges who were wrong.
 
@@ -20,7 +20,7 @@ The essay's claim is that a factory whose objectives are supplied from outside i
 
 **Compute.** The factory buys inference from three rails: prepaid OpenRouter credit, Venice paid in USDC over x402, and any seller on the public x402 index. It holds its own reserve on Base, moves money between the exchange and the reserve through its own treasury tool, and tops up its Venice balance itself. When every rail is unaffordable the world ends; nobody refills it.
 
-**Time.** The factory keeps its own clock. The tick is a charter parameter the population can change within physical bounds. Governance uses measured consequence ages in events with a configured backstop floor. The live clock measures delivered tick gaps, and governance converts event periods with the interval the loop actually achieved.
+**Time.** The factory keeps its own clock. The tick is a charter parameter the population can change within physical bounds. Governance uses measured consequence ages in world ticks with a configured backstop floor, and every evaluation horizon (a judgement's timeout, a consequence's backstop) counts world ticks, never the runtime's internal events. The live clock measures delivered tick gaps, and governance converts tick periods with the interval the loop actually achieved.
 
 **What the architect does.** Writes one manifest: the seed assemblies, the prices, the norms, the bounds, and a charter whose cards the seed population drafted itself before launch. Its hash is the first ledger item. After launch there is one live view, a page of sealed aggregates and balances, and one control: kill. There is no refill, no restart with new settings, no reading the diary while the world lives.
 
@@ -36,16 +36,25 @@ uv run factorylab run --world scripted --events 500 --seed 1
 uv run factorylab run --world scripted-crash --events 600 --seed 2
 ```
 
-The first runs a deterministic world for 500 events, registers an assembly learner, activates a card amendment and a seed evaluator retirement on separate governance boundaries, and prints a summary. Its orders size from the world wallet, and its consequence backstop is 20 events. Every seat spends from its own entitlement (edition 2, C10): the seeded trader bears its own trading losses and runs its share down before the 500 events are out. A router that draws nobody now settles that draw as inapplicable instead of manufacturing a producer return for the judges to grade, so evaluation stops buying work nobody authored and the run reaches the scripted population observation, which the script places past its 1,600th producer call, inside these 500 events. The second halves the price of BTC four times under a leveraged long; gap liquidation can take the wallet below zero, and the world dies of `balance_zero` and releases its key. Then the tests:
+The first runs a deterministic world for 500 events, registers an assembly learner, activates a card amendment and a seed evaluator retirement on separate governance boundaries, and prints a summary. Its orders size from the world wallet, and its consequence backstop is 20 ticks. Every seat spends from its own entitlement (edition 2, C10), and what a seat's trades realise at the venue is its claim on the venue's custody, never compute money drawn from or paid into the other seats' pool: the summary's `venue_custody` reconciles the claims with what the venue settled. A router that draws nobody now settles that draw as inapplicable instead of manufacturing a producer return for the judges to grade, so evaluation stops buying work nobody authored and the run reaches the scripted population observation, which the script places past its 1,600th producer call, inside these 500 events. The second halves the price of BTC four times under a leveraged long; gap liquidation can take the wallet below zero, and the world dies of `balance_zero` and releases its key. Then the tests:
 
 ```bash
-uv run pytest
+uv run pytest                                     # check: the inner loop, 2 workers, about a minute
+uv run pytest -m "check or gate" -n 4             # the merge gate: adds every test that runs a world
 uv run pytest -m slow -o addopts="" tests/runtime/test_resume.py
+uv run pytest -m gate tests/audit/test_r2a_lifecycle.py   # one gate file you touched
 ```
 
-The second set kills and resumes real processes at every ledger write. `uv run factorylab --help` lists the rest: validating a manifest, resuming a world, publishing the wake page, reading a dead world's diary, versioning it.
+Tests are in three tiers, assigned in `tests/conftest.py`. `check` runs no world, and a
+`check` test whose call takes over 2 s fails and asks to be marked `@pytest.mark.gate`
+(`FACTORYLAB_CHECK_LIMIT_S=5` raises the limit on a slow machine, `=off` disables it).
+`gate` is every test that runs a world or reads a shared scripted run. `slow` kills and
+resumes real processes at every ledger write. More workers: `-n 8`, or `-n auto` for
+every core (hot on a laptop); the last `-m` and `-n` given win over the defaults.
+`uv run python scripts/bench_scripted.py 50 100 200` times the scripted world and
+prints digests of its diary, so a performance change can show it changed nothing else. `uv run factorylab --help` lists the rest: validating a manifest, resuming a world, publishing the wake page, reading a dead world's diary, versioning it.
 
-Running against Hyperliquid testnet needs an exchange key and a model-provider key at the repository root (`hyperliquid.key`, `openrouter.key`, mode 0600, never committed). The shipped testnet manifest uses `PURR/USDC` spot, a configured reserve address, a 120-second tick and a 60-event consequence backstop. Running with real money additionally needs the reserve key and a manifest named `funded` with an explicit `[charter]`; the code refuses mainnet without them. The mainnet spot names for the re-draft are `UBTC/USDC` and `UETH/USDC`.
+Running against Hyperliquid testnet needs an exchange key and a model-provider key at the repository root (`hyperliquid.key`, `openrouter.key`, mode 0600, never committed). The shipped testnet manifest uses `PURR/USDC` spot, a configured reserve address, a 120-second tick and a 60-tick consequence backstop. Running with real money additionally needs the reserve key and a manifest named `funded` with an explicit `[charter]`; the code refuses mainnet without them. The mainnet spot names for the re-draft are `UBTC/USDC` and `UETH/USDC`.
 
 To end a persistent world, stop its running process to release the writer lock, then run `uv run factorylab kill --world W --ledger L` with its original manifest and ledger. This records `explicit_kill:operator`, releases the seal and exits `3`. Stopping the process alone leaves the world resumable. Failures from `run` and `kill` may print a second stderr line naming the exception class and factory module beneath the reason code.
 

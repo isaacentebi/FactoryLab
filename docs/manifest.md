@@ -646,9 +646,10 @@ parameters; the observer never substitutes a second set of thresholds.
 | Key | Type | Seed default | Hard cast? |
 | --- | --- | --- | --- |
 | `timing.min_support` | positive integer, at most `timing.cadence_sample` | `30` | Yes: settled samples required before estimating p90; a larger support than the retained sample could never be reached, so it is refused at load. |
-| `timing.cadence_sample` | positive integer | `200` | Yes: retained event-latency sample length. |
+| `timing.cadence_sample` | positive integer | `200` | Yes: retained consequence-latency sample length (latencies in world ticks). |
 | `timing.min_ratio` | integer, at least 3 | `3` | Yes: cascade and governance separation. |
-| `evaluation.consequence_backstop_events` | positive integer | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
+| `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
+| `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a judgement waits for its judge (a verdict for a producer return, a meta verdict for a verdict) before it is censored. |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
 | `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation; absent from the manifest hash at its default. |
 | `immune.k` | integer, at least 2 | `3` | Yes: consecutive windows or changes required for diagnosis. |
@@ -670,20 +671,34 @@ pressure continues to ratchet.
 
 ## Timing interpretation
 
+The two evaluation horizons, `verdict_timeout_events` and
+`consequence_backstop_events`, count **world ticks consumed**, not internal events.
+The runtime's internal event counter advances for every fill, verdict, meta verdict,
+watcher firing and world update, about twenty times per tick in the scripted world,
+so a horizon counted in it lasted a fraction of what its number said: a 20-event
+verdict timeout was about one tick, shorter than the cascade window that releases
+verdicts to the metas, and nearly every evaluator decision was censored before a
+meta could read it. The keys keep their names and their numbers, now read as
+ticks; `verdict_timeout_ticks` and `consequence_backstop_ticks` are the same keys
+spelled for their unit (a manifest that gives both spellings must give one
+number). The judgement deadlines the decision queue enforces were already
+computed from these numbers times the tick interval, so the two now agree.
+
 The shipped testnet manifest sets `tick_interval = "120s"` and
 `evaluation.consequence_backstop_events = 60`. With `timing.min_ratio = 3`,
-the conservative activation floor is 180 events, or six hours at the declared
-tick interval. Both scripted manifests use a 20-event backstop so the
+the conservative activation floor is 180 ticks, or six hours at the declared
+tick interval. Both scripted manifests use a 20-tick backstop so the
 500-event demonstration can activate a card amendment and evaluator retirement
 on separate boundaries.
 
-All measured latencies are `settled_event - opened_event`. The ledger also retains
-nanoseconds as provenance, but nanoseconds never determine the measured period.
-The period is `max(backstop, supported_p90, oldest_outstanding_age)` in events;
-unsupported p90 contributes nothing. Multiply by the current tick interval for
-the corresponding duration. Both that duration and `min_ratio * period` fresh
-events must pass after the previous activation. Activations at one boundary
-therefore cannot chain.
+All measured latencies are `settled_event - opened_event` on the cadence's clock,
+which is world ticks consumed (the ledger's `cadence.*` items keep their field
+names). The ledger also retains nanoseconds as provenance, but nanoseconds never
+determine the measured period. The period is
+`max(backstop, supported_p90, oldest_outstanding_age)` in ticks; unsupported p90
+contributes nothing. Multiply by the current tick interval for the corresponding
+duration. Both that duration and `min_ratio * period` fresh ticks must pass after
+the previous activation. Activations at one boundary therefore cannot chain.
 
 `LiveClock` retains the latest 64 delivered tick gaps and exposes their integer
 mean through `measured_interval_ns()`. Before two ticks it returns the declared
@@ -1725,8 +1740,16 @@ whole authority is to cancel, reduce, close and reconcile: it cannot open risk
 and cannot resume the population. Every external operation has a durable
 identity derived from (launch nonce, coin, market, side, target), ledgered
 `winddown.op` before submission and `winddown.op_result` after it, so a repeated
-kill or a kill after a restart reconciles by identity and repeats nothing. A
-final account read is ledgered as `winddown.reconciliation` with the residual and
+kill or a kill after a restart reconciles by identity and repeats nothing it
+completed. What the venue definitively refused or only partly did (rejected, an
+IOC that cancelled, a partial fill) is retried under the target's next attempt
+identity: up to three rounds in one kill, each re-reading the venue, and a later
+kill of the same diary continues the numbering. An ambiguous answer (a timeout, an
+exception, a resting order) is read again, never resent. A residual below the
+venue's minimum order value (Hyperliquid's $10, above the default `[kill]
+dust_usd = "1"`) can never be sold; it is reported in the residual's dust with
+`reason = "below_venue_minimum"` and reads `dust_within_precommitted_bound`, not
+`wind_down_pending`. A final account read is ledgered as `winddown.reconciliation` with the residual and
 the `exposure_state` it implies: an acknowledgement is not a flat account, and a
 failed read is `unknown`. Neither a venue nor the diary can prevent death; a
 diary failure during the wind-down is counted, printed on stderr and carried to
@@ -1873,7 +1896,16 @@ a pending claim in `pending_conversions`, never a balance in two places.
 A receipt's identity is chain, transaction hash, log index, asset and recipient
 (defaults: `base`, `USDC`, the reserve). `Treasury.earn` is idempotent on that
 identity: the same payment twice books once, and a *different* payment presented
-under one identity fails closed with `income.conflict` and books nothing.
+under one identity fails closed with `income.conflict` and books nothing. The log
+index is normalised to an integer and a missing recipient is the reserve, and a
+transfer is also deduplicated across spellings: the same transaction and recipient
+with the same log index, or the same amount where either side has no log index, is
+the same transfer (`income.duplicate`, nothing booked). A confirmed claim is booked
+under the chain's own identity (the log the transfer is at, the recipient it
+reached); two equal transfers to the reserve in one transaction and a claim that
+names no log index are ambiguous and the claim stays unresolved. A receipt a claim
+became is handed to the runtime's credit exactly once, even when `Treasury.tick`
+verified it; the hosted seller (`deploy/serve.py`) spools the recipient.
 
 The seller's spool is the wake host's word, not a payment. `collect_income`
 books each spool row as a **claim** (`income.claimed`, counted in
@@ -1904,7 +1936,12 @@ needs the base coin (`spot sell exceeds venue base balance`). Unknown collateral
 (`order collateral unavailable: <exception>`) and stale collateral (`order
 collateral is stale: venue account older than one tick`, which is how
 Hyperliquid's fallback to its last complete snapshot reads) block new risk, and
-neither ever blocks a cancellation or a `reduce_only` reduction.
+neither ever blocks a cancellation or a `reduce_only` reduction. A failed
+Hyperliquid mids read raises `VenueUnavailable` and is never answered with the last
+prices; an account fallback to the last complete snapshot is returned with
+`stale = true` and its original `observed_at_ns`, and the prompts (`StaleAccount`),
+the watchers, a window's opening equity and the wind-down's final reconciliation
+(`unknown`, never `flat`) all refuse it.
 
 `[venue] collateral_headroom_usd` is an exact nonnegative decimal string,
 default `"0"`: free collateral the world precommits to leaving unused, declared
@@ -1912,25 +1949,23 @@ before the orders that would want it. It is not `[kill] dust_micro`, which is a
 different setting for a different thing. At its default the key is dropped from
 the canonical manifest JSON, so no world that predates it changes hash.
 
-`[venue] principal_usd` is an exact positive decimal string, default absent: the
-risk-bearing trading principal this world declares it may use at the venue. It
-is a gate, not a balance. GPT-6 Pro's third reading §11 offers the experimenter
-two ways to launch at the proposed size — withdraw the rest of the testnet
-balance, or declare the principal so "the runtime refuses to use more" — and
-this key is the second. `_collateral_view` reads the venue's own
-`collateral_view` and lowers it to the declaration before `_order_collateral`
-does any arithmetic, so an account funded with $966 that declares `"120"` is
-collateralised as if it held $120. The venue holds eligible USD in two pools
-the runtime checks separately (the perps account's eligible equity and the spot
-account's quote balance), so the declared principal is shared between them in
-proportion to what each actually holds, floored to the micro; with an empty spot
-quote balance that is exactly "eligible equity capped at the principal". The cap
-only lowers a figure, and the capped view carries `principal_cap_usd` beside
-`uncapped_eligible_equity_usd` and `uncapped_spot_available` so a refusal can say
-which of the two — the venue or the declaration — refused it. Custody still
-reports what the venue actually holds. Where the key is absent it is dropped from
-the canonical manifest JSON, so no world that predates it changes hash;
-`worlds/edition3-testnet.toml` declares `principal_usd = "120"`.
+`[venue] principal_usd` and `[tools] max_leverage` are **deprecated and inert**
+(architect decision D1: a cap on the principal or the leverage the population may use
+is an objective supplied from outside, a Class-2 imposition). Both keys are still
+read and validated, and both still enter the canonical manifest JSON exactly as
+before, so every manifest that declares them loads and keeps its historical hash;
+nothing enforces either. `_collateral_view` is the venue's own view, unchanged, and
+`venue.set_leverage` takes any positive integer and lets the venue accept or refuse
+it. The first launch gate is met by holding only the proposed principal at the venue.
+
+The margin an order needs is charged at the leverage the venue has in effect for the
+instrument: `leverage_for_instrument` is what Hyperliquid's `clearinghouseState`
+reports for an open position on the coin, or failing that the venue's acknowledgement
+of this account's `set_leverage` (the fake reports its own per-coin setting). When the
+venue has not said — a coin with no position and no acknowledged `set_leverage`, or a
+resting order on such a coin (`open_order_holds_usd` is then `null`) — the local check
+does not guess a 1x requirement: it admits the order and the venue's acceptance or
+rejection is the answer.
 
 ### The reward line
 

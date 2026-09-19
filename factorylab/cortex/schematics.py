@@ -182,6 +182,18 @@ class SchematicsMixin:
             "optional state object to keep",
             "timeout_s": 10,
             "state_policy": "private",
+            "trigger": "optional; makes the seat a watcher the kernel wakes from world state "
+            "each tick, at the program price and without a model call: {\"kind\": "
+            "\"price_cross\", \"coin\", \"level\"} | {\"kind\": \"funding_sign\", "
+            "\"coin\"} | {\"kind\": \"equity_below\", \"level\"} | {\"kind\": "
+            "\"equity_above\", \"level\"}",
+        },
+        "predicate": {
+            "kind": "predicate",
+            "id": "slug",
+            "description": "what it resolves",
+            "code": "python defining resolve(facts) -> bool over the public window facts; "
+            "admitted only if it resolves on the last closed window, then nameable by forecasts",
         },
         "observation": {
             "kind": "observation",
@@ -278,7 +290,8 @@ class SchematicsMixin:
         "A retire proposal names an id from world.catalogue (any assembly, the seeds "
         "included) and removes it from every router; a retired id may be "
         "registered again as its next version. Effort: low, medium, high. An assembly with "
-        "model_id program is a program seat (proposal_shapes.program): its code runs in the "
+        "model_id program (or kind program) is a program seat (proposal_shapes.program): its "
+        "code runs in the "
         "tool jail instead of a model, reads one JSON object from stdin (prompt, description, "
         "inputs, outcome_schema, state) and prints the Return JSON a model would; it is "
         "routed, judged, paid and retired exactly like a model seat, each call costing "
@@ -602,6 +615,7 @@ class SchematicsMixin:
         "service": "sell a registered tool's output to outside buyers over x402",
         "tool": "register jailed code as a priced tool anyone may call",
         "program": "register a seat whose jailed code answers instead of a model",
+        "predicate": "register a forecast predicate over a closed window's public facts",
         "observation": "register a measurement over a closed window's public facts",
         "learner": "give one assembly a learner over an action set it declares",
         "amendment": "add, replace or remove charter cards, with a predicted effect",
@@ -927,13 +941,12 @@ class SchematicsMixin:
         """The seat's own note index and the artifacts it may read, bounded and paged."""
         notes = sorted(key for key, entry in self.notes.items()
                        if entry.get("owner") == seat)
-        artifacts = [row for row in self._artifact_index()
-                     if row.get("owner") == seat or row.get("public")]
+        count, artifacts = self._artifacts_visible_to(seat, DIRECTORY_PREVIEW)
         return {
             "notes": {"count": len(notes), "keys": notes[:DIRECTORY_PREVIEW]},
-            "artifacts": {"count": len(artifacts),
+            "artifacts": {"count": count,
                           "newest": [{k: row[k] for k in ("sha", "kind", "bytes", "owner")}
-                                     for row in artifacts[:DIRECTORY_PREVIEW]]},
+                                     for row in artifacts]},
             "paging": f"note.list and artifact.list return {DIRECTORY_PAGE} rows a page",
         }
 
@@ -1196,6 +1209,10 @@ class SchematicsMixin:
         inventory = self._provider_inventory()
         release = self._next_release()
         heads = set(self.budget.heads())
+        # Read once for every seat: both are pure reads, and each seat's rows are
+        # filtered from them exactly as its own call would have read them.
+        outstanding = self.queue.outstanding()
+        pending = self.book.pending()
         views: list[dict[str, Any]] = []
         for seat in self.budget.seats():
             assembly = self.assemblies.get(seat)
@@ -1233,7 +1250,8 @@ class SchematicsMixin:
                     "runway_at_observed_burn": runway,
                     "next_release_reachable": reachable,
                 },
-                "open_commitments": self._open_commitments(seat),
+                "open_commitments": self._open_commitments(seat, outstanding=outstanding,
+                                                            pending=pending),
                 # §8's ``spending_authority`` slot, kernel-serialised: the same three
                 # kernel numbers ``your_resources`` renders as USD text, in the
                 # micro-USD the budget book actually holds them in, so arithmetic on
@@ -1264,7 +1282,8 @@ class SchematicsMixin:
             })
         return views
 
-    def _open_commitments(self, seat: str) -> dict[str, Any]:
+    def _open_commitments(self, seat: str, *, outstanding: list | None = None,
+                          pending: list | None = None) -> dict[str, Any]:
         """This seat's outstanding decisions and sealed, unsettled forecasts.
 
         Handles are the seat's own, so naming them discloses nothing about
@@ -1274,13 +1293,14 @@ class SchematicsMixin:
         decisions = [
             {"handle": d.handle, "channel": d.channel, "deadline_utc": _utc(d.deadline_ns),
              "opened_utc": _utc(d.opened_ns), "cost_ceiling_usd": _usd(d.cost_ceiling)}
-            for d in self.queue.outstanding()
+            for d in (self.queue.outstanding() if outstanding is None else outstanding)
             if d.actor == seat or self.handle_to_assembly.get(d.handle) == seat
         ]
         forecasts = [
             {"handle": f.handle, "about_handle": f.about_handle, "predicate": f.predicate_id,
              "q": f.q, "due_at_event": f.due_at_event}
-            for f in self.book.pending() if f.evaluator_id == seat
+            for f in (self.book.pending() if pending is None else pending)
+            if f.evaluator_id == seat
         ]
         return {"open_decisions": decisions[-DIRECTORY_PAGE:],
                 "open_decision_count": len(decisions),
@@ -1308,13 +1328,13 @@ class SchematicsMixin:
               "owner": entry.get("owner"), "updated_window": entry.get("window")}
              for key, entry in self.notes.items()),
             key=lambda row: (-(row["updated_window"] or 0), row["key"]))
-        artifacts = self._artifact_index()
+        listing = self._artifact_listing()
         return {
             "notes": {"count": len(notes), "newest": notes[:DIRECTORY_PREVIEW]},
-            "artifacts": {"count": len(artifacts),
+            "artifacts": {"count": listing.count(),
                           "newest": [{k: row[k] for k in
                                       ("sha", "kind", "bytes", "owner", "public")}
-                                     for row in artifacts[:DIRECTORY_PREVIEW]]},
+                                     for row in listing.newest(DIRECTORY_PREVIEW)]},
             "paging": f"note.list and artifact.list return {DIRECTORY_PAGE} rows a page with "
                       "a cursor; both are indexes, not contents",
         }
@@ -1435,14 +1455,17 @@ class SchematicsMixin:
 
     @staticmethod
     def _register_schema() -> dict[str, Any]:
+        """Every kind a return may register is a kind the capability index names.
+
+        The enum is the index's own key set, so neither can list a kind the other
+        refuses: ``program`` is accepted here and registered as an assembly whose
+        model_id is program, and ``predicate`` is published with a shape.
+        """
         return {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"kind": {"enum": ["model", "assembly", "router", "tool",
-                                                   "observation", "predicate", "learner",
-                                                   "amendment", "retire", "connector",
-                                                   "market", "challenge", "service"]}},
+                "properties": {"kind": {"enum": sorted(SchematicsMixin.PROPOSAL_SHAPES)}},
                 "required": ["kind"],
             },
         }
@@ -1483,7 +1506,7 @@ class SchematicsMixin:
             "producer_or_antagonist_return": (
                 "ProducerReturn and custom return kinds settle on the verdict channel: "
                 "the score is the verdict (0 to 1) a judging return "
-                f"gives it within {ev.verdict_timeout_events} events, less the card penalty; "
+                f"gives it within {ev.verdict_timeout_ticks} ticks, less the card penalty; "
                 "unjudged returns are censored (no score, no learning)"
             ),
             "antagonist_exposure": (
@@ -1523,7 +1546,7 @@ class SchematicsMixin:
             ),
             "evaluator_return": (
                 "settles on the conformity channel: the score a meta gives the verdict within "
-                f"{ev.verdict_timeout_events} events, less the card penalty; metas judge one "
+                f"{ev.verdict_timeout_ticks} ticks, less the card penalty; metas judge one "
                 f"verdict in every {self.m.timing.min_ratio} (with jitter) as the window's "
                 "representative; the representative settles at the meta's score and each "
                 f"unread sibling at {ev.sibling_share} of it"

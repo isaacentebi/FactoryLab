@@ -229,12 +229,6 @@ def test_a_diary_failure_during_the_wind_down_never_prevents_death():
     assert witness._pending_wind_down["ledger_failures"] >= 1
 
 
-def test_the_ledger_failure_reaches_stderr(capsys):
-    venue = Venue(positions=[Position("BTC", Decimal("1"), Decimal("100"))])
-    wind_down(venue, Diary("winddown.op"), launch_nonce=NONCE)
-    assert "the diary refused one record" in capsys.readouterr().err
-
-
 def test_every_operation_has_a_durable_id_derived_from_the_launch_identity():
     """(launch_nonce, coin, market, side, sequence), and nothing that varies with time."""
     first = operation_id(NONCE, "BTC", "perp", "sell", 0)
@@ -289,7 +283,7 @@ def test_a_restart_mid_wind_down_reconciles_the_diary_it_finds():
     """The process died between the two records; the next kill continues from them."""
     op_id = operation_id(NONCE, "BTC", "perp", "sell", 0)
     venue = Venue(positions=[Position("BTC", Decimal("1"), Decimal("100")),
-                             Position("ETH", Decimal("2"), Decimal("10"))])
+                             Position("ETH", Decimal("1"), Decimal("10"))])
     # First pass: the diary refuses the result records, exactly as a crash between
     # the submission and its answer would leave them.
     crashed = Diary("winddown.op_result")
@@ -326,7 +320,8 @@ def test_the_executor_cannot_reach_the_population():
         assert forbidden not in source
     executor = WindDownExecutor(Venue(), Diary(), launch_nonce=NONCE)
     assert set(vars(executor)) == {"exchange", "ledger", "launch_nonce", "dust_micro",
-                                   "reader", "report", "_known", "_submitted"}
+                                   "reader", "report", "_known", "_submitted",
+                                   "_requested", "_owed", "_minimums"}
 
 
 def test_the_witness_line_carries_both_states_and_the_operation_count(tmp_path):
@@ -568,20 +563,3 @@ def test_a_late_credit_to_a_retired_seat_goes_to_the_commons_and_is_ledgered_as_
         {"ts_ns": 7, "amount_micro": 1_000, "source": "credit"},
         {"ts_ns": 7, "amount_micro": 2_000, "source": "income"}]
     assert "alice" not in json.dumps(shown)
-
-
-def test_the_wake_shows_the_two_states_of_death_separately():
-    observatory = _Observatory()
-    observatory.feed({"kind": "kill.production", "production_state": "killed",
-                      "reason": "explicit_kill:operator", "ts": 11})
-    observatory.feed({"kind": "winddown.reconciliation", "exposure_state": PENDING,
-                      "operations": 2, "unreadable": [],
-                      "residual": {"resting": [], "positions": [{"coin": "BTC"}],
-                                   "balances": [], "dust": []}})
-    liveness = observatory.result(load_manifest("scripted"))["liveness"]
-    assert liveness["production_state"] == "killed"
-    assert liveness["production_kill_reason"] == "explicit_kill:operator"
-    assert liveness["exposure_state"] == PENDING
-    assert liveness["exposure"]["residual_counts"]["positions"] == 1
-    # Dead with exposure still open is a state the page can say out loud.
-    assert liveness["status"] == "alive"

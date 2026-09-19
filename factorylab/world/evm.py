@@ -117,6 +117,11 @@ def event_topic(signature: str) -> str:
     return "0x" + keccak(text=signature).hex()
 
 
+def _with_headroom(price: int) -> int:
+    """A quoted gas price plus 25%, rounded up."""
+    return (price * 5 + 3) // 4
+
+
 class EVM:
     """Each signed call pins chain, sender, nonce, destination, calldata and maximum gas cost."""
 
@@ -196,7 +201,10 @@ class EVM:
         tx = {"from": sender, "to": to, "value": "0x0", "data": data}
         estimate = int(self.call("eth_estimateGas", [tx]), 16)
         gas = (estimate * 12 + 9) // 10
-        price = int(self.call("eth_gasPrice", []), 16)
+        # Headroom over the node's quote: a legacy transaction priced at exactly the
+        # current gas price stalls in the mempool at the first uptick, and its nonce
+        # then blocks every later transfer from this signer.
+        price = _with_headroom(int(self.call("eth_gasPrice", []), 16))
         ceiling = gas * price
         if ceiling <= 0 or ceiling > gas_remaining_wei:
             raise RailError("transaction exceeds remaining gas budget")
@@ -244,6 +252,33 @@ class EVM:
             "l1_fee_ceiling_wei": l1_ceiling,
         }
 
+    def replace(self, reference: dict, *, gas_remaining_wei: int) -> dict:
+        """The same transaction at the same nonce, repriced to replace one the chain will not mine.
+
+        The replacement's gas price is at least 12.5% above the stuck one (nodes
+        require 10%) and at least the current quote with headroom; everything else
+        -- chain, signer, nonce, destination, calldata, gas limit -- is the original's,
+        so at most one of the two can ever execute. ``replaces`` carries every hash
+        this nonce was sent under, and ``receipt`` accepts whichever the chain mined.
+        """
+        self.check_chain()
+        tx = reference["tx"]
+        if tx["chainId"] != self.chain.id or reference["sender"] != self.account.address:
+            raise RailError("transaction reference belongs to another chain or signer")
+        price = max((tx["gasPrice"] * 9 + 7) // 8,
+                    _with_headroom(int(self.call("eth_gasPrice", []), 16)))
+        unsigned = {**tx, "gasPrice": price}
+        ceiling = unsigned["gas"] * price + reference.get("l1_fee_ceiling_wei", 0)
+        if ceiling > gas_remaining_wei or self.balance() < ceiling:
+            raise RailError("replacement exceeds remaining gas budget or balance")
+        try:
+            signed = self.account.sign_transaction(unsigned)
+        except Exception:
+            raise RailError("transaction signing failed") from None
+        return {**reference, "tx": unsigned, "tx_hash": "0x" + bytes(signed.hash).hex(),
+                "gas_ceiling_wei": ceiling,
+                "replaces": [reference["tx_hash"], *reference.get("replaces", [])]}
+
     def broadcast(self, reference: dict) -> None:
         """Broadcast only an already-journaled immutable transaction; no new nonce on retry."""
         self.check_chain()
@@ -266,12 +301,21 @@ class EVM:
             raise Pending("RPC did not acknowledge the prepared transaction hash")
 
     def receipt(self, reference: dict, *, finalized: bool = True) -> dict | None:
-        """Verify canonical identity and fees; provisional receipts never establish settlement."""
-        receipt = self.proof(reference["tx_hash"], finalized=finalized)
+        """Verify canonical identity and fees; provisional receipts never establish settlement.
+
+        A replaced transaction is found under whichever of its hashes the chain mined
+        (``reference["replaces"]``): they share one nonce, so at most one exists.
+        """
+        receipt, mined = None, reference["tx_hash"]
+        for candidate in (reference["tx_hash"], *reference.get("replaces", [])):
+            receipt = self.proof(candidate, finalized=finalized)
+            if receipt is not None:
+                mined = candidate
+                break
         if receipt is None:
             return None
         if (
-            receipt["transactionHash"].lower() != reference["tx_hash"].lower()
+            receipt["transactionHash"].lower() != mined.lower()
             or receipt["from"].lower() != reference["sender"].lower()
             or receipt["to"].lower() != reference["tx"]["to"].lower()
         ):

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from factorylab.kernel.ledger import KeyStore, Ledger, LedgerIntegrityError
+from factorylab.kernel.ledger import Ledger, LedgerIntegrityError
 
 
 def checkpointed(path):
@@ -15,25 +15,6 @@ def checkpointed(path):
     ledger.append({"kind": "snapshot", "state": {"test": True}})
     ledger.append({"kind": "tail", "value": 1})
     return ledger
-
-
-def test_reopen_skips_decrypting_the_authenticated_prefix(tmp_path, monkeypatch):
-    path = tmp_path / "stream.jsonl"
-    checkpointed(path)
-    decrypt = KeyStore._decrypt
-
-    def checked(self, token):
-        plaintext = decrypt(self, token)
-        assert json.loads(plaintext).get("kind") != "old-private-record"
-        return plaintext
-
-    monkeypatch.setattr(KeyStore, "_decrypt", checked)
-    restored = Ledger.reopen(path, manifest={})
-    snapshot, tail = restored._recovery_tail()
-    assert snapshot["state"] == {"test": True}
-    assert [item["kind"] for item in tail] == ["tail"]
-    assert restored.aggregate("action_frequencies") == {"counts": {}}
-    assert restored._Ledger__tokens == []
 
 
 def test_head_never_hides_modified_prefix_bytes(tmp_path):

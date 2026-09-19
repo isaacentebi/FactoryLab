@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from decimal import ROUND_DOWN, Decimal
+from decimal import Decimal
 
 from factorylab.cortex.request import Return
 from factorylab.kernel.money import usd_to_micro
@@ -19,9 +19,6 @@ from factorylab.world.exchange import (
     VenueUnavailable,
 )
 
-#: A share of a declared principal is floored to the micro: a cap may never round up.
-_MICRO = Decimal("0.000001")
-
 #: How many times an uncertain order is polled before the runtime says so and stops.
 #: The manifest declares no order-lifecycle schedule, so the schedule is this bound:
 #: an uncertain intent is asked about at most this many times in all, each answer
@@ -30,11 +27,6 @@ _MICRO = Decimal("0.000001")
 #: repeat forever. The kill wind-down's terminal reconciliation reads past it: a
 #: dying runtime asks once more, whatever the schedule already spent.
 UNCERTAIN_ORDER_POLLS = 5
-
-
-def _floor_micro(value: Decimal) -> Decimal:
-    """Round a capped collateral figure down to the micro. A cap never rounds up."""
-    return value.quantize(_MICRO, rounding=ROUND_DOWN)
 
 
 def _custody_of(market: str) -> str:
@@ -220,7 +212,11 @@ class VenueMixin:
         memo = getattr(self, "_account_memo", None)
         if memo is None or memo[0] != tick:
             try:
-                memo = (tick, self.exchange.account(), None, self.clock.now_ns)
+                account = self.exchange.account()
+                # A fallback to an older snapshot is not this tick's account.
+                memo = ((tick, None, "StaleAccount", self.clock.now_ns)
+                        if getattr(account, "stale", False)
+                        else (tick, account, None, self.clock.now_ns))
             except Exception as exc:  # noqa: BLE001 - every read failure is reportable
                 memo = (tick, None, type(exc).__name__, self.clock.now_ns)
             self._account_memo = memo
@@ -273,14 +269,20 @@ class VenueMixin:
         derived from it unmeasured, which is what it is.
         """
         try:
-            return usd_to_micro(self.exchange.account().equity_usd, rounding="nearest")
+            account = self.exchange.account()
         except RuntimeError:
             return None
+        if getattr(account, "stale", False):
+            return None  # an old snapshot is not the equity a window opens on
+        return usd_to_micro(account.equity_usd, rounding="nearest")
 
     def _observe_positions(self) -> None:
         """A new peak position notional is recorded before it enters the window."""
         try:
-            positions = self.exchange.account().positions
+            account = self.exchange.account()
+            if getattr(account, "stale", False):
+                return  # a peak is observed on a live account or not at all
+            positions = account.positions
             mids = self.exchange.mids() if positions else {}
         except RuntimeError:
             return
@@ -326,6 +328,8 @@ class VenueMixin:
         """
         for delta, reference, reason, custody, order_id in settlements:
             handle = self._order_owner(order_id)
+            # The venue's own settled P&L: what every seat's venue claim is backed by.
+            self.budget.book_venue(delta, f"{reason}:{reference}")
             self.ledger.append({
                 "kind": "venue.settled", "custody": custody, "amount": delta,
                 "reference": reference, "reason": reason, "handle": handle,
@@ -362,6 +366,11 @@ class VenueMixin:
                     continue
                 we.payload["realized_usd"] = str(self._account_spot_fill(we.payload))
         for we in evs:
+            if id(we) in refused:
+                # A fill the lot book refused has no accounted owner and no accounted
+                # inventory: the venue's own realized figure for it is not evidence
+                # of anyone's P&L, so it is neither settled nor counted below.
+                continue
             if we.kind is WorldEventKind.FILL:
                 delta = usd_to_micro(we.payload["realized_usd"], rounding="nearest") - usd_to_micro(
                     we.payload["fee_usd"]
@@ -381,6 +390,9 @@ class VenueMixin:
             if id(we) not in refused:
                 self.consequences.observe(str(we.kind), dict(we.payload), self.n)
         for we in evs:
+            if id(we) in refused:
+                self.internal.append(self._kernel_event(we))
+                continue
             if we.kind is WorldEventKind.FILL:
                 self.stats.fills += 1
                 self.window.fills += 1
@@ -488,10 +500,11 @@ class VenueMixin:
                         if lot.coin == args["coin"] and lot.market == "spot"), 0)
             if quantity <= 0 or quantity > min(held, lots):
                 return self._refuse_order(handle, "spot sell exceeds accounted inventory")
-        if any(i["result"]["status"] == "uncertain" and i["args"]["coin"] == args["coin"]
-               for i in self.order_intents.values()):
-            return self._refuse_order(handle, "prior order on this coin is still uncertain")
-        intent = {"handle": handle, "client_id": client_id, "operation": operation,
+        # An uncertain intent blocks only its own identity: repeating it reconciles
+        # (above) and never resubmits. It never shuts the coin: another write on the
+        # same coin -- another seat's, or a close or cancel -- carries its own identity,
+        # and one lost acknowledgement used to refuse every one of them forever.
+        intent ={"handle": handle, "client_id": client_id, "operation": operation,
                   "args": dict(args), "result": {"status": "uncertain"}}
         self.ledger.append({"kind": "order.intent", **intent})
         self.order_intents[client_id] = intent
@@ -595,17 +608,21 @@ class VenueMixin:
                 if result["status"] == "cancelled" and Decimal(str(result["filled_size"])) > 0:
                     attributed = {**result, "status": "filled"}
                 self.consequences.order_result(intent["handle"], attributed, intent["args"], self.n)
-            self._replay_deferred(self.consequences.order_acknowledged(client_id))
+            before = self.consequences.table
+            self._replay_deferred(self.consequences.order_acknowledged(client_id), before)
         return dict(result)
 
-    def _replay_deferred(self, events: list[tuple[str, dict, int]]) -> None:
+    def _replay_deferred(self, events: list[tuple[str, dict, int]], before=None) -> None:
         """Account the economic events a released hold was deferring, in their own order.
 
         A hold is released by an answer (``order_acknowledged``) or, when no
         answer will ever come, by ``release_unresolved``; either way the events
-        it held back are accounted the same way here.
+        it held back are accounted the same way here. The consequence book has
+        already replayed them by the time this runs, so each spot fill is checked
+        against the table as it stood before the release (``before``): checking it
+        against the table that already holds it would execute it twice.
         """
-        spot_table = self.consequences.table
+        spot_table = before if before is not None else self.consequences.table
         corrections = []
         for kind, payload, _event in events:
             if kind == "Fill":
@@ -642,8 +659,9 @@ class VenueMixin:
         meant deciding what an order of unknown fill status means for the return
         that sent it. It means the return's consequence is unknown: it settles
         censored for documented external unobservability, and every later
-        return's outcome resolves again. What stays is the exposure -- this coin
-        refuses new orders from this seat while the intent reads uncertain, the
+        return's outcome resolves again. The intent is then terminal
+        (``unresolved``): it is polled no more and blocks nothing -- not its coin,
+        not another seat, not a close or a cancel. What stays is the exposure: the
         kill wind-down still reads the venue for it, and a fill the venue
         eventually admits still belongs to this return.
         """
@@ -655,7 +673,8 @@ class VenueMixin:
                             "operation": intent["operation"], "polls": int(intent.get("polls", 0)),
                             "result": dict(intent["result"])})
         self.order_intents[client_id] = {**intent, "unresolved": True}
-        self._replay_deferred(self.consequences.release_unresolved(client_id, self.n))
+        before = self.consequences.table
+        self._replay_deferred(self.consequences.release_unresolved(client_id, self.n), before)
 
     def _reconcile_orders(self, *, final: bool = False) -> None:
         """Pending identities are reconciled before consuming newly observed venue fills.
@@ -691,7 +710,7 @@ class VenueMixin:
         broad, because it includes spot marks that are not eligible collateral
         for a perp. The view states the account mode, the collateral asset, the
         eligible equity, the margin already used, the margin resting orders hold
-        and whether that is already inside margin used, the leverage acknowledged
+        and whether that is already inside margin used, the leverage the venue has in effect
         for this instrument, and when it was observed.
 
         The check is then exactly the reviewer's: incremental margin, plus holds
@@ -737,59 +756,33 @@ class VenueMixin:
         return reason
 
     def _collateral_view(self, coin: str, market: str = "perp") -> dict:
-        """The venue's own collateral view, capped at the principal this world declared.
+        """The venue's own collateral view, unchanged.
 
-        ``[venue] principal_usd`` is the reviewer's second way of meeting the first
-        launch gate: "the experimenter withdraws the rest of the testnet balance
-        first **or the manifest declares the principal and the runtime refuses to
-        use more**". A testnet account funded with $966 that declares ``"120"``
-        is collateralised as if it held $120, so the rehearsal is the size of the
-        real proposal and nothing has to be moved to make it so.
-
-        The cap is on the venue's *eligible* USD, and the venue holds it in two
-        pools the runtime already checks separately: the perps account's eligible
-        equity and the spot account's quote balance. A per-pool ceiling would let
-        an order lean on the principal twice, so the declared principal is shared
-        between them in proportion to what each actually holds, floored to the
-        micro. When the spot quote balance is empty — the ordinary case — that is
-        exactly "eligible equity capped at the principal".
-
-        The cap only ever lowers a number. It is not a balance and is never
-        reported as one: custody still shows what the venue actually holds, and
-        the view carries ``principal_cap_usd`` and the uncapped figures so a
-        refusal can say which of the two refused it. A world that declares no
-        principal gets the venue's view unchanged.
+        There is no declared principal between the venue and the population any
+        more (architect decision D1): a cap on how much of the venue's money the
+        population may lean on is an objective supplied from outside, a Class-2
+        imposition. ``[venue] principal_usd`` is still read so the manifests that
+        declare it load with their historical hashes, and it is inert.
         """
-        view = dict(self.exchange.collateral_view(coin, market))
-        declared = getattr(self.m.exchange, "principal_usd", None)
-        if declared is None:
-            return view
-        cap = Decimal(str(declared))
-        view["principal_cap_usd"] = cap
-        equity = Decimal(str(view.get("eligible_equity_usd", 0)))
-        balances = dict(view.get("spot_available") or {})
-        quote = Decimal(str(balances.get("USDC", 0)))
-        total = max(Decimal(0), equity) + max(Decimal(0), quote)
-        if total <= cap or total <= 0:
-            return view
-        view["uncapped_eligible_equity_usd"] = equity
-        view["eligible_equity_usd"] = _floor_micro(max(Decimal(0), equity) * cap / total)
-        if balances:
-            view["uncapped_spot_available"] = dict(balances)
-            balances["USDC"] = _floor_micro(max(Decimal(0), quote) * cap / total)
-            view["spot_available"] = balances
-        return view
+        return dict(self.exchange.collateral_view(coin, market))
 
     def _collateral_stale(self, view: dict) -> str | None:
-        """An observation older than one tick cannot authorise new risk.
+        """An observation the venue did not just make cannot authorise new risk.
 
         A deterministic venue computes the view from its own books at the moment
         it is asked, so there is nothing for it to be stale about. A live venue
         stamps the account read the view is built from, and Hyperliquid's adapter
         keeps that stamp when it falls back to its last complete snapshot: the
         fallback is exactly the case worth refusing.
+
+        A timestamp alone does not catch it. A read that succeeded and then an
+        endpoint failure inside the same tick falls back to a snapshot whose
+        observation time is this tick's, so the view's own ``stale`` marker is
+        the fact, and it is refused whatever the age says.
         """
         observed_at = view.get("observed_at_ns")
+        if view.get("stale"):
+            return "order collateral is stale: the venue did not refresh the account"
         if observed_at is None:
             return "order collateral unavailable: venue reported no observation time"
         if getattr(self.exchange, "deterministic", False):
@@ -801,16 +794,26 @@ class VenueMixin:
 
     def _perp_collateral(self, view: dict, coin: str, size: Decimal, is_buy: bool,
                          mark: Decimal, headroom: Decimal) -> str | None:
-        """Incremental margin plus unreflected holds plus headroom, against free collateral."""
+        """Incremental margin plus unreflected holds plus headroom, against free collateral.
+
+        The margin is charged at the leverage the venue says is in effect for this
+        instrument (``leverage_for_instrument``), never at a manifest ceiling and
+        never at an assumed 1x. When the venue has not said -- a live account with
+        no position and no acknowledged ``set_leverage`` on the coin, or a resting
+        order on such a coin -- the requirement is not knowable here, and the
+        venue's own acceptance or rejection is the answer.
+        """
         current = Decimal(str(view.get("position_size", 0)))
         target = current + (size if is_buy else -size)
         increase = max(Decimal(0), abs(target) - abs(current)) * mark
         if increase == 0:
             return None  # a pure reduction releases collateral rather than needing it
-        leverage = min(Decimal(str(view["leverage_for_instrument"])),
-                       self._order_leverage(coin))
+        leverage = self._order_leverage(coin, view)
+        raw_holds = view.get("open_order_holds_usd")
+        if leverage is None or raw_holds is None:
+            return None  # the venue is the authority on what it has not told us
         holds = (Decimal(0) if view["holds_included_in_margin_used"]
-                 else Decimal(str(view["open_order_holds_usd"])))
+                 else Decimal(str(raw_holds)))
         required = increase / leverage + holds + headroom
         available = view["eligible_equity_usd"] - view["margin_used_usd"]
         if required <= available:
@@ -832,14 +835,19 @@ class VenueMixin:
             return None
         return "spot sell exceeds venue base balance"
 
-    def _order_leverage(self, coin: str) -> Decimal:
-        """Use acknowledged leverage; unknown live leverage receives no collateral discount."""
+    def _order_leverage(self, coin: str, view: dict | None = None) -> Decimal | None:
+        """The leverage the venue has in effect for ``coin``, or ``None`` when unknown.
+
+        Read from the venue's own collateral view, which reads it from the account
+        (Hyperliquid reports it per position in ``clearinghouseState``) or from the
+        venue's acknowledgement of ``set_leverage``. Spot is delivery, never margin.
+        """
         if "/" in coin:
             return Decimal(1)
-        if self.venue_tools is not None:
-            for tool, args, ok in reversed(self.venue_tools.log):
-                if tool == "venue.set_leverage" and ok and args["coin"] == coin:
-                    return Decimal(args["leverage"])
-        if self.exchange.deterministic:
-            return Decimal(self.exchange.target.max_leverage)
-        return Decimal(1)
+        if view is None:
+            view = self._collateral_view(coin, "perp")
+        leverage = view.get("leverage_for_instrument")
+        if leverage is None:
+            return None
+        leverage = Decimal(str(leverage))
+        return leverage if leverage.is_finite() and leverage > 0 else None

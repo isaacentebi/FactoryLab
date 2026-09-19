@@ -82,8 +82,15 @@ def _record_types() -> dict[str, type]:
     from factorylab.runtime.pricing import MeasureWindow
     from factorylab.runtime.routing import PopulationEvent
     from factorylab.runtime.summary import RunStats
+    from factorylab.settlement.fidelity import FidelityObjection
     from factorylab.settlement.forecast import Forecast
     from factorylab.settlement.lots import Lot, LotOrder, LotTable, Payoff, ReturnAccount
+    from factorylab.settlement.receipts import (
+        Adjudication,
+        Commitment,
+        ExecutionReceipt,
+        LearningReceipt,
+    )
     from factorylab.settlement.settle import PredicateForecast
     from factorylab.settlement.standing import _Standing
     from factorylab.settlement.vocabulary import Predicate
@@ -114,7 +121,8 @@ def _record_types() -> dict[str, type]:
         Lot,
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
         AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position,
-        SpotBalance, SellerModel,
+        SpotBalance, SellerModel, FidelityObjection,
+        Adjudication, Commitment, ExecutionReceipt, LearningReceipt,
         CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote,
     )
     return {cls.__name__: cls for cls in classes}
@@ -235,6 +243,14 @@ class RecoveryJournal:
         self.recovering = False
         self.failure: str | None = None
         self.connector_bodies: list[str] = []  # transient, never checkpointed
+        # How many calls that may change an external answer have been made through
+        # this journal, per adapter (the name before the first dot: ``exchange``,
+        # ``treasury``, ``provider``...), counting every call ``_read_only`` does not
+        # name. A view held above the recorded-I/O layer keys on the adapters its
+        # answer depends on, so any write to them in between makes the next read go
+        # out again. Transient, never checkpointed: memos keyed on it are dropped at
+        # every checkpoint, so only differences within one continuation count.
+        self.writes: dict[str, int] = {}
 
     def __getattr__(self, name):
         return getattr(self.ledger, name)
@@ -314,6 +330,9 @@ class RecoveryJournal:
 
     def call(self, name: str, function, args: tuple, kwargs: dict, *, deterministic=False):
         """Recorded calls return their original result; only deterministic fakes run in replay."""
+        if not _read_only(name):
+            adapter = name.split(".", 1)[0]
+            self.writes[adapter] = self.writes.get(adapter, 0) + 1
         if not self.active:
             return function(*args, **kwargs)
         # The x402 evidence callback appends ledger-only payment evidence inside complete().
@@ -502,7 +521,6 @@ _RUNTIME_FIELDS = (
     "world_consumed", "ticks_consumed", "drips_consumed", "started", "catalogue", "sellers",
     "registration_feedback", "tool_jail_available", "vote_handles", "voted_amendments",
     "order_intents", "market_index", "unresolved_x402",
-    "card_samples",
     "exposure_evidence", "pending_meta", "verdict_outcomes", "consequence_mix",
     # Verdict commitments already closed out and already graded, by judge handle: a
     # restored runtime never re-opens, re-closes or re-grades one it finished.
@@ -549,7 +567,65 @@ _RUNTIME_FIELDS = (
     # under MAX_SAID into the archive. The fold's offered/delivered/acknowledged
     # states ride inside ``subscriptions`` above, where the fold itself lives.
     "inbox_delivery",
+    # Venue effects by custody, per decision, until its outcome settles: the
+    # consequence line reports them beside provider cost (edition 3, C5).
+    "venue_deltas",
+    # When each judge's metas began waiting on a fact about it, and the
+    # adjudication queued for each seat while it is unanswered. Both are
+    # properties over a private dict (``FeedbackMixin``); ``_RUNTIME_BACKING``
+    # names the attribute a restore assigns.
+    "meta_waiting_since", "open_adjudications",
 )
+# Runtime fields read through a property with no setter, and the attribute behind it.
+_RUNTIME_BACKING = {
+    "meta_waiting_since": "_meta_waiting_since",
+    "open_adjudications": "_open_adjudications",
+}
+# The settlement receipt books, by the path from the runtime to each. A receipt's
+# id is its content address, so a book is saved as its receipts in record order
+# and rebuilt as ``{receipt.id: receipt}``: the same ids, the same order, and an
+# open adjudication resolved later stays under the id of the claim.
+_RECEIPT_BOOKS = ("book.receipts", "consequences.receipts")
+
+# State a runtime carries across events that the checkpoint deliberately does not
+# save, by ``Class.attr`` (or a whole ``Class``), with the reason.
+# ``tests/runtime/test_checkpoint_coverage.py`` restores a checkpoint at many
+# points of a run and fails on any attribute that differs from the running world
+# and is not named here, so a new field is either checkpointed or declared.
+#
+# Derived: rebuilt on demand from checkpointed state, or a read held for the tick
+# that made it; a restored runtime rebuilds it or reads afresh.
+_DERIVED_STATE = {
+    "Runtime._instruments_memo": "the venue's instrument listing, held for the tick that read it",
+    "Runtime._mids_memo": "the venue's mid prices, held for the tick that read them",
+    "Runtime._account_memo": "the venue account read, held for the tick that read it",
+    "Runtime._prefix_memo": "the rendered cacheable prompt prefix, keyed on what it renders",
+    "Runtime._world_chars_cache": "the world block's size, keyed on the event that measured it",
+    "Runtime._artifact_listing_view": "the artifact listing, rebuilt from the archive index",
+    "ArtifactStore._changed": "hashes changed since the listing last drained; a restore "
+                              "replaces the index and every view is rebuilt from scratch",
+    "ArtifactStore.generation": "a change counter for views over the index, bumped on restore",
+    "ArtifactStore.epoch": "a rebuild counter for views over the index, bumped on restore",
+    "ForecastBook._ForecastBook__open_cache": "the unsettled handles, rebuilt from the "
+                                              "forecast map and settled set it names",
+    "FakeTreasury._balances_memo": "the scripted rail's balances, keyed on what they read",
+}
+# Transient: belongs to this process or this file, not to the world.
+_TRANSIENT_STATE = {
+    "RecoveryJournal": "the diary itself and this process's replay cursor over it: the "
+                       "checkpoint is an item in the diary, not a copy of it",
+    "LedgerLock": "this process's exclusive hold on the diary file",
+    "Runtime.diary_id": "bound by the restore to the diary the checkpoint came from",
+    "ArtifactStore.root": "where this process finds the archive's bytes beside the ledger",
+    "JournalProxy.call_metrics": "this process's wall-clock timing of its own adapter calls",
+}
+# Unordered: mappings a checkpoint saves in sorted order because nothing reads
+# their order (lookups and order-free reductions only).
+_UNORDERED_STATE = {
+    "SubscriptionBook.folds": "per-seat folds, read by seat and reduced with min()",
+    "SubscriptionBook.last_wake": "per-seat last wake tick, read by seat",
+    "OutcomeInbox.delivered_through": "per-seat delivery cursor, read by seat",
+}
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (
     ("book", "_ForecastBook__", ("forecasts", "settled", "requested")),
@@ -557,7 +633,9 @@ _COMPONENT_FIELDS = (
     ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred",
                        "current_event", "last_activation_event", "outstanding", "min_support")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
-    ("settler", "_Settler__", ("snapshots", "recorded")),
+    # ``objections``: the accepted fidelity objection each judge's return carried,
+    # until its verdict settles and pairs with it.
+    ("settler", "_Settler__", ("snapshots", "recorded", "objections")),
     ("charter_book", "_CharterBook__", (
         "editions", "proposals", "committees", "ballots", "activated", "activations",
         "bindings",
@@ -585,6 +663,14 @@ _COMPONENT_FIELDS = (
     # what was booked through it since, so a resumed world settles against the same read.
     ("bill_settlement", "", ("reference",)),
 )
+
+
+def _resolve(rt, path: str):
+    """The object a dotted path from the runtime names."""
+    target = rt
+    for part in path.split("."):
+        target = getattr(target, part)
+    return target
 
 
 def _venue_address(exchange) -> str | None:
@@ -615,6 +701,7 @@ def runtime_state(rt) -> Checkpoint:
     rt._ensure_connector_tool()
     runtime = {name: getattr(rt, name) for name in _RUNTIME_FIELDS}
     runtime["amendment_feedback"] = getattr(rt, "amendment_feedback", None)
+    receipts = {path: list(_resolve(rt, path)) for path in _RECEIPT_BOOKS}
     components = {
         name: {field: getattr(getattr(rt, name), prefix + field) for field in names}
         for name, prefix, names in _COMPONENT_FIELDS
@@ -636,6 +723,7 @@ def runtime_state(rt) -> Checkpoint:
         "budget": encode(rt.budget.state()),
         "components": encode(components),
         "treasury": encode(rt.treasury.snapshot()),
+        "receipts": encode(receipts),
         # A program seat's private state is restored by artifact hash (C8); the key is
         # present only for program seats, so a world without one checkpoints as before.
         "assemblies": encode([{"spec": a.spec, "memory": a.memory,
@@ -693,6 +781,10 @@ def restore_runtime(rt, state: dict) -> None:
     running_digest = getattr(rt, "release_digest", None)  # read before the saved fields land
     running_facilitator = getattr(rt, "facilitator_url", None)
     # Identity validation precedes every mutation of the destination runtime.
+    # The saved world names the release that launched it. A different release does
+    # not continue that identity: it is a new kernel and must be a new world. It
+    # also names the x402 facilitator it launched under: the seller settles every
+    # paid call through it, so a different one is a steering lever outside the diary.
     saved_digest = saved_runtime.get("release_digest")
     if saved_digest is not None and saved_digest != running_digest:
         raise ResumeError("release digest differs from the saved world", code="release_mismatch")
@@ -736,31 +828,18 @@ def restore_runtime(rt, state: dict) -> None:
                      heads=(components.get("working_state") or {}).get("heads") or {},
                      outcomes=(components.get("outcomes") or {}).get("items") or {})
     for name, value in saved_runtime.items():
-        setattr(rt, name, value)
+        setattr(rt, _RUNTIME_BACKING.get(name, name), value)
     rt.diary_id = diary
     # A checkpoint written before launch-bound venue identities keeps its historical
     # client order IDs rather than adopting this process's fresh nonce. The adapter
     # is rebound below, after a deterministic venue's own state has been restored.
     rt.launch_nonce = saved_runtime.get("launch_nonce")
-    # The saved world names the release that launched it. A different release does
-    # not continue that identity: it is a new kernel and must be a new world. A
-    # checkpoint written before release identity carries no digest; it keeps its
-    # historical Launch (no digest to replay) and, once launched, adopts the
-    # running release so every later resume is bound.
-    saved_digest = saved_runtime.get("release_digest")
-    if saved_digest is not None and saved_digest != running_digest:
-        raise ResumeError("release digest differs from the saved world",
-                          code="release_mismatch")
+    # Both identities were checked above, before any assignment. A checkpoint
+    # written before release identity (or before the facilitator pin) carries
+    # none; it keeps its historical Launch (nothing to replay) and, once
+    # launched, adopts the running value so every later resume is bound.
     rt.release_digest = saved_digest if saved_digest is not None or not rt.started else (
         running_digest)
-    # The saved world names the x402 facilitator it launched under. The seller
-    # settles every paid call through it, so a different one after launch is a
-    # steering lever outside the diary; a checkpoint written before the pin keeps
-    # its historical Launch and adopts the running value once launched.
-    saved_facilitator = saved_runtime.get("facilitator_url")
-    if saved_facilitator is not None and saved_facilitator != running_facilitator:
-        raise ResumeError("x402 facilitator differs from the saved world",
-                          code="facilitator_mismatch")
     rt.facilitator_url = (saved_facilitator if saved_facilitator is not None or not rt.started
                           else running_facilitator)
     rt.observer.predicates = rt.predicates
@@ -781,6 +860,9 @@ def restore_runtime(rt, state: dict) -> None:
     if "budget" in state:  # entitlements restore exactly; older checkpoints predate them
         rt.budget._restore_state(decode(state["budget"]))
     rt.treasury.restore(decode(state["treasury"]))
+    # Older checkpoints predate the receipt books; theirs start empty, as they did.
+    for path, saved in decode(state.get("receipts") or {}).items():
+        _resolve(rt, path)._ReceiptBook__by_id = {receipt.id: receipt for receipt in saved}
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
             if name == "controller" and field == "kappa" and field not in components[name]:
@@ -798,6 +880,9 @@ def restore_runtime(rt, state: dict) -> None:
             if (name == "consequences" and field in ("unresolved_orders", "censored_payoffs")
                     and field not in components[name]):
                 # Older checkpoints predate the released hold; nothing is released.
+                continue
+            if name == "settler" and field == "objections" and field not in components[name]:
+                # Older checkpoints predate saved objections; none is pending.
                 continue
             if name == "bill_settlement" and name not in components:
                 # Older checkpoints predate bill settlement; the next read takes a reference.

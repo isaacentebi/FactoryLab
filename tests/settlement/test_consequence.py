@@ -335,7 +335,9 @@ def test_one_return_is_one_observation_however_many_forecasts_share_it(
     # Which outcomes are already counted survives a checkpoint with the snapshots.
     from factorylab.runtime.resume import _COMPONENT_FIELDS
 
-    assert ("settler", "_Settler__", ("snapshots", "recorded")) in _COMPONENT_FIELDS
+    saved = {name: (prefix, fields) for name, prefix, fields in _COMPONENT_FIELDS}
+    assert saved["settler"][0] == "_Settler__"
+    assert {"snapshots", "recorded"} <= set(saved["settler"][1])
 
 
 def test_a_released_unresolved_order_censors_its_return_and_frees_every_later_one(

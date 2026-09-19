@@ -3,6 +3,7 @@
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 
+from factorylab.kernel.ledger import canonical
 from factorylab.kernel.queue import DecisionQueue, SettleStatus
 from factorylab.kernel.registry import _freeze
 from factorylab.settlement.fidelity import FidelityObjection, parse_objection
@@ -107,6 +108,17 @@ def baseline_key(forecast: Forecast) -> str:
     return forecast.predicate_id
 
 
+def _question(forecast: Forecast, key: str) -> str:
+    """Name the one question a forecast answers: its predicate version, subject,
+    parameters and sealed interval (and, for a population predicate, the window
+    position it was sealed at). Two judges forecasting it make one observation."""
+    cursor = getattr(forecast, "window_cursor", None)
+    return canonical({"key": key, "about": forecast.about_handle,
+                      "params": dict(forecast.params), "made": forecast.made_at_event,
+                      "due": forecast.due_at_event,
+                      "cursor": dict(cursor) if cursor is not None else None}).decode()
+
+
 def normative_brier(q: float, outcome: float) -> float:
     """Return 1 - (q - outcome)^2 in [0, 1] for a probability and a unit-interval outcome."""
     _require_probability(q, "q")
@@ -160,8 +172,20 @@ class Settler:
     def settle_due(
         self, n: int, facts_for: Callable[[Forecast], WindowFacts | None]
     ) -> list[Settled]:
-        """Return due outcomes in seal order; only accepted observed settlements train history."""
+        """Return due outcomes in seal order; only accepted observed settlements train history.
+
+        Snapshot before record, as ``settle_consequences`` does: every forecast of
+        one question is scored against the base rate as it stood before that
+        question's answer entered it, and one question is one observation, entering
+        the base rate once. A question is one predicate version over one subject,
+        one parameter set and one sealed interval (and, for a population predicate,
+        one sealed window position); its forecasts are all due together, so the
+        snapshot lives for this pass only.
+        """
         results = []
+        # question -> (baseline q, uninformative) as it stood before its answer
+        before: dict[str, tuple[float, bool]] = {}
+        answered: set[str] = set()  # questions whose one observation is recorded
         for forecast in self.__book.due(n):
             if forecast.predicate_id == RETURN_PAID_OFF.id:
                 continue
@@ -181,14 +205,19 @@ class Settler:
                 else:
                     y = self.__observer.observe(forecast.predicate_id, forecast.params, facts)
             key = baseline_key(forecast)
+            question = _question(forecast, key)
+            if question not in before:
+                before[question] = (self.__baseline.baseline_q(key),
+                                    self.__baseline.uninformative(key))
+            baseline_q, easy = before[question]
             # Easy questions do not pay. A predicate the world has already
             # answered — a base rate at or beyond the bound over real support —
             # is not a claim anyone can be right about, so it is observed,
             # recorded in the base rate, and worth no standing at all.
-            uninformative = y is not None and self.__baseline.uninformative(key)
+            uninformative = y is not None and easy
             definition = "brier-v1"
             if y is not None and not uninformative:
-                baseline_score = self.__baseline.baseline_brier(key, y)
+                baseline_score = brier(baseline_q, y)
                 score = brier(forecast.q, y)
                 status = SettleStatus.SETTLED
             elif uninformative:
@@ -203,8 +232,9 @@ class Settler:
                 definition_version=definition,
                 sampling_ref=None,
             )
-            if y is not None:
+            if y is not None and question not in answered:
                 self.__baseline.record(key, y)
+                answered.add(question)
             if score is not None:
                 # No predicate is privileged: this claim trains the judge's
                 # standing at the charter's weight, like any other.

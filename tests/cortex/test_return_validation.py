@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from factorylab.cortex.assembly import Assembly, AssemblySpec
+from factorylab.cortex.assembly import OPTIONAL_SECTIONS, Assembly, AssemblySpec
 from factorylab.cortex.request import Request
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.wallet import Wallet
@@ -33,9 +33,16 @@ def invoke(body, schema=None):
 def test_wrong_structured_type_fails_before_memory_or_effects(field, bad):
     ret, assembly, wallet = invoke(json.dumps({field: bad, 'tool_calls': []}
                                             if field != 'tool_calls' else {field: bad}))
-    assert ret.status == 'malformed'
-    assert not ret.children and not ret.tool_calls and not assembly.memory
+    assert not ret.children and not ret.tool_calls
     assert wallet.state()['reservations'] == [] and ret.cost == 2
+    if field in OPTIONAL_SECTIONS and field != 'tool_calls':
+        # An optional section beside the answer is dropped with its reason, and
+        # nothing in it reaches an effect; the rest of the return stands.
+        assert ret.status == 'ok' and field not in ret.outputs
+        assert [d['section'] for d in ret.dropped] == [field]
+        return
+    # The answer itself, or a reply with nothing valid left in it, is malformed.
+    assert ret.status == 'malformed' and not assembly.memory
 
 
 @pytest.mark.parametrize('number', ['1e309', 'NaN', '-Infinity'])

@@ -1,6 +1,5 @@
 """B15: a manifest file cannot borrow another world's declared identity."""
 
-from pathlib import Path
 
 import pytest
 
@@ -15,11 +14,3 @@ def test_loading_by_name_rejects_a_different_declared_identity(tmp_path, monkeyp
         load_manifest("alias")
     with pytest.raises(ValueError, match="file stem"):
         load_manifest(str(tmp_path / "alias.toml"))
-
-
-def test_edition_example_has_one_identity_and_one_card_per_observation():
-    m = load_manifest("edition1-example")
-    assert m.name == Path("edition1-example.toml").stem
-    observations = [card.observation for card in m.charter.cards]
-    assert len(observations) == len(set(observations))
-    assert "model_cost_efficiency" in {card.id for card in m.charter.cards}

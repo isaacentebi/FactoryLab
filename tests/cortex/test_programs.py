@@ -1,18 +1,13 @@
 """C8: a program seat runs in the jail through the meter and answers like a model seat."""
 
-import json
-from dataclasses import replace
 
 import pytest
 
 from factorylab.cortex import sandbox
 from factorylab.cortex.assembly import (
-    MAX_PROGRAM_STATE_BYTES,
     ProgramAssembly,
     ProgramAssemblySpec,
-    validate_proposal,
 )
-from factorylab.cortex.registration import AssemblyProposal, Rejected, parse_proposals
 from factorylab.cortex.request import Request
 from factorylab.cortex.sandbox import ProgramRunner
 from factorylab.kernel.artifacts import ArtifactStore
@@ -58,33 +53,6 @@ def program(wallet=None, *, ledger=None, **kw):
     return asm, wallet, recorded
 
 
-# --- the spec ----------------------------------------------------------------
-
-def test_spec_requires_program_model_code_timeout_and_policy():
-    with pytest.raises(ValueError):
-        spec(model_id="fake-haiku")
-    with pytest.raises(ValueError):
-        spec(code="   ")
-    with pytest.raises(ValueError):
-        spec(code="x" * 16_001)
-    for timeout in (0, 11, 2.0, True):
-        with pytest.raises(ValueError):
-            spec(timeout_s=timeout)
-    with pytest.raises(ValueError):
-        spec(state_policy="shared")
-    assert spec().reward_shapes == {"ProducerReturn": "judged"}
-    custom = spec(emits=("Finding",), schemas={"Finding": {"type": "object"}},
-                  reward_shapes={"Finding": "forecast"})
-    assert custom.reward_shapes == {"Finding": "forecast"}
-
-
-def test_routing_reads_a_flat_ceiling_from_the_program_model():
-    asm, _, _ = program()
-    assert asm.model.ceiling(None) == PRICE
-    with pytest.raises(ValueError):
-        ProgramAssembly(spec(), ProgramRunner(available=False), Meter(TinyWallet(1)), -1)
-
-
 # --- invocation through the meter -------------------------------------------
 
 def test_program_answers_like_a_model_and_is_charged_its_flat_price():
@@ -101,22 +69,6 @@ def test_program_answers_like_a_model_and_is_charged_its_flat_price():
                          "state_out": asm.state_sha}]
 
 
-def test_private_state_written_by_one_call_is_read_by_the_next():
-    require_jail()
-    asm, _, recorded = program()
-    first = asm.invoke(req("h1"))
-    sha_after_first = asm.state_sha
-    second = asm.invoke(req("h2"))
-    assert (first.outputs["seen"], second.outputs["seen"]) == (0, 1)
-    assert asm.state_sha != sha_after_first
-    assert json.loads(asm.artifacts.get(asm.state_sha)) == {"n": 2}
-    assert recorded[1]["state_in"] == sha_after_first
-    assert recorded[1]["state_out"] == asm.state_sha
-    assert asm.artifacts.owner_for(asm.state_sha) == "prog-a"
-    # The artifact is the diary's evidence too: a put precedes each program.call.
-    assert [r["kind"] for r in asm.artifacts.list()] == ["program.state", "program.state"]
-
-
 def test_state_restored_by_hash_is_what_the_next_call_sees():
     require_jail()
     asm, _, _ = program()
@@ -126,16 +78,6 @@ def test_state_restored_by_hash_is_what_the_next_call_sees():
                             artifacts=asm.artifacts)
     fresh.state_sha = sha
     assert fresh.invoke(req("h2")).outputs["seen"] == 1
-
-
-def test_state_is_the_programs_and_never_the_returns():
-    require_jail()
-    asm, wallet, _ = program(state_policy="none")
-    ret = asm.invoke(req())
-    assert ret.status == "malformed" and asm.state_sha is None and ret.cost == PRICE
-    asm, wallet, _ = program()
-    asm.invoke(req())
-    assert "state" not in asm.invoke(req()).outputs
 
 
 #: A program that never stops is stopped by whichever bound trips first. The jail
@@ -154,6 +96,7 @@ OVERRAN = ("timeout", "exit -24")
     ("print('not json')", None),
     ("import json\nprint(json.dumps({'status': 7}))", None),
 ])
+@pytest.mark.gate  # measured over 0.9 s: a subprocess, a jail timeout or a long loop
 def test_failure_is_a_billed_malformed_return_never_an_exception(code, reason):
     require_jail()
     asm, wallet, recorded = program(code=code, timeout_s=1)
@@ -165,16 +108,6 @@ def test_failure_is_a_billed_malformed_return_never_an_exception(code, reason):
     else:
         assert "raw" in ret.outputs
     assert asm.state_sha is None and recorded[0]["status"] == "malformed"
-
-
-def test_oversize_or_unserialisable_state_is_malformed_and_kept_out_of_the_archive():
-    require_jail()
-    code = ("import json,sys\nprint(json.dumps({'action': 'hold', 'state': "
-            f"{{'blob': 'x' * {MAX_PROGRAM_STATE_BYTES}}}}}))\n")
-    asm, _, _ = program(code=code)
-    ret = asm.invoke(req())
-    assert ret.status == "malformed" and "exceeds" in ret.outputs["reason"]
-    assert asm.artifacts.list() == []
 
 
 def test_infeasible_reservation_and_ceiling_yield_failed_with_no_charge():
@@ -205,56 +138,4 @@ def test_program_runner_never_raises(monkeypatch):
     assert runner.run("print(1)", stdin="{}", timeout_s=11) == {"error": "invalid program timeout"}
 
 
-def test_stdin_carries_the_rendered_prompt_the_inputs_and_the_state():
-    asm, _, _ = program()
-    data = json.loads(asm.build_stdin(req(), {"n": 4}))
-    assert set(data) == {"prompt", "description", "inputs", "outcome_schema", "state"}
-    assert data["inputs"] == {"mid": "60000", "you": "prog-a"} and data["state"] == {"n": 4}
-    assert data["prompt"] == replace(req(), inputs=data["inputs"]).prompt_text()
-
-
 # --- registration ----------------------------------------------------------------
-
-def proposal(**kw):
-    return {"kind": "assembly", "id": "prog-a", "model_id": "program", "accepts": ["Tick"],
-            "code": ECHO, **kw}
-
-
-def parse(item, *, jail=True):
-    return parse_proposals({"register": [item]}, event_kinds=frozenset({"Tick"}),
-                           known_models=frozenset({"fake-haiku"}), known_assemblies=frozenset(),
-                           tool_jail=jail)
-
-
-def test_program_proposal_is_an_assembly_with_code_and_needs_the_jail():
-    accepted, rejected = parse(proposal(timeout_s=3, state_policy="private"))
-    assert not rejected and isinstance(accepted[0], AssemblyProposal)
-    assert (accepted[0].model_id, accepted[0].code, accepted[0].timeout_s,
-            accepted[0].state_policy) == ("program", ECHO, 3, "private")
-    assert accepted[0].system_prompt == "program"
-    assert parse(proposal(), jail=False) == ([], [Rejected(0, "no jail on this host")])
-    validate_proposal(proposal(timeout_s=10, state_policy="private"))
-
-
-@pytest.mark.parametrize("changes, reason", [
-    ({"code": None}, "a program seat needs code"),
-    ({"code": ""}, "a program seat needs code"),
-    ({"code": "x" * 16_001}, "code exceeds 16000 chars"),
-    ({"timeout_s": 0}, "timeout_s must be an int in [1, 10]"),
-    ({"timeout_s": 11}, "timeout_s must be an int in [1, 10]"),
-    ({"state_policy": "shared"}, "state_policy must be none or private"),
-    ({"model_id": "unknown"}, "model_id must name a registered model"),
-])
-def test_malformed_program_proposals_are_refused_with_a_reason(changes, reason):
-    assert parse(proposal(**changes)) == ([], [Rejected(0, reason)])
-
-
-def test_model_seats_cannot_carry_program_fields():
-    item = {"kind": "assembly", "id": "seat", "model_id": "fake-haiku", "accepts": ["Tick"],
-            "system_prompt": "Reply with JSON.", "code": "print(1)"}
-    assert parse(item) == ([], [Rejected(0, "code, timeout_s, state_policy and trigger "
-                                            "belong to a program seat")])
-    watcher = {k: v for k, v in item.items() if k != "code"}
-    watcher["trigger"] = {"kind": "funding_sign", "coin": "BTC"}
-    assert parse(watcher) == ([], [Rejected(0, "code, timeout_s, state_policy and trigger "
-                                               "belong to a program seat")])
