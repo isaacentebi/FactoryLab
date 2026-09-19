@@ -7,6 +7,7 @@ import pytest
 
 from factorylab.charter.charter import Norm
 from factorylab.charter.windows import MetricWindow
+from factorylab.cortex.assembly import _validate_return, validate_schema
 from factorylab.cortex.registration import AssemblyProposal
 from factorylab.cortex.request import ChildRequest, Return
 from factorylab.kernel.events import Event, EventKind
@@ -612,12 +613,20 @@ def test_failed_final_evaluator_is_rejected_even_if_called_post_hoc():
     assert rt.queue.history(judge)[-1].status is SettleStatus.INAPPLICABLE
 
 
-def test_realized_field_is_published_only_on_the_final_commission_schema():
+@pytest.mark.parametrize("status", ["supported", "contrary", "unknown"])
+def test_realized_field_is_published_only_on_the_final_commission_schema(status):
     legacy = evaluator_answer_schema({}, {})
     realized = evaluator_answer_schema({}, {}, include_realized=True)
     assert "realized_consequence" not in legacy["properties"]
     assert "realized_consequence" in realized["properties"]
     assert "realized_consequence" not in realized["required"]
+    assert "verdict" not in legacy["required"]
+    answer = {"rationale": "Read the supplied evidence", "realized_consequence": {
+        "status": status, "score": 0.8, "evidence": ["event:7"], "reason": "Evidence"}}
+    with pytest.raises(ValueError, match="required field absent"):
+        validate_schema(answer, realized)
+    validate_schema({**answer, "verdict": 0.8}, realized)
+    _validate_return({"status": "cannot", "reason": "declined"}, realized)
 
 
 def test_one_malformed_final_gets_one_bounded_fresh_retry():
