@@ -601,7 +601,7 @@ class GovernanceMixin:
 
     def _require_founder_endowment(self, handle: str, amount: int, target: str,
                                    *, explicit: bool) -> None:
-        """Require a known founder's free entitlement and wallet backing before admission.
+        """Require a known founder's free entitlement before admission.
 
         Guarantees an explicit endowment cannot fall back to the commons or double-credit
         the founder. Legacy trial registrations retain their historical pool fallback when
@@ -616,8 +616,6 @@ class GovernanceMixin:
             raise ValueError("founder cannot endow itself")
         if self.budget.entitlement(proposer) < amount:
             raise Infeasible("founder's entitlement is below the endowment")
-        if self.wallet.available < amount:
-            raise Infeasible("wallet available balance is below the endowment")
 
     def _preflight_assembly(self, spec: AssemblySpec) -> None:
         """Validate assembly state that can fail before consuming its novelty receipt."""

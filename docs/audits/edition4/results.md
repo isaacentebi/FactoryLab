@@ -2,7 +2,10 @@
 
 This is an experimental implementation, not a production launch. The architect
 authorized at most $50 total inference spend. The budget is a ceiling, not a
-reason to consume it. Source changes remain local and uncommitted.
+reason to consume it. The initial experimental results preceded publication;
+the architect subsequently authorized pushing the changes and opening
+[PR #108](https://github.com/isaacentebi/FactoryLab/pull/108). The PR is not a
+merge or deployment.
 
 All paid work is now closed. Total reported inference spend was **$2.510298**,
 including superseded probe attempts; **$47.489702** remains unspent. No bill was
@@ -224,7 +227,8 @@ tests, with two additional recovery checks. The full gate suite was not run.
 Offline scripted scaling and real jailed cross-participant program execution
 were tested separately. See `verification.json`, `scripted-baseline.json` and
 `grounded-scaling.json`. No mainnet, treasury transfer, top-up, public deployment,
-commit or branch was performed. No key file or manifest named `funded` was read
+commit or branch was performed during those experiments. Subsequent PR
+publication is recorded above. No key file or manifest named `funded` was read
 by the committee.
 
 `changed-files.txt` lists this task's changes. `verification-output.txt` preserves

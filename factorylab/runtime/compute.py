@@ -17,6 +17,7 @@ from factorylab.cortex.request import (
     ChildRequest,
     Request,
     Return,
+    public_child_inputs,
     public_return,
     public_tool_calls,
 )
@@ -1776,7 +1777,7 @@ class ComputeMixin:
             payload = {"about_handle": handle, "description": item.description,
                        # A parent may hand its child the text of a message to send.
                        # The judge that prices the child sees the task, not the body.
-                       "inputs": public_return(item.inputs),
+                       "inputs": public_child_inputs(item.inputs),
                        "outputs": public_return(ret.outputs),
                        "cost": ret.cost, "status": ret.status,
                        "propensity": self._public_propensity(handle)}

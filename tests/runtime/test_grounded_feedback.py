@@ -42,7 +42,7 @@ def _runtime(*, provider=None):
         evaluation=replace(
             manifest.evaluation,
             producer_feedback="realized",
-            forecast_horizon_events=2,
+            grounded_horizon_ticks=2,
             verdict_timeout_events=3,
         ),
     )
@@ -146,6 +146,39 @@ def test_a_favorable_initial_opinion_cannot_settle_the_producer():
     assert not rt.queue.history(producer)
 
 
+def test_grounded_horizon_is_independent_of_ordinary_forecast_horizon():
+    due = []
+    for forecast_horizon in (1, 100):
+        manifest = load_manifest("scripted")
+        manifest = replace(
+            manifest,
+            evaluation=replace(
+                manifest.evaluation,
+                producer_feedback="realized",
+                grounded_horizon_ticks=4,
+                forecast_horizon_events=forecast_horizon,
+            ),
+        )
+        rt = _consequence_runtime(manifest=manifest)
+        handle = _consequence_decision(rt, "seed-decider", CH_VERDICT)
+        contract = freeze_contract(rt, handle, "seed-decider", {"action": "investigate"})
+        due.append(contract.due_tick - contract.opened_tick)
+    assert due == [4, 4]
+
+
+def test_busy_internal_events_do_not_mature_a_grounded_contract_without_ticks():
+    rt = _runtime()
+    producer, contract = _open_contract(rt)
+    opened_tick = rt.ticks_consumed
+    rt.n += 1_000
+
+    rt._settle_due_grounded()
+
+    assert rt.ticks_consumed == opened_tick < contract.due_tick
+    assert producer in rt.grounded_pending
+    assert not any(event.payload.get("grounded_consequence") for event in rt.internal)
+
+
 def test_real_initial_and_final_evaluator_paths_reverse_the_provisional_opinion():
     rt = _runtime(provider=_GroundedProvider())
     producer, event = _consequence_produce(rt, "seed-decider")
@@ -196,7 +229,7 @@ def test_scripted_realized_world_closes_contracts_through_real_dispatch():
     manifest = replace(
         manifest,
         evaluation=replace(manifest.evaluation, producer_feedback="realized",
-                           forecast_horizon_events=2, verdict_timeout_events=3),
+                           grounded_horizon_ticks=2, verdict_timeout_events=3),
     )
     rt = Runtime(
         manifest, events=25, seed=4, initial_balance_micro=100_000_000,

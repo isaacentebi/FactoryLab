@@ -253,6 +253,7 @@ class EvaluationSpec:
     min_coverage: float = 0.5
     trial_amount_micro: int = 100_000  # novelty trial paid per registration
     forecast_horizon_events: int = 10
+    grounded_horizon_ticks: int = 10
     consequence_backstop_events: int = 200
     adversarial_share: float = 0.15  # cap on router mass over antagonist assemblies
     sibling_share: float = 0.5  # share of the representative's meta score a sibling settles at
@@ -517,6 +518,8 @@ class WorldManifest:
         # the world every manifest already described.
         if payload["evaluation"].get("producer_feedback") == "verdict":
             payload["evaluation"].pop("producer_feedback")
+        if payload["evaluation"].get("grounded_horizon_ticks") == 10:
+            payload["evaluation"].pop("grounded_horizon_ticks")
         # An absent [web] block registers no search tool, so a world without one hashes
         # exactly as it did before web search existed.
         if payload["web"] == asdict(WebSpec()):
@@ -747,6 +750,9 @@ class WorldManifest:
         backstop = self.evaluation.consequence_backstop_events
         if type(backstop) is not int or backstop < 1:
             raise ValueError("consequence_backstop_events must be a positive integer")
+        grounded = self.evaluation.grounded_horizon_ticks
+        if type(grounded) is not int or grounded < 1:
+            raise ValueError("evaluation.grounded_horizon_ticks must be a positive integer")
         for a in self.assemblies:
             if not isinstance(a.role, str) or not a.role.strip():
                 raise ValueError(f"assembly {a.id} has an empty role label")
@@ -1022,6 +1028,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         min_coverage=float(ev.get("min_coverage", 0.5)),
         trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10"), rounding="exact"),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
+        grounded_horizon_ticks=ev.get("grounded_horizon_ticks", 10),
         consequence_backstop_events=_tick_horizon(ev, "consequence_backstop", 200),
         adversarial_share=ev.get("adversarial_share", 0.15),
         sibling_share=ev.get("sibling_share", 0.5),

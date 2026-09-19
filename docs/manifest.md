@@ -2024,9 +2024,11 @@ numeric score and produce no learner update; a timed-out pending assessment also
 train early. One malformed final finding can be retried by a different evaluator,
 within the close horizon. Both top-level and child producer decisions use this path.
 
-The first final commission becomes due after `forecast_horizon_events` world ticks;
-closure is bounded by a further `max(horizon + 1, verdict_timeout_ticks)` ticks. A final
-unknown finding may close earlier. Late adoption is not retroactively scored. Card
+`grounded_horizon_ticks` is an exact positive integer, default `10`. It controls when
+the first final consequence-grounded commission becomes due and is independent of
+`forecast_horizon_events`, which continues to govern ordinary forecasts. Closure is
+bounded by a further `max(horizon + 1, verdict_timeout_ticks)` ticks. A final unknown
+finding may close earlier. Late adoption is not retroactively scored. Card
 penalties retain the existing originating-measurement-window rule, including the lambda
 at that window's close; the numeric lambda is not frozen at decision time.
 

@@ -1,6 +1,7 @@
 """Founder-selected assembly endowments stay exact, funded and replayable."""
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -8,9 +9,13 @@ from factorylab.cortex.registration import AssemblyProposal, parse_proposals
 from factorylab.cortex.request import ChildRequest
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.kernel.wallet import Infeasible
+from factorylab.runtime.loop import Runtime
 from factorylab.runtime.resume import restore_runtime, runtime_state
 from factorylab.runtime.shared import CH_VERDICT
+from factorylab.runtime.worlds import load_manifest
+from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelResponse
+from factorylab.world.scripted import ScriptedProvider
 from tests.conftest import make_runtime
 
 FOUNDER = "seed-decider"
@@ -34,8 +39,18 @@ def _proposal(aid="founder-child", *, endowment_micro=None):
     )
 
 
-def _runtime():
-    rt = make_runtime()
+def _runtime(*, novelty_share=None):
+    if novelty_share is None:
+        rt = make_runtime()
+    else:
+        manifest = load_manifest("scripted")
+        manifest = replace(
+            manifest, novelty=replace(manifest.novelty, share=novelty_share))
+        rt = Runtime(
+            manifest, events=0, seed=1, initial_balance_micro=100_000_000,
+            ledger_path=None, drip=False, router_gamma=.1,
+            exchange=FakeExchange(), provider=ScriptedProvider(),
+        )
     rt._manage_reserve_window()
     return rt
 
@@ -118,17 +133,24 @@ def test_explicit_endowment_refuses_overspend_and_open_hold_without_mutation():
     finally:
         rt._seat_wallet(FOUNDER).release(hold)
 
-    raw_available = rt.wallet.available
-    wallet_hold = rt.wallet.reserve(raw_available - 1_000, "wallet-hold", "test:wallet")
-    try:
-        available_after = rt.wallet.available
-        assert available_after < available_after + 500 < raw_available
-        with pytest.raises(Infeasible, match="wallet available"):
-            rt._register(handle, _proposal(aid="wallet-child",
-                                            endowment_micro=available_after + 500))
-        assert "wallet-child" not in rt.assemblies
-    finally:
-        rt.wallet.release(wallet_hold)
+
+def test_full_novelty_reserve_does_not_block_backed_founder_endowment():
+    rt = _runtime(novelty_share=1)
+    handle = _handle(rt)
+    amount = 1_000
+    founder_before = rt.budget.entitlement(FOUNDER)
+    balance_before = rt.wallet.balance
+    reserve_before = rt.reserve.remaining()
+    assert rt.wallet.available == 0
+    assert founder_before >= amount
+
+    rt._register(handle, _proposal(endowment_micro=amount))
+
+    assert rt.wallet.balance == balance_before
+    assert rt.budget.entitlement(FOUNDER) == founder_before - amount
+    assert rt.budget.entitlement("founder-child") == amount
+    assert rt.reserve.remaining() == reserve_before - rt.ev.trial_amount_micro
+    assert rt.budget.check_invariant()
 
 
 def test_explicit_endowment_requires_known_founder_and_rejects_self_or_live_id():

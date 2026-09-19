@@ -20,6 +20,7 @@ import pytest
 
 from factorylab.cortex.request import (
     ADDRESS_TOOL,
+    public_child_inputs,
     public_return,
     public_tool_calls,
 )
@@ -62,6 +63,56 @@ def test_a_body_is_redacted_wherever_a_model_chose_to_put_it():
         "named_arguments": {"tool_id": ADDRESS_TOOL, "arguments": {"to": "d", "text": SECRET}},
     }
     assert SECRET not in rendered(public_return(everywhere))
+
+
+def test_a_root_address_call_is_redacted_without_exposing_continuity():
+    continuity = {"working_state": {"private": SECRET},
+                  "ack_through": "outcome:1", "raw": SECRET}
+    root = public_return({**call(), **continuity})
+    nested = public_return({"call": call(), **continuity})
+
+    for projected in (root, nested):
+        assert SECRET not in rendered(projected)
+        assert not ({"working_state", "ack_through", "raw"} & projected.keys())
+    assert root["tool"] == ADDRESS_TOOL
+    assert root["args"]["to"] == "seat-b"
+    assert root["args"]["body"]["fields"] == ["text"]
+
+
+@pytest.mark.parametrize(
+    ("recipient_field", "body_field"),
+    [
+        ("recipient", "text"),
+        ("to", "body"),
+        ("recipient", "message"),
+        ("to", "content"),
+        ("recipient", "payload"),
+    ],
+)
+@pytest.mark.parametrize("nested", [False, True])
+def test_delegated_address_arguments_are_private_without_a_tool_marker(
+        recipient_field, body_field, nested):
+    addressed = {recipient_field: "seat-b", body_field: SECRET, "topic": "funding"}
+    inputs = {"delegation": addressed} if nested else addressed
+
+    projected = public_child_inputs(inputs)
+    visible = projected["delegation"] if nested else projected
+
+    assert SECRET not in rendered(projected)
+    assert visible[recipient_field] == "seat-b"
+    assert visible["topic"] == "funding"
+    assert visible["body"]["fields"] == [body_field]
+
+
+def test_child_projection_keeps_ordinary_text_and_handles_explicit_calls():
+    ordinary = {"text": SECRET, "payload": {"question": "value"}, "topic": "analysis"}
+    assert public_child_inputs(ordinary) == ordinary
+
+    projected = public_child_inputs({**call(), "working_state": {"private": SECRET}})
+    assert SECRET not in rendered(projected)
+    assert projected["args"]["to"] == "seat-b"
+    assert projected["args"]["body"]["fields"] == ["text"]
+    assert "working_state" not in projected
 
 
 def test_a_body_nested_past_the_projection_is_dropped_not_passed_through():

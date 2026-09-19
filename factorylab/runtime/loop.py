@@ -1097,6 +1097,14 @@ class Runtime(
         if grounded:
             frozen = payload.get("contract")
             frozen = frozen if isinstance(frozen, dict) else {}
+            # The commission's normative basis and observations are its frozen
+            # record, not a fresh market snapshot or the current pricing cards.
+            for key in ("charter", "predicates", "forecast_example", "world",
+                        "your_consequence_standing"):
+                inputs.pop(key, None)
+            inputs["commission"].pop("horizon_events", None)
+            inputs["commission"]["horizon_ticks"] = (
+                frozen.get("due_tick", 0) - frozen.get("opened_tick", 0))
             inputs["realized_consequence"] = {
                 "frozen_norms": frozen.get("norms", []),
                 "producer_claim": frozen.get("producer_outputs", payload.get("outputs", {})),
@@ -1109,7 +1117,7 @@ class Runtime(
                 "evidence": payload.get("evidence", []),
                 "answer_with": (
                     "realized_consequence: {status: supported|contrary|unknown, "
-                    "score: number only when supported, evidence: [supplied refs], reason}"
+                    "score: number only when supported, evidence: [references], reason}"
                 ),
             }
         if generic:
@@ -1126,10 +1134,9 @@ class Runtime(
                 "window-level pricing measurements, not the sole criterion for this decision. "
                 "Uptake, profit, execution, and other measurements are evidence only when "
                 "relevant to the frozen claim and norms; none is mandatory. A true predicate "
-                "or execution receipt is evidence, not automatic usefulness. Cite only "
-                "supplied evidence refs. Answer supported only for a positively evidenced, "
-                "norm-relevant effect; contrary for observed failure; unknown when evidence "
-                "or the frozen normative basis cannot decide. Also give verdict as your "
+                "or execution receipt is evidence, not automatic usefulness. Explain what "
+                "the observed consequences establish about this undertaking, what they "
+                "contradict, and what remains unresolved. Also give verdict as your "
                 "normative quality judgment so the ordinary recursive evaluation path can "
                 "judge your interpretation."
             )

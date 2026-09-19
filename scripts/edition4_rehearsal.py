@@ -16,6 +16,7 @@ import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -128,11 +129,12 @@ class Admission:
             self.stop_reason = "unknown_bill_after_dispatch"
 
     def report(self) -> dict[str, Any]:
+        known_calls = self.attempted - self.uncertain_bills
         return {
             "cap_micro": self.cap_micro,
             "max_calls": self.max_calls,
             "attempted": self.attempted,
-            "known_calls": self.attempted - self.uncertain_bills,
+            "known_calls": known_calls,
             "known_micro": self.known_micro,
             "uncertain_calls": self.uncertain_bills,
             "uncertain_micro": self.uncertain_micro,
@@ -140,8 +142,7 @@ class Admission:
             "refusals": self.refusals,
             "remaining_micro": self.remaining_micro,
             "known_mean_micro": (
-                self.known_micro / max(1, self.attempted - self.uncertain_bills)
-                if self.known_micro else None
+                str(Fraction(self.known_micro, known_calls)) if known_calls else None
             ),
             "stop_reason": self.stop_reason,
         }

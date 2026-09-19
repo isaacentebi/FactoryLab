@@ -37,6 +37,24 @@ def request():
     return ModelRequest("openai/gpt-5.6-luna", "", ({"role": "user", "content": "x"},), 1)
 
 
+def test_report_mean_is_exact_and_distinguishes_free_calls_from_missing_bills():
+    admission = rehearsal.Admission(cap_micro=100, max_calls=5)
+    assert admission.report()["known_mean_micro"] is None
+    for cost in (0, 1, 1):
+        admission.attempted_call()
+        admission.observe(ModelResponse(request().model_id, "{}", 1, 1, "stop",
+                                        cost_micro=cost), 100)
+        if cost == 0:
+            assert admission.report()["known_mean_micro"] == "0"
+    assert admission.report()["known_mean_micro"] == "2/3"
+    admission.attempted_call()
+    admission.observe(ModelResponse(request().model_id, "{}", 1, 1, "stop",
+                                    cost_micro=None), 10)
+    report = admission.report()
+    assert report["known_calls"] == 3 and report["uncertain_calls"] == 1
+    assert report["known_mean_micro"] == "2/3"
+
+
 def test_effective_manifest_preserves_roster_charter_and_endowment():
     original = load_manifest(WORLD)
     effective = rehearsal.effective_manifest(original)

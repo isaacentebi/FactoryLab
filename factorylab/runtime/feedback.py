@@ -1631,18 +1631,39 @@ class FeedbackMixin:
     def _close_assembly_rounds(self) -> None:
         """Close every assembly round whose decision now has an outcome.
 
-        The evidence is the decision's first outcome, by the same rule the router
-        follows (``_deliver_returns``): a score that settled it before its cutoff,
-        or else nothing observed. A timeout is the cutoff, not a zero; a score
-        that arrives after it trains nothing. A round is closed once, whatever
-        opened the decision, so nothing is left open for a decision that will
-        never be scored again.
+        Ordinarily the evidence is the decision's first outcome, by the same rule
+        the router follows (``_deliver_returns``): a score before its cutoff, or
+        else nothing observed. Grounded producers instead keep their frozen round
+        through a wall timeout because their horizon counts world ticks. Their
+        final grounded score overrides that timeout; final unknown discards the
+        round without imputation. Every round closes at most once.
         """
         for handle in list(self.assembly_rounds):
             decision = self.queue.get(handle)
-            if decision.status is SettleStatus.PENDING:
+            if decision.status is SettleStatus.PENDING or (
+                decision.status is SettleStatus.TIMED_OUT
+                and handle in self.grounded_pending
+            ):
                 continue
-            first = next(iter(self.queue.history(handle)), None)
+            history = self.queue.history(handle)
+            grounded = next(
+                (item for item in history
+                 if item.definition_version.startswith(GROUNDED_DEFINITION)),
+                None,
+            )
+            if (
+                grounded is not None
+                and grounded.definition_version == f"{GROUNDED_DEFINITION}-unknown"
+            ):
+                assembly_id = self.assembly_rounds.pop(handle, None)
+                learner = self.assembly_learners.get(assembly_id)
+                if learner is not None:
+                    try:
+                        learner.discard_for(handle)
+                    except KeyError:
+                        pass
+                continue
+            first = grounded or next(iter(history), None)
             reward = (min(1.0, max(0.0, float(first.score)))
                       if first is not None and first.status is SettleStatus.SETTLED
                       else None)

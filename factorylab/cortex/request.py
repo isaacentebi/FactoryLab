@@ -37,6 +37,10 @@ ADDRESS_TOOL = "address.send"
 #: what it said is not.
 ADDRESS_BODY_FIELDS = frozenset({"text", "body", "message", "content", "payload"})
 
+#: Address-shaped child inputs do not always repeat the tool name: a parent can
+#: delegate the complete arguments of an address call as the child's task.
+_ADDRESS_RECIPIENT_FIELDS = frozenset({"recipient", "to"})
+
 #: Where an address call keeps its arguments, whatever the caller named them.
 _ARGUMENT_FIELDS = ("args", "arguments", "inputs")
 
@@ -70,6 +74,29 @@ def _redact_body(args: Any) -> Any:
             "fields": sorted(dropped),
             "bytes": sum(len(json.dumps(args[k], sort_keys=True, default=str).encode("utf-8"))
                          for k in dropped),
+        }
+    return kept
+
+
+def _address_shaped(value: dict[str, Any]) -> bool:
+    """True when a child-input mapping contains both an address and a body."""
+    return bool(_ADDRESS_RECIPIENT_FIELDS & value.keys()) and bool(
+        ADDRESS_BODY_FIELDS & value.keys()
+    )
+
+
+def _redact_projected_body(projected: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    """A projected mapping with raw body fields represented only by their receipt."""
+    kept = {k: v for k, v in projected.items() if k not in ADDRESS_BODY_FIELDS}
+    dropped = [k for k in raw if k in ADDRESS_BODY_FIELDS]
+    if dropped:
+        kept["body"] = {
+            "redacted": "the recipient holds the only readable copy",
+            "fields": sorted(dropped),
+            "bytes": sum(
+                len(json.dumps(raw[k], sort_keys=True, default=str).encode("utf-8"))
+                for k in dropped
+            ),
         }
     return kept
 
@@ -124,8 +151,49 @@ def public_return(outputs: Any) -> dict[str, Any]:
     """
     if not isinstance(outputs, dict):
         return {"invalid_return": True}
-    return {k: _project(v) for k, v in outputs.items()
-            if k not in {"working_state", "ack_through", "raw"}}
+    visible = {k: v for k, v in outputs.items()
+               if k not in {"working_state", "ack_through", "raw"}}
+    return _project(visible)
+
+
+def _project_child_inputs(value: Any, depth: int = 0) -> Any:
+    """Project delegated inputs, including address arguments without a tool marker."""
+    if depth >= _PROJECTION_DEPTH:
+        return {"omitted": "nested deeper than this projection reads"}
+    if isinstance(value, dict):
+        out = {k: _project_child_inputs(v, depth + 1) for k, v in value.items()}
+        if _names_address(value):
+            argument_fields = [field for field in _ARGUMENT_FIELDS if field in out]
+            for field in argument_fields:
+                raw = value[field]
+                if isinstance(raw, dict) and isinstance(out[field], dict):
+                    out[field] = _redact_projected_body(out[field], raw)
+                else:
+                    out[field] = _redact_body(raw)
+            if not argument_fields:
+                return _redact_projected_body(out, value)
+        if _address_shaped(value):
+            return _redact_projected_body(out, value)
+        return out
+    if isinstance(value, (list, tuple)):
+        return [_project_child_inputs(item, depth + 1) for item in value]
+    return value
+
+
+def public_child_inputs(inputs: Any) -> dict[str, Any]:
+    """Project delegated inputs for a public child-evaluation event.
+
+    Guarantees an addressed body stays private even when the parent delegates raw
+    address arguments without naming ``address.send``. A mapping is treated as an
+    address only when it contains both ``recipient``/``to`` and a body field, so
+    ordinary task text remains visible to the evaluator.
+    """
+    if not isinstance(inputs, dict):
+        return {"invalid_return": True}
+    visible = {
+        k: v for k, v in inputs.items() if k not in {"working_state", "ack_through", "raw"}
+    }
+    return _project_child_inputs(visible)
 
 
 def _utc(ns: Any) -> str | None:
@@ -733,7 +801,12 @@ class Request:
 
 @dataclass(frozen=True)
 class ChildRequest:
-    """A neutral composition contract names a target capability and its complete task."""
+    """A neutral composition contract names a target capability and its complete task.
+
+    ``description`` is public task documentation shown to the child evaluator.
+    Private addressed content belongs in ``inputs``, where the public event applies
+    the same body projection as an executed ``address.send`` call.
+    """
 
     target: str
     description: str

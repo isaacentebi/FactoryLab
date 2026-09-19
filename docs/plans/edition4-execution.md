@@ -57,7 +57,9 @@ and matched rehearsals. Spend the first USD 5–10, inspect results, then alloca
 No mainnet, treasury transfers, top-ups, public deployment, publication, or real-capital
 allocation. Never inspect a `*.key` or a manifest named `funded`; the established CLI may
 load credentials internally for authorized inference/testnet execution without exposing them.
-Do not commit, overwrite unrelated work, or change a running world's code or configuration.
+The original experiment phase excluded commits. The architect subsequently
+authorized a branch, push and PR publication; see PR #108. Do not overwrite
+unrelated work or change a running world's code or configuration.
 Fresh worlds only. Preserve the previous release for the baseline.
 
 ## What is being tested

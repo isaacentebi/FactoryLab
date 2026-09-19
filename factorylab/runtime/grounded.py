@@ -99,7 +99,7 @@ def freeze_contract(
     } for card in runtime.charter.cards)
     predicates = tuple((predicate.id, predicate.version) for predicate in runtime.predicates.all())
     opened = runtime.ticks_consumed
-    horizon = max(1, int(runtime.ev.forecast_horizon_events))
+    horizon = runtime.ev.grounded_horizon_ticks
     close_delay = max(horizon + 1, int(runtime.ev.verdict_timeout_ticks))
     return GroundedContract(
         handle=handle, producer_id=producer_id, opened_tick=opened,
