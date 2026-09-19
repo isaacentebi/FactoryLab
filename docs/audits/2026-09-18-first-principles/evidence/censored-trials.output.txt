@@ -1,0 +1,8 @@
+censored: external_unobservable
+trial_count_before: 0
+committee_before: {}
+trial_count_after: 1
+committee_after: {}
+min_settled: 5
+
+Exit code: 0

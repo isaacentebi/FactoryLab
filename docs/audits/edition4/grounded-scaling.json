@@ -1,0 +1,101 @@
+{
+  "benchmark": "offline-scripted-realized-feedback",
+  "date": "2026-09-18",
+  "source": {
+    "runtime_root": "/tmp/factorylab-edition4-treatment-source",
+    "python_digest": "c9f96dcdfbb0681b54ec744953328269ffd9cd4f0183f5ee46683d2ed059b9a5",
+    "manifest_source": "worlds/edition3-rehearsal-5.toml",
+    "in_memory_changes": {
+      "evaluation.producer_feedback": "realized",
+      "exchange.kind": "fake",
+      "exchange.mainnet": false,
+      "exchange.client_namespace": null
+    },
+    "provider": "ScriptedProvider",
+    "exchange": "FakeExchange",
+    "seed": 1,
+    "persistent_ledger": false,
+    "credentials_read": false,
+    "network_calls": false
+  },
+  "measurements": [
+    {
+      "events_requested": 50,
+      "seconds": 2.5692290000006324,
+      "seconds_per_event": 0.05138458000001265,
+      "decisions": 553,
+      "producer_returns": 90,
+      "ledger_items": 12808,
+      "grounded_contracts": 42,
+      "execution_receipts": 10,
+      "timeouts": 26
+    },
+    {
+      "events_requested": 500,
+      "seconds": 57.70604141600052,
+      "seconds_per_event": 0.11541208283200104,
+      "decisions": 6304,
+      "producer_returns": 1061,
+      "ledger_items": 144468,
+      "grounded_contracts": 458,
+      "execution_receipts": 75,
+      "timeouts": 486
+    },
+    {
+      "events_requested": 500,
+      "seconds": 54.104535208003654,
+      "seconds_per_event": 0.1082090704160073,
+      "decisions": 6304,
+      "producer_returns": 1061,
+      "ledger_items": 144468,
+      "grounded_contracts": 458,
+      "grounded_final_requests": 709,
+      "grounded_final_retries": 261,
+      "grounded_findings": 0,
+      "grounded_findings_refused": 321,
+      "grounded_unknown": 432,
+      "execution_receipts": 75,
+      "timeouts": 486,
+      "note": "Repeat added to count the final-evaluation path; deterministic work counts matched."
+    }
+  ],
+  "aggregate": {
+    "seconds_50": 2.5692290000006324,
+    "seconds_500_median": 55.90528831200209,
+    "seconds_per_event_50": 0.05138458000001265,
+    "seconds_per_event_500_median": 0.11181057662400418,
+    "wall_time_ratio_500_to_50": 21.760530695169727,
+    "per_event_slowdown_500_to_50": 2.176053069516973
+  },
+  "historical_reference": {
+    "seconds_50": 2.19,
+    "seconds_500": 60.13,
+    "current_50_delta_percent": 17.3163926940928,
+    "current_500_median_delta_percent": -7.023968879589064,
+    "comparability": "Limited. The realized run produced 553 decisions and 12,808 ledger rows at 50 events, and 6,304 decisions and 144,468 rows at 500. It also attempted delayed final evaluation, but ScriptedProvider supplied no valid realized_consequence findings: 321 were refused and 432 contracts closed unknown in the 500-event repeat. The historical reference did not retain these workload counts."
+  },
+  "receipt_index": {
+    "confirmed": true,
+    "freeze_cursor": "ReceiptBook.execution_count() is O(1)",
+    "evidence_lookup": "ReceiptBook.executions_since(handle, cursor) uses a per-handle derived index and binary search",
+    "restore": "The derived execution index is rebuilt once from saved receipt order",
+    "profile_observation": "Neither public_evidence nor either execution-index accessor appeared in the top 35 cumulative functions of a 200-event cProfile run."
+  },
+  "profile_200_events": {
+    "profiled_seconds": 30.023,
+    "function_calls": 113366088,
+    "primitive_calls": 102290737,
+    "selected_cumulative_seconds": {
+      "routing._route": 19.213,
+      "schematics._world_block": 7.8,
+      "ledger.append": 7.516,
+      "feasibility.filter": 7.103,
+      "routing._seat_need": 6.986,
+      "routing._current_world_chars": 6.947,
+      "json.dumps": 6.239,
+      "runtime._snapshot": 4.872
+    },
+    "remaining_blocker": "The dominant remaining scaling work is repeated routing feasibility and world-view sizing/serialization, followed by ledger canonicalization and periodic full snapshots. These cumulative categories overlap, so they are diagnostic rather than additive."
+  },
+  "conclusion": "The receipt lifetime scan is removed and is not the observed bottleneck. The build is modestly faster than the historical 500-event reference by the median of two runs, but still scales superlinearly: ten times the requested events took 21.76 times the wall time and doubled time per event. This benchmark is a weak test of successful grounded settlement because the generic scripted evaluator never produced a valid final realized-consequence answer."
+}

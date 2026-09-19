@@ -1,0 +1,30 @@
+Agent-measured initial baseline, concurrent local load; seconds are wall time without cProfile.
+[
+  {
+    "ticks": 10,
+    "seconds": 0.643,
+    "events": 121,
+    "invocations": 38,
+    "archive_count": 93,
+    "artifact_entries": 935,
+    "world_block": 85
+  },
+  {
+    "ticks": 20,
+    "seconds": 1.371,
+    "events": 238,
+    "invocations": 73,
+    "archive_count": 165,
+    "artifact_entries": 1913,
+    "world_block": 173
+  },
+  {
+    "ticks": 40,
+    "seconds": 3.935,
+    "events": 544,
+    "invocations": 175,
+    "archive_count": 366,
+    "artifact_entries": 4865,
+    "world_block": 399
+  }
+]

@@ -33,7 +33,8 @@ Imports the kernel and the standard library only, like the rest of
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Iterator, Mapping
+from bisect import bisect_left
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field, replace
 
 from factorylab.kernel.ledger import Ledger, canonical
@@ -260,6 +261,24 @@ class ReceiptBook:
     def __init__(self, ledger: Ledger) -> None:
         self.__ledger = ledger
         self.__by_id: dict[str, _Receipt] = {}
+        self.__execution_ids: list[str] = []
+        self.__execution_by_handle: dict[str, list[tuple[int, str]]] = {}
+
+    def _index_execution(self, identity: str, receipt: _Receipt) -> None:
+        """Append one execution receipt to the derived global and per-handle indexes."""
+        if not isinstance(receipt, ExecutionReceipt):
+            return
+        ordinal = len(self.__execution_ids)
+        self.__execution_ids.append(identity)
+        self.__execution_by_handle.setdefault(receipt.handle, []).append((ordinal, identity))
+
+    def restore(self, receipts: Iterable[_Receipt]) -> None:
+        """Restore record order and rebuild derived execution indexes in one pass."""
+        self.__by_id = {receipt.id: receipt for receipt in receipts}
+        self.__execution_ids = []
+        self.__execution_by_handle = {}
+        for identity, receipt in self.__by_id.items():
+            self._index_execution(identity, receipt)
 
     def record(self, receipt: _Receipt) -> str:
         """Ledger one object and return its id; an identical re-record writes nothing."""
@@ -276,7 +295,22 @@ class ReceiptBook:
         self.__ledger.append({"kind": f"receipt.{kind}", "id": identity,
                               "receipt": receipt.as_dict()})
         self.__by_id[identity] = receipt
+        self._index_execution(identity, receipt)
         return identity
+
+    def execution_count(self) -> int:
+        """Return the global execution-receipt cursor in constant time."""
+        return len(self.__execution_ids)
+
+    def executions_since(self, handle: str, cursor: int) -> list[ExecutionReceipt]:
+        """Return this handle's execution receipts at or after one global cursor."""
+        if not isinstance(handle, str) or not handle:
+            raise ValueError("handle is required")
+        if type(cursor) is not int or not 0 <= cursor <= len(self.__execution_ids):
+            raise ValueError("execution cursor is outside this receipt book")
+        rows = self.__execution_by_handle.get(handle, ())
+        start = bisect_left(rows, (cursor, ""))
+        return [self.__by_id[identity] for _, identity in rows[start:]]
 
     def get(self, identity: str) -> _Receipt | None:
         """The object with this id, or None: an id nobody issued describes nothing."""

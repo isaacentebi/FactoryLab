@@ -1,0 +1,5 @@
+censored_payoffs: 5
+eligible: {'seed-decider': 'producer'}
+uncensored_payoffs: 0
+
+Exit code: 0

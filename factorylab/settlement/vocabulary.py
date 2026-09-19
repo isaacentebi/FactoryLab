@@ -98,7 +98,9 @@ def finding_schema() -> dict:
     }
 
 
-def evaluator_answer_schema(forecasts: dict, register: dict) -> dict:
+def evaluator_answer_schema(
+    forecasts: dict, register: dict, *, include_realized: bool = False
+) -> dict:
     """The evaluator answer schema, including edition 3's structured fidelity objection.
 
     It lives here rather than inline in ``runtime.loop`` so the charter's own
@@ -111,21 +113,34 @@ def evaluator_answer_schema(forecasts: dict, register: dict) -> dict:
     payoff privilege"). ``status`` lets the same answer conclude that the
     subject is unmeasured, or decline the commission outright.
     """
+    properties = {
+        "verdict": {"type": "number", "minimum": 0, "maximum": 1},
+        "payoff": {"type": "number", "minimum": 0, "maximum": 1},
+        "status": {"enum": [UNMEASURED, "cannot"]},
+        "reason": {"type": "string"},
+        "rationale": {"type": "string"},
+        "propensity": {"type": "object"},
+        "forecasts": forecasts,
+        "register": register,
+        "about_handle": {"type": "string"},
+        "fidelity_objection": objection_schema(),
+        "fidelity_finding": finding_schema(),
+    }
+    if include_realized:
+        properties["realized_consequence"] = {
+            "type": "object",
+            "properties": {
+                "status": {"enum": ["supported", "contrary", "unknown"]},
+                "score": {"type": "number", "minimum": 0, "maximum": 1},
+                "evidence": {"type": "array", "items": {"type": "string"}},
+                "reason": {"type": "string"},
+            },
+            "required": ["status", "reason"],
+            "additionalProperties": False,
+        }
     return {
         "type": "object",
-        "properties": {
-            "verdict": {"type": "number", "minimum": 0, "maximum": 1},
-            "payoff": {"type": "number", "minimum": 0, "maximum": 1},
-            "status": {"enum": [UNMEASURED, "cannot"]},
-            "reason": {"type": "string"},
-            "rationale": {"type": "string"},
-            "propensity": {"type": "object"},
-            "forecasts": forecasts,
-            "register": register,
-            "about_handle": {"type": "string"},
-            "fidelity_objection": objection_schema(),
-            "fidelity_finding": finding_schema(),
-        },
+        "properties": properties,
         "required": ["rationale"],
     }
 

@@ -1,0 +1,22 @@
+from tests.conftest import make_runtime
+from factorylab.kernel.queue import PropensityRecord
+
+rt = make_runtime()
+a = 'seed-decider'
+prop = PropensityRecord((a,), (1.0,), a, 0, 'router:Tick', 'probe')
+h = rt.queue.open(actor='router:Tick', event_id='probe', propensity=prop, channel='verdict', deadline_ns=10**18, parent_handle=None, cost_ceiling=0)
+rt.handle_to_assembly[h] = a
+rt.consequences.start(h, 1)
+rt.consequences.finish(h, 0)
+rt.consequences.order_intent('probe-order', h, 'BTC')
+rt.consequences.release_unresolved('probe-order', 2)
+print('censored:', rt.consequences.table.account(h).payoff.censored)
+print('trial_count_before:', rt.stats.consequences_by_assembly.get(a, 0))
+print('committee_before:', rt._committee_eligible())
+try:
+    rt._settle_due_forecasts()
+except Exception as exc:
+    print('settle_exception:', type(exc).__name__, str(exc)[:100])
+print('trial_count_after:', rt.stats.consequences_by_assembly.get(a, 0))
+print('committee_after:', rt._committee_eligible())
+print('min_settled:', rt.m.committee.min_settled)

@@ -1,0 +1,116 @@
+"""Bounded paired evidence test; model responses are data and never executed."""
+import argparse
+import hashlib
+import json
+import sys
+from dataclasses import asdict, replace
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--source', required=True)
+parser.add_argument('--out', required=True)
+parser.add_argument('--paid', action='store_true')
+args = parser.parse_args()
+source = Path(args.source).resolve()
+sys.path.insert(0, str(source))
+from scripts import calibrate_seats as cal
+from scripts import edition4_rehearsal as guard
+from factorylab.runtime.worlds import load_manifest
+from factorylab.runtime.grounded import freeze_contract, public_evidence, parse_finding, observed_evidence_refs
+from factorylab.kernel.queue import PropensityRecord
+from factorylab.kernel.events import Event, EventKind
+from factorylab.learners.router import Sample
+from factorylab.settlement.lots import Payoff
+from factorylab.cortex.assembly import _parse_json_object
+
+MODELS = ('venice:z-ai-glm-5-3-flash', 'openai/gpt-5.6-luna')
+CASES = ('gain', 'loss', 'unobserved')
+CLAIM = {'action': 'order', 'claim': 'I choose to use this decision to increase resources available for future choices. My testable claim is that this decision will have positive net trading proceeds exceeding its own compute cost by the frozen horizon. This is my chosen undertaking, not an objective assigned to other participants.'}
+EXPECTED = {'gain': 'supported', 'loss': 'contrary', 'unobserved': 'unknown'}
+manifest = load_manifest(str(source / 'worlds/control/edition3-rehearsal-5.toml'))
+manifest = replace(manifest, evaluation=replace(manifest.evaluation, producer_feedback='realized'))
+
+class Captured(Exception):
+    pass
+
+class Capture:
+    def __init__(self):
+        self.request = None
+    def affordable(self, *_):
+        return True, ''
+    def complete(self, req):
+        self.request = req
+        raise Captured()
+
+def prepare(model, case, repeat):
+    capture = Capture()
+    rt = cal.build_runtime(manifest, capture, seed=8100 + repeat)
+    producer = 'opportunity'
+    target = next(aid for aid, a in rt.assemblies.items() if a.spec.role == 'evaluator' and a.spec.model_id == model)
+    prop = PropensityRecord((producer,), (1.0,), producer, 0, 'probe', 'probe')
+    subject = rt.queue.open(actor='probe', event_id='subject', propensity=prop, channel='verdict', deadline_ns=10**15, parent_handle=None, cost_ceiling=100000)
+    rt.handle_to_assembly[subject] = producer
+    rt.consequences.start(subject, rt.n)
+    contract = freeze_contract(rt, subject, producer, CLAIM)
+    if not contract.norms:
+        raise RuntimeError('missing frozen norms')
+    if case != 'unobserved':
+        net = 10000 if case == 'gain' else -10000
+        outcome = Payoff(subject, int(net > 1000), net, 1000, rt.n + 1)
+        account = rt.consequences.table.account(subject)
+        rt.ledger.append({'kind': 'consequence.outcome', **asdict(outcome)})
+        rt.consequences.table = rt.consequences.table._accounts({subject: replace(account, payoff=outcome)})
+    rt.grounded_pending[subject] = contract
+    rt.ticks_consumed = contract.due_tick
+    rt._settle_due_grounded()
+    event = rt.internal.pop()
+    evidence = public_evidence(rt, contract)
+    prop = PropensityRecord((target,), (1.0,), target, 0, 'probe', 'probe')
+    judge = rt.queue.open(actor='probe', event_id='judge', propensity=prop, channel='conformity', deadline_ns=10**15, parent_handle=None, cost_ceiling=100000)
+    sample = Sample((target,), (1.0,), target, 0, 'probe', 'probe', ())
+    rt._evaluator_step(event, judge, sample, 10**15)
+    if capture.request is None:
+        raise RuntimeError('request not captured')
+    request = asdict(capture.request)
+    digest = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
+    return capture.request, {'model': model, 'case': case, 'repeat': repeat, 'request': request, 'request_sha256': digest, 'contract': asdict(contract), 'evidence': evidence, 'expected_investigator_only': EXPECTED[case]}
+
+out = Path(args.out)
+out.mkdir(exist_ok=True, parents=True)
+prepared = [prepare(model, case, repeat) for repeat in (1, 2) for model in MODELS for case in CASES]
+preflight = {'source': guard.source_hash(source), 'hypothesis': 'Same frozen chosen claim and norms, opposite observed outcomes yield different findings; missing evidence yields unknown. A synthetic discrimination test, not spontaneous utility, profit, or Class3 evidence.', 'inputs': [row for _, row in prepared]}
+p = out / 'preflight.json'
+if p.exists():
+    if json.loads(p.read_text()) != json.loads(json.dumps(preflight)):
+        raise RuntimeError('preflight changed')
+else:
+    p.write_text(json.dumps(preflight, indent=2) + '\n')
+if not args.paid:
+    print(json.dumps({'preflight': str(p), 'requests': len(prepared)}))
+    sys.exit(0)
+if (out / 'calls.jsonl').exists():
+    raise RuntimeError('refusing repeated paid run')
+admission = guard.Admission(1000000, 12)
+provider = guard.PrepaidProvider(guard.build_prepaid_provider(manifest), manifest, admission)
+records = []
+try:
+    with (out / 'calls.jsonl').open('x') as journal:
+        for req, row in prepared:
+            journal.write(json.dumps({'stage':'attempt','request_sha256':row['request_sha256']}) + '\n'); journal.flush()
+            resp = provider.complete(req)
+            response = {'text': resp.text, 'model':resp.model_id, 'cost_micro':resp.cost_micro, 'stop_reason':resp.stop_reason}
+            journal.write(json.dumps({'stage':'response',**response}) + '\n'); journal.flush()
+            record = {'case':row['case'], 'model':row['model'], 'repeat':row['repeat'], 'response':response, 'request_sha256':row['request_sha256']}
+            try:
+                parsed = _parse_json_object(resp.text)
+                refs = {e['ref'] for e in row['evidence']}
+                finding = parse_finding(parsed.get('realized_consequence'), refs, observed_evidence_refs(row['evidence']))
+                record.update({'finding':finding, 'matches_prediction':finding[0] == EXPECTED[row['case']]})
+            except Exception as exc:
+                record.update({'parse_failure':type(exc).__name__, 'matches_prediction':False})
+            records.append(record)
+            (out / 'records.json').write_text(json.dumps(records, indent=2) + '\n')
+finally:
+    report = {'status':'completed' if len(records)==12 else 'incomplete', 'cost':admission.report(), 'records':records, 'preflight':str(p), 'executed_returned_actions':False, 'scope':'Paid model discrimination only; no live runtime learning or external transactions.'}
+    (out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
+    print(json.dumps({'out':str(out),'cost':admission.report(),'completed':len(records),'matched':sum(r['matches_prediction'] for r in records)}))

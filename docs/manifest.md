@@ -1973,3 +1973,86 @@ rejection is the answer.
 `provider_cost_micro`, `venue_delta_micro` (a map by custody), `position_open`,
 `commitment_settled`, alongside the entitlement movement `net_micro`. The
 inbox item carries them.
+
+## Edition 4 factors: prompt, address, feedback
+
+Three keys turn on one edition 4 change each. All three are elided from the
+canonical manifest JSON at their defaults, so every manifest that predates them
+keeps its hash, and none of them changes a roster digest: a charter ratified on a
+roster is still ratified on it when a factor is switched on.
+
+`[prompt] mode` is `"reference"` (the default) or `"compact"`. Under `reference` a
+request carries the whole institutional world inside the cached prefix, which is
+what every world did before this key existed. Under `compact` the prefix keeps the
+charter norms, the capability index with one line and one price per capability, and
+the sections a return is validated against (`a_return_may_include`,
+`reserved_return_fields`, `action_labels`, `accounting_facts`, `meta_input`). The
+rest of the reference — the registries, the catalogues, the settlement rules — is
+replaced by `sections_not_carried`, a directory naming every held-out section with
+its exact handle, its entry count, its byte size and the route that reads it. A
+compacted section is never moved into `INPUTS` and never dropped: it is retrieved
+through the world-reading tool, which returns the same object the world block
+publishes and the action validators read. On the scripted world the rendered
+producer prompt measured 65,436 versus 36,293 bytes in the integration fixture, and every section other than the
+prefix is byte-identical between the two modes. No byte ceiling is enforced
+anywhere; `Request.section_bytes` measures what was actually sent.
+
+`[tools] address_enabled` is exactly `true` or `false`, default `false` (a truthy
+string or `1` is refused). It gates whether the world publishes the voluntary
+addressing capability. It schedules nothing and wakes nobody. When a return records
+a call to `address.send`, the projection that crosses a contract boundary
+(`public_return`, `public_tool_calls`) keeps the capability, the recipient, the
+price and the size of what was said, and drops the body under any of the names
+`text`, `body`, `message`, `content` or `payload`, at whatever nesting the return
+wrote it. A judge prices an act it can see the shape of; it does not read the
+message. The sender keeps its own copy in its working state, which no projection
+touches.
+
+`[evaluation] producer_feedback` is `"verdict"` (the default) or `"realized"`. Under
+`verdict` a producer decision settles on the judge opinion it drew, which is the
+shipped line. Under `realized`, initial opinion is provisional. Before the producer
+acts, the runtime freezes all charter norm definitions, the separate pricing cards,
+existing predicate versions, evidence baseline and tick horizon. A fresh independent
+evaluator later interprets attributable economic outcomes, execution receipts and
+resolved forecasts against the producer's claim under those frozen norms. Windowed
+pricing cards are not the sole criteria for valuing an individual decision. Historical
+contracts without frozen norms retain that absence on restore; current norms are not
+silently substituted. The current feedback definition is `realized-consequence-v2`. This is
+consequence-grounded evaluation, not an objective utility oracle or a pure-P&L score.
+Supported and contrary findings must cite supplied evidence. Unknown findings have no
+numeric score and produce no learner update; a timed-out pending assessment also cannot
+train early. One malformed final finding can be retried by a different evaluator,
+within the close horizon. Both top-level and child producer decisions use this path.
+
+Additive routers may commission several provisional opinions; all participating
+provisional evaluators and their eligible forecasts remain attached to the contract.
+None of those evaluators may supply its final independent finding. The final
+commission uses the producer's selected emitted kind, including custom judged kinds.
+It uses the first active router in that kind's checkpointed registration order for
+one ordinary, propensity-logged draw. A NOOP ends that commission without forcing
+a judge or trying the other routers. This single-router rule applies only to the
+final commission, not the subsequent recursive evaluation of its finding. Historical
+contracts lacking the emitted-kind field retain the old `ProducerReturn` fallback.
+
+`grounded_horizon_ticks` is an exact positive integer, default `10`. It controls when
+the first final consequence-grounded commission becomes due and is independent of
+`forecast_horizon_events`, which continues to govern ordinary forecasts. Closure is
+bounded by a further `max(horizon + 1, verdict_timeout_ticks)` ticks. A final unknown
+finding may close earlier. Late adoption is not retroactively scored. Card
+penalties retain the existing originating-measurement-window rule, including the lambda
+at that window's close; the numeric lambda is not frozen at decision time.
+
+In realized mode, paid population-tool executions generate version-bound receipts for
+caller and maker. These distinguish same-lineage and cross-lineage use. They contain
+result hashes, not private argument or result bodies, and execution alone earns no score.
+An unknown configuration value is refused at load. All factors are fixed at launch.
+
+Assembly proposals may include `endowment_micro`, an exact positive integer transferred
+from the founder's available entitlement. Omission retains `trial_amount_usd` as the
+default transfer. A chosen endowment does not consume that entire amount from shared
+novelty: admission still uses the fixed trial amount. Unaffordable founding is refused
+before registration; children retain their founder's lineage for commons allocation.
+The amount is recorded in the private budget transfer ledger, not public registration.
+This funds a continuing participant; it is distinct from a `requests[]` child invocation,
+whose actual cost is charged to the requester. It does not introduce individual bankruptcy
+or a fixed lifetime: later commons allocation remains possible.

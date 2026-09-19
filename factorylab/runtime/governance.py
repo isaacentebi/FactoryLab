@@ -599,11 +599,36 @@ class GovernanceMixin:
         if proposer is not None and self.budget.entitlement(proposer) < amount:
             raise Infeasible("proposer's entitlement is below the trial amount")
 
-    def _move_trial(self, handle: str, amount: int, *, to: str | None, reason: str) -> None:
+    def _require_founder_endowment(self, handle: str, amount: int, target: str,
+                                   *, explicit: bool) -> None:
+        """Require a known founder's free entitlement before admission.
+
+        Guarantees an explicit endowment cannot fall back to the commons or double-credit
+        the founder. Legacy trial registrations retain their historical pool fallback when
+        no proposer seat is known.
+        """
+        proposer = self._trial_proposer(handle)
+        if proposer is None:
+            if explicit:
+                raise Infeasible("explicit endowment requires a known founder")
+            return
+        if target == proposer:
+            raise ValueError("founder cannot endow itself")
+        if self.budget.entitlement(proposer) < amount:
+            raise Infeasible("founder's entitlement is below the endowment")
+
+    def _preflight_assembly(self, spec: AssemblySpec) -> None:
+        """Validate assembly state that can fail before consuming its novelty receipt."""
+        self._check_event_schemas(spec)
+        if spec.model_id != "program" and spec.model_id not in self.prices.prices:
+            raise ValueError("assembly model is not priced in this world")
+
+    def _move_trial(self, handle: str, amount: int, *, to: str | None, reason: str,
+                    allow_pool: bool = True) -> None:
         """Move an admitted trial from the proposer to the child seat, or to the pool.
 
-        A child registered without a known proposer is endowed from the pool when the
-        pool can cover it; otherwise it starts empty and infeasible until credited.
+        A legacy child registered without a known proposer is endowed from the pool when
+        the pool can cover it; explicit founder endowments refuse that path.
         """
         proposer = self._trial_proposer(handle)
         if to is not None:
@@ -612,11 +637,15 @@ class GovernanceMixin:
             self.budget.adopt(to, proposer, reason)
         if proposer is None:
             if to is not None:
+                if not allow_pool:
+                    raise Infeasible("explicit endowment requires a known founder")
                 try:
                     self.budget.grant(to, amount, reason)
                 except Infeasible:
                     pass
             return
+        if to == proposer:
+            raise ValueError("founder cannot endow itself")
         if to is None:
             self.budget.debit(proposer, amount, reason)
         elif to != proposer:
@@ -797,12 +826,20 @@ class GovernanceMixin:
                 system_prompt=prop.system_prompt, max_tokens=prop.max_tokens,
                 effort=prop.effort, accepts=frozenset(prop.accepts), role=prop.role,
                 emits=emits, schemas=prop.schemas, **extra)
-            self._check_event_schemas(spec)
             contract = _assembly_contract(prop.id, prop.role, prop.accepts, prop.max_tokens,
                                          emits=spec.emits, schemas=spec.schemas, version=version)
-            self._require_trial(handle, amount)
+            amount = (prop.endowment_micro if prop.endowment_micro is not None
+                      else self.ev.trial_amount_micro)
+            if type(amount) is not int or amount <= 0:
+                raise ValueError("endowment_micro must be a positive integer")
+            self._preflight_assembly(spec)
+            self._require_founder_endowment(
+                handle, amount, prop.id, explicit=prop.endowment_micro is not None)
+            # Novelty admission remains the fixed registration trial. A founder's
+            # chosen endowment is a conserved transfer after admission, not a demand
+            # on the shared novelty runway.
             self._register_with_trial(
-                contract, handle, amount,
+                contract, handle, self.ev.trial_amount_micro,
                 refuse=("id already registered: a live assembly is retired by vote before "
                         "its id takes a next version") if live else "")
             self._instantiate(spec)
@@ -812,7 +849,9 @@ class GovernanceMixin:
                 self.subscription_book.watch(
                     prop.id, owner=self.handle_to_assembly.get(handle),
                     trigger=dict(spec.trigger))
-            self._move_trial(handle, amount, to=prop.id, reason="trial:assembly")
+            self._move_trial(
+                handle, amount, to=prop.id, reason="trial:assembly",
+                allow_pool=prop.endowment_micro is None)
             if custom:
                 self.kind_reward_shapes.update(shapes)
             self.retired_assemblies.discard(prop.id)

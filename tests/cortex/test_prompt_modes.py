@@ -1,0 +1,183 @@
+"""Contract P: what a compact prompt keeps, what it hands back, and what it costs.
+
+A world chooses its prompt mode in the manifest. ``reference`` is what every world
+rendered before the key existed and stays the default, so an old manifest keeps both
+its prompt and its hash. ``compact`` keeps the norms, the priced capability index and
+the sections a return is validated against, and replaces the reference manual with a
+directory of exact section handles.
+
+Three things are proved here. Nothing becomes invisible: every section held out of
+the prompt is named, with the route that reads it. Nothing becomes a second version:
+a retrieved section is the object the world block publishes and the validators read.
+And nothing private becomes addressable: the allowlist is the institutional world
+only. The byte counts are measured and reported, never asserted against a fixed
+ceiling -- the target is a bill, and a bill is measured on a paid run.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+
+import pytest
+
+from factorylab.cortex.schematics import (
+    INSTITUTION_INLINE_KEYS,
+    INSTITUTION_SECTIONS,
+)
+from factorylab.runtime.loop import Runtime
+from factorylab.runtime.worlds import PromptSpec, load_manifest, manifest_from_dict
+from factorylab.world.exchange import FakeExchange
+from factorylab.world.scripted import ScriptedProvider
+
+
+def runtime(mode="reference"):
+    """A scripted runtime in one prompt mode.
+
+    The events budget is zero and nothing here calls ``run``: these tests read what a
+    request would render, so they belong in the check tier and stay in it.
+    """
+    manifest = replace(load_manifest("worlds/scripted.toml"), prompt=PromptSpec(mode=mode))
+    return Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                   drip=False, router_gamma=0.1, provider=ScriptedProvider(),
+                   exchange=FakeExchange(coins=manifest.exchange.coins))
+
+
+@pytest.fixture(scope="module")
+def modes():
+    return runtime("reference"), runtime("compact")
+
+
+def test_reference_is_the_default_and_renders_what_it_always_rendered(modes):
+    reference, _ = modes
+    assert PromptSpec().mode == "reference"
+    assert load_manifest("worlds/scripted.toml").prompt.mode == "reference"
+    prefix = reference._stable_prefix_text()
+    assert "INSTITUTIONS" in prefix and "sections_not_carried" not in prefix
+    # Every institutional section is carried whole, which is the old contract.
+    for section in INSTITUTION_SECTIONS:
+        assert f'"{section}"' in prefix
+
+
+def test_an_unnamed_mode_and_an_unpublished_address_leave_the_manifest_hash_alone():
+    raw = {"name": "scripted", "seed": 1, "initial_balance_usd": "10",
+           "exchange": {"kind": "fake"}}
+    base = load_manifest("worlds/scripted.toml")
+    assert base.manifest_hash() == replace(
+        base, prompt=PromptSpec(mode="reference")).manifest_hash()
+    assert "prompt" not in base.canonical_json()
+    assert "address_enabled" not in base.canonical_json()
+    assert base.tools.address_enabled is False
+    # A named mode is part of the world it defines, so it does change the identity.
+    assert base.manifest_hash() != replace(base, prompt=PromptSpec(mode="compact")).manifest_hash()
+    assert raw  # the loader is exercised through load_manifest above
+
+
+def test_a_refused_mode_or_key_is_refused_at_load():
+    def load(table):
+        manifest_from_dict({"name": "w", "seed": 1, "initial_balance_usd": "1",
+                            "exchange": {"kind": "fake"}, **table})
+
+    with pytest.raises(ValueError, match="prompt.mode"):
+        load({"prompt": {"mode": "short"}})
+    with pytest.raises(ValueError, match="prompt accepts only mode"):
+        load({"prompt": {"mode": "compact", "max_bytes": 8000}})
+    with pytest.raises(ValueError, match="address_enabled"):
+        load({"tools": {"address_enabled": "true"}})
+
+
+def test_compact_keeps_the_norms_the_prices_and_everything_a_return_is_judged_by(modes):
+    reference, compact = modes
+    prefix = compact._stable_prefix_text()
+    for norm in reference.charter.norms:
+        assert norm.definition is None or norm.definition in prefix
+    # The action interface and the meaning of a seat's own numbers stay inline.
+    for section in INSTITUTION_INLINE_KEYS:
+        assert f'"{section}"' in prefix
+    # No action is cheaper to read about than to pay for: every capability keeps its
+    # line and its price, which is what an affordability judgement is made from.
+    for tool_id, spec in reference.tool_specs.items():
+        assert tool_id in prefix
+        price = spec.get("price_micro_per_call")
+        if price is not None:
+            assert str(price) in prefix
+
+
+def test_compact_names_every_section_it_does_not_carry(modes):
+    reference, compact = modes
+    block = reference._institutional_block()
+    directory = compact._institutional_directory(block)
+    named = {row["section"] for row in directory["sections"]}
+    assert named == set(block) - INSTITUTION_INLINE_KEYS
+    assert named  # a compaction that carried everything would prove nothing
+    for row in directory["sections"]:
+        assert row["bytes"] > 0
+        assert row["section"] in INSTITUTION_SECTIONS
+    # Every handle the directory prints is a handle the reader can actually use.
+    for section in named:
+        assert compact.institution_section(section) == block[section]
+
+
+def test_a_section_handle_reaches_the_institutional_world_and_nothing_else(modes):
+    _, compact = modes
+    assert INSTITUTION_SECTIONS == set(compact._institutional_block())
+    for private in ("seats", "custody", "account", "world_resources", "stable_prefix",
+                    "world_update", "clock_now"):
+        with pytest.raises(ValueError):
+            compact.institution_section(private)
+    with pytest.raises(ValueError):
+        compact.institution_section("all")
+
+
+def test_retrieval_returns_the_version_the_world_publishes(modes):
+    _, compact = modes
+    world = compact._world_block()
+    for section in INSTITUTION_SECTIONS:
+        # The world block keeps every section whatever the prompt carries: the
+        # validators, the wake page and the diary read it there.
+        assert compact.institution_section(section) == world[section]
+
+
+def test_compaction_is_measured_and_the_measurement_is_the_bytes_sent(modes):
+    reference, compact = modes
+    long, short = len(reference._stable_prefix_text()), len(compact._stable_prefix_text())
+    assert short < long
+    # The prefix is memoised against what it renders, so two reads are one object.
+    assert compact._stable_prefix_text() is compact._stable_prefix_text()
+
+
+def rendered(rt, seat="mechanism"):
+    """One producer request as its executor would read it, without invoking anything."""
+    seat = next(iter(rt.assemblies))
+    inputs = {"kind": "Tick", "payload": {"index": 1}, "world": rt._world_block(),
+              "you": seat, "your_recent_returns": [], "your_action_policy": {}}
+    return rt._request("decision-1", "Respond to the supplied world event.", inputs,
+                       rt._contract_schema(seat), 10**15, "verdict")
+
+
+def test_a_compact_request_drops_the_manual_and_keeps_the_request(modes):
+    reference, compact = modes
+    rich, lean = rendered(reference), rendered(compact)
+    names = [name for name, _ in lean.sections()]
+    # The request itself is untouched: what compaction removes is institution.
+    assert names == [name for name, _ in rich.sections()]
+    assert "".join(text for _, text in lean.sections()) == lean.prompt_text()
+    assert lean.section_bytes()["total"] == len(lean.prompt_text().encode("utf-8"))
+    for section in ("you", "world_update", "inputs", "outcome_schema",
+                    "outcome_contract", "completion_criterion"):
+        assert lean.section_bytes()[section] > 0
+    assert lean.section_bytes()["total"] < rich.section_bytes()["total"]
+
+
+def test_a_compacted_section_is_not_carried_somewhere_else_instead(modes):
+    reference, compact = modes
+    prompt = rendered(compact).prompt_text()
+    block = reference._institutional_block()
+    moved = [key for key in set(block) - INSTITUTION_INLINE_KEYS
+             if json.dumps(block[key], sort_keys=True, indent=2).encode("utf-8").__len__() > 300
+             and json.dumps(block[key], sort_keys=True, indent=2)[:200] in prompt]
+    # A compaction that pushed the manual into INPUTS would cost more and cache
+    # nothing. Each section is named in the directory and rendered nowhere.
+    assert moved == []
+    for row in compact._institutional_directory(block)["sections"]:
+        assert row["section"] in prompt

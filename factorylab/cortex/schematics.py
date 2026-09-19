@@ -94,6 +94,47 @@ INSTITUTIONS_HEADER = (
     "move, it says so and names where the value in force is published.\n"
 )
 
+#: The institutional sections a compact prompt keeps inline. Two things a seat may
+#: not have to go and fetch: what a well formed return may contain, and what its
+#: own numbers mean. Everything a return is validated against is here, so
+#: compaction can never make an action malformed or hide what an action costs --
+#: the price of every capability is in BASE CAPABILITIES, which is inline in both
+#: modes. What leaves is the reference manual: the registries, the catalogues and
+#: the settlement prose, which are read when a seat means to use one.
+INSTITUTION_INLINE_KEYS = frozenset({
+    "a_return_may_include", "accounting_facts", "action_labels", "meta_input",
+    "reserved_return_fields",
+})
+
+#: Every section name ``_institutional_block`` publishes, and therefore the whole
+#: allowlist a world-reading tool may serve. It is the institutional world only:
+#: no seat row, no custody view, no account, no private state and no prefix bytes
+#: are named here, so a section handle cannot address another seat. A section is
+#: retrieved through ``institution_section``, which returns the same value the
+#: prefix rendered and the validators read -- never a second copy of it.
+INSTITUTION_SECTIONS = frozenset({
+    "a_return_may_include", "accounting_facts", "action_labels", "assemblies",
+    "catalogue", "clock", "committee", "composition", "compute_supply", "connectors",
+    "contracts", "event_kinds", "event_schemas", "mechanics", "meta_input", "models",
+    "observation_facts", "observations", "population_tools", "prices",
+    "reserved_return_fields", "routers", "scoring", "sellers", "trading_markets",
+    "venue_listing", "work",
+})
+
+#: The head of a compact prompt's institutional part: the sections that stayed, and
+#: then the directory of the ones that did not.
+INSTITUTIONS_COMPACT_HEADER = (
+    "INSTITUTIONS\nWhat a return may contain and what your numbers mean, stated "
+    "here once for the life of this runtime. The rest of this world's reference "
+    "-- its registries, catalogues and settlement rules -- is not carried in this "
+    "prompt. Its sections are listed under sections_not_carried with the route "
+    "that reads them. A section you have not read is unread, not empty, and a "
+    "capability you cannot see the shape of is still listed with its price in "
+    "BASE CAPABILITIES. What moves is below: WORLD UPDATE carries the charter in "
+    "force and what changed, YOU carries your own account and authority, and "
+    "INPUTS carries this request.\n"
+)
+
 
 def _usd(micro: Any) -> str | None:
     """Exact USD text for integer micro-USD; ``None`` for an unobserved amount."""
@@ -146,6 +187,8 @@ class SchematicsMixin:
             "reward_shapes": {"ProducerReturn": "judged"},
             "max_tokens": 512,
             "effort": "low",
+            "endowment_micro": "optional positive integer micro-USD transferred from the "
+            "founder's available entitlement; omission uses the published trial amount",
         },
         "router": {
             "kind": "router",
@@ -681,6 +724,74 @@ class SchematicsMixin:
             "addressing": _ADDRESSING,
         }
 
+    def _prompt_mode(self) -> str:
+        """The manifest's prompt mode, or the mode every world had before the key."""
+        return getattr(getattr(getattr(self, "m", None), "prompt", None), "mode", "reference")
+
+    def institution_section(self, name: str) -> Any:
+        """One institutional section by name: the value the prefix and the validators use.
+
+        Guarantees the value returned is the one ``_institutional_block`` publishes,
+        built here rather than copied, so a retrieved contract can never be a
+        staler version of the contract an action is validated against. Guarantees
+        the name is one of ``INSTITUTION_SECTIONS`` and nothing else: a section
+        handle addresses the institutional world, and no name in it reaches a
+        seat's own row, a custody view, an account or any private state. Guarantees
+        one section an ask: no name returns the whole block, because a retrieval
+        that can dump everything is the manual again.
+        """
+        if name not in INSTITUTION_SECTIONS:
+            raise ValueError(f"no institutional section named {name!r}")
+        block = self._institutional_block()
+        if name not in block:
+            # Named in the allowlist, absent from this world: an honest gap, never
+            # an invented empty section.
+            raise ValueError(f"section {name!r} is not published by this world")
+        return block[name]
+
+    def _institutional_directory(self, institutions: dict[str, Any]) -> dict[str, Any]:
+        """The sections a compact prompt did not carry, by exact handle, with their size.
+
+        Guarantees every section held out of the prompt is named here, so
+        compaction hides no institution: a reader can see that a thing exists, how
+        much of it there is, and how to read it. The handles are the exact names
+        ``institution_section`` accepts, so a seat never has to guess one.
+        """
+        rows = []
+        for key in sorted(institutions):
+            if key in INSTITUTION_INLINE_KEYS:
+                continue
+            value = institutions[key]
+            rows.append({
+                "section": key,
+                "entries": len(value) if isinstance(value, (list, tuple, dict)) else 1,
+                "bytes": len(json.dumps(value, sort_keys=True, indent=2).encode("utf-8")),
+            })
+        tool = "world.read" if "world.read" in getattr(self, "tool_specs", {}) else None
+        return {
+            "sections": rows,
+            "read_with": (
+                tool + ' {"section": "<one of the handles above>"}' if tool else
+                "no world-reading tool is registered in this world; these sections "
+                "are not retrievable here"
+            ),
+            "authority": "a retrieved section is the same value this world publishes "
+                         "and validates against, not a summary of it",
+        }
+
+    def _institution_text(self, institutions: dict[str, Any]) -> tuple[str, str]:
+        """The institutional part of the prefix: its header and its body, by prompt mode.
+
+        Guarantees ``reference`` renders exactly what it rendered before the mode
+        existed, byte for byte, and that ``compact`` renders the inline sections and
+        a directory naming every section it left out.
+        """
+        if self._prompt_mode() != "compact":
+            return INSTITUTIONS_HEADER, json.dumps(institutions, sort_keys=True, indent=2)
+        body = {k: v for k, v in institutions.items() if k in INSTITUTION_INLINE_KEYS}
+        body["sections_not_carried"] = self._institutional_directory(institutions)
+        return INSTITUTIONS_COMPACT_HEADER, json.dumps(body, sort_keys=True, indent=2)
+
     def _stable_prefix_text(self, institutions: dict[str, Any] | None = None) -> str:
         """The prefix every request in this world opens with, serialised once and reused.
 
@@ -706,13 +817,14 @@ class SchematicsMixin:
         different prefixes as one: it re-serialises, and the only thing it costs
         is the cache it was put here to win.
         """
-        body = json.dumps(self._institutional_block() if institutions is None else institutions,
-                          sort_keys=True, indent=2)
+        header, body = self._institution_text(
+            self._institutional_block() if institutions is None else institutions)
         signature = (
             tuple((str(n), n.definition) for n in self.charter.norms),
             tuple((tool_id, spec.get("description", ""), spec.get("price_micro_per_call"))
                   for tool_id, spec in sorted(self.tool_specs.items())),
             tuple(sorted(self.PROPOSAL_SHAPES)),
+            header,
             body,
         )
         memo = getattr(self, "_prefix_memo", None)
@@ -720,7 +832,7 @@ class SchematicsMixin:
             index = json.dumps(self._capability_index(), sort_keys=True, indent=2)
             memo = (signature,
                     f"{self._world_contract_text()}\n{CAPABILITY_HEADER}{index}\n\n"
-                    f"{INSTITUTIONS_HEADER}{body}\n\n")
+                    f"{header}{body}\n\n")
             self._prefix_memo = memo
         return memo[1]
 

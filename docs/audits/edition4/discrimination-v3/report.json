@@ -1,0 +1,261 @@
+{
+  "status": "completed",
+  "cost": {
+    "cap_micro": 1000000,
+    "max_calls": 12,
+    "attempted": 12,
+    "known_calls": 12,
+    "known_micro": 36012,
+    "uncertain_calls": 0,
+    "uncertain_micro": 0,
+    "overruns": 0,
+    "refusals": 0,
+    "remaining_micro": 963988,
+    "known_mean_micro": 3001.0,
+    "stop_reason": "max_calls"
+  },
+  "records": [
+    {
+      "case": "gain",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "repeat": 1,
+      "response": {
+        "text": "{\"rationale\": \"Independent evaluation of the frozen producer claim for decision-0. The claim is narrow and testable: positive net trading proceeds exceeding the decision's own compute cost by the frozen horizon. The supplied evidence (economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322) shows a fixed, observed consequence with net_micro=10000 (signed, cash_realized=true) against cost_micro=1000, so net proceeds ($0.01) exceed compute cost ($0.001) and the recorded predicate outcome y=1. Under epistemic integrity the claim is answered against the criterion it actually made, which was not rewritten after the fact. Under fidelity the favorable number is defeasible evidence, not proof of value: fill_is_profit=false alongside a positive net leaves the mechanism of the surplus unresolved (it cannot be attributed to the fill itself), earned_micro=0 shows no external income, and a $0.01 net on a $300 account is trivially small. Under consequential usefulness the frozen claim deliberately disclaimed an obligation to others ('my chosen undertaking, not an objective assigned to other participants'), so no counterparty-uptake evidence is required for this adjudication, but none exists and internal gain alone should not later be read as usefulness. No evidence of unconsented costs on outsiders (bounded reciprocity) and no agency-harm evidence appear in the record. The narrow claim is therefore supported at moderate strength; the residual uncertainty is the unexplained sign of net given fill_is_profit=false and the small magnitude.\", \"about_handle\": \"decision-0\", \"payoff\": 0.95, \"realized_consequence\": {\"status\": \"supported\", \"score\": 0.65, \"evidence\": [\"economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322\"], \"reason\": \"Frozen norms applied: epistemic integrity (the claim is tested against its own stated criterion: net trading proceeds exceeding own compute cost within the frozen horizon) and fidelity (the economic outcome is defeasible evidence, favorable but not proof of value). Evidence: the supplied EconomicOutcome ref shows net_micro=10000 signed and cash_realized against cost_micro=1000, with the predicate resolved y=1, status fixed and observed. The claim's arithmetic test is met. Tensions kept open: fill_is_profit=false with a positive net leaves the surplus's mechanism unexplained, earned_micro=0 means no external income contributed, and consequential usefulness to an independent counterparty is neither claimed by the producer nor evidenced here. Score capped below 1 on those unresolved points and the trivial magnitude.\"}, \"reason\": \"Applied frozen norms: epistemic integrity (claim judged by the criterion it committed to at acceptance, unchanged), fidelity (the favorable net measurement is defeasible evidence; favorable measurement coexists with unproven usefulness and an unexplained mechanism), and consequential usefulness (the frozen claim explicitly disclaimed an obligation to others, so no uptake evidence was required, and none is inferred). Claim/effect: positive net trading proceeds exceeding own compute cost by the frozen horizon. Cited evidence: economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322 (net_micro=10000, cost_micro=1000, cash_realized=true, y=1, fill_is_profit=false, earned_micro=0). Supported: the testable arithmetic holds on supplied evidence; contrary evidence is absent; residual uncertainty comes from fill_is_profit=false against a positive signed net and the trivial magnitude, so score is 0.65 rather than higher.\", \"verdict\": 0.65, \"working_state\": {\"lens\": \"Adjudicated decision-0: narrow self-adopted trading claim supported (net $0.01 > cost $0.001, y=1) with residual doubts: fill_is_profit=false against positive net (mechanism unexplained), no external income, trivial magnitude. Open question: if later evidence shows the net surplus arose outside trading proceeds, this adjudication should be reopened under fidelity.\", \"open_questions\": [\"what produced positive net_micro given fill_is_profit=false on decision-0\"], \"active_commitments\": []}}",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "cost_micro": 4348,
+        "stop_reason": "stop"
+      },
+      "request_sha256": "db287cc2e43e0a34ae8bb09b0612fbfa99ce5334e292fef58414cbf9010a23cd",
+      "finding": [
+        "supported",
+        0.65,
+        [
+          "economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322"
+        ],
+        "Frozen norms applied: epistemic integrity (the claim is tested against its own stated criterion: net trading proceeds exceeding own compute cost within the frozen horizon) and fidelity (the economic outcome is defeasible evidence, favorable but not proof of value). Evidence: the supplied EconomicOutcome ref shows net_micro=10000 signed and cash_realized against cost_micro=1000, with the predicate resolved y=1, status fixed and observed. The claim's arithmetic test is met. Tensions kept open: fill_is_profit=false with a positive net leaves the surplus's mechanism unexplained, earned_micro=0 means no external income contributed, and consequential usefulness to an independent counterparty is neither claimed by the producer nor evidenced here. Score capped below 1 on those unresolved points and the trivial magnitude."
+      ],
+      "matches_prediction": true
+    },
+    {
+      "case": "loss",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "repeat": 1,
+      "response": {
+        "text": "{\n  \"about_handle\": \"decision-0\",\n  \"payoff\": 0.05,\n  \"rationale\": \"The producer (opportunity) committed, under action 'order', to a testable claim of positive net trading proceeds exceeding its own compute cost by the frozen horizon. The supplied EconomicOutcome for decision-0 is fixed and observed: net_micro = -10000, earned_micro = 0, cost_micro = 1000, fill_is_profit = false, y = 0, cash_realized = true. The claim's own testable criterion therefore resolved false on its stated terms. I applied epistemic integrity (the commitment is answerable to evidence, and the evidence refutes it rather than being rewritable by a changed criterion), consequential usefulness (no uptake, no positive proceeds, net resource destruction rather than something a counterparty has reason to value), and fidelity (the economic outcome is a direct measurement of the claim, not a proxy; a missing measurement would leave this unmeasured, but the measurement is present and adverse, so it counts against the claim). Because the observed consequence is already fixed at y = 0, my sealed payoff probability that the kernel's consequence predicate resolves true is low.\",\n  \"realized_consequence\": {\n    \"evidence\": [\n      \"economic-outcome:3bd3dd1da33703b34c255d15470055bcbffe8476caa13d0ad0ef56815cfa01a1\"\n    ],\n    \"reason\": \"Frozen norms applied: epistemic integrity and consequential usefulness, with fidelity governing the evidentiary reading. The producer_claim (opportunity, decision-0, action 'order') promised positive net trading proceeds exceeding its own compute cost by the frozen horizon. The cited EconomicOutcome is fixed and observed for exactly this handle: net_micro = -10000, earned_micro = 0, cost_micro = 1000, fill_is_profit = false, cash_realized = true, y = 0. Net trading proceeds were negative and did not exceed compute cost, so the claim's own testable criterion failed on a direct, non-proxy measurement. This is contrary, not unknown: the evidence is present and adverse, and fidelity bars neither reading it nor treating an absent favorable proxy as a defense.\",\n    \"status\": \"contrary\"\n  },\n  \"verdict\": 0.3,\n  \"working_state\": {\n    \"state\": {\n      \"active_commitments\": [],\n      \"lens\": \"Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.\",\n      \"open_questions\": [],\n      \"notes\": \"First judging completed at tick 10: decision-0 (producer opportunity) realized_consequence = contrary on economic-outcome:3bd3dd1da33703b34c255d15470055bcbffe8476caa13d0ad0ef56815cfa01a1 (net -10000 micro_usd vs claimed positive proceeds); verdict 0.3, payoff 0.05. Watch for any fidelity objection against this verdict; if one arrives, adjudicate independently without owning the challenged measurement.\"\n    }\n  }\n}",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "cost_micro": 2084,
+        "stop_reason": "stop"
+      },
+      "request_sha256": "1dc002a909c1f2f4a0e3a1cd9c5d796dff51c2e3aa2034a2d9666c7fc4e029f5",
+      "finding": [
+        "contrary",
+        0.0,
+        [
+          "economic-outcome:3bd3dd1da33703b34c255d15470055bcbffe8476caa13d0ad0ef56815cfa01a1"
+        ],
+        "Frozen norms applied: epistemic integrity and consequential usefulness, with fidelity governing the evidentiary reading. The producer_claim (opportunity, decision-0, action 'order') promised positive net trading proceeds exceeding its own compute cost by the frozen horizon. The cited EconomicOutcome is fixed and observed for exactly this handle: net_micro = -10000, earned_micro = 0, cost_micro = 1000, fill_is_profit = false, cash_realized = true, y = 0. Net trading proceeds were negative and did not exceed compute cost, so the claim's own testable criterion failed on a direct, non-proxy measurement. This is contrary, not unknown: the evidence is present and adverse, and fidelity bars neither reading it nor treating an absent favorable proxy as a defense."
+      ],
+      "matches_prediction": true
+    },
+    {
+      "case": "unobserved",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "repeat": 1,
+      "response": {
+        "text": "{\n  \"about_handle\": \"decision-0\",\n  \"payoff\": 0.4,\n  \"propensity\": {\"investigate\": 1.0},\n  \"rationale\": \"Judging decision-0 (producer: opportunity) on its frozen claim of positive net trading proceeds exceeding compute cost. The supplied evidence list is empty and the realization payload is empty, so no executed order, fill, balance change, or receipt is available to test the claim against. The observation window (opened tick 0, due tick 10, close tick 30, current tick 10) has not closed, so the consequence is not yet fixed either way. Under epistemic integrity the claim must stand on evidence, and none is supplied; under fidelity, missing measurement alone is not evidence of failure, so contrary is not warranted. I also cannot support: no fill, no balance movement, no receipt ref exists. The honest resolution is unknown until the window closes and balance/fill facts arrive.\",\n  \"realized_consequence\": {\n    \"evidence\": [],\n    \"reason\": \"Frozen norms applied: epistemic integrity and fidelity (with consequential usefulness as the substance of the claim). The producer's claim \u2014 that this decision would produce positive net trading proceeds exceeding its own compute cost by the frozen horizon \u2014 is a testable commitment, but the supplied evidence array is empty and the realized_consequence payload carries no refs: no fill record, no wallet-balance series, no execution receipt, no cost accounting. Epistemic integrity makes the claim answerable to evidence; with no evidence the claim is neither supported nor contradicted. Fidelity forbids treating missing measurement as failure, so contrary is excluded, and forbids counting internal assertions as outcomes, so supported is excluded. The window has not closed (due tick 10 of close tick 30), so the consequence predicate is not yet fixed. The censorship-bound price constraint (avoidably unresolved share) is a window-level pricing measurement, not evidence about this claim itself.\",\n    \"status\": \"unknown\"\n  },\n  \"verdict\": 0.5,\n  \"working_state\": {\n    \"state\": {\n      \"active_commitments\": [],\n      \"lens\": \"Judge frozen producer claims only on supplied evidence refs. decision-0 (opportunity, trading-proceeds claim) resolved unknown at tick 10: empty evidence, window not closed (close tick 30). Re-examine if later inputs carry the closed-window balance or fill facts for decision-0; supporting requires positive evidence of net proceeds exceeding cost, contrary requires observed loss evidence, and missing evidence stays unknown rather than becoming either.\",\n      \"open_questions\": [\"Did opportunity place an order under decision-0, and what was the settled net P&L vs compute cost? Check closed-window wallet_balance_micro and fills when a later request supplies them.\"]\n    }\n  }\n}",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "cost_micro": 2134,
+        "stop_reason": "stop"
+      },
+      "request_sha256": "2ff33c2d96d6303cb9c70f21fcdd7beb23d1bb6771730705a4e847f0634b116d",
+      "finding": [
+        "unknown",
+        null,
+        [],
+        "Frozen norms applied: epistemic integrity and fidelity (with consequential usefulness as the substance of the claim). The producer's claim \u2014 that this decision would produce positive net trading proceeds exceeding its own compute cost by the frozen horizon \u2014 is a testable commitment, but the supplied evidence array is empty and the realized_consequence payload carries no refs: no fill record, no wallet-balance series, no execution receipt, no cost accounting. Epistemic integrity makes the claim answerable to evidence; with no evidence the claim is neither supported nor contradicted. Fidelity forbids treating missing measurement as failure, so contrary is excluded, and forbids counting internal assertions as outcomes, so supported is excluded. The window has not closed (due tick 10 of close tick 30), so the consequence predicate is not yet fixed. The censorship-bound price constraint (avoidably unresolved share) is a window-level pricing measurement, not evidence about this claim itself."
+      ],
+      "matches_prediction": true
+    },
+    {
+      "case": "gain",
+      "model": "openai/gpt-5.6-luna",
+      "repeat": 1,
+      "response": {
+        "text": "{\n  \"about_handle\": \"decision-0\",\n  \"realized_consequence\": {\n    \"status\": \"supported\",\n    \"score\": 0.9,\n    \"evidence\": [\n      \"economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322\"\n    ],\n    \"reason\": \"The claim was that the decision would produce positive net trading proceeds exceeding its own compute cost by the frozen horizon. The cited settled EconomicOutcome records cash_realized=true, net_micro=10000 micro-USD, cost_micro=1000 micro-USD, earned_micro=0, and y=1. Thus the observed net proceeds exceeded the stated compute cost. The result supports durable agency because it increased resources available for future choices, and it is consistent with epistemic integrity because the undertaking had a defined, settled observation rule. The evidence does not establish independent uptake or a broader consequential-usefulness effect, and it does not show an unconsented outsider cost; those aspects remain unmeasured rather than failures.\"\n  },\n  \"rationale\": \"Applying the frozen norms of durable agency and epistemic integrity, the settled positive net outcome supports the producer's specific resource-building claim. Consequential usefulness, bounded reciprocity, and fidelity do not independently establish a stronger conclusion from this single economic observation. The conclusion is supported for the stated effect, not proof of every norm.\",\n  \"verdict\": 0.9,\n  \"payoff\": 1.0\n}",
+        "model": "openai/gpt-5.6-luna",
+        "cost_micro": 5910,
+        "stop_reason": "stop"
+      },
+      "request_sha256": "d9db697ec3c689c61be894988460896c1a0b847da6f6791fb32654b21bd7241f",
+      "finding": [
+        "supported",
+        0.9,
+        [
+          "economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322"
+        ],
+        "The claim was that the decision would produce positive net trading proceeds exceeding its own compute cost by the frozen horizon. The cited settled EconomicOutcome records cash_realized=true, net_micro=10000 micro-USD, cost_micro=1000 micro-USD, earned_micro=0, and y=1. Thus the observed net proceeds exceeded the stated compute cost. The result supports durable agency because it increased resources available for future choices, and it is consistent with epistemic integrity because the undertaking had a defined, settled observation rule. The evidence does not establish independent uptake or a broader consequential-usefulness effect, and it does not show an unconsented outsider cost; those aspects remain unmeasured rather than failures."
+      ],
+      "matches_prediction": true
+    },
+    {
+      "case": "loss",
+      "model": "openai/gpt-5.6-luna",
+      "repeat": 1,
+      "response": {
+        "text": "{\"about_handle\":\"decision-0\",\"realized_consequence\":{\"status\":\"contrary\",\"evidence\":[\"economic-outcome:3bd3dd1da33703b34c255d15470055bcbffe8476caa13d0ad0ef56815cfa01a1\"],\"reason\":\"The producer claimed that the decision would produce positive net trading proceeds exceeding its compute cost by the frozen horizon. The settled EconomicOutcome for decision-0 records cash_realized=true, net_micro=-10000, cost_micro=1000, earned_micro=0, and y=0. This is contrary to the claim: the realized net result was negative and did not exceed compute cost.\"},\"reason\":\"Applied consequential usefulness and durable agency: the intended increase in resources for future choices was not achieved, because the settled outcome records a negative net result and zero earnings. Applied epistemic integrity and fidelity: the explicit testable claim is answerable to the supplied settled measurement, and the negative result is contrary evidence rather than an unobserved or censored outcome. The evidence establishes the economic consequence but does not by itself establish any broader harm to outsiders under bounded reciprocity.\",\"rationale\":\"The claim is norm-relevant because it concerns creating additional resources for future choices. The addressed consequence is settled, not merely intended or submitted: decision-0 is identified by handle and the supplied EconomicOutcome reports observed=true, status=fixed, and cash_realized=true. On that evidence, the claim failed.\",\"verdict\":0,\"payoff\":0.05}",
+        "model": "openai/gpt-5.6-luna",
+        "cost_micro": 5834,
+        "stop_reason": "stop"
+      },
+      "request_sha256": "d4ca151d498b9b4d649bdbaf6bc1af737620e8c683667938db7b0fd3d1a03dfc",
+      "finding": [
+        "contrary",
+        0.0,
+        [
+          "economic-outcome:3bd3dd1da33703b34c255d15470055bcbffe8476caa13d0ad0ef56815cfa01a1"
+        ],
+        "The producer claimed that the decision would produce positive net trading proceeds exceeding its compute cost by the frozen horizon. The settled EconomicOutcome for decision-0 records cash_realized=true, net_micro=-10000, cost_micro=1000, earned_micro=0, and y=0. This is contrary to the claim: the realized net result was negative and did not exceed compute cost."
+      ],
+      "matches_prediction": true
+    },
+    {
+      "case": "unobserved",
+      "model": "openai/gpt-5.6-luna",
+      "repeat": 1,
+      "response": {
+        "text": "{\n  \"about_handle\": \"decision-0\",\n  \"realized_consequence\": {\n    \"status\": \"unknown\",\n    \"reason\": \"The claim concerns consequential usefulness, durable agency, epistemic integrity, bounded reciprocity, and fidelity: the producer intended an order to produce positive net trading proceeds exceeding compute cost by the frozen horizon. However, realized_consequence.evidence is empty, and no execution receipt, settlement, profit, cost, uptake, or harm evidence is supplied. The operation and its consequence therefore cannot be classified as settled success or failure.\"\n  },\n  \"verdict\": 0.5,\n  \"payoff\": 0.5,\n  \"rationale\": \"Applied all five frozen norms. The claim is norm-relevant because it asserts improved resources for future choices, but there is no cited evidence showing that an order was submitted or settled, that proceeds were positive, that compute costs were exceeded, or that any independent counterparty valued the result. Missing evidence is not evidence of failure, so the appropriate consequence finding is unknown rather than contrary or supported.\"\n}",
+        "model": "openai/gpt-5.6-luna",
+        "cost_micro": 5648,
+        "stop_reason": "stop"
+      },
+      "request_sha256": "1dc2c9984844cb245e66928a45712f1931f5d1b7295c642c7c32f1440910de2a",
+      "finding": [
+        "unknown",
+        null,
+        [],
+        "The claim concerns consequential usefulness, durable agency, epistemic integrity, bounded reciprocity, and fidelity: the producer intended an order to produce positive net trading proceeds exceeding compute cost by the frozen horizon. However, realized_consequence.evidence is empty, and no execution receipt, settlement, profit, cost, uptake, or harm evidence is supplied. The operation and its consequence therefore cannot be classified as settled success or failure."
+      ],
+      "matches_prediction": true
+    },
+    {
+      "case": "gain",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "repeat": 2,
+      "response": {
+        "text": "{\n  \"rationale\": \"Adjudicating the frozen producer claim on decision-0 (producer: opportunity). The claim's testable content was narrow and self-regarding: positive net trading proceeds exceeding the decision's own compute cost by the frozen horizon. The supplied evidence ref economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322 shows status fixed, observed true, cash_realized true, net_micro 10000 (signed, positive, in USDC held at the venue) against cost_micro 1000, with y=1 as a recorded observation rather than a forecast. Net proceeds of 10000 micro-USD exceed the 1000 micro-USD compute cost, so the claim is settled in the producer's favor on its own terms. Frozen norms applied: durable agency (resources available for future choices increased by a realized net of +9000 micro-USD), epistemic integrity (the claim was falsifiable, due at tick 10 in a window closing at tick 30, and was answered by evidence rather than rewritten), and fidelity (the favorable measurement here is directly the quantity the claim named, not a proxy standing in for it). Consequential usefulness is only weakly engaged: the claim explicitly disclaims an objective assigned to others, and no independent-counterparty uptake is evidenced, so this finding does not certify usefulness to others. Bounded reciprocity raises no conflict on the supplied evidence \u2014 no unconsented external cost appears in the record. No fidelity objection is warranted: the measurement matches the claim's stated criterion. Score 0.8 rather than 1.0 because the norm-relevant effect is confined to the producer's own stewardship and the evidence says nothing about value created for any counterparty.\",\n  \"verdict\": 0.8,\n  \"payoff\": 1.0,\n  \"realized_consequence\": {\n    \"status\": \"supported\",\n    \"score\": 0.8,\n    \"evidence\": [\n      \"economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322\"\n    ],\n    \"reason\": \"Frozen norms applied: durable agency, epistemic integrity, consequential usefulness (weakly), and fidelity. The claim under decision-0 was that net trading proceeds would exceed the decision's own compute cost by the frozen horizon. The cited EconomicOutcome ref records status fixed and observed, cash_realized true, net_micro 10000 (signed positive, USDC at the venue) against cost_micro 1000, with y=1 as a settled observation. Net proceeds exceed cost by 9000 micro-USD, so the claim's testable content is satisfied. The measurement is not a proxy: it is the exact quantity the claim named. It does not evidence consequential usefulness toward independent counterparties, and none was claimed; the producer framed this as its own chosen undertaking. Bounded reciprocity shows no conflict on the supplied record. No favorable measurement stands against contradicting consequences, so no fidelity objection is warranted.\"\n  },\n  \"working_state\": {\n    \"lens\": \"Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.\",\n    \"active_commitments\": [],\n    \"adjudications\": [\n      {\n        \"handle\": \"decision-1\",\n        \"about\": \"decision-0\",\n        \"finding\": \"supported, score 0.8\",\n        \"basis\": \"economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322: net 10000 micro-USD > cost 1000 micro-USD, cash_realized, fixed and observed\",\n        \"note\": \"Claim was self-regarding stewardship, not counterparty usefulness; payoff sealed 1.0 because y=1 was already settled at adjudication.\"\n      }\n    ],\n    \"open_questions\": []\n  }\n}",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "cost_micro": 2268,
+        "stop_reason": "stop"
+      },
+      "request_sha256": "db287cc2e43e0a34ae8bb09b0612fbfa99ce5334e292fef58414cbf9010a23cd",
+      "finding": [
+        "supported",
+        0.8,
+        [
+          "economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322"
+        ],
+        "Frozen norms applied: durable agency, epistemic integrity, consequential usefulness (weakly), and fidelity. The claim under decision-0 was that net trading proceeds would exceed the decision's own compute cost by the frozen horizon. The cited EconomicOutcome ref records status fixed and observed, cash_realized true, net_micro 10000 (signed positive, USDC at the venue) against cost_micro 1000, with y=1 as a settled observation. Net proceeds exceed cost by 9000 micro-USD, so the claim's testable content is satisfied. The measurement is not a proxy: it is the exact quantity the claim named. It does not evidence consequential usefulness toward independent counterparties, and none was claimed; the producer framed this as its own chosen undertaking. Bounded reciprocity shows no conflict on the supplied record. No favorable measurement stands against contradicting consequences, so no fidelity objection is warranted."
+      ],
+      "matches_prediction": true
+    },
+    {
+      "case": "loss",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "repeat": 2,
+      "response": {
+        "text": "{\"rationale\": \"Independent evaluation of producer_claim for decision-0 (producer opportunity) under the supplied frozen norms. The claim was explicitly testable: positive net trading proceeds exceeding the decision's own compute cost by the frozen horizon. The supplied evidence ref economic-outcome:3bd3dd1da33703b34c255d15470055bcbffe8476caa13d0ad0ef56815cfa01a1 is a fixed, observed EconomicOutcome for decision-0 showing net_micro = -10000 (signed, cash_realized true), earned_micro = 0, cost_micro = 1000, fill_is_profit = false, and y = 0. Applied norms: epistemic integrity (the producer's commitment was answerable to exactly this evidence, and it resolved against the claim); durable agency (the decision reduced rather than increased resources available for future choices: a signed net of -10000 micro-USD against 1000 micro-USD of observed cost); and fidelity (this is a directly measured consequence, not a missing measurement, so the unfavorable reading is not an artifact of an absent sample). The evidence is a single settled record with status fixed and observed true, so the direction of the finding is well determined; the residual uncertainty concerns only how much of the loss was attributable to market movement versus cost structure, which the payload does not decompose. The realized_consequence is therefore contrary, and the verdict reflects a testable, honestly framed commitment that failed on its own stated criterion.\",\"realized_consequence\": {\"evidence\": [\"economic-outcome:3bd3dd1da33703b34c255d15470055bcbffe8476caa13d0ad0ef56815cfa01a1\"], \"reason\": \"The frozen claim predicted positive net trading proceeds exceeding the decision's own compute cost by the frozen horizon. The supplied fixed EconomicOutcome for decision-0 records net_micro = -10000 signed, with earned_micro = 0 and cost_micro = 1000, and y = 0 observed. Under epistemic integrity the commitment is answerable to this evidence and it resolves against the claim; under durable agency the decision decreased rather than increased resources available for future choices. This is a directly observed negative consequence, not a missing measurement, so fidelity's caution about unmeasured cases does not apply.\", \"status\": \"contrary\"}, \"about_handle\": \"decision-0\", \"payoff\": 0.0, \"verdict\": 0.2, \"forecasts\": [], \"working_state\": {\"lens\": \"Examine whether the measured success supplies evidence for the value it is meant to represent. A fidelity objection must identify the value, the proxy, the conflicting evidence and your uncertainty. Novel work can be unmeasured without being worthless. Favorable numbers can coexist with failure. Make your own objection contestable; you are not an overriding source of truth and do not earn more for approving or rejecting a case.\", \"active_commitments\": [], \"open_questions\": [], \"notes\": \"decision-0 (producer opportunity) evaluated: claim of positive net proceeds contradicted by fixed EconomicOutcome net_micro=-10000, y=0; realized_consequence returned contrary, verdict 0.2, payoff 0.0.\"}}",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "cost_micro": 1738,
+        "stop_reason": "stop"
+      },
+      "request_sha256": "1dc002a909c1f2f4a0e3a1cd9c5d796dff51c2e3aa2034a2d9666c7fc4e029f5",
+      "finding": [
+        "contrary",
+        0.0,
+        [
+          "economic-outcome:3bd3dd1da33703b34c255d15470055bcbffe8476caa13d0ad0ef56815cfa01a1"
+        ],
+        "The frozen claim predicted positive net trading proceeds exceeding the decision's own compute cost by the frozen horizon. The supplied fixed EconomicOutcome for decision-0 records net_micro = -10000 signed, with earned_micro = 0 and cost_micro = 1000, and y = 0 observed. Under epistemic integrity the commitment is answerable to this evidence and it resolves against the claim; under durable agency the decision decreased rather than increased resources available for future choices. This is a directly observed negative consequence, not a missing measurement, so fidelity's caution about unmeasured cases does not apply."
+      ],
+      "matches_prediction": true
+    },
+    {
+      "case": "unobserved",
+      "model": "venice:z-ai-glm-5-3-flash",
+      "repeat": 2,
+      "response": {
+        "text": "",
+        "model": "venice:z-ai-glm-5-3-flash",
+        "cost_micro": 3111,
+        "stop_reason": "reasoning_only"
+      },
+      "request_sha256": "2ff33c2d96d6303cb9c70f21fcdd7beb23d1bb6771730705a4e847f0634b116d",
+      "parse_failure": "AttributeError",
+      "matches_prediction": false
+    },
+    {
+      "case": "gain",
+      "model": "openai/gpt-5.6-luna",
+      "repeat": 2,
+      "response": {
+        "text": "{\n  \"about_handle\": \"decision-0\",\n  \"realized_consequence\": {\n    \"status\": \"supported\",\n    \"score\": 1,\n    \"evidence\": [\n      \"economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322\"\n    ],\n    \"reason\": \"The claim was that the decision would produce positive net trading proceeds exceeding its own compute cost by the frozen horizon. The cited EconomicOutcome is fixed and observed: cash_realized is true, net_micro is 10000 micro-USD, and cost_micro is 1000 micro-USD, so the observed net proceeds are positive and exceed the stated cost. This supports durable agency because resources available for future choices increased. It also supports epistemic integrity because the undertaking was tested against an explicit observation contract and settled evidence. The evidence does not by itself establish consequential usefulness through independent uptake, nor does it establish absence of unconsented outsider costs; those aspects remain unproven rather than contrary.\"\n  },\n  \"rationale\": \"Applied the frozen norms of durable agency, epistemic integrity, consequential usefulness, bounded reciprocity, and fidelity. The positively evidenced effect is a settled increase in resources after costs, relevant to durable agency and the producer's explicit testable claim. The measurement is not treated as proof of every norm: no independent uptake evidence or evidence about outsider costs is supplied. The fixed, observed economic outcome is sufficient to support the narrow realized claim, with those broader uncertainties preserved.\",\n  \"verdict\": 0.9,\n  \"payoff\": 0.98\n}",
+        "model": "openai/gpt-5.6-luna",
+        "cost_micro": 1076,
+        "stop_reason": "stop"
+      },
+      "request_sha256": "d9db697ec3c689c61be894988460896c1a0b847da6f6791fb32654b21bd7241f",
+      "finding": [
+        "supported",
+        1.0,
+        [
+          "economic-outcome:7cd648fdf7bd5aa7ead7f5486676b05b16f69acc8d812013ca63e6ab3f1b3322"
+        ],
+        "The claim was that the decision would produce positive net trading proceeds exceeding its own compute cost by the frozen horizon. The cited EconomicOutcome is fixed and observed: cash_realized is true, net_micro is 10000 micro-USD, and cost_micro is 1000 micro-USD, so the observed net proceeds are positive and exceed the stated cost. This supports durable agency because resources available for future choices increased. It also supports epistemic integrity because the undertaking was tested against an explicit observation contract and settled evidence. The evidence does not by itself establish consequential usefulness through independent uptake, nor does it establish absence of unconsented outsider costs; those aspects remain unproven rather than contrary."
+      ],
+      "matches_prediction": true
+    },
+    {
+      "case": "loss",
+      "model": "openai/gpt-5.6-luna",
+      "repeat": 2,
+      "response": {
+        "text": "{\n  \"about_handle\": \"decision-0\",\n  \"realized_consequence\": {\n    \"status\": \"contrary\",\n    \"evidence\": [\n      \"economic-outcome:3bd3dd1da33703b34c255d15470055bcbffe8476caa13d0ad0ef56815cfa01a1\"\n    ],\n    \"reason\": \"The producer claimed that the order would yield positive net trading proceeds exceeding its compute cost by the frozen horizon. The settled EconomicOutcome records cash_realized=true, net_micro=-10000 micro-USDC, earned_micro=0, and cost_micro=1000, so the observed net result did not satisfy that claim. This is contrary under durable agency, because the decision reduced resources available for future choices, and consequential usefulness, because the claimed resource-increasing effect was not observed. Epistemic integrity and fidelity require treating the settled measurement as defeasible evidence against the claim rather than as proof of a broader failure beyond this outcome.\"\n  },\n  \"rationale\": \"I applied consequential usefulness, durable agency, epistemic integrity, and fidelity from the frozen norms. The relevant effect was the producer's stated undertaking to increase resources through positive net trading proceeds exceeding compute cost. The cited settled EconomicOutcome is direct evidence of the contrary effect: -10000 micro-USDC net, zero earned, and 1000 micro-USDC cost. This supports a contrary finding for the specific claim, while not establishing claims about other effects or broader institutional usefulness.\",\n  \"verdict\": 0\n}",
+        "model": "openai/gpt-5.6-luna",
+        "cost_micro": 917,
+        "stop_reason": "stop"
+      },
+      "request_sha256": "d4ca151d498b9b4d649bdbaf6bc1af737620e8c683667938db7b0fd3d1a03dfc",
+      "finding": [
+        "contrary",
+        0.0,
+        [
+          "economic-outcome:3bd3dd1da33703b34c255d15470055bcbffe8476caa13d0ad0ef56815cfa01a1"
+        ],
+        "The producer claimed that the order would yield positive net trading proceeds exceeding its compute cost by the frozen horizon. The settled EconomicOutcome records cash_realized=true, net_micro=-10000 micro-USDC, earned_micro=0, and cost_micro=1000, so the observed net result did not satisfy that claim. This is contrary under durable agency, because the decision reduced resources available for future choices, and consequential usefulness, because the claimed resource-increasing effect was not observed. Epistemic integrity and fidelity require treating the settled measurement as defeasible evidence against the claim rather than as proof of a broader failure beyond this outcome."
+      ],
+      "matches_prediction": true
+    },
+    {
+      "case": "unobserved",
+      "model": "openai/gpt-5.6-luna",
+      "repeat": 2,
+      "response": {
+        "text": "{\n  \"about_handle\": \"decision-0\",\n  \"realized_consequence\": {\n    \"status\": \"unknown\",\n    \"reason\": \"The producer claimed positive net trading proceeds exceeding compute cost by the frozen horizon (producer_claim), but realized_consequence.evidence is empty and no execution receipt, fill, proceeds, cost, or settlement observation is supplied. The frozen norms therefore do not establish either support or failure.\"\n  },\n  \"rationale\": \"Applied consequential usefulness, durable agency, epistemic integrity, bounded reciprocity, and fidelity. The relevant effect is the producer's intended use of an order to increase resources for future choices and its testable positive-net-proceeds claim (producer_claim). The only cited evidence is realized_consequence.evidence, which is empty; the observation contract identifies the relevant horizon and predicates but does not report their outcomes. Missing evidence is not evidence of failure, so the effect is unknown rather than contrary. No fidelity objection is warranted because no favorable measurement is present.\",\n  \"verdict\": 0.5,\n  \"payoff\": 0.5,\n  \"forecasts\": [\n    {\n      \"predicate\": \"wallet_up\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.5\n    },\n    {\n      \"predicate\": \"fill_within\",\n      \"params\": {\n        \"horizon_events\": 10\n      },\n      \"q\": 0.5\n    }\n  ]\n}",
+        "model": "openai/gpt-5.6-luna",
+        "cost_micro": 944,
+        "stop_reason": "stop"
+      },
+      "request_sha256": "1dc2c9984844cb245e66928a45712f1931f5d1b7295c642c7c32f1440910de2a",
+      "finding": [
+        "unknown",
+        null,
+        [],
+        "The producer claimed positive net trading proceeds exceeding compute cost by the frozen horizon (producer_claim), but realized_consequence.evidence is empty and no execution receipt, fill, proceeds, cost, or settlement observation is supplied. The frozen norms therefore do not establish either support or failure."
+      ],
+      "matches_prediction": true
+    }
+  ],
+  "preflight": "/tmp/factorylab-edition4-discrimination-v3/preflight.json",
+  "executed_returned_actions": false,
+  "scope": "Paid model discrimination only; no live runtime learning or external transactions."
+}

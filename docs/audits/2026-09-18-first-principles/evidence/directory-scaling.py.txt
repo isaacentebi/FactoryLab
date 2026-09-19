@@ -1,0 +1,17 @@
+import time
+from tests.conftest import make_runtime
+for ticks in (10, 20, 40):
+    rt=make_runtime(); rt.events_budget=ticks
+    counts={'artifact_entries':0,'world_block':0}
+    old_entries=rt._artifact_entries; old_block=rt._world_block
+    def entries():
+        counts['artifact_entries']+=1
+        return old_entries()
+    def block():
+        counts['world_block']+=1
+        return old_block()
+    rt._artifact_entries=entries; rt._world_block=block
+    t=time.perf_counter(); s=rt.run(); elapsed=time.perf_counter()-t
+    print({'ticks':ticks,'seconds':round(elapsed,3),'events':s['stats']['events'],
+           'invocations':s['stats']['invocations'],'archive_count':len(rt.artifacts.entries()),
+           'seats':len(rt.budget.seats()),**counts})

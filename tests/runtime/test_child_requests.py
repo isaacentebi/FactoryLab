@@ -26,6 +26,7 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
     rt._instantiate(replace(spec, id='helper'))
     req = parent_request(rt)
     calls = []
+    private_child_text = 'This message is only for the delegated recipient.'
 
     def provider(request):
         text = request.messages[-1]['content']
@@ -42,7 +43,8 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
             body = {'action': 'hold', 'answer': 'used child'}
         else:
             body = {'requests': [{'target': 'helper', 'description': 'child task',
-                                  'inputs': {'question': 'value'}, 'outcome_schema': {
+                                  'inputs': {'question': 'value', 'recipient': 'seed-observer',
+                                             'text': private_child_text}, 'outcome_schema': {
                                       'type': 'object',
                                       'properties': {'answer': {'type': 'integer'}},
                                       'required': ['answer']}}]}
@@ -64,6 +66,11 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
     assert not any(i['kind'] == 'requests.refused' for i in items)
     event = next(ev for ev in rt.internal if ev.payload.get('about_handle') == child['handle'])
     assert str(event.kind) == 'ProducerReturn' and event.payload['outputs']['answer'] == 42
+    assert private_child_text not in str(event.payload)
+    assert 'text' not in event.payload['inputs']
+    assert event.payload['inputs']['recipient'] == 'seed-observer'
+    assert event.payload['inputs']['question'] == 'value'
+    assert event.payload['inputs']['body']['fields'] == ('text',)
     restored = make_runtime()
     monkeypatch.undo()
     rt.provider.target.__dict__.pop("complete", None)

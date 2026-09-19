@@ -79,6 +79,7 @@ def _record_types() -> dict[str, type]:
     from factorylab.runtime.cascade import CascadeGate
     from factorylab.runtime.feedback import PendingJudgement
     from factorylab.runtime.governance import Retirement, WorkAssemblySpec
+    from factorylab.runtime.grounded import GroundedContract
     from factorylab.runtime.pricing import MeasureWindow
     from factorylab.runtime.routing import PopulationEvent
     from factorylab.runtime.summary import RunStats
@@ -118,6 +119,7 @@ def _record_types() -> dict[str, type]:
         SettleStatus, Contract, PriceSpec, ResourceBounds, DistributionSummary, DripSchedule,
         ReleaseSchedule,
         Reservation, Retirement, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast,
+        GroundedContract,
         Lot,
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
         AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position,
@@ -580,6 +582,8 @@ _RUNTIME_FIELDS = (
 _RUNTIME_BACKING = {
     "meta_waiting_since": "_meta_waiting_since",
     "open_adjudications": "_open_adjudications",
+    "grounded_pending": "_grounded_pending",
+    "grounded_closed": "_grounded_closed",
 }
 # The settlement receipt books, by the path from the runtime to each. A receipt's
 # id is its content address, so a book is saved as its receipts in record order
@@ -608,6 +612,8 @@ _DERIVED_STATE = {
     "ArtifactStore.epoch": "a rebuild counter for views over the index, bumped on restore",
     "ForecastBook._ForecastBook__open_cache": "the unsettled handles, rebuilt from the "
                                               "forecast map and settled set it names",
+    "ReceiptBook._ReceiptBook__execution_ids": "derived global execution-receipt cursor",
+    "ReceiptBook._ReceiptBook__execution_by_handle": "derived per-handle execution index",
     "FakeTreasury._balances_memo": "the scripted rail's balances, keyed on what they read",
 }
 # Transient: belongs to this process or this file, not to the world.
@@ -700,6 +706,12 @@ def runtime_state(rt) -> Checkpoint:
     """Retain learning, FIFO lots, private memory and exact source cursors in one checkpoint."""
     rt._ensure_connector_tool()
     runtime = {name: getattr(rt, name) for name in _RUNTIME_FIELDS}
+    # The experimental delayed line retains its frozen contracts and finality.
+    # Reference worlds keep their previous checkpoint shape; older checkpoints
+    # restore with the mixin's empty defaults.
+    if getattr(rt.ev, "producer_feedback", "verdict") == "realized":
+        runtime["grounded_pending"] = rt.grounded_pending
+        runtime["grounded_closed"] = rt.grounded_closed
     runtime["amendment_feedback"] = getattr(rt, "amendment_feedback", None)
     receipts = {path: list(_resolve(rt, path)) for path in _RECEIPT_BOOKS}
     components = {
@@ -862,7 +874,7 @@ def restore_runtime(rt, state: dict) -> None:
     rt.treasury.restore(decode(state["treasury"]))
     # Older checkpoints predate the receipt books; theirs start empty, as they did.
     for path, saved in decode(state.get("receipts") or {}).items():
-        _resolve(rt, path)._ReceiptBook__by_id = {receipt.id: receipt for receipt in saved}
+        _resolve(rt, path).restore(saved)
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
             if name == "controller" and field == "kappa" and field not in components[name]:

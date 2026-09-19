@@ -1,6 +1,6 @@
 import pytest
 
-from factorylab.runtime.worlds import NS_PER_HOUR, manifest_from_dict
+from factorylab.runtime.worlds import NS_PER_HOUR, load_manifest, manifest_from_dict
 
 
 def test_testnet_manifest_is_not_mainnet() -> None:
@@ -77,6 +77,33 @@ def test_prices_section_defaults_and_validation() -> None:
         d["prices"] = bad
         with pytest.raises(ValueError):
             manifest_from_dict(d)
+
+
+def test_grounded_horizon_default_keeps_legacy_identity_and_nondefault_changes_it():
+    scripted = load_manifest("scripted")
+    assert scripted.evaluation.grounded_horizon_ticks == 10
+    assert "grounded_horizon_ticks" not in scripted.canonical_json()
+    assert scripted.manifest_hash() == (
+        "f3bf34acc6aa2e9a530bd176453c1968e526b4083f7f3dedbea59636bdad2dd8"
+    )
+
+    implicit = manifest_from_dict(_base())
+    explicit_raw = _base()
+    explicit_raw["evaluation"] = {"grounded_horizon_ticks": 10}
+    explicit = manifest_from_dict(explicit_raw)
+    assert explicit.manifest_hash() == implicit.manifest_hash()
+
+    changed_raw = _base()
+    changed_raw["evaluation"] = {"grounded_horizon_ticks": 11}
+    assert manifest_from_dict(changed_raw).manifest_hash() != implicit.manifest_hash()
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "10", None])
+def test_grounded_horizon_requires_a_positive_exact_integer(value):
+    raw = _base()
+    raw["evaluation"] = {"grounded_horizon_ticks": value}
+    with pytest.raises(ValueError, match="grounded_horizon_ticks"):
+        manifest_from_dict(raw)
 
 
 def test_clock_bounds_seed_validation_and_hash():

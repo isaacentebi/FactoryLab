@@ -140,6 +140,11 @@ class ToolsSpec:
     max_depth: int = 4
     max_children: int = 3
     max_tool_calls: int = 4
+    #: Whether this world publishes the voluntary addressing capability. It is off
+    #: by default, so address is a factor a run turns on rather than something that
+    #: arrives with a code change, and a world that predates the key is unchanged.
+    #: It gates a capability; it schedules nothing and wakes nobody.
+    address_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -248,11 +253,18 @@ class EvaluationSpec:
     min_coverage: float = 0.5
     trial_amount_micro: int = 100_000  # novelty trial paid per registration
     forecast_horizon_events: int = 10
+    grounded_horizon_ticks: int = 10
     consequence_backstop_events: int = 200
     adversarial_share: float = 0.15  # cap on router mass over antagonist assemblies
     sibling_share: float = 0.5  # share of the representative's meta score a sibling settles at
     sampling_step: float = 0.1  # consequence-mix step per divergent window
     sampling_cap: float = 0.7  # ceiling of the raised consequence mix
+    #: What finally settles a producer decision. ``verdict`` is the shipped line: a
+    #: judge opinion is the producer score. ``realized`` settles on observed
+    #: consequence instead, so an approval that nothing bore out does not pay. The
+    #: default is ``verdict``, so a world that predates the key is unchanged and a
+    #: run turns the new line on deliberately.
+    producer_feedback: str = "verdict"
 
     # Both horizons count world ticks consumed, not internal events (defect 1). The
     # field names predate that and are kept so every manifest keeps its meaning; the
@@ -360,6 +372,23 @@ class ProvidersSpec:
 
 
 @dataclass(frozen=True)
+class PromptSpec:
+    """Which institutional facts every request carries inline, and which it retrieves.
+
+    ``reference`` renders the whole institutional world inside the cached prefix,
+    as every world before this key did. ``compact`` renders the norms, the
+    capability index with its prices, and the facts a return cannot be well formed
+    without; everything else is named in a directory and read back on demand from
+    the same block the validators read.
+
+    The default is ``reference``: a manifest that does not name a mode gets the
+    prompt it always got, and hashes as it always did.
+    """
+
+    mode: str = "reference"
+
+
+@dataclass(frozen=True)
 class EndowmentSpec:
     """Locked backing and the tranches that release it, as offsets from the Launch (C1), and
     how each unlocked tranche is classified: ``base_share`` split equally across live seats,
@@ -395,6 +424,7 @@ class WorldManifest:
     endowment: EndowmentSpec = EndowmentSpec()
     kill: KillSpec = KillSpec()
     providers: ProvidersSpec = ProvidersSpec()
+    prompt: PromptSpec = PromptSpec()
     tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -475,6 +505,21 @@ class WorldManifest:
             payload.pop("kill")
         if payload["providers"] == asdict(ProvidersSpec()):
             payload.pop("providers")
+        # A world that names no prompt mode hashes exactly as it did before the key
+        # existed: an added key may not rename a world that predates it, and every
+        # roster digest a charter was ratified against stays what it was.
+        if payload["prompt"] == asdict(PromptSpec()):
+            payload.pop("prompt")
+        # Likewise for the addressing switch: a world that does not publish address
+        # hashes exactly as it did before the capability existed.
+        if payload["tools"].get("address_enabled") is False:
+            payload["tools"].pop("address_enabled")
+        # And for the feedback line: a world settling producers on judge opinion is
+        # the world every manifest already described.
+        if payload["evaluation"].get("producer_feedback") == "verdict":
+            payload["evaluation"].pop("producer_feedback")
+        if payload["evaluation"].get("grounded_horizon_ticks") == 10:
+            payload["evaluation"].pop("grounded_horizon_ticks")
         # An absent [web] block registers no search tool, so a world without one hashes
         # exactly as it did before web search existed.
         if payload["web"] == asdict(WebSpec()):
@@ -595,6 +640,10 @@ class WorldManifest:
 
     def validate(self) -> None:
         namespace = self.exchange.client_namespace
+        if self.prompt.mode not in ("reference", "compact"):
+            raise ValueError("prompt.mode must be reference or compact")
+        if self.evaluation.producer_feedback not in ("verdict", "realized"):
+            raise ValueError("evaluation.producer_feedback must be verdict or realized")
         if namespace is not None and (not isinstance(namespace, str) or len(namespace) != 32
                                       or any(c not in "0123456789abcdef" for c in namespace)):
             raise ValueError("exchange.client_namespace must be 32 lowercase hex characters")
@@ -701,6 +750,9 @@ class WorldManifest:
         backstop = self.evaluation.consequence_backstop_events
         if type(backstop) is not int or backstop < 1:
             raise ValueError("consequence_backstop_events must be a positive integer")
+        grounded = self.evaluation.grounded_horizon_ticks
+        if type(grounded) is not int or grounded < 1:
+            raise ValueError("evaluation.grounded_horizon_ticks must be a positive integer")
         for a in self.assemblies:
             if not isinstance(a.role, str) or not a.role.strip():
                 raise ValueError(f"assembly {a.id} has an empty role label")
@@ -976,11 +1028,13 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         min_coverage=float(ev.get("min_coverage", 0.5)),
         trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10"), rounding="exact"),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
+        grounded_horizon_ticks=ev.get("grounded_horizon_ticks", 10),
         consequence_backstop_events=_tick_horizon(ev, "consequence_backstop", 200),
         adversarial_share=ev.get("adversarial_share", 0.15),
         sibling_share=ev.get("sibling_share", 0.5),
         sampling_step=ev.get("sampling_step", 0.1),
         sampling_cap=ev.get("sampling_cap", 0.7),
+        producer_feedback=_manifest_producer_feedback(ev.get("producer_feedback", "verdict")),
     )
     pr = d.get("prices") or {}
     prices = PricesSpec(
@@ -1039,6 +1093,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             (d.get("tools") or {}).get("max_depth", 4),
             (d.get("tools") or {}).get("max_children", 3),
             (d.get("tools") or {}).get("max_tool_calls", 4),
+            _manifest_address_enabled((d.get("tools") or {}).get("address_enabled", False)),
         ),
         prices=prices,
         treasury=TreasurySpec(
@@ -1069,6 +1124,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         endowment=endowment,
         kill=_manifest_kill(d.get("kill")),
         providers=_manifest_providers(d.get("providers")),
+        prompt=_manifest_prompt(d.get("prompt")),
         extra={k: v for k, v in d.items() if k.startswith("x_")},
     )
     m.validate()
@@ -1106,6 +1162,37 @@ def _manifest_providers(raw: Any) -> ProvidersSpec:
             raise ValueError(f"providers.{key} must be nonnegative")
         amounts.append(micro)
     return ProvidersSpec(openrouter_micro=amounts[0], venice_micro=amounts[1])
+
+
+def _manifest_producer_feedback(raw: Any) -> str:
+    """``[evaluation] producer_feedback``: a judge opinion or an observed consequence."""
+    if raw not in ("verdict", "realized"):
+        raise ValueError("evaluation.producer_feedback must be verdict or realized")
+    return raw
+
+
+def _manifest_address_enabled(raw: Any) -> bool:
+    """``[tools] address_enabled``: exactly a boolean, never a truthy string or 1."""
+    if type(raw) is not bool:
+        raise ValueError("tools.address_enabled must be true or false")
+    return raw
+
+
+def _manifest_prompt(raw: Any) -> PromptSpec:
+    """``[prompt] mode = "reference" | "compact"``: how much institution rides inline.
+
+    An absent block is ``reference``, which is what every world rendered before
+    this key existed. An unknown key or an unknown mode is refused here rather than
+    quietly ignored, so a manifest cannot ask for a compaction it does not get.
+    """
+    if raw is None:
+        return PromptSpec()
+    if not isinstance(raw, dict) or set(raw) - {"mode"}:
+        raise ValueError("prompt accepts only mode")
+    mode = raw.get("mode", "reference")
+    if mode not in ("reference", "compact"):
+        raise ValueError("prompt.mode must be reference or compact")
+    return PromptSpec(mode=mode)
 
 
 def _manifest_endowment(raw: Any) -> EndowmentSpec:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from statistics import fmean
 from typing import Any
 
@@ -12,6 +12,14 @@ from factorylab.kernel.queue import LearningReturn, SettleStatus
 from factorylab.kernel.wallet import Infeasible
 from factorylab.learners.base import BanditFeedback
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_window_ns
+from factorylab.runtime.grounded import (
+    GROUNDED_DEFINITION,
+    UNKNOWN_REASON,
+    GroundedContract,
+    observed_evidence_refs,
+    parse_finding,
+    public_evidence,
+)
 from factorylab.runtime.routing import _KeyedLearner
 from factorylab.runtime.shared import (
     CH_CONFORMITY,
@@ -109,6 +117,20 @@ class PendingJudgement:
 
 class FeedbackMixin:
     """Preserve runtime state and behavior for feedback operations."""
+
+    @property
+    def grounded_pending(self) -> dict[str, GroundedContract]:
+        """Producer contracts still waiting for independently interpreted consequences."""
+        if not hasattr(self, "_grounded_pending"):
+            self._grounded_pending: dict[str, GroundedContract] = {}
+        return self._grounded_pending
+
+    @property
+    def grounded_closed(self) -> set[str]:
+        """Producer handles whose grounded settlement is permanently final."""
+        if not hasattr(self, "_grounded_closed"):
+            self._grounded_closed: set[str] = set()
+        return self._grounded_closed
 
     @property
     def meta_waiting_since(self) -> dict[str, int]:
@@ -1433,11 +1455,162 @@ class FeedbackMixin:
         })
         self.consequence_mix = after
 
+    def _grounded_unknown(self, contract: GroundedContract, reason: str) -> None:
+        """Close one unavailable consequence once, without fabricating a learner sample."""
+        handle = contract.handle
+        if handle in self.grounded_closed:
+            return
+        self.ledger.append({"kind": "consequence.unknown", "handle": handle,
+                            "reason": reason, "ts": self.clock.now_ns})
+        if self.queue.get(handle).status in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
+            self.queue.settle(handle, channel=CH_VERDICT, score=0.0,
+                              status=SettleStatus.CENSORED,
+                              definition_version=f"{GROUNDED_DEFINITION}-unknown",
+                              sampling_ref=None)
+            self.stats.censored += 1
+            self.window.outcomes += 1
+            self.window.censored += 1
+        self.pending.pop(handle, None)
+        self.grounded_pending.pop(handle, None)
+        self.grounded_closed.add(handle)
+
+    def _settle_due_grounded(self) -> None:
+        """Commission one fresh final judge at maturity, then bound unanswered contracts."""
+        if getattr(self.ev, "producer_feedback", "verdict") != "realized":
+            return
+        for handle, contract in list(self.grounded_pending.items()):
+            if handle in self.grounded_closed:
+                self.grounded_pending.pop(handle, None)
+                continue
+            if self.ticks_consumed >= contract.close_tick:
+                self._grounded_unknown(contract, UNKNOWN_REASON)
+                continue
+            if self.ticks_consumed < contract.due_tick or contract.final_requested:
+                continue
+            evidence = public_evidence(self, contract)
+            excluded = {contract.producer_id}
+            excluded.update(filter(None, (
+                self.handle_to_assembly.get(ancestor)
+                for ancestor in self._ancestry(contract.handle)
+            )))
+            excluded.update(contract.initial_evaluators)
+            excluded.update(contract.final_evaluators)
+            self.ledger.append({
+                "kind": "consequence.final_requested", "handle": handle,
+                "due_tick": contract.due_tick, "evidence_refs": [e["ref"] for e in evidence],
+                "excluded_evaluators": sorted(excluded), "ts": self.clock.now_ns,
+            })
+            self.grounded_pending[handle] = contract.requested()
+            self._emit(contract.subject_kind, {
+                "about_handle": handle,
+                "description": "Final independent evaluation of a frozen producer contract",
+                "inputs": {"kind": "RealizedConsequence", "payload": {}},
+                "outputs": contract.producer_outputs,
+                "cost": 0,
+                "status": "ok",
+                "propensity": self._public_propensity(handle),
+                "grounded_consequence": True,
+                "excluded_evaluators": sorted(excluded),
+                "contract": asdict(contract),
+                "evidence": evidence,
+            })
+
+    def _complete_grounded_evaluation(
+        self, judge_handle: str, evaluator_id: str, about: str | None, ret: Any,
+        evidence: Any,
+    ) -> None:
+        """Settle a producer only from a fresh judge's cited, supplied public evidence."""
+        contract = self.grounded_pending.get(str(about))
+        if contract is None or contract.handle in self.grounded_closed:
+            self._settle_unmeasured(judge_handle, CH_CONFORMITY,
+                                    "the grounded contract is no longer open")
+            return
+        excluded = {contract.producer_id}
+        excluded.update(contract.initial_evaluators)
+        excluded.update(contract.final_evaluators)
+        excluded.update(filter(None, (
+            self.handle_to_assembly.get(ancestor)
+            for ancestor in self._ancestry(contract.handle)
+        )))
+        if evaluator_id in excluded:
+            self._settle_unmeasured(judge_handle, CH_CONFORMITY,
+                                    "grounded consequence needs a fresh independent evaluator")
+            return
+        refs = {row.get("ref") for row in evidence if isinstance(row, dict)
+                and isinstance(row.get("ref"), str)} if isinstance(evidence, list) else set()
+        raw = (ret.outputs.get("realized_consequence")
+               if ret.status == "ok" and isinstance(ret.outputs, dict) else None)
+        try:
+            status, score, cited, reason = parse_finding(
+                raw, refs, observed_evidence_refs(evidence))
+        except ValueError as exc:
+            self.ledger.append({"kind": "consequence.finding_refused", "handle": about,
+                                "judge_handle": judge_handle, "reason": str(exc),
+                                "ts": self.clock.now_ns})
+            self._settle_unmeasured(judge_handle, CH_CONFORMITY, str(exc))
+            if contract.final_attempts < 2 and self.ticks_consumed < contract.close_tick:
+                self.grounded_pending[contract.handle] = contract.retry_after(evaluator_id)
+                self.ledger.append({"kind": "consequence.final_retry",
+                                    "handle": contract.handle,
+                                    "attempt": contract.final_attempts + 1,
+                                    "excluded_evaluator": evaluator_id,
+                                    "ts": self.clock.now_ns})
+            else:
+                self._grounded_unknown(contract, str(exc))
+            return
+        self.ledger.append({
+            "kind": "consequence.finding", "handle": contract.handle,
+            "judge_handle": judge_handle, "evaluator_id": evaluator_id,
+            "status": status, "score": score, "evidence": list(cited),
+            "reason": reason, "ts": self.clock.now_ns,
+        })
+        if score is None:
+            self._settle_unmeasured(judge_handle, CH_CONFORMITY, reason)
+            self._grounded_unknown(contract, reason)
+            return
+        if self.queue.get(contract.handle).status in (
+            SettleStatus.PENDING, SettleStatus.TIMED_OUT
+        ):
+            self._settle_priced(
+                contract.handle, channel=CH_VERDICT, score=score,
+                definition_version=GROUNDED_DEFINITION, sampling_ref=judge_handle,
+                cards="producer")
+            self.stats.verdicts += 1
+        self.pending.pop(contract.handle, None)
+        self.grounded_pending.pop(contract.handle, None)
+        self.grounded_closed.add(contract.handle)
+        verdict = _as_unit(ret.outputs.get("verdict"))
+        if verdict is None:
+            self.queue.settle(judge_handle, channel=CH_CONFORMITY, score=0.0,
+                              status=SettleStatus.SETTLED,
+                              definition_version=DEF_CONFORMITY, sampling_ref=None)
+            self.stats.conformities += 1
+            self.window.outcomes += 1
+            return
+        self.pending[judge_handle] = PendingJudgement(
+            judge_handle, CH_CONFORMITY, self.n, opened_at_tick=self.ticks_consumed)
+        self._emit(EventKind.VERDICT, {
+            "about_handle": contract.handle,
+            "evaluator_handle": judge_handle,
+            "verdict": verdict,
+            "payoff": None,
+            "payoff_handle": None,
+            "rationale": str(ret.outputs.get("rationale", ""))[:2000],
+            "producer_outputs": contract.producer_outputs,
+            "realized_finding": {"status": status, "score": score,
+                                   "evidence": list(cited), "reason": reason},
+            "grounded_contract": asdict(contract),
+            "grounded_evidence": evidence,
+            "propensity": self._public_propensity(judge_handle),
+            "grounded_consequence": True,
+        })
+
     def _censor_stale_judgements(self) -> None:
         stale = [
             p
             for p in self.pending.values()
             if p.channel not in (NORM_COMMITMENT, NORM_SUBJECT)  # settled by the window
+            and p.handle not in self.grounded_pending
             and self._tick_age(p) > self.ev.verdict_timeout_ticks
         ]
         for p in stale:
@@ -1458,18 +1631,39 @@ class FeedbackMixin:
     def _close_assembly_rounds(self) -> None:
         """Close every assembly round whose decision now has an outcome.
 
-        The evidence is the decision's first outcome, by the same rule the router
-        follows (``_deliver_returns``): a score that settled it before its cutoff,
-        or else nothing observed. A timeout is the cutoff, not a zero; a score
-        that arrives after it trains nothing. A round is closed once, whatever
-        opened the decision, so nothing is left open for a decision that will
-        never be scored again.
+        Ordinarily the evidence is the decision's first outcome, by the same rule
+        the router follows (``_deliver_returns``): a score before its cutoff, or
+        else nothing observed. Grounded producers instead keep their frozen round
+        through a wall timeout because their horizon counts world ticks. Their
+        final grounded score overrides that timeout; final unknown discards the
+        round without imputation. Every round closes at most once.
         """
         for handle in list(self.assembly_rounds):
             decision = self.queue.get(handle)
-            if decision.status is SettleStatus.PENDING:
+            if decision.status is SettleStatus.PENDING or (
+                decision.status is SettleStatus.TIMED_OUT
+                and handle in self.grounded_pending
+            ):
                 continue
-            first = next(iter(self.queue.history(handle)), None)
+            history = self.queue.history(handle)
+            grounded = next(
+                (item for item in history
+                 if item.definition_version.startswith(GROUNDED_DEFINITION)),
+                None,
+            )
+            if (
+                grounded is not None
+                and grounded.definition_version == f"{GROUNDED_DEFINITION}-unknown"
+            ):
+                assembly_id = self.assembly_rounds.pop(handle, None)
+                learner = self.assembly_learners.get(assembly_id)
+                if learner is not None:
+                    try:
+                        learner.discard_for(handle)
+                    except KeyError:
+                        pass
+                continue
+            first = grounded or next(iter(history), None)
             reward = (min(1.0, max(0.0, float(first.score)))
                       if first is not None and first.status is SettleStatus.SETTLED
                       else None)
@@ -1546,6 +1740,10 @@ class FeedbackMixin:
         standing, its history -- but trains no learner a second time.
         """
         decision = self.queue.get(lr.handle)
+        if lr.status is SettleStatus.TIMED_OUT and lr.handle in self.grounded_pending:
+            # Wall-clock expiry during an outage cannot become an anticipatory
+            # sample for a contract whose horizon is counted in world ticks.
+            return
         prop = decision.propensity
         keyed = isinstance(state.learner, _KeyedLearner)
         key = self.snapshot_keys.pop(lr.handle, None) if keyed else None
@@ -1553,12 +1751,18 @@ class FeedbackMixin:
             if key is not None:
                 state.learner.inner.discard_for(key)
             return
-        if lr.status is not SettleStatus.TIMED_OUT and any(
-                r.status is SettleStatus.TIMED_OUT for r in self.queue.history(lr.handle)):
+        if (
+            not lr.definition_version.startswith(GROUNDED_DEFINITION)
+            and lr.status is not SettleStatus.TIMED_OUT
+            and any(r.status is SettleStatus.TIMED_OUT
+                    for r in self.queue.history(lr.handle))
+        ):
             return  # learned once already, neutrally, at its cutoff
         if lr.status is SettleStatus.SETTLED:
             reward = min(1.0, max(0.0, float(lr.score)))
             state.observed.record(prop.chosen, reward)
+        elif lr.definition_version == f"{GROUNDED_DEFINITION}-unknown":
+            reward = None
         else:
             reward = state.observed.neutral(prop.chosen)
         if reward is None:
@@ -1591,7 +1795,11 @@ class FeedbackMixin:
             for lr in fresh:
                 self._learn_router_return(state, lr)
             self.delivered_seen[lid] = total
-            if lid in self.retired_routers and not self.queue.outstanding(lid):
+            if (
+                lid in self.retired_routers
+                and not self.queue.outstanding(lid)
+                and not self._router_owns_grounded_pending(lid)
+            ):
                 self.queue.retire_actor(lid)
                 self.ledger.append({"kind": "router.drained", "learner_id": lid})
                 del self.retired_routers[lid]

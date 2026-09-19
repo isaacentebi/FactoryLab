@@ -1,0 +1,45 @@
+{
+  "source_base": "7dd212a",
+  "source_state": "uncommitted local changes",
+  "frozen_treatment_source": "/tmp/factorylab-edition4-treatment-source",
+  "treatment_python_digest": "c9f96dcdfbb0681b54ec744953328269ffd9cd4f0183f5ee46683d2ed059b9a5",
+  "ruff": "passed",
+  "check": {
+    "passed": 1997,
+    "seconds": 20.04
+  },
+  "selected_gate": {
+    "passed": 23,
+    "seconds": 13.74,
+    "files": [
+      "tests/runtime/test_grounded_feedback.py",
+      "tests/runtime/test_tool_use_evidence.py",
+      "tests/audit/test_edition4_rehearsal.py",
+      "tests/scripts/test_edition4_report.py",
+      "tests/scripts/test_edition4_observer.py",
+      "tests/runtime/test_loop.py",
+      "tests/audit/test_r2a_lifecycle.py",
+      "tests/audit/test_r3d_evaluation.py"
+    ]
+  },
+  "additional_recovery_checks": {
+    "passed": 2,
+    "seconds": 1.7,
+    "cases": [
+      "test_partial_event_replays_settlement_after_durable_item_before_mutation",
+      "test_child_dispatch_after_durable_intent_replays_without_duplicate_decisions"
+    ]
+  },
+  "full_gate_run": false,
+  "deployed": false,
+  "committed": false,
+  "observer": {
+    "opt_in_rehearsal_only": true,
+    "actual_fake_runtime_ticks_verified": 5,
+    "before_termination_writes_verified": true,
+    "production_enabled": false
+  },
+  "latest_C_frozen_source": "/tmp/factorylab-edition4-treatment-v3",
+  "live_C_v2_package_digest": "b592ab9bdaa10b54a6c4a8c54833fe6f8a53ec84f0769a94226cde0360463b45",
+  "latest_C_source_digest": "e9c5b15c4ce30e32b946b474740f217ec98700ff195ae92680753c5d15d8ad20"
+}

@@ -1,0 +1,59 @@
+{
+  "authorized_total_micro": 50000000,
+  "known_inference_micro": 2510298,
+  "remaining_authorization_micro": 47489702,
+  "uncertain_micro": 0,
+  "accounting": "Provider-reported inference bills including superseded probe attempts. No additional run scheduled. Not a statement about subscription costs of the coding committee.",
+  "items": [
+    {
+      "work": "menu calibration",
+      "known_micro": 433221,
+      "evidence": "calibration-baseline-summary.json"
+    },
+    {
+      "work": "archived B0",
+      "known_micro": 656658,
+      "evidence": "b0-summary.json"
+    },
+    {
+      "work": "matched P calibration",
+      "known_micro": 380405,
+      "evidence": "paired-context-calibration.json"
+    },
+    {
+      "work": "integration control",
+      "known_micro": 213200,
+      "evidence": "control-summary.json"
+    },
+    {
+      "work": "compact P live",
+      "known_micro": 210272,
+      "evidence": "compact-summary.json"
+    },
+    {
+      "work": "consequence C live v2",
+      "known_micro": 246074,
+      "evidence": "realized-summary.json"
+    },
+    {
+      "work": "address A live",
+      "known_micro": 213672,
+      "evidence": "address-summary.json"
+    },
+    {
+      "work": "theatre probe including superseded attempts",
+      "known_micro": 120784,
+      "evidence": "consequence-theatre-probe.json"
+    },
+    {
+      "work": "corrected C discrimination",
+      "known_micro": 36012,
+      "evidence": "discrimination-v3/report.json"
+    }
+  ],
+  "venue_end": {
+    "equity_usd": "965.989286405",
+    "positions": [],
+    "open_orders": []
+  }
+}

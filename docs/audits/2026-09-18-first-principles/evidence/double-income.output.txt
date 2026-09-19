@@ -1,0 +1,8 @@
+claims ['base:0xabababababababababababababababababababababababababababababababab:None:USDC:', 'base:0xabababababababababababababababababababababababababababababababab:0:USDC:0x1111111111111111111111111111111111111111']
+chain_transfer_count 1
+claim_verifications [{'confirmed': True, 'evidence': {'chain': 8453, 'tx': '0xabababababababababababababababababababababababababababababababab', 'asset': 'USDC', 'recipient': '0x1111111111111111111111111111111111111111', 'micro': 1000000}}, {'confirmed': True, 'evidence': {'chain': 8453, 'tx': '0xabababababababababababababababababababababababababababababababab', 'asset': 'USDC', 'recipient': '0x1111111111111111111111111111111111111111', 'micro': 1000000}}]
+verified_income_items 2 earned_micro 2000000
+wallet_delta_micro 2000000
+wallet_conservation True
+
+Exit code: 0

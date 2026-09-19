@@ -1,0 +1,17 @@
+from tests.conftest import make_runtime
+from factorylab.kernel.queue import PropensityRecord
+
+rt = make_runtime()
+a = 'seed-decider'
+for i in range(rt.m.committee.min_settled):
+    p = PropensityRecord((a,), (1.0,), a, 0, 'router:Tick', 'probe')
+    h = rt.queue.open(actor='router:Tick', event_id=f'probe-{i}', propensity=p, channel='verdict', deadline_ns=10**18, parent_handle=None, cost_ceiling=0)
+    rt.handle_to_assembly[h] = a
+    rt.consequences.start(h, i + 1)
+    rt.consequences.finish(h, 0)
+    client_id=f'order-{i}'
+    rt.consequences.order_intent(client_id, h, 'BTC')
+    rt.consequences.release_unresolved(client_id, i + 2)
+print('censored_payoffs:', sum(r.payoff is not None and r.payoff.censored is not None for r in rt.consequences.table.returns))
+print('eligible:', rt._committee_eligible())
+print('uncensored_payoffs:', sum(r.payoff is not None and r.payoff.censored is None for r in rt.consequences.table.returns))

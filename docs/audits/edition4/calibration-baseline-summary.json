@@ -1,0 +1,923 @@
+{
+  "mode": "paid",
+  "paid": true,
+  "world": "/tmp/factorylab-edition4-baseline-source/worlds/testnet.toml",
+  "manifest": {
+    "name": "testnet",
+    "manifest_sha256": "fd43cbe8faf339d3450df40a36df8384f8f191554f05079c1b0413f34dc44c82",
+    "roster_sha256": "f4ff81c7ca95a72f064ec92ae06fea6ae165bfec9bd7a433025d4bd6d0c317ae",
+    "menu": [
+      "deepseek/deepseek-v4-flash-0731",
+      "deepseek/deepseek-v4.1-flash",
+      "meta/muse-spark-1.3",
+      "openai/gpt-5.6-luna",
+      "qwen/qwen3.7-flash",
+      "qwen/qwen3.8-flash",
+      "z-ai/glm-5.3-flash"
+    ]
+  },
+  "budget": {
+    "budget_micro": 2000000,
+    "spent_micro": 433221,
+    "remaining_micro": 1566779,
+    "refused_calls": 0,
+    "stopped": null
+  },
+  "candidates": {
+    "z-ai/glm-5.3-flash": {
+      "candidate": "z-ai/glm-5.3-flash",
+      "trees": 7,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 367346,
+      "entitlement_refused_trees": 0,
+      "completion": 1.0,
+      "well_formed": 1.0,
+      "task_met": 1.0,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 3774.0,
+      "cost_p95_micro": 10103.8,
+      "latency_p50_ms": 5445.6,
+      "cached_share": 0.0019,
+      "cached_reported_trees": 7,
+      "tick_cost_micro": 11349,
+      "served_by": [
+        "z-ai/glm-5.3-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 3659.0,
+          "cost_p95_micro": 3659.0,
+          "latency_p50_ms": 6529.7,
+          "prompt_bytes_max": 97655
+        },
+        "judge": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 3916.0,
+          "cost_p95_micro": 3916.0,
+          "latency_p50_ms": 6166.9,
+          "prompt_bytes_max": 101963
+        },
+        "meta": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 3774.0,
+          "cost_p95_micro": 3774.0,
+          "latency_p50_ms": 5445.6,
+          "prompt_bytes_max": 99350
+        },
+        "tool": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 8274.0,
+          "cost_p95_micro": 8274.0,
+          "latency_p50_ms": 4506.8,
+          "prompt_bytes_max": 96985
+        },
+        "fail": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 3646.0,
+          "cost_p95_micro": 3646.0,
+          "latency_p50_ms": 3146.5,
+          "prompt_bytes_max": 96943
+        },
+        "continuation": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 10888.0,
+          "cost_p95_micro": 10888.0,
+          "latency_p50_ms": 7957.6,
+          "prompt_bytes_max": 96986
+        },
+        "long_context": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 3713.0,
+          "cost_p95_micro": 3713.0,
+          "latency_p50_ms": 4488.3,
+          "prompt_bytes_max": 97655
+        }
+      }
+    },
+    "deepseek/deepseek-v4.1-flash": {
+      "candidate": "deepseek/deepseek-v4.1-flash",
+      "trees": 7,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 367346,
+      "entitlement_refused_trees": 0,
+      "completion": 1.0,
+      "well_formed": 1.0,
+      "task_met": 1.0,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 4589.0,
+      "cost_p95_micro": 6170.9,
+      "latency_p50_ms": 5215.2,
+      "cached_share": 0.505,
+      "cached_reported_trees": 7,
+      "tick_cost_micro": 14438,
+      "served_by": [
+        "deepseek/deepseek-v4.1-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 5361.0,
+          "cost_p95_micro": 5361.0,
+          "latency_p50_ms": 4146.6,
+          "prompt_bytes_max": 98092
+        },
+        "judge": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 6518.0,
+          "cost_p95_micro": 6518.0,
+          "latency_p50_ms": 5215.2,
+          "prompt_bytes_max": 102400
+        },
+        "meta": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2559.0,
+          "cost_p95_micro": 2559.0,
+          "latency_p50_ms": 7595.7,
+          "prompt_bytes_max": 99789
+        },
+        "tool": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 4589.0,
+          "cost_p95_micro": 4589.0,
+          "latency_p50_ms": 2783.3,
+          "prompt_bytes_max": 97424
+        },
+        "fail": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1765.0,
+          "cost_p95_micro": 1765.0,
+          "latency_p50_ms": 7875.8,
+          "prompt_bytes_max": 97382
+        },
+        "continuation": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 5334.0,
+          "cost_p95_micro": 5334.0,
+          "latency_p50_ms": 7445.7,
+          "prompt_bytes_max": 97445
+        },
+        "long_context": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1859.0,
+          "cost_p95_micro": 1859.0,
+          "latency_p50_ms": 2556.5,
+          "prompt_bytes_max": 98093
+        }
+      }
+    },
+    "deepseek/deepseek-v4-flash-0731": {
+      "candidate": "deepseek/deepseek-v4-flash-0731",
+      "trees": 7,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 367346,
+      "entitlement_refused_trees": 0,
+      "completion": 1.0,
+      "well_formed": 0.8571,
+      "task_met": 0.7143,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 1914.0,
+      "cost_p95_micro": 5450.9,
+      "latency_p50_ms": 2993.6,
+      "cached_share": 0.2297,
+      "cached_reported_trees": 7,
+      "tick_cost_micro": 7154,
+      "served_by": [
+        "deepseek/deepseek-v4-flash-0731"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 3703.0,
+          "cost_p95_micro": 3703.0,
+          "latency_p50_ms": 2135.5,
+          "prompt_bytes_max": 98237
+        },
+        "judge": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 2075.0,
+          "cost_p95_micro": 2075.0,
+          "latency_p50_ms": 7056.5,
+          "prompt_bytes_max": 102545
+        },
+        "meta": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 1376.0,
+          "cost_p95_micro": 1376.0,
+          "latency_p50_ms": 6972.3,
+          "prompt_bytes_max": 99932
+        },
+        "tool": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 1577.0,
+          "cost_p95_micro": 1577.0,
+          "latency_p50_ms": 2993.6,
+          "prompt_bytes_max": 97567
+        },
+        "fail": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1313.0,
+          "cost_p95_micro": 1313.0,
+          "latency_p50_ms": 2096.9,
+          "prompt_bytes_max": 97525
+        },
+        "continuation": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 6200.0,
+          "cost_p95_micro": 6200.0,
+          "latency_p50_ms": 5002.4,
+          "prompt_bytes_max": 97594
+        },
+        "long_context": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1914.0,
+          "cost_p95_micro": 1914.0,
+          "latency_p50_ms": 1592.4,
+          "prompt_bytes_max": 98237
+        }
+      }
+    },
+    "qwen/qwen3.8-flash": {
+      "candidate": "qwen/qwen3.8-flash",
+      "trees": 7,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 367346,
+      "entitlement_refused_trees": 0,
+      "completion": 0.7143,
+      "well_formed": 0.7143,
+      "task_met": 0.7143,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 4600.0,
+      "cost_p95_micro": 5279.6,
+      "latency_p50_ms": 11852.0,
+      "cached_share": 0.5697,
+      "cached_reported_trees": 5,
+      "tick_cost_micro": null,
+      "served_by": [
+        "qwen/qwen3.8-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 1,
+          "completion": 0.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": null,
+          "cost_p95_micro": null,
+          "latency_p50_ms": null,
+          "prompt_bytes_max": 98198
+        },
+        "judge": {
+          "trees": 1,
+          "completion": 0.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": null,
+          "cost_p95_micro": null,
+          "latency_p50_ms": null,
+          "prompt_bytes_max": 102506
+        },
+        "meta": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 4638.0,
+          "cost_p95_micro": 4638.0,
+          "latency_p50_ms": 33152.7,
+          "prompt_bytes_max": 99893
+        },
+        "tool": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 4600.0,
+          "cost_p95_micro": 4600.0,
+          "latency_p50_ms": 11852.0,
+          "prompt_bytes_max": 97528
+        },
+        "fail": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1859.0,
+          "cost_p95_micro": 1859.0,
+          "latency_p50_ms": 9372.9,
+          "prompt_bytes_max": 97486
+        },
+        "continuation": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 5440.0,
+          "cost_p95_micro": 5440.0,
+          "latency_p50_ms": 21197.3,
+          "prompt_bytes_max": 97529
+        },
+        "long_context": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1952.0,
+          "cost_p95_micro": 1952.0,
+          "latency_p50_ms": 11736.7,
+          "prompt_bytes_max": 98198
+        }
+      }
+    },
+    "qwen/qwen3.7-flash": {
+      "candidate": "qwen/qwen3.7-flash",
+      "trees": 7,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 367346,
+      "entitlement_refused_trees": 0,
+      "completion": 1.0,
+      "well_formed": 1.0,
+      "task_met": 0.8571,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 531.0,
+      "cost_p95_micro": 1305.5,
+      "latency_p50_ms": 3577.9,
+      "cached_share": 0.4767,
+      "cached_reported_trees": 7,
+      "tick_cost_micro": 1974,
+      "served_by": [
+        "qwen/qwen3.7-flash"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 882.0,
+          "cost_p95_micro": 882.0,
+          "latency_p50_ms": 3494.7,
+          "prompt_bytes_max": 98198
+        },
+        "judge": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 561.0,
+          "cost_p95_micro": 561.0,
+          "latency_p50_ms": 5849.7,
+          "prompt_bytes_max": 102506
+        },
+        "meta": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 531.0,
+          "cost_p95_micro": 531.0,
+          "latency_p50_ms": 6277.8,
+          "prompt_bytes_max": 99893
+        },
+        "tool": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 492.0,
+          "cost_p95_micro": 492.0,
+          "latency_p50_ms": 2728.2,
+          "prompt_bytes_max": 97528
+        },
+        "fail": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 499.0,
+          "cost_p95_micro": 499.0,
+          "latency_p50_ms": 3577.9,
+          "prompt_bytes_max": 97486
+        },
+        "continuation": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 1487.0,
+          "cost_p95_micro": 1487.0,
+          "latency_p50_ms": 8860.5,
+          "prompt_bytes_max": 97529
+        },
+        "long_context": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 498.0,
+          "cost_p95_micro": 498.0,
+          "latency_p50_ms": 3285.6,
+          "prompt_bytes_max": 98198
+        }
+      }
+    },
+    "openai/gpt-5.6-luna": {
+      "candidate": "openai/gpt-5.6-luna",
+      "trees": 7,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 367346,
+      "entitlement_refused_trees": 0,
+      "completion": 1.0,
+      "well_formed": 1.0,
+      "task_met": 0.8571,
+      "refusal_correct": 0.0,
+      "cost_p50_micro": 6943.0,
+      "cost_p95_micro": 17722.4,
+      "latency_p50_ms": 3157.4,
+      "cached_share": 0.0,
+      "cached_reported_trees": 7,
+      "tick_cost_micro": 20401,
+      "served_by": [
+        "openai/gpt-5.6-luna"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 6432.0,
+          "cost_p95_micro": 6432.0,
+          "latency_p50_ms": 1577.4,
+          "prompt_bytes_max": 98462
+        },
+        "judge": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 7026.0,
+          "cost_p95_micro": 7026.0,
+          "latency_p50_ms": 3994.4,
+          "prompt_bytes_max": 102770
+        },
+        "meta": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 6943.0,
+          "cost_p95_micro": 6943.0,
+          "latency_p50_ms": 3865.9,
+          "prompt_bytes_max": 100157
+        },
+        "tool": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 13927.0,
+          "cost_p95_micro": 13927.0,
+          "latency_p50_ms": 3157.4,
+          "prompt_bytes_max": 97792
+        },
+        "fail": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 6385.0,
+          "cost_p95_micro": 6385.0,
+          "latency_p50_ms": 1857.5,
+          "prompt_bytes_max": 97750
+        },
+        "continuation": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 19349.0,
+          "cost_p95_micro": 19349.0,
+          "latency_p50_ms": 7925.5,
+          "prompt_bytes_max": 97795
+        },
+        "long_context": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 6432.0,
+          "cost_p95_micro": 6432.0,
+          "latency_p50_ms": 1853.4,
+          "prompt_bytes_max": 98462
+        }
+      }
+    },
+    "meta/muse-spark-1.3": {
+      "candidate": "meta/muse-spark-1.3",
+      "trees": 7,
+      "budget_refused_trees": 0,
+      "seat_grant_micro": 367346,
+      "entitlement_refused_trees": 0,
+      "completion": 1.0,
+      "well_formed": 0.8571,
+      "task_met": 0.8571,
+      "refusal_correct": 1.0,
+      "cost_p50_micro": 35206.0,
+      "cost_p95_micro": 45559.3,
+      "latency_p50_ms": 7473.3,
+      "cached_share": 0.0,
+      "cached_reported_trees": 7,
+      "tick_cost_micro": 106763,
+      "served_by": [
+        "meta/muse-spark-1.3"
+      ],
+      "scenarios": {
+        "produce": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 33963.0,
+          "cost_p95_micro": 33963.0,
+          "latency_p50_ms": 5666.5,
+          "prompt_bytes_max": 98462
+        },
+        "judge": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 37594.0,
+          "cost_p95_micro": 37594.0,
+          "latency_p50_ms": 10929.6,
+          "prompt_bytes_max": 102770
+        },
+        "meta": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 35206.0,
+          "cost_p95_micro": 35206.0,
+          "latency_p50_ms": 7473.3,
+          "prompt_bytes_max": 100157
+        },
+        "tool": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 48973.0,
+          "cost_p95_micro": 48973.0,
+          "latency_p50_ms": 12442.1,
+          "prompt_bytes_max": 97792
+        },
+        "fail": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 33433.0,
+          "cost_p95_micro": 33433.0,
+          "latency_p50_ms": 5239.7,
+          "prompt_bytes_max": 97750
+        },
+        "continuation": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 0.0,
+          "task_met": 0.0,
+          "cost_p50_micro": 36326.0,
+          "cost_p95_micro": 36326.0,
+          "latency_p50_ms": 14624.3,
+          "prompt_bytes_max": 97795
+        },
+        "long_context": {
+          "trees": 1,
+          "completion": 1.0,
+          "well_formed": 1.0,
+          "task_met": 1.0,
+          "cost_p50_micro": 33780.0,
+          "cost_p95_micro": 33780.0,
+          "latency_p50_ms": 4766.8,
+          "prompt_bytes_max": 98462
+        }
+      }
+    }
+  },
+  "tick_cost": {
+    "definition": "one producer decision on a Tick, one evaluator verdict on it, one meta assessment of that verdict; each at the p50 metered cost of its whole decision tree",
+    "manifest_roster": {
+      "parts": {
+        "producer": {
+          "seat": "seed-observer",
+          "model": "z-ai/glm-5.3-flash",
+          "cost_p50_micro": 3659.0
+        },
+        "evaluator": {
+          "seat": "eval-a",
+          "model": "z-ai/glm-5.3-flash",
+          "cost_p50_micro": 3916.0
+        },
+        "meta": {
+          "seat": "meta-a",
+          "model": "deepseek/deepseek-v4.1-flash",
+          "cost_p50_micro": 2559.0
+        }
+      },
+      "tick_cost_micro": 10134
+    },
+    "per_candidate": {
+      "z-ai/glm-5.3-flash": 11349,
+      "deepseek/deepseek-v4.1-flash": 14438,
+      "deepseek/deepseek-v4-flash-0731": 7154,
+      "qwen/qwen3.8-flash": null,
+      "qwen/qwen3.7-flash": 1974,
+      "openai/gpt-5.6-luna": 20401,
+      "meta/muse-spark-1.3": 106763
+    }
+  },
+  "seat_grants": {
+    "definition": "each candidate seat's endowment from the unallocated pool, the bound on what it may spend over the whole calibration; a tree refused by it is flagged entitlement_refused, not the model's",
+    "grant_micro": 367346,
+    "seats": {
+      "z-ai/glm-5.3-flash": {
+        "producer": {
+          "seat": "cal:z-ai/glm-5.3-flash:producer",
+          "grant_micro": 367346
+        },
+        "evaluator": {
+          "seat": "cal:z-ai/glm-5.3-flash:evaluator",
+          "grant_micro": 367346
+        },
+        "meta": {
+          "seat": "cal:z-ai/glm-5.3-flash:meta",
+          "grant_micro": 367346
+        },
+        "tool": {
+          "seat": "cal:z-ai/glm-5.3-flash:tool",
+          "grant_micro": 367346
+        },
+        "fail": {
+          "seat": "cal:z-ai/glm-5.3-flash:fail",
+          "grant_micro": 367346
+        },
+        "parent": {
+          "seat": "cal:z-ai/glm-5.3-flash:parent",
+          "grant_micro": 367346
+        },
+        "helper": {
+          "seat": "cal:z-ai/glm-5.3-flash:helper",
+          "grant_micro": 367346
+        }
+      },
+      "deepseek/deepseek-v4.1-flash": {
+        "producer": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:producer",
+          "grant_micro": 367346
+        },
+        "evaluator": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:evaluator",
+          "grant_micro": 367346
+        },
+        "meta": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:meta",
+          "grant_micro": 367346
+        },
+        "tool": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:tool",
+          "grant_micro": 367346
+        },
+        "fail": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:fail",
+          "grant_micro": 367346
+        },
+        "parent": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:parent",
+          "grant_micro": 367346
+        },
+        "helper": {
+          "seat": "cal:deepseek/deepseek-v4.1-flash:helper",
+          "grant_micro": 367346
+        }
+      },
+      "deepseek/deepseek-v4-flash-0731": {
+        "producer": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:producer",
+          "grant_micro": 367346
+        },
+        "evaluator": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:evaluator",
+          "grant_micro": 367346
+        },
+        "meta": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:meta",
+          "grant_micro": 367346
+        },
+        "tool": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:tool",
+          "grant_micro": 367346
+        },
+        "fail": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:fail",
+          "grant_micro": 367346
+        },
+        "parent": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:parent",
+          "grant_micro": 367346
+        },
+        "helper": {
+          "seat": "cal:deepseek/deepseek-v4-flash-0731:helper",
+          "grant_micro": 367346
+        }
+      },
+      "qwen/qwen3.8-flash": {
+        "producer": {
+          "seat": "cal:qwen/qwen3.8-flash:producer",
+          "grant_micro": 367346
+        },
+        "evaluator": {
+          "seat": "cal:qwen/qwen3.8-flash:evaluator",
+          "grant_micro": 367346
+        },
+        "meta": {
+          "seat": "cal:qwen/qwen3.8-flash:meta",
+          "grant_micro": 367346
+        },
+        "tool": {
+          "seat": "cal:qwen/qwen3.8-flash:tool",
+          "grant_micro": 367346
+        },
+        "fail": {
+          "seat": "cal:qwen/qwen3.8-flash:fail",
+          "grant_micro": 367346
+        },
+        "parent": {
+          "seat": "cal:qwen/qwen3.8-flash:parent",
+          "grant_micro": 367346
+        },
+        "helper": {
+          "seat": "cal:qwen/qwen3.8-flash:helper",
+          "grant_micro": 367346
+        }
+      },
+      "qwen/qwen3.7-flash": {
+        "producer": {
+          "seat": "cal:qwen/qwen3.7-flash:producer",
+          "grant_micro": 367346
+        },
+        "evaluator": {
+          "seat": "cal:qwen/qwen3.7-flash:evaluator",
+          "grant_micro": 367346
+        },
+        "meta": {
+          "seat": "cal:qwen/qwen3.7-flash:meta",
+          "grant_micro": 367346
+        },
+        "tool": {
+          "seat": "cal:qwen/qwen3.7-flash:tool",
+          "grant_micro": 367346
+        },
+        "fail": {
+          "seat": "cal:qwen/qwen3.7-flash:fail",
+          "grant_micro": 367346
+        },
+        "parent": {
+          "seat": "cal:qwen/qwen3.7-flash:parent",
+          "grant_micro": 367346
+        },
+        "helper": {
+          "seat": "cal:qwen/qwen3.7-flash:helper",
+          "grant_micro": 367346
+        }
+      },
+      "openai/gpt-5.6-luna": {
+        "producer": {
+          "seat": "cal:openai/gpt-5.6-luna:producer",
+          "grant_micro": 367346
+        },
+        "evaluator": {
+          "seat": "cal:openai/gpt-5.6-luna:evaluator",
+          "grant_micro": 367346
+        },
+        "meta": {
+          "seat": "cal:openai/gpt-5.6-luna:meta",
+          "grant_micro": 367346
+        },
+        "tool": {
+          "seat": "cal:openai/gpt-5.6-luna:tool",
+          "grant_micro": 367346
+        },
+        "fail": {
+          "seat": "cal:openai/gpt-5.6-luna:fail",
+          "grant_micro": 367346
+        },
+        "parent": {
+          "seat": "cal:openai/gpt-5.6-luna:parent",
+          "grant_micro": 367346
+        },
+        "helper": {
+          "seat": "cal:openai/gpt-5.6-luna:helper",
+          "grant_micro": 367346
+        }
+      },
+      "meta/muse-spark-1.3": {
+        "producer": {
+          "seat": "cal:meta/muse-spark-1.3:producer",
+          "grant_micro": 367346
+        },
+        "evaluator": {
+          "seat": "cal:meta/muse-spark-1.3:evaluator",
+          "grant_micro": 367346
+        },
+        "meta": {
+          "seat": "cal:meta/muse-spark-1.3:meta",
+          "grant_micro": 367346
+        },
+        "tool": {
+          "seat": "cal:meta/muse-spark-1.3:tool",
+          "grant_micro": 367346
+        },
+        "fail": {
+          "seat": "cal:meta/muse-spark-1.3:fail",
+          "grant_micro": 367346
+        },
+        "parent": {
+          "seat": "cal:meta/muse-spark-1.3:parent",
+          "grant_micro": 367346
+        },
+        "helper": {
+          "seat": "cal:meta/muse-spark-1.3:helper",
+          "grant_micro": 367346
+        }
+      }
+    },
+    "unallocated_after_micro": 46
+  },
+  "source_commit": "7dd212a",
+  "interpretation": "Candidate calibration on older testnet menu, scripted exchange, one sample per scenario; not spontaneous behavior or a roster selection."
+}

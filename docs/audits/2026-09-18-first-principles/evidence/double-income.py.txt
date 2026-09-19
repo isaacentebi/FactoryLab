@@ -1,0 +1,28 @@
+from types import SimpleNamespace
+from tests.conftest import make_runtime
+from factorylab.world.treasury_rails import LiveRail, BASE, event_topic, word_address
+
+rt=make_runtime()
+reserve='0x'+'11'*20
+tx='0x'+'ab'*32
+micro=1_000_000
+topic=event_topic('Transfer(address,address,uint256)')
+to_word='0x'+word_address(reserve).hex()
+proof={'status':'0x1','logs':[{'address':BASE.usdc,'topics':[topic,'0x'+'00'*32,to_word], 'data':hex(micro),'logIndex':'0x0'}]}
+rail=object.__new__(LiveRail)
+rail.reserve_address=reserve
+rail.base=SimpleNamespace(chain=BASE,proof=lambda _: proof)
+rt.treasury.rail=rail
+common={'payer':'payer','program':'program','version':1,'chain':'base','asset':'USDC'}
+rt.treasury.earn('service',micro,tx,claim=True,recipient=None,log_index=None,**common)
+rt.treasury.earn('service',micro,tx,claim=True,recipient=reserve,log_index=0,**common)
+print('claims',list(rt.treasury.income['claims']))
+print('chain_transfer_count',len(proof['logs']))
+print('claim_verifications',[rail.verify_receipt({'tx':tx,'micro':micro,'recipient':r,'log_index':i}) for r,i in ((None,None),(reserve,0))])
+before=rt.wallet.balance
+items=rt.treasury.verify_receipts()
+print('verified_income_items',len(items),'earned_micro',rt.treasury.income['earned_micro'])
+for item in items:
+    rt._book_income(item)
+print('wallet_delta_micro',rt.wallet.balance-before)
+print('wallet_conservation',rt.wallet.check_conservation())
