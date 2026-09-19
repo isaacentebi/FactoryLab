@@ -26,7 +26,8 @@ process death between the two records) or whose answer was ambiguous (a timeout,
 an exception, a resting order) is *reconciled* by reading the venue, never by
 sending it again. An attempt the venue definitively refused or only partly did
 (rejected, an IOC that cancelled, a fill for less than the size) is followed by the
-target's next attempt under the next sequence (``sequence_of``): up to
+target's next attempt under the next sequence (``sequence_of``) — whether that answer
+came back to the submission or to the reconciliation that read it: up to
 ``ROUNDS_PER_KILL`` rounds in one kill, each re-reading the venue, and a later kill
 of the same diary continues the numbering. A residual worth less than the venue's
 order minimum can never be sold, so it is reported as dust
@@ -260,6 +261,7 @@ class WindDownExecutor:
                 self._append({"kind": OP_RESULT, "disposition": "reconciled", **record,
                               "result": result})
                 self._count(op, result, record)
+                self._owe(op, coin, market, side, target, result, detail, retry)
                 return
             result = self._known[latest]
             if self._complete(op, result, detail) or not retry:
@@ -277,6 +279,7 @@ class WindDownExecutor:
                 self._append({"kind": OP_RESULT, "disposition": "reconciled", **record,
                               "result": result})
                 self._count(op, result, record)
+                self._owe(op, coin, market, side, target, result, detail, retry)
                 return
         record = record_for(attempt)
         op_id = record["op_id"]
@@ -291,6 +294,18 @@ class WindDownExecutor:
         self._append({"kind": OP_RESULT, "disposition": "submitted", **record,
                       "result": result})
         self._count(op, result, record)
+        self._owe(op, coin, market, side, target, result, detail, retry)
+
+    def _owe(self, op: str, coin: str, market: str, side: str, target, result: dict,
+             detail: dict, retry: bool) -> None:
+        """A refusal or a partial fill owes this target its next attempt, in this kill.
+
+        The answer is the same fact whether the venue gave it to the submission or
+        to the reconciliation that read it afterwards: an attempt that was
+        definitively refused or only partly done left exposure in place, and the
+        next round sends that target's next identity rather than waiting for a
+        later kill to notice.
+        """
         if retry and self._retryable(op, result) and not self._complete(op, result, detail):
             self._owed.add((op, coin, market, side, str(target)))
 
