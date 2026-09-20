@@ -84,6 +84,17 @@ def _ask(mode="reference", **commission):
     return rt, provider, refs, event
 
 
+def test_grounded_judge_cannot_acknowledge_an_inbox_omitted_from_its_request():
+    provider = _Capturing()
+    rt = _runtime(provider=provider)
+    _producer, event = _commission(rt)
+    rt.outcomes.append("eval-b", handle="unseen", outcome={"kind": "message"})
+    ident = f"outcome:{rt.outcomes.items['eval-b'][-1]['seq']}"
+    _consequence_judge(rt, event, "eval-b")
+    rt.outcomes.ack_through("eval-b", ident)
+    assert rt.outcomes.cursors.get("eval-b", 0) == 0
+
+
 @pytest.mark.parametrize("mode", ["reference", "compact"])
 def test_the_evidence_field_names_exactly_the_refs_this_commission_supplied(mode):
     _rt, provider, refs, _event = _ask(mode)

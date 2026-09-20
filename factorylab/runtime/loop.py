@@ -1174,7 +1174,8 @@ class Runtime(
             },
             "world": self._world_block(),
             "your_state": self.working_state.render(sample.chosen),
-            "unread_outcomes": self.outcomes.unread(sample.chosen),
+            "unread_outcomes": ({} if payload.get("grounded_consequence") else
+                                self.outcomes.unread(sample.chosen)),
             "your_consequence_standing": self._standing_for(sample.chosen),
             "your_action_policy": self._action_policy(sample.chosen),  # private
             # Evaluation is a commission, not an obligation (§6.B): a subject, a
@@ -1457,6 +1458,7 @@ class Runtime(
                 sampling_ref=None,
             )
             return
+        review = _grounded_review(payload)
         inputs = {
             "verdict": {
                 "verdict": payload.get("score") if recursive else payload.get("verdict"),
@@ -1471,14 +1473,14 @@ class Runtime(
         }
         inputs["your_action_policy"] = self._action_policy(sample.chosen)  # private
         inputs["your_state"] = self.working_state.render(sample.chosen)
-        inputs["unread_outcomes"] = self.outcomes.unread(sample.chosen)
+        inputs["unread_outcomes"] = (self.outcomes.unread(sample.chosen)
+                                    if review is None else {})
         if "window" in payload:
             inputs["window"] = payload["window"]
         if recursive:
             # The grounded record is given once, below.
             inputs["meta_verdict"] = {key: value for key, value in payload.items()
                                       if key not in GROUNDED_FIELDS}
-        review = _grounded_review(payload)
         if review is not None:
             # The judge answered under frozen norms; the current charter and a fresh
             # world block would grade it against a standard it was not answering to.

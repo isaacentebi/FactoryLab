@@ -512,7 +512,7 @@ class OutcomeInbox:
                 "next_after": page[-1]["seq"] if more else None,
                 "items": [self.index_of(seat, r) for r in page]}
 
-    def get(self, seat: str, ident: Any) -> dict[str, Any]:
+    def get(self, seat: str, ident: Any, *, delivered: bool = True) -> dict[str, Any]:
         """One item by ``outcome_id``, or by handle as a fallback — the ``outcome.get`` view."""
         record = self._find(seat, ident)
         if record is None:
@@ -520,7 +520,8 @@ class OutcomeInbox:
         body = self.body(record["sha"])
         if body is None:
             return {"error": OUTCOME_UNKNOWN}
-        self._mark_delivered(seat, record["seq"])
+        if delivered:
+            self._mark_delivered(seat, record["seq"])
         view = {**body, "sha": record["sha"], "outcome_id": f"outcome:{record['seq']}",
                 "related_outcomes": [f"outcome:{r['seq']}" for r in self.items.get(seat, ())
                                      if r["handle"] == record["handle"]],

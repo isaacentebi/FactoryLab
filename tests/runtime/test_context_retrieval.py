@@ -1,10 +1,12 @@
 """Retrieval closes a real decision without losing evidence or spending twice."""
 
 import json
+from dataclasses import replace
 
 import pytest
 from test_discovery_continuation import request, rows, runtime, scripted
 
+from factorylab.cortex.request import Return
 from factorylab.runtime.compute import _compacted_result
 
 
@@ -71,3 +73,38 @@ def test_unpriced_retrieval_finishes_instead_of_buying_another_round(monkeypatch
     assert ret.status == "ok" and len(prompts) == 2
     assert "Return the final answer" in prompts[1]
     assert rows(rt, "tool.rounds_exhausted")[0]["priced"] is False
+
+
+def test_large_unaffordable_result_preserves_answer_without_claiming_delivery(monkeypatch):
+    rt = runtime()
+    seat = "seed-decider"
+    rt.outcomes.append(seat, handle="large", outcome={"evidence": "x" * 250_000})
+    base = request(rt)
+    reserve = rt._call_reserve(rt.assemblies[seat], base)
+    req = replace(base, cost_ceiling=3 * reserve)
+    prompts = []
+    scripted(rt, monkeypatch, [
+        {"tool_calls": [{"tool": "outcome.get", "args": {"outcome_id": "outcome:1"}}]},
+        {"action": "hold", "ack_through": "outcome:1"},
+    ], prompts)
+    ret = rt._invoke(seat, req, "producer")
+    assert ret.status == "ok" and ret.cost <= req.cost_ceiling
+    assert "Tool bodies were not loaded" in prompts[1]
+    assert "x" * 1000 not in prompts[1]
+    assert rt.outcomes.cursors.get(seat, 0) == 0
+
+
+def test_program_cannot_run_tools_with_its_last_answer_budget(monkeypatch):
+    from tests.cortex.test_programs import program
+
+    rt = runtime()
+    req = request(rt)
+    asm, _, _ = program()
+    rt.assemblies["seed-decider"] = asm
+    monkeypatch.setattr(rt, "_invoke_compute", lambda *_: Return(
+        req.handle, {}, asm.price, "ok", tool_calls=(
+            {"tool": "outcome.list", "args": {}},)))
+    ret = rt._invoke("seed-decider", replace(req, cost_ceiling=2 * asm.price - 1), "producer")
+    assert ret.status == "failed" and ret.cost == asm.price
+    assert not rows(rt, "tool.call")
+    assert rows(rt, "tool.rounds_exhausted")[0]["reserve"] == asm.price

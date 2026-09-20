@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any
 
-from factorylab.cortex.assembly import Assembly, AssemblySpec
+from factorylab.cortex.assembly import Assembly, AssemblySpec, ProgramAssembly
 from factorylab.cortex.request import (
     ADDRESS_TOOL,
     ChildRequest,
@@ -1018,6 +1018,8 @@ class ComputeMixin:
         seat, or a request that did not render — and an unpriced call is refused a
         round rather than treated as free.
         """
+        if isinstance(assembly, ProgramAssembly):
+            return assembly.price
         model = getattr(assembly, "model", None)
         build = getattr(assembly, "build_model_request", None)
         if model is None or build is None:
@@ -1190,7 +1192,7 @@ class ComputeMixin:
             # ``outcome_id`` names one item exactly; ``handle`` is the fallback and
             # answers with the oldest unread item of that decision (R3-F).
             ident = args.get("outcome_id") if args.get("outcome_id") else args.get("handle")
-            result = self.outcomes.get(action_id, ident)
+            result = self.outcomes.get(action_id, ident, delivered=False)
             self.ledger.append({"kind": "outcome.get",
                                 "handle": handle, "assembly_id": action_id,
                                 "asked": str(ident)[:64],
@@ -1457,12 +1459,29 @@ class ComputeMixin:
         granted = True  # the first continuation always happens: results must be read
         outside_text = False
         answered: set[str] = set()  # lookups this decision has already been answered
+        final_note = ("Return the final answer; this request's continuation has been "
+                      "consumed. Further tool calls and requests are refused.")
+        minimum_inputs = {**req.inputs, "continuation": final_note,
+                          "context_notice": "Tool bodies were not loaded: insufficient budget."}
+        minimum_answer = req.continuation(inputs=minimum_inputs, cost_ceiling=req.cost_ceiling)
+        answer_reserve = self._call_reserve(assembly, minimum_answer) or 0
         while (not self.wallet.dead and ret.status == "ok" and (ret.tool_calls or ret.children)
                and granted):
+            if req.cost_ceiling - total_cost < answer_reserve:
+                self.ledger.append({"kind": "tool.rounds_exhausted", "handle": req.handle,
+                                    "assembly_id": action_id, "round": tool_round,
+                                    "reason": "answer unaffordable before dispatch",
+                                    "remaining": max(0, req.cost_ceiling - total_cost),
+                                    "reserve": answer_reserve, "ts": self.clock.now_ns})
+                ret = Return(req.handle, {
+                             "reason": "remaining budget cannot cover a tool-result answer"},
+                             0, "failed")
+                break
             results = []
             tool_cost = 0
             learned = False  # a lookup this decision had not already been given
             acted = False  # a write or a child: this decision has taken its action
+            delivered_reads = []
             for index, call in enumerate(ret.tool_calls):
                 if self.wallet.dead:
                     break
@@ -1471,7 +1490,7 @@ class ComputeMixin:
                 # position, so two rounds of one decision cannot collide on one
                 # order id and an intended second write is never read as a repeat.
                 slot = f"tool:{index}" if tool_round == 0 else f"round{tool_round}:{index}"
-                if price > max(0, req.cost_ceiling - total_cost - tool_cost):
+                if price > max(0, req.cost_ceiling - total_cost - tool_cost - answer_reserve):
                     result, cost = {"error": "request cost ceiling exhausted"}, 0
                     dispatched = False
                     if call["tool"] == "connector.fetch":
@@ -1488,6 +1507,7 @@ class ComputeMixin:
                         result, cost = {"sha": sha, "kind": "retrieval.result", "bytes": len(data),
                                         "text": data.decode("utf-8"),
                                         "expires": "end of this decision"}, 0
+                        delivered_reads.append(json.loads(data))
                         self.ledger.append({"kind": "artifact.get", "sha": sha,
                                             "handle": req.handle, "assembly_id": action_id,
                                             "found": True, "scope": "invocation",
@@ -1558,6 +1578,8 @@ class ComputeMixin:
                 self.window.tool_calls += 1
                 results.append({"tool": call.get("tool"), "args": call.get("args"),
                                 "result": result})
+                if call["tool"] == "outcome.get":
+                    delivered_reads.append(results[-1])
                 # A write the venue accepted, or has not yet acknowledged, is an
                 # action this return took; a rejected or refused one is not.
                 label = effect_label(str(call.get("tool")), call.get("args"))
@@ -1569,7 +1591,8 @@ class ComputeMixin:
                 if self.wallet.dead:
                     break
                 result, cost = self._invoke_child(
-                    action_id, req, item, max(0, req.cost_ceiling - total_cost - tool_cost)
+                    action_id, req, item,
+                    max(0, req.cost_ceiling - total_cost - tool_cost - answer_reserve)
                 )
                 tool_cost += cost
                 results.append(result)
@@ -1588,11 +1611,26 @@ class ComputeMixin:
             # The continuation is the same request, and it is the billed call
             # that produces the final verdict — so everything the first call was
             # shown, the PROPENSITY block included, rides along unchanged.
-            note = ("Return the final answer; this request's continuation has been "
-                    "consumed. Further tool calls and requests are refused.")
+            note = final_note
             follow_inputs = {**req.inputs, "tool_results": results,
                              "seen_tool_results": seen_results, "continuation": note}
             follow = req.continuation(inputs=follow_inputs, cost_ceiling=remaining)
+            final_quote = self._call_reserve(assembly, follow)
+            if final_quote is not None and final_quote > remaining:
+                # Result size is unknown before dispatch. Keep it exact but unloaded
+                # when its body would consume the answer's budget.
+                follow_inputs = {**follow_inputs,
+                                 "tool_results": [_compacted_result(entry, retrieved)
+                                                  for entry in results],
+                                 "context_notice": "Tool bodies were not loaded because their "
+                                 "input cost exceeds the remaining decision budget."}
+                delivered_reads = []
+                follow = req.continuation(inputs=follow_inputs, cost_ceiling=remaining)
+                compact_quote = self._call_reserve(assembly, follow)
+                if compact_quote is not None and compact_quote > remaining:
+                    follow_inputs = minimum_inputs
+                    follow = req.continuation(inputs=follow_inputs, cost_ceiling=remaining)
+                learned = False  # do not buy another read after withholding its body
             # A decision acts once: a write or a child ends the retrieval and the
             # next call is the answer. Nothing executed in one wake can therefore
             # be executed again in a later round of the same wake.
@@ -1631,6 +1669,11 @@ class ComputeMixin:
                 prompt_cache = _safe_prompt_cache_identity(assembly, follow)
             ret = (Return(req.handle, {"reason": "wallet exhausted"}, 0, "failed")
                    if self.wallet.dead else self._invoke_compute(action_id, follow))
+            if ret.status != "failed":
+                for entry in delivered_reads:
+                    body = entry.get("result")
+                    if entry.get("tool") == "outcome.get" and isinstance(body, dict):
+                        self.outcomes.get(action_id, body.get("outcome_id"))
             dropped.extend(ret.dropped)
             total_cost += tool_cost + ret.cost
             self._check_compute_return(req.handle, ret)
