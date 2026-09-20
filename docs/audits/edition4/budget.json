@@ -1,11 +1,9 @@
 {
   "authorized_total_micro": 50000000,
-  "known_inference_micro": 4671326,
-  "remaining_authorization_micro": 45328674,
-  "active_rehearsal_caps_micro": {
-    "coverage-60-r1": 3000000
-  },
-  "remaining_unreserved_authorization_micro": 42298110,
+  "known_inference_micro": 4932683,
+  "remaining_authorization_micro": 45067317,
+  "active_rehearsal_caps_micro": {},
+  "remaining_unreserved_authorization_micro": 45036753,
   "uncertain_micro": 30564,
   "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [
@@ -131,11 +129,24 @@
       "uncertain_micro": 0,
       "evidence": "../edition4-context/live-smoke.md",
       "status": "terminated at duration; all bills known; subsequent prompt/input preservation fixes verified offline"
+    },
+    {
+      "work": "60-tick coverage attempt on 55ea7d7",
+      "known_micro": 261357,
+      "uncertain_micro": 0,
+      "evidence": "../edition4-coverage/results.md",
+      "status": "terminated at 25 ticks; wrapper falsely labeled HTTP 402 unknown; core meter established unbilled and released reservation; residual BTC at exit"
     }
   ],
   "venue_end": {
-    "equity_usd": "965.17899941",
-    "positions": [],
+    "equity_usd": "965.16083241",
+    "positions": [
+      {
+        "coin": "BTC",
+        "size": "-0.00013",
+        "entry_px": "80763.0"
+      }
+    ],
     "open_orders": []
   }
 }

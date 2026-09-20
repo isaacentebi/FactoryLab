@@ -28,7 +28,7 @@ from factorylab.runtime.cli import _load_dotenv
 from factorylab.runtime.live import LiveClock
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import PromptSpec, WorldManifest, load_manifest
-from factorylab.world.metering import UnbilledFailure
+from factorylab.world.metering import UnbilledFailure, classify_provider_failure
 from factorylab.world.models import ModelRequest, ModelResponse
 
 DEFAULT_WORLD = Path("worlds/edition3-rehearsal-5.toml")
@@ -126,7 +126,8 @@ class Admission:
 
     def observe_exception(self, exc: BaseException, ceiling_micro: int) -> None:
         """Classify an exception without retaining a provider body or credential."""
-        if getattr(exc, "sent", True):
+        classified = classify_provider_failure(exc) if isinstance(exc, Exception) else exc
+        if not isinstance(classified, UnbilledFailure) and getattr(classified, "sent", True):
             self.unknown_bills += 1
             self.uncertain_bills += 1
             self.uncertain_micro += max(0, ceiling_micro)

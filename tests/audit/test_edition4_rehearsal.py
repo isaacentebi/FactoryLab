@@ -11,6 +11,7 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.evm import RailError
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelRequest, ModelResponse
+from factorylab.world.openrouter import OpenRouterError
 from scripts import edition4_rehearsal as rehearsal
 
 WORLD = "worlds/edition3-rehearsal-5.toml"
@@ -175,6 +176,37 @@ def test_admission_counts_attempts_and_stops_on_overrun_or_unknown_bill():
     assert table.admission.report()["known_micro"] == 0
     assert table.admission.report()["uncertain_micro"] == max(10, table._ceiling(request()))
     assert table.admission.stop_reason == "non_authoritative_table_cost"
+
+
+def test_admission_uses_canonical_provider_failure_billing_classification():
+    manifest = rehearsal.effective_manifest(load_manifest(WORLD))
+
+    class FailingProvider(StubProvider):
+        def complete(self, _request):
+            raise self.response
+
+    rejected = rehearsal.PrepaidProvider(
+        FailingProvider(OpenRouterError(402, "rejected", sent=True)),
+        manifest,
+        rehearsal.Admission(cap_micro=1_000_000, max_calls=3),
+    )
+    with pytest.raises(OpenRouterError):
+        rejected.complete(request())
+    assert rejected.admission.report()["uncertain_calls"] == 0
+    assert rejected.admission.uncertain_micro == 0
+    assert rejected.admission.stop_reason is None
+
+    unknown = rehearsal.PrepaidProvider(
+        FailingProvider(OpenRouterError(None, "connection dropped", sent=True)),
+        manifest,
+        rehearsal.Admission(cap_micro=1_000_000, max_calls=3),
+    )
+    ceiling = unknown._ceiling(request())
+    with pytest.raises(OpenRouterError):
+        unknown.complete(request())
+    assert unknown.admission.report()["uncertain_calls"] == 1
+    assert unknown.admission.uncertain_micro == ceiling
+    assert unknown.admission.stop_reason == "unknown_bill_after_dispatch"
 
 
 def test_every_treasury_direction_is_refused_before_prepare():
