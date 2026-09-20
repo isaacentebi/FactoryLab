@@ -1,12 +1,10 @@
 {
   "authorized_total_micro": 50000000,
-  "known_inference_micro": 5445301,
-  "remaining_authorization_micro": 44554699,
-  "active_rehearsal_caps_micro": {
-    "working-context-draft-answer": 480000
-  },
-  "remaining_unreserved_authorization_micro": 44044135,
-  "uncertain_micro": 30564,
+  "known_inference_micro": 5447601,
+  "remaining_authorization_micro": 44552399,
+  "active_rehearsal_caps_micro": {},
+  "remaining_unreserved_authorization_micro": 44515659,
+  "uncertain_micro": 36740,
   "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [
     {
@@ -187,6 +185,13 @@
       "uncertain_micro": 0,
       "evidence": "../edition4-investigation-protocol/working-context-results.json",
       "status": "completed; fake venue; 3 of 4 task chains succeeded; no population pilot"
+    },
+    {
+      "work": "bounded working context screen: draft-answer repair",
+      "known_micro": 2300,
+      "uncertain_micro": 6176,
+      "evidence": "../edition4-investigation-protocol/working-context-results.json",
+      "status": "incomplete; 3 attempted calls, 2 known bills; provider timeout on GLM retrieval request; unknown ceiling reserved; remaining cases skipped; no retry or population pilot"
     }
   ],
   "venue_end": {

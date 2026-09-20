@@ -78,3 +78,30 @@ four-read request executes, later two reads remain visible with the first four,
 and final completion improves. Report every attempt, including failures; the
 same 4/4 progression requirement applies. This amendment follows a new source
 change and is not an unchanged paid retry.
+
+## Final verification and outcome
+
+Final runtime source: ea14de3bcd8b0644057149991995b4404cb5745d. Ruff passed;
+2,218 checks passed in 31.75 seconds; three relevant gates passed in 3.30 seconds.
+Independent review and GitHub Codex review found no actionable issues in both
+repair stages. Cursor Bugbot did not run because its usage limit was exhausted.
+
+The amended prompt-derived replay reproduces the empty draft facts field and
+still completes all four cases in twelve scripted calls, without private notes.
+The source is `work/tool-turn-working-context/draft_answer_canned.py`, SHA-256
+`8838572b0821ac7022c2bacb87feab070dc0e00b0485b9350700e2930a179e5b`.
+Its report is `work/tool-turn-working-context/draft-answer-canned-report.json`,
+SHA-256 `16f3de5d84b62467e5e041c42381cad76a4bfb7143be961a7ec6c6315fd7fe44`.
+
+The revised paid screen is incomplete. GLM's calculation completed in two calls
+($0.002300). Its subsequent retrieval call timed out after dispatch; its exact
+bill is unknown and the $0.006176 ceiling remains reserved. The runner stopped
+and skipped both Luna cases. There were three attempts, two captured completed
+responses. Do not interpret the report's `calls: 2` (captured responses) as the
+number dispatched, or turn the skipped cases into model failures.
+
+Across this repair, known inference spend is $0.036853, plus $0.006176 uncertain.
+No unchanged paid retry, population pilot, deployment or venue action occurred.
+The working-set repair has a real Luna aggregation success; the draft-field
+repair has offline proof but its revised live screen did not complete. Neither
+result demonstrates emergent collaboration or Class 3.
