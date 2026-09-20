@@ -1,100 +1,120 @@
-# Investigation interface: result
+# Investigation interface: final result
 
-The first screen failed, and independent review subsequently found it confounded.
-Both source arms completed one of four commissioned chains. Neither model retrieved the six private facts. The population
-pilot was therefore **not launched**, and its conditional $3 was not reserved.
-No live venue action, transfer, or deployment occurred in this experiment.
+The corrected mechanical screen failed: baseline completed **2/4** chains and the
+repaired candidate **1/4**. Neither completed the six-fact task. The conditional
+population pilot was not launched. No deployment, live venue action, or transfer
+occurred. Total new inference spend, including the confounded first comparison,
+was **$0.063249**, with every bill known.
 
-## What changed
+## What was repaired
 
-Candidate `d0351b6` moves full charter text and older public midpoint history behind
-exact, decision-scoped `artifact.get` references. Current observations, resources,
-task, outcome schema, fixed norms, and frozen judging evidence remain available
-inline. Broader institutional schemas remain discoverable by exact handle; their
-directory publishes byte sizes. Programs still receive full inputs.
+The initial R2 replay reproduced all nine rejected batches: seven otherwise valid
+producer answers lost oversized tool sections and two whole answers were malformed.
+Authored bounded sequences executed offline. That demonstrated tool feasibility,
+not that a model would choose the sequence.
 
-This is exact retrieval, not a model-written summary. No storage institution,
-message board, reward, objective, or new tool was added. Routing measures the same
-compact representation as invocation, including when omitted history grows.
-An independent review caught and verified the repair of a mismatch which would
-otherwise have excluded affordable seats.
+The lean context change keeps current facts inline and moves full charter text
+and older public midpoint history behind exact, decision-scoped artifact references.
+Fixed norms, current resources, immediate schemas, and frozen judging evidence stay
+available. Institutional handles include byte sizes. Programs keep full inputs;
+zero-tool worlds retain charter/history inline. Routing measures the same compact
+representation used by invocation, so hidden history does not falsely exclude an
+affordable seat. No new tool or storage institution was added.
 
-## Offline evidence
+Two deeper interface issues appeared during this work:
 
-The retained replay script reproduced all nine R2 rejected tool batches: seven
-otherwise valid producer answers lost their oversized tool section, and two whole
-answers were malformed. No original tool batch executed. Authored bounded repairs
-executed through the real runtime on a fake exchange, in one handle with charged
-continuations. These authored repairs demonstrate feasibility, not learning.
+1. Arbitrary task schemas did not necessarily expose the numeric tool-batch limit.
+   The general capability index now publishes the authoritative tool-call envelope,
+   including its manifest-derived limit. The corrected diagnostic also puts that
+   optional field in both arms' task schemas so the comparison does not depend on
+   discovering an undisclosed batch bound.
+2. Continuations carried only the latest tool bodies, while prior bodies became
+   references and intermediate private notes were lost. A responder using only its
+   actual prompt saw **0 → 4 → 2 → 4 → 2** facts. Extra budget did not repair that
+   ordinary read/reread cycle. Valid paid intermediate working_state now commits
+   through the existing owned state store and appears in the next continuation.
+   Size limits, rent, ledgering, and continuation pricing still apply. A later
+   failed answer does not undo an earlier accepted paid note. Other continuity
+   effects, including acknowledgements, remain in the final pass.
 
-The late-history test fixture fell from 38,423 to 20,715 bytes while retaining
-exact access to the omitted material. This is a constructed fixture, not an
-observed live population token saving. Tests cover retrieval across rounds,
-isolation, affordability, unchanged original inputs, unknown price values,
-program inputs, frozen judging evidence, and routing growth.
+This deliberately extends the timing of the existing private-memory contract.
+It does not automatically summarize tool bodies or manufacture an agent's notes.
+A prompt-only scripted responder now sees **0 → 4 → 6** and completes the task by
+writing its own observations into that memory. The real models did not reliably
+use this mechanism in the corrected screen.
 
-Ruff passed. The final default check tier passed **2,199 tests in 34.32 s**. The
-three relevant world gate tests passed in 3.23 s. The initial canned diagnostic accounted simulated bills, but its success claim
-was invalid: its final answer knew fixture facts absent from the actual prompt.
-A prompt-derived responder instead exposed an internal 4-fact / 2-fact cycle.
-The corrected protocol requires facts to come solely from the rendered prompt.
+## Evidence and verification
 
-## Paid comparison
+The late-history fixture fell from 38,423 to 20,715 bytes with exact retrieval of
+the omitted material. That is an offline fixture, not an observed live population
+saving. The original canned diagnostic used fixture-known facts in its answer;
+that success claim was invalidated and replaced with a responder deriving facts
+only from the actual current prompt and its carried notes.
 
-Both arms used the same R2 manifest, models, tasks, schemas, reasoning settings,
-and $0.50 arm ceiling. The prior compact runtime was `c0b29e6`; the candidate was
-`d0351b6`. Identical diagnostic helpers were used in both frozen source trees.
-Actual first-dispatch fingerprints matched the reviewed preflights. External
-action rails were denied; the exchange was fake. Raw requests, responses, and
-receipts remain private. Their hashes and sanitized results are in
-[paired-results.json](paired-results.json).
+Ruff passed. The final check tier passed **2,209 tests in 25.22 s**. All three
+relevant world gates passed in 3.26 s. Focused checks cover exact retrieval,
+private ownership, unchanged frozen evidence, zero-tool access, projected routing
+growth, state size refusal, repricing, persistence after final failure, and one
+ledger event per attempted state write. Independent review findings were repaired
+and rechecked. Raw provider captures and source snapshots remain private under
+work/investigation-paired*; published results retain hashes and safe aggregates.
 
-| Observation | Previous compact | Lean compact |
+## Corrected paid comparison
+
+Both arms used the same R2 manifest, tasks, models, final-answer requirements,
+reasoning settings, fake venue, denied external rails, and $0.48 cap. The baseline
+runtime was c0b29e6 and candidate 93a38c6. Identical diagnostic helpers were used;
+actual first-dispatch fingerprints matched reviewed preflights. Private state was
+explicitly permitted, while public notes, acknowledgements, messages, trades, and
+transfers remained forbidden. The candidate bundles context retrieval, a visible
+batch contract, and intermediate memory; this is not a single-factor causal test.
+
+| Observation | Baseline | Repaired candidate |
 |---|---:|---:|
-| Successful chains | 1 / 4 | 1 / 4 |
-| Provider calls | 5 | 6 |
-| Median input tokens, including continuations | 8,831 | 8,025 |
-| Total billed inference | $0.010202 | $0.011927 |
-| Total cost per successful chain, including failures | $0.010202 | $0.011927 |
-| Six-fact retrieval successes | 0 / 2 | 0 / 2 |
+| Successful chains | 2 / 4 | 1 / 4 |
+| Provider calls | 11 | 8 |
+| Median input tokens, including continuations | 10,440 | 9,461.5 |
+| Total billed inference | $0.024284 | $0.016836 |
+| Total cost per successful chain, including failures | $0.012142 | $0.016836 |
+| Six-fact retrieval-and-answer successes | 0 / 2 | 0 / 2 |
 | Unknown bills | 0 | 0 |
 
-Every initial candidate request was 5,060 bytes smaller. The 9.1% median token
-reduction did **not** lower cost per successful chain: that rose 16.9% in this
-tiny sample. Different continuation counts matter. These are four cases per arm,
-not a reliable model ranking or a causal population estimate.
+Every candidate first request was 4,808 bytes smaller. Median input tokens fell
+9.4%, but cost per successful chain rose 38.7% in this tiny sample. Four cases per
+arm do not establish a model ranking, a reliability estimate, or improved economy.
+See [corrected-results.json](corrected-results.json).
 
-GLM completed the baseline calculation through `calc`. In the candidate it
-returned the correct number but claimed a tool receipt that did not exist. Luna
-failed the baseline calculation, but in the candidate actually discovered the
-schema, called `calc`, and used its returned result. Receipt-based scoring rejects
-correct-looking answers that skip the requested execution.
+Both baseline models completed the calculation. Baseline GLM read all six facts
+across bounded batches but could not assemble a valid final answer after rereads;
+Luna stopped after its first four reads. Candidate GLM completed the calculation
+but returned six empty strings without attempting private retrieval. Candidate Luna returned
+the arithmetic answer without executing the required capability, then separately
+read the private facts in 4+2+4 batches. It wrote no usable intermediate notes and
+finished with four facts plus two unknowns. Scoring rejected correct-looking
+arithmetic without the requested tool receipt and incomplete fact lists.
 
-For private facts, baseline GLM returned explicitly labeled placeholders. The
-other three answers attempted six reads in one batch, exceeding the enforced
-four-call limit, which this custom task schema omitted from the initial prompt. Some responses also narrated multiple apparent turns as separate
-JSON objects in one completion. The runtime did not execute those six-call
-batches. The limit was discoverable, but the screen unintentionally required discovery
-of that limit as well. Separately, replacing prior read bodies with references
-while discarding intermediate private notes prevented ordinary accumulation of
-six facts across four-call batches. These are interface confounders, not evidence
-that the population consciously prefers inactivity.
+The earlier, confounded comparison completed 1/4 in each arm and cost $0.022129.
+Its custom schemas omitted the visible numeric limit, and its canned success
+concealed the memory failure. It is retained in [paired-results.json](paired-results.json)
+for provenance, not used to claim that models ignored an explicit bound. Both
+comparisons together stayed below the original $1 authorization.
 
-## Decision and next test
+## Decision
 
-Retain the mechanically verified retrieval change, but do not present it as a
-reliability or useful-work improvement. No paid retry or larger population run
-was used to rescue the failed screen. The total new spend was **$0.022129**; the
-cumulative ledger now records $5.369628 known, $0.030564 previously uncertain,
-and **$44.599808 unreserved** under the existing $50 authorization.
+Retain the verified mechanics, but do not call the factory ready. No further paid
+retry or population run was used to rescue the failed screen. The cumulative
+ledger records **$5.410748 known**, **$0.030564 previously uncertain**, and
+**$44.558688 unreserved** under the original $50 authorization.
 
-The corrected protocol first exposes the authoritative batch contract and repairs
-intermediate private working_state carryover. A native-tool redesign is premature
-until those mechanical defects are fixed and a prompt-derived offline responder
-can complete the task. The initial evidence and its bills remain retained. Any
-corrected paid comparison stays within the original $1 total; no unchanged paid
-attempt is retried.
+The remaining bottleneck is reliable multi-step interaction: the model must issue
+real calls, retain necessary evidence, and distinguish an executed observation
+from a narrated one. A bounded recent interaction transcript or a schema-constrained
+native tool boundary deserves the next isolated engineering test. The evidence
+here does not select the correct implementation or justify another larger run.
+First require a prompt-derived offline proof, then a fresh predeclared small model
+screen. Capital, extra seats, or a message board do not correct an execution
+protocol that the current participants do not reliably use.
 
-There is still no new evidence here of autonomous objectives, useful cooperation,
-or independent income buying further operation. A shorter request is an
-affordance; it is not a Class 3 factory.
+These are commissioned tasks. There is no new demonstration of useful cooperation,
+independent income purchasing further operation, or autonomous objective formation.
+A mechanically possible interaction remains short of a Class 3 factory.
