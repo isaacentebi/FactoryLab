@@ -5,11 +5,14 @@ network call is made and no paid completion is bought.
 """
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from factorylab.world.models import ModelRequest, ModelResponse
 from scripts import edition4_discovery_probe as probe
+from scripts import edition4_investigation_probe as investigation
 
 
 @pytest.fixture(autouse=True)
@@ -282,6 +285,65 @@ def test_reported_bills_are_counted_against_the_one_dollar_bound(tmp_path):
     assert cost["known_micro"] == 1000 * cost["attempted"] <= 1_000_000
     assert cost["uncertain_micro"] == 0 and cost["overruns"] == 0
     assert sum(seat["cost_micro"] for seat in record["seats"]) > 0
+
+
+def test_investigation_receipts_allow_reordered_and_duplicate_private_reads():
+    expected = [f"fact-{index}" for index in range(6)]
+    fetches = [expected[2], expected[0], expected[1], expected[2],
+               expected[5], expected[4], expected[3]]
+    receipts = [
+        {"tool": "outcome.get", "slot": f"{'tool' if index < 4 else 'round1'}:{index}",
+         "refused": False, "result": {"outcome": {"payload": {"fact": fact}}}}
+        for index, fact in enumerate(fetches)
+    ]
+    ret = SimpleNamespace(status="ok", cost=700, outputs={"facts": expected})
+
+    result = investigation._result("mechanism", "private_outcomes", ret,
+                                   receipts, expected)
+
+    assert result["receipt_success"] and result["retrieved_all_facts"]
+    assert result["valid_batch"] and result["exact_final_answer"] and result["success"]
+
+
+def test_investigation_paid_mode_requires_an_existing_freeze(tmp_path, monkeypatch):
+    monkeypatch.setattr(investigation, "build_prepaid_provider",
+                        lambda _manifest: pytest.fail("provider must not be constructed"))
+
+    code = investigation.main([
+        "--source-root", str(Path.cwd()),
+        "--world", "work/coverage-60-r2/world.toml",
+        "--out", str(tmp_path / "arm"),
+        "--paid",
+    ])
+
+    report = json.loads((tmp_path / "arm" / "report.json").read_text())
+    assert code == 1 and report["reason"] == "paid_requires_existing_preflight"
+    assert report["executed"] is False
+
+
+def test_investigation_initial_requests_publish_numeric_tool_call_bound():
+    manifest = investigation.effective_manifest(
+        investigation.load_manifest(str(probe.DEFAULT_WORLD)))
+    seat = "mechanism"
+
+    for case in investigation.CASES:
+        runtime = investigation._runtime(manifest, investigation.NullProvider(), [])
+        if case == "private_outcomes":
+            investigation._seed_outcomes(runtime, seat)
+        request = investigation._decision(
+            runtime, seat, case, investigation.CAP_MICRO // 4)
+        actual, model_request = investigation.actual_model_request(
+            runtime, seat, request)
+        tool_calls = actual.outcome_schema["properties"]["tool_calls"]
+        prompt = "".join(str(message.get("content", ""))
+                         for message in model_request.messages)
+
+        assert tool_calls["maxItems"] == manifest.tools.max_tool_calls
+        assert actual.outcome_schema["required"] == investigation.SCHEMAS[case]["required"]
+        assert set(actual.outcome_schema["properties"]) == {
+            *investigation.SCHEMAS[case]["properties"], "tool_calls", "working_state"}
+        assert (f"This response may contain at most {manifest.tools.max_tool_calls} "
+                "tool_calls" in prompt)
 
 
 @pytest.mark.parametrize("bound", [{"cap_micro": 2_000_000}, {"max_calls": 13},

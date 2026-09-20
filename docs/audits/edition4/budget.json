@@ -1,9 +1,9 @@
 {
   "authorized_total_micro": 50000000,
-  "known_inference_micro": 5347499,
-  "remaining_authorization_micro": 44652501,
+  "known_inference_micro": 5410748,
+  "remaining_authorization_micro": 44589252,
   "active_rehearsal_caps_micro": {},
-  "remaining_unreserved_authorization_micro": 44621937,
+  "remaining_unreserved_authorization_micro": 44558688,
   "uncertain_micro": 30564,
   "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [
@@ -143,6 +143,34 @@
       "uncertain_micro": 0,
       "evidence": "../edition4-coverage/results-r2.md",
       "status": "terminated after 60 ticks; all 154 bills known; venue flat; 9 of 10 required assessed findings; behavioral screen inconclusive"
+    },
+    {
+      "work": "investigation interface paired diagnostic: baseline",
+      "known_micro": 10202,
+      "uncertain_micro": 0,
+      "evidence": "../edition4-investigation-protocol/paired-results.json",
+      "status": "completed; confounded initial fixture omitted visible batch bound; retained as superseded diagnostic evidence; no population pilot"
+    },
+    {
+      "work": "investigation interface paired diagnostic: candidate",
+      "known_micro": 11927,
+      "uncertain_micro": 0,
+      "evidence": "../edition4-investigation-protocol/paired-results.json",
+      "status": "completed; confounded initial fixture omitted visible batch bound; retained as superseded diagnostic evidence; no population pilot"
+    },
+    {
+      "work": "corrected investigation interface diagnostic: baseline",
+      "known_micro": 24284,
+      "uncertain_micro": 0,
+      "evidence": "../edition4-investigation-protocol/corrected-results.json",
+      "status": "completed; fake venue; 2 of 4 task chains succeeded; progression failed; no population pilot"
+    },
+    {
+      "work": "corrected investigation interface diagnostic: candidate",
+      "known_micro": 16836,
+      "uncertain_micro": 0,
+      "evidence": "../edition4-investigation-protocol/corrected-results.json",
+      "status": "completed; fake venue; 1 of 4 task chains succeeded; progression failed; no population pilot"
     }
   ],
   "venue_end": {

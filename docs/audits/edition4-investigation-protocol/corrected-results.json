@@ -1,0 +1,534 @@
+{
+  "baseline": {
+    "status": "completed",
+    "executed": true,
+    "all_four_success": false,
+    "calls": 11,
+    "cases": [
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "calc"
+          }
+        ],
+        "case": "catalogue_calc",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 2864,
+        "exact_final_answer": true,
+        "receipt_success": true,
+        "seat": "mechanism",
+        "status": "ok",
+        "success": true
+      },
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:1",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:2",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:3",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round1:0",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round1:1",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round2:0",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round2:1",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round2:2",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round2:3",
+            "tool": "outcome.get"
+          }
+        ],
+        "case": "private_outcomes",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 7536,
+        "exact_final_answer": false,
+        "receipt_success": true,
+        "retrieved_all_facts": true,
+        "seat": "mechanism",
+        "status": "malformed",
+        "success": false,
+        "valid_batch": true
+      },
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "catalogue.search"
+          },
+          {
+            "ok": true,
+            "slot": "round1:0",
+            "tool": "calc"
+          }
+        ],
+        "case": "catalogue_calc",
+        "catalogue_schema_discovered": true,
+        "cost_micro": 7700,
+        "exact_final_answer": true,
+        "receipt_success": true,
+        "seat": "opportunity",
+        "status": "ok",
+        "success": true
+      },
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:1",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:2",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:3",
+            "tool": "outcome.get"
+          }
+        ],
+        "case": "private_outcomes",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 6234,
+        "exact_final_answer": false,
+        "receipt_success": false,
+        "retrieved_all_facts": false,
+        "seat": "opportunity",
+        "status": "malformed",
+        "success": false,
+        "valid_batch": false
+      }
+    ],
+    "cost": {
+      "attempted": 11,
+      "cap_micro": 480000,
+      "known_calls": 11,
+      "known_mean_micro": "24284/11",
+      "known_micro": 24284,
+      "max_calls": 40,
+      "overruns": 0,
+      "refusals": 0,
+      "remaining_micro": 455716,
+      "stop_reason": null,
+      "uncertain_calls": 0,
+      "uncertain_micro": 0
+    },
+    "model_metrics": {
+      "mechanism": {
+        "calls": 6,
+        "cost_micro": 10400,
+        "median_cost_micro": 1743.5,
+        "median_input_tokens": 11065.5,
+        "median_output_tokens": 151.5,
+        "median_request_bytes": 42671.0,
+        "model_id": "z-ai/glm-5.3-flash"
+      },
+      "opportunity": {
+        "calls": 5,
+        "cost_micro": 13884,
+        "median_cost_micro": 2741,
+        "median_input_tokens": 9499,
+        "median_output_tokens": 157,
+        "median_request_bytes": 39780,
+        "model_id": "openai/gpt-5.6-luna"
+      }
+    },
+    "commission": "Commissioned diagnostic: receipt success tests a supplied retrieval task, not spontaneous objective formation or institutional emergence.",
+    "source_sha256": "5409de09ace42110e69f9934dba56b6629c2c4ab4678a39c2cda326b2117531d",
+    "source_commit": "c0b29e6dfbeb66f90ade82eec2840b13c1fcdc11",
+    "preflight_digest": "d3615adbeecb91dcd84766e10bbe638e804b5765b505735060ba8d0fbea47f46",
+    "runner_sha256": "4f7e51f7081c2fc77104963934a3e40be4acb118b9737805bbe254f28dd7da16",
+    "helper_sha256": {
+      "edition4_discovery_probe.py": "b022b70b7c5be518a9f4254170d0ee2006c568781fcd318d39d73bee9e7471b0",
+      "edition4_rehearsal.py": "0e16cc35ad412f94e93b3a3628cf4232641f7d2277d8992247fb320cdc560ed0"
+    },
+    "private_captures_sha256": "550aa25c90251bafceceffd2e0f9c79ec2f028827ba7e17d2f3191bd9703a329",
+    "initial_requests": {
+      "mechanism:catalogue_calc": {
+        "continuity_fields": [
+          "unread_outcomes",
+          "your_state"
+        ],
+        "model_id": "z-ai/glm-5.3-flash",
+        "quote_micro": 6072,
+        "request_bytes": 35830,
+        "request_sha256": "b7d9e311ad2c6f4ac8715f6132555d4b0de259fff03afc11bd5e16954eef1a52",
+        "schema_sha256": "850b4eb376a08e916b1f65ff87e5af3b678e4c02a53c39fd9434a20688e96c73",
+        "section_bytes": {
+          "completion_criterion": 64,
+          "inputs": 2140,
+          "outcome_contract": 1315,
+          "outcome_schema": 696,
+          "request": 296,
+          "stable_prefix": 16497,
+          "total": 33210,
+          "world_update": 7114,
+          "you": 5088
+        }
+      },
+      "mechanism:private_outcomes": {
+        "continuity_fields": [
+          "unread_outcomes",
+          "your_state"
+        ],
+        "model_id": "z-ai/glm-5.3-flash",
+        "quote_micro": 6770,
+        "request_bytes": 41003,
+        "request_sha256": "73b15f7dd394542e76b7b31f703323cdd44e058aca208b5e259ff9de78818532",
+        "schema_sha256": "228adcce1ee60c802217176aec8fd6a3de78f5d03c77f14bab1dd71f82cfbf40",
+        "section_bytes": {
+          "completion_criterion": 64,
+          "inputs": 2140,
+          "outcome_contract": 1315,
+          "outcome_schema": 774,
+          "request": 502,
+          "stable_prefix": 16497,
+          "total": 38383,
+          "world_update": 7331,
+          "you": 9760
+        }
+      },
+      "opportunity:catalogue_calc": {
+        "continuity_fields": [
+          "unread_outcomes",
+          "your_state"
+        ],
+        "model_id": "openai/gpt-5.6-luna",
+        "quote_micro": 12560,
+        "request_bytes": 35822,
+        "request_sha256": "161b4b8d4e5a15263d76ac17452d16cc4a0f4f2392cdcfacb2f3fc746dc7ebde",
+        "schema_sha256": "850b4eb376a08e916b1f65ff87e5af3b678e4c02a53c39fd9434a20688e96c73",
+        "section_bytes": {
+          "completion_criterion": 64,
+          "inputs": 2142,
+          "outcome_contract": 1315,
+          "outcome_schema": 696,
+          "request": 296,
+          "stable_prefix": 16497,
+          "total": 33202,
+          "world_update": 7114,
+          "you": 5078
+        }
+      },
+      "opportunity:private_outcomes": {
+        "continuity_fields": [
+          "unread_outcomes",
+          "your_state"
+        ],
+        "model_id": "openai/gpt-5.6-luna",
+        "quote_micro": 14119,
+        "request_bytes": 41019,
+        "request_sha256": "e36bc29732a61444727b39ca1375a2ebf1a20237dd676823d024ccb7c6191c8a",
+        "schema_sha256": "228adcce1ee60c802217176aec8fd6a3de78f5d03c77f14bab1dd71f82cfbf40",
+        "section_bytes": {
+          "completion_criterion": 64,
+          "inputs": 2142,
+          "outcome_contract": 1315,
+          "outcome_schema": 774,
+          "request": 502,
+          "stable_prefix": 16497,
+          "total": 38399,
+          "world_update": 7343,
+          "you": 9762
+        }
+      }
+    },
+    "median_input_tokens": 10440,
+    "successful_chains": 2,
+    "total_micro_per_successful_chain": 12142
+  },
+  "candidate": {
+    "status": "completed",
+    "executed": true,
+    "all_four_success": false,
+    "calls": 8,
+    "cases": [
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "calc"
+          }
+        ],
+        "case": "catalogue_calc",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 2185,
+        "exact_final_answer": true,
+        "receipt_success": true,
+        "seat": "mechanism",
+        "status": "ok",
+        "success": true
+      },
+      {
+        "calls": [],
+        "case": "private_outcomes",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 1218,
+        "exact_final_answer": false,
+        "receipt_success": false,
+        "retrieved_all_facts": false,
+        "seat": "mechanism",
+        "status": "ok",
+        "success": false,
+        "valid_batch": false
+      },
+      {
+        "calls": [],
+        "case": "catalogue_calc",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 2032,
+        "exact_final_answer": true,
+        "receipt_success": false,
+        "seat": "opportunity",
+        "status": "ok",
+        "success": false
+      },
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:1",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:2",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:3",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round1:0",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round1:1",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round2:0",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round2:1",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round2:2",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round2:3",
+            "tool": "outcome.get"
+          }
+        ],
+        "case": "private_outcomes",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 11401,
+        "exact_final_answer": false,
+        "receipt_success": true,
+        "retrieved_all_facts": true,
+        "seat": "opportunity",
+        "status": "ok",
+        "success": false,
+        "valid_batch": true
+      }
+    ],
+    "cost": {
+      "attempted": 8,
+      "cap_micro": 480000,
+      "known_calls": 8,
+      "known_mean_micro": "4209/2",
+      "known_micro": 16836,
+      "max_calls": 40,
+      "overruns": 0,
+      "refusals": 0,
+      "remaining_micro": 463164,
+      "stop_reason": null,
+      "uncertain_calls": 0,
+      "uncertain_micro": 0
+    },
+    "model_metrics": {
+      "mechanism": {
+        "calls": 3,
+        "cost_micro": 3403,
+        "median_cost_micro": 1173,
+        "median_input_tokens": 7961,
+        "median_output_tokens": 71,
+        "median_request_bytes": 31433,
+        "model_id": "z-ai/glm-5.3-flash"
+      },
+      "opportunity": {
+        "calls": 5,
+        "cost_micro": 13433,
+        "median_cost_micro": 2761,
+        "median_input_tokens": 10388,
+        "median_output_tokens": 119,
+        "median_request_bytes": 39547,
+        "model_id": "openai/gpt-5.6-luna"
+      }
+    },
+    "commission": "Commissioned diagnostic: receipt success tests a supplied retrieval task, not spontaneous objective formation or institutional emergence.",
+    "source_sha256": "15485d139ed6115be2422188c62932098e1d2d6a5941516db8b7f29c5a39ee61",
+    "source_commit": "93a38c6",
+    "preflight_digest": "75bf68b4c9211760c7616fd710df5f976f672dd3e4afa579c826e4c169dfed93",
+    "runner_sha256": "4f7e51f7081c2fc77104963934a3e40be4acb118b9737805bbe254f28dd7da16",
+    "helper_sha256": {
+      "edition4_discovery_probe.py": "b022b70b7c5be518a9f4254170d0ee2006c568781fcd318d39d73bee9e7471b0",
+      "edition4_rehearsal.py": "0e16cc35ad412f94e93b3a3628cf4232641f7d2277d8992247fb320cdc560ed0"
+    },
+    "private_captures_sha256": "9e2b54a15215e9a2d147eb13da96d5ffc3d62fa251ee54a479989453b931c873",
+    "initial_requests": {
+      "mechanism:catalogue_calc": {
+        "continuity_fields": [
+          "unread_outcomes",
+          "your_state"
+        ],
+        "model_id": "z-ai/glm-5.3-flash",
+        "quote_micro": 5423,
+        "request_bytes": 31022,
+        "request_sha256": "3a02d5a3c5c5c78df2c3834b3625b509afdcfeb37d412de782c5ac7c662bc979",
+        "schema_sha256": "850b4eb376a08e916b1f65ff87e5af3b678e4c02a53c39fd9434a20688e96c73",
+        "section_bytes": {
+          "completion_criterion": 64,
+          "inputs": 2140,
+          "outcome_contract": 1315,
+          "outcome_schema": 696,
+          "request": 296,
+          "stable_prefix": 13244,
+          "total": 28402,
+          "world_update": 5559,
+          "you": 5088
+        }
+      },
+      "mechanism:private_outcomes": {
+        "continuity_fields": [
+          "unread_outcomes",
+          "your_state"
+        ],
+        "model_id": "z-ai/glm-5.3-flash",
+        "quote_micro": 6121,
+        "request_bytes": 36195,
+        "request_sha256": "fd4037d5ef0754fe686302171df980833fc2a9d744c88e47d47160e939d38dd9",
+        "schema_sha256": "228adcce1ee60c802217176aec8fd6a3de78f5d03c77f14bab1dd71f82cfbf40",
+        "section_bytes": {
+          "completion_criterion": 64,
+          "inputs": 2140,
+          "outcome_contract": 1315,
+          "outcome_schema": 774,
+          "request": 502,
+          "stable_prefix": 13244,
+          "total": 33575,
+          "world_update": 5776,
+          "you": 9760
+        }
+      },
+      "opportunity:catalogue_calc": {
+        "continuity_fields": [
+          "unread_outcomes",
+          "your_state"
+        ],
+        "model_id": "openai/gpt-5.6-luna",
+        "quote_micro": 11117,
+        "request_bytes": 31014,
+        "request_sha256": "4865c12c21ef70fefee9a05b740f8355d69684165aa992f6691d18d183a71a56",
+        "schema_sha256": "850b4eb376a08e916b1f65ff87e5af3b678e4c02a53c39fd9434a20688e96c73",
+        "section_bytes": {
+          "completion_criterion": 64,
+          "inputs": 2142,
+          "outcome_contract": 1315,
+          "outcome_schema": 696,
+          "request": 296,
+          "stable_prefix": 13244,
+          "total": 28394,
+          "world_update": 5559,
+          "you": 5078
+        }
+      },
+      "opportunity:private_outcomes": {
+        "continuity_fields": [
+          "unread_outcomes",
+          "your_state"
+        ],
+        "model_id": "openai/gpt-5.6-luna",
+        "quote_micro": 12676,
+        "request_bytes": 36211,
+        "request_sha256": "cddcacf86a2db77c8a1fc6f74262e8f35a4ffaa4e7784180dd612b0b216c5ee5",
+        "schema_sha256": "228adcce1ee60c802217176aec8fd6a3de78f5d03c77f14bab1dd71f82cfbf40",
+        "section_bytes": {
+          "completion_criterion": 64,
+          "inputs": 2142,
+          "outcome_contract": 1315,
+          "outcome_schema": 774,
+          "request": 502,
+          "stable_prefix": 13244,
+          "total": 33591,
+          "world_update": 5788,
+          "you": 9762
+        }
+      }
+    },
+    "median_input_tokens": 9461.5,
+    "successful_chains": 1,
+    "total_micro_per_successful_chain": 16836
+  }
+}

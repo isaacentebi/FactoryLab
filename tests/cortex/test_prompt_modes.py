@@ -21,6 +21,7 @@ from dataclasses import replace
 
 import pytest
 
+from factorylab.cortex.assembly import reserved_return_fields
 from factorylab.cortex.schematics import (
     INSTITUTION_INLINE_KEYS,
     INSTITUTION_SECTIONS,
@@ -31,13 +32,15 @@ from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
 
 
-def runtime(mode="reference"):
+def runtime(mode="reference", *, max_tool_calls=None):
     """A scripted runtime in one prompt mode.
 
     The events budget is zero and nothing here calls ``run``: these tests read what a
     request would render, so they belong in the check tier and stay in it.
     """
     manifest = replace(load_manifest("worlds/scripted.toml"), prompt=PromptSpec(mode=mode))
+    if max_tool_calls is not None:
+        manifest = replace(manifest, tools=replace(manifest.tools, max_tool_calls=max_tool_calls))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
                    drip=False, router_gamma=0.1, provider=ScriptedProvider(),
                    exchange=FakeExchange(coins=manifest.exchange.coins))
@@ -46,6 +49,16 @@ def runtime(mode="reference"):
 @pytest.fixture(scope="module")
 def modes():
     return runtime("reference"), runtime("compact")
+
+
+def test_disabled_retrieval_keeps_the_exact_institutional_reference_inline():
+    rt = runtime("compact", max_tool_calls=0)
+    institutions = rt._institutional_block()
+    _, body = rt._institution_text(institutions)
+    assert json.loads(body) == json.loads(json.dumps(institutions))
+    prefix = rt._stable_prefix_text()
+    assert '"action_labels"' in prefix
+    assert "sections_not_carried" not in prefix
 
 
 def test_reference_is_the_default_and_renders_what_it_always_rendered(modes):
@@ -107,12 +120,14 @@ def test_compact_names_every_section_it_does_not_carry(modes):
     reference, compact = modes
     block = reference._institutional_block()
     directory = compact._institutional_directory(block)
-    named = {row["section"] for row in directory["sections"]}
+    named = set(directory["sections"])
     assert named == set(block) - INSTITUTION_INLINE_KEYS
     assert named  # a compaction that carried everything would prove nothing
-    for row in directory["sections"]:
-        assert row["bytes"] > 0
-        assert row["section"] in INSTITUTION_SECTIONS
+    for section in directory["sections"]:
+        assert section in INSTITUTION_SECTIONS
+        assert directory["sections"][section] == len(
+            json.dumps(block[section], sort_keys=True, indent=2).encode("utf-8")
+        )
     # Every handle the directory prints is a handle the reader can actually use.
     for section in named:
         assert compact.institution_section(section) == block[section]
@@ -130,6 +145,7 @@ def test_grounded_actor_access_keeps_operating_routes_out_of_grading_facts(modes
     assert req.world_update_text() == ""
     assert "catalogue.search" in req.stable_prefix()
     assert "args_schema" in req.stable_prefix()
+    assert f'"maxItems":{rt.m.tools.max_tool_calls}' in req.stable_prefix().replace(" ", "")
     assert req.seat_block()["spending_authority"] != "unavailable"
     assert set(actor) == {"stable_prefix", "seats", "clock_now", "world_resources"}
     assert len(actor["seats"]) == 1
@@ -226,6 +242,15 @@ def test_a_compact_request_drops_the_manual_and_keeps_the_request(modes):
                     "outcome_contract", "completion_criterion"):
         assert lean.section_bytes()[section] > 0
     assert lean.section_bytes()["total"] < rich.section_bytes()["total"]
+    # Compaction changes reference placement, not the current task, resources,
+    # moving world, or exact response contract.
+    assert lean.seat_block() == rich.seat_block()
+    assert lean.world_update_block() == rich.world_update_block()
+    assert lean.outcome_schema == rich.outcome_schema
+    assert lean.description == rich.description
+    rich_inputs = json.loads(dict(rich.sections())["inputs"].removeprefix("INPUTS\n"))
+    lean_inputs = json.loads(dict(lean.sections())["inputs"].removeprefix("INPUTS\n"))
+    assert lean_inputs == rich_inputs
     limit = compact.m.tools.max_tool_calls
     instruction = (
         f"This response may contain at most {limit} tool_calls; prioritize the reads you need."
@@ -251,5 +276,65 @@ def test_a_compacted_section_is_not_carried_somewhere_else_instead(modes):
     # A compaction that pushed the manual into INPUTS would cost more and cache
     # nothing. Each section is named in the directory and rendered nowhere.
     assert moved == []
-    for row in compact._institutional_directory(block)["sections"]:
-        assert row["section"] in prompt
+    for section in compact._institutional_directory(block)["sections"]:
+        assert section in prompt
+
+
+def test_compact_bootstraps_exact_read_schemas_and_keeps_every_tool_discoverable(modes):
+    reference, compact = modes
+    historical = {row["id"]: row for row in reference._capability_index()["tools"]}
+    lean = {row["id"]: row for row in compact._capability_index()["tools"]}
+
+    assert set(lean) == set(compact.tool_specs)
+    assert lean["catalogue.search"]["args_schema"] == (
+        compact.tool_specs["catalogue.search"]["args_schema"]
+    )
+    assert lean["catalogue.search"]["call"] == {
+        "tool": "catalogue.search",
+        "args": compact.tool_specs["catalogue.search"]["args_schema"]["examples"][0],
+    }
+    assert lean["artifact.get"]["args_schema"] == compact.tool_specs["artifact.get"][
+        "args_schema"
+    ]
+    for tool_id, row in lean.items():
+        assert row["description"] == compact.tool_specs[tool_id]["description"]
+        assert row["price_micro_per_call"] == compact.tool_specs[tool_id][
+            "price_micro_per_call"
+        ]
+        if tool_id not in {"catalogue.search", "artifact.get"}:
+            assert "args_schema" not in row and "call" not in row
+
+    # The reference baseline retains the previous direct-read bootstrap set.
+    for tool_id in ("catalogue.search", "world.read", "outcome.list", "outcome.get",
+                    "artifact.get"):
+        assert historical[tool_id]["args_schema"] == reference.tool_specs[tool_id][
+            "args_schema"
+        ]
+
+
+@pytest.mark.parametrize("mode", ["reference", "compact"])
+def test_custom_decision_schema_still_receives_the_authoritative_tool_batch_contract(mode):
+    rt = runtime(mode)
+    world = rt._world_block()
+    seat = next(iter(rt.assemblies))
+    custom_schema = {
+        "type": "object",
+        "properties": {"decision": {"type": "string"}},
+        "required": ["decision"],
+    }
+    req = rt._request(
+        "private-decision", "Make the private decision.",
+        {"you": seat, "world": world, "private_evidence": {"ref": "frozen:1"}},
+        custom_schema, 10**15, "conformity",
+    )
+
+    contract = rt._capability_index()["return_envelope"]["tool_calls"]
+    assert contract == reserved_return_fields(
+        max_tool_calls=rt.m.tools.max_tool_calls
+    )["tool_calls"]
+    assert contract["maxItems"] == rt.m.tools.max_tool_calls
+    assert contract["items"]["required"] == ["tool", "args"]
+    sent = req.prompt_text()
+    assert f'"maxItems":{rt.m.tools.max_tool_calls}' in sent.replace(" ", "").replace("\n", "")
+    assert "private_evidence" in sent and "frozen:1" in sent
+    assert "This response may contain at most" not in dict(req.sections())["outcome_schema"]

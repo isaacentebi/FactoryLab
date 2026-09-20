@@ -109,6 +109,10 @@ class ProbeRefused(RehearsalRefused):
     """A local guard refused the probe before any paid call was admitted."""
 
 
+class InitialRequestCaptured(Exception):
+    """Stop an offline invocation at its exact initial model-dispatch boundary."""
+
+
 class NullProvider:
     """Render a prompt with no route to a completion, so freezing cannot spend."""
 
@@ -341,13 +345,39 @@ def _probe_runtime(manifest: Any, provider: Any, refusals: list[dict],
 
 
 def rendered_requests(manifest: Any, seats: tuple[str, ...], ceiling: int) -> dict[str, str]:
-    """Digest each seat's initial model request without a provider that could answer."""
+    """Digest each seat's actual initial dispatch without a provider that could answer."""
     digests: dict[str, str] = {}
     for seat in seats:
         runtime = _probe_runtime(manifest, NullProvider(), [], [])
         request = _decision(runtime, seat, ceiling)
-        digests[seat] = request_digest(runtime.assemblies[seat].build_model_request(request))
+        _actual, model_request = actual_model_request(runtime, seat, request)
+        digests[seat] = request_digest(model_request)
     return digests
+
+
+def actual_model_request(runtime: Runtime, seat: str, request: Any) -> tuple[Any, Any]:
+    """Capture the first request after ``Runtime._invoke`` prepares its exact context.
+
+    Guarantees the ordinary invocation path runs through every pre-dispatch request
+    transformation, then stops at ``_invoke_compute`` before any provider can be
+    admitted or called. The returned model request is therefore the request the
+    provider-boundary digest guard will see during the paid execution.
+    """
+    captured: dict[str, Any] = {}
+
+    def stop(action_id: str, actual: Any, **_kwargs: Any) -> Any:
+        captured["request"] = actual
+        captured["model_request"] = runtime.assemblies[action_id].build_model_request(actual)
+        raise InitialRequestCaptured
+
+    runtime._invoke_compute = stop
+    try:
+        runtime._invoke(seat, request, "producer")
+    except InitialRequestCaptured:
+        pass
+    if "model_request" not in captured:
+        raise ProbeRefused("actual_initial_request_not_captured")
+    return captured["request"], captured["model_request"]
 
 
 def preflight_digest(preflight: dict[str, Any]) -> str:

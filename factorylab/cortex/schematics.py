@@ -99,9 +99,11 @@ INSTITUTIONS_HEADER = (
     "move, it says so and names where the value in force is published.\n"
 )
 
-#: Accounting and action vocabulary stay inline; full return contracts remain
-#: reachable through the schema directory, with the bootstrap call shown inline.
-INSTITUTION_INLINE_KEYS = frozenset({"accounting_facts", "action_labels"})
+#: Accounting facts stay beside the money they qualify. Action vocabulary and
+#: full return contracts are broader reference: compact prompts name their exact
+#: ``world.read`` handles and retrieve them only when the current decision needs
+#: them. The request's actual outcome schema remains inline on every call.
+INSTITUTION_INLINE_KEYS = frozenset({"accounting_facts"})
 
 #: Every section name ``_institutional_block`` publishes, and therefore the whole
 #: allowlist a world-reading tool may serve. It is the institutional world only:
@@ -121,8 +123,8 @@ INSTITUTION_SECTIONS = frozenset({
 #: The head of a compact prompt's institutional part: the sections that stayed, and
 #: then the directory of the ones that did not.
 INSTITUTIONS_COMPACT_HEADER = (
-    "INSTITUTIONS\nWhat a return may contain and what your numbers mean, stated "
-    "here once for the life of this runtime. The rest of this world's reference "
+    "INSTITUTIONS\nWhat your resource numbers mean, stated here once for the life "
+    "of this runtime. The rest of this world's reference "
     "-- its registries, catalogues and settlement rules -- is not carried in this "
     "prompt. Its sections are listed under sections_not_carried with the route "
     "that reads them. A section you have not read is unread, not empty, and a "
@@ -700,7 +702,7 @@ class SchematicsMixin:
             for norm in self.charter.norms)
         return f"{WORLD_CONTRACT_OPENING}{norms}\n{WORLD_CONTRACT_CLOSING}"
 
-    def _capability_index(self) -> dict[str, Any]:
+    def _capability_index(self, *, compact: bool | None = None) -> dict[str, Any]:
         """Every callable tool and every registrable proposal kind, one line each.
 
         Guarantees nothing registrable or callable becomes invisible by being
@@ -717,13 +719,22 @@ class SchematicsMixin:
         schema publishes and bootstrap validated against it, never a second copy
         of the contract that could drift from the one the validator reads.
         """
+        if compact is None:
+            compact = self._prompt_mode() == "compact"
+        return_fields = reserved_return_fields(max_tool_calls=self.m.tools.max_tool_calls)
         tools = []
         for tool_id, spec in sorted(self.tool_specs.items()):
             row = {"id": spec.get("id", tool_id),
                    "description": spec.get("description", ""),
                    "price_micro_per_call": spec.get("price_micro_per_call")}
-            if row["id"] in {CATALOGUE_TOOL, "world.read", "outcome.list",
-                              "outcome.get", "artifact.get"}:
+            # ``catalogue.search`` describes every held-back schema. Compact mode
+            # also carries ``artifact.get`` because an invocation can replace
+            # public history with a directly usable transient reference. Reference
+            # mode retains the historical bootstrap schemas byte for byte.
+            bootstrap = ({CATALOGUE_TOOL, "artifact.get"} if compact else
+                         {CATALOGUE_TOOL, "world.read", "outcome.list",
+                          "outcome.get", "artifact.get"})
+            if row["id"] in bootstrap:
                 row["args_schema"] = spec.get("args_schema", {})
                 examples = spec.get("args_schema", {}).get("examples") or []
                 if examples:
@@ -737,9 +748,15 @@ class SchematicsMixin:
                        'After reading results, answer according to the outcome schema below. '
                        'Optional register entries need the complete kind-specific shape, '
                        'not just a kind. Retrieve it with catalogue.search. '
-                       'Optional working_state replaces your private memory; ack_through '
+                       'Optional working_state replaces your private memory; on a paid '
+                       'continuation return it is committed before the continuation. ack_through '
                        'acknowledges outcomes through an exact outcome_id.',
             "return_field_names": sorted(reserved_return_fields()),
+            # A custom decision or judging schema need not repeat optional tool
+            # calls, but the kernel still validates their common envelope and
+            # batch bound. Publish that one exact reserved field in the bootstrap
+            # every request receives; the full contract remains retrievable below.
+            "return_envelope": {"tool_calls": return_fields["tool_calls"]},
             "return_contract": ({"tool": "world.read",
                                  "args": {"section": "reserved_return_fields"}}
                                 if "world.read" in self.tool_specs else
@@ -779,26 +796,20 @@ class SchematicsMixin:
         return block[name]
 
     def _institutional_directory(self, institutions: dict[str, Any]) -> dict[str, Any]:
-        """The sections a compact prompt did not carry, by exact handle, with their size.
+        """The sections a compact prompt did not carry, by exact handle and byte cost.
 
         Guarantees every section held out of the prompt is named here, so
-        compaction hides no institution: a reader can see that a thing exists, how
-        much of it there is, and how to read it. The handles are the exact names
+        compaction hides no institution: a reader can see that a thing exists,
+        how much exact JSON it will retrieve, and how to read it. The handles are the exact names
         ``institution_section`` accepts, so a seat never has to guess one.
         """
-        rows = []
-        for key in sorted(institutions):
-            if key in INSTITUTION_INLINE_KEYS:
-                continue
-            value = institutions[key]
-            rows.append({
-                "section": key,
-                "entries": len(value) if isinstance(value, (list, tuple, dict)) else 1,
-                "bytes": len(json.dumps(value, sort_keys=True, indent=2).encode("utf-8")),
-            })
+        handles = {
+            key: len(json.dumps(institutions[key], sort_keys=True, indent=2).encode("utf-8"))
+            for key in sorted(set(institutions) - INSTITUTION_INLINE_KEYS)
+        }
         tool = "world.read" if "world.read" in getattr(self, "tool_specs", {}) else None
         return {
-            "sections": rows,
+            "sections": handles,
             "read_with": (
                 tool + ' {"section": "<one of the handles above>"}' if tool else
                 "no world-reading tool is registered in this world; these sections "
@@ -813,9 +824,10 @@ class SchematicsMixin:
 
         Guarantees ``reference`` renders exactly what it rendered before the mode
         existed, byte for byte, and that ``compact`` renders the inline sections and
-        a directory naming every section it left out.
+        a directory naming every section it left out. With retrieval disabled,
+        the reference stays inline rather than advertising unreachable sections.
         """
-        if self._prompt_mode() != "compact":
+        if self._prompt_mode() != "compact" or self.m.tools.max_tool_calls <= 0:
             return INSTITUTIONS_HEADER, json.dumps(institutions, sort_keys=True, indent=2)
         body = {k: v for k, v in institutions.items() if k in INSTITUTION_INLINE_KEYS}
         body["sections_not_carried"] = self._institutional_directory(institutions)
@@ -870,7 +882,11 @@ class SchematicsMixin:
 
     def _operating_context(self, seat: str, world: dict[str, Any]) -> dict[str, Any]:
         """Grounded judges retain their own operating access, never live grading facts."""
-        index = self._capability_index()
+        # Grounded reviews carry frozen grading evidence and a separate operating
+        # surface. That surface is deliberately mode-independent: prompt mode may
+        # change ordinary world context, never the evidence commission or the
+        # capabilities with which its judge operates.
+        index = self._capability_index(compact=False)
         # Registered descriptions are population text. A blind grading request
         # publishes addresses/prices, not other inhabitants' unsolicited prose.
         index["tools"] = [{key: value for key, value in row.items() if key != "description"}
