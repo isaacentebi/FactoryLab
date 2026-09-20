@@ -1665,9 +1665,6 @@ class ComputeMixin:
                     "You may call tools again to use what you retrieved, then return the "
                     "final answer. Requests are refused."
                 )
-                note += (f" At most {self.MAX_TOOL_ROUNDS - tool_round - 1} further tool "
-                         "rounds remain, a repeated lookup buys none of them, and none is "
-                         "bought unless what is left also covers the final answer.")
                 follow = req.continuation(inputs={**follow_inputs, "continuation": note},
                                           cost_ceiling=remaining)
             if isinstance(assembly, Assembly):

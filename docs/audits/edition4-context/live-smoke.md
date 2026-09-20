@@ -109,8 +109,8 @@ no background rehearsal remains. Raw diaries and reports remain local under `wor
 
 The final PR review also identified a caller input named `actor_context` being
 silently omitted when an ordinary request already had `world`. That preservation
-fix and removal of a redundant grading instruction from the operating-context header
-followed the last live snapshot. They are verified by focused regressions and the
+fix and removal of redundant grading/round-limit narration from the operating-context
+header and continuation instruction followed the last live snapshot. They are verified by focused regressions and the
 check/gate suite, not by these earlier paid calls. They do not change the economic
 or delivery contracts exercised above.
 

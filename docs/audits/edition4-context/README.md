@@ -96,7 +96,7 @@ Validation on the integrated working tree:
 uv run ruff check .
 All checks passed!
 uv run pytest
-============================ 2186 passed in 33.26s =============================
+============================ 2186 passed in 33.40s =============================
 ```
 
 Affected gate command:
@@ -106,7 +106,7 @@ uv run pytest -m gate -n 2 tests/runtime/test_compute_continuity.py tests/runtim
 ```
 
 ```text
-============================== 21 passed in 9.18s ==============================
+============================== 21 passed in 9.22s ==============================
 ```
 
 The scripted retrieval test reaches a later inbox item, uses its exact content in a
