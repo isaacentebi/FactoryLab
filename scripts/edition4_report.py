@@ -931,7 +931,7 @@ def build_behavioral_trace(
     for row in events:
         if row.get("kind") == "tool.call" and isinstance(row.get("handle"), str):
             tool_calls[str(row["handle"])].append(row)
-        if (row.get("kind") == "return.sections_dropped"
+        if (row.get("kind") in ("return.sections_dropped", "return.validation_failed")
                 and isinstance(row.get("handle"), str)
                 and isinstance(row.get("dropped"), list)):
             for dropped in row["dropped"]:

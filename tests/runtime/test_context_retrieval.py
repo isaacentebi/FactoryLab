@@ -10,6 +10,31 @@ from factorylab.cortex.request import Return
 from factorylab.runtime.compute import _compacted_result
 
 
+@pytest.mark.parametrize("calls,reason", [
+    ([{"tool": "venue.order_book", "args": {"coin": "BTC"}}], "depth"),
+    ([{"tool": "outcome.get", "args": {"outcome_id": "outcome:1"}}] * 5,
+     "more than 4 tool_calls"),
+])
+def test_invalid_tool_only_reply_reaches_own_inbox_without_dispatch(monkeypatch, calls, reason):
+    rt = runtime()
+    req = request(rt)
+    prompts = []
+    scripted(rt, monkeypatch, [{"tool_calls": calls}], prompts)
+    before = rt.wallet.balance
+    ret = rt._invoke("seed-decider", req, "producer")
+
+    assert ret.status == "malformed" and len(prompts) == 1
+    assert ret.cost == before - rt.wallet.balance and ret.cost > 0
+    assert not ret.tool_calls and not ret.children and not rows(rt, "tool.call")
+    fault = rows(rt, "return.validation_failed")[-1]
+    assert reason in fault["dropped"][0]["reason"]
+    body = rt.outcomes.get("seed-decider", req.handle)
+    assert body["outcome"]["status"] == "malformed"
+    assert body["outcome"]["dropped"] == fault["dropped"]
+    assert "raw" not in body["outcome"]
+    assert "error" in rt.outcomes.get("other-seat", body["outcome_id"])
+
+
 def test_discover_page_read_and_act_in_one_budget(monkeypatch):
     rt = runtime()
     req = request(rt)

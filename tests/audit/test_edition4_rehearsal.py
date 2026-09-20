@@ -205,6 +205,9 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
             manifest_seen["value"] = manifest
             market_seen["value"] = kwargs["market"]
             assert kwargs["kill_at_end"] is True
+            assert kwargs["events"] == 60
+            assert kwargs["clock_source"].base.count == 60
+            assert kwargs["clock_source"].base.deadline_ns == 3_601_000_000_000
             self.ledger = FakeLedger()
             self.ticks_consumed = 1
             self.grounded_pending = {"pending": object()}
@@ -236,12 +239,14 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
     report = rehearsal.run_rehearsal(
         WORLD,
         out=out,
-        duration_ns=2 * rehearsal.SHORT_TICK_NS,
+        duration_ns=60 * 60 * 1_000_000_000,
+        target_ticks=60,
         cap_micro=10_000,
         max_calls=2,
         provider=provider,
         source_root="/Users/isaacentebi/Desktop/FactoryLab",
-        minimum_ticks=2,
+        now_ns=lambda: 1_000_000_000,
+        minimum_ticks=60,
     )
 
     assert report["status"] == "completed"
@@ -282,11 +287,12 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
         ),
     }
     assert report["protocol"] == {
-        "duration_ns": 2 * rehearsal.SHORT_TICK_NS,
+        "duration_ns": 60 * 60 * 1_000_000_000,
+        "target_ticks": 60,
         "cap_micro": 10_000,
         "max_calls": 2,
-        "planned_tick_ceiling": 2,
-        "minimum_delivered_ticks": 2,
+        "planned_tick_ceiling": 60,
+        "minimum_delivered_ticks": 60,
         "minimum_assessed_grounded_samples": 0,
         "minimum_contrary_grounded_samples": 0,
         "no_live_parameter_changes": True,
@@ -308,7 +314,8 @@ def test_cli_passes_frozen_factors_and_reports_an_incomplete_screen(monkeypatch,
     monkeypatch.setattr(rehearsal, "run_rehearsal", fake_run)
     code = rehearsal.main([
         "--out", str(tmp_path / "run"),
-        "--duration", "30m",
+        "--duration", "60m",
+        "--ticks", "60",
         "--prompt", "compact",
         "--producer-feedback", "realized",
         "--address-enabled",
@@ -323,10 +330,16 @@ def test_cli_passes_frozen_factors_and_reports_an_incomplete_screen(monkeypatch,
     assert seen["producer_feedback"] == "realized"
     assert seen["address_enabled"] is True
     assert seen["reasoning"] == "on"
+    assert seen["target_ticks"] == 60
     assert seen["minimum_ticks"] == 60
     assert seen["minimum_grounded_samples"] == 12
     assert seen["minimum_contrary_samples"] == 2
     assert json.loads(capsys.readouterr().out)["behavioral_screen"]["status"] == "inconclusive"
+
+
+def test_tick_target_requires_a_positive_count(tmp_path):
+    with pytest.raises(ValueError, match="target_ticks must be a positive integer"):
+        rehearsal.run_rehearsal(WORLD, out=tmp_path / "zero", target_ticks=0)
 
 
 @pytest.mark.gate
@@ -353,6 +366,7 @@ def test_runner_consumes_injected_clock_and_persists_dead_diary(tmp_path):
     )
 
     assert report["status"] == "completed"
+    assert "target_ticks" not in report["protocol"]
     assert report["timing"]["ticks"] == 1
     assert (tmp_path / "run" / "ledger.jsonl").exists()
     assert (tmp_path / "run" / "events.json").exists()

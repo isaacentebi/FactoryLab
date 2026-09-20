@@ -84,8 +84,12 @@ def _postmortem_fixture():
     return report, events
 
 
-def test_postmortem_trace_separates_replays_execution_and_mechanical_failures():
+@pytest.mark.parametrize("rejection_kind", ["return.sections_dropped", "return.validation_failed"])
+def test_postmortem_trace_separates_replays_execution_and_mechanical_failures(rejection_kind):
     report, events = _postmortem_fixture()
+    for row in events:
+        if row.get("kind") == "return.sections_dropped":
+            row["kind"] = rejection_kind
     trace = build_behavioral_trace(report, events)
 
     work = trace["producer_work"]

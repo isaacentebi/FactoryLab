@@ -170,16 +170,20 @@ class Assembly:
         resp = replace(resp, text=utf8_text(resp.text))
         parsed = _parse_json_object(resp.text)
         dropped: tuple[dict[str, Any], ...] = ()
+        rejected: list[dict[str, Any]] = []
+        validation_error = "answer is not a JSON object"
         if parsed is not None:
             try:
                 parsed, dropped = validate_return_sections(
-                    parsed, req.outcome_schema, self.validator, req)
-            except (ValueError, TypeError, ArithmeticError, RecursionError):
+                    parsed, req.outcome_schema, self.validator, req, rejected=rejected)
+            except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
+                validation_error = str(exc)[:200] or type(exc).__name__
                 parsed = None
         if parsed is None:
             return Return(
                 req.handle,
-                {"raw": resp.text},
+                {"raw": resp.text, "validation_error": validation_error,
+                 "rejected_sections": rejected},
                 cost,
                 "malformed",
                 served_by=resp.model_id,
@@ -420,20 +424,25 @@ class ProgramAssembly:
         parsed = _parse_json_object(text)
         new_state: Any = None
         dropped: tuple[dict[str, Any], ...] = ()
+        rejected: list[dict[str, Any]] = []
+        validation_error = "answer is not a JSON object"
         if parsed is not None:
             # The state is the program's, not the return's: it never reaches the
             # outcome schema, the judges or the ledger's outputs field.
             new_state = parsed.pop("state", None)
             if self.spec.state_policy != "private" and new_state is not None:
+                validation_error = "program has no private state policy"
                 parsed = None
             else:
                 try:
                     parsed, dropped = validate_return_sections(
-                        parsed, req.outcome_schema, self.validator, req)
-                except (ValueError, TypeError, ArithmeticError, RecursionError):
+                        parsed, req.outcome_schema, self.validator, req, rejected=rejected)
+                except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
+                    validation_error = str(exc)[:200] or type(exc).__name__
                     parsed = None
         if parsed is None:
-            return malformed({"raw": text[:4000]}, "stop")
+            return malformed({"raw": text[:4000], "validation_error": validation_error,
+                              "rejected_sections": rejected}, "stop")
         if new_state is not None:
             try:
                 encoded = json.dumps(new_state, sort_keys=True, allow_nan=False,
@@ -645,6 +654,7 @@ _FAULTS = (ValueError, TypeError, ArithmeticError, RecursionError, KeyError, Att
 
 
 def validate_return_sections(parsed: dict, schema: dict, validator=None, req=None,
+                             *, rejected: list[dict[str, Any]] | None = None,
                              ) -> tuple[dict, tuple[dict[str, Any], ...]]:
     """Return the reply with invalid optional sections dropped, and what was dropped.
 
@@ -654,9 +664,10 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     ``OPTIONAL_SECTIONS``, or one item of a list section, is ever dropped, each
     with a bounded reason and, for an item, its index in the reply as written. A
     dropped section is gone from the reply, so nothing in it reaches an effect.
+    If supplied, ``rejected`` retains section faults even when the whole answer fails.
     """
     parsed = dict(parsed)
-    dropped: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = [] if rejected is None else rejected
     origin: dict[str, list[int]] = {}
 
     def drop(section: str, reason: str, index: int | None = None) -> None:

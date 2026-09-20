@@ -1783,29 +1783,36 @@ class ComputeMixin:
         ret = replace(ret, dropped=tuple(dropped))
         if dropped and ret.status == "ok":
             self._report_dropped_sections(action_id, req.handle, ret.dropped)
+        elif ret.status == "malformed" and isinstance(ret.outputs.get("validation_error"), str):
+            self._report_dropped_sections(
+                action_id, req.handle, tuple(ret.outputs.get("rejected_sections", ())),
+                error=ret.outputs["validation_error"])
         del self.ledger.connector_bodies[body_mark:]
         return ret
 
     def _report_dropped_sections(self, seat: str, handle: str,
-                                 dropped: tuple[dict[str, Any], ...]) -> None:
+                                 dropped: tuple[dict[str, Any], ...], *,
+                                 error: str | None = None) -> None:
         """Tell a seat which optional sections of its answer were dropped, and why.
 
-        The answer stood; what did not validate beside it (a working state of the
-        wrong type, a malformed tool call, a proposal of a kind nobody registers)
-        was dropped rather than voiding it. The diary records it, and the seat's
-        own inbox carries it, so the next wake reads what was not done instead of
-        assuming it was.
+        A failed answer retains its rejection reasons without admitting its effects.
+        The diary and owning seat's inbox distinguish rejection from partial success.
         """
         items = [dict(d) for d in dropped]
-        self.ledger.append({"kind": "return.sections_dropped", "assembly_id": seat,
-                            "handle": handle, "dropped": items, "ts": self.clock.now_ns})
+        kind = "return.validation_failed" if error is not None else "return.sections_dropped"
+        detail = {"reason": error} if error is not None else {}
+        self.ledger.append({"kind": kind, "assembly_id": seat,
+                            "handle": handle, "dropped": items, **detail,
+                            "ts": self.clock.now_ns})
         if seat in self.assemblies:
             self.outcomes.append(
                 seat, handle=handle,
-                outcome={"kind": "return_sections_dropped", "status": "partial",
-                         "dropped": items},
+                outcome={"kind": ("return_rejected" if error is not None
+                                  else "return_sections_dropped"),
+                         "status": "malformed" if error is not None else "partial",
+                         "dropped": items, **detail},
                 delta_micro=0,
-                evidence={"kind": "return.sections_dropped", "handle": handle,
+                evidence={"kind": kind, "handle": handle,
                           "ts": self.clock.now_ns})
 
     def _apply_continuity(self, action_id: str, handle: str, ret: Return) -> None:
