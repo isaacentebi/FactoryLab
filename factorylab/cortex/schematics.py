@@ -721,6 +721,7 @@ class SchematicsMixin:
         """
         if compact is None:
             compact = self._prompt_mode() == "compact"
+        return_fields = reserved_return_fields(max_tool_calls=self.m.tools.max_tool_calls)
         tools = []
         for tool_id, spec in sorted(self.tool_specs.items()):
             row = {"id": spec.get("id", tool_id),
@@ -747,9 +748,15 @@ class SchematicsMixin:
                        'After reading results, answer according to the outcome schema below. '
                        'Optional register entries need the complete kind-specific shape, '
                        'not just a kind. Retrieve it with catalogue.search. '
-                       'Optional working_state replaces your private memory; ack_through '
+                       'Optional working_state replaces your private memory; on a paid '
+                       'continuation return it is committed before the continuation. ack_through '
                        'acknowledges outcomes through an exact outcome_id.',
             "return_field_names": sorted(reserved_return_fields()),
+            # A custom decision or judging schema need not repeat optional tool
+            # calls, but the kernel still validates their common envelope and
+            # batch bound. Publish that one exact reserved field in the bootstrap
+            # every request receives; the full contract remains retrievable below.
+            "return_envelope": {"tool_calls": return_fields["tool_calls"]},
             "return_contract": ({"tool": "world.read",
                                  "args": {"section": "reserved_return_fields"}}
                                 if "world.read" in self.tool_specs else

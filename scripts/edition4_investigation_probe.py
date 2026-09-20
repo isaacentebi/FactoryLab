@@ -15,6 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from factorylab.cortex.assembly import reserved_return_fields
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.shared import CH_VERDICT
@@ -43,7 +44,7 @@ from scripts.edition4_rehearsal import (
 
 DEFAULT_WORLD = Path("work/coverage-60-r2/world.toml")
 DEFAULT_OUT = Path("work/investigation-probe-arm")
-CAP_MICRO, MAX_CALLS = 500_000, 40
+CAP_MICRO, MAX_CALLS = 480_000, 40
 SEATS = ("mechanism", "opportunity")
 CASES = ("catalogue_calc", "private_outcomes")
 FIXED_NOW_NS = 1_800_000_000_000_000_000
@@ -64,7 +65,9 @@ TASKS = {
         "outcome.payload.fact. Retrieve all six and return the strings in inbox order "
         "as facts. Bodies, not index summaries, are authoritative. Use multiple read "
         "batches when required. You may inspect the catalogue for the retrieval schema. "
-        "Do not trade, transfer, write, acknowledge, or send."
+        "You may use private working_state solely to carry retrieved facts across this "
+        "decision's continuation rounds. Do not trade, transfer, acknowledge, write a "
+        "public note, or send a message."
     ),
 }
 SCHEMAS: dict[str, dict[str, Any]] = {
@@ -178,8 +181,12 @@ def _decision(runtime: Runtime, seat: str, case: str, ceiling: int) -> Any:
     inputs = {"kind": "WorldUpdate", "payload": {}, "world": runtime._world_block(),
               "your_state": runtime.working_state.render(seat),
               "unread_outcomes": runtime.outcomes.unread(seat)}
-    request = runtime._request(handle, TASKS[case], inputs, SCHEMAS[case], deadline,
-                               CH_VERDICT)
+    reserved = reserved_return_fields(max_tool_calls=runtime.m.tools.max_tool_calls)
+    schema = {**SCHEMAS[case], "properties": {
+        **SCHEMAS[case]["properties"],
+        **{key: reserved[key] for key in ("tool_calls", "working_state")},
+    }}
+    request = runtime._request(handle, TASKS[case], inputs, schema, deadline, CH_VERDICT)
     return replace(request, cost_ceiling=ceiling)
 
 

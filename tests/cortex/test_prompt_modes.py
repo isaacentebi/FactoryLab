@@ -21,6 +21,7 @@ from dataclasses import replace
 
 import pytest
 
+from factorylab.cortex.assembly import reserved_return_fields
 from factorylab.cortex.schematics import (
     INSTITUTION_INLINE_KEYS,
     INSTITUTION_SECTIONS,
@@ -132,6 +133,7 @@ def test_grounded_actor_access_keeps_operating_routes_out_of_grading_facts(modes
     assert req.world_update_text() == ""
     assert "catalogue.search" in req.stable_prefix()
     assert "args_schema" in req.stable_prefix()
+    assert f'"maxItems":{rt.m.tools.max_tool_calls}' in req.stable_prefix().replace(" ", "")
     assert req.seat_block()["spending_authority"] != "unavailable"
     assert set(actor) == {"stable_prefix", "seats", "clock_now", "world_resources"}
     assert len(actor["seats"]) == 1
@@ -296,3 +298,31 @@ def test_compact_bootstraps_exact_read_schemas_and_keeps_every_tool_discoverable
         assert historical[tool_id]["args_schema"] == reference.tool_specs[tool_id][
             "args_schema"
         ]
+
+
+@pytest.mark.parametrize("mode", ["reference", "compact"])
+def test_custom_decision_schema_still_receives_the_authoritative_tool_batch_contract(mode):
+    rt = runtime(mode)
+    world = rt._world_block()
+    seat = next(iter(rt.assemblies))
+    custom_schema = {
+        "type": "object",
+        "properties": {"decision": {"type": "string"}},
+        "required": ["decision"],
+    }
+    req = rt._request(
+        "private-decision", "Make the private decision.",
+        {"you": seat, "world": world, "private_evidence": {"ref": "frozen:1"}},
+        custom_schema, 10**15, "conformity",
+    )
+
+    contract = rt._capability_index()["return_envelope"]["tool_calls"]
+    assert contract == reserved_return_fields(
+        max_tool_calls=rt.m.tools.max_tool_calls
+    )["tool_calls"]
+    assert contract["maxItems"] == rt.m.tools.max_tool_calls
+    assert contract["items"]["required"] == ["tool", "args"]
+    sent = req.prompt_text()
+    assert f'"maxItems":{rt.m.tools.max_tool_calls}' in sent.replace(" ", "").replace("\n", "")
+    assert "private_evidence" in sent and "frozen:1" in sent
+    assert "This response may contain at most" not in dict(req.sections())["outcome_schema"]

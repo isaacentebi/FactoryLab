@@ -1448,6 +1448,11 @@ class ComputeMixin:
         """Project one world exactly as a compact model invocation receives it."""
         if getattr(getattr(self.m, "prompt", None), "mode", "reference") != "compact":
             return world
+        # A reference is disclosure only when this request can execute its read.
+        # Zero is a valid tool-call limit; keep the exact context inline rather
+        # than replacing it with an unreachable ``artifact.get`` address.
+        if self.m.tools.max_tool_calls <= 0:
+            return world
         update = world.get("world_update")
         if not isinstance(update, dict):
             return world
@@ -1544,6 +1549,13 @@ class ComputeMixin:
             else:
                 self.queue.bind(req.handle, emitted)
                 self.return_kinds[req.handle] = emitted
+        working_state_handled = False
+        if (ret.status == "ok" and (ret.tool_calls or ret.children)
+                and isinstance(ret.outputs, dict) and "working_state" in ret.outputs):
+            working_state_handled = True
+            if self._write_working_state(action_id, req.handle, ret.outputs):
+                req = replace(req, inputs={**req.inputs,
+                                          "your_state": self.working_state.render(action_id)})
         total_cost = ret.cost
         seen_results: list[dict] = []
         previous_results: list[dict] = []
@@ -1774,10 +1786,30 @@ class ComputeMixin:
             if (ret.status == "ok" and ret.outputs.get("status") == "cannot"
                     and isinstance(ret.outputs.get("reason"), str)):
                 ret = replace(ret, status="refused", children=(), tool_calls=())
+            has_continuation = bool(ret.tool_calls or ret.children)
             if ret.children:
                 self.ledger.append({"kind": "requests.refused", "handle": req.handle,
                                     "reason": "continuation already consumed"})
                 ret = replace(ret, children=())
+            state_changed = False
+            working_state_handled = False
+            if (ret.status == "ok" and has_continuation
+                    and isinstance(ret.outputs, dict) and "working_state" in ret.outputs):
+                working_state_handled = True
+                if self._write_working_state(action_id, req.handle, ret.outputs):
+                    req = replace(req, inputs={**req.inputs,
+                                              "your_state": self.working_state.render(action_id)})
+                    state_changed = True
+            if state_changed:
+                # The new private head is part of the next paid prompt. Reprice
+                # the minimum answer before another tool dispatch can spend from
+                # the same decision's remaining cover.
+                minimum_inputs = {**req.inputs, "continuation": final_note,
+                                  "context_notice": "Tool bodies were not loaded: "
+                                                    "insufficient budget."}
+                minimum_answer = req.continuation(
+                    inputs=minimum_inputs, cost_ceiling=req.cost_ceiling)
+                answer_reserve = self._call_reserve(assembly, minimum_answer) or 0
             # The extra round composes the retrieved text through ordinary jailed
             # tools. Text from outside keeps that narrow: fetched or searched bytes
             # cannot reach the venue, the treasury or a transport inside the same
@@ -1868,7 +1900,8 @@ class ComputeMixin:
             if role == "producer":
                 self.window.costs.append(ret.cost)
         self._record_declared_propensity(action_id, req, ret, role, effects=tuple(effects))
-        self._apply_continuity(action_id, req.handle, ret)
+        self._apply_continuity(
+            action_id, req.handle, ret, working_state_handled=working_state_handled)
         ret = replace(ret, dropped=tuple(dropped))
         if dropped and ret.status == "ok":
             self._report_dropped_sections(action_id, req.handle, ret.dropped)
@@ -1904,7 +1937,8 @@ class ComputeMixin:
                 evidence={"kind": kind, "handle": handle,
                           "ts": self.clock.now_ns})
 
-    def _apply_continuity(self, action_id: str, handle: str, ret: Return) -> None:
+    def _apply_continuity(self, action_id: str, handle: str, ret: Return, *,
+                          working_state_handled: bool = False) -> None:
         """Advance the seat's own head and inbox cursor from its answer (C1).
 
         Every answer of every shape passes here — producer, verdict, meta, child,
@@ -1931,15 +1965,38 @@ class ComputeMixin:
             # and what it cost reaches the lineage that put it in the world.
             self._deliver_program_result_to_inbox(action_id, handle, ret)
         self.outcomes.record_said(action_id, handle, ret.outputs)
-        if "working_state" in ret.outputs:
-            try:
-                self.working_state.put(action_id, ret.outputs["working_state"], handle=handle)
-            except ValueError as exc:
-                self.ledger.append({"kind": "state.refused", "assembly_id": action_id,
-                                    "handle": handle, "reason": str(exc)[:200],
-                                    "ts": self.clock.now_ns})
+        if not working_state_handled:
+            self._write_working_state(action_id, handle, ret.outputs)
         if "ack_through" in ret.outputs:
             self.outcomes.ack_through(action_id, ret.outputs["ack_through"])
+
+    def _write_working_state(self, action_id: str, handle: str, outputs: Any) -> bool:
+        """Commit one accepted private head, or leave the prior head unchanged.
+
+        This is shared by intermediate tool-call returns and the final continuity
+        pass. It applies no inbox acknowledgement, said-record update, or program
+        delivery, so committing memory between paid calls cannot duplicate any
+        other return effect. A refusal is ledgered by the existing contract and
+        returns false so the next prompt continues from the previous head.
+        """
+        if (action_id not in self.assemblies or not isinstance(outputs, dict)
+                or "working_state" not in outputs):
+            return False
+        state = outputs["working_state"]
+        if self.ledger.without_connector_bodies(state) != state:
+            self.ledger.append({"kind": "state.refused", "assembly_id": action_id,
+                                "handle": handle,
+                                "reason": "connector body in working_state",
+                                "ts": self.clock.now_ns})
+            return False
+        try:
+            self.working_state.put(action_id, state, handle=handle)
+        except ValueError as exc:
+            self.ledger.append({"kind": "state.refused", "assembly_id": action_id,
+                                "handle": handle, "reason": str(exc)[:200],
+                                "ts": self.clock.now_ns})
+            return False
+        return True
 
     # --- the deciding agent's propensity rides on the request -------------------
 

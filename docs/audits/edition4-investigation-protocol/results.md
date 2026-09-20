@@ -1,7 +1,7 @@
 # Investigation interface: result
 
-The predeclared mechanical screen failed. Both source arms completed one of four
-commissioned chains. Neither model retrieved the six private facts. The population
+The first screen failed, and independent review subsequently found it confounded.
+Both source arms completed one of four commissioned chains. Neither model retrieved the six private facts. The population
 pilot was therefore **not launched**, and its conditional $3 was not reserved.
 No live venue action, transfer, or deployment occurred in this experiment.
 
@@ -34,9 +34,10 @@ isolation, affordability, unchanged original inputs, unknown price values,
 program inputs, frozen judging evidence, and routing growth.
 
 Ruff passed. The final default check tier passed **2,199 tests in 34.32 s**. The
-three relevant world gate tests passed in 3.23 s. The diagnostic also completed
-all four cases against a canned provider with 12 calls and correctly accounted
-simulated bills before real models were dispatched.
+three relevant world gate tests passed in 3.23 s. The initial canned diagnostic accounted simulated bills, but its success claim
+was invalid: its final answer knew fixture facts absent from the actual prompt.
+A prompt-derived responder instead exposed an internal 4-fact / 2-fact cycle.
+The corrected protocol requires facts to come solely from the rendered prompt.
 
 ## Paid comparison
 
@@ -70,12 +71,14 @@ schema, called `calc`, and used its returned result. Receipt-based scoring rejec
 correct-looking answers that skip the requested execution.
 
 For private facts, baseline GLM returned explicitly labeled placeholders. The
-other three answers attempted six reads in one batch, exceeding the published
-four-call limit. Some responses also narrated multiple apparent turns as separate
+other three answers attempted six reads in one batch, exceeding the enforced
+four-call limit, which this custom task schema omitted from the initial prompt. Some responses also narrated multiple apparent turns as separate
 JSON objects in one completion. The runtime did not execute those six-call
-batches. This is direct evidence of a response/continuation protocol failure;
-it is not evidence that the underlying outcome reader is broken, that private
-bodies are unavailable, or that the population consciously prefers inactivity.
+batches. The limit was discoverable, but the screen unintentionally required discovery
+of that limit as well. Separately, replacing prior read bodies with references
+while discarding intermediate private notes prevented ordinary accumulation of
+six facts across four-call batches. These are interface confounders, not evidence
+that the population consciously prefers inactivity.
 
 ## Decision and next test
 
@@ -85,15 +88,12 @@ was used to rescue the failed screen. The total new spend was **$0.022129**; the
 cumulative ledger now records $5.369628 known, $0.030564 previously uncertain,
 and **$44.599808 unreserved** under the existing $50 authorization.
 
-The next intervention should address the action protocol: make a tool request and
-its returned observation a real interaction boundary, instead of relying on a
-model to simulate that boundary correctly inside free-form JSON. First compare
-the captured responses against a schema-constrained/native-tool adapter offline,
-including oversized batches, invented receipts, multiple JSON objects, and
-unaffordable continuations. Do not execute extra objects from a completion, invent
-missing facts, silently retry paid calls, or weaken the money and batch bounds.
-Then predeclare a fresh bounded model screen. This experiment does not establish
-which adapter or model configuration will pass it.
+The corrected protocol first exposes the authoritative batch contract and repairs
+intermediate private working_state carryover. A native-tool redesign is premature
+until those mechanical defects are fixed and a prompt-derived offline responder
+can complete the task. The initial evidence and its bills remain retained. Any
+corrected paid comparison stays within the original $1 total; no unchanged paid
+attempt is retried.
 
 There is still no new evidence here of autonomous objectives, useful cooperation,
 or independent income buying further operation. A shorter request is an

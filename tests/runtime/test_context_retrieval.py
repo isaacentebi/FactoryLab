@@ -8,6 +8,7 @@ from test_discovery_continuation import packed, request, rows, runtime, scripted
 
 from factorylab.cortex.request import Return
 from factorylab.runtime.compute import _compacted_result
+from factorylab.runtime.continuity import HARD_STATE_BYTES
 
 
 @pytest.mark.parametrize("calls,reason", [
@@ -156,6 +157,30 @@ def test_compaction_preserves_an_unknown_mid_history_value():
     }
 
 
+def test_zero_tool_call_world_keeps_charter_and_history_inline():
+    rt = runtime()
+    rt.m = replace(rt.m, tools=replace(rt.m.tools, max_tool_calls=0))
+    now_s = rt.clock.now_ns // 1_000_000_000
+    rt.recent_mids["BTC"] = [
+        {"t_s": now_s - 1, "mid": "90000.0"},
+        {"t_s": now_s, "mid": "90001.0"},
+    ]
+    original = request(rt)
+    retrieved = {}
+
+    kept = rt._compact_invocation_context(original, retrieved)
+
+    before = original.world_update_block()
+    after = kept.world_update_block()
+    assert kept is original and retrieved == {}
+    assert isinstance(after["charter"]["text"], str)
+    assert after["charter"]["text"] == before["charter"]["text"]
+    assert after["public_observations"]["recent_mids"] == (
+        before["public_observations"]["recent_mids"]
+    )
+    assert "full_history" not in after["public_observations"]
+
+
 def test_program_request_is_not_replaced_with_transient_references(monkeypatch):
     from tests.cortex.test_programs import program
 
@@ -263,6 +288,139 @@ def test_first_call_can_read_transient_world_history_through_its_own_handle(monk
     assert len(rt.artifacts.index) == before_artifacts
     reads = [row for row in rows(rt, "artifact.get") if row.get("scope") == "invocation"]
     assert [row["sha"] for row in reads] == [ref["sha"] for ref in refs]
+
+
+def test_intermediate_working_state_carries_four_plus_two_facts_across_rounds(monkeypatch):
+    rt = runtime()
+    req = request(rt)
+    first = ["fact-a", "fact-b", "fact-c", "fact-d"]
+    second = [*first, "fact-e", "fact-f"]
+    quoted_states = []
+    quote = rt._call_reserve
+
+    def capture_quote(assembly, current):
+        state = current.inputs.get("your_state")
+        if isinstance(state, dict) and isinstance(state.get("state"), dict):
+            quoted_states.append(list(state["state"].get("facts", ())))
+        return quote(assembly, current)
+
+    monkeypatch.setattr(rt, "_call_reserve", capture_quote)
+    prompts = []
+    scripted(rt, monkeypatch, [
+        {"working_state": {"facts": first},
+         "tool_calls": [{"tool": "world.read", "args": {"section": "composition"}}]},
+        {"working_state": {"facts": second},
+         "tool_calls": [{"tool": "world.read",
+                         "args": {"section": "reserved_return_fields"}}]},
+        {"action": "hold", "rationale": "All six retained facts were considered."},
+    ], prompts)
+    before = rt.wallet.balance
+
+    ret = rt._invoke("seed-decider", req, "producer")
+
+    assert ret.status == "ok" and len(prompts) == 3
+    assert all(fact in prompts[1] for fact in first)
+    assert all(fact in prompts[2] for fact in second)
+    assert "fact-e" not in prompts[1] and "fact-f" not in prompts[1]
+    assert first in quoted_states and second in quoted_states
+    assert rt.working_state.render("seed-decider")["state"] == {"facts": second}
+    assert len(rows(rt, "state.put")) == 2
+    assert ret.cost == before - rt.wallet.balance and ret.cost > 0
+
+    other = rt._request(
+        "other-decision", "Answer independently.",
+        {"you": "other-seat", "world": rt._world_block(),
+         "your_state": rt.working_state.render("other-seat")},
+        {}, 10**15, "verdict",
+    )
+    assert all(fact not in other.prompt_text() for fact in second)
+
+
+def test_oversize_intermediate_state_is_refused_without_changing_the_head(monkeypatch):
+    rt = runtime()
+    seat = "seed-decider"
+    rt.working_state.put(seat, {"keep": "baseline"}, handle="before")
+    before_head = dict(rt.working_state.head(seat))
+    req = request(rt)
+    req = replace(req, inputs={**req.inputs, "your_state": rt.working_state.render(seat)})
+    prompts = []
+    too_large = {"body": "Z" * HARD_STATE_BYTES}
+    scripted(rt, monkeypatch, [
+        {"working_state": too_large,
+         "tool_calls": [{"tool": "world.read", "args": {"section": "composition"}}]},
+        {"action": "hold", "rationale": "The prior state remains."},
+    ], prompts)
+
+    ret = rt._invoke(seat, req, "producer")
+
+    assert ret.status == "ok" and len(prompts) == 2
+    assert rt.working_state.head(seat) == before_head
+    assert '"keep": "baseline"' in prompts[1]
+    assert "Z" * 1000 not in prompts[1]
+    refused = rows(rt, "state.refused")
+    assert len(refused) == 1 and str(HARD_STATE_BYTES) in refused[0]["reason"]
+
+
+def test_intermediate_state_commit_survives_a_later_final_failure(monkeypatch):
+    rt = runtime()
+    req = request(rt)
+    prompts = []
+    committed = {"finding": "kept even if the final answer fails"}
+    scripted(rt, monkeypatch, [
+        {"working_state": committed,
+         "tool_calls": [{"tool": "world.read", "args": {"section": "composition"}}]},
+        ["not", "a", "return object"],
+    ], prompts)
+
+    ret = rt._invoke("seed-decider", req, "producer")
+
+    assert ret.status == "malformed" and len(prompts) == 2
+    assert rt.working_state.render("seed-decider")["state"] == committed
+    puts = rows(rt, "state.put")
+    assert len(puts) == 1 and puts[0]["handle"] == req.handle
+
+
+@pytest.mark.parametrize("state,accepted", [
+    ({"after_action": "remembered"}, True),
+    ({"body": "Z" * HARD_STATE_BYTES}, False),
+])
+def test_loop_ending_tool_return_handles_working_state_only_once(
+        monkeypatch, state, accepted):
+    rt = runtime()
+    req = request(rt)
+    prompts = []
+    scripted(rt, monkeypatch, [
+        {"tool_calls": [{"tool": "note.put",
+                         "args": {"key": "done", "text": "the action is complete"}}]},
+        {"working_state": state,
+         "tool_calls": [{"tool": "world.read", "args": {"section": "composition"}}]},
+    ], prompts)
+
+    ret = rt._invoke("seed-decider", req, "producer")
+
+    assert ret.status == "ok" and len(prompts) == 2
+    if accepted:
+        assert rt.working_state.render("seed-decider")["state"] == state
+        assert len(rows(rt, "state.put")) == 1
+        assert rows(rt, "state.refused") == []
+    else:
+        assert rt.working_state.head("seed-decider") is None
+        assert rows(rt, "state.put") == []
+        assert len(rows(rt, "state.refused")) == 1
+
+
+def test_connector_body_cannot_become_intermediate_working_state():
+    rt = runtime()
+    body = "outside private body that must remain transient"
+    rt.ledger.protect_connector_body(body)
+
+    accepted = rt._write_working_state(
+        "seed-decider", "decision-private", {"working_state": {"memory": body}})
+
+    assert accepted is False and rt.working_state.head("seed-decider") is None
+    refused = rows(rt, "state.refused")
+    assert refused[-1]["reason"] == "connector body in working_state"
+    assert body not in json.dumps(refused[-1])
 
 
 def test_unpriced_retrieval_finishes_instead_of_buying_another_round(monkeypatch):

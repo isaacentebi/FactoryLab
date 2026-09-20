@@ -321,6 +321,31 @@ def test_investigation_paid_mode_requires_an_existing_freeze(tmp_path, monkeypat
     assert report["executed"] is False
 
 
+def test_investigation_initial_requests_publish_numeric_tool_call_bound():
+    manifest = investigation.effective_manifest(
+        investigation.load_manifest(str(probe.DEFAULT_WORLD)))
+    seat = "mechanism"
+
+    for case in investigation.CASES:
+        runtime = investigation._runtime(manifest, investigation.NullProvider(), [])
+        if case == "private_outcomes":
+            investigation._seed_outcomes(runtime, seat)
+        request = investigation._decision(
+            runtime, seat, case, investigation.CAP_MICRO // 4)
+        actual, model_request = investigation.actual_model_request(
+            runtime, seat, request)
+        tool_calls = actual.outcome_schema["properties"]["tool_calls"]
+        prompt = "".join(str(message.get("content", ""))
+                         for message in model_request.messages)
+
+        assert tool_calls["maxItems"] == manifest.tools.max_tool_calls
+        assert actual.outcome_schema["required"] == investigation.SCHEMAS[case]["required"]
+        assert set(actual.outcome_schema["properties"]) == {
+            *investigation.SCHEMAS[case]["properties"], "tool_calls", "working_state"}
+        assert (f"This response may contain at most {manifest.tools.max_tool_calls} "
+                "tool_calls" in prompt)
+
+
 @pytest.mark.parametrize("bound", [{"cap_micro": 2_000_000}, {"max_calls": 13},
                                    {"cap_micro": 0}, {"max_calls": 0}])
 def test_bounds_above_the_authorized_ceiling_are_rejected(tmp_path, bound):
