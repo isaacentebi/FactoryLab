@@ -108,3 +108,34 @@ def test_program_cannot_run_tools_with_its_last_answer_budget(monkeypatch):
     assert ret.status == "failed" and ret.cost == asm.price
     assert not rows(rt, "tool.call")
     assert rows(rt, "tool.rounds_exhausted")[0]["reserve"] == asm.price
+
+
+def test_routing_bridge_does_not_fund_the_seats_retrieval_chain(monkeypatch):
+    rt = runtime()
+    req = request(rt)
+    seat = "seed-decider"
+    monkeypatch.setattr(rt, "_novelty_protection", lambda *_: 0)
+    quote = rt._call_reserve(rt.assemblies[seat], req)
+    rt.budget.debit(seat, rt.budget.entitlement(seat) - quote // 2, "test")
+    prompts = []
+    scripted(rt, monkeypatch, [
+        {"tool_calls": [{"tool": "world.read", "args": {"section": "composition"}}]},
+        {"action": "hold"},
+    ], prompts)
+    ret = rt._invoke(seat, req, "producer")
+    bridges = [r for r in rows(rt, "budget") if r.get("op") == "bridge"]
+    assert len(bridges) == 1 and len(prompts) == 1
+    assert ret.status == "failed" and not rows(rt, "tool.call")
+
+
+def test_continuation_cannot_claim_a_routing_bridge_directly(monkeypatch):
+    rt = runtime()
+    req = request(rt)
+    seat = "seed-decider"
+    rt.handle_to_assembly[req.handle] = seat
+    monkeypatch.setattr(rt, "_novelty_protection", lambda *_: 0)
+    rt.budget.debit(seat, rt.budget.entitlement(seat) - 1, "test")
+    ret = rt._invoke_compute(seat, req.continuation(
+        inputs={**req.inputs, "continuation": "answer"}, cost_ceiling=req.cost_ceiling))
+    assert ret.status == "failed" and ret.cost == 0
+    assert not [r for r in rows(rt, "budget") if r.get("op") == "bridge"]

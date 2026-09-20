@@ -1391,7 +1391,8 @@ class ComputeMixin:
         except Exception:  # an unrenderable request fails inside invoke, as before
             ceiling = None
         cover = self.budget.cover(seat, self._novelty_protection(req.handle, reason))
-        if ceiling is not None and cover > 0 and ceiling > cover:
+        if (ceiling is not None and cover > 0 and ceiling > cover
+                and req.parent_handle is None and "continuation" not in req.inputs):
             backed = self.budget.bridge(seat, req.handle, ceiling - cover, "routing estimate")
             if backed:
                 self.entitlement_bridges[req.handle] = backed
@@ -1430,6 +1431,12 @@ class ComputeMixin:
         # priced from this request and a parent cannot forge its child's.
         effects: list[str] = []  # venue and treasury writes, children: the action so far
         ret = self._invoke_compute(action_id, req)
+        # The routing bridge buys only the routed call. Reads and children spend
+        # the liable seat's remaining cover, never a fresh claim on the commons.
+        seat = self._liable_seat(req.handle) or action_id
+        cover = self.budget.cover(
+            seat, self._novelty_protection(req.handle, f"model:{assembly.spec.model_id}"))
+        req = replace(req, cost_ceiling=min(req.cost_ceiling, ret.cost + cover))
         dropped = list(ret.dropped)  # optional sections dropped while the answer stood
         self._check_compute_return(req.handle, ret)
         if (ret.status == "ok" and ret.outputs.get("status") == "cannot"

@@ -174,6 +174,8 @@ def test_custom_child_freezes_its_selected_kind_for_final_commission():
     rt = _runtime(provider=_CustomProducer())
     _register_custom_producer(rt)
     parent = _consequence_decision(rt, "seed-decider", CH_VERDICT)
+    # Normal invocation binds the paying parent before it can request children.
+    rt.handle_to_assembly[parent] = "seed-decider"
     request = rt._request(
         parent, "parent", {}, {"type": "object"}, 10**18, CH_VERDICT,
     )
