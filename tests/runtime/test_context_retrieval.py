@@ -4,7 +4,7 @@ import json
 from dataclasses import replace
 
 import pytest
-from test_discovery_continuation import request, rows, runtime, scripted
+from test_discovery_continuation import packed, request, rows, runtime, scripted
 
 from factorylab.cortex.request import Return
 from factorylab.runtime.compute import _compacted_result
@@ -85,6 +85,186 @@ def test_large_and_external_results_remain_transient_and_exact(size):
     assert ref["expires"] == "end of this decision"
 
 
+def test_late_public_history_is_exactly_addressable_while_current_facts_stay_inline():
+    rt = runtime()
+    now_s = rt.clock.now_ns // 1_000_000_000
+    rt.recent_mids["BTC"] = [
+        {"t_s": now_s - (40 - index), "mid": f"{60_000 + index}.125"}
+        for index in range(40)
+    ]
+    original = request(rt)
+    original = replace(original, inputs={**original.inputs,
+                                        "frozen_evidence": {"ref": "frozen-proof"}})
+    retrieved = {}
+
+    lean = rt._compact_invocation_context(original, retrieved)
+    before = original.world_update_block()
+    after = lean.world_update_block()
+
+    assert len(lean.prompt_text()) < len(original.prompt_text())
+    assert after["charter"]["edition"] == before["charter"]["edition"]
+    assert after["charter"]["cards"] == before["charter"]["cards"]
+    assert after["charter"]["pending_changes"] == before["charter"]["pending_changes"]
+    assert after["observation_window"] == before["observation_window"]
+    assert after["public_observations"]["last_closed_window_values"] == (
+        before["public_observations"]["last_closed_window_values"]
+    )
+    assert after["public_observations"]["pathologies"] == (
+        before["public_observations"]["pathologies"]
+    )
+    assert after["public_observations"]["shared_directory"] == (
+        before["public_observations"]["shared_directory"]
+    )
+    assert after["public_observations"]["recent_mids"] == {
+        "BTC": [before["public_observations"]["recent_mids"]["BTC"][-1]]
+    }
+    assert lean.inputs["frozen_evidence"] == {"ref": "frozen-proof"}
+
+    charter_ref = after["charter"]["text"]
+    history_ref = after["public_observations"]["full_history"]
+    assert json.loads(retrieved[charter_ref["sha"]]) == {
+        "section": "world_update.charter.text", "value": before["charter"]["text"]
+    }
+    assert json.loads(retrieved[history_ref["sha"]]) == {
+        "section": "world_update.public_observations",
+        "value": before["public_observations"],
+    }
+    assert charter_ref["read_with"] == {
+        "tool": "artifact.get", "args": {"sha": charter_ref["sha"]}
+    }
+    assert history_ref["read_with"] == {
+        "tool": "artifact.get", "args": {"sha": history_ref["sha"]}
+    }
+    assert "retrieved_earlier" not in charter_ref and "retrieved_earlier" not in history_ref
+
+
+def test_compaction_preserves_an_unknown_mid_history_value():
+    rt = runtime()
+    original = request(rt)
+    inputs = json.loads(json.dumps(original.inputs))
+    inputs["world"]["world_update"]["public_observations"]["recent_mids"] = {
+        "BTC": {"status": "unavailable", "reason": "malformed upstream history"},
+        "ETH": [{"t_s": 1, "mid": "1"}, {"t_s": 2, "mid": "2"}],
+    }
+    original = replace(original, inputs=inputs)
+
+    lean = rt._compact_invocation_context(original, {})
+
+    assert lean.world_update_block()["public_observations"]["recent_mids"] == {
+        "BTC": {"status": "unavailable", "reason": "malformed upstream history"},
+        "ETH": [{"t_s": 2, "mid": "2"}],
+    }
+
+
+def test_program_request_is_not_replaced_with_transient_references(monkeypatch):
+    from tests.cortex.test_programs import program
+
+    rt = runtime()
+    req = request(rt)
+    asm, _, _ = program()
+    rt.assemblies["seed-decider"] = asm
+    monkeypatch.setattr(rt, "_compact_invocation_context",
+                        lambda *_: pytest.fail("program context was compacted"))
+    monkeypatch.setattr(rt, "_invoke_compute",
+                        lambda *_, **__: Return(req.handle, {"action": "hold"}, 0, "ok"))
+
+    ret = rt._invoke("seed-decider", req, "producer")
+
+    assert ret.status == "ok"
+
+
+def test_routing_growth_uses_the_same_compact_world_before_and_after_invocation(monkeypatch):
+    rt = runtime()
+    now_s = rt.clock.now_ns // 1_000_000_000
+    rt.recent_mids["BTC"] = [
+        {"t_s": now_s - (180 - index), "mid": f"{80_000 + index}.500"}
+        for index in range(180)
+    ]
+    req = request(rt)
+    raw_world_chars = len(json.dumps(req.inputs["world"], sort_keys=True, indent=2))
+    lean = rt._compact_invocation_context(req, {})
+    compact_world_chars = rt._world_chars(req.inputs["world"])
+    assert compact_world_chars == rt._world_chars(lean.inputs["world"])
+    assert compact_world_chars < raw_world_chars
+    prompts = []
+    scripted(rt, monkeypatch, [
+        {"action": "hold", "rationale": "No action from unchanged history."},
+    ], prompts)
+
+    ret = rt._invoke("seed-decider", req, "producer")
+
+    assert ret.status == "ok" and len(prompts) == 1
+    record = rt.seat_ceilings["seed-decider"]
+    assert record["world_chars"] == compact_world_chars
+    # Hold the world at the same projected representation. Removed history
+    # is not growth, so routing needs exactly the last model ceiling.
+    rt._world_chars_cache = (rt.n, compact_world_chars)
+    assert rt._seat_need("seed-decider") == record["ceiling"]
+
+    # More prior rows change the referenced bytes and hash, whose rendered widths
+    # are stable; they do not become inline growth on the next routed call.
+    base_current_chars = rt._world_chars(rt._world_block())
+    current = rt._world_block()
+    current["world_update"]["public_observations"]["recent_mids"]["BTC"] = [
+        *rt.recent_mids["BTC"][:-1], *rt.recent_mids["BTC"][:-1], rt.recent_mids["BTC"][-1]
+    ]
+    future_chars = rt._world_chars(current)
+    projected_growth = future_chars - base_current_chars
+    assert 0 <= projected_growth <= 2  # only the reference byte-count width may grow
+    record["world_chars"] = base_current_chars
+    rt._world_chars_cache = (rt.n, future_chars)
+    model = rt.assemblies["seed-decider"]
+    price = rt.prices.price(model.spec.model_id)
+    expected = (record["ceiling"]
+                + price.cost(int(projected_growth * model.model.input_slack), 0)
+                - price.cost(0, 0))
+    assert rt._seat_need("seed-decider") == expected
+
+
+def test_first_call_can_read_transient_world_history_through_its_own_handle(monkeypatch):
+    rt = runtime()
+    now_s = rt.clock.now_ns // 1_000_000_000
+    rt.recent_mids["BTC"] = [
+        {"t_s": now_s - (24 - index), "mid": f"{70_000 + index}.250"}
+        for index in range(24)
+    ]
+    req = request(rt)
+    preview_retrieved = {}
+    preview = rt._compact_invocation_context(req, preview_retrieved)
+    update = preview.world_update_block()
+    refs = [update["charter"]["text"],
+            update["public_observations"]["full_history"]]
+    calls = [ref["read_with"] for ref in refs]
+    before_artifacts = len(rt.artifacts.index)
+    prompts = []
+    scripted(rt, monkeypatch, [
+        {"tool_calls": calls},
+        {"action": "hold", "rationale": "The exact history was read."},
+    ], prompts)
+
+    ret = rt._invoke("seed-decider", req, "producer")
+
+    assert ret.status == "ok" and len(prompts) == 2
+    assert "artifact.get" in prompts[0] and '"sha"' in prompts[0]
+    oldest = json.dumps(rt.recent_mids["BTC"][0], sort_keys=True)
+    latest = json.dumps(rt.recent_mids["BTC"][-1], sort_keys=True)
+    assert packed(oldest) not in packed(prompts[0])
+    assert packed(latest) in packed(prompts[0])
+    assert update["charter"]["text"]["sha"] in prompts[0]
+    input_at = prompts[1].index("INPUTS\n") + len("INPUTS\n")
+    continued, _ = json.JSONDecoder().raw_decode(prompts[1][input_at:])
+    bodies = [json.loads(row["result"]["text"]) for row in continued["tool_results"]]
+    assert bodies == [
+        {"section": "world_update.charter.text",
+         "value": req.world_update_block()["charter"]["text"]},
+        {"section": "world_update.public_observations",
+         "value": req.world_update_block()["public_observations"]},
+    ]
+    assert len(rt.artifacts.index) == before_artifacts
+    reads = [row for row in rows(rt, "artifact.get") if row.get("scope") == "invocation"]
+    assert [row["sha"] for row in reads] == [ref["sha"] for ref in refs]
+
+
 def test_unpriced_retrieval_finishes_instead_of_buying_another_round(monkeypatch):
     rt = runtime()
     req = request(rt)
@@ -126,7 +306,7 @@ def test_program_cannot_run_tools_with_its_last_answer_budget(monkeypatch):
     req = request(rt)
     asm, _, _ = program()
     rt.assemblies["seed-decider"] = asm
-    monkeypatch.setattr(rt, "_invoke_compute", lambda *_: Return(
+    monkeypatch.setattr(rt, "_invoke_compute", lambda *_, **__: Return(
         req.handle, {}, asm.price, "ok", tool_calls=(
             {"tool": "outcome.list", "args": {}},)))
     ret = rt._invoke("seed-decider", replace(req, cost_ceiling=2 * asm.price - 1), "producer")

@@ -109,6 +109,29 @@ def _compacted_result(entry: dict[str, Any], retrieved: dict[str, bytes]) -> dic
             "read_with": {"tool": "artifact.get", "args": {"sha": sha}}}
 
 
+def _transient_snapshot(section: str, value: Any,
+                        retrieved: dict[str, bytes]) -> dict[str, Any]:
+    """Address an exact public context value for this decision and no longer.
+
+    The wrapper keeps the section name beside the value, so an ``artifact.get``
+    result is self-describing and remains a mapping like every other transient
+    retrieval body. Canonical bytes make the reference content-addressed; no
+    summary, durable artifact, or second representation of the value is made.
+    """
+    from factorylab.kernel.ledger import canonical
+
+    data = canonical({"section": section, "value": value})
+    sha = hashlib.sha256(data).hexdigest()
+    retrieved[sha] = data
+    return {
+        "not_carried": section,
+        "bytes": len(data),
+        "sha": sha,
+        "expires": "end of this decision",
+        "read_with": {"tool": "artifact.get", "args": {"sha": sha}},
+    }
+
+
 def _publishable(policy: dict[str, float]) -> dict[str, float]:
     """Return a readable copy of a distribution that is still a distribution.
 
@@ -358,12 +381,17 @@ class ComputeMixin:
         # the two, never their sum: adding them let one call spend the pool twice.
         return max(self._protected_share(self.queue.get(handle).propensity.chosen), bridged)
 
-    @staticmethod
-    def _world_chars(world: Any) -> int:
+    def _world_chars(self, world: Any) -> int:
         """The rendered size of a request's world block, the part of every prompt that
-        grows with the factory (registrations, notes, artifacts, charter)."""
+        grows with the factory (registrations, notes, artifacts, charter).
+
+        Compact worlds are measured through the same pure projection an invocation
+        receives. Routing therefore prices growth in inline context, not history
+        that the next call will replace with a fixed-size transient reference.
+        """
         if not isinstance(world, dict):
             return 0
+        world = self._compact_world_context(world, {})
         return len(json.dumps(world, sort_keys=True, indent=2, default=str))
 
     def _liable_seat(self, handle: str) -> str | None:
@@ -1380,7 +1408,8 @@ class ComputeMixin:
         request is dearer than the seat's cover, the pool bridges the gap for this
         one call, ledgered, so a stale estimate never surfaces as a failed return.
         The seat's real ceiling and the world size it was priced at are recorded
-        for the next routing decision.
+        for the next routing decision. Compact-mode world sizing uses the same
+        projection for this record and for future growth checks.
         """
         asm = self.assemblies[action_id]
         model_id = asm.spec.model_id
@@ -1414,6 +1443,61 @@ class ComputeMixin:
         self.stats.invocations_by_assembly[action_id] = count
         return ret
 
+    def _compact_world_context(self, world: dict[str, Any],
+                               retrieved: dict[str, bytes]) -> dict[str, Any]:
+        """Project one world exactly as a compact model invocation receives it."""
+        if getattr(getattr(self.m, "prompt", None), "mode", "reference") != "compact":
+            return world
+        update = world.get("world_update")
+        if not isinstance(update, dict):
+            return world
+
+        compact = dict(update)
+        charter = update.get("charter")
+        if isinstance(charter, dict) and isinstance(charter.get("text"), str):
+            charter = dict(charter)
+            charter["text"] = _transient_snapshot(
+                "world_update.charter.text", charter["text"], retrieved)
+            compact["charter"] = charter
+
+        observations = update.get("public_observations")
+        mids = observations.get("recent_mids") if isinstance(observations, dict) else None
+        has_history = isinstance(mids, dict) and any(
+            isinstance(rows, (list, tuple)) and len(rows) > 1 for rows in mids.values()
+        )
+        if has_history:
+            observations = dict(observations)
+            observations["recent_mids"] = {
+                coin: ([rows[-1]] if rows else [])
+                if isinstance(rows, (list, tuple)) else rows
+                for coin, rows in mids.items()
+            }
+            observations["full_history"] = _transient_snapshot(
+                "world_update.public_observations", update["public_observations"], retrieved)
+            compact["public_observations"] = observations
+        return {**world, "world_update": compact}
+
+    def _compact_invocation_context(self, req: Request,
+                                    retrieved: dict[str, bytes]) -> Request:
+        """Keep current operating facts inline and address exact public history.
+
+        Only compact-mode requests with a runtime world are changed. The live
+        charter edition, cards and pending changes stay inline while its full
+        text is addressable as canonical bytes. Public observation history moves
+        only when there is prior midpoint history to remove; the latest exact row
+        for every market, freshness, closed-window values, pathologies and shared
+        directory remain inline. The returned request owns the same immutable
+        inputs for its first call and every continuation, while ``retrieved``
+        survives for the whole invocation and nowhere else.
+        """
+        world = req.inputs.get("world")
+        if not isinstance(world, dict):
+            return req
+        compact = self._compact_world_context(world, retrieved)
+        if compact is world:
+            return req
+        return replace(req, inputs={**req.inputs, "world": compact})
+
     def _invoke(self, action_id: str, req: Request, role: str, *, child: bool = False) -> Return:
         from factorylab.runtime.propensity import effect_label
 
@@ -1421,6 +1505,12 @@ class ComputeMixin:
         body_mark = len(self.ledger.connector_bodies)
         self.handle_to_assembly[req.handle] = action_id
         assembly = self.assemblies[action_id]
+        retrieved: dict[str, bytes] = {}  # same-handle only; never checkpointed or published
+        # Programs receive the request directly on jailed stdin and cannot use a
+        # model continuation's transient ``artifact.get`` map. Keep their inputs
+        # whole; only model assemblies receive same-handle snapshot references.
+        if isinstance(assembly, Assembly):
+            req = self._compact_invocation_context(req, retrieved)
         prompt_cache = (_safe_prompt_cache_identity(assembly, req)
                         if isinstance(assembly, Assembly) else None)
         # Every request tells its executor who it is: an id is a public schematic,
@@ -1457,7 +1547,6 @@ class ComputeMixin:
         total_cost = ret.cost
         seen_results: list[dict] = []
         previous_results: list[dict] = []
-        retrieved: dict[str, bytes] = {}  # invocation-local, never checkpointed or published
         tool_round = 0
         # One decision reads, discovers and then acts inside its own wake. What
         # bounds it is not a round count but its own money: a further round is
