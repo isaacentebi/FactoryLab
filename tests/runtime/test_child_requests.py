@@ -24,7 +24,9 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
     rt = make_runtime()
     spec = rt.assemblies['seed-decider'].spec
     rt._instantiate(replace(spec, id='helper'))
-    req = parent_request(rt)
+    # Each descendant must leave its caller enough for a final answer at the
+    # quoted maximum, even though this fixture's actual completions are tiny.
+    req = parent_request(rt, ceiling=3_000_000)
     calls = []
     private_child_text = 'This message is only for the delegated recipient.'
 

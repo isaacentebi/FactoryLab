@@ -633,6 +633,7 @@ _UNORDERED_STATE = {
     "SubscriptionBook.folds": "per-seat folds, read by seat and reduced with min()",
     "SubscriptionBook.last_wake": "per-seat last wake tick, read by seat",
     "OutcomeInbox.delivered_through": "per-seat delivery cursor, read by seat",
+    "OutcomeInbox.delivered_sparse": "out-of-order delivered ids, read by seat",
 }
 _KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
 _COMPONENT_FIELDS = (

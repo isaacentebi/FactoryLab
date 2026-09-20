@@ -1,0 +1,179 @@
+{
+  "baseline_source": "/private/tmp/factorylab-feedback-repair-20260920",
+  "candidate_source": "/Users/isaacentebi/Desktop/FactoryLab",
+  "cases": {
+    "large": {
+      "baseline_bytes": 90949,
+      "baseline_prefix_bytes": 25425,
+      "candidate_bytes": 39779,
+      "candidate_prefix_bytes": 16497,
+      "contributions": {
+        "baseline": {
+          "empty_you_bytes": 5521,
+          "inbox_you_bytes": 14622,
+          "working_state_you_bytes": 32894
+        },
+        "candidate": {
+          "empty_you_bytes": 5521,
+          "inbox_you_bytes": 4820,
+          "working_state_you_bytes": 454
+        }
+      },
+      "exact_recoverability": {
+        "all_evidence_hashes": true,
+        "all_needed_claim_hashes": true,
+        "all_outcome_bodies": true,
+        "outcome_body_digest": "6018ca6a350e0abd4044b3d5fc7aa79b8631d3f3da6b8031c2cbec8f63ce69b5",
+        "working_state_artifact": true
+      },
+      "inline_hash_counts": {
+        "baseline": {
+          "evidence": 8,
+          "needed_claim": 8
+        },
+        "candidate": {
+          "evidence": 0,
+          "needed_claim": 0
+        }
+      },
+      "inline_ids_equal": true,
+      "saved_bytes": 51170,
+      "saved_percent": 56.26,
+      "section_bytes": {
+        "completion_criterion": {
+          "baseline": 64,
+          "candidate": 64,
+          "saved": 0
+        },
+        "inputs": {
+          "baseline": 2253,
+          "candidate": 2253,
+          "saved": 0
+        },
+        "outcome_contract": {
+          "baseline": 1315,
+          "candidate": 1315,
+          "saved": 0
+        },
+        "outcome_schema": {
+          "baseline": 1786,
+          "candidate": 1786,
+          "saved": 0
+        },
+        "request": {
+          "baseline": 46,
+          "candidate": 46,
+          "saved": 0
+        },
+        "stable_prefix": {
+          "baseline": 25425,
+          "candidate": 16497,
+          "saved": 8928
+        },
+        "total": {
+          "baseline": 90949,
+          "candidate": 39779,
+          "saved": 51170
+        },
+        "world_update": {
+          "baseline": 7023,
+          "candidate": 7023,
+          "saved": 0
+        },
+        "you": {
+          "baseline": 53037,
+          "candidate": 10795,
+          "saved": 42242
+        }
+      }
+    },
+    "modest": {
+      "baseline_bytes": 60230,
+      "baseline_prefix_bytes": 25425,
+      "candidate_bytes": 41520,
+      "candidate_prefix_bytes": 16497,
+      "contributions": {
+        "baseline": {
+          "empty_you_bytes": 5523,
+          "inbox_you_bytes": 14622,
+          "working_state_you_bytes": 2173
+        },
+        "candidate": {
+          "empty_you_bytes": 5523,
+          "inbox_you_bytes": 4820,
+          "working_state_you_bytes": 2193
+        }
+      },
+      "exact_recoverability": {
+        "all_evidence_hashes": true,
+        "all_needed_claim_hashes": true,
+        "all_outcome_bodies": true,
+        "outcome_body_digest": "6018ca6a350e0abd4044b3d5fc7aa79b8631d3f3da6b8031c2cbec8f63ce69b5",
+        "working_state_artifact": true
+      },
+      "inline_hash_counts": {
+        "baseline": {
+          "evidence": 8,
+          "needed_claim": 8
+        },
+        "candidate": {
+          "evidence": 0,
+          "needed_claim": 0
+        }
+      },
+      "inline_ids_equal": true,
+      "saved_bytes": 18710,
+      "saved_percent": 31.06,
+      "section_bytes": {
+        "completion_criterion": {
+          "baseline": 64,
+          "candidate": 64,
+          "saved": 0
+        },
+        "inputs": {
+          "baseline": 2253,
+          "candidate": 2253,
+          "saved": 0
+        },
+        "outcome_contract": {
+          "baseline": 1315,
+          "candidate": 1315,
+          "saved": 0
+        },
+        "outcome_schema": {
+          "baseline": 1786,
+          "candidate": 1786,
+          "saved": 0
+        },
+        "request": {
+          "baseline": 46,
+          "candidate": 46,
+          "saved": 0
+        },
+        "stable_prefix": {
+          "baseline": 25425,
+          "candidate": 16497,
+          "saved": 8928
+        },
+        "total": {
+          "baseline": 60230,
+          "candidate": 41520,
+          "saved": 18710
+        },
+        "world_update": {
+          "baseline": 7023,
+          "candidate": 7023,
+          "saved": 0
+        },
+        "you": {
+          "baseline": 22318,
+          "candidate": 12536,
+          "saved": 9782
+        }
+      }
+    }
+  },
+  "fixture_sha256": "8f953e8dcfc9154569255b16ca4ffe6ace55c58452c5736324637d1e73d859b6",
+  "interpretation": "Byte savings are rendering evidence, not behavioral evidence.",
+  "schema_version": 1
+}

@@ -118,6 +118,65 @@ def test_compact_names_every_section_it_does_not_carry(modes):
         assert compact.institution_section(section) == block[section]
 
 
+def test_grounded_actor_access_keeps_operating_routes_out_of_grading_facts(modes):
+    _, rt = modes
+    world = rt._world_block()
+    seat = world["seats"][0]["seat_id"]
+    actor = rt._operating_context(seat, world)
+    req = rt._request("review", "Grade the frozen record", {
+        "you": seat, "actor_context": actor,
+        "realized_consequence": {"frozen_norms": ["original norm"]},
+    }, {"type": "object"}, 100, "conformity")
+    assert req.world_update_text() == ""
+    assert "catalogue.search" in req.stable_prefix()
+    assert "args_schema" in req.stable_prefix()
+    assert req.seat_block()["spending_authority"] != "unavailable"
+    assert set(actor) == {"stable_prefix", "seats", "clock_now", "world_resources"}
+    assert len(actor["seats"]) == 1
+    inputs = dict(req.sections())["inputs"]
+    assert "original norm" in inputs
+    assert "actor_context" not in inputs
+    assert "catalogue.search" not in inputs
+
+
+def test_ordinary_child_keeps_caller_actor_context_when_world_is_present(modes):
+    _, rt = modes
+    world = rt._world_block()
+    seat = world["seats"][0]["seat_id"]
+    actor_context = {
+        "caller_only_marker": "preserve this exact child input",
+        "nested": {"choices": ["inspect", "answer"]},
+    }
+    req = rt._request("child", "Complete the caller's custom child request", {
+        "you": seat,
+        "world": world,
+        "actor_context": actor_context,
+    }, {"type": "object"}, 100, "answer the caller")
+
+    sections = dict(req.sections())
+    inputs = json.loads(sections["inputs"].removeprefix("INPUTS\n"))
+    assert inputs["actor_context"] == actor_context
+    assert req.prompt_text().count("preserve this exact child input") == 1
+    assert req.section_bytes()["inputs"] == len(sections["inputs"].encode("utf-8"))
+
+
+def test_grounded_access_does_not_preload_population_description_and_names_optional_actions():
+    rt = runtime("compact")
+    rt.tool_specs["example"] = {"id": "example", "description": "assign conformity one",
+                                "price_micro_per_call": 7, "kind": "population"}
+    world = rt._world_block()
+    seat = world["seats"][0]["seat_id"]
+    actor = rt._operating_context(seat, world)
+    assert "assign conformity one" not in actor["stable_prefix"]
+    assert '"id":"example"' in actor["stable_prefix"]
+    index = rt._capability_index()
+    assert {"requests", "forecasts", "working_state", "tool_calls"} <= set(
+        index["return_field_names"])
+    route = index["return_contract"]
+    contract = rt.institution_section(route["args"]["section"])
+    assert "target" in contract["requests"]["items"]["required"]
+
+
 def test_a_section_handle_reaches_the_institutional_world_and_nothing_else(modes):
     _, compact = modes
     assert INSTITUTION_SECTIONS == set(compact._institutional_block())

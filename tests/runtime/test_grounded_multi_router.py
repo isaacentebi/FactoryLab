@@ -174,6 +174,8 @@ def test_custom_child_freezes_its_selected_kind_for_final_commission():
     rt = _runtime(provider=_CustomProducer())
     _register_custom_producer(rt)
     parent = _consequence_decision(rt, "seed-decider", CH_VERDICT)
+    # Normal invocation binds the paying parent before it can request children.
+    rt.handle_to_assembly[parent] = "seed-decider"
     request = rt._request(
         parent, "parent", {}, {"type": "object"}, 10**18, CH_VERDICT,
     )
@@ -247,6 +249,7 @@ def test_final_commission_uses_one_additive_router_but_recursive_verdict_uses_al
 
 def test_recursive_grounded_prompt_reviews_the_immediate_meta(monkeypatch):
     rt = _runtime()
+    rt.outcomes.append("meta-b", handle="unseen", outcome={"kind": "message"})
     immediate = _consequence_decision(rt, "meta-a", CH_CONFORMITY)
     rt.handle_to_assembly[immediate] = "meta-a"
     event = Event(
@@ -289,6 +292,12 @@ def test_recursive_grounded_prompt_reviews_the_immediate_meta(monkeypatch):
     req = captured[-1]
     assert req.inputs["meta_verdict"]["by"] == immediate
     assert req.inputs["realized_consequence"]["finding"]["score"] == 0.9
+    assert "world" not in req.inputs and "charter" not in req.inputs
+    assert req.inputs["actor_context"]["seats"][0]["seat_id"] == "meta-b"
+    assert "catalogue.search" in req.stable_prefix()
+    assert "your_state" not in req.inputs and "unread_outcomes" not in req.inputs
+    rt.outcomes.ack_through("meta-b", "outcome:1")
+    assert rt.outcomes.cursors.get("meta-b", 0) == 0
     assert "Assess the immediate meta verdict in meta_verdict" in req.description
     assert "original finding as a new first-tier review" in req.description
     assert "Assess the final grounded judgement" not in req.description

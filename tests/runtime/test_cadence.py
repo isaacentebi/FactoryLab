@@ -2,6 +2,7 @@ import pytest
 
 from factorylab.kernel.ledger import Ledger
 from factorylab.runtime.cadence import GovernanceCadence
+from tests.conftest import make_runtime
 
 
 def cadence(*, sample=200, ratio=3, backstop=200, min_support=30):
@@ -25,6 +26,20 @@ def test_no_data_uses_backstop_cap_and_launch_anchor():
     gate.advance(600)
     assert gate.ready(now_ns=7_000, tick_interval_ns=10, window=1)
     assert gate.slowest_period_ns(2) == 400  # the current interval owns the cap
+
+
+def test_charter_view_does_not_present_eligibility_as_a_pending_change():
+    rt = make_runtime()
+    charter = rt._charter_view()
+    assert charter["pending_changes"] == {"waiting": []}
+    eligibility = charter["amendment_eligibility"]
+    assert eligibility["eligible_no_earlier_than"]
+    assert "not a scheduled charter change" in eligibility["meaning"]
+
+    rt.cadence.approve("amendment-one")
+    charter = rt._charter_view()
+    assert charter["pending_changes"]["waiting"] == ["amendment-one"]
+    assert charter["pending_changes"]["eligibility"] == charter["amendment_eligibility"]
 
 
 def test_nearest_rank_p90_and_bounded_history_fall_with_faster_settlements():

@@ -14,14 +14,24 @@ restore, because the head is a hash and the bytes are an artifact the resume
 already verifies. The soft allowance is 8 KiB — above it the state is kept and
 the rent is simply what it is — and the hard limit is 64 KiB, above which the
 field is refused, ledgered, and the head is left exactly as it was.
+A third bound is about display, not storage: a head over ``INLINE_STATE_BYTES``
+is named on the request — sha, exact size, ``loaded: False``, and the tool that
+returns it — instead of pasted into it. The bytes are unchanged, the rent is
+unchanged, nothing is summarised, and ``artifact.get`` still hands the seat its
+own state exactly as it wrote it.
 
 **Outcome inbox.** When a consequence settles for a decision a seat made, an
 item addressed to that seat is appended: the original handle, what the seat
 said then, the outcome, when it was observed, the financial delta, and an
 evidence pointer into the diary. The body is an artifact; the inbox holds the
-index. The oldest unread items ride on the next request under
-``unread_outcomes``, with ``more`` counting the ones the window did not carry;
-``outcome.get`` fetches any of them by ``outcome_id`` (a handle is a fallback
+index. What rides on the next request under ``unread_outcomes`` is that index and
+not those bodies: the oldest unread items as compact entries — the id, the
+handle, when it was observed, the typed outcome, the money, the evidence pointer,
+the sha and size, and the tool that returns the rest — with ``more`` counting the
+ones the window did not carry. ``outcome.list`` pages the ids past the window
+without delivering or acknowledging any of them, so a seat can find out that its
+fortieth outcome exists without acknowledging thirty-nine it has never read.
+``outcome.get`` fetches any of them whole by ``outcome_id`` (a handle is a fallback
 that answers with the oldest unread item of that decision, and says so); an
 answer's ``ack_through`` takes an id and advances the cursor only as far as this
 seat was actually delivered. An unacknowledged item stays. Nothing is lost.
@@ -52,12 +62,31 @@ SOFT_STATE_BYTES = 8_192
 HARD_STATE_BYTES = 65_536
 #: Inbox items delivered inline on a request; the rest are counted and fetchable.
 INLINE_OUTCOMES = 8
+#: Above this a head is *shown* by reference instead of inline. Storage, the soft
+#: allowance, the hard limit and the rent are untouched: this bounds what a request
+#: carries, never what the world keeps.
+INLINE_STATE_BYTES = 4_096
+#: The largest page one list call will return, so a paged index cannot become a dump.
+MAX_LIST_LIMIT = 32
+#: Typed fields an index carries verbatim off an outcome, where the outcome has them.
+INDEX_FIELDS = ("kind", "status", "phase", "from", "subject", "score")
+#: An evidence pointer longer than this is named by its size instead of carried.
+MAX_INDEX_EVIDENCE = 128
+#: The longest a typed index field may be before it is named by its size instead.
+#: A field is a label, not a payload: past this it is a body under another name.
+MAX_INDEX_FIELD = 256
 #: What the inbox remembers a seat said, bounded so an unbounded history cannot pin memory.
 MAX_SAID = 1_024
 
 STATE_TOO_LARGE = f"working_state exceeds {HARD_STATE_BYTES} bytes"
 STATE_NOT_OBJECT = "working_state must be a JSON object"
 OUTCOME_UNKNOWN = "no outcome addressed to you carries that handle"
+STATE_NOT_LOADED = (
+    f"this head is over the {INLINE_STATE_BYTES}-byte display bound, so it is named here "
+    "and not carried; artifact.get on its sha returns the bytes exactly as written"
+)
+OUTCOME_BODIES = ("an index, never a body: outcome.get {outcome_id} returns one item whole, "
+                  "outcome.list {after, limit} pages the ids you have not read")
 
 
 def canonical(obj: Any) -> bytes:
@@ -69,6 +98,45 @@ def canonical(obj: Any) -> bytes:
                           ensure_ascii=False).encode("utf-8")
     except (TypeError, ValueError):
         raise ValueError(STATE_NOT_OBJECT) from None
+
+
+def _shape_of(value: Any) -> dict[str, Any]:
+    """Name a value that is too large to carry: what kind it is and exactly how big.
+
+    Guarantees: it reads the value and returns no part of it, so naming something
+    can never leak it; the size is the exact byte length the value serialises to,
+    or None when it does not serialise at all, which is itself a fact and not a
+    silence.
+    """
+    if isinstance(value, str):
+        return {"shape": "str", "bytes": len(value.encode("utf-8"))}
+    try:
+        size = len(json.dumps(value, sort_keys=True, allow_nan=False,
+                              ensure_ascii=False).encode("utf-8"))
+    except (TypeError, ValueError):
+        size = None
+    shape = {"shape": type(value).__name__, "bytes": size}
+    if isinstance(value, (dict, list, tuple)):
+        shape["items"] = len(value)
+    return shape
+
+
+def _bounded_field(field: str, value: Any) -> dict[str, Any]:
+    """One typed index field verbatim, or its name, shape and size when it is a body.
+
+    Guarantees: what it returns under ``field`` is the value itself, unrounded and
+    unshortened, or nothing at all under that name. A number, a boolean and None
+    are facts small enough to be labels and ride as they are; a string rides when it
+    is within ``MAX_INDEX_FIELD`` bytes. Anything else — a longer string, a nested
+    object, a list — is named as ``<field>_not_loaded`` and stays in the body, so
+    the size of an index entry is bounded by the schema and not by what a settler,
+    a seat or an outside seller decided to put in a field.
+    """
+    if value is None or isinstance(value, (bool, int, float)):
+        return {field: value}
+    if isinstance(value, str) and len(value.encode("utf-8")) <= MAX_INDEX_FIELD:
+        return {field: value}
+    return {f"{field}_not_loaded": _shape_of(value)}
 
 
 class WorkingState:
@@ -118,19 +186,32 @@ class WorkingState:
         return successor
 
     def render(self, seat: str) -> dict[str, Any] | None:
-        """The head as the seat is shown it: ``{sha, bytes, state}``, verbatim.
+        """The head as the seat is shown it: ``{sha, bytes, loaded, state}``, verbatim.
 
         None means this seat has no head. A head whose bytes cannot be read raises:
-        an unreadable state is an unavailable fact, never the absence of one.
+        an unreadable state is an unavailable fact, never the absence of one — and
+        that check runs whatever the size, so a large head is never silently absent.
+
+        Small state rides inline exactly as the seat wrote it. Over
+        ``INLINE_STATE_BYTES`` the request carries the reference instead: the sha,
+        the true byte size, ``loaded: False``, why, and the tool that returns the
+        bytes. Nothing is summarised, shortened or paraphrased — a model's precis of
+        a seat's own memory would be a lossy rewrite of a fact the seat owns — and
+        nothing about storage, the soft allowance, the hard limit or rent changes.
         """
         record = self.heads.get(seat)
         if record is None:
             return None
         try:
-            state = json.loads(self.artifacts.get(record["sha"]).decode("utf-8"))
+            data = self.artifacts.get(record["sha"])
+            state = json.loads(data.decode("utf-8"))
         except Exception as exc:
             raise RuntimeError("working state is present but unavailable") from exc
-        return {"sha": record["sha"], "bytes": record["bytes"], "state": state}
+        view = {"sha": record["sha"], "bytes": len(data), "loaded": True}
+        if len(data) > INLINE_STATE_BYTES:
+            return {**view, "loaded": False, "state_not_loaded": STATE_NOT_LOADED,
+                    "read_with": {"tool": "artifact.get", "args": {"sha": record["sha"]}}}
+        return {**view, "state": state}
 
 
 class OutcomeInbox:
@@ -152,10 +233,13 @@ class OutcomeInbox:
         self.cursors: dict[str, int] = {}          # seat -> highest acknowledged seq
         self.said: dict[str, dict[str, Any]] = {}  # handle -> what its seat said then
         self.seq = 0
-        # seat -> the highest seq this seat was actually shown, inline or by a
-        # fetch. ``ack_through`` can never advance past it (R3-F, §4: "acknowledging
-        # a handle can acknowledge unseen items").
+        # seat -> the highest seq through which every earlier item addressed to
+        # this seat was actually shown. Global seqs may interleave other seats, so
+        # continuity is over this seat's ordered records, not adjacent integers.
         self.delivered_through: dict[str, int] = {}
+        # Items fetched past a delivery gap. They become part of
+        # ``delivered_through`` only after every earlier item for this seat arrives.
+        self.delivered_sparse: dict[str, set[int]] = {}
         # handle -> the sha of a ``said`` record evicted under MAX_SAID. Nothing is
         # lost: the rationale is an artifact and is read back on demand.
         self.archived_said: dict[str, str] = {}
@@ -298,9 +382,23 @@ class OutcomeInbox:
             raise RuntimeError("addressed outcome is unavailable") from exc
 
     def _mark_delivered(self, seat: str, seq: int) -> None:
-        """Record that this seat was actually shown this item, so it can acknowledge it."""
-        if seq > self.delivered_through.get(seat, 0):
-            self.delivered_through[seat] = seq
+        """Record one shown item and advance only across this seat's delivered prefix."""
+        frontier = self.delivered_through.get(seat, 0)
+        if seq <= frontier:
+            return
+        pending = self.delivered_sparse.setdefault(seat, set())
+        pending.add(seq)
+        for record in self.items.get(seat, ()):
+            candidate = record["seq"]
+            if candidate <= frontier:
+                continue
+            if candidate not in pending:
+                break
+            pending.remove(candidate)
+            frontier = candidate
+        self.delivered_through[seat] = frontier
+        if not pending:
+            self.delivered_sparse.pop(seat, None)
 
     def _find(self, seat: str, ident: Any) -> dict[str, Any] | None:
         """One item by ``outcome:<n>``, or the oldest unread item for a handle (R3-F).
@@ -321,22 +419,117 @@ class OutcomeInbox:
         unread = [r for r in matching if r["seq"] > cursor]
         return (unread or matching or [None])[0]
 
+    def index_of(self, seat: str, record: dict[str, Any]) -> dict[str, Any]:
+        """One item as an address rather than a text: exact identity, timing, amounts.
+
+        Guarantees: every field here is copied verbatim off the stored body, none is
+        derived, rounded or written by a model, the body stays whole behind ``sha``,
+        and the entry is bounded whatever the body contains. It carries what a seat
+        needs in order to decide whether to spend a read: the id it must address, the
+        decision it answers, when it was observed, the typed outcome (kind, status,
+        phase, sender, subject, score) where the outcome has one, the money, the
+        evidence pointer, and the route to the rest.
+
+        A typed field is a label, so only a short scalar is carried: a number, a
+        boolean, None, or a string within ``MAX_INDEX_FIELD`` bytes. A long string or
+        any nested object or list is named instead, as ``<field>_not_loaded``
+        with its shape and exact size, and is read through the same ``read_with``
+        route as the rest of the body. Otherwise a nested ``status`` or a
+        thousand-character ``subject`` would put the body back on the request under a
+        field name, which is the thing this index exists to stop. Nothing is
+        truncated or paraphrased on the way: a field is either exact or absent and
+        said to be absent, and ``outcome.get`` still returns every one of them whole.
+        """
+        data = self.artifacts.get(record["sha"])
+        body = json.loads(data.decode("utf-8"))
+        body = body if isinstance(body, dict) else {}
+        outcome = body.get("outcome")
+        ident = f"outcome:{record['seq']}"
+        entry = {
+            "outcome_id": ident,
+            "handle": body.get("handle", record["handle"]),
+            "observed_at_ns": body.get("observed_at_ns", record.get("observed_at_ns")),
+            "delta_micro": body.get("delta_micro", 0),
+            "sha": record["sha"],
+            "bytes": len(data),
+            "read": record["seq"] <= self.cursors.get(seat, 0),
+            "read_with": {"tool": "outcome.get", "args": {"outcome_id": ident}},
+        }
+        if isinstance(outcome, dict):
+            for field in INDEX_FIELDS:
+                if field in outcome:
+                    entry.update(_bounded_field(field, outcome[field]))
+        elif outcome is not None:
+            # A scalar outcome has no typed fields to name; say what shape it is
+            # rather than invent one or hide that it is there.
+            entry["outcome_not_loaded"] = _shape_of(outcome)
+        evidence = body.get("evidence")
+        if isinstance(evidence, str) and len(evidence.encode("utf-8")) <= MAX_INDEX_EVIDENCE:
+            entry["evidence"] = evidence
+        elif isinstance(evidence, int) and not isinstance(evidence, bool):
+            entry["evidence"] = evidence
+        elif evidence is not None:
+            entry["evidence_not_loaded"] = _shape_of(evidence)
+        return entry
+
     def unread(self, seat: str) -> dict[str, Any]:
-        """Deliver oldest-first, with unambiguous item addresses, until acknowledged.
+        """Index the oldest unread items; their bodies stay in the archive until asked for.
 
         The inline window is the oldest ``INLINE_OUTCOMES`` unread items and
         ``more`` is how many unread items it did not carry, so a seat can tell the
         window from the queue (§4: "the inline window is a subset").
+
+        Each entry is the index above, so no body travels on a request. Delivery is
+        unchanged: being shown these ids is what lets ``ack_through`` reach them, and
+        nothing here acknowledges anything.
         """
         cursor = self.cursors.get(seat, 0)
         rows = [r for r in self.items.get(seat, ()) if r["seq"] > cursor]
         window = rows[:INLINE_OUTCOMES]
         for record in window:
             self._mark_delivered(seat, record["seq"])
-        return {"count": len(rows), "more": len(rows) - len(window), "items": [
-            {**self.body(r["sha"]), "outcome_id": f"outcome:{r['seq']}"} for r in window]}
+        return {"count": len(rows), "more": len(rows) - len(window),
+                "items": [self.index_of(seat, r) for r in window],
+                "bodies": OUTCOME_BODIES,
+                "next_after": window[-1]["seq"] if len(rows) > len(window) else None,
+                "read_with": {"tool": "outcome.get",
+                              "args": {"outcome_id": "<outcome_id from items>"}},
+                "paging": {"tool": "outcome.list",
+                           "args": {"after": window[-1]["seq"] if window else 0,
+                                    "limit": INLINE_OUTCOMES}}}
 
-    def get(self, seat: str, ident: Any) -> dict[str, Any]:
+    def list(self, seat: str, after: int = 0,
+             limit: int = INLINE_OUTCOMES) -> dict[str, Any]:
+        """Page this seat's unread ids after ``after``, delivering and acknowledging nothing.
+
+        Guarantees: a seat reads only its own queue; a page is the same index
+        ``unread`` shows, so no body travels; and nothing here marks an item
+        delivered, which is the point — a seat can discover that item 40 exists
+        without that discovery letting it acknowledge the 39 it was never shown. It
+        must still fetch what it wants to read, and ``ack_through`` still reaches
+        only what it was delivered. ``next_after`` is the cursor for the next page,
+        or None at the end of the queue.
+        """
+        try:
+            after = max(0, int(after))
+        except (TypeError, ValueError):
+            after = 0
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            limit = INLINE_OUTCOMES
+        limit = max(1, min(limit, MAX_LIST_LIMIT))
+        cursor = self.cursors.get(seat, 0)
+        unread = [r for r in self.items.get(seat, ()) if r["seq"] > cursor]
+        rows = [r for r in unread if r["seq"] > after]
+        page = rows[:limit]
+        more = len(rows) - len(page)
+        return {"count": len(page), "more": more, "after": after, "limit": limit,
+                "unread": len(unread), "bodies": OUTCOME_BODIES,
+                "next_after": page[-1]["seq"] if more else None,
+                "items": [self.index_of(seat, r) for r in page]}
+
+    def get(self, seat: str, ident: Any, *, delivered: bool = True) -> dict[str, Any]:
         """One item by ``outcome_id``, or by handle as a fallback — the ``outcome.get`` view."""
         record = self._find(seat, ident)
         if record is None:
@@ -344,7 +537,8 @@ class OutcomeInbox:
         body = self.body(record["sha"])
         if body is None:
             return {"error": OUTCOME_UNKNOWN}
-        self._mark_delivered(seat, record["seq"])
+        if delivered:
+            self._mark_delivered(seat, record["seq"])
         view = {**body, "sha": record["sha"], "outcome_id": f"outcome:{record['seq']}",
                 "related_outcomes": [f"outcome:{r['seq']}" for r in self.items.get(seat, ())
                                      if r["handle"] == record["handle"]],
@@ -378,12 +572,18 @@ class OutcomeInbox:
     def delivery_state(self) -> dict[str, Any]:
         """Plain data: how far each seat was delivered, and what ``said`` was archived."""
         return {"delivered_through": dict(sorted(self.delivered_through.items())),
+                "delivered_sparse": {seat: sorted(seqs)
+                                     for seat, seqs in sorted(self.delivered_sparse.items())},
                 "archived_said": dict(sorted(self.archived_said.items()))}
 
     def restore_delivery(self, state: dict[str, Any]) -> None:
         """Adopt a checkpoint's delivery bookkeeping; a world without one starts empty."""
         self.delivered_through = {k: int(v)
                                   for k, v in (state.get("delivered_through") or {}).items()}
+        self.delivered_sparse = {
+            seat: {int(seq) for seq in seqs}
+            for seat, seqs in (state.get("delivered_sparse") or {}).items()
+        }
         self.archived_said = dict(state.get("archived_said") or {})
 
 

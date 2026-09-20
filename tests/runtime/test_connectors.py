@@ -247,7 +247,8 @@ def test_request_ceiling_blocks_connector_before_dispatch(monkeypatch):
     req = rt._request(handle, "Produce", {}, {"type": "object"}, 10**15, "verdict")
     ret = rt._invoke("seed-decider", replace(req, cost_ceiling=1000), "producer")
     assert ret.cost == 1 and not transport.calls
-    assert ledger_items(rt, "connector.refused")[-1]["reason"] == "request cost ceiling exhausted"
+    assert ret.status == "failed"
+    assert ret.outputs["reason"] == "remaining budget cannot cover a tool-result answer"
 
 
 def test_short_body_cannot_rewrite_an_order_side_into_a_different_action(monkeypatch):

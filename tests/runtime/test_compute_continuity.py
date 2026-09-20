@@ -1,5 +1,7 @@
 """A funded Venice population survives loss of its OpenRouter endowment."""
 
+import hashlib
+import json
 from dataclasses import replace
 
 from factorylab.runtime.loop import Runtime
@@ -7,8 +9,53 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.market import MultiProvider
 from factorylab.world.openrouter import OpenRouterError
 from factorylab.world.scripted import ScriptedProvider, _inputs_from_prompt
+from tests.conftest import make_runtime
 
 ROSTER = "worlds/compute-continuity-roster.toml"
+
+
+def test_invocation_records_bounded_effective_prefix_hashes(monkeypatch):
+    rt = make_runtime()
+    captured = []
+    complete = rt.provider.target.complete
+
+    def capture(request):
+        captured.append(request)
+        return complete(request)
+
+    monkeypatch.setattr(rt.provider.target, "complete", capture)
+    requests = [
+        rt._request(
+            f"cache-witness-{index}", f"Respond to supplied tick {index}.",
+            {"kind": "Tick", "payload": {"index": index}, "world": rt._world_block()},
+            {}, 10**15, "policy",
+        )
+        for index in (1, 2)
+    ]
+    for req in requests:
+        rt._invoke("seed-decider", req, "producer")
+    invocations = [row for row in rt.ledger._recovery_items()
+                   if row["kind"] == "invocation"
+                   and str(row["handle"]).startswith("cache-witness-")]
+    assert len(invocations) == 2
+    stable = replace(
+        requests[0], inputs={**requests[0].inputs, "you": "seed-decider"}
+    ).stable_prefix()
+    leading = [
+        {"role": "system", "content": captured[0].system},
+        {"role": "user", "content": stable},
+    ]
+    encoded = json.dumps(leading, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False).encode("utf-8")
+    expected = {
+        "stable_prefix_sha256": hashlib.sha256(stable.encode()).hexdigest(),
+        "effective_leading_messages_sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+    assert all(invocation["prompt_cache"] == expected for invocation in invocations)
+    assert all(len(value) == 64 for value in expected.values())
+    assert "WORLD CONTRACT" not in json.dumps(
+        [invocation["prompt_cache"] for invocation in invocations]
+    )
 
 
 class CreditProvider:

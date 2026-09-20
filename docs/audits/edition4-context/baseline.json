@@ -1,0 +1,200 @@
+{
+  "cases": {
+    "large": {
+      "contributions": {
+        "empty_you_bytes": 5521,
+        "inbox_you_bytes": 14622,
+        "working_state_you_bytes": 32894
+      },
+      "discoverability": {
+        "evidence_hashes": [
+          "80c16c92cb865368e80027c6837ebabde08adb8612e0716348df2f47c15d098d",
+          "3524b5806d8bd9ad01ca66168768d7a9d913e5894645abb136c009795141d522",
+          "71d4bdd7a2d004e1cf065c2b82c8616b6f156baab78f761bada946b865415d17",
+          "b9aed2081ec14f8677ab634974ab4caabe8389983b07f24ae6e10e1ab17c7233",
+          "5570fb680ce46986fb4325868a1c65a959f3cb30904f63312d6cee1e6aa01147",
+          "c5322060a3cfae08acb4cadd4d21d5171eff0d8d799f816180c65479755a628e",
+          "c4756200d6ea937479313adf161c4075b8b5375c20918722ed0d66007ddc2844",
+          "cd5d3ae847f0596c17677dbfa512e23af2d2ff88568a96b5ee1fccf424513c76"
+        ],
+        "inline_outcome_ids": [
+          "outcome:1",
+          "outcome:2",
+          "outcome:3",
+          "outcome:4",
+          "outcome:5",
+          "outcome:6",
+          "outcome:7",
+          "outcome:8"
+        ],
+        "needed_claim_hashes": [
+          "60526e2fdb1951b5c230579159d523fb2a541adc33709d17d66fc1256748612b",
+          "02699c390ed03a264809f688cde2e2510111d68fa64ac25e6ff849b30dfb84c8",
+          "ca96dcb6644647b66075180d7c7f773074ccf2ee6b6fd2b29ebf136056b382df",
+          "d4c3404399ed3f661f5b608bddf903ffbd7116aac15db78fb57c0bf31d8a5d1c",
+          "983eee9ad5d945235408c6e85d9e67c439e7efd7361a6c9227170a32500a1176",
+          "21aedf19e3cebf2fd79d01f3163ad2780bf5cdd4a1eb801772ac568d5863c8c9",
+          "7001e15d4032878271c2e2539ac253e4770e46e5cfc0c8f423d0dda6bd4ca493",
+          "257ba8fe75e9f628a4db9174b63d3ba01fc12f2fc9f148739d4e7b291906b85a"
+        ],
+        "queue_count_visible": true,
+        "state_bytes_visible": true,
+        "state_sha_visible": true
+      },
+      "exact_recoverability": {
+        "all_evidence_hashes": true,
+        "all_needed_claim_hashes": true,
+        "all_outcome_bodies": true,
+        "outcome_body_digest": "6018ca6a350e0abd4044b3d5fc7aa79b8631d3f3da6b8031c2cbec8f63ce69b5",
+        "working_state_artifact": true
+      },
+      "prefix_bytes": 25425,
+      "prompt_bytes": 90949,
+      "prompt_sha256": "d96f25005be921c21bca289dba8f61df0c4723906796bae0dd048b3d5406c5b5",
+      "section_bytes": {
+        "completion_criterion": 64,
+        "inputs": 2253,
+        "outcome_contract": 1315,
+        "outcome_schema": 1786,
+        "request": 46,
+        "stable_prefix": 25425,
+        "total": 90949,
+        "world_update": 7023,
+        "you": 53037
+      }
+    },
+    "modest": {
+      "contributions": {
+        "empty_you_bytes": 5523,
+        "inbox_you_bytes": 14622,
+        "working_state_you_bytes": 2173
+      },
+      "discoverability": {
+        "evidence_hashes": [
+          "80c16c92cb865368e80027c6837ebabde08adb8612e0716348df2f47c15d098d",
+          "3524b5806d8bd9ad01ca66168768d7a9d913e5894645abb136c009795141d522",
+          "71d4bdd7a2d004e1cf065c2b82c8616b6f156baab78f761bada946b865415d17",
+          "b9aed2081ec14f8677ab634974ab4caabe8389983b07f24ae6e10e1ab17c7233",
+          "5570fb680ce46986fb4325868a1c65a959f3cb30904f63312d6cee1e6aa01147",
+          "c5322060a3cfae08acb4cadd4d21d5171eff0d8d799f816180c65479755a628e",
+          "c4756200d6ea937479313adf161c4075b8b5375c20918722ed0d66007ddc2844",
+          "cd5d3ae847f0596c17677dbfa512e23af2d2ff88568a96b5ee1fccf424513c76"
+        ],
+        "inline_outcome_ids": [
+          "outcome:1",
+          "outcome:2",
+          "outcome:3",
+          "outcome:4",
+          "outcome:5",
+          "outcome:6",
+          "outcome:7",
+          "outcome:8"
+        ],
+        "needed_claim_hashes": [
+          "60526e2fdb1951b5c230579159d523fb2a541adc33709d17d66fc1256748612b",
+          "02699c390ed03a264809f688cde2e2510111d68fa64ac25e6ff849b30dfb84c8",
+          "ca96dcb6644647b66075180d7c7f773074ccf2ee6b6fd2b29ebf136056b382df",
+          "d4c3404399ed3f661f5b608bddf903ffbd7116aac15db78fb57c0bf31d8a5d1c",
+          "983eee9ad5d945235408c6e85d9e67c439e7efd7361a6c9227170a32500a1176",
+          "21aedf19e3cebf2fd79d01f3163ad2780bf5cdd4a1eb801772ac568d5863c8c9",
+          "7001e15d4032878271c2e2539ac253e4770e46e5cfc0c8f423d0dda6bd4ca493",
+          "257ba8fe75e9f628a4db9174b63d3ba01fc12f2fc9f148739d4e7b291906b85a"
+        ],
+        "queue_count_visible": true,
+        "state_bytes_visible": true,
+        "state_sha_visible": true
+      },
+      "exact_recoverability": {
+        "all_evidence_hashes": true,
+        "all_needed_claim_hashes": true,
+        "all_outcome_bodies": true,
+        "outcome_body_digest": "6018ca6a350e0abd4044b3d5fc7aa79b8631d3f3da6b8031c2cbec8f63ce69b5",
+        "working_state_artifact": true
+      },
+      "prefix_bytes": 25425,
+      "prompt_bytes": 60230,
+      "prompt_sha256": "347c08128d8c8998b1855d6782742e00a6840e8bb23e5a64ed709ea0eae056ce",
+      "section_bytes": {
+        "completion_criterion": 64,
+        "inputs": 2253,
+        "outcome_contract": 1315,
+        "outcome_schema": 1786,
+        "request": 46,
+        "stable_prefix": 25425,
+        "total": 60230,
+        "world_update": 7023,
+        "you": 22318
+      }
+    }
+  },
+  "fixture": {
+    "events": 0,
+    "exchange": "FakeExchange",
+    "expected_inline": [
+      {
+        "body_sha256": "59af4eb6bd48e2345a5c6f95845f10cc49968e60841bb10c432206610b02f480",
+        "evidence_hash": "80c16c92cb865368e80027c6837ebabde08adb8612e0716348df2f47c15d098d",
+        "needed_claim_hash": "60526e2fdb1951b5c230579159d523fb2a541adc33709d17d66fc1256748612b",
+        "outcome_id": "outcome:1"
+      },
+      {
+        "body_sha256": "af78a82d91707f5fd6a8986d636207c420731a735ab1aaa9f6f61c828a953d0b",
+        "evidence_hash": "3524b5806d8bd9ad01ca66168768d7a9d913e5894645abb136c009795141d522",
+        "needed_claim_hash": "02699c390ed03a264809f688cde2e2510111d68fa64ac25e6ff849b30dfb84c8",
+        "outcome_id": "outcome:2"
+      },
+      {
+        "body_sha256": "8741ab370a4c2602beb0c98829ed83a11aa6b5c5569a09a8e67ec12b331f96b2",
+        "evidence_hash": "71d4bdd7a2d004e1cf065c2b82c8616b6f156baab78f761bada946b865415d17",
+        "needed_claim_hash": "ca96dcb6644647b66075180d7c7f773074ccf2ee6b6fd2b29ebf136056b382df",
+        "outcome_id": "outcome:3"
+      },
+      {
+        "body_sha256": "f052ad4dc5e4f047576d23db1bc04e9af1473086864b83ffe576b20b2c452a78",
+        "evidence_hash": "b9aed2081ec14f8677ab634974ab4caabe8389983b07f24ae6e10e1ab17c7233",
+        "needed_claim_hash": "d4c3404399ed3f661f5b608bddf903ffbd7116aac15db78fb57c0bf31d8a5d1c",
+        "outcome_id": "outcome:4"
+      },
+      {
+        "body_sha256": "422dd2be260a87c54b51392c837b31b417775f61f97e4fa5db3211bc61489bea",
+        "evidence_hash": "5570fb680ce46986fb4325868a1c65a959f3cb30904f63312d6cee1e6aa01147",
+        "needed_claim_hash": "983eee9ad5d945235408c6e85d9e67c439e7efd7361a6c9227170a32500a1176",
+        "outcome_id": "outcome:5"
+      },
+      {
+        "body_sha256": "b1695a002e79c93d4d0b5f53ec126f865473270d9d90decebf3fd1fb9040f3f0",
+        "evidence_hash": "c5322060a3cfae08acb4cadd4d21d5171eff0d8d799f816180c65479755a628e",
+        "needed_claim_hash": "21aedf19e3cebf2fd79d01f3163ad2780bf5cdd4a1eb801772ac568d5863c8c9",
+        "outcome_id": "outcome:6"
+      },
+      {
+        "body_sha256": "6101c32f75de61bb87949c41d1cb85e581fdfcc46e20b4f190aac44ea044e6b0",
+        "evidence_hash": "c4756200d6ea937479313adf161c4075b8b5375c20918722ed0d66007ddc2844",
+        "needed_claim_hash": "7001e15d4032878271c2e2539ac253e4770e46e5cfc0c8f423d0dda6bd4ca493",
+        "outcome_id": "outcome:7"
+      },
+      {
+        "body_sha256": "b8aecc4a025d5bc912129a455456b782e10d4a904884e924f393c6d901a4f0be",
+        "evidence_hash": "cd5d3ae847f0596c17677dbfa512e23af2d2ff88568a96b5ee1fccf424513c76",
+        "needed_claim_hash": "257ba8fe75e9f628a4db9174b63d3ba01fc12f2fc9f148739d4e7b291906b85a",
+        "outcome_id": "outcome:8"
+      }
+    ],
+    "inline_count": 8,
+    "manifest": "worlds/edition3-rehearsal-5.toml",
+    "offline_manifest_hash": "575b8254b12b4c80c6dae657923196b632cf16cbd0ecda3da1cf69892a61ac9d",
+    "outcome_count": 30,
+    "prompt_mode": "compact",
+    "provider": "ScriptedProvider",
+    "schema_sha256": "c7addfb04dc7cedd01d29dbba71eeea907dc51839b9a951a9dd82b2500ed4f95",
+    "seat": "mechanism",
+    "source_manifest_hash": "2a7fe5c279251807537fa96ee5f6d94d27257d622b4e1b8621c6e2d4400cf49f",
+    "state_bytes": {
+      "large": 32768,
+      "modest": 2048
+    }
+  },
+  "fixture_sha256": "8f953e8dcfc9154569255b16ca4ffe6ace55c58452c5736324637d1e73d859b6",
+  "schema_version": 1,
+  "source": "/private/tmp/factorylab-feedback-repair-20260920"
+}

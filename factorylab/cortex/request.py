@@ -317,8 +317,11 @@ COALESCED_UPDATE = "since_you_last_woke"
 # The request inputs C1 supplies for continuity: the seat's own working-state head
 # and its unread outcomes. They are rendered inside the ``YOU`` block as
 # ``working_state`` and ``outcomes``, and taken out of ``INPUTS`` there, so a
-# working state of up to 64 KiB is carried once and appears where a seat looks for
-# what it remembers, and never in the moving block.
+# working-state value or address appears once where a seat looks for memory.
+# Grounded reviewers' actor_context supplies operating access, not grading inputs.
+# It is removed conditionally in ``sections`` only when ``_world`` actually uses
+# it as the operating world; an ordinary request may use the same caller-owned
+# field name while carrying its operating facts under ``world``.
 SEAT_INPUT_KEYS = ("your_state", "unread_outcomes")
 
 # The request input R3-F supplies for the WORLD UPDATE block: the receipts newly
@@ -486,8 +489,10 @@ class Request:
         return replace(self, inputs=inputs, cost_ceiling=cost_ceiling)
 
     def _world(self) -> dict[str, Any]:
-        """This request's world block, or an empty mapping when it carries none."""
+        """Return operating facts without adding them to frozen grading inputs."""
         world = self.inputs.get("world")
+        if not isinstance(world, dict):
+            world = self.inputs.get("actor_context")
         return world if isinstance(world, dict) else {}
 
     def _world_split(self) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -572,6 +577,8 @@ class Request:
             "subscription": entry.get("subscription", UNAVAILABLE),
             "open_commitments": entry.get("open_commitments", UNAVAILABLE),
             "outcomes": {
+                **{key: value for key, value in outcomes.items()
+                   if key not in ("count", "items", "more")},
                 "unread_count": count if type(count) is int else UNAVAILABLE,
                 # Oldest first, with the exact id of each item: ``outcome.get`` and
                 # ``ack_through`` both take one of these. The id is the inbox's own
@@ -648,7 +655,7 @@ class Request:
 
     def world_update_text(self) -> str:
         """The rendered WORLD UPDATE block; empty when the request carries no world."""
-        if not self._world():
+        if not isinstance(self.inputs.get("world"), dict):
             return ""
         return (f"{WORLD_UPDATE_HEADER}"
                 f"{json.dumps(self.world_update_block(), sort_keys=True, indent=2)}\n\n")
@@ -699,8 +706,12 @@ class Request:
         # and the addressed receipts in ``WORLD UPDATE``. Carrying them here too
         # would put a second copy of a working state — up to 64 KiB of it — in
         # front of every decision, for no reader.
+        seat_input_keys = set(SEAT_INPUT_KEYS)
+        if (not isinstance(self.inputs.get("world"), dict)
+                and isinstance(self.inputs.get("actor_context"), dict)):
+            seat_input_keys.add("actor_context")
         inputs = {k: v for k, v in inputs.items()
-                  if k not in SEAT_INPUT_KEYS and k != RECEIPTS_INPUT_KEY}
+                  if k not in seat_input_keys and k != RECEIPTS_INPUT_KEY}
         payload = inputs.get("payload")
         if isinstance(payload, dict) and COALESCED_UPDATE in payload:
             inputs = {**inputs,

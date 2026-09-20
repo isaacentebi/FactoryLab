@@ -41,6 +41,8 @@ def test_private_and_bulk_sections_are_not_retrievable():
         assert cost == 0
 
 
-def test_reference_control_does_not_gain_an_extra_capability():
+def test_reference_grounded_reviews_can_retrieve_the_manual_they_do_not_carry():
     rt = runtime("reference")
-    assert "world.read" not in rt.tool_specs
+    result, cost = read(rt, "reserved_return_fields")
+    assert result["value"] == rt.institution_section("reserved_return_fields")
+    assert cost == 0

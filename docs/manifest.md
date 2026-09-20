@@ -170,9 +170,14 @@ work. `WORLD UPDATE` is the world's moving facts in §8's order:
 source is), `changes_since_last_successful_delivery` (C2's coalesced fold, or a
 statement that this request carries none), `execution_receipts` (the receipts
 newly addressed to this seat, or that no addressed-receipt source is carried),
-`charter` (edition, text, live cards with their prices and regions, pending
-changes), `catalogue` (version and changed entries only), `public_observations`
-(last closed window's values, pathologies, recent prints, the shared directory)
+`charter` (edition, text, live cards with their prices and regions, actual
+pending changes, and amendment eligibility). `pending_changes.waiting` contains
+only approved ids still waiting; when it is empty, it carries no activation
+timestamp. The cadence threshold remains available under
+`amendment_eligibility` as `eligible_no_earlier_than`, explicitly an eligibility
+boundary rather than a scheduled charter change. `catalogue` carries version
+and changed entries only; `public_observations` carries the last closed window's
+values, pathologies, recent prints and the shared directory,
 and `unavailable_observations` — every source that could not be read, with the
 reason. No private state is in this block; a seat's own state appears exactly
 once, in `YOU`. Everything else the world publishes — `inputs.you`, the event,
@@ -186,9 +191,14 @@ one of those four places: the partition is `PREFIX_WORLD_KEY` with
 block, which is the runtime's own disclosure surface, and is rendered only
 through the block that carries it. The controller re-prices every card at every
 closed window, so the cards ride in `WORLD UPDATE` and never in the prefix.
-Where the provider reports
-it, `usage.prompt_tokens_details.cached_tokens` is recorded as
-`usage.cached_tokens` on the `invocation` item, absent where it is not reported.
+Where the provider reports `usage.prompt_tokens_details.cached_tokens`, the
+runtime records it as `usage.cached_tokens` on the `invocation` item, beside two
+bounded diagnostic hashes: `prompt_cache.stable_prefix_sha256` identifies the rendered
+stable block, and `prompt_cache.effective_leading_messages_sha256` identifies
+the system message, any preceding handle-scoped messages, and that block in
+their effective order. No prompt prose is added to the invocation record. These
+hashes distinguish local prefix drift or memory reordering from a reported miss
+on identical local input; they do not claim that an upstream cache must hit.
 Cost metering is unchanged: OpenRouter's reported `usage.cost` already carries
 the cache discount.
 
@@ -1980,18 +1990,35 @@ roster is still ratified on it when a factor is switched on.
 `[prompt] mode` is `"reference"` (the default) or `"compact"`. Under `reference` a
 request carries the whole institutional world inside the cached prefix, which is
 what every world did before this key existed. Under `compact` the prefix keeps the
-charter norms, the capability index with one line and one price per capability, and
-the sections a return is validated against (`a_return_may_include`,
-`reserved_return_fields`, `action_labels`, `accounting_facts`, `meta_input`). The
-rest of the reference — the registries, the catalogues, the settlement rules — is
-replaced by `sections_not_carried`, a directory naming every held-out section with
-its exact handle, its entry count, its byte size and the route that reads it. A
-compacted section is never moved into `INPUTS` and never dropped: it is retrieved
-through the world-reading tool, which returns the same object the world block
-publishes and the action validators read. On the scripted world the rendered
-producer prompt measured 65,436 versus 36,293 bytes in the integration fixture, and every section other than the
-prefix is byte-identical between the two modes. No byte ceiling is enforced
-anywhere; `Request.section_bytes` measures what was actually sent.
+charter norms, the priced capability index, accounting facts and action labels.
+Bootstrap reads carry exact argument schemas; complete return contracts and other
+reference sections are reached through `world.read`, and proposal shapes through
+`catalogue.search`. The directory names every omitted section. Nothing is replaced
+with a generated summary or made inaccessible. `Request.section_bytes` measures
+actual rendered bytes; the offline comparison is in `docs/audits/edition4-context/`.
+
+Own working state stays inline through 4,096 UTF-8 bytes. Larger state retains its
+exact artifact address and `artifact.get` route; storage limits and rent do not
+change. The inbox carries eight typed indices, not eight full bodies. `outcome.list`
+pages further unread indices without acknowledgement, and `outcome.get` returns an
+exact body. An index is notice of an outcome, not evidence that its body was read.
+
+Grounded evaluators and meta-judges receive operational capabilities and their own
+account separately from the frozen judging record. Their prompt does not preload
+mutable memory, inbox text, population tool descriptions, current charter or current
+world observations as judging evidence. Discovery remains available; only the
+commission's preserved evidence can support its finding.
+
+A decision may buy up to five tool rounds, bounded by its existing money and model
+call ceilings. Known reads can extend retrieval; a write or child call ends it.
+Continuation pricing reserves another call before extending reads, and unknown
+prices do not extend them. Actual metering remains authoritative. Older tool results
+have exact invocation-local `artifact.get` references that expire when the decision
+returns; they create no permanent archive entries. The current round's results are
+included once. External text retains its restricted continuation and cannot write
+a notebook in that continuation. Public `world.read` is available in both prompt
+modes, including grounded commissions that omit the full reference manual.
+
 
 `[tools] address_enabled` is exactly `true` or `false`, default `false` (a truthy
 string or `1` is refused). It gates whether the world publishes the voluntary

@@ -874,6 +874,298 @@ def build_report(
     }
 
 
+def _terminated_exports(
+    report_path: str | Path, events_path: str | Path
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Open events only after termination and same resolved run-directory binding.
+
+    The rehearsal writes both exports into one newly created output directory. This
+    rejects accidental cross-run pairing; it is not a cryptographic authenticity
+    guarantee against replacement of a trusted local artifact.
+    """
+    report_path = Path(report_path).resolve()
+    events_path = Path(events_path).resolve()
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ReportInputError(f"cannot read postmortem report: {type(exc).__name__}") from exc
+    if not isinstance(report, dict):
+        raise ReportInputError("postmortem report must be a JSON object")
+    summary = report.get("summary")
+    if (report.get("status") != "completed" or not isinstance(summary, Mapping)
+            or summary.get("terminated") is not True):
+        raise ReportInputError("postmortem report is not completed and terminated")
+    if report_path.parent != events_path.parent:
+        raise ReportInputError("postmortem report and events must share one resolved run directory")
+    try:
+        events = json.loads(events_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ReportInputError(f"cannot read terminated events: {type(exc).__name__}") from exc
+    if not isinstance(events, list) or not all(isinstance(row, dict) for row in events):
+        raise ReportInputError("terminated events must be a JSON array of objects")
+    return report, events
+
+
+def build_behavioral_trace(
+    report: Mapping[str, Any], events: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Join mechanical evidence from one terminated diary without inferring causality."""
+    summary = report.get("summary") if isinstance(report.get("summary"), Mapping) else {}
+    if report.get("status") != "completed" or summary.get("terminated") is not True:
+        raise ReportInputError("behavioral trace requires a completed, terminated report")
+
+    invocations = [row for row in events if row.get("kind") == "invocation"]
+    invocation_by_handle = {
+        str(row["handle"]): row for row in invocations if isinstance(row.get("handle"), str)
+    }
+    opens = {
+        str(row["handle"]): row for row in events
+        if row.get("kind") == "decision.open" and isinstance(row.get("handle"), str)
+    }
+    classified = {
+        str(row["handle"]): row.get("action") for row in events
+        if row.get("kind") == "action.classified" and isinstance(row.get("handle"), str)
+    }
+    tool_calls: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    dropped_sections: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in events:
+        if row.get("kind") == "tool.call" and isinstance(row.get("handle"), str):
+            tool_calls[str(row["handle"])].append(row)
+        if (row.get("kind") == "return.sections_dropped"
+                and isinstance(row.get("handle"), str)
+                and isinstance(row.get("dropped"), list)):
+            for dropped in row["dropped"]:
+                if not isinstance(dropped, Mapping) or not isinstance(dropped.get("section"), str):
+                    continue
+                item = {"section": dropped["section"]}
+                if isinstance(dropped.get("index"), int):
+                    item["index"] = dropped["index"]
+                dropped_sections[str(row["handle"])].append(item)
+
+    emissions: list[dict[str, Any]] = []
+    for row in events:
+        event_kind, payload = _event_info(row)
+        if event_kind != "ProducerReturn" or payload is None:
+            continue
+        handle = payload.get("about_handle")
+        if not isinstance(handle, str):
+            continue
+        outputs = payload.get("outputs") if isinstance(payload.get("outputs"), Mapping) else {}
+        invocation = invocation_by_handle.get(handle, {})
+        emissions.append({
+            "handle": handle,
+            "seq": row.get("seq"),
+            "open_seq": opens.get(handle, {}).get("seq"),
+            "invocation_seq": invocation.get("seq"),
+            "seat": invocation.get("assembly_id"),
+            "status": payload.get("status"),
+            "declared_action": outputs.get("action"),
+        })
+    unique: dict[str, dict[str, Any]] = {}
+    for emission in emissions:
+        unique.setdefault(emission["handle"], emission)
+    decisions = []
+    for handle, decision in unique.items():
+        calls = tool_calls.get(handle, [])
+        decisions.append({
+            **decision,
+            "classified_action": classified.get(handle),
+            "executed_tool_calls": [row.get("tool") for row in calls
+                                    if row.get("outcome") == "ok"],
+            "failed_tool_calls": [row.get("tool") for row in calls
+                                  if row.get("outcome") == "failed"],
+            "uncertain_tool_calls": [row.get("tool") for row in calls
+                                     if row.get("outcome") == "uncertain"],
+            "refused_tool_calls": [row.get("tool") for row in calls
+                                   if row.get("outcome") == "refused"],
+            "pre_dispatch_rejected_sections": dropped_sections.get(handle, []),
+        })
+
+    published: dict[tuple[str, Any], Mapping[str, Any]] = {}
+    for row in events:
+        event_kind, payload = _event_info(row)
+        if (
+            event_kind != "Verdict"
+            or payload is None
+            or payload.get("grounded_consequence") is not True
+        ):
+            continue
+        about = payload.get("about_handle")
+        if isinstance(about, str):
+            published[(about, payload.get("evaluator_handle"))] = row
+    final_findings = [row for row in events
+                      if row.get("kind") == "consequence.finding"
+                      and isinstance(row.get("handle"), str)
+                      and isinstance(row.get("judge_handle"), str)]
+    settlement_rows = [row for row in events
+                       if row.get("kind") == "decision.settle"
+                       and isinstance(row.get("return"), Mapping)]
+    addressed = [row for row in events if row.get("kind") == "outcome.addressed"]
+    acknowledgements = [row for row in events if row.get("kind") == "outcome.ack"]
+    chains = []
+    ordered_decisions = sorted(
+        decisions,
+        key=lambda row: (
+            row.get("open_seq") if isinstance(row.get("open_seq"), int) else -1
+        ),
+    )
+    for finding in final_findings:
+        handle = str(finding["handle"])
+        judge_handle = finding.get("judge_handle")
+        produced = unique.get(handle)
+        settled = next((row for row in settlement_rows
+                        if row["return"].get("handle") == handle
+                        and (row["return"].get("sampling_ref") == judge_handle
+                             or (finding.get("status") == "unknown"
+                                 and str(row["return"].get("definition_version", ""))
+                                 .endswith("-unknown")))), None)
+        seat = None if produced is None else produced.get("seat")
+        publication = published.get((handle, judge_handle))
+        chain_sequences = [
+            seq for seq in (
+                finding.get("seq"), None if settled is None else settled.get("seq"),
+                None if publication is None else publication.get("seq"),
+            ) if isinstance(seq, int)
+        ]
+        after = max(chain_sequences, default=-1)
+        delivery = next((row for row in addressed
+                         if row.get("handle") == handle
+                         and row.get("assembly_id") == seat
+                         and row.get("evidence") == judge_handle), None)
+        next_return = next((row for row in ordered_decisions
+                            if row.get("seat") == seat and row.get("handle") != handle
+                            and isinstance(row.get("open_seq"), int)
+                            and row["open_seq"] > after), None)
+        next_return_seq = next_return.get("seq") if next_return is not None else None
+        next_invocation_seq = (
+            next_return.get("invocation_seq") if next_return is not None else None
+        )
+        delivered_item = delivery.get("item") if delivery is not None else None
+        finding_seq = finding.get("seq")
+        delivery_seq = None if delivery is None else delivery.get("seq")
+        settlement_seq = None if settled is None else settled.get("seq")
+        publication_seq = None if publication is None else publication.get("seq")
+        chain_ordered = (
+            all(isinstance(seq, int) for seq in (
+                finding_seq, delivery_seq, settlement_seq, publication_seq
+            ))
+            and finding_seq < delivery_seq < settlement_seq < publication_seq
+        )
+        acknowledgement = None if delivery is None else next((row for row in acknowledgements
+            if row.get("assembly_id") == seat
+            and isinstance(row.get("seq"), int)
+            and isinstance(delivery_seq, int)
+            and isinstance(next_invocation_seq, int)
+            and isinstance(next_return_seq, int)
+            and delivery_seq < next_invocation_seq < row["seq"] < next_return_seq
+            and isinstance(row.get("cursor"), int) and isinstance(delivered_item, int)
+            and row["cursor"] >= delivered_item), None)
+        if not chain_ordered:
+            pathway = "missing_or_malformed_chain_order"
+        elif acknowledgement is not None:
+            pathway = "addressed_and_acknowledged"
+        elif next_return is not None:
+            pathway = "addressed_without_ack"
+        else:
+            pathway = "ended_before_next_wake_without_ack"
+        chains.append({
+            "producer_handle": handle,
+            "producer_seat": seat,
+            "settlement_observed": settled is not None,
+            "settlement_status": (
+                settled.get("return", {}).get("status") if settled is not None else None
+            ),
+            "finding_status": finding.get("status"),
+            "finding_score": finding.get("score"),
+            "final_judge_handle": judge_handle,
+            "published_verdict": publication is not None,
+            "addressed_to_inbox": delivery is not None,
+            "chain_ordered": chain_ordered,
+            "acknowledged_receipt": acknowledgement is not None,
+            "model_exposure": "claimed_received" if acknowledgement is not None else "unknown",
+            "next_return": None if next_return is None else {
+                key: next_return.get(key) for key in
+                ("handle", "status", "declared_action", "classified_action")
+            },
+            "next_return_valid": next_return is not None and next_return.get("status") == "ok",
+            "delivery_pathway": pathway,
+        })
+
+    stop_failures = Counter(
+        str(row.get("stop_reason")) for row in invocations
+        if row.get("status") != "ok"
+        and row.get("stop_reason") in {"reasoning_only", "length"}
+    )
+    available = summary.get("tools") if isinstance(summary.get("tools"), list) else []
+    attempted_tools = [row.get("tool") for calls in tool_calls.values() for row in calls]
+    capability = {
+        tool: {
+            "available": tool in available,
+            "attempted": attempted_tools.count(tool),
+            "executed": sum(row.get("tool") == tool and row.get("outcome") == "ok"
+                            for calls in tool_calls.values() for row in calls),
+            "failed": sum(row.get("tool") == tool and row.get("outcome") == "failed"
+                          for calls in tool_calls.values() for row in calls),
+            "uncertain": sum(row.get("tool") == tool and row.get("outcome") == "uncertain"
+                             for calls in tool_calls.values() for row in calls),
+            "refused": sum(row.get("tool") == tool and row.get("outcome") == "refused"
+                           for calls in tool_calls.values() for row in calls),
+        }
+        for tool in sorted(
+            set(available) | {str(tool) for tool in attempted_tools if tool is not None}
+        )
+    }
+    reasons = []
+    invalid = sum(row.get("status") != "ok" for row in decisions)
+    if invalid:
+        reasons.append(f"{invalid} unique producer returns were invalid")
+    if stop_failures:
+        reasons.append("model calls ended before a valid final answer")
+    if any(
+        not chain["chain_ordered"]
+        or not chain["acknowledged_receipt"]
+        or not chain["next_return_valid"]
+        for chain in chains
+    ):
+        reasons.append("final feedback exposure or a later valid decision is incomplete")
+    if not chains:
+        reasons.append("no final grounded findings were observed")
+    finding_statuses = Counter(str(row.get("status", "missing")) for row in final_findings)
+    rejected_section_counts = Counter(
+        item["section"] for items in dropped_sections.values() for item in items
+    )
+    return {
+        "report_kind": "edition4_terminated_behavioral_trace",
+        "producer_work": {
+            "unique_decisions": len(decisions), "emissions": len(emissions),
+            "re_emitted_contracts": len(emissions) - len(decisions),
+            "valid_unique_decisions": len(decisions) - invalid, "decisions": decisions,
+        },
+        "model_output_failures": dict(sorted(stop_failures.items())),
+        "pre_dispatch_rejections": {
+            "sections": sum(rejected_section_counts.values()),
+            "by_section": dict(sorted(rejected_section_counts.items())),
+            "tool_call_sections_without_tool_identity": rejected_section_counts["tool_calls"],
+        },
+        "capabilities": capability,
+        "final_finding_statuses": dict(sorted(finding_statuses.items())),
+        "final_feedback_chains": chains,
+        "interpretation": {
+            "status": (
+                "unmeasured" if not chains else
+                "mechanically_inconclusive" if reasons else
+                "observed_chains_complete"
+            ),
+            "reasons": reasons,
+            "caveat": (
+                "Trace completeness covers observed chains only; it is not global correctness, "
+                "and sequence does not establish that feedback caused a later action. CLI inputs "
+                "are bound by one resolved run directory, not a cryptographic events digest."
+            ),
+        },
+    }
+
+
 def compare_rehearsals(
     control: Mapping[str, Any], treatment: Mapping[str, Any], *, factors: Sequence[str]
 ) -> dict[str, Any]:
@@ -1008,10 +1300,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--control", type=Path, help="completed control rehearsal report")
     parser.add_argument("--treatment", type=Path, help="completed treatment rehearsal report")
+    parser.add_argument("--postmortem-report", type=Path,
+                        help="completed and terminated rehearsal report")
+    parser.add_argument("--events", type=Path, help="events export for --postmortem-report")
     parser.add_argument("--factor", action="append",
                         choices=("prompt", "feedback", "address", "reasoning"))
     args = parser.parse_args(argv)
-    if args.control or args.treatment or args.factor:
+    if args.postmortem_report or args.events:
+        if args.input or args.control or args.treatment or args.factor or not (
+            args.postmortem_report and args.events
+        ):
+            parser.error("postmortem requires --postmortem-report and --events only")
+        completed, events = _terminated_exports(args.postmortem_report, args.events)
+        report = build_behavioral_trace(completed, events)
+    elif args.control or args.treatment or args.factor:
         if args.input or not (args.control and args.treatment and args.factor):
             parser.error("comparison requires --control, --treatment and --factor, without --input")
         reports = []
