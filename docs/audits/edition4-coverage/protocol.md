@@ -67,3 +67,32 @@ budget, and carry source repairs through review and merge. Raw diaries remain lo
 Preflight validation: Ruff passed; 2,190 check tests passed in 27.66s and four
 affected gates passed in 3.09s. Independent review found no blocking issue in
 rejection preservation, isolation, cost attribution or report classification.
+
+## Second attempt: declared provider substitution
+
+After explicit authorization, the residual BTC testnet position was closed by a
+separately journaled, capped reduce-only recovery. A fresh snapshot showed no
+positions or orders. Venice then had only 98,171 micro-USD credit, versus
+76,782,606 micro-USD available on OpenRouter. The previous attempt consumed about
+109,465 micro-USD on Venice in 25 ticks, so another unchanged 60-tick run would
+mechanically starve five seats.
+
+The second attempt routes the same named GLM 5.3 Flash family through OpenRouter,
+preserving requested low reasoning and output allowances. The unused Venice Qwen
+menu entry is also mapped to its OpenRouter counterpart, with its disabled
+reasoning setting preserved. No silent fallback or top-up occurs. Prices and IDs
+come from the current provider catalogue. Exact route deltas and the changed roster
+digest are recorded before dispatch in `work/coverage-60-r2/preflight.json`.
+
+This is a provider-substitution arm, not a matched repeat. The runner compares the
+new base manifest with its own effective version; its preservation flags therefore
+must not be interpreted as preservation relative to r1. Norms, seats, prompts,
+endowments and reasoning requests remain fixed. Source is 284c8c2, including the
+confirmed-unbilled rejection repair. Controls remain 60 ticks, a 60-minute deadline,
+$3, 300 calls, compact context, realized feedback, addressing and no observer.
+
+Prediction: removing known Venice credit attrition should permit more delivered
+ticks before a provider-capacity failure. It does not predict collaboration or
+successful JSON returns. Provider-route differences confound any behavioral change.
+Keep the original coverage thresholds; inspect only after termination. Do not
+increase the cap, weaken bill accounting or change models during the run.

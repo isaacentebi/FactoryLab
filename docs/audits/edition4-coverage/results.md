@@ -93,3 +93,23 @@ not reopened and no new population was launched. Postmortem wrapper repair passe
 Ruff, 2,191 check tests in 30.62 seconds, and the affected rehearsal gate in 0.70
 seconds. These validate the repair offline; it has not been tested in another live
 population.
+
+## Operator recovery after explicit authorization
+
+A separately journaled testnet recovery closed the residual BTC short using a
+fresh, capped, reduce-only request. The original timed-out operation remains
+unconfirmed; it was not reclassified as a failure or silently retried. Recovery
+order 60565404356 filled 0.00013 BTC at 80,933. The subsequent account snapshot
+confirmed no positions and no open orders, with equity 965.14998841 testnet USD.
+The dead world's diary was unchanged. Private recovery evidence lives in
+`work/coverage-60-r1/recovery/operator-close.jsonl`. No mainnet, top-up or fund
+transfer occurred. This is operational recovery, not population behavior.
+
+A bounded follow-up read of R1's 34 invocations in the 13k–17k input-token band
+found that `stable_prefix` and `world_update` accounted for 33.3% and 24.8% of
+recorded request text, respectively. Schema/contract overhead was about 7%.
+Only six of 77 completed invocations used retrieval continuations; their final
+requests grew by a median 1,151 input tokens. Their initial requests already
+contained 9,821–14,300 tokens. Thus the large baseline is mainly preamble and
+world payload, not retrieval alone. These section shares are text lengths, not
+provider-token shares; no R2 live evidence was read for this diagnosis.

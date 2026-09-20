@@ -728,9 +728,26 @@ class Request:
                 "here so you can price them.\n"
                 f"{json.dumps(self.propensity, sort_keys=True, indent=2)}",
             ))
+        shapes = self.outcome_schema.get("anyOf", (self.outcome_schema,))
+        tool_call_limits = [
+            shape.get("properties", {}).get("tool_calls", {}).get("maxItems")
+            for shape in shapes if isinstance(shape, dict)
+        ]
+        common_tool_call_limits = {
+            limit for limit in tool_call_limits if type(limit) is int
+        }
+        tool_call_instruction = (
+            f"\nThis response may contain at most {next(iter(common_tool_call_limits))} "
+            "tool_calls; "
+            "prioritize the reads you need."
+            if (len(tool_call_limits) == len(shapes)
+                and all(type(limit) is int for limit in tool_call_limits)
+                and len(common_tool_call_limits) == 1) else ""
+        )
         blocks.extend([
             ("outcome_schema",
-             f"OUTCOME SCHEMA\n{json.dumps(self.outcome_schema, sort_keys=True, indent=2)}"),
+             f"OUTCOME SCHEMA\n{json.dumps(self.outcome_schema, sort_keys=True, indent=2)}"
+             f"{tool_call_instruction}"),
             # §8's outcome-schema text, once per request and immediately after the
             # schema it is about: what an execution claim must distinguish, what a
             # forecast and an objection must carry, and that money names its asset,

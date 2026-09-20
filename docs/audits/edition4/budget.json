@@ -1,9 +1,9 @@
 {
   "authorized_total_micro": 50000000,
-  "known_inference_micro": 4932683,
-  "remaining_authorization_micro": 45067317,
+  "known_inference_micro": 5347499,
+  "remaining_authorization_micro": 44652501,
   "active_rehearsal_caps_micro": {},
-  "remaining_unreserved_authorization_micro": 45036753,
+  "remaining_unreserved_authorization_micro": 44621937,
   "uncertain_micro": 30564,
   "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [
@@ -135,18 +135,19 @@
       "known_micro": 261357,
       "uncertain_micro": 0,
       "evidence": "../edition4-coverage/results.md",
-      "status": "terminated at 25 ticks; wrapper falsely labeled HTTP 402 unknown; core meter established unbilled and released reservation; residual BTC at exit"
+      "status": "terminated at 25 ticks; wrapper falsely labeled HTTP 402 unknown; core meter established unbilled and released reservation; residual BTC at exit; subsequent separately authorized reduce-only recovery closed BTC and confirmed flat"
+    },
+    {
+      "work": "60-tick OpenRouter substitution arm on 284c8c2",
+      "known_micro": 414816,
+      "uncertain_micro": 0,
+      "evidence": "../edition4-coverage/results-r2.md",
+      "status": "terminated after 60 ticks; all 154 bills known; venue flat; 9 of 10 required assessed findings; behavioral screen inconclusive"
     }
   ],
   "venue_end": {
-    "equity_usd": "965.16083241",
-    "positions": [
-      {
-        "coin": "BTC",
-        "size": "-0.00013",
-        "entry_px": "80763.0"
-      }
-    ],
+    "equity_usd": "965.14998841",
+    "positions": [],
     "open_orders": []
   }
 }
