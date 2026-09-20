@@ -341,6 +341,13 @@ OUTCOME_CONTRACT = """OUTCOME CONTRACT
 Return the public result required by this request's schema. Optional private
 continuity fields are working_state and ack_through.
 
+Return exactly one JSON object for this turn. To use tools, submit tool_calls
+and end your response; omit final-answer fields you cannot fill yet.
+Actual results arrive in the next request under
+tool_results; earlier results may appear under seen_tool_results. Do not write
+imagined tool responses or additional turns. Use returned evidence to continue
+the investigation or answer the original request.
+
 For an execution claim, distinguish:
 - intended: no operation has been submitted;
 - submitted: an operation identifier exists, but settlement is not known;
