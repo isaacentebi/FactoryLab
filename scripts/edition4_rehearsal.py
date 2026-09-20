@@ -623,6 +623,7 @@ def run_rehearsal(
     *,
     out: str | Path | None = None,
     duration_ns: int = DEFAULT_DURATION_NS,
+    target_ticks: int | None = None,
     cap_micro: int = DEFAULT_CAP_MICRO,
     max_calls: int = 2_000,
     provider: Any | None = None,
@@ -639,9 +640,11 @@ def run_rehearsal(
     minimum_grounded_samples: int | None = None,
     minimum_contrary_samples: int | None = None,
 ) -> dict[str, Any]:
-    """Run a fresh 30-minute testnet rehearsal and persist a sanitized evidence report."""
+    """Run a fresh bounded testnet rehearsal and persist a sanitized evidence report."""
     if type(duration_ns) is not int or duration_ns <= 0:
         raise ValueError("duration_ns must be positive integer")
+    if target_ticks is not None and (type(target_ticks) is not int or target_ticks <= 0):
+        raise ValueError("target_ticks must be a positive integer")
     if type(cap_micro) is not int or cap_micro <= 0:
         raise ValueError("cap_micro must be positive integer")
     if type(max_calls) is not int or max_calls <= 0:
@@ -679,10 +682,10 @@ def run_rehearsal(
         if report_path is not None:
             report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
         return report
-    planned_ticks = max(1, duration_ns // manifest.tick_interval_ns)
+    planned_ticks = target_ticks or max(1, duration_ns // manifest.tick_interval_ns)
     minimum_ticks = minimum_ticks or manifest.evaluation.consequence_backstop_ticks
     if minimum_ticks > planned_ticks:
-        raise ValueError("minimum_ticks exceeds the fixed duration's planned tick ceiling")
+        raise ValueError("minimum_ticks exceeds the rehearsal's planned tick ceiling")
     if manifest.evaluation.producer_feedback == "realized":
         minimum_grounded_samples = (
             10 if minimum_grounded_samples is None else minimum_grounded_samples
@@ -763,6 +766,7 @@ def run_rehearsal(
         },
         "protocol": {
             "duration_ns": duration_ns,
+            **({"target_ticks": target_ticks} if target_ticks is not None else {}),
             "cap_micro": cap_micro,
             "max_calls": max_calls,
             "planned_tick_ceiling": planned_ticks,
@@ -872,7 +876,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--world", type=Path, default=DEFAULT_WORLD)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--duration", default="30m")
+    parser.add_argument("--duration", default="30m",
+                        help="wall-clock safety deadline")
+    parser.add_argument("--ticks", type=int,
+                        help="stop after this many delivered ticks, subject to safety limits")
     parser.add_argument("--cap-usd", default="5")
     parser.add_argument("--max-calls", type=int, default=2_000)
     parser.add_argument("--prompt", choices=sorted(FACTOR_PROMPTS))
@@ -891,6 +898,7 @@ def main(argv: list[str] | None = None) -> int:
     from factorylab.runtime.worlds import duration_ns
 
     report = run_rehearsal(args.world, out=args.out, duration_ns=duration_ns(args.duration),
+                           target_ticks=args.ticks,
                            cap_micro=usd_to_micro(args.cap_usd, rounding="floor"),
                            max_calls=args.max_calls, source_root=args.source_root,
                            observe=args.observe, prompt_mode=args.prompt,
