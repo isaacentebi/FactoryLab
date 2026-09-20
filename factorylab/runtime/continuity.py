@@ -233,10 +233,13 @@ class OutcomeInbox:
         self.cursors: dict[str, int] = {}          # seat -> highest acknowledged seq
         self.said: dict[str, dict[str, Any]] = {}  # handle -> what its seat said then
         self.seq = 0
-        # seat -> the highest seq this seat was actually shown, inline or by a
-        # fetch. ``ack_through`` can never advance past it (R3-F, §4: "acknowledging
-        # a handle can acknowledge unseen items").
+        # seat -> the highest seq through which every earlier item addressed to
+        # this seat was actually shown. Global seqs may interleave other seats, so
+        # continuity is over this seat's ordered records, not adjacent integers.
         self.delivered_through: dict[str, int] = {}
+        # Items fetched past a delivery gap. They become part of
+        # ``delivered_through`` only after every earlier item for this seat arrives.
+        self.delivered_sparse: dict[str, set[int]] = {}
         # handle -> the sha of a ``said`` record evicted under MAX_SAID. Nothing is
         # lost: the rationale is an artifact and is read back on demand.
         self.archived_said: dict[str, str] = {}
@@ -379,9 +382,23 @@ class OutcomeInbox:
             raise RuntimeError("addressed outcome is unavailable") from exc
 
     def _mark_delivered(self, seat: str, seq: int) -> None:
-        """Record that this seat was actually shown this item, so it can acknowledge it."""
-        if seq > self.delivered_through.get(seat, 0):
-            self.delivered_through[seat] = seq
+        """Record one shown item and advance only across this seat's delivered prefix."""
+        frontier = self.delivered_through.get(seat, 0)
+        if seq <= frontier:
+            return
+        pending = self.delivered_sparse.setdefault(seat, set())
+        pending.add(seq)
+        for record in self.items.get(seat, ()):
+            candidate = record["seq"]
+            if candidate <= frontier:
+                continue
+            if candidate not in pending:
+                break
+            pending.remove(candidate)
+            frontier = candidate
+        self.delivered_through[seat] = frontier
+        if not pending:
+            self.delivered_sparse.pop(seat, None)
 
     def _find(self, seat: str, ident: Any) -> dict[str, Any] | None:
         """One item by ``outcome:<n>``, or the oldest unread item for a handle (R3-F).
@@ -555,12 +572,18 @@ class OutcomeInbox:
     def delivery_state(self) -> dict[str, Any]:
         """Plain data: how far each seat was delivered, and what ``said`` was archived."""
         return {"delivered_through": dict(sorted(self.delivered_through.items())),
+                "delivered_sparse": {seat: sorted(seqs)
+                                     for seat, seqs in sorted(self.delivered_sparse.items())},
                 "archived_said": dict(sorted(self.archived_said.items()))}
 
     def restore_delivery(self, state: dict[str, Any]) -> None:
         """Adopt a checkpoint's delivery bookkeeping; a world without one starts empty."""
         self.delivered_through = {k: int(v)
                                   for k, v in (state.get("delivered_through") or {}).items()}
+        self.delivered_sparse = {
+            seat: {int(seq) for seq in seqs}
+            for seat, seqs in (state.get("delivered_sparse") or {}).items()
+        }
         self.archived_said = dict(state.get("archived_said") or {})
 
 

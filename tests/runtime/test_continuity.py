@@ -217,6 +217,42 @@ def test_later_ids_are_discoverable_without_acknowledging_earlier_ones(inbox):
     assert inbox.get("alice", "outcome:20")["handle"] == "decision-19"
 
 
+def test_sparse_fetch_cannot_acknowledge_the_gap_and_survives_restore(inbox):
+    fill(inbox, count=20)
+    inbox.unread("alice")
+    assert inbox.list("alice", after=19, limit=1)["items"][0]["outcome_id"] == "outcome:20"
+    assert inbox.get("alice", "outcome:20")["handle"] == "decision-19"
+    assert inbox.delivered_through["alice"] == 8
+    assert inbox.delivered_sparse["alice"] == {20}
+
+    saved = inbox.delivery_state()
+    inbox.get("alice", "outcome:20")  # replaying the same delivery is idempotent
+    assert inbox.delivery_state() == saved
+    inbox.delivered_through.clear()
+    inbox.delivered_sparse.clear()
+    inbox.restore_delivery(saved)
+    assert inbox.ack_through("alice", "outcome:20") == 8
+    assert inbox.unread("alice")["count"] == 12
+
+    # Delivering the next window advances through 16, but the fetched twentieth
+    # item remains behind the still-unseen 17..19 gap.
+    assert inbox.ack_through("alice", "outcome:20") == 16
+    assert inbox.unread("alice")["count"] == 4
+    assert inbox.ack_through("alice", "outcome:20") == 20
+    assert inbox.unread("alice")["count"] == 0
+
+
+def test_delivery_prefix_uses_the_seats_order_not_adjacent_global_ids(inbox):
+    inbox.append("alice", handle="a1", outcome={"fact": 1})
+    inbox.append("carol", handle="c1", outcome={"fact": 2})
+    inbox.append("alice", handle="a2", outcome={"fact": 3})
+
+    inbox.get("alice", "outcome:1")
+    inbox.get("alice", "outcome:3")
+    assert inbox.delivered_through["alice"] == 3
+    assert inbox.ack_through("alice", "outcome:3") == 3
+
+
 def test_listing_acknowledges_nothing_and_loses_nothing(inbox):
     fill(inbox, count=20)
     before = inbox.cursors.get("alice", 0), dict(inbox.delivered_through)
