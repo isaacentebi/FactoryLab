@@ -226,6 +226,19 @@ def test_a_compact_request_drops_the_manual_and_keeps_the_request(modes):
                     "outcome_contract", "completion_criterion"):
         assert lean.section_bytes()[section] > 0
     assert lean.section_bytes()["total"] < rich.section_bytes()["total"]
+    limit = compact.m.tools.max_tool_calls
+    instruction = (
+        f"This response may contain at most {limit} tool_calls; prioritize the reads you need."
+    )
+    assert instruction in dict(rich.sections())["outcome_schema"]
+    assert instruction in dict(lean.sections())["outcome_schema"]
+
+    uncapped_schema = json.loads(json.dumps(lean.outcome_schema))
+    uncapped_schema["properties"]["tool_calls"].pop("maxItems")
+    uncapped = replace(lean, outcome_schema=uncapped_schema)
+    assert "This response may contain at most" not in dict(uncapped.sections())["outcome_schema"]
+    mixed = replace(lean, outcome_schema={"anyOf": [lean.outcome_schema, uncapped_schema]})
+    assert "This response may contain at most" not in dict(mixed.sections())["outcome_schema"]
 
 
 def test_a_compacted_section_is_not_carried_somewhere_else_instead(modes):
