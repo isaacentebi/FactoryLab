@@ -1,11 +1,9 @@
 {
   "authorized_total_micro": 50000000,
-  "known_inference_micro": 5347499,
-  "remaining_authorization_micro": 44652501,
-  "active_rehearsal_caps_micro": {
-    "investigation-paired-probe": 1000000
-  },
-  "remaining_unreserved_authorization_micro": 43621937,
+  "known_inference_micro": 5369628,
+  "remaining_authorization_micro": 44630372,
+  "active_rehearsal_caps_micro": {},
+  "remaining_unreserved_authorization_micro": 44599808,
   "uncertain_micro": 30564,
   "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [
@@ -145,6 +143,20 @@
       "uncertain_micro": 0,
       "evidence": "../edition4-coverage/results-r2.md",
       "status": "terminated after 60 ticks; all 154 bills known; venue flat; 9 of 10 required assessed findings; behavioral screen inconclusive"
+    },
+    {
+      "work": "investigation interface paired diagnostic: baseline",
+      "known_micro": 10202,
+      "uncertain_micro": 0,
+      "evidence": "../edition4-investigation-protocol/paired-results.json",
+      "status": "completed; fake venue and denied external rails; 1 of 4 task chains succeeded; no population pilot"
+    },
+    {
+      "work": "investigation interface paired diagnostic: candidate",
+      "known_micro": 11927,
+      "uncertain_micro": 0,
+      "evidence": "../edition4-investigation-protocol/paired-results.json",
+      "status": "completed; fake venue and denied external rails; 1 of 4 task chains succeeded; no population pilot"
     }
   ],
   "venue_end": {
