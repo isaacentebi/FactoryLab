@@ -639,9 +639,9 @@ class SectionError(ValueError):
 
 #: What a return may carry beside its answer. A section here (or one item of a
 #: list section) that does not validate is dropped with its reason and the answer
-#: stands. Everything else — the action and its order, verdict, payoff,
-#: conformity, vote, emits, about_handle, status and the fields the outcome schema
-#: requires — is the answer, and is validated strictly.
+#: stands. A continued turn may also discard malformed request-specific draft
+#: fields; final answers and core fields — the action and its order, verdict,
+#: payoff, conformity, vote, emits, about_handle and status — validate strictly.
 OPTIONAL_SECTIONS = ("rationale", "working_state", "ack_through", "propensity",
                      "register", "tool_calls", "requests", "forecasts")
 _LIST_SECTIONS = frozenset({"register", "tool_calls", "requests", "forecasts"})
@@ -661,9 +661,12 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     Guarantees the answer is validated exactly as strictly as a whole return was:
     the pruned reply passes ``_validate_return`` and ``validator`` in full, or this
     raises and the return is malformed. Only a section named in
-    ``OPTIONAL_SECTIONS``, or one item of a list section, is ever dropped, each
-    with a bounded reason and, for an item, its index in the reply as written. A
-    dropped section is gone from the reply, so nothing in it reaches an effect.
+    ``OPTIONAL_SECTIONS``, or one item of a list section, may be dropped. On a
+    continuation only, an invalid task-specific answer field may also be dropped:
+    it is an unfinished answer beside valid effects, not an effect itself. Core
+    reserved fields, order size, and explicitly declared emitted bodies remain
+    atomic. Every fault has a bounded reason and, for an item, its original index.
+    A dropped section is gone from the reply, so nothing in it reaches an effect.
     If supplied, ``rejected`` retains section faults even when the whole answer fails.
     """
     parsed = dict(parsed)
@@ -724,6 +727,23 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
             del parsed[section]  # every item went: the section is gone, not empty
             continue
         parsed[section], origin[section] = kept, where
+    # A continuation is a turn boundary, not a partial final answer. Some models
+    # fill the final schema with placeholders while asking for the evidence that
+    # will produce the real answer. Preserve a valid continuation by removing only
+    # malformed fields declared by this request's outcome schema. Reserved return
+    # fields and order size still validate atomically, and an explicit ``emits``
+    # keeps its declared event body atomic rather than laundering it as a draft.
+    continuation = bool(parsed.get("tool_calls") or parsed.get("requests"))
+    if continuation and "emits" not in parsed:
+        protected = {*reserved, "size"}
+        for section, shape in declared.items():
+            if section not in parsed or section in protected or not isinstance(shape, dict):
+                continue
+            try:
+                validate_schema(parsed[section], shape)
+            except _FAULTS as exc:
+                drop(section, f"unfinished continuation field: {exc}")
+                del parsed[section]
     # The answer, strictly; a validator names a fault that belongs to one section.
     for _ in range(1 + sum(len(v) for v in origin.values()) + len(OPTIONAL_SECTIONS)):
         try:
@@ -749,7 +769,8 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
             continue
         if dropped and not parsed:
             raise ValueError("nothing in the return validated")  # no answer to keep
-        dropped.sort(key=lambda d: (OPTIONAL_SECTIONS.index(d["section"]),
+        order = {section: index for index, section in enumerate(OPTIONAL_SECTIONS)}
+        dropped.sort(key=lambda d: (order.get(d["section"], len(order)),
                                     d.get("index", -1)))
         return parsed, tuple(dropped)
     raise ValueError("return sections did not settle")

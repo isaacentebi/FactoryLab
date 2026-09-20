@@ -1,0 +1,303 @@
+{
+  "baseline": {
+    "all_four_success": false,
+    "calls": 8,
+    "cases": [
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "calc"
+          }
+        ],
+        "case": "catalogue_calc",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 2839,
+        "exact_final_answer": true,
+        "receipt_success": true,
+        "seat": "mechanism",
+        "status": "ok",
+        "success": true
+      },
+      {
+        "calls": [],
+        "case": "private_outcomes",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 1500,
+        "exact_final_answer": false,
+        "receipt_success": false,
+        "retrieved_all_facts": false,
+        "seat": "mechanism",
+        "status": "malformed",
+        "success": false,
+        "valid_batch": false
+      },
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "calc"
+          }
+        ],
+        "case": "catalogue_calc",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 4168,
+        "exact_final_answer": true,
+        "receipt_success": true,
+        "seat": "opportunity",
+        "status": "ok",
+        "success": true
+      },
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:1",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:2",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:3",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round1:0",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round1:1",
+            "tool": "outcome.get"
+          }
+        ],
+        "case": "private_outcomes",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 8148,
+        "exact_final_answer": false,
+        "receipt_success": true,
+        "retrieved_all_facts": true,
+        "seat": "opportunity",
+        "status": "malformed",
+        "success": false,
+        "valid_batch": true
+      }
+    ],
+    "commission": "Commissioned diagnostic: receipt success tests a supplied retrieval task, not spontaneous objective formation or institutional emergence.",
+    "cost": {
+      "attempted": 8,
+      "cap_micro": 480000,
+      "known_calls": 8,
+      "known_mean_micro": "16655/8",
+      "known_micro": 16655,
+      "max_calls": 40,
+      "overruns": 0,
+      "refusals": 0,
+      "remaining_micro": 463345,
+      "stop_reason": null,
+      "uncertain_calls": 0,
+      "uncertain_micro": 0
+    },
+    "executed": true,
+    "journal": "/Users/isaacentebi/Desktop/FactoryLab/work/tool-turn-working-context/baseline/paid.46e4a8d87d0c49e7.journal.jsonl",
+    "median_cost_micro": 2084.0,
+    "model_metrics": {
+      "mechanism": {
+        "calls": 3,
+        "cost_micro": 4339,
+        "median_cost_micro": 1500,
+        "median_input_tokens": 8017,
+        "median_output_tokens": 338,
+        "median_request_bytes": 31433,
+        "model_id": "z-ai/glm-5.3-flash"
+      },
+      "opportunity": {
+        "calls": 5,
+        "cost_micro": 12316,
+        "median_cost_micro": 2601,
+        "median_input_tokens": 9366,
+        "median_output_tokens": 146,
+        "median_request_bytes": 36211,
+        "model_id": "openai/gpt-5.6-luna"
+      }
+    },
+    "models": {
+      "mechanism": "z-ai/glm-5.3-flash",
+      "opportunity": "openai/gpt-5.6-luna"
+    },
+    "private_captures": {
+      "path": "/Users/isaacentebi/Desktop/FactoryLab/work/tool-turn-working-context/baseline/captures.private.json",
+      "sha256": "0eb77bcddfff5eda778e643d8dbafeddd98ac260ac8350d788e2784699ffb532"
+    },
+    "source": {
+      "root": "/private/tmp/factorylab-working-context-8e57719ba74c",
+      "sha256": "fd34e69767ec374e3589bb5e1b403946c64ebc9797ae90c05c58b69f0926e9b7"
+    },
+    "status": "completed"
+  },
+  "candidate": {
+    "all_four_success": false,
+    "calls": 9,
+    "cases": [
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "calc"
+          }
+        ],
+        "case": "catalogue_calc",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 1902,
+        "exact_final_answer": true,
+        "receipt_success": true,
+        "seat": "mechanism",
+        "status": "ok",
+        "success": true
+      },
+      {
+        "calls": [],
+        "case": "private_outcomes",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 1398,
+        "exact_final_answer": false,
+        "receipt_success": false,
+        "retrieved_all_facts": false,
+        "seat": "mechanism",
+        "status": "malformed",
+        "success": false,
+        "valid_batch": false
+      },
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "catalogue.search"
+          },
+          {
+            "ok": true,
+            "slot": "round1:0",
+            "tool": "calc"
+          }
+        ],
+        "case": "catalogue_calc",
+        "catalogue_schema_discovered": true,
+        "cost_micro": 6561,
+        "exact_final_answer": true,
+        "receipt_success": true,
+        "seat": "opportunity",
+        "status": "ok",
+        "success": true
+      },
+      {
+        "calls": [
+          {
+            "ok": true,
+            "slot": "tool:0",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:1",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:2",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "tool:3",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round1:0",
+            "tool": "outcome.get"
+          },
+          {
+            "ok": true,
+            "slot": "round1:1",
+            "tool": "outcome.get"
+          }
+        ],
+        "case": "private_outcomes",
+        "catalogue_schema_discovered": false,
+        "cost_micro": 8087,
+        "exact_final_answer": true,
+        "receipt_success": true,
+        "retrieved_all_facts": true,
+        "seat": "opportunity",
+        "status": "ok",
+        "success": true,
+        "valid_batch": true
+      }
+    ],
+    "commission": "Commissioned diagnostic: receipt success tests a supplied retrieval task, not spontaneous objective formation or institutional emergence.",
+    "cost": {
+      "attempted": 9,
+      "cap_micro": 480000,
+      "known_calls": 9,
+      "known_mean_micro": "5966/3",
+      "known_micro": 17898,
+      "max_calls": 40,
+      "overruns": 0,
+      "refusals": 0,
+      "remaining_micro": 462102,
+      "stop_reason": null,
+      "uncertain_calls": 0,
+      "uncertain_micro": 0
+    },
+    "executed": true,
+    "journal": "/Users/isaacentebi/Desktop/FactoryLab/work/tool-turn-working-context/candidate/paid.50f418d5fc5986e0.journal.jsonl",
+    "median_cost_micro": 2198,
+    "model_metrics": {
+      "mechanism": {
+        "calls": 3,
+        "cost_micro": 3300,
+        "median_cost_micro": 1128,
+        "median_input_tokens": 8030,
+        "median_output_tokens": 81,
+        "median_request_bytes": 31795,
+        "model_id": "z-ai/glm-5.3-flash"
+      },
+      "opportunity": {
+        "calls": 6,
+        "cost_micro": 14598,
+        "median_cost_micro": 2359.0,
+        "median_input_tokens": 9002.5,
+        "median_output_tokens": 93.5,
+        "median_request_bytes": 36070.0,
+        "model_id": "openai/gpt-5.6-luna"
+      }
+    },
+    "models": {
+      "mechanism": "z-ai/glm-5.3-flash",
+      "opportunity": "openai/gpt-5.6-luna"
+    },
+    "private_captures": {
+      "path": "/Users/isaacentebi/Desktop/FactoryLab/work/tool-turn-working-context/candidate/captures.private.json",
+      "sha256": "c1e9e0f7128ac947c4b52fc1dc00b328dbbbfeeb520aea834e4269dd16db52d3"
+    },
+    "source": {
+      "root": "/private/tmp/factorylab-working-context-c83160033ef5",
+      "sha256": "d7e06637d4e4c899aaf8dfeab14b5a1b66b7afe092465b63111fb04c9de4afcb"
+    },
+    "status": "completed"
+  }
+}

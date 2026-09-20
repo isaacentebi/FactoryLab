@@ -112,6 +112,75 @@ def test_a_required_answer_field_cannot_be_rescued_by_dropping_sections():
     assert ret.status == "ok" and sections(ret) == [("working_state", None)]
 
 
+def test_unfinished_task_fields_do_not_block_valid_retrieval_continuation():
+    rt = make_runtime()
+    schema = {"type": "object", "properties": {
+        "facts": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "evidence": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    }, "required": ["facts", "evidence"]}
+    calls = [{"tool": "outcome.get", "args": {"outcome_id": f"outcome:{index}"}}
+             for index in range(1, 5)]
+
+    ret = invoke({"facts": [], "evidence": "retrieval not yet performed",
+                  "tool_calls": calls}, schema, validator=rt._validate_output_contract)
+
+    assert ret.status == "ok" and list(ret.tool_calls) == calls
+    assert ret.outputs == {}
+    assert sections(ret) == [("facts", None), ("evidence", None)]
+    assert all(item["reason"].startswith("unfinished continuation field: ")
+               for item in ret.dropped)
+
+
+def test_unfinished_task_fields_remain_strict_on_the_final_turn():
+    schema = {"type": "object", "properties": {
+        "facts": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "evidence": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    }, "required": ["facts", "evidence"]}
+
+    ret = invoke({"facts": [], "evidence": "retrieval not yet performed"}, schema)
+
+    assert ret.status == "malformed" and not ret.dropped and not ret.tool_calls
+
+
+@pytest.mark.parametrize("body", [
+    {"verdict": 2},
+    {"action": "order", "coin": "BTC", "side": "buy", "size": "not-a-number"},
+])
+def test_continuation_does_not_strip_invalid_core_answer_fields(body):
+    call = {"tool": "outcome.get", "args": {"outcome_id": "outcome:1"}}
+
+    ret = invoke({**body, "tool_calls": [call]})
+
+    assert ret.status == "malformed" and not ret.dropped and not ret.tool_calls
+
+
+def test_continuation_does_not_strip_an_invalid_declared_event_body():
+    schema = {"type": "object", "properties": {
+        "facts": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    }, "required": ["facts"]}
+    call = {"tool": "outcome.get", "args": {"outcome_id": "outcome:1"}}
+
+    ret = invoke({"emits": "Finding", "facts": [], "tool_calls": [call]}, schema)
+
+    assert ret.status == "malformed" and not ret.dropped and not ret.tool_calls
+
+
+def test_invalid_tool_batch_cannot_rescue_an_unfinished_answer():
+    rt = make_runtime()
+    schema = {"type": "object", "properties": {
+        "facts": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    }, "required": ["facts"]}
+    bad = {"tool": "venue.place_market", "args": {
+        "coin": "BTC", "side": "sideways", "size": "1"}}
+
+    ret = invoke({"facts": [], "tool_calls": [bad]}, schema,
+                 validator=rt._validate_output_contract)
+
+    assert ret.status == "malformed" and not ret.dropped and not ret.tool_calls
+    rejected = ret.outputs["rejected_sections"]
+    assert [item["section"] for item in rejected] == ["facts", "tool_calls"]
+
+
 def test_the_runtime_contract_drops_a_bad_tool_argument_but_keeps_the_order():
     rt = make_runtime()
     bad = {"tool": "venue.place_market", "args": {"coin": "BTC", "side": "sideways",
