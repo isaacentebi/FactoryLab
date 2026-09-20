@@ -327,6 +327,7 @@ def test_a_larger_ceiling_reads_further_and_a_small_one_still_answers(monkeypatc
 
 def test_older_bodies_travel_as_references_that_read_again(monkeypatch):
     rt = runtime()
+    monkeypatch.setattr(rt, "RECENT_RESULT_BYTES", 1)  # Force exact-body eviction.
     inbox(rt)
     req = request(rt)
     prompts = []

@@ -2,8 +2,11 @@
   "authorized_total_micro": 50000000,
   "known_inference_micro": 5410748,
   "remaining_authorization_micro": 44589252,
-  "active_rehearsal_caps_micro": {},
-  "remaining_unreserved_authorization_micro": 44558688,
+  "active_rehearsal_caps_micro": {
+    "working-context-baseline": 480000,
+    "working-context-candidate": 480000
+  },
+  "remaining_unreserved_authorization_micro": 43598688,
   "uncertain_micro": 30564,
   "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [

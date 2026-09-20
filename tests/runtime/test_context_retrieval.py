@@ -7,7 +7,7 @@ import pytest
 from test_discovery_continuation import packed, request, rows, runtime, scripted
 
 from factorylab.cortex.request import Return
-from factorylab.runtime.compute import _compacted_result
+from factorylab.runtime.compute import _bounded_result_history, _compacted_result
 from factorylab.runtime.continuity import HARD_STATE_BYTES
 
 
@@ -290,28 +290,23 @@ def test_first_call_can_read_transient_world_history_through_its_own_handle(monk
     assert [row["sha"] for row in reads] == [ref["sha"] for ref in refs]
 
 
-def test_intermediate_working_state_carries_four_plus_two_facts_across_rounds(monkeypatch):
+def test_recent_results_carry_four_plus_two_facts_without_working_state(monkeypatch):
     rt = runtime()
     req = request(rt)
-    first = ["fact-a", "fact-b", "fact-c", "fact-d"]
-    second = [*first, "fact-e", "fact-f"]
-    quoted_states = []
-    quote = rt._call_reserve
-
-    def capture_quote(assembly, current):
-        state = current.inputs.get("your_state")
-        if isinstance(state, dict) and isinstance(state.get("state"), dict):
-            quoted_states.append(list(state["state"].get("facts", ())))
-        return quote(assembly, current)
-
-    monkeypatch.setattr(rt, "_call_reserve", capture_quote)
+    facts = [f"unknown-fact-{letter}" for letter in "abcdef"]
+    for index, fact in enumerate(facts):
+        rt.outcomes.append("seed-decider", handle=f"fact-{index}",
+                           outcome={"unknown": fact})
     prompts = []
     scripted(rt, monkeypatch, [
-        {"working_state": {"facts": first},
-         "tool_calls": [{"tool": "world.read", "args": {"section": "composition"}}]},
-        {"working_state": {"facts": second},
-         "tool_calls": [{"tool": "world.read",
-                         "args": {"section": "reserved_return_fields"}}]},
+        {"tool_calls": [
+            {"tool": "outcome.get", "args": {"outcome_id": f"outcome:{index}"}}
+            for index in range(1, 5)
+        ]},
+        {"tool_calls": [
+            {"tool": "outcome.get", "args": {"outcome_id": f"outcome:{index}"}}
+            for index in range(5, 7)
+        ]},
         {"action": "hold", "rationale": "All six retained facts were considered."},
     ], prompts)
     before = rt.wallet.balance
@@ -319,21 +314,34 @@ def test_intermediate_working_state_carries_four_plus_two_facts_across_rounds(mo
     ret = rt._invoke("seed-decider", req, "producer")
 
     assert ret.status == "ok" and len(prompts) == 3
-    assert all(fact in prompts[1] for fact in first)
-    assert all(fact in prompts[2] for fact in second)
-    assert "fact-e" not in prompts[1] and "fact-f" not in prompts[1]
-    assert first in quoted_states and second in quoted_states
-    assert rt.working_state.render("seed-decider")["state"] == {"facts": second}
-    assert len(rows(rt, "state.put")) == 2
+    assert all(fact in prompts[1] for fact in facts[:4])
+    assert all(fact not in prompts[1] for fact in facts[4:])
+    assert all(prompts[2].count(fact) == 1 for fact in facts)
+    assert rt.working_state.head("seed-decider") is None
+    assert rows(rt, "state.put") == []
     assert ret.cost == before - rt.wallet.balance and ret.cost > 0
 
-    other = rt._request(
-        "other-decision", "Answer independently.",
-        {"you": "other-seat", "world": rt._world_block(),
-         "your_state": rt.working_state.render("other-seat")},
-        {}, 10**15, "verdict",
-    )
-    assert all(fact not in other.prompt_text() for fact in second)
+
+def test_large_prior_result_history_is_bounded_and_exactly_retrievable():
+    entries = [
+        {"tool": "outcome.get", "args": {"outcome_id": f"outcome:{index}"},
+         "result": {"unknown": f"fact-{index}", "padding": "x" * 3000}}
+        for index in range(12)
+    ]
+    retrieved = {}
+
+    carried, references = _bounded_result_history(
+        entries, retrieved, byte_limit=16 * 1024)
+
+    exact_bytes = sum(reference["bytes"]
+                      for row, reference in zip(carried, references, strict=True)
+                      if "result" in row)
+    assert exact_bytes <= 16 * 1024
+    assert 0 < sum("result" in row for row in carried) < len(entries)
+    assert all("result" in row for row in carried[-5:])
+    assert all("result" not in row for row in carried[:-5])
+    assert [json.loads(retrieved[reference["sha"]]) for reference in references] == entries
+    assert all(not ({"result", "sha"} <= row.keys()) for row in carried)
 
 
 def test_oversize_intermediate_state_is_refused_without_changing_the_head(monkeypatch):
@@ -455,6 +463,45 @@ def test_large_unaffordable_result_preserves_answer_without_claiming_delivery(mo
     assert "Tool bodies were not loaded" in prompts[1]
     assert "x" * 1000 not in prompts[1]
     assert rt.outcomes.cursors.get(seat, 0) == 0
+
+
+def test_unaffordable_recent_working_set_falls_back_to_exact_references(monkeypatch):
+    rt = runtime()
+    seat = "seed-decider"
+    for index in range(2):
+        rt.outcomes.append(seat, handle=f"fact-{index}",
+                           outcome={"unknown": f"private-fact-{index}"})
+    req = request(rt)
+    quote = rt._call_reserve
+    quoted_exact_history = []
+
+    def price(assembly, current):
+        seen = current.inputs.get("seen_tool_results", ())
+        if any(isinstance(row, dict) and "result" in row for row in seen):
+            quoted_exact_history.append(current)
+            return current.cost_ceiling + 1
+        return quote(assembly, current)
+
+    monkeypatch.setattr(rt, "_call_reserve", price)
+    prompts = []
+    scripted(rt, monkeypatch, [
+        {"tool_calls": [{"tool": "outcome.get",
+                         "args": {"outcome_id": "outcome:1"}}]},
+        {"tool_calls": [{"tool": "outcome.get",
+                         "args": {"outcome_id": "outcome:2"}}]},
+        {"action": "hold", "rationale": "The exact bodies did not fit."},
+    ], prompts)
+
+    ret = rt._invoke(seat, req, "producer")
+
+    assert ret.status == "ok" and len(prompts) == 3
+    assert len(quoted_exact_history) == 1
+    assert "Tool bodies were not loaded" in prompts[2]
+    assert all(f"private-fact-{index}" not in prompts[2] for index in range(2))
+    continued = quoted_exact_history[0].inputs
+    assert "result" in continued["seen_tool_results"][0]
+    assert "result" in continued["tool_results"][0]
+    assert prompts[2].count('"read_with"') >= 2
 
 
 def test_program_cannot_run_tools_with_its_last_answer_budget(monkeypatch):

@@ -109,6 +109,27 @@ def _compacted_result(entry: dict[str, Any], retrieved: dict[str, bytes]) -> dic
             "read_with": {"tool": "artifact.get", "args": {"sha": sha}}}
 
 
+def _bounded_result_history(
+        entries: list[dict[str, Any]], retrieved: dict[str, bytes], byte_limit: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Keep the newest exact prior results within ``byte_limit`` canonical bytes.
+
+    Every prior result remains exactly addressable for this invocation. Results
+    that do not fit travel as references; no result has both representations in
+    the returned working set. The second return value is the all-reference form
+    used when the model cannot afford the exact working set.
+    """
+    references = [_compacted_result(entry, retrieved) for entry in entries]
+    carried = list(references)
+    remaining = max(0, byte_limit)
+    for index in range(len(entries) - 1, -1, -1):
+        size = references[index]["bytes"]
+        if size <= remaining:
+            carried[index] = entries[index]
+            remaining -= size
+    return carried, references
+
+
 def _transient_snapshot(section: str, value: Any,
                         retrieved: dict[str, bytes]) -> dict[str, Any]:
     """Address an exact public context value for this decision and no longer.
@@ -1006,6 +1027,11 @@ class ComputeMixin:
     #: case finite even where a call is free.
     MAX_TOOL_ROUNDS = 5
 
+    #: Exact older tool results retained beside the latest batch. Canonical byte
+    #: accounting makes the prompt bound independent of JSON rendering choices;
+    #: every result outside the window remains available by its transient ref.
+    RECENT_RESULT_BYTES = 16 * 1024
+
     #: Tool kinds a round earned by text from outside may still run. Fetched or
     #: searched bytes cannot reach the venue, the treasury or a transport inside
     #: the same wake that read them.
@@ -1557,7 +1583,7 @@ class ComputeMixin:
                 req = replace(req, inputs={**req.inputs,
                                           "your_state": self.working_state.render(action_id)})
         total_cost = ret.cost
-        seen_results: list[dict] = []
+        prior_results: list[dict] = []
         previous_results: list[dict] = []
         tool_round = 0
         # One decision reads, discovers and then acts inside its own wake. What
@@ -1707,13 +1733,14 @@ class ComputeMixin:
                 acted = True
                 if "error" not in result["result"] and result["result"].get("status") != "failed":
                     effects.append(f"request:{item.target}"[:64])
-            # The round just run travels in full under tool_results. The record of
-            # every round, this one included, travels as references, so no body is
-            # carried twice and a long retrieval does not drag every body it ever
-            # fetched into every later prompt. A reference is not a refusal: the
-            # call that produced it can be made again, and a seat that repeats one
-            # gets the whole body back in full.
-            seen_results.extend(_compacted_result(entry, retrieved) for entry in previous_results)
+            # The round just run travels in full under tool_results. Recent exact
+            # results from older rounds form a bounded working set; older or large
+            # results travel as references. Every result is also put in the
+            # invocation's private retrieval map, so affordability can replace the
+            # whole working set with references without losing exact evidence.
+            prior_results.extend(previous_results)
+            seen_results, referenced_seen_results = _bounded_result_history(
+                prior_results, retrieved, self.RECENT_RESULT_BYTES)
             previous_results = results
             remaining = max(0, req.cost_ceiling - total_cost - tool_cost)
             # The continuation is the same request, and it is the billed call
@@ -1728,6 +1755,7 @@ class ComputeMixin:
                 # Result size is unknown before dispatch. Keep it exact but unloaded
                 # when its body would consume the answer's budget.
                 follow_inputs = {**follow_inputs,
+                                 "seen_tool_results": referenced_seen_results,
                                  "tool_results": [_compacted_result(entry, retrieved)
                                                   for entry in results],
                                  "context_notice": "Tool bodies were not loaded because their "
