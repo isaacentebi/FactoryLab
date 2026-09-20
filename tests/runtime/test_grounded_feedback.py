@@ -227,6 +227,8 @@ def test_polymorphic_producer_freezes_before_selecting_its_producing_variant():
 
 @pytest.mark.gate
 def test_scripted_realized_world_closes_contracts_through_real_dispatch():
+    from scripts.edition4_report import build_behavioral_trace
+
     manifest = load_manifest("scripted")
     manifest = replace(
         manifest,
@@ -236,7 +238,7 @@ def test_scripted_realized_world_closes_contracts_through_real_dispatch():
     rt = Runtime(
         manifest, events=25, seed=4, initial_balance_micro=100_000_000,
         ledger_path=None, drip=False, router_gamma=0.1,
-        provider=_FullRunProvider(), exchange=FakeExchange(),
+        provider=_FullRunProvider(), exchange=FakeExchange(), kill_at_end=True,
     )
     rt.run()
     rows = rt.ledger._recovery_items()
@@ -246,6 +248,11 @@ def test_scripted_realized_world_closes_contracts_through_real_dispatch():
     assert any(any(ref.startswith("economic-outcome:") for ref in row["evidence"])
                for row in findings)
     assert not [row for row in rows if row["kind"] == "consequence.finding_refused"]
+    trace = build_behavioral_trace(
+        {"status": "completed", "summary": {"terminated": bool(rt.termination.final)}}, rows)
+    assert len(trace["final_feedback_chains"]) == len(findings)
+    assert all(chain["addressed_to_inbox"] for chain in trace["final_feedback_chains"])
+    assert any(chain["next_return_valid"] for chain in trace["final_feedback_chains"])
 
 
 def test_true_predicate_evidence_is_not_automatic_usefulness_and_contrary_is_zero():
@@ -760,6 +767,11 @@ class _EvidenceReadingJudge(_GroundedProvider):
     """A final judge whose words never change and whose finding follows the evidence."""
 
     meta_inputs = None
+    producer_inputs = None
+
+    def _produce(self, desc, inputs):
+        self.producer_inputs = inputs
+        return super()._produce(desc, inputs)
 
     def _evaluate(self, req, inputs):
         grounded = inputs.get("realized_consequence")
@@ -824,6 +836,53 @@ def _final_judgement(rt, result=None, *, action="eval-b"):
                     if e.kind is EventKind.VERDICT
                     and e.payload.get("about_handle") == producer), None)
     return producer, judge, verdict
+
+
+@pytest.mark.parametrize(
+    "provider_type,result,status,score",
+    [
+        (_EvidenceReadingJudge, "adopted", "supported", 0.8),
+        (_EvidenceReadingJudge, "ignored", "contrary", 0.0),
+        (_UnknownWithEvidence, "adopted", "unknown", None),
+    ],
+)
+def test_final_grounded_finding_reaches_the_producers_next_request_once(
+    provider_type, result, status, score
+):
+    provider = provider_type()
+    rt = _runtime(provider=provider)
+    producer, judge, verdict = _final_judgement(rt, result)
+    finding = dict(verdict.payload["realized_finding"])
+    contract = freeze_contract(rt, producer, "seed-decider", {"action": "investigate"})
+
+    # A repeated delivery attempt (including after replay) names the same final
+    # judge fact and therefore cannot create a second inbox item.
+    before = len(rt.outcomes.items["seed-decider"])
+    rt._deliver_grounded_finding_to_inbox(contract, finding, judge_handle=judge)
+    assert len(rt.outcomes.items["seed-decider"]) == before
+
+    _consequence_produce(rt, "seed-decider")
+    delivered = [
+        item for item in provider.producer_inputs["unread_outcomes"]["items"]
+        if item["handle"] == producer
+        and item.get("kind") == "grounded_evaluation"
+    ]
+    assert len(delivered) == 1
+    item = delivered[0]
+    assert item["evidence"] == judge
+    assert item["score"] == score
+    assert rt.outcomes.get("seed-decider", item["outcome_id"])["outcome"] == {
+        "kind": "grounded_evaluation",
+        "phase": "final",
+        "judge_handle": judge,
+        "status": status,
+        "score": score,
+        "evidence": list(finding["evidence"]),
+        "reason": finding["reason"],
+    }
+    if status == "unknown":
+        assert rt.queue.history(producer)[0].status is SettleStatus.CENSORED
+        assert rt.queue.history(producer)[0].definition_version.endswith("-unknown")
 
 
 def _release(rt, event):

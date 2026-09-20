@@ -28,6 +28,15 @@ hyperliquid.key
 # The factory-owned reserve wallet key (Base). Created by `factorylab reserve init`, never committed.
 reserve.key
 
+# Rehearsal credentials and private runtime evidence stay local.
+*.key
+/docs/audits/**/ledger.jsonl*
+/docs/audits/**/ledger.artifacts/
+/docs/audits/**/events.json
+/docs/audits/**/observer/
+/docs/audits/**/paid.marker
+/.claude/
+
 # The essay is the experimenter's document; copied into audit worktrees, never committed.
 docs/essay.md
 

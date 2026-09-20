@@ -48,6 +48,67 @@ from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
 MIN_PROTECTED_BODY_CHARS = 32
 
 
+def _prompt_cache_identity(assembly: Assembly, req: Request) -> dict[str, str]:
+    """Hash the exact stable prompt bytes and message ordering without retaining prose.
+
+    The effective-leading hash includes the system message, any handle-scoped
+    messages that precede this request, and the stable prefix at the head of the
+    final user message. It deliberately excludes the moving suffix. Two live
+    invocations can therefore distinguish local prefix drift from an upstream
+    cache miss without putting prompt bodies on the ledger.
+    """
+    stamped = replace(req, inputs={**req.inputs, "you": assembly.spec.id})
+    stable = stamped.stable_prefix()
+    model_request = assembly.build_model_request(req)
+    leading = [{"role": "system", "content": model_request.system},
+               *[dict(message) for message in model_request.messages[:-1]]]
+    if stable and model_request.messages:
+        final = model_request.messages[-1]
+        content = final.get("content")
+        if not isinstance(content, str) or not content.startswith(stable):
+            raise ValueError("model request does not begin with its stable prefix")
+        leading.append({"role": final.get("role"), "content": stable})
+
+    def digest(value: Any) -> str:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    return {
+        "stable_prefix_sha256": hashlib.sha256(stable.encode("utf-8")).hexdigest(),
+        "effective_leading_messages_sha256": digest(leading),
+    }
+
+
+def _safe_prompt_cache_identity(assembly: Assembly, req: Request) -> dict[str, str] | None:
+    """Keep diagnostic hashing from changing whether an otherwise bad request returns."""
+    try:
+        return _prompt_cache_identity(assembly, req)
+    except Exception:
+        return None
+
+
+
+def _call_signature(call: dict[str, Any]) -> str:
+    """Identify one tool call by what it asked for, so a repeat of it is recognisable."""
+    from factorylab.kernel.ledger import canonical
+
+    return hashlib.sha256(canonical({"tool": call.get("tool"),
+                                     "args": call.get("args")})).hexdigest()
+
+
+def _compacted_result(entry: dict[str, Any], retrieved: dict[str, bytes]) -> dict[str, Any]:
+    """Keep an exact result addressable only until this invocation returns."""
+    from factorylab.kernel.ledger import canonical
+
+    data = canonical(entry)
+    sha = hashlib.sha256(data).hexdigest()
+    retrieved[sha] = data
+    return {"tool": entry.get("tool"), "retrieved_earlier": True,
+            "bytes": len(data), "sha": sha, "expires": "end of this decision",
+            "read_with": {"tool": "artifact.get", "args": {"sha": sha}}}
+
+
 def _publishable(policy: dict[str, float]) -> dict[str, float]:
     """Return a readable copy of a distribution that is still a distribution.
 
@@ -912,6 +973,60 @@ class ComputeMixin:
         "venue.set_leverage", "treasury.transfer",
     })
 
+    #: The most continuation calls one decision can buy, whatever it retrieves.
+    #: The budget is the live limit; this is the backstop that makes the worst
+    #: case finite even where a call is free.
+    MAX_TOOL_ROUNDS = 5
+
+    #: Tool kinds a round earned by text from outside may still run. Fetched or
+    #: searched bytes cannot reach the venue, the treasury or a transport inside
+    #: the same wake that read them.
+    PARSE_KINDS = frozenset({"population", "note", "artifact", "outcome"})
+
+    #: Tool kinds that answer with state and change none. Reading one can be worth
+    #: another round, because what it returned arrives after the answer that asked
+    #: for it, and a round that ran only these has not acted.
+    READ_ONLY_KINDS = frozenset({
+        "institution", "catalogue", "outcome", "artifact", "market", "venue",
+        "connector", "web",
+    })
+
+    #: The reads inside a kind that also writes.
+    READ_ONLY_TOOLS = frozenset({"note.get", "note.list"})
+
+    def _read_only_call(self, tool_id: str) -> bool:
+        """Whether this tool answers with state without changing any.
+
+        Guarantees the answer is False for anything this runtime does not know to
+        be a read: a write, a transport, a notebook entry, population code and any
+        tool the population registers later. Retrieval is extended by reads and
+        ended by everything else, so a new capability cannot become a way to buy
+        more rounds of acting.
+        """
+        if tool_id in self.CONSEQUENCE_WRITES:
+            return False
+        if tool_id in self.READ_ONLY_TOOLS:
+            return True
+        return self.tool_specs.get(tool_id, {}).get("kind") in self.READ_ONLY_KINDS
+
+    def _call_reserve(self, assembly: Any, req: Request) -> int | None:
+        """The most one more call on this request can cost, at its own price.
+
+        Guarantees an upper bound or ``None``: the estimate is the metered model's
+        own ceiling over the rendered prompt, so nothing here invents a price.
+        ``None`` means this executor could not price the call at all — a program
+        seat, or a request that did not render — and an unpriced call is refused a
+        round rather than treated as free.
+        """
+        model = getattr(assembly, "model", None)
+        build = getattr(assembly, "build_model_request", None)
+        if model is None or build is None:
+            return None
+        try:
+            return max(0, int(model.ceiling(build(req))))
+        except Exception:
+            return None
+
     def _address_send(self, action_id: str, handle: str, args: dict, *,
                       slot: Any, price: int) -> tuple[dict, int]:
         """Deliver one addressed message: validated free, delivered once, paid once.
@@ -1081,6 +1196,27 @@ class ComputeMixin:
                                 "asked": str(ident)[:64],
                                 "outcome_id": result.get("outcome_id"),
                                 "found": "error" not in result, "ts": self.clock.now_ns})
+            return result, 0
+        if tool_id == "outcome.list":
+            # The index of the same inbox: addresses and headers, never bodies, so
+            # a seat can find the item worth spending a read on instead of guessing
+            # a handle. Addressed by the authenticated caller exactly like
+            # outcome.get - a seat cannot page another seat's queue by naming it -
+            # and listing delivers nothing, so nothing here can be acknowledged
+            # unread.
+            def _bounded(value: Any, default: int, low: int, high: int) -> int:
+                if type(value) is not int:
+                    return default
+                return max(low, min(value, high))
+
+            result = self.outcomes.list(action_id,
+                                        after=_bounded(args.get("after"), 0, 0, 2**31),
+                                        limit=_bounded(args.get("limit"), 8, 1, 32))
+            self.ledger.append({"kind": "outcome.list", "handle": handle,
+                                "assembly_id": action_id,
+                                "rows": len(result.get("items", ())),
+                                "count": result.get("count"),
+                                "after": result.get("after"), "ts": self.clock.now_ns})
             return result, 0
         if tool_id in self.CONSEQUENCE_WRITES and not self._may_write(handle):
             # No judge trades what it judges (essay II.III): the refusal is public.
@@ -1281,6 +1417,9 @@ class ComputeMixin:
         self._ensure_connector_tool()
         body_mark = len(self.ledger.connector_bodies)
         self.handle_to_assembly[req.handle] = action_id
+        assembly = self.assemblies[action_id]
+        prompt_cache = (_safe_prompt_cache_identity(assembly, req)
+                        if isinstance(assembly, Assembly) else None)
         # Every request tells its executor who it is: an id is a public schematic,
         # and retirement, learner registration and requests are all keyed by it.
         # Nothing else about authorship travels; the judge of this return never
@@ -1308,21 +1447,33 @@ class ComputeMixin:
                 self.return_kinds[req.handle] = emitted
         total_cost = ret.cost
         seen_results: list[dict] = []
+        previous_results: list[dict] = []
+        retrieved: dict[str, bytes] = {}  # invocation-local, never checkpointed or published
         tool_round = 0
-        round_limit = 1
-        discovery_continuation = False
+        # One decision reads, discovers and then acts inside its own wake. What
+        # bounds it is not a round count but its own money: a further round is
+        # bought only while what is left still covers the final answer, and only
+        # while the last round learned something this decision had not been given.
+        granted = True  # the first continuation always happens: results must be read
         outside_text = False
+        answered: set[str] = set()  # lookups this decision has already been answered
         while (not self.wallet.dead and ret.status == "ok" and (ret.tool_calls or ret.children)
-               and tool_round < round_limit):
+               and granted):
             results = []
             tool_cost = 0
+            learned = False  # a lookup this decision had not already been given
+            acted = False  # a write or a child: this decision has taken its action
             for index, call in enumerate(ret.tool_calls):
                 if self.wallet.dead:
                     break
                 price = self._tool_price_bound(call)
-                slot = f"tool:{index}" if tool_round == 0 else f"connector-parse:{index}"
+                # A slot is a client identity: it names the round as well as the
+                # position, so two rounds of one decision cannot collide on one
+                # order id and an intended second write is never read as a repeat.
+                slot = f"tool:{index}" if tool_round == 0 else f"round{tool_round}:{index}"
                 if price > max(0, req.cost_ceiling - total_cost - tool_cost):
                     result, cost = {"error": "request cost ceiling exhausted"}, 0
+                    dispatched = False
                     if call["tool"] == "connector.fetch":
                         self._connector_refused(req.handle, result["error"])
                     elif call["tool"] == "web.search":
@@ -1331,7 +1482,19 @@ class ComputeMixin:
                             "assembly_id": action_id, "reason": result["error"],
                             "ts": self.clock.now_ns})
                 else:
-                    result, cost = self._run_tool(action_id, req.handle, call, slot=slot)
+                    sha = call.get("args", {}).get("sha")
+                    if call["tool"] == "artifact.get" and isinstance(sha, str) and sha in retrieved:
+                        data = retrieved[sha]
+                        result, cost = {"sha": sha, "kind": "retrieval.result", "bytes": len(data),
+                                        "text": data.decode("utf-8"),
+                                        "expires": "end of this decision"}, 0
+                        self.ledger.append({"kind": "artifact.get", "sha": sha,
+                                            "handle": req.handle, "assembly_id": action_id,
+                                            "found": True, "scope": "invocation",
+                                            "ts": self.clock.now_ns})
+                    else:
+                        result, cost = self._run_tool(action_id, req.handle, call, slot=slot)
+                    dispatched = True
                 tool_cost += cost
                 # A venue write the venue has not yet acknowledged is its own outcome:
                 # the intent is durable and the reconciler finalises it under the
@@ -1344,24 +1507,31 @@ class ComputeMixin:
                                        and result.get("error") is not None)
                 # Catalogue model names can also come from a remote provider. Treat
                 # any model-bearing result as outside text; schema-only discovery
-                # retains the ordinary continuation. Outside text earns one more
-                # round of ordinary jailed tools, so a seat can read and then act
-                # within the same wake instead of spending another decision on it.
+                # retains the ordinary continuation. A round earned by outside text
+                # runs jailed tools only, so a seat can read and then compose within
+                # the same wake instead of spending another decision on it.
                 if ok and (call["tool"] in ("connector.fetch", "web.search")
                            or (call["tool"] == "catalogue.search"
                                and isinstance(result, dict) and result.get("models"))):
-                    round_limit = 2
                     outside_text = True
-                # A retrieved contract arrives in a tool result, so without a
-                # further round it is read by a decision that can no longer act on
-                # it: a seat could learn a contract and never be able to use it.
-                # One more round, then the final answer as usual. The ceiling is two
-                # rounds whatever is retrieved, so repeating a lookup cannot extend
-                # the wake, and this is continuation of the same decision rather than
-                # a scheduler, an objective, or a reward for having called something.
-                if call["tool"] in ("catalogue.search", "world.read") and ok:
-                    round_limit = 2
-                    discovery_continuation = True
+                # What a lookup returns arrives after the answer that asked for it,
+                # so without a further round a seat can learn a contract, an index
+                # or an outcome and never be able to use it. A lookup this decision
+                # has already been answered buys nothing: repeating it returns the
+                # same bytes, and a wake cannot be extended by asking twice. A read
+                # of moving state is not refused by that rule, it simply does not
+                # extend the wake a second time on the same question.
+                signature = _call_signature(call)
+                read_only = self._read_only_call(str(call["tool"]))
+                if ok and signature not in answered and read_only:
+                    learned = True
+                answered.add(signature)
+                if dispatched and not read_only:
+                    # Anything that is not a known read ends the retrieval, whether or
+                    # not it names an action: a notebook entry, a message, population
+                    # code and an unrecognised tool all stop the wake at one round of
+                    # doing, so nothing executed here can be executed again below.
+                    acted = True
                 self.stats.tool_calls += 1
                 if not ok:
                     self.stats.tool_call_failures += 1
@@ -1371,7 +1541,11 @@ class ComputeMixin:
                 # to whom and how large it was, never what it said.
                 visible = (public_tool_calls([call])[0].get("args")
                            if call.get("tool") == ADDRESS_TOOL else call.get("args"))
-                logged_args = ("[connector continuation]" if tool_round else
+                # A continuation's arguments are redacted once text from outside has
+                # entered this wake, because from then on an argument can carry
+                # fetched bytes. A retrieval that never left this world keeps its
+                # arguments on the ledger, so a chain of reads stays auditable.
+                logged_args = ("[connector continuation]" if outside_text and tool_round else
                                json.dumps(self.ledger.without_connector_bodies(visible),
                                           default=str)[:1000])
                 self.ledger.append({
@@ -1390,6 +1564,7 @@ class ComputeMixin:
                 if label is not None and ok and (
                         not isinstance(result, dict) or result.get("status") != "rejected"):
                     effects.append(label)
+                    acted = True
             for item in ret.children:
                 if self.wallet.dead:
                     break
@@ -1398,27 +1573,62 @@ class ComputeMixin:
                 )
                 tool_cost += cost
                 results.append(result)
+                acted = True
                 if "error" not in result["result"] and result["result"].get("status") != "failed":
                     effects.append(f"request:{item.target}"[:64])
-            seen_results.extend(results)
+            # The round just run travels in full under tool_results. The record of
+            # every round, this one included, travels as references, so no body is
+            # carried twice and a long retrieval does not drag every body it ever
+            # fetched into every later prompt. A reference is not a refusal: the
+            # call that produced it can be made again, and a seat that repeats one
+            # gets the whole body back in full.
+            seen_results.extend(_compacted_result(entry, retrieved) for entry in previous_results)
+            previous_results = results
+            remaining = max(0, req.cost_ceiling - total_cost - tool_cost)
             # The continuation is the same request, and it is the billed call
             # that produces the final verdict — so everything the first call was
             # shown, the PROPENSITY block included, rides along unchanged.
             note = ("Return the final answer; this request's continuation has been "
                     "consumed. Further tool calls and requests are refused.")
-            if tool_round + 1 < round_limit:
+            follow_inputs = {**req.inputs, "tool_results": results,
+                             "seen_tool_results": seen_results, "continuation": note}
+            follow = req.continuation(inputs=follow_inputs, cost_ceiling=remaining)
+            # A decision acts once: a write or a child ends the retrieval and the
+            # next call is the answer. Nothing executed in one wake can therefore
+            # be executed again in a later round of the same wake.
+            granted = (not self.wallet.dead and learned and not acted
+                       and tool_round + 1 < self.MAX_TOOL_ROUNDS)
+            if granted:
+                # Reading on is bought only while the answer is still affordable
+                # afterwards. The reserve is the model's own ceiling for this
+                # request, counted twice: the round asked for, and the final answer
+                # that must follow it. A decision that cannot cover both answers now.
+                reserve = self._call_reserve(assembly, follow)
+                if reserve is None or remaining < 2 * reserve:
+                    granted = False
+                    self.ledger.append({"kind": "tool.rounds_exhausted", "handle": req.handle,
+                                        "assembly_id": action_id, "round": tool_round + 1,
+                                        "reason": "final answer reserved",
+                                        "priced": reserve is not None,
+                                        "remaining": remaining, "reserve": reserve,
+                                        "ts": self.clock.now_ns})
+            if granted:
                 note = (
-                    "You may call tools once more to use what you retrieved, then return "
-                    "the final answer. Requests are refused."
-                    if discovery_continuation and not outside_text else
-                    "You may call population tools once more to parse what you retrieved, "
-                    "then return the final answer. Requests are refused."
+                    "You may call population tools again to parse what you retrieved, then "
+                    "return the final answer. Requests are refused."
+                    if outside_text else
+                    "You may call tools again to use what you retrieved, then return the "
+                    "final answer. Requests are refused."
                 )
-            follow = req.continuation(
-                inputs={**req.inputs, "tool_results": results,
-                        "seen_tool_results": seen_results, "continuation": note},
-                cost_ceiling=max(0, req.cost_ceiling - total_cost - tool_cost),
-            )
+                note += (f" At most {self.MAX_TOOL_ROUNDS - tool_round - 1} further tool "
+                         "rounds remain, a repeated lookup buys none of them, and none is "
+                         "bought unless what is left also covers the final answer.")
+                follow = req.continuation(inputs={**follow_inputs, "continuation": note},
+                                          cost_ceiling=remaining)
+            if isinstance(assembly, Assembly):
+                # The invocation's usage is the final provider call's usage. Keep
+                # the diagnostic identity aligned with that same continuation.
+                prompt_cache = _safe_prompt_cache_identity(assembly, follow)
             ret = (Return(req.handle, {"reason": "wallet exhausted"}, 0, "failed")
                    if self.wallet.dead else self._invoke_compute(action_id, follow))
             dropped.extend(ret.dropped)
@@ -1438,17 +1648,16 @@ class ComputeMixin:
             # wake that read them. A schema this world answered with itself is not
             # outside text, so a seat that looked a capability up may call the
             # capability it looked up, which is the whole point of looking.
-            if tool_round < round_limit and ret.tool_calls:
-                if ((outside_text or not discovery_continuation)
-                        and any(self.tool_specs.get(c["tool"], {}).get("kind")
-                                not in ("population", "note", "artifact", "outcome")
-                                for c in ret.tool_calls)):
-                    round_limit = tool_round
-            if ret.tool_calls and tool_round >= round_limit:
+            if (granted and ret.tool_calls and outside_text
+                    and any(c["tool"] == "note.put" or
+                            self.tool_specs.get(c["tool"], {}).get("kind") not in self.PARSE_KINDS
+                            for c in ret.tool_calls)):
+                granted = False
+            if ret.tool_calls and not granted:
                 self.ledger.append({"kind": "tool.calls_ignored", "handle": req.handle,
                                     "reason": "continuation already consumed",
                                     "ts": self.clock.now_ns})
-            if not ret.tool_calls or tool_round >= round_limit:
+            if not ret.tool_calls or not granted:
                 from factorylab.cortex.assembly import validate_schema
 
                 if ret.status == "ok":
@@ -1501,6 +1710,7 @@ class ComputeMixin:
                 # move, so the change is measured rather than assumed.
                 "sections": replace(
                     req, inputs={**req.inputs, "you": action_id}).section_bytes(),
+                **({"prompt_cache": prompt_cache} if prompt_cache is not None else {}),
                 "ts": self.clock.now_ns,
             }
         )

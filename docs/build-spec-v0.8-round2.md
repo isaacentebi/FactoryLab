@@ -111,7 +111,11 @@ Accept: one rejected registration per twenty returns leaves `revision` at 0; the
 
 Essay II.I.b: underdisclosure starves an agent of what it needs to coordinate; schematics are public.
 
-Mechanism (`cortex/schematics.py`): the world block carries `charter` (the full render: norms, cards with observation, region, λ, `answers_for`, window) for every role; and `mechanics`: committee seats and threshold, eligibility rule, novelty share and window, trials, the controller recurrence (η, κ, decay, λ max, penalty cap), the cascade ratio and jitter, the consequence mix, the tick bounds. A `charter.read` tool is unnecessary once this is in every request.
+Mechanism (`cortex/schematics.py`): the world block carries `charter` (the full render: norms, cards with observation, region, λ, `answers_for`, window) for every role; and `mechanics`: committee seats and threshold, eligibility rule, novelty share and window, trials, the controller recurrence (η, κ, decay, λ max, penalty cap), the cascade ratio and jitter, the consequence mix, the tick bounds. A `charter.read` tool is unnecessary once this is in every request. In compact mode the fixed norms remain inline; full institutional
+mechanics are addressed through `world.read`, with exact tool/proposal contracts
+through `catalogue.search`. Grounded meta-review instead carries the frozen norms
+and evidence of its commission, alongside a separate operational capability and
+own-account view. It must not use current charter facts to regrade past work.
 
 ### A8. No topology
 

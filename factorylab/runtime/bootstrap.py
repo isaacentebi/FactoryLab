@@ -506,8 +506,9 @@ class BootstrapMixin:
         }
         self.tool_specs["catalogue.search"] = {
             "id": "catalogue.search",
-            "description": "Search the model catalogues (OpenRouter, Venice, registered sellers) "
-            "by substring; returns ids with prices per million tokens and context length.",
+            "description": "Find tools, complete proposal shapes and model offers by substring. "
+            "Returns exact tool argument schemas and prices, proposal contracts, and "
+            "matching model ids with token prices and context length.",
             "args_schema": {
                 "type": "object",
                 "properties": {
@@ -597,23 +598,38 @@ class BootstrapMixin:
             "price_micro_per_call": 0,
             "kind": "outcome",
         }
-        if getattr(getattr(manifest, "prompt", None), "mode", "reference") == "compact":
-            from factorylab.cortex.schematics import INSTITUTION_SECTIONS
-
-            self.tool_specs["world.read"] = {
-                "id": "world.read",
-                "description": "Read one current public institutional section by its "
-                "directory handle. Returns its authoritative contract, not private "
-                "participant state. Free; the next model call still costs inference.",
-                "args_schema": {
-                    "type": "object",
-                    "properties": {"section": {"type": "string",
-                                                "enum": sorted(INSTITUTION_SECTIONS)}},
-                    "required": ["section"], "additionalProperties": False,
+        self.tool_specs["outcome.list"] = {
+            "id": "outcome.list",
+            "description": "Page your own outcome and message index without acknowledging "
+            "items. Read any indexed body with outcome.get using its exact outcome_id.",
+            "args_schema": {
+                "type": "object",
+                "properties": {
+                    "after": {"type": "integer", "minimum": 0, "default": 0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 32, "default": 8},
                 },
-                "price_micro_per_call": 0, "kind": "institution",
-            }
-            examples["world.read"] = [{"section": "composition"}]
+                "additionalProperties": False,
+            },
+            "price_micro_per_call": 0,
+            "kind": "outcome",
+        }
+        examples["outcome.list"] = [{"after": 0, "limit": 8}]
+        from factorylab.cortex.schematics import INSTITUTION_SECTIONS
+
+        self.tool_specs["world.read"] = {
+            "id": "world.read",
+            "description": "Read one current public institutional section by its "
+            "directory handle. Returns its authoritative contract, not private "
+            "participant state. Free; the next model call still costs inference.",
+            "args_schema": {
+                "type": "object",
+                "properties": {"section": {"type": "string",
+                                            "enum": sorted(INSTITUTION_SECTIONS)}},
+                "required": ["section"], "additionalProperties": False,
+            },
+            "price_micro_per_call": 0, "kind": "institution",
+        }
+        examples["world.read"] = [{"section": "composition"}]
         if getattr(manifest.tools, "address_enabled", False):
             from factorylab.runtime.address import specs as address_specs
 

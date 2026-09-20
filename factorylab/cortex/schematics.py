@@ -99,17 +99,9 @@ INSTITUTIONS_HEADER = (
     "move, it says so and names where the value in force is published.\n"
 )
 
-#: The institutional sections a compact prompt keeps inline. Two things a seat may
-#: not have to go and fetch: what a well formed return may contain, and what its
-#: own numbers mean. Everything a return is validated against is here, so
-#: compaction can never make an action malformed or hide what an action costs --
-#: the price of every capability is in BASE CAPABILITIES, which is inline in both
-#: modes. What leaves is the reference manual: the registries, the catalogues and
-#: the settlement prose, which are read when a seat means to use one.
-INSTITUTION_INLINE_KEYS = frozenset({
-    "a_return_may_include", "accounting_facts", "action_labels", "meta_input",
-    "reserved_return_fields",
-})
+#: Accounting and action vocabulary stay inline; full return contracts remain
+#: reachable through the schema directory, with the bootstrap call shown inline.
+INSTITUTION_INLINE_KEYS = frozenset({"accounting_facts", "action_labels"})
 
 #: Every section name ``_institutional_block`` publishes, and therefore the whole
 #: allowlist a world-reading tool may serve. It is the institutional world only:
@@ -377,7 +369,8 @@ class SchematicsMixin:
         "hosting nor discovery; independently confirmed payments become income.earned.",
         "tool_calls": (
             'a list of {"tool": id, "args": {...}} bounded by mechanics.tools.max_tool_calls; '
-            'results come back in one continuation per request'
+            'results return within this decision; further reads require remaining budget '
+            'for retrieval and the final answer'
         ),
         "emits": (
             "the selected return kind from your registered emits; optional for a single kind. "
@@ -393,8 +386,8 @@ class SchematicsMixin:
             'objects: {"target":"an id from world.catalogue, or self","description":"task",'
             '"inputs":{},"outcome_schema":{"type":"object"}}; children have tools and '
             'may request children to mechanics.tools.max_depth (root depth 0), with '
-            'mechanics.tools.max_children children per request. Each depth has one '
-            'continuation and spends within its parent\'s remaining cost ceiling. '
+            'mechanics.tools.max_children children per request. Each depth spends '
+            'within its parent\'s remaining cost ceiling. '
             'Outputs arrive in tool_results as '
             '{"tool":"assembly:<target>","args":<inputs>,"result":{"outputs":{},'
             '"status":"ok","cost_micro":0}} before your second call. '
@@ -729,7 +722,9 @@ class SchematicsMixin:
             row = {"id": spec.get("id", tool_id),
                    "description": spec.get("description", ""),
                    "price_micro_per_call": spec.get("price_micro_per_call")}
-            if row["id"] == CATALOGUE_TOOL:
+            if row["id"] in {CATALOGUE_TOOL, "world.read", "outcome.list",
+                              "outcome.get", "artifact.get"}:
+                row["args_schema"] = spec.get("args_schema", {})
                 examples = spec.get("args_schema", {}).get("examples") or []
                 if examples:
                     row["call"] = {"tool": row["id"], "args": examples[0]}
@@ -738,6 +733,17 @@ class SchematicsMixin:
             "tools": tools,
             "proposals": [{"kind": kind, "description": line}
                           for kind, line in sorted(self._proposal_index().items())],
+            "returns": 'Request tools with {"tool_calls":[{"tool":"<id>","args":{}}]}. '
+                       'After reading results, answer according to the outcome schema below. '
+                       'Optional register entries need the complete kind-specific shape, '
+                       'not just a kind. Retrieve it with catalogue.search. '
+                       'Optional working_state replaces your private memory; ack_through '
+                       'acknowledges outcomes through an exact outcome_id.',
+            "return_field_names": sorted(reserved_return_fields()),
+            "return_contract": ({"tool": "world.read",
+                                 "args": {"section": "reserved_return_fields"}}
+                                if "world.read" in self.tool_specs else
+                                "See INSTITUTIONS reserved_return_fields"),
             "schemas": "catalogue.search returns the full args_schema of any tool and "
                        "the full shape of any proposal kind",
             # R3-D's reference line. It is a constant — what an id addresses, and
@@ -813,7 +819,7 @@ class SchematicsMixin:
             return INSTITUTIONS_HEADER, json.dumps(institutions, sort_keys=True, indent=2)
         body = {k: v for k, v in institutions.items() if k in INSTITUTION_INLINE_KEYS}
         body["sections_not_carried"] = self._institutional_directory(institutions)
-        return INSTITUTIONS_COMPACT_HEADER, json.dumps(body, sort_keys=True, indent=2)
+        return INSTITUTIONS_COMPACT_HEADER, json.dumps(body, sort_keys=True, separators=(",", ":"))
 
     def _stable_prefix_text(self, institutions: dict[str, Any] | None = None) -> str:
         """The prefix every request in this world opens with, serialised once and reused.
@@ -842,7 +848,11 @@ class SchematicsMixin:
         """
         header, body = self._institution_text(
             self._institutional_block() if institutions is None else institutions)
+        index = json.dumps(self._capability_index(), sort_keys=True,
+                           **({"separators": (",", ":")} if self._prompt_mode() == "compact"
+                              else {"indent": 2}))
         signature = (
+            index,
             tuple((str(n), n.definition) for n in self.charter.norms),
             tuple((tool_id, spec.get("description", ""), spec.get("price_micro_per_call"))
                   for tool_id, spec in sorted(self.tool_specs.items())),
@@ -852,12 +862,32 @@ class SchematicsMixin:
         )
         memo = getattr(self, "_prefix_memo", None)
         if memo is None or memo[0] != signature:
-            index = json.dumps(self._capability_index(), sort_keys=True, indent=2)
             memo = (signature,
                     f"{self._world_contract_text()}\n{CAPABILITY_HEADER}{index}\n\n"
                     f"{header}{body}\n\n")
             self._prefix_memo = memo
         return memo[1]
+
+    def _operating_context(self, seat: str, world: dict[str, Any]) -> dict[str, Any]:
+        """Grounded judges retain their own operating access, never live grading facts."""
+        index = self._capability_index()
+        # Registered descriptions are population text. A blind grading request
+        # publishes addresses/prices, not other inhabitants' unsolicited prose.
+        index["tools"] = [{key: value for key, value in row.items() if key != "description"}
+                          for row in index["tools"]]
+        index["proposals"] = [{"kind": row["kind"]} for row in index["proposals"]]
+        return {
+            "stable_prefix": (
+                "OPERATING ACCESS\nThese capabilities and your account support acting; "
+                "they are not evidence for this commission. Grade only its frozen record.\n"
+                + CAPABILITY_HEADER
+                + json.dumps(index, sort_keys=True, separators=(",", ":"))
+            ),
+            "seats": [row for row in world.get("seats", ()) if row.get("seat_id") == seat],
+            "clock_now": world.get("clock_now", {}),
+            "world_resources": {"provider_inventory":
+                                world.get("world_resources", {}).get("provider_inventory", {})},
+        }
 
     # --- the moving world (R3-E, WORLD UPDATE) ------------------------------------
 
@@ -959,7 +989,18 @@ class SchematicsMixin:
         }
 
     def _charter_view(self) -> dict[str, Any]:
-        """The charter as a moving fact: this edition, its live cards with prices, pending."""
+        """The charter in force, actual pending changes, and amendment eligibility."""
+        cadence = self.cadence.world_block(self.tick_clock)
+        waiting = list(cadence.get("waiting") or ())
+        eligibility = {
+            "slowest_period": cadence["slowest_period"],
+            "slowest_period_events": cadence["slowest_period_events"],
+            "outstanding_forecasts": cadence["outstanding_forecasts"],
+            "eligible_no_earlier_than_event": cadence["earliest_activation_event"],
+            "eligible_no_earlier_than": cadence["earliest_activation"],
+            "meaning": "a cadence boundary at which a waiting change could become eligible; "
+                       "it is not a scheduled charter change",
+        }
         return {
             "edition": self.charter.edition,
             "text": self._charter_text(),
@@ -975,7 +1016,15 @@ class SchematicsMixin:
                 }
                 for cid in sorted(self.priced)
             ],
-            "pending_changes": self.cadence.world_block(self.tick_clock),
+            # An eligibility clock with no approved candidate is not a pending
+            # change. Keep the queue truthful and publish the general cadence
+            # information separately so a reader cannot mistake its threshold for
+            # a scheduled charter activation.
+            "pending_changes": {
+                "waiting": waiting,
+                **({"eligibility": eligibility} if waiting else {}),
+            },
+            "amendment_eligibility": eligibility,
         }
 
     def _world_update_block(self, custody: dict[str, Any]) -> dict[str, Any]:
@@ -1600,6 +1649,8 @@ class SchematicsMixin:
             "type": "array",
             "items": {
                 "type": "object",
+                "description": "Retrieve the full shape with catalogue.search using the kind "
+                               "as substring. A kind alone is not a complete proposal.",
                 "properties": {"kind": {"enum": sorted(SchematicsMixin.PROPOSAL_SHAPES)}},
                 "required": ["kind"],
             },

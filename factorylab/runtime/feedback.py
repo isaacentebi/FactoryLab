@@ -659,6 +659,37 @@ class FeedbackMixin:
                              outcome={"verdict": (round(float(score), 4)
                                                   if score is not None else None)})
 
+    def _deliver_grounded_finding_to_inbox(
+        self, contract: GroundedContract, finding: dict[str, Any], *, judge_handle: str,
+    ) -> None:
+        """Address one final grounded finding to the producer that earned it.
+
+        The item identifies itself as the final grounded assessment so it cannot
+        be mistaken for the provisional verdict delivered when the contract was
+        opened.  Unknown remains an explicit absence of score.  Using the final
+        judge handle as the inbox evidence identity also makes replay idempotent.
+        """
+        owner = (self.handle_to_assembly.get(contract.handle)
+                 or self.outcomes.seat_of(contract.handle))
+        if owner is None:
+            return self._undeliverable(
+                "grounded_finding", contract.handle, "no seat owns that decision")
+        score = finding.get("score")
+        self.outcomes.append(
+            owner,
+            handle=contract.handle,
+            evidence=judge_handle,
+            outcome={
+                "kind": "grounded_evaluation",
+                "phase": "final",
+                "judge_handle": judge_handle,
+                "status": finding.get("status"),
+                "score": round(float(score), 4) if score is not None else None,
+                "evidence": list(finding.get("evidence") or ()),
+                "reason": finding.get("reason"),
+            },
+        )
+
     def _undeliverable(self, what: str, handle: str | None, why: str) -> None:
         """Record a consequence that reached nobody, rather than dropping it (R3-F)."""
         self.ledger.append({"kind": "outcome.undeliverable", "consequence": what,
@@ -1585,6 +1616,8 @@ class FeedbackMixin:
         })
         finding = {"status": status, "score": score,
                    "evidence": list(cited), "reason": reason}
+        self._deliver_grounded_finding_to_inbox(
+            contract, finding, judge_handle=judge_handle)
         if score is None:
             self._grounded_unknown(contract, reason)
             # An unknown answered with facts in hand is still a claim, and it is

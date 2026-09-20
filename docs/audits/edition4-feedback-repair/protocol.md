@@ -1,0 +1,15 @@
+# Feedback repair: mechanical preflight before behavioral interpretation
+
+The user authorized repairing the observed failures and rerunning bounded experiments under the existing $50 cumulative inference budget. No mainnet, funding, top-up, deployment, key-file inspection or live diary access is authorized by this protocol.
+
+Before the next population run, require the real evaluator-to-inbox-to-next-request regression to pass for supported, contrary and unknown findings. Require the postmortem reader to recognize the runtime's actual ordering: finding, addressed inbox item, settlement, review event; acknowledgements occur in a later model return, not necessarily before its invocation. A cursor acknowledgement may cover an earlier item. Do not infer causality from this sequence. Count unique producer decisions separately from contract re-emissions, and tool effects separately from declared action labels.
+
+The separate four-call GLM probe compares 4,096 and 8,192 output allowances, with two identical fixture calls per allowance and a $0.10 admission cap. Reasoning remains enabled at its existing setting. The fixture does not reconstruct the exact failed live request; failure reproduction and improved success are not assumed. Keep every attempt, including failed probes, in accounting.
+
+After targeted tests, the default check suite and affected gate files pass, freeze the repaired source and launch one new testnet population for at most 60 minutes, $1.50 inference and 240 provider calls. Keep ten-second declared ticks, compact context, address enabled, realized feedback, full norms, roles, economic endowments and consequence horizons. The only planned roster change is the GLM output allowance, if adopted after the probe; record the effective manifest before launch. No mid-run changes or extra time because results look unfavorable.
+
+This is a repair iteration, not a randomized one-factor comparison with the previous source. Predeclare the existing behavioral coverage targets: 60 delivered ticks, ten supported/contrary findings and at least one contrary finding. Failure to meet these targets remains inconclusive. Separately measure the repair: final findings addressed correctly, acknowledgements covering those exact items, and subsequent valid decisions. A successful repair is not evidence of usefulness, autonomous objectives or self-support.
+
+After termination and flat-account verification, inspect capability availability, attempts, refusals, mechanical invalidity, and choices separately. Keep unknown evidence unknown. Judge/meta/adversary quality requires anchored corrections or resolved outcomes; invocation counts and favorable verdicts are insufficient. External income and voluntary reproduction must remain distinct from synthetic or commissioned probes.
+
+Cache behavior is unchanged. Bounded invocation hashes diagnose whether local stable prefixes and leading messages actually match; a matching hash does not promise an upstream cache hit. Governance context distinguishes actual waiting amendments from a general earliest eligibility boundary.

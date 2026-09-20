@@ -289,6 +289,10 @@ def test_recursive_grounded_prompt_reviews_the_immediate_meta(monkeypatch):
     req = captured[-1]
     assert req.inputs["meta_verdict"]["by"] == immediate
     assert req.inputs["realized_consequence"]["finding"]["score"] == 0.9
+    assert "world" not in req.inputs and "charter" not in req.inputs
+    assert req.inputs["actor_context"]["seats"][0]["seat_id"] == "meta-b"
+    assert "catalogue.search" in req.stable_prefix()
+    assert "your_state" not in req.inputs and "unread_outcomes" not in req.inputs
     assert "Assess the immediate meta verdict in meta_verdict" in req.description
     assert "original finding as a new first-tier review" in req.description
     assert "Assess the final grounded judgement" not in req.description

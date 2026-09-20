@@ -1,10 +1,10 @@
 {
   "authorized_total_micro": 50000000,
-  "known_inference_micro": 3101702,
-  "remaining_authorization_micro": 46898298,
+  "known_inference_micro": 4392575,
+  "remaining_authorization_micro": 45607425,
   "active_rehearsal_caps_micro": {},
-  "remaining_unreserved_authorization_micro": 46898298,
-  "uncertain_micro": 0,
+  "remaining_unreserved_authorization_micro": 45584881,
+  "uncertain_micro": 22544,
   "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [
     {
@@ -71,10 +71,47 @@
       "work": "September 19 repaired control",
       "known_micro": 540781,
       "evidence": "../edition4-next/live-control/report.json"
+    },
+    {
+      "work": "merged compact/address verdict control",
+      "known_micro": 427508,
+      "evidence": "../edition4-experiments/control/report.json"
+    },
+    {
+      "work": "merged compact/address realized-feedback arm",
+      "known_micro": 270552,
+      "evidence": "../edition4-experiments/realized/report.json"
+    },
+    {
+      "work": "identical Luna request cache diagnostic",
+      "known_micro": 2763,
+      "evidence": "../edition4-experiments/cache-report.json"
+    },
+    {
+      "work": "identical Luna cache diagnostic corrected telemetry",
+      "known_micro": 1627,
+      "evidence": "../edition4-experiments/cache-v2-report.json"
+    },
+    {
+      "work": "commissioned real-model spawning diagnostic v2",
+      "known_micro": 13765,
+      "evidence": "../edition4-experiments/spawn-report-v2.json"
+    },
+    {
+      "work": "GLM answer allowance 4096 versus8192 fixture",
+      "known_micro": 6024,
+      "evidence": "../edition4-feedback-repair/report.json"
+    },
+    {
+      "work": "repaired final-feedback population rerun",
+      "known_micro": 568634,
+      "uncertain_micro": 22544,
+      "evidence": "../edition4-feedback-repair/live/report.json",
+      "status": "terminated; unknown provider bill remains reserved; no further paid calls"
     }
   ],
   "venue_end": {
-    "equity_usd": "965.94307941",
+    "equity_usd": "965.17899941",
     "positions": [],
     "open_orders": []
   }

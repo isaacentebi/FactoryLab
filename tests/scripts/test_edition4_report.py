@@ -12,12 +12,193 @@ from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
 from scripts.edition4_report import (
     ReportInputError,
+    _terminated_exports,
+    build_behavioral_trace,
     build_report,
     compare_rehearsals,
     load_rows,
     main,
     render_html,
 )
+
+
+def _postmortem_fixture():
+    report = {
+        "status": "completed",
+        "summary": {"terminated": True, "tools": ["venue.close", "world.read"]},
+    }
+    events = [
+        {"seq": 1, "kind": "decision.open", "handle": "p1"},
+        {"seq": 2, "kind": "invocation", "handle": "p1", "assembly_id": "producer-a",
+         "status": "ok", "stop_reason": "stop"},
+        {"seq": 3, "kind": "tool.call", "handle": "p1", "tool": "venue.close",
+         "ok": True, "outcome": "ok"},
+        {"kind": "tool.call", "handle": "p1", "tool": "missing.tool",
+         "ok": False, "outcome": "failed"},
+        {"kind": "return.sections_dropped", "handle": "p1", "assembly_id": "producer-a",
+         "dropped": [{"section": "tool_calls",
+                      "reason": "item 0: malformed arguments"}]},
+        {"seq": 4, "kind": "action.classified", "handle": "p1", "action": "order"},
+        {"seq": 5, "kind": "event", "event": {"kind": "ProducerReturn", "payload": {
+            "about_handle": "p1", "status": "ok", "outputs": {"action": "defer"}}}},
+        {"seq": 6, "kind": "event", "event": {"kind": "ProducerReturn", "payload": {
+            "about_handle": "p1", "status": "ok", "outputs": {"action": "defer"}}}},
+        {"seq": 7, "kind": "consequence.finding", "handle": "p1",
+         "judge_handle": "judge-final", "status": "supported", "score": 0.4},
+        {"seq": 8, "kind": "decision.settle", "return": {
+            "handle": "p1", "status": "settled",
+            "definition_version": "realized-consequence-v2", "sampling_ref": "judge-final"}},
+        {"seq": 9, "kind": "event", "event": {"kind": "Verdict", "payload": {
+            "about_handle": "p1", "evaluator_handle": "judge-final",
+            "grounded_consequence": True, "verdict": 0.4}}},
+        {"seq": 10, "kind": "decision.open", "handle": "p2"},
+        {"seq": 11, "kind": "invocation", "handle": "p2", "assembly_id": "producer-a",
+         "status": "malformed", "stop_reason": "reasoning_only"},
+        {"seq": 12, "kind": "event", "event": {"kind": "ProducerReturn", "payload": {
+            "about_handle": "p2", "status": "malformed", "outputs": {}}}},
+        {"seq": 13, "kind": "decision.open", "handle": "p3"},
+        {"seq": 14, "kind": "invocation", "handle": "p3", "assembly_id": "producer-b",
+         "status": "ok", "stop_reason": "stop"},
+        {"seq": 15, "kind": "event", "event": {"kind": "ProducerReturn", "payload": {
+            "about_handle": "p3", "status": "ok", "outputs": {"action": "hold"}}}},
+        {"seq": 16, "kind": "consequence.finding", "handle": "p3",
+         "judge_handle": "judge-3", "status": "unknown", "score": None},
+        {"seq": 17, "kind": "outcome.addressed", "handle": "p3",
+         "assembly_id": "producer-b", "evidence": "judge-3", "item": 7},
+        {"seq": 18, "kind": "decision.settle", "return": {
+            "handle": "p3", "status": "censored",
+            "definition_version": "realized-consequence-v2-unknown"}},
+        {"seq": 19, "kind": "event", "event": {"kind": "Verdict", "payload": {
+            "about_handle": "p3", "evaluator_handle": "judge-3",
+            "grounded_consequence": True, "verdict": None}}},
+        {"seq": 20, "kind": "decision.open", "handle": "p4"},
+        {"seq": 21, "kind": "invocation", "handle": "p4", "assembly_id": "producer-b",
+         "status": "ok", "stop_reason": "stop"},
+        {"seq": 22, "kind": "outcome.ack", "handle": "older-item",
+         "assembly_id": "producer-b", "cursor": 9},
+        {"seq": 23, "kind": "event", "event": {"kind": "ProducerReturn", "payload": {
+            "about_handle": "p4", "status": "ok", "outputs": {"action": "investigate"}}}},
+        {"seq": 24, "kind": "invocation", "handle": "valid-length",
+         "assembly_id": "judge", "status": "ok", "stop_reason": "length"},
+    ]
+    return report, events
+
+
+def test_postmortem_trace_separates_replays_execution_and_mechanical_failures():
+    report, events = _postmortem_fixture()
+    trace = build_behavioral_trace(report, events)
+
+    work = trace["producer_work"]
+    assert (work["unique_decisions"], work["emissions"], work["re_emitted_contracts"]) == (4, 5, 1)
+    first = work["decisions"][0]
+    assert first["declared_action"] == "defer"
+    assert first["classified_action"] == "order"
+    assert first["executed_tool_calls"] == ["venue.close"]
+    assert first["pre_dispatch_rejected_sections"] == [{"section": "tool_calls"}]
+    assert work["valid_unique_decisions"] == 3
+    assert trace["model_output_failures"] == {"reasoning_only": 1}
+    assert trace["pre_dispatch_rejections"] == {
+        "sections": 1,
+        "by_section": {"tool_calls": 1},
+        "tool_call_sections_without_tool_identity": 1,
+    }
+    assert trace["capabilities"]["world.read"] == {
+        "available": True, "attempted": 0, "executed": 0,
+        "failed": 0, "uncertain": 0, "refused": 0,
+    }
+    assert trace["capabilities"]["missing.tool"] == {
+        "available": False, "attempted": 1, "executed": 0,
+        "failed": 1, "uncertain": 0, "refused": 0,
+    }
+    assert trace["interpretation"]["status"] == "mechanically_inconclusive"
+
+
+def test_postmortem_trace_follows_runtime_finding_address_settle_publish_ack_order():
+    report, events = _postmortem_fixture()
+    trace = build_behavioral_trace(report, events)
+    chains = trace["final_feedback_chains"]
+
+    missing, delivered = chains
+    assert missing["delivery_pathway"] == "missing_or_malformed_chain_order"
+    assert missing["chain_ordered"] is False
+    assert missing["model_exposure"] == "unknown"
+    assert missing["next_return"] == {
+        "handle": "p2", "status": "malformed",
+        "declared_action": None, "classified_action": None,
+    }
+    assert missing["next_return_valid"] is False
+    assert delivered["delivery_pathway"] == "addressed_and_acknowledged"
+    assert delivered["chain_ordered"] is True
+    assert delivered["acknowledged_receipt"] is True
+    assert delivered["model_exposure"] == "claimed_received"
+    assert delivered["finding_status"] == "unknown"
+    assert delivered["finding_score"] is None
+    assert delivered["settlement_status"] == "censored"
+    assert delivered["next_return"] == {
+        "handle": "p4", "status": "ok",
+        "declared_action": "investigate", "classified_action": None,
+    }
+    assert delivered["next_return_valid"] is True
+    assert "does not establish" in trace["interpretation"]["caveat"]
+
+
+@pytest.mark.parametrize("ack_seq", [20, 24])
+def test_postmortem_ack_must_occur_inside_selected_invocation(ack_seq):
+    report, events = _postmortem_fixture()
+    ack = next(row for row in events if row.get("kind") == "outcome.ack")
+    ack["seq"] = ack_seq
+
+    delivered = build_behavioral_trace(report, events)["final_feedback_chains"][1]
+
+    assert delivered["chain_ordered"] is True
+    assert delivered["acknowledged_receipt"] is False
+    assert delivered["model_exposure"] == "unknown"
+    assert delivered["delivery_pathway"] == "addressed_without_ack"
+
+
+def test_postmortem_malformed_chain_order_is_inconclusive():
+    report, events = _postmortem_fixture()
+    address = next(row for row in events
+                   if row.get("kind") == "outcome.addressed" and row.get("handle") == "p3")
+    address["seq"] = 19
+
+    trace = build_behavioral_trace(report, events)
+    delivered = trace["final_feedback_chains"][1]
+
+    assert delivered["addressed_to_inbox"] is True
+    assert delivered["chain_ordered"] is False
+    assert delivered["delivery_pathway"] == "missing_or_malformed_chain_order"
+    assert trace["interpretation"]["status"] == "mechanically_inconclusive"
+
+
+def test_postmortem_refuses_before_opening_events(tmp_path):
+    report = tmp_path / "report.json"
+    report.write_text(json.dumps({"status": "prepared", "summary": {"terminated": False}}))
+    absent_events = tmp_path / "must-not-be-opened.json"
+
+    with pytest.raises(ReportInputError, match="not completed and terminated"):
+        _terminated_exports(report, absent_events)
+
+
+def test_postmortem_refuses_cross_directory_events_before_reading_them(tmp_path):
+    run = tmp_path / "run-a"
+    run.mkdir()
+    report = run / "report.json"
+    report.write_text(json.dumps({"status": "completed", "summary": {"terminated": True}}))
+    other_events = tmp_path / "run-b" / "events.json"
+
+    with pytest.raises(ReportInputError, match="share one resolved run directory"):
+        _terminated_exports(report, other_events)
+
+
+def test_postmortem_without_final_findings_is_unmeasured():
+    trace = build_behavioral_trace(
+        {"status": "completed", "summary": {"terminated": True, "tools": []}}, []
+    )
+
+    assert trace["final_finding_statuses"] == {}
+    assert trace["final_feedback_chains"] == []
+    assert trace["interpretation"]["status"] == "unmeasured"
 
 
 def test_empty_data_keeps_unmeasured_metrics_unknown():
