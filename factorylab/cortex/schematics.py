@@ -824,9 +824,10 @@ class SchematicsMixin:
 
         Guarantees ``reference`` renders exactly what it rendered before the mode
         existed, byte for byte, and that ``compact`` renders the inline sections and
-        a directory naming every section it left out.
+        a directory naming every section it left out. With retrieval disabled,
+        the reference stays inline rather than advertising unreachable sections.
         """
-        if self._prompt_mode() != "compact":
+        if self._prompt_mode() != "compact" or self.m.tools.max_tool_calls <= 0:
             return INSTITUTIONS_HEADER, json.dumps(institutions, sort_keys=True, indent=2)
         body = {k: v for k, v in institutions.items() if k in INSTITUTION_INLINE_KEYS}
         body["sections_not_carried"] = self._institutional_directory(institutions)

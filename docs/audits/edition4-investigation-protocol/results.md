@@ -51,12 +51,14 @@ saving. The original canned diagnostic used fixture-known facts in its answer;
 that success claim was invalidated and replaced with a responder deriving facts
 only from the actual current prompt and its carried notes.
 
-Ruff passed. The final check tier passed **2,209 tests in 25.22 s**. All three
-relevant world gates passed in 3.26 s. Focused checks cover exact retrieval,
+Ruff passed. The final check tier passed **2,210 tests in 34.04 s**. All three
+relevant world gates passed in 3.18 s. Focused checks cover exact retrieval,
 private ownership, unchanged frozen evidence, zero-tool access, projected routing
 growth, state size refusal, repricing, persistence after final failure, and one
 ledger event per attempted state write. Independent review findings were repaired
-and rechecked. Raw provider captures and source snapshots remain private under
+and rechecked. The final zero-tool fallback was checked independently; all four tested
+first-request fingerprints and quotes remain unchanged for the four-call
+configuration. Raw provider captures and source snapshots remain private under
 work/investigation-paired*; published results retain hashes and safe aggregates.
 
 ## Corrected paid comparison

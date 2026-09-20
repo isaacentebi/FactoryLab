@@ -32,13 +32,15 @@ from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
 
 
-def runtime(mode="reference"):
+def runtime(mode="reference", *, max_tool_calls=None):
     """A scripted runtime in one prompt mode.
 
     The events budget is zero and nothing here calls ``run``: these tests read what a
     request would render, so they belong in the check tier and stay in it.
     """
     manifest = replace(load_manifest("worlds/scripted.toml"), prompt=PromptSpec(mode=mode))
+    if max_tool_calls is not None:
+        manifest = replace(manifest, tools=replace(manifest.tools, max_tool_calls=max_tool_calls))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
                    drip=False, router_gamma=0.1, provider=ScriptedProvider(),
                    exchange=FakeExchange(coins=manifest.exchange.coins))
@@ -47,6 +49,16 @@ def runtime(mode="reference"):
 @pytest.fixture(scope="module")
 def modes():
     return runtime("reference"), runtime("compact")
+
+
+def test_disabled_retrieval_keeps_the_exact_institutional_reference_inline():
+    rt = runtime("compact", max_tool_calls=0)
+    institutions = rt._institutional_block()
+    _, body = rt._institution_text(institutions)
+    assert json.loads(body) == json.loads(json.dumps(institutions))
+    prefix = rt._stable_prefix_text()
+    assert '"action_labels"' in prefix
+    assert "sections_not_carried" not in prefix
 
 
 def test_reference_is_the_default_and_renders_what_it_always_rendered(modes):
