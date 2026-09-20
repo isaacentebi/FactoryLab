@@ -1,10 +1,10 @@
 {
   "authorized_total_micro": 50000000,
-  "known_inference_micro": 4392575,
-  "remaining_authorization_micro": 45607425,
+  "known_inference_micro": 4671326,
+  "remaining_authorization_micro": 45328674,
   "active_rehearsal_caps_micro": {},
-  "remaining_unreserved_authorization_micro": 45584881,
-  "uncertain_micro": 22544,
+  "remaining_unreserved_authorization_micro": 45298110,
+  "uncertain_micro": 30564,
   "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [
     {
@@ -108,6 +108,27 @@
       "uncertain_micro": 22544,
       "evidence": "../edition4-feedback-repair/live/report.json",
       "status": "terminated; unknown provider bill remains reserved; no further paid calls"
+    },
+    {
+      "work": "context release 6061107 testnet smoke",
+      "known_micro": 118898,
+      "uncertain_micro": 8020,
+      "evidence": "../edition4-context/live-smoke.md",
+      "status": "terminated; unknown dispatched provider bill reserved; source predates continuation subsidy fix"
+    },
+    {
+      "work": "context release 1f601bd testnet smoke",
+      "known_micro": 109293,
+      "uncertain_micro": 0,
+      "evidence": "../edition4-context/live-smoke.md",
+      "status": "terminated at duration; all bills known; source predates sparse delivery fix"
+    },
+    {
+      "work": "context release 3450176 final interface smoke",
+      "known_micro": 50560,
+      "uncertain_micro": 0,
+      "evidence": "../edition4-context/live-smoke.md",
+      "status": "terminated at duration; all bills known; subsequent prompt/input preservation fixes verified offline"
     }
   ],
   "venue_end": {

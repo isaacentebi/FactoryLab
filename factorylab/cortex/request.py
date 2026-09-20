@@ -319,7 +319,10 @@ COALESCED_UPDATE = "since_you_last_woke"
 # ``working_state`` and ``outcomes``, and taken out of ``INPUTS`` there, so a
 # working-state value or address appears once where a seat looks for memory.
 # Grounded reviewers' actor_context supplies operating access, not grading inputs.
-SEAT_INPUT_KEYS = ("your_state", "unread_outcomes", "actor_context")
+# It is removed conditionally in ``sections`` only when ``_world`` actually uses
+# it as the operating world; an ordinary request may use the same caller-owned
+# field name while carrying its operating facts under ``world``.
+SEAT_INPUT_KEYS = ("your_state", "unread_outcomes")
 
 # The request input R3-F supplies for the WORLD UPDATE block: the receipts newly
 # addressed to this seat. It is rendered there and taken out of ``INPUTS``, so it
@@ -703,8 +706,12 @@ class Request:
         # and the addressed receipts in ``WORLD UPDATE``. Carrying them here too
         # would put a second copy of a working state — up to 64 KiB of it — in
         # front of every decision, for no reader.
+        seat_input_keys = set(SEAT_INPUT_KEYS)
+        if (not isinstance(self.inputs.get("world"), dict)
+                and isinstance(self.inputs.get("actor_context"), dict)):
+            seat_input_keys.add("actor_context")
         inputs = {k: v for k, v in inputs.items()
-                  if k not in SEAT_INPUT_KEYS and k != RECEIPTS_INPUT_KEY}
+                  if k not in seat_input_keys and k != RECEIPTS_INPUT_KEY}
         payload = inputs.get("payload")
         if isinstance(payload, dict) and COALESCED_UPDATE in payload:
             inputs = {**inputs,

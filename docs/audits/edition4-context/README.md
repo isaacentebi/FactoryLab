@@ -85,7 +85,8 @@ Changed implementation files in this iteration:
 Changed checks: `tests/cortex/test_prompt_modes.py`,
 `tests/runtime/test_continuity.py`, `test_context_retrieval.py`,
 `test_discovery_continuation.py`, `test_grounded_feedback.py`,
-`test_grounded_multi_router.py`, and `test_world_read.py`.
+`test_grounded_multi_router.py`, `test_world_read.py`, `test_child_requests.py`,
+`test_connectors.py`, and `test_grounded_evidence_schema.py`.
 Documentation: this directory, `docs/manifest.md`, and
 `docs/build-spec-v0.8-round2.md`. Earlier uncommitted repairs were preserved.
 
@@ -95,17 +96,17 @@ Validation on the integrated working tree:
 uv run ruff check .
 All checks passed!
 uv run pytest
-============================ 2178 passed in 27.14s =============================
+============================ 2186 passed in 33.26s =============================
 ```
 
 Affected gate command:
 
 ```bash
-uv run pytest -m gate -n 2 tests/runtime/test_compute_continuity.py tests/runtime/test_grounded_feedback.py tests/runtime/test_grounded_multi_router.py tests/runtime/test_discovery_continuation.py tests/runtime/test_context_retrieval.py tests/runtime/test_continuity.py tests/runtime/test_nonfinancial_consequence_gate.py tests/cortex/test_return_sections.py tests/scripts/test_edition4_nonfinancial_model_probe.py tests/scripts/test_edition4_report.py
+uv run pytest -m gate -n 2 tests/runtime/test_compute_continuity.py tests/runtime/test_grounded_feedback.py tests/runtime/test_grounded_multi_router.py tests/runtime/test_discovery_continuation.py tests/runtime/test_context_retrieval.py tests/runtime/test_continuity.py tests/runtime/test_nonfinancial_consequence_gate.py tests/cortex/test_return_sections.py tests/scripts/test_edition4_nonfinancial_model_probe.py tests/scripts/test_edition4_report.py tests/runtime/test_child_requests.py tests/runtime/test_connectors.py tests/runtime/test_entitlement.py tests/runtime/test_resume.py
 ```
 
 ```text
-============================== 19 passed in 6.53s ==============================
+============================== 21 passed in 9.18s ==============================
 ```
 
 The scripted retrieval test reaches a later inbox item, uses its exact content in a
@@ -115,9 +116,22 @@ then verifies that reference is absent from persistent storage after return. Oth
 checks cover other-seat refusal, bounded hostile index fields, small-budget completion,
 and outside-text restrictions on both financial and notebook writes.
 
-No paid population experiment, mainnet action, transfer, deployment, or commit was
-performed. These results establish functioning interfaces and smaller rendered
+These offline measurements establish functioning interfaces and smaller rendered
 requests; they do not establish cheaper useful decisions, collaboration, income,
 or Class 3 emergence. The next behavioral comparison must measure total inference
 spend per completed useful decision, including retrieval calls, rather than initial
 prompt size alone.
+
+Release follow-up: [bounded testnet validation](live-smoke.md). PR review also repaired
+result-size budget overruns and false delivery of omitted inbox entries. Model and
+program calls reserve an affordable final-answer scaffold before tool/child spending.
+Oversized unaffordable bodies remain unloaded; they do not confer acknowledgement
+rights. An unaffordable continuation is a mechanical failure, not a voluntary decline.
+
+Only the routed root call may use a routing-estimate bridge. Retrieval and child
+calls spend the liable seat's own remaining cover; they cannot repeatedly draw
+from the commons. Regression checks cover direct and chained bridge refusal.
+
+Sparse outcome delivery is checkpointed separately. Acknowledgement advances only
+through the contiguous delivered prefix for that seat; fetching a later item cannot
+hide earlier unseen feedback, even across recovery or interleaved global IDs.

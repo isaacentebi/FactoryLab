@@ -878,8 +878,7 @@ class SchematicsMixin:
         index["proposals"] = [{"kind": row["kind"]} for row in index["proposals"]]
         return {
             "stable_prefix": (
-                "OPERATING ACCESS\nThese capabilities and your account support acting; "
-                "they are not evidence for this commission. Grade only its frozen record.\n"
+                "OPERATING ACCESS\n"
                 + CAPABILITY_HEADER
                 + json.dumps(index, sort_keys=True, separators=(",", ":"))
             ),

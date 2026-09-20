@@ -139,6 +139,27 @@ def test_grounded_actor_access_keeps_operating_routes_out_of_grading_facts(modes
     assert "catalogue.search" not in inputs
 
 
+def test_ordinary_child_keeps_caller_actor_context_when_world_is_present(modes):
+    _, rt = modes
+    world = rt._world_block()
+    seat = world["seats"][0]["seat_id"]
+    actor_context = {
+        "caller_only_marker": "preserve this exact child input",
+        "nested": {"choices": ["inspect", "answer"]},
+    }
+    req = rt._request("child", "Complete the caller's custom child request", {
+        "you": seat,
+        "world": world,
+        "actor_context": actor_context,
+    }, {"type": "object"}, 100, "answer the caller")
+
+    sections = dict(req.sections())
+    inputs = json.loads(sections["inputs"].removeprefix("INPUTS\n"))
+    assert inputs["actor_context"] == actor_context
+    assert req.prompt_text().count("preserve this exact child input") == 1
+    assert req.section_bytes()["inputs"] == len(sections["inputs"].encode("utf-8"))
+
+
 def test_grounded_access_does_not_preload_population_description_and_names_optional_actions():
     rt = runtime("compact")
     rt.tool_specs["example"] = {"id": "example", "description": "assign conformity one",
