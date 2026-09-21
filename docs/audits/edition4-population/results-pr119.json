@@ -1,0 +1,143 @@
+{
+  "source_commit": "a874f1e15901754ebaa5f4e6497612861f3ce1b0",
+  "cost": {
+    "cap_micro": 5000000,
+    "max_calls": 1000,
+    "attempted": 460,
+    "known_calls": 460,
+    "known_micro": 1259488,
+    "uncertain_calls": 0,
+    "uncertain_micro": 0,
+    "overruns": 0,
+    "refusals": 0,
+    "consecutive_provider_failures": 0,
+    "recover_provider_failures": true,
+    "max_consecutive_provider_failures": 3,
+    "remaining_micro": 3740512,
+    "known_mean_micro": "314872/115",
+    "stop_reason": null
+  },
+  "timing": {
+    "declared_interval_ns": 10000000000,
+    "ticks": 200,
+    "events": 2147,
+    "measured_interval_ns": 28111856437
+  },
+  "coverage": {
+    "status": "inconclusive",
+    "criteria_met": {
+      "delivered_ticks": false,
+      "assessed_grounded_samples": false,
+      "contrary_grounded_samples": true,
+      "authoritative_bills": true
+    },
+    "declared_before_run": {
+      "planned_tick_ceiling": 240,
+      "minimum_delivered_ticks": 240,
+      "minimum_assessed_grounded_samples": 10,
+      "minimum_contrary_grounded_samples": 1
+    },
+    "horizons_ticks": {
+      "grounded_due": 10,
+      "grounded_close_from_open": 30,
+      "consequence_backstop": 60,
+      "governance_activation_floor": 180,
+      "observe_backstop_then_governance_floor": 240
+    },
+    "delivered": {
+      "ticks": 200,
+      "grounded": {
+        "assessed": 2,
+        "supported": 1,
+        "contrary": 1,
+        "unknown": 25,
+        "censored": 42,
+        "outstanding": 9,
+        "malformed_or_uncited_excluded": 0
+      },
+      "outstanding_decisions": 19,
+      "calls": 460,
+      "decisions": 1282,
+      "known_micro_per_tick": "157436/25",
+      "known_micro_per_decision": "629744/641",
+      "calls_per_tick": "23/10",
+      "decisions_per_tick": "641/100"
+    },
+    "critical_path_io": {
+      "provider_complete_calls": 460,
+      "provider_complete_elapsed_ns": 5916721120800,
+      "exchange_account_calls": 430,
+      "exchange_account_elapsed_ns": 480842947991,
+      "exchange_mids_calls": 392,
+      "exchange_mids_elapsed_ns": 262215827254,
+      "selected_total_calls": 1282,
+      "selected_total_elapsed_ns": 6659779896045,
+      "selected_mean_elapsed_ns": "6659779896045/1282",
+      "scope": "this process only; includes journal overhead, excludes replay"
+    },
+    "interpretation": "coverage contract not met; do not interpret absence or rates as behavior"
+  },
+  "execution": {
+    "intents": 2,
+    "statuses": {
+      "filled": 2,
+      "resting": 0,
+      "cancelled": 0,
+      "rejected": 0,
+      "uncertain": 0
+    },
+    "polled_fills": 2,
+    "terminal_reconciliation": {
+      "attempted": true,
+      "fill_read_error": null
+    },
+    "positions_closed_at_exit": false
+  },
+  "terminated": true,
+  "venue_at_exit": {
+    "equity_usd": "964.975590865",
+    "positions": [
+      {
+        "coin": "BTC",
+        "size": "-0.005",
+        "entry_px": "81732.0"
+      }
+    ],
+    "open_orders": []
+  },
+  "venue_independent": {
+    "equity_usd": "942.760013865",
+    "positions": [
+      {
+        "coin": "BTC",
+        "size": "-0.005",
+        "entry_px": "81732.0"
+      }
+    ],
+    "open_orders": []
+  },
+  "evidence": {
+    "work/population-pr119/live/report.json": "bf82c54ea8d3b0d4f3ee905cd3a0c761108727f6e721436a4408b4c8fddcc16e",
+    "work/population-pr119/live/events.json": "f3910870188c6883cc921b0fd6afc6778eb3b187e38219704b3441674b4e7857",
+    "work/population-pr119/postmortem/report.json": "fd21a0096afc89d6527dacaaa7630c9075f6f226eccb7ec75b8311f6dce07527",
+    "work/population-pr119/analysis.json": "ad80bfcec793161c871c485569429d7bb065b7b1e57f8935c6b83750a3c12476",
+    "work/population-pr119/venue-after-independent.json": "0e9cc6652b174428f15ea64b921e4e27b65b13afd8dc1d08106aed43855422ef"
+  },
+  "operator_recovery": {
+    "separate_user_authorization": true,
+    "kind": "operator_recovery_result",
+    "result": {
+      "order_id": "60677048880",
+      "status": "filled",
+      "filled_size": "0.005",
+      "avg_px": "86533.0",
+      "error": null
+    },
+    "venue_after": {
+      "equity_usd": "942.352314865",
+      "positions": [],
+      "open_orders": []
+    },
+    "evidence_sha256": "1c162de900fc44fbba759dbc38b9b446c2d7e1afaf21a7903e576fa973cec12e"
+  }
+}
