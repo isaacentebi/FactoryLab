@@ -67,6 +67,10 @@ class CatalogueEntry:
     prompt_usd_per_token: str
     completion_usd_per_token: str
     context_length: int | None
+    # The provider's advertised physical completion window.  This is distinct
+    # from context length: callers must not invent an output limit from the
+    # combined input/output window when the provider leaves it unreported.
+    max_completion_tokens: int | None = None
 
     def price(self) -> TokenPrice:
         """Return exact per-token micro-USD prices without rounding the quotes."""

@@ -141,6 +141,9 @@ def _assembly_contract(aid: str, role: str, accepts: tuple[str, ...], max_tokens
     """Publish accepts/emits and custom schemas without exposing assembly internals."""
     from factorylab.cortex.registration import seed_emits
 
+    if type(max_tokens) is not int or max_tokens <= 0:
+        raise ValueError("assembly contracts require a resolved positive max_tokens")
+
     return Contract(
         id=aid,
         version=version,

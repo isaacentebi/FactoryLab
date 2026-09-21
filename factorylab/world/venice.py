@@ -22,6 +22,11 @@ from factorylab.world.x402 import VENICE_URL, X402Client, http_request, redact
 MAX_REASONING_CHARS = 2_000
 
 
+def _positive_int(value: Any) -> int | None:
+    """Return provider metadata only when it is a positive, non-boolean integer."""
+    return value if type(value) is int and value > 0 else None
+
+
 def prepare_top_up(client: X402Client, *, now_s: int, nonce: bytes) -> dict:
     """Fix a $5 quote and unsigned authorization before the treasury reserves and journals it."""
     from factorylab.world.x402 import TOP_UP_MICRO, authorization_typed_data, parse_quote
@@ -332,6 +337,7 @@ class VeniceProvider:
                         prompt_usd_per_token=quotes[0],
                         completion_usd_per_token=quotes[1],
                         context_length=spec.get("availableContextTokens"),
+                        max_completion_tokens=_positive_int(spec.get("maxCompletionTokens")),
                     )
                 )
             self._prices = {entry.id: entry.price() for entry in entries}

@@ -42,6 +42,7 @@ def catalogue():
         "id": "test/flash",
         "name": "Test Flash",
         "context_length": 8192,
+        "top_provider": {"max_completion_tokens": 16384},
         "pricing": {"prompt": "0.00000015", "completion": "0.00000025", "request": "0"},
     }]}
 
@@ -106,7 +107,9 @@ def test_catalogue_preserves_decimal_quotes_and_rounds_total_up(catalogue):
     transport = FakeTransport([catalogue])
     entry, = OpenRouterProvider(transport=transport).catalogue()
     assert transport.calls == [("GET", "/models", None)]
-    assert (entry.id, entry.name, entry.context_length) == ("test/flash", "Test Flash", 8192)
+    assert (entry.id, entry.name, entry.context_length, entry.max_completion_tokens) == (
+        "test/flash", "Test Flash", 8192, 16384,
+    )
     assert entry.prompt_usd_per_token == "0.00000015"
     assert entry.completion_usd_per_token == "0.00000025"
     price = entry.price()
@@ -117,6 +120,20 @@ def test_catalogue_preserves_decimal_quotes_and_rounds_total_up(catalogue):
     assert price.cost(6, 1) == 2
     assert price.cost(0, 0) == 0
     assert type(price.cost(1, 1)) is int
+
+
+@pytest.mark.parametrize("advertised", [None, 0, -1, True, 1.5, "16384", [], {}])
+def test_catalogue_ignores_invalid_completion_limits(catalogue, advertised):
+    catalogue["data"][0]["top_provider"]["max_completion_tokens"] = advertised
+    entry, = OpenRouterProvider(transport=FakeTransport([catalogue])).catalogue()
+    assert entry.max_completion_tokens is None
+
+
+def test_catalogue_does_not_infer_completion_limit_from_context(catalogue):
+    catalogue["data"][0].pop("top_provider")
+    entry, = OpenRouterProvider(transport=FakeTransport([catalogue])).catalogue()
+    assert entry.context_length == 8192
+    assert entry.max_completion_tokens is None
 
 
 @pytest.mark.parametrize("remaining, expected", [
@@ -188,6 +205,7 @@ def test_default_transport_disables_redirects(monkeypatch, req):
         return original_build_opener(*handlers)
 
     def fake_open(self, wire_req, timeout):
+        assert timeout is None  # Model processing has no client thinking deadline.
         handler, = handlers_seen
         assert handler.redirect_request(wire_req, None, 302, "", {}, "https://other.test") is None
         raise error.HTTPError(wire_req.full_url, 302, "redirect", {}, BytesIO(b"redirect"))

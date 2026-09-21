@@ -74,8 +74,8 @@ class AssemblySpec:
             self.emits if self.emits is not None else seed_emits(self.role), self.schemas)
         object.__setattr__(self, "emits", emits)
         object.__setattr__(self, "schemas", schemas)
-        if self.max_tokens <= 0:
-            raise ValueError("max_tokens must be positive")
+        if type(self.max_tokens) is not int or self.max_tokens <= 0:
+            raise ValueError("max_tokens must be a resolved positive integer")
 
 
 @dataclass
@@ -810,7 +810,7 @@ def validate_proposal(proposal: dict) -> None:
     # A tool's timeout stays within [1, 5] (checked where tools are parsed); a
     # program seat's may reach MAX_PROGRAM_TIMEOUT_S.
     fields.update({"gamma": {"type": "number", "minimum": 1e-300, "maximum": 1},
-                   "max_tokens": {"type": "integer", "minimum": 16, "maximum": 4096},
+                   "max_tokens": {"type": ["integer", "null"], "minimum": 16},
                    "timeout_s": {"type": "integer", "minimum": 1,
                                  "maximum": MAX_PROGRAM_TIMEOUT_S},
                    "accepts": {"type": "array", "items": {"type": "string"}},
