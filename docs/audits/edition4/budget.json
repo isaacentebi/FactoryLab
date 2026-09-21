@@ -1,10 +1,10 @@
 {
   "authorized_total_micro": 50000000,
-  "known_inference_micro": 6947799,
-  "remaining_authorization_micro": 43052201,
+  "known_inference_micro": 7120146,
+  "remaining_authorization_micro": 42879854,
   "active_rehearsal_caps_micro": {},
-  "remaining_unreserved_authorization_micro": 43015461,
-  "uncertain_micro": 36740,
+  "remaining_unreserved_authorization_micro": 42833408,
+  "uncertain_micro": 46446,
   "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [
     {
@@ -199,10 +199,17 @@
       "uncertain_micro": 0,
       "evidence": "../edition4-population/results.json",
       "status": "terminated at 240ticks; 623 calls all billed; coverage met; no new orders; wind-down reports precommitted spot dust"
+    },
+    {
+      "work": "PR117 population: stopped at 26 of 240 ticks",
+      "known_micro": 172347,
+      "uncertain_micro": 9706,
+      "evidence": "../edition4-population/results-pr117.json",
+      "status": "terminated and sealed; 78 known bills, one dispatched OpenRouterError without per-call bill; core wallet inferred 2253 micro from provider balance but admission retains 9706 micro uncertainty; no orders; coverage not met"
     }
   ],
   "venue_end": {
-    "equity_usd": "965.14998841",
+    "equity_usd": "965.15385641",
     "positions": [],
     "open_orders": []
   }
