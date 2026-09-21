@@ -127,6 +127,13 @@ def evaluator_answer_schema(
         "fidelity_finding": finding_schema(),
     }
     if include_realized:
+        # The final grounded commission reads an already-fixed return outcome.
+        # A new payoff claim or optional forecast cannot settle before that fact
+        # and the grounded branch deliberately does not open either one.  Keep
+        # them on ordinary evaluator requests, but do not advertise dead fields
+        # here.
+        properties.pop("payoff")
+        properties.pop("forecasts")
         properties["realized_consequence"] = {
             "type": "object",
             "properties": {
@@ -141,7 +148,8 @@ def evaluator_answer_schema(
     return {
         "type": "object",
         "properties": properties,
-        "required": ["rationale", "verdict"] if include_realized else ["rationale"],
+        "required": (["rationale", "verdict", "realized_consequence"]
+                     if include_realized else ["rationale"]),
     }
 
 

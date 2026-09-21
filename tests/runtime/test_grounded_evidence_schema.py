@@ -75,6 +75,14 @@ def _evidence_contract(provider):
     return schema["properties"]["realized_consequence"]["properties"]["evidence"]
 
 
+def _outcome_schema(provider):
+    """Return the effective schema rendered in the evaluator's actual request."""
+    text = _sent(provider)
+    head = text.index("OUTCOME SCHEMA") + len("OUTCOME SCHEMA")
+    schema, _ = json.JSONDecoder().raw_decode(text[head:].lstrip())
+    return schema
+
+
 def _ask(mode="reference", **commission):
     provider = _Capturing()
     rt = _runtime(mode, provider)
@@ -140,6 +148,50 @@ def test_both_prompt_modes_state_the_same_evidence_contract():
     # contract cannot drift between a full and a compact world.
     assert _sent(full) == _sent(compact)
     assert '"enum"' in _sent(compact)
+
+
+def test_final_grounded_request_requires_the_finding_and_omits_dead_forecasts():
+    _rt, provider, _refs, _event = _ask()
+    schema = _outcome_schema(provider)
+
+    assert "realized_consequence" in schema["required"]
+    assert {"payoff", "forecasts"}.isdisjoint(schema["properties"])
+    # The verdict remains: the final interpretation still enters the ordinary
+    # recursive meta-evaluation path.
+    assert "verdict" in schema["required"]
+
+
+def test_zero_financial_result_alone_is_not_stated_as_a_contrary_ground():
+    def zero_cost_only(payload):
+        changed = dict(payload)
+        contract = dict(changed["contract"])
+        contract["producer_outputs"] = {
+            "action": "defer", "defer": 2,
+            "rationale": "wait for enough evidence before deciding",
+        }
+        changed["contract"] = contract
+        evidence = []
+        for row in changed["evidence"]:
+            row = dict(row)
+            if row.get("kind") == "EconomicOutcome":
+                row["payload"] = {
+                    **row["payload"], "earned_micro": 0, "net_micro": 0,
+                    "cost_micro": 2_433,
+                }
+            evidence.append(row)
+        changed["evidence"] = evidence
+        return changed
+
+    _rt, provider, _refs, _event = _ask(amend=zero_cost_only)
+    grounded = provider.__dict__["grounded_input"]
+    prompt = _sent(provider)
+
+    assert grounded["producer_claim"]["action"] == "defer"
+    assert "contradicts an applicable frozen norm or criterion" in prompt
+    assert "does not require producer_claim to repeat that norm" in prompt
+    assert "Zero earnings, zero net, or compute cost alone is not contrary" in prompt
+    assert "When the evidence merely fails to show usefulness, answer unknown" in prompt
+    assert "Do not return payoff or forecasts" in prompt
 
 
 def test_a_commission_with_no_supplied_evidence_admits_the_empty_list_alone():

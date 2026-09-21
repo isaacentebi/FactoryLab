@@ -242,7 +242,11 @@ def test_the_seat_is_told_what_was_dropped_and_why():
     body = rt.outcomes.body(record["sha"])
     assert body["handle"] == "decision-x"
     assert body["outcome"] == {"kind": "return_sections_dropped", "status": "partial",
-                               "dropped": list(dropped)}
+                               "dropped": list(dropped),
+                               "rejected_section": "working_state",
+                               "rejection_reason": "wrong field type"}
+    entry = rt.outcomes.unread(seat)["items"][0]
+    assert entry["rejection_reason"] == dropped[0]["reason"]
 
 
 class BadSectionProvider(ScriptedProvider):
