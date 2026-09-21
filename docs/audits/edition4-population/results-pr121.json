@@ -1,0 +1,221 @@
+{
+  "source_commit": "b29f33745c38d117ad69e229e1c786d374ee21c1",
+  "evidence_sha256": {
+    "work/population-pr121/live/report.json": "a467f313200a33a9c276cefac05eace0f2859ac2f8917ff39c5e8f2c645c1466",
+    "work/population-pr121/live/events.json": "8c0e74fcecd0c803334a73fe059c094d15aca94a9abb133aca7f5ec6e15b00d6",
+    "work/population-pr121/effective-manifest.json": "80d5d3ecc3e06f2b9f2ee0a27244de2832f7f68d77a34c4aac14ec1d7d158298",
+    "work/population-pr121/venue-confirmation.json": "ad546df166243361acd8bef5a5d4177b1acfbcbf1370095ee708673fe6f9ba98"
+  },
+  "status": "completed",
+  "timing": {
+    "declared_interval_ns": 10000000000,
+    "ticks": 240,
+    "events": 2759,
+    "measured_interval_ns": 20617040796
+  },
+  "cost": {
+    "cap_micro": 5000000,
+    "max_calls": 1000,
+    "attempted": 619,
+    "known_calls": 619,
+    "known_micro": 1534603,
+    "uncertain_calls": 0,
+    "uncertain_micro": 0,
+    "overruns": 0,
+    "refusals": 0,
+    "consecutive_provider_failures": 0,
+    "recover_provider_failures": true,
+    "max_consecutive_provider_failures": 3,
+    "remaining_micro": 3465397,
+    "known_mean_micro": "1534603/619",
+    "stop_reason": null
+  },
+  "behavioral_screen": {
+    "status": "inconclusive",
+    "criteria_met": {
+      "delivered_ticks": true,
+      "assessed_grounded_samples": false,
+      "contrary_grounded_samples": false,
+      "authoritative_bills": true
+    },
+    "declared_before_run": {
+      "planned_tick_ceiling": 240,
+      "minimum_delivered_ticks": 240,
+      "minimum_assessed_grounded_samples": 10,
+      "minimum_contrary_grounded_samples": 1
+    },
+    "horizons_ticks": {
+      "grounded_due": 10,
+      "grounded_close_from_open": 30,
+      "consequence_backstop": 60,
+      "governance_activation_floor": 180,
+      "observe_backstop_then_governance_floor": 240
+    },
+    "delivered": {
+      "ticks": 240,
+      "grounded": {
+        "assessed": 0,
+        "supported": 0,
+        "contrary": 0,
+        "unknown": 75,
+        "censored": 49,
+        "outstanding": 8,
+        "malformed_or_uncited_excluded": 0
+      },
+      "outstanding_decisions": 34,
+      "calls": 619,
+      "decisions": 1584,
+      "known_micro_per_tick": "1534603/240",
+      "known_micro_per_decision": "1534603/1584",
+      "calls_per_tick": "619/240",
+      "decisions_per_tick": "33/5"
+    },
+    "critical_path_io": {
+      "provider_complete_calls": 619,
+      "provider_complete_elapsed_ns": 4471642937449,
+      "exchange_account_calls": 515,
+      "exchange_account_elapsed_ns": 533572572540,
+      "exchange_mids_calls": 448,
+      "exchange_mids_elapsed_ns": 235268561211,
+      "selected_total_calls": 1582,
+      "selected_total_elapsed_ns": 5240484071200,
+      "selected_mean_elapsed_ns": "374320290800/113",
+      "scope": "this process only; includes journal overhead, excludes replay"
+    },
+    "interpretation": "coverage contract not met; do not interpret absence or rates as behavior"
+  },
+  "venue_after": {
+    "equity_usd": "945.78222488",
+    "positions": [],
+    "open_orders": []
+  },
+  "fresh_venue_confirmation": {
+    "equity_usd": "945.77394736",
+    "positions": [],
+    "open_orders": []
+  },
+  "work": {
+    "actions": {
+      "defer": 29,
+      "hold": 215,
+      "investigate": 4
+    },
+    "actions_emitted": 248,
+    "adversary": {
+      "calls": 125,
+      "judge_failed": 0,
+      "settled": 93,
+      "verdict_exposed": 0
+    },
+    "judges": {
+      "judge-consequence": {
+        "evaluation_unmeasured": 6,
+        "invocations": 170,
+        "mean_payoff": 0.603361,
+        "mean_verdict": 0.630368,
+        "verdict_consequences_later_unmeasured": 81,
+        "verdict_forecasts_without_payoff": 163,
+        "verdicts": 163
+      },
+      "judge-fidelity": {
+        "evaluation_unmeasured": 34,
+        "invocations": 112,
+        "mean_payoff": 0.384286,
+        "mean_verdict": 0.492361,
+        "verdict_consequences_later_unmeasured": 47,
+        "verdict_forecasts_without_payoff": 72,
+        "verdicts": 72
+      }
+    },
+    "metas": {
+      "meta-calibration": {
+        "mean_score": 0.957,
+        "verdicts": 20
+      },
+      "meta-countercase": {
+        "mean_score": 0.844444,
+        "verdicts": 9
+      }
+    },
+    "producer_return_emissions": 394,
+    "producer_return_replays": 137,
+    "producer_return_statuses": {
+      "malformed": 9,
+      "ok": 248
+    },
+    "producer_returns": 257,
+    "returns_without_action": 9
+  },
+  "births": {
+    "child_funding": [],
+    "constraints": {
+      "budget_infeasible": 0,
+      "unaffordable_routes": 0
+    },
+    "final_entitlements_micro": {
+      "antagonist": 10272186,
+      "constructor": 10568303,
+      "empirical": 10610640,
+      "judge-consequence": 10078414,
+      "judge-fidelity": 10479673,
+      "mechanism": 10553177,
+      "meta-calibration": 10620557,
+      "meta-countercase": 10649759,
+      "opportunity": 10627580
+    },
+    "population_registry": [],
+    "registered_events": []
+  },
+  "cache": {
+    "cache_reported_calls": 580,
+    "cache_unreported_calls": 0,
+    "interpretation": "The fraction covers only final-call rows with an explicit cache field; unreported is unknown, not zero.",
+    "invocation_rows": 580,
+    "provider_attempted_calls": 619,
+    "reported_cached_tokens": 728064,
+    "reported_input_tokens": 6705894,
+    "reported_token_fraction": 0.108571,
+    "scope": "usage from the final model call represented by each invocation row; continuation-call usage is not summed"
+  },
+  "interpretation": "Full tick target; no final-call length truncations; 18 schema-malformed finals; all75 grounded findings unknown. Executed order tools followed by malformed order answers lost valid evaluable claims. Class3 and durable learning unproven.",
+  "mechanical": {
+    "final_invocations": 580,
+    "provider_calls": 619,
+    "length_truncated_final_invocations": 0,
+    "malformed_final_invocations": 18,
+    "executed_limit_order_tool_calls": 4,
+    "malformed_trading_handles": [
+      "decision-264",
+      "decision-273"
+    ],
+    "malformed_invocation_seqs": [
+      6688,
+      7050
+    ],
+    "unknown_finding_seqs": [
+      8845,
+      9296
+    ],
+    "all_provider_stop_reasons": {
+      "stop": 619
+    }
+  },
+  "provider_usage_all_calls": {
+    "input_tokens": 7178351,
+    "output_tokens": 216384,
+    "cost_micro": 1534603,
+    "calls": 619
+  },
+  "feedback": {
+    "final_finding_bodies_fetched": 12,
+    "final_findings": 75,
+    "cursor_ack_events": 8,
+    "retention_example": {
+      "fetch_seq": 2233,
+      "invocation_seq": 2246,
+      "decision": "decision-84"
+    },
+    "learning": "not established",
+    "trading_decisions_evaluation_eligible": true
+  }
+}

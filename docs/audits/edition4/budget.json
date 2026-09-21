@@ -1,11 +1,9 @@
 {
   "authorized_total_micro": 50000000,
-  "known_inference_micro": 8383389,
-  "remaining_authorization_micro": 41616611,
-  "active_rehearsal_caps_micro": {
-    "pr121-population-240": 5000000
-  },
-  "remaining_unreserved_authorization_micro": 36570165,
+  "known_inference_micro": 9917992,
+  "remaining_authorization_micro": 40082008,
+  "active_rehearsal_caps_micro": {},
+  "remaining_unreserved_authorization_micro": 40035562,
   "uncertain_micro": 46446,
   "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [
@@ -222,6 +220,13 @@
       "uncertain_micro": 0,
       "calls": 3,
       "note": "Three no-trading native-completion judge probes; two assessments and one valid initial catalogue request, all stopped normally. Reservation released once."
+    },
+    {
+      "name": "pr121-population-240",
+      "known_micro": 1534603,
+      "uncertain_micro": 0,
+      "calls": 619,
+      "note": "Sealed 240-tick native-completion population; active cap released once. No additional world authorized."
     }
   ],
   "venue_end": {
