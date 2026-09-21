@@ -3,8 +3,9 @@
 The runner makes a fresh in-memory manifest from the edition 3 rehearsal manifest.  It
 does not make a top-up, an x402 purchase, or a treasury transfer.  A provider wrapper
 admits a call only when its quote fits the independent cap and records the provider's
-actual bill separately; provider-reported overruns and bills with no reported cost
-stop the run before another completion is admitted.
+actual bill separately. Failed dispatches retain their full quote as liability while
+later work may continue; repeated failures and unauthoritative successful bills stop
+admission. A failed completion is never retried by this wrapper.
 """
 
 from __future__ import annotations
@@ -56,12 +57,15 @@ class Admission:
     """Track independent admission and provider-bill bounds for one rehearsal.
 
     Guarantees: no admitted call starts above the remaining quote cap or call count;
-    every completion attempt is counted; a bill that is unknown or above its quote
-    is retained as uncertain evidence and prevents subsequent admissions.
+    every completion attempt is counted. With population recovery enabled, failed
+    dispatches retain their quote and three consecutive exceptions stop admission.
+    Otherwise a dispatched failure stops immediately, preserving probe protocols. Successful
+    responses with unknown bills and reported overruns still stop immediately.
     """
 
     cap_micro: int
     max_calls: int
+    recover_provider_failures: bool = False
     attempted: int = 0
     known_micro: int = 0
     uncertain_micro: int = 0
@@ -70,6 +74,7 @@ class Admission:
     overruns: int = 0
     refusals: int = 0
     stop_reason: str | None = None
+    consecutive_failures: int = 0
 
     @property
     def remaining_micro(self) -> int:
@@ -111,6 +116,7 @@ class Admission:
             self.uncertain_micro += max(0, ceiling_micro)
             self.stop_reason = "unknown_bill"
             return
+        self.consecutive_failures = 0
         self.known_micro += cost
         if cost > ceiling_micro:
             self.overruns += 1
@@ -126,12 +132,22 @@ class Admission:
 
     def observe_exception(self, exc: BaseException, ceiling_micro: int) -> None:
         """Classify an exception without retaining a provider body or credential."""
+        self.consecutive_failures += 1
         classified = classify_provider_failure(exc) if isinstance(exc, Exception) else exc
         if not isinstance(classified, UnbilledFailure) and getattr(classified, "sent", True):
             self.unknown_bills += 1
             self.uncertain_bills += 1
             self.uncertain_micro += max(0, ceiling_micro)
-            self.stop_reason = "unknown_bill_after_dispatch"
+            if not self.recover_provider_failures:
+                self.stop_reason = "unknown_bill_after_dispatch"
+        if not self.recover_provider_failures:
+            return
+        if self.known_micro + self.uncertain_micro >= self.cap_micro:
+            self.stop_reason = "cap_exhausted"
+        elif self.attempted >= self.max_calls:
+            self.stop_reason = "max_calls"
+        elif self.consecutive_failures >= 3:
+            self.stop_reason = "consecutive_provider_failures"
 
     def report(self) -> dict[str, Any]:
         known_calls = self.attempted - self.uncertain_bills
@@ -145,6 +161,9 @@ class Admission:
             "uncertain_micro": self.uncertain_micro,
             "overruns": self.overruns,
             "refusals": self.refusals,
+            "consecutive_provider_failures": self.consecutive_failures,
+            "recover_provider_failures": self.recover_provider_failures,
+            "max_consecutive_provider_failures": 3 if self.recover_provider_failures else None,
             "remaining_micro": self.remaining_micro,
             "known_mean_micro": (
                 str(Fraction(self.known_micro, known_calls)) if known_calls else None
@@ -664,7 +683,7 @@ def run_rehearsal(
         output_dir = Path(out)
         output_dir.mkdir(parents=True, exist_ok=False)
         report_path = output_dir / "report.json"
-    admission = Admission(cap_micro, max_calls)
+    admission = Admission(cap_micro, max_calls, recover_provider_failures=True)
     try:
         base = load_manifest(str(world))
         manifest = effective_manifest(

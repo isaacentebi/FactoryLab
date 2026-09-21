@@ -8,6 +8,7 @@ import pytest
 
 from factorylab.runtime.live import LiveClock
 from factorylab.runtime.worlds import load_manifest
+from factorylab.world.clock import ClockSource
 from factorylab.world.evm import RailError
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.models import ModelRequest, ModelResponse
@@ -207,6 +208,59 @@ def test_admission_uses_canonical_provider_failure_billing_classification():
     assert unknown.admission.report()["uncertain_calls"] == 1
     assert unknown.admission.uncertain_micro == ceiling
     assert unknown.admission.stop_reason == "unknown_bill_after_dispatch"
+    assert not unknown.admission.can_admit(ceiling)[0]
+
+
+def test_failed_dispatch_keeps_liability_without_retry_and_later_work_can_succeed():
+    manifest = rehearsal.effective_manifest(load_manifest(WORLD))
+
+    class Intermittent(StubProvider):
+        calls = 0
+
+        def complete(self, req):
+            self.calls += 1
+            if self.calls == 1:
+                raise OpenRouterError(None, "lost response", sent=True)
+            return self.response
+
+    inner = Intermittent(ModelResponse(request().model_id, "{}", 1, 1, "stop", cost_micro=1))
+    probe = rehearsal.PrepaidProvider(inner, manifest,
+                                      rehearsal.Admission(1_000_000, 10,
+                                                           recover_provider_failures=True))
+    ceiling = probe._ceiling(request())
+    with pytest.raises(OpenRouterError):
+        probe.complete(request())
+    assert inner.calls == 1  # No hidden retry or replacement answer.
+    later = replace(request(), messages=({"role": "user", "content": "later work"},))
+    assert probe.complete(later).cost_micro == 1
+    assert inner.calls == 2
+    assert probe.admission.uncertain_micro == ceiling
+    assert probe.admission.known_micro == 1
+    assert probe.admission.remaining_micro == 1_000_000 - ceiling - 1
+    assert probe.admission.consecutive_failures == 0
+
+
+@pytest.mark.parametrize("sent", [False, True])
+def test_consecutive_provider_failures_stop_before_a_fourth_dispatch(sent):
+    admission = rehearsal.Admission(1000, 10, recover_provider_failures=True)
+    for _ in range(3):
+        admission.admit(100)
+        admission.attempted_call()
+        admission.observe_exception(OpenRouterError(None, "failed", sent=sent), 100)
+    assert admission.uncertain_micro == (300 if sent else 0)
+    assert admission.stop_reason == "consecutive_provider_failures"
+    with pytest.raises(rehearsal.RehearsalRefused):
+        admission.admit(100)
+    assert admission.attempted == 3
+
+
+def test_one_unknown_bill_can_exhaust_cap_without_exhausting_failure_allowance():
+    admission = rehearsal.Admission(100, 10, recover_provider_failures=True)
+    admission.admit(100)
+    admission.attempted_call()
+    admission.observe_exception(OpenRouterError(None, "failed", sent=True), 100)
+    assert admission.stop_reason == "cap_exhausted"
+    assert not admission.can_admit(1)[0]
 
 
 def test_every_treasury_direction_is_refused_before_prepare():
@@ -406,3 +460,45 @@ def test_runner_consumes_injected_clock_and_persists_dead_diary(tmp_path):
     assert observer["observer"]["ticks"] == report["timing"]["ticks"]
     assert observer["costs"]["basis"] == "admission_report"
     assert report["observer"]["scope"] == "rehearsal_only_recent_evidence_window"
+
+
+@pytest.mark.gate
+def test_world_continues_after_lost_provider_response_with_liability_reserved(tmp_path):
+    class Intermittent(StubProvider):
+        calls = 0
+
+        def complete(self, req):
+            self.calls += 1
+            if self.calls == 2:
+                raise OpenRouterError(None, "lost response", sent=True)
+            return self.response
+
+    provider = Intermittent(
+        ModelResponse(request().model_id, "{}", 1, 1, "stop", cost_micro=1))
+    report = rehearsal.run_rehearsal(
+        WORLD, out=tmp_path / "run", target_ticks=5, minimum_ticks=5,
+        provider=provider,
+        exchange=FakeExchange(seed=1, coins=("BTC", "ETH"), start_cash_usd="120"),
+        clock_source=ClockSource(0, rehearsal.SHORT_TICK_NS, 5),
+        source_root=Path(rehearsal.__file__).resolve().parents[1],
+    )
+    assert report["status"] == "completed"
+    assert report["summary"]["terminated"] and report["summary"]["seal_key_released"]
+    assert report["summary"]["wallet_conservation"]
+    assert report["timing"]["ticks"] == 5
+    cost = report["cost"]
+    assert provider.calls == cost["attempted"] > 2
+    assert cost["uncertain_calls"] == 1 and cost["uncertain_micro"] > 0
+    assert cost["known_micro"] == cost["known_calls"] == provider.calls - 1
+    assert cost["stop_reason"] is None
+    rows = json.loads((tmp_path / "run" / "events.json").read_text())
+    failed = next(row for row in rows if row["kind"] == "invocation"
+                  and row["status"] == "failed")
+    assert sum(row["kind"] == "invocation" and row.get("handle") == failed["handle"]
+               for row in rows) == 1
+    assert sum(row["kind"] == "metering.uncertain" and row.get("handle") == failed["handle"]
+               for row in rows) == 1
+    assert not any(row["kind"] == "wallet.settle_uncertain" for row in rows)
+    assert any(row["kind"] == "invocation" and row["seq"] > failed["seq"]
+               and row["handle"] != failed["handle"] for row in rows)
+    assert report["summary"]["execution"]["intents"] == 0
