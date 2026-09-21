@@ -1,9 +1,9 @@
 {
   "authorized_total_micro": 50000000,
-  "known_inference_micro": 7120146,
-  "remaining_authorization_micro": 42879854,
+  "known_inference_micro": 8379634,
+  "remaining_authorization_micro": 41620366,
   "active_rehearsal_caps_micro": {},
-  "remaining_unreserved_authorization_micro": 42833408,
+  "remaining_unreserved_authorization_micro": 41573920,
   "uncertain_micro": 46446,
   "accounting": "Provider-reported inference bills including superseded probe attempts and the September 19 discovery diagnostic. Further probes remain bounded by this cumulative authorization. Not a statement about subscription costs of the coding committee.",
   "items": [
@@ -206,10 +206,17 @@
       "uncertain_micro": 9706,
       "evidence": "../edition4-population/results-pr117.json",
       "status": "terminated and sealed; 78 known bills, one dispatched OpenRouterError without per-call bill; core wallet inferred 2253 micro from provider balance but admission retains 9706 micro uncertainty; no orders; coverage not met"
+    },
+    {
+      "work": "PR119 population: 200 of 240 ticks",
+      "known_micro": 1259488,
+      "uncertain_micro": 0,
+      "evidence": "../edition4-population/results-pr119.json",
+      "status": "sealed after 200 ticks at deadline; 460 known calls; 2 population fills; ETH closed during shutdown; residual BTC separately authorized reduce-only recovery filled; fresh snapshot no perpetual positions or open orders"
     }
   ],
   "venue_end": {
-    "equity_usd": "965.15385641",
+    "equity_usd": "942.352314865",
     "positions": [],
     "open_orders": []
   }
