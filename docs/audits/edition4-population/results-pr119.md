@@ -5,12 +5,13 @@ terminated and sealed after 200 of 240 planned ticks, 1,282 sampled decisions an
 460 provider calls. Known inference was $1.259488, with no new uncertain bills.
 The wall-clock limit ended the run; neither the $5 cap nor 1,000-call cap bound it.
 The generic terminal reason `explicit_kill:budget` is not evidence of depleted money.
-There was no provider exception, so isolated-error recovery was not exercised live.
+There was no transport or billing exception, so isolated-error recovery was not
+exercised live. Output failures did produce provider.fault events.
 
 ## Action and remaining exposure
 
 Mechanism decision-84 submitted a 0.005 BTC short and a 0.15 ETH long through
-`venue.place_market` (tool receipts seq 2267 and 2281). Both filled. These were two
+`venue.place_market` (tool calls seq 2267 and 2281; fill receipts seq 2421 and 2423). Both filled. These were two
 legs of one decision, not two independently discovered strategies. The summary's
 legacy `orders_placed=0` counter does not count these tool-submitted orders;
 the execution report and attributable tool receipts do.
@@ -78,8 +79,14 @@ throughout the run. Lack of production must not be attributed solely to unwillin
 ## Next warranted work
 
 The separately authorized residual-position recovery is complete.
-Next reproduce evaluator answer starvation offline using the recorded limits and
-provider-response shape. Preserve reasoning rather than returning to the old patch
+The frozen manifest explicitly set a 4,096 total-completion allowance: hidden
+reasoning and visible JSON share it. New assembly registration also caps this field
+at 4,096, so a participant cannot simply register an 8,192-token replacement.
+The prior 4,096-versus-8,192 diagnostic used a smaller, different fixture; both
+4,096 answers finished, while one of two 8,192 answers failed schema validation.
+It was a diagnostic, not a propagated fix or proof that 8,192 resolves this workload.
+Next reproduce the recorded production-sized request and provider-response shape;
+review manifest allowances, registration validation and payable-ceiling tests together. Preserve reasoning rather than returning to the old patch
 of disabling it. Any allowance change must still reserve a payable ceiling and be
 tested as an isolated model-interface change before another population run.
 
