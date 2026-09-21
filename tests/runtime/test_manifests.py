@@ -246,3 +246,14 @@ def test_manifest_card_scope_must_name_a_kind_a_seed_assembly_emits():
         manifest_from_dict(raw)
     raw["charter"]["cards"][0]["answers_for"] = "WeatherForecast"
     assert manifest_from_dict(raw).charter.cards[0].answers_for == "WeatherForecast"
+
+
+def test_provider_native_completion_mode_preserves_explicit_historical_allowance():
+    d = _base()
+    d["assemblies"][0]["max_tokens"] = "provider"
+    native = manifest_from_dict(d)
+    assert native.assemblies[0].max_tokens is None
+    d["assemblies"][0]["max_tokens"] = None
+    assert manifest_from_dict(d).assemblies[0].max_tokens is None
+    d["assemblies"][0]["max_tokens"] = 4096
+    assert manifest_from_dict(d).assemblies[0].max_tokens == 4096

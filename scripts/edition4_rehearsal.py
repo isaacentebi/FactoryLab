@@ -410,6 +410,7 @@ def effective_manifest(
     producer_feedback: str | None = None,
     address_enabled: bool | None = None,
     reasoning: str = "preserve",
+    native_completions: bool = False,
 ) -> WorldManifest:
     """Freeze one factorized short-tick testnet identity before any paid work."""
     if base.exchange.kind != "hyperliquid" or base.exchange.mainnet:
@@ -425,6 +426,12 @@ def effective_manifest(
         raise ValueError("address_enabled must be boolean")
     if reasoning not in FACTOR_REASONING:
         raise ValueError("reasoning must be preserve, off, or on")
+    if type(native_completions) is not bool:
+        raise ValueError("native_completions must be boolean")
+    models = _factor_models(base, reasoning)
+    if native_completions:
+        models = tuple(replace(m, reasoning=tuple(
+            (k, v) for k, v in m.reasoning if k != "max_tokens")) for m in models)
     exchange = replace(base.exchange, client_namespace=uuid4().hex)
     # An absent reserve selects UnconfiguredRail. It refuses transfers and does not
     # construct a signer; the charter, seed roster, $300 endowment and venue cash stay.
@@ -441,7 +448,9 @@ def effective_manifest(
                     replace(base.evaluation, producer_feedback=producer_feedback)),
         tools=(base.tools if address_enabled is None else
                replace(base.tools, address_enabled=address_enabled)),
-        models=_factor_models(base, reasoning),
+        models=models,
+        assemblies=(tuple(replace(a, max_tokens=None) for a in base.assemblies)
+                    if native_completions else base.assemblies),
     )
     manifest.validate()
     return manifest
@@ -692,6 +701,7 @@ def run_rehearsal(
             producer_feedback=producer_feedback,
             address_enabled=address_enabled,
             reasoning=reasoning,
+            native_completions=True,
         )
         source_path, frozen_hash = source_hash(Path(source_root) if source_root else None)
     except Exception as exc:
@@ -757,6 +767,7 @@ def run_rehearsal(
         },
         "factors": {
             "fixed_at_launch": True,
+            "completion_allowance": "provider",
             "prompt_mode": manifest.prompt.mode,
             "producer_feedback": manifest.evaluation.producer_feedback,
             "address_enabled": manifest.tools.address_enabled,

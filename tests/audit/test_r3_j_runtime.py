@@ -16,7 +16,8 @@ from tests.runtime.test_child_requests import parent_request
 def register_work(rt, *, name="weather-desk", kind="WeatherForecast", shape="forecast",
                   accepts=("Tick",)):
     origin = parent_request(rt).handle
-    proposal = assembly(id=name, model_id="fake-haiku", emits=[kind], accepts=list(accepts),
+    proposal = assembly(id=name, model_id="fake-haiku", max_tokens=512,
+                        emits=[kind], accepts=list(accepts),
                         schemas={kind: {"type": "object"}}, reward_shapes={kind: shape})
     rt._apply_registrations(origin, Return(origin, {"register": [proposal]}, 0, "ok"))
     assert name in rt.assemblies, rt.registration_feedback

@@ -344,7 +344,7 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
     assert "x402" in report["denied_rails"]
     assert (
         report["preserved"]["roster_sha256"]["from"]
-        == report["preserved"]["roster_sha256"]["to"]
+        != report["preserved"]["roster_sha256"]["to"]
     )
     assert report["behavioral_screen"]["status"] == "inconclusive"
     assert report["behavioral_screen"]["criteria_met"]["delivered_ticks"] is False
@@ -364,7 +364,8 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
     assert critical["selected_total_calls"] == 9
     assert critical["selected_total_elapsed_ns"] == 105
     assert critical["selected_mean_elapsed_ns"] == "35/3"
-    assert report["factors"]["roster_preserved"] is True
+    assert report["factors"]["roster_preserved"] is False
+    assert report["factors"]["completion_allowance"] == "provider"
     assert report["factors"]["reasoning"]["actual_reasoning_provenance"] == {
         "status": "unknown",
         "reason": (
@@ -502,3 +503,11 @@ def test_world_continues_after_lost_provider_response_with_liability_reserved(tm
     assert any(row["kind"] == "invocation" and row["seq"] > failed["seq"]
                and row["handle"] != failed["handle"] for row in rows)
     assert report["summary"]["execution"]["intents"] == 0
+
+
+def test_native_completion_launch_removes_seat_caps_without_disabling_reasoning():
+    original = load_manifest(WORLD)
+    effective = rehearsal.effective_manifest(original, native_completions=True)
+    assert all(a.max_tokens is None for a in effective.assemblies)
+    assert effective.models == original.models
+    assert effective.charter == original.charter

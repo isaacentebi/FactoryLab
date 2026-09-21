@@ -136,7 +136,7 @@ class AssemblyProposal:
     model_id: str
     system_prompt: str
     accepts: tuple[str, ...]
-    max_tokens: int
+    max_tokens: int | None
     effort: str
     emits: tuple[str, ...] = ()
     schemas: dict[str, dict] = field(default_factory=dict)
@@ -544,9 +544,9 @@ def _assembly(
     accepts = tuple(dict.fromkeys(event_name(k) for k in accepts))
     emits, schemas = output_contracts(item.get("emits", seed_emits(role)),
                                       item.get("schemas", {}))
-    max_tokens = item.get("max_tokens", 512)
-    if type(max_tokens) is not int or not 16 <= max_tokens <= 4096:
-        raise ValueError("max_tokens must be an int in [16, 4096]")
+    max_tokens = item.get("max_tokens")
+    if max_tokens is not None and (type(max_tokens) is not int or max_tokens < 16):
+        raise ValueError("max_tokens must be null or an int of at least 16")
     effort = item.get("effort", "low")
     if effort not in ("low", "medium", "high"):
         raise ValueError("effort must be low, medium or high")

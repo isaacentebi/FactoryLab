@@ -86,9 +86,25 @@ ceiling is also capped by the parent's available compute. Children never spend
 protected novelty compute. These are protocol semantics, not additional
 population objectives.
 
-`assemblies[].max_tokens` seeds `3000` for `eval-b` and `eval-c`, and `2500`
-for `antagonist-a`, in testnet and the edition-one example. These are output
-budgets, not guarantees of nonempty or well-formed model replies.
+`assemblies[].max_tokens = "provider"` uses the provider's advertised completion
+allowance, shared by reasoning and the visible answer. The shipped testnet roster
+and new edition-four rehearsals use this mode; they do not impose a smaller seat
+ceiling. The resolved allowance is recorded and used for the contract and prepaid
+reservation. Missing output-limit metadata refuses admission before inference;
+context length is not substituted for an output limit. OpenRouter exposes this
+metadata; Venice exposes `model_spec.maxCompletionTokens`.
+
+An omitted or null `register` assembly `max_tokens` likewise requests the provider
+allowance. Participants may explicitly choose a smaller positive integer (at least
+16), and there is no 4,096-token registration maximum. Programs require no model
+completion allowance. Historical manifests with numeric limits preserve their exact
+values and identities. A native allowance is not a guarantee of valid JSON or
+unlimited computation: the model's physical limit and the seat's ability to pay still
+apply. OpenRouter and Venice chat completions have no client processing timeout;
+control-plane reads retain their network timeout. Run-duration checks occur between
+completed operations, so a long completion can outlast the requested run duration.
+Stopping an in-flight process still leaves its full quote as uncertain liability;
+there is no automatic retry.
 
 The deterministic scripted fixture reuses its existing call schedule: the third
 registration slot installs a helper and a producer accepting `ProducerReturn`;

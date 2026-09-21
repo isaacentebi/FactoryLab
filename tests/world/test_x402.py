@@ -488,3 +488,16 @@ def test_payment_header_survives_decimal_extensions(quote):
     selected = parse_quote(HTTPResponse(402, body))
     payment = decoded(payment_header(account, selected))
     assert payment["extensions"]["bazaar"]["faroutQuote"]["info"]["usd"] == "0.001"
+
+
+@pytest.mark.parametrize("method,path,expected", [
+    ("POST", "/api/v1/chat/completions", None),
+    ("GET", "/api/v1/models", 180),
+    ("POST", "/settle", 180),
+])
+def test_completion_processing_has_no_client_deadline(monkeypatch, method, path, expected):
+    def open_request(self, req, timeout):
+        assert timeout == expected
+        return WireResponse(b'{}')
+    monkeypatch.setattr(request.OpenerDirector, "open", open_request)
+    http_request(method, "https://fake.test" + path, {}, {})

@@ -71,7 +71,10 @@ def http_request(method: str, url: str, payload: dict | None, headers: dict) -> 
         method=method,
     )
     try:
-        response = request.build_opener(_NoRedirect()).open(req, timeout=MODEL_HTTP_TIMEOUT_S)
+        completion = method == "POST" and parse.urlsplit(url).path.rstrip("/").endswith(
+            "/chat/completions")
+        response = request.build_opener(_NoRedirect()).open(
+            req, timeout=None if completion else MODEL_HTTP_TIMEOUT_S)
     except error.HTTPError as exc:
         response = exc
     with response:

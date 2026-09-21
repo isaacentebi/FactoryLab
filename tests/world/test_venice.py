@@ -34,6 +34,7 @@ def catalogue():
                 "name": "Test Flash",
                 "model_spec": {
                     "availableContextTokens": 32768,
+                    "maxCompletionTokens": 24576,
                     "pricing": {"input": {"usd": "0.15"}, "output": {"usd": "0.50"}},
                 },
             }
@@ -83,6 +84,21 @@ def test_catalogue_long_decimal_price_has_no_intermediate_rounding(catalogue):
     (entry,) = VeniceProvider(transport=FakeTransport([catalogue])).catalogue()
     assert entry.price().input_micro == Fraction(quote)
     assert entry.context_length is None
+    assert entry.max_completion_tokens == 24576
+
+
+@pytest.mark.parametrize("advertised", [None, 0, -1, True, 1.5, "24576", [], {}])
+def test_catalogue_ignores_invalid_completion_limits(catalogue, advertised):
+    catalogue["data"][0]["model_spec"]["maxCompletionTokens"] = advertised
+    entry, = VeniceProvider(transport=FakeTransport([catalogue])).catalogue()
+    assert entry.max_completion_tokens is None
+
+
+def test_catalogue_does_not_infer_completion_limit_from_context(catalogue):
+    catalogue["data"][0]["model_spec"].pop("maxCompletionTokens")
+    entry, = VeniceProvider(transport=FakeTransport([catalogue])).catalogue()
+    assert entry.context_length == 32768
+    assert entry.max_completion_tokens is None
 
 
 @pytest.mark.parametrize("reported,expected", [

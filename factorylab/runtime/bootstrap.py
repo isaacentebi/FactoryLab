@@ -339,11 +339,20 @@ class BootstrapMixin:
         self.market_index: list[dict] | None = None
         self.unresolved_x402: dict[str, dict] = {}
         self.catalogue: dict[str, TokenPrice] | None = None
+        # Provider-native output limits are launch evidence, separate from both
+        # pricing and the combined context window.  Checkpoints retain this map so
+        # a resumed world cannot be steered by a provider changing its catalogue.
+        self.catalogue_completion_limits: dict[str, int | None] = {}
         if not self.ledger.bootstrap and hasattr(self.provider, "catalogue"):
             try:
-                self.catalogue = {e.id: e.price() for e in self.provider.catalogue()}
+                entries = list(self.provider.catalogue())
+                self.catalogue = {e.id: e.price() for e in entries}
+                self.catalogue_completion_limits = {
+                    e.id: self._advertised_completion_limit(e) for e in entries
+                }
             except Exception:  # catalogue unavailable: model proposals will be rejected
                 self.catalogue = None
+                self.catalogue_completion_limits = {}
 
         if not self.ledger.bootstrap:
             self._register_seed_contracts()
@@ -356,12 +365,18 @@ class BootstrapMixin:
         self.decision_subjects: dict[str, str] = {}
         self.event_schemas: dict[str, dict] = {}
         for a in manifest.assemblies:
+            # During recovery these temporary assemblies are cleared and replaced
+            # by their resolved checkpoint specs.  Do not consult today's catalogue.
+            max_tokens = (
+                512 if self.ledger.bootstrap and a.max_tokens is None
+                else self._resolve_max_tokens(a.model_id, a.max_tokens)
+            )
             self._instantiate(
                 AssemblySpec(
                     id=a.id,
                     version=1,
                     model_id=a.model_id,
-                    max_tokens=a.max_tokens,
+                    max_tokens=max_tokens,
                     effort=a.effort,
                     memory_policy=a.memory_policy,
                     accepts=frozenset(a.accepts),
@@ -738,6 +753,49 @@ class BootstrapMixin:
                 total += int(item.get("cost") or 0)
         return total
 
+    @staticmethod
+    def _advertised_completion_limit(entry: Any) -> int | None:
+        """Return a positive advertised completion limit, or None when absent/invalid."""
+        value = getattr(entry, "max_completion_tokens", None)
+        return value if type(value) is int and value > 0 else None
+
+    @staticmethod
+    def _model_limit_aliases(model_id: str) -> tuple[str, ...]:
+        """Return provider catalogue identities used by runtime model aliases."""
+        aliases = [model_id]
+        base, separator, _effort = model_id.rpartition("@")
+        if separator and base:
+            aliases.append(base)
+        for candidate in tuple(aliases):
+            if candidate.endswith(":online"):
+                aliases.append(candidate.removesuffix(":online"))
+        return tuple(dict.fromkeys(aliases))
+
+    def _provider_completion_limit(self, model_id: str) -> int | None:
+        """Return the launch-pinned provider completion limit for a model or alias."""
+        for alias in self._model_limit_aliases(model_id):
+            limit = self.catalogue_completion_limits.get(alias)
+            if type(limit) is int and limit > 0:
+                return limit
+        return None
+
+    def _resolve_max_tokens(self, model_id: str, requested: int | None, *,
+                            program: bool = False) -> int:
+        """Resolve provider-native output once; every executable spec gets a positive int."""
+        if requested is not None:
+            return requested
+        if program:
+            # Programs do not buy a completion.  Keep the historical harmless
+            # contract bound when their proposal omits max_tokens.
+            return 512
+        limit = self._provider_completion_limit(model_id)
+        if limit is None:
+            raise ValueError(
+                f"provider-native max_tokens unavailable for model {model_id!r}"
+            )
+        self.catalogue_completion_limits[model_id] = limit
+        return limit
+
     def _register_seed_contracts(self) -> None:
         for tier in self.m.models:
             price = self.prices.price(tier.id)
@@ -748,8 +806,9 @@ class BootstrapMixin:
                 continue
             self.registry.register(_model_contract(tier.id, price, tier.provider))
         for seed in self.m.assemblies:
+            max_tokens = self._resolve_max_tokens(seed.model_id, seed.max_tokens)
             self.registry.register(
-                _assembly_contract(seed.id, seed.role, seed.accepts, seed.max_tokens,
+                _assembly_contract(seed.id, seed.role, seed.accepts, max_tokens,
                                    emits=seed.emits, schemas=seed.schemas)
             )
         # The seed catalogue is registered the same way the population's own

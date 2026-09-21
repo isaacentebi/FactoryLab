@@ -13,10 +13,14 @@ from factorylab.kernel.money import nonnegative_usd_micro, usd_to_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
 from factorylab.world.openai_wire import dispatched, parse_completion
 
-#: A completion may legitimately take minutes (long context, 3,000-token replies);
-#: a transport timeout is billed as uncertain at the ceiling, so it must be rarer than
-#: a slow reply. The ten-minute tick absorbs it.
+#: Control-plane reads are bounded. Paid completions have no client processing
+#: deadline: a slow model must not lose its answer to an invented thinking cutoff.
 MODEL_HTTP_TIMEOUT_S = 180
+
+
+def _positive_int(value: Any) -> int | None:
+    """Return provider metadata only when it is a positive, non-boolean integer."""
+    return value if type(value) is int and value > 0 else None
 
 
 class OpenRouterError(Exception):
@@ -92,7 +96,8 @@ class OpenRouterProvider:
             method=method,
         )
         opener = request.build_opener(_NoRedirect())
-        with opener.open(req, timeout=MODEL_HTTP_TIMEOUT_S) as response:
+        timeout = None if method == "POST" and path == "/chat/completions" else MODEL_HTTP_TIMEOUT_S
+        with opener.open(req, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
             if not 200 <= response.status < 300:
                 raise OpenRouterError(response.status, self._redact(body))
@@ -206,6 +211,10 @@ class OpenRouterProvider:
                 prompt_usd_per_token=entry["pricing"]["prompt"],
                 completion_usd_per_token=entry["pricing"]["completion"],
                 context_length=entry.get("context_length"),
+                max_completion_tokens=_positive_int(
+                    (entry.get("top_provider") or {}).get("max_completion_tokens")
+                    if isinstance(entry.get("top_provider"), Mapping) else None
+                ),
             )
             for entry in response["data"]
         ]

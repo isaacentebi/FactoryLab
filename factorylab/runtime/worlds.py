@@ -98,7 +98,7 @@ class AssemblySeed:
     id: str
     model_id: str
     accepts: tuple[str, ...]
-    max_tokens: int = 1024
+    max_tokens: int | None = 1024
     effort: str = "medium"
     memory_policy: str = "none"
     role: str = "producer"
@@ -117,6 +117,9 @@ class AssemblySeed:
     def __post_init__(self) -> None:
         from factorylab.cortex.registration import output_contracts, seed_emits
 
+        if self.max_tokens is not None and (
+                type(self.max_tokens) is not int or self.max_tokens <= 0):
+            raise ValueError("assembly max_tokens must be positive or provider-native")
         if type(self.cadence_floor) is not int or self.cadence_floor < 1:
             raise ValueError("assembly cadence_floor must be a positive integer of ticks")
         if not isinstance(self.initial_state, dict):
@@ -1008,7 +1011,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             id=a["id"],
             model_id=a["model_id"],
             accepts=tuple(a.get("accepts", ["Tick"])),
-            max_tokens=int(a.get("max_tokens", 1024)),
+            max_tokens=(None if a.get("max_tokens") == "provider"
+                        or ("max_tokens" in a and a["max_tokens"] is None)
+                        else a.get("max_tokens", 1024)),
             effort=a.get("effort", "medium"),
             memory_policy=a.get("memory_policy", "none"),
             role=a.get("role", "producer"),

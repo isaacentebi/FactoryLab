@@ -1,5 +1,6 @@
 import pytest
 
+from factorylab.cortex.assembly import validate_proposal
 from factorylab.cortex.registration import (
     AssemblyProposal,
     ModelProposal,
@@ -48,6 +49,52 @@ def test_valid_proposals_of_each_kind() -> None:
     assert isinstance(acc[1], AssemblyProposal) and acc[1].accepts == ("MarketMid", "Tick")
     assert acc[1].effort == "low"
     assert acc[2] == RouterProposal("Tick", "blum_mansour", 0.2)
+
+
+def test_assembly_max_tokens_uses_provider_native_allowance_when_unspecified() -> None:
+    for max_tokens in ({}, {"max_tokens": None}):
+        accepted, rejected = _parse([{
+            "kind": "assembly", "id": "native-budget", "model_id": "ds-flash",
+            "system_prompt": "Use the available context.", "accepts": ["Tick"],
+            **max_tokens,
+        }])
+
+        assert rejected == []
+        assert accepted[0].max_tokens is None
+    validate_proposal({"kind": "assembly", "max_tokens": None})
+
+
+def test_assembly_max_tokens_has_no_arbitrary_upper_bound() -> None:
+    accepted, rejected = _parse([
+        {
+            "kind": "assembly", "id": "large-context", "model_id": "ds-flash",
+            "system_prompt": "Use the available context.", "accepts": ["Tick"],
+            "max_tokens": 8192,
+        },
+        {
+            "kind": "assembly", "id": "very-large-context", "model_id": "ds-flash",
+            "system_prompt": "Use the available context.", "accepts": ["Tick"],
+            "max_tokens": 32768,
+        },
+    ])
+
+    assert rejected == []
+    assert [proposal.max_tokens for proposal in accepted] == [8192, 32768]
+    validate_proposal({"kind": "assembly", "max_tokens": 32768})
+
+
+@pytest.mark.parametrize("max_tokens", [15, -1, True, 16.0, "8192"])
+def test_assembly_max_tokens_stays_an_integer_of_at_least_16(max_tokens) -> None:
+    accepted, rejected = _parse([{
+        "kind": "assembly", "id": "bad-budget", "model_id": "ds-flash",
+        "system_prompt": "Use the available context.", "accepts": ["Tick"],
+        "max_tokens": max_tokens,
+    }])
+
+    assert accepted == []
+    assert [item.reason for item in rejected] == [
+        "max_tokens must be null or an int of at least 16"
+    ]
 
 
 def test_rejections_carry_reasons_and_cap_is_enforced() -> None:

@@ -790,6 +790,9 @@ class GovernanceMixin:
             contract = _model_contract(prop.openrouter_id, price, provider)
             self._register_with_trial(contract, handle, amount)
             self.prices.register(prop.openrouter_id, price)
+            limit = self._provider_completion_limit(base)
+            if limit is not None:
+                self.catalogue_completion_limits[prop.openrouter_id] = limit
             self._emit(
                 EventKind.REGISTERED, {"kind": "model", "id": prop.openrouter_id}
             )
@@ -821,12 +824,15 @@ class GovernanceMixin:
             else:
                 spec_class = WorkAssemblySpec if custom else AssemblySpec
                 extra = {"reward_shapes": shapes} if custom else {}
+            max_tokens = self._resolve_max_tokens(
+                prop.model_id, prop.max_tokens, program=program
+            )
             spec = spec_class(
                 id=prop.id, version=version, model_id=prop.model_id,
-                system_prompt=prop.system_prompt, max_tokens=prop.max_tokens,
+                system_prompt=prop.system_prompt, max_tokens=max_tokens,
                 effort=prop.effort, accepts=frozenset(prop.accepts), role=prop.role,
                 emits=emits, schemas=prop.schemas, **extra)
-            contract = _assembly_contract(prop.id, prop.role, prop.accepts, prop.max_tokens,
+            contract = _assembly_contract(prop.id, prop.role, prop.accepts, max_tokens,
                                          emits=spec.emits, schemas=spec.schemas, version=version)
             amount = (prop.endowment_micro if prop.endowment_micro is not None
                       else self.ev.trial_amount_micro)
