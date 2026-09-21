@@ -1,0 +1,121 @@
+{
+  "source_commit": "30e0af8fb649e650b4a8fac88e5d1eff0f63b488",
+  "status": "completed",
+  "summary": {
+    "terminated": true,
+    "termination_reason": "explicit_kill:budget",
+    "seal_key_released": true,
+    "wallet_conservation": true,
+    "ledger_verify": true,
+    "outstanding_decisions": 25,
+    "execution": {
+      "intents": 0,
+      "statuses": {
+        "filled": 0,
+        "resting": 0,
+        "cancelled": 0,
+        "rejected": 0,
+        "uncertain": 0
+      },
+      "polled_fills": 0,
+      "terminal_reconciliation": {
+        "attempted": true,
+        "fill_read_error": null
+      },
+      "positions_closed_at_exit": false
+    }
+  },
+  "cost": {
+    "cap_micro": 5000000,
+    "max_calls": 1000,
+    "attempted": 79,
+    "known_calls": 78,
+    "known_micro": 172347,
+    "uncertain_calls": 1,
+    "uncertain_micro": 9706,
+    "overruns": 0,
+    "refusals": 0,
+    "remaining_micro": 4817947,
+    "known_mean_micro": "57449/26",
+    "stop_reason": "unknown_bill_after_dispatch"
+  },
+  "timing": {
+    "declared_interval_ns": 10000000000,
+    "ticks": 26,
+    "events": 287,
+    "measured_interval_ns": 26743028680
+  },
+  "behavioral_screen": {
+    "status": "inconclusive",
+    "criteria_met": {
+      "delivered_ticks": false,
+      "assessed_grounded_samples": false,
+      "contrary_grounded_samples": false,
+      "authoritative_bills": false
+    },
+    "declared_before_run": {
+      "planned_tick_ceiling": 240,
+      "minimum_delivered_ticks": 240,
+      "minimum_assessed_grounded_samples": 10,
+      "minimum_contrary_grounded_samples": 1
+    },
+    "horizons_ticks": {
+      "grounded_due": 10,
+      "grounded_close_from_open": 30,
+      "consequence_backstop": 60,
+      "governance_activation_floor": 180,
+      "observe_backstop_then_governance_floor": 240
+    },
+    "delivered": {
+      "ticks": 26,
+      "grounded": {
+        "assessed": 1,
+        "supported": 1,
+        "contrary": 0,
+        "unknown": 6,
+        "censored": 0,
+        "outstanding": 13,
+        "malformed_or_uncited_excluded": 0
+      },
+      "outstanding_decisions": 25,
+      "calls": 79,
+      "decisions": 184,
+      "known_micro_per_tick": "172347/26",
+      "known_micro_per_decision": "172347/184",
+      "calls_per_tick": "79/26",
+      "decisions_per_tick": "92/13"
+    },
+    "critical_path_io": {
+      "provider_complete_calls": 79,
+      "provider_complete_elapsed_ns": 734448971663,
+      "exchange_account_calls": 60,
+      "exchange_account_elapsed_ns": 62762154913,
+      "exchange_mids_calls": 29,
+      "exchange_mids_elapsed_ns": 14191398414,
+      "selected_total_calls": 168,
+      "selected_total_elapsed_ns": 811402524990,
+      "selected_mean_elapsed_ns": "135233754165/28",
+      "scope": "this process only; includes journal overhead, excludes replay"
+    },
+    "interpretation": "coverage contract not met; do not interpret absence or rates as behavior"
+  },
+  "venue_after": {
+    "equity_usd": "965.15385641",
+    "positions": [],
+    "open_orders": []
+  },
+  "independent_venue_after": {
+    "equity_usd": "965.15385641",
+    "positions": [],
+    "open_orders": []
+  },
+  "core_balance_inferred_failed_call_micro": 2253,
+  "budget_policy": "Preserve admission uncertainty separately from core balance-based reconciliation; never add inclusive invocation costs to provider bills.",
+  "evidence": {
+    "work/population-pr117/live/report.json": "c5e9dc45cfab0f8a853560273c4c36fd5f1af88f203a0e234bdc7b5a24d326ed",
+    "work/population-pr117/live/events.json": "f009d67e12b1de58b2f8e5af880aac13c16adc2b955153c990f5238c82610e75",
+    "work/population-pr117/analysis.json": "227182ed73106ceaddebb1377825fbb6850d387e06603b012d3cdb620aed76a6",
+    "work/population-pr117/postmortem/report.json": "45a04a4050b079b5abd61fe1fc4540819d9ae077d31b1be54170a2c34b4b6363",
+    "work/population-pr117/venue-after-independent.json": "dcdf6b7c313bcce71a4606356740b56880e34972de6b84a1e32f7039b23cd344"
+  }
+}
