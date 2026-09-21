@@ -1540,10 +1540,15 @@ inbox; a **late realisation**; and a judge's verdict consequence. A consequence
 with no owner to address is a **failed delivery** and is ledgered
 `outcome.undeliverable {consequence, handle, reason}` rather than dropped.
 
-The next request carries `unread_outcomes: {count, more, items}` — `count` is
-every unread item, `items` is the **oldest** eight, oldest first, and `more` is
-how many unread items the window did not carry, so the window is never mistaken
-for the queue. `outcome.get {outcome_id}` is a seed tool, version 1, priced at
+The next request carries `unread_outcomes: {count, more, items, next_after, paging}`.
+`count` is every unread item. At most eight items are shown, oldest first: all
+items when the queue fits, otherwise the oldest four and newest four. In the
+split window the newest entries have `preview: true`: they reveal recent results
+and failures but do not count as delivery for acknowledgement. `more` counts
+unshown items. `next_after` and `paging.args.after` point after the **oldest
+prefix**, so `outcome.list` can discover the hidden middle without skipping it.
+Listing is discovery only; fetch a preview or listed item to deliver its body.
+`outcome.get {outcome_id}` is a seed tool, version 1, priced at
 zero: a kernel read of the seat's own inbox, never another seat's, ledgered as
 `outcome.get`. `handle` is a **fallback** and returns the oldest item of that
 decision the seat has not read, with a `note` saying so, because one decision can
