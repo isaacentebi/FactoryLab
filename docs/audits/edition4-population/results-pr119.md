@@ -52,9 +52,20 @@ damaged judging throughput; they do not directly explain the 25 delivered unknow
 findings. Most evaluated hold/defer claims lacked a falsifiable consequence: settled
 zero net income neither demonstrated usefulness nor contradicted a specific promise.
 The supported finding concerned decision-84 execution receipts; the contrary finding
-concerned decision-232 claimed carry versus zero settled earnings. Only two of 27
-final chains were acknowledged. The two scored findings reached inboxes without
-acknowledgement; later actions cannot be causally attributed to their exposure.
+concerned decision-232 claimed carry versus zero settled earnings. Two of 27
+final chains had direct acknowledgement requests that advanced the cursor through
+the named item. A third request targeted `outcome:118`, but its cursor did not reach it.
+The supported finding was visible only as the `outcome:50` inbox index and was never
+fetched. The contrary finding was different: mechanism fetched the full `outcome:118`
+body at seq 8192, then said in decision-321 that realised earnings were absent and
+that it would not repeat the earnings claim without a settled positive outcome. Its
+working state retained: `Do not assert realized earnings without an addressed
+economic outcome showing earned_micro>0.` The answer requested `ack_through`, and
+`outcome.ack` was recorded at seq 8208, but the contiguous cursor stopped at 31
+because earlier gaps remained; item 118 was therefore read but not acknowledged.
+Later decisions 371 and 412 retained the same evidence rule. This is one observed
+read-and-revision trace, not proof that the finding caused durable learning or
+improved consequential decisions.
 
 All 74 dispatched tools succeeded: 62 outcome reads, four world reads, two funding-
 history reads, two order-book reads, two market orders, one funding read and one

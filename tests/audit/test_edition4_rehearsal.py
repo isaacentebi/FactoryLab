@@ -11,7 +11,7 @@ from factorylab.runtime.worlds import load_manifest
 from factorylab.world.clock import ClockSource
 from factorylab.world.evm import RailError
 from factorylab.world.exchange import FakeExchange
-from factorylab.world.models import ModelRequest, ModelResponse
+from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
 from factorylab.world.openrouter import OpenRouterError
 from scripts import edition4_rehearsal as rehearsal
 
@@ -21,6 +21,28 @@ WORLD = "worlds/edition3-rehearsal-5.toml"
 @dataclass
 class StubProvider:
     response: ModelResponse
+
+    def catalogue(self):
+        """Expose explicit fixture metadata for every model in the rehearsal roster."""
+        rows = (
+            ("deepseek/deepseek-v4.1-flash", "0.00000015", "0.00000060", 384_000),
+            ("openai/gpt-5.6-sol", "0.00000200", "0.00001000", 128_000),
+            ("venice:z-ai-glm-5-3-flash", "0.00000015", "0.00000050", 131_072),
+            ("venice:qwen-3-8-flash", "0.00000014", "0.00000049", 131_072),
+            ("openai/gpt-5.6-luna", "0.00000020", "0.00000120", 128_000),
+            ("openai/gpt-5.6-luna:online", "0.00000020", "0.00000120", 128_000),
+        )
+        return [
+            CatalogueEntry(
+                id=model_id,
+                name=f"fixture metadata for {model_id}",
+                prompt_usd_per_token=prompt,
+                completion_usd_per_token=completion,
+                context_length=None,
+                max_completion_tokens=limit,
+            )
+            for model_id, prompt, completion, limit in rows
+        ]
 
     def affordable(self, _model_id, _ceiling):
         return True, ""
