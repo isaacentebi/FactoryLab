@@ -626,13 +626,20 @@ def test_realized_field_is_published_only_on_the_final_commission_schema(status)
     realized = evaluator_answer_schema({}, {}, include_realized=True)
     assert "realized_consequence" not in legacy["properties"]
     assert "realized_consequence" in realized["properties"]
-    assert "realized_consequence" not in realized["required"]
+    assert "realized_consequence" in realized["required"]
+    assert {"payoff", "forecasts"} <= set(legacy["properties"])
+    assert {"payoff", "forecasts"}.isdisjoint(realized["properties"])
     assert "verdict" not in legacy["required"]
     answer = {"rationale": "Read the supplied evidence", "realized_consequence": {
         "status": status, "score": 0.8, "evidence": ["event:7"], "reason": "Evidence"}}
     with pytest.raises(ValueError, match="required field absent"):
         validate_schema(answer, realized)
     validate_schema({**answer, "verdict": 0.8}, realized)
+    with pytest.raises(ValueError, match="required field absent"):
+        validate_schema({"rationale": "missing finding", "verdict": 0.8}, realized)
+    # A retrieval turn is partial by contract; the required final finding applies
+    # after its tool continuation, not before the evidence has been fetched.
+    _validate_return({"tool_calls": [{"tool": "outcome.get", "args": {}}]}, realized)
     _validate_return({"status": "cannot", "reason": "declined"}, realized)
 
 

@@ -1951,6 +1951,10 @@ class ComputeMixin:
         items = [dict(d) for d in dropped]
         kind = "return.validation_failed" if error is not None else "return.sections_dropped"
         detail = {"reason": error} if error is not None else {}
+        # Keep the first exact section fault discoverable without fetching the
+        # whole outcome. The full list remains authoritative in the owned body.
+        rejection = ({"rejected_section": items[0]["section"],
+                      "rejection_reason": items[0]["reason"]} if items else {})
         self.ledger.append({"kind": kind, "assembly_id": seat,
                             "handle": handle, "dropped": items, **detail,
                             "ts": self.clock.now_ns})
@@ -1960,7 +1964,7 @@ class ComputeMixin:
                 outcome={"kind": ("return_rejected" if error is not None
                                   else "return_sections_dropped"),
                          "status": "malformed" if error is not None else "partial",
-                         "dropped": items, **detail},
+                         "dropped": items, **detail, **rejection},
                 delta_micro=0,
                 evidence={"kind": kind, "handle": handle,
                           "ts": self.clock.now_ns})

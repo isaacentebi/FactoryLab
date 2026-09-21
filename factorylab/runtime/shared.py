@@ -116,10 +116,28 @@ def work_disclosure(kinds: dict[str, str], predicates: list[dict]) -> dict:
             "kind": "predicate", "id": "has-fill", "description": "A fill occurred.",
             "code": "def resolve(facts): return facts['fills'] > 0",
         },
+        "predicate_readiness": {
+            "requires_closed_window": True,
+            "live_signal": "WORLD UPDATE public_observations.last_closed_window_values",
+            "not_ready": "an empty last_closed_window_values means registration will be "
+                         "rejected because there is no closed window to preflight",
+        },
+        "predicate_facts_example": {
+            "mids": {"BTC": [[1_710_000_000_000_000_000, 81_234_500_000],
+                              [1_710_000_060_000_000_000, 81_310_000_000]]},
+            "funding": {"BTC": [[1_710_000_000_000_000_000, 0.0001]]},
+            "wallet_balance_micro": [[1_710_000_000_000_000_000, 300_000_000],
+                                     [1_710_000_060_000_000_000, 299_999_000]],
+            "tick_timestamps_ns": [1_710_000_000_000_000_000,
+                                   1_710_000_060_000_000_000],
+        },
         "predicate_contract": (
             "resolve(facts) returns a boolean over public observation facts. Admission "
             "preflights the last closed window. Forecasts bind the registered version; "
-            "replacement definitions do not change outstanding predictions."
+            "replacement definitions do not change outstanding predictions. mids and funding "
+            "map each coin to ordered [timestamp_ns, value] pairs, not objects; mid values and "
+            "wallet balances are integer micro-USD, and wallet_balance_micro is also a series "
+            "of [timestamp_ns, value] pairs."
         ),
     }
 

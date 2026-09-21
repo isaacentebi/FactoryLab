@@ -662,7 +662,8 @@ class SchematicsMixin:
         ),
         "tool": "register jailed code as a priced tool anyone may call",
         "program": "register a seat whose jailed code answers instead of a model",
-        "predicate": "register a forecast predicate over a closed window's public facts",
+        "predicate": "register a forecast predicate over a closed window's public facts; "
+                     'read input shapes and readiness with world.read {"section":"work"}',
         "observation": "register a measurement over a closed window's public facts",
         "learner": "give one assembly a learner over an action set it declares",
         "amendment": "add, replace or remove charter cards, with a predicted effect",

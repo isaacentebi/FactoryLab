@@ -78,6 +78,15 @@ def test_unread_window_indexes_and_carries_no_body_text(inbox):
     shown = inbox.unread("alice")
     assert shown["count"] == 12
     assert len(shown["items"]) == INLINE_OUTCOMES and shown["more"] == 4
+    assert [item["outcome_id"] for item in shown["items"]] == [
+        "outcome:1", "outcome:2", "outcome:3", "outcome:4",
+        "outcome:9", "outcome:10", "outcome:11", "outcome:12",
+    ]
+    assert shown["next_after"] == 4
+    assert shown["paging"]["args"] == {"after": 4, "limit": INLINE_OUTCOMES}
+    assert all("preview" not in item for item in shown["items"][:4])
+    assert all(item["preview"] is True for item in shown["items"][4:])
+    assert "outcome.get" in shown["preview_semantics"]
     blob = json.dumps(shown)
     assert "R" * 900 not in blob and "W" * 900 not in blob
     assert "said" not in shown["items"][0] and "outcome" not in shown["items"][0]
@@ -98,6 +107,21 @@ def test_unread_window_indexes_and_carries_no_body_text(inbox):
     assert inbox.artifacts.get(first["sha"]) is not None
     assert first["bytes"] == len(inbox.artifacts.get(first["sha"]))
     assert first["bytes"] > len(json.dumps(first))
+
+
+def test_unread_at_the_inline_bound_keeps_the_whole_oldest_window(inbox):
+    fill(inbox, count=INLINE_OUTCOMES)
+    shown = inbox.unread("alice")
+    assert [item["outcome_id"] for item in shown["items"]] == [
+        f"outcome:{seq}" for seq in range(1, INLINE_OUTCOMES + 1)
+    ]
+    assert shown["more"] == 0 and shown["next_after"] is None
+    assert shown["paging"]["args"] == {
+        "after": INLINE_OUTCOMES, "limit": INLINE_OUTCOMES,
+    }
+    assert inbox.delivered_through["alice"] == INLINE_OUTCOMES
+    assert "alice" not in inbox.delivered_sparse
+    assert "preview_semantics" not in shown
 
 
 def test_a_message_indexes_its_sender_and_subject_without_its_text(inbox):
@@ -141,6 +165,38 @@ def test_an_oversized_or_nested_typed_field_is_named_and_never_inlined(inbox):
                                   "args": {"outcome_id": entry["outcome_id"]}}
     whole = inbox.get("bob", entry["outcome_id"])["outcome"]
     assert whole["subject"] == subject and whole["status"] == status
+
+
+def test_latest_rejection_is_visible_under_the_same_privacy_bound(inbox):
+    private = "PRIVATE" * 2_000
+    fill(inbox, seat="bob", count=8, said=False)
+    inbox.append("bob", handle="h1", outcome={
+        "kind": "rejected",
+        "rejection_reason": "missing depth",
+        "rejected_section": "tool_calls[0]",
+    })
+    inbox.append("bob", handle="h2", outcome={
+        "kind": "rejected",
+        "rejection_reason": private,
+        "rejected_section": {"name": private},
+    })
+
+    shown = inbox.unread("bob")
+    by_id = {item["outcome_id"]: item for item in shown["items"]}
+    assert list(by_id) == [
+        "outcome:1", "outcome:2", "outcome:3", "outcome:4",
+        "outcome:7", "outcome:8", "outcome:9", "outcome:10",
+    ]
+    exact, bounded = by_id["outcome:9"], by_id["outcome:10"]
+    assert exact["preview"] is True and bounded["preview"] is True
+    assert exact["rejection_reason"] == "missing depth"
+    assert exact["rejected_section"] == "tool_calls[0]"
+    assert "rejection_reason" not in bounded and "rejected_section" not in bounded
+    assert bounded["rejection_reason_not_loaded"] == {
+        "shape": "str", "bytes": len(private.encode("utf-8")),
+    }
+    assert bounded["rejected_section_not_loaded"]["shape"] == "dict"
+    assert private not in json.dumps(bounded)
 
 
 def test_the_field_bound_is_utf8_bytes_and_a_field_at_it_still_rides(inbox):
@@ -200,20 +256,22 @@ def test_get_still_returns_the_body_exactly_as_it_was_stored(inbox):
 
 def test_later_ids_are_discoverable_without_acknowledging_earlier_ones(inbox):
     fill(inbox, count=20)
-    inbox.unread("alice")          # delivered through outcome:8
-    page = inbox.list("alice", after=8, limit=8)
+    shown = inbox.unread("alice")
+    assert shown["next_after"] == 4
+    page = inbox.list("alice", after=shown["next_after"], limit=8)
     assert [i["outcome_id"] for i in page["items"]] == [
-        f"outcome:{n}" for n in range(9, 17)]
-    assert page["count"] == 8 and page["more"] == 4 and page["next_after"] == 16
+        f"outcome:{n}" for n in range(5, 13)]
+    assert page["count"] == 8 and page["more"] == 8 and page["next_after"] == 12
     assert page["unread"] == 20
     last = inbox.list("alice", after=page["next_after"], limit=8)
     assert [i["outcome_id"] for i in last["items"]] == [
-        f"outcome:{n}" for n in range(17, 21)]
+        f"outcome:{n}" for n in range(13, 21)]
     assert last["more"] == 0 and last["next_after"] is None
     # Listing delivered nothing, so acknowledging a listed id cannot reach past
-    # the eight the seat was actually shown: items 9 to 20 stay unread.
-    assert inbox.ack_through("alice", "outcome:20") == INLINE_OUTCOMES
-    assert inbox.unread("alice")["count"] == 12
+    # the oldest four the seat was actually shown contiguously: items 5 to 20
+    # stay unread even though the newest four were visible.
+    assert inbox.ack_through("alice", "outcome:20") == INLINE_OUTCOMES // 2
+    assert inbox.unread("alice")["count"] == 16
     assert inbox.get("alice", "outcome:20")["handle"] == "decision-19"
 
 
@@ -222,7 +280,7 @@ def test_sparse_fetch_cannot_acknowledge_the_gap_and_survives_restore(inbox):
     inbox.unread("alice")
     assert inbox.list("alice", after=19, limit=1)["items"][0]["outcome_id"] == "outcome:20"
     assert inbox.get("alice", "outcome:20")["handle"] == "decision-19"
-    assert inbox.delivered_through["alice"] == 8
+    assert inbox.delivered_through["alice"] == 4
     assert inbox.delivered_sparse["alice"] == {20}
 
     saved = inbox.delivery_state()
@@ -231,15 +289,45 @@ def test_sparse_fetch_cannot_acknowledge_the_gap_and_survives_restore(inbox):
     inbox.delivered_through.clear()
     inbox.delivered_sparse.clear()
     inbox.restore_delivery(saved)
+    assert inbox.ack_through("alice", "outcome:20") == 4
+    assert inbox.unread("alice")["count"] == 16
+
+    # Each window advances only its four-item oldest prefix. Previewed latest
+    # items are not deliveries; the explicitly fetched twentieth stays sparse
+    # until every middle item has actually been shown.
     assert inbox.ack_through("alice", "outcome:20") == 8
     assert inbox.unread("alice")["count"] == 12
-
-    # Delivering the next window advances through 16, but the fetched twentieth
-    # item remains behind the still-unseen 17..19 gap.
-    assert inbox.ack_through("alice", "outcome:20") == 16
-    assert inbox.unread("alice")["count"] == 4
+    assert inbox.ack_through("alice", "outcome:20") == 12
+    assert inbox.unread("alice")["count"] == 8
     assert inbox.ack_through("alice", "outcome:20") == 20
     assert inbox.unread("alice")["count"] == 0
+
+
+def test_repeated_latest_previews_do_not_grow_sparse_delivery_state(inbox):
+    fill(inbox, count=20)
+    shown = inbox.unread("alice")
+    assert inbox.delivered_through["alice"] == 4
+    assert "alice" not in inbox.delivered_sparse
+
+    for seq in range(21, 61):
+        inbox.append("alice", handle=f"decision-{seq}",
+                     outcome={"kind": "rejected", "rejection_reason": "latest"})
+        shown = inbox.unread("alice")
+
+    latest = shown["items"][-1]
+    assert latest["outcome_id"] == "outcome:60" and latest["preview"] is True
+    assert inbox.delivered_through["alice"] == 4
+    assert "alice" not in inbox.delivered_sparse
+
+    inbox.get("alice", latest["outcome_id"])
+    assert inbox.delivered_sparse["alice"] == {60}
+    saved = inbox.delivery_state()
+    inbox.delivered_through.clear()
+    inbox.delivered_sparse.clear()
+    inbox.restore_delivery(saved)
+    assert inbox.delivered_through["alice"] == 4
+    assert inbox.delivered_sparse["alice"] == {60}
+    assert inbox.ack_through("alice", latest["outcome_id"]) == 4
 
 
 def test_delivery_prefix_uses_the_seats_order_not_adjacent_global_ids(inbox):

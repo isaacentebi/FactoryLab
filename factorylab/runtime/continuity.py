@@ -25,12 +25,15 @@ item addressed to that seat is appended: the original handle, what the seat
 said then, the outcome, when it was observed, the financial delta, and an
 evidence pointer into the diary. The body is an artifact; the inbox holds the
 index. What rides on the next request under ``unread_outcomes`` is that index and
-not those bodies: the oldest unread items as compact entries — the id, the
-handle, when it was observed, the typed outcome, the money, the evidence pointer,
-the sha and size, and the tool that returns the rest — with ``more`` counting the
-ones the window did not carry. ``outcome.list`` pages the ids past the window
-without delivering or acknowledging any of them, so a seat can find out that its
-fortieth outcome exists without acknowledging thirty-nine it has never read.
+not those bodies: up to four oldest and four newest unread items as compact
+entries — the id, the handle, when it was observed, the typed outcome, the money,
+the evidence pointer, the sha and size, and the tool that returns the rest — with
+``more`` counting the ones the window did not carry. ``outcome.list`` starts after
+the oldest prefix and pages every id through the middle without delivering or
+acknowledging any of them, so a seat can see a recent failure without losing the
+older facts that explain it. The newest four are marked ``preview: true`` and are
+discovery only, like ``outcome.list``: fetching one with ``outcome.get`` records
+delivery, while merely rendering new previews cannot grow delivery state.
 ``outcome.get`` fetches any of them whole by ``outcome_id`` (a handle is a fallback
 that answers with the oldest unread item of that decision, and says so); an
 answer's ``ack_through`` takes an id and advances the cursor only as far as this
@@ -69,7 +72,8 @@ INLINE_STATE_BYTES = 4_096
 #: The largest page one list call will return, so a paged index cannot become a dump.
 MAX_LIST_LIMIT = 32
 #: Typed fields an index carries verbatim off an outcome, where the outcome has them.
-INDEX_FIELDS = ("kind", "status", "phase", "from", "subject", "score")
+INDEX_FIELDS = ("kind", "status", "phase", "from", "subject", "score",
+                "rejection_reason", "rejected_section")
 #: An evidence pointer longer than this is named by its size instead of carried.
 MAX_INDEX_EVIDENCE = 128
 #: The longest a typed index field may be before it is named by its size instead.
@@ -87,6 +91,8 @@ STATE_NOT_LOADED = (
 )
 OUTCOME_BODIES = ("an index, never a body: outcome.get {outcome_id} returns one item whole, "
                   "outcome.list {after, limit} pages the ids you have not read")
+OUTCOME_PREVIEWS = ("items marked preview are discovery only; use outcome.get on an "
+                    "outcome_id to deliver one before acknowledging it")
 
 
 def canonical(obj: Any) -> bytes:
@@ -427,8 +433,9 @@ class OutcomeInbox:
         and the entry is bounded whatever the body contains. It carries what a seat
         needs in order to decide whether to spend a read: the id it must address, the
         decision it answers, when it was observed, the typed outcome (kind, status,
-        phase, sender, subject, score) where the outcome has one, the money, the
-        evidence pointer, and the route to the rest.
+        phase, sender, subject, score, rejection reason and rejected section) where
+        the outcome has one, the money, the evidence pointer, and the route to the
+        rest.
 
         A typed field is a label, so only a short scalar is carried: a number, a
         boolean, None, or a string within ``MAX_INDEX_FIELD`` bytes. A long string or
@@ -473,30 +480,53 @@ class OutcomeInbox:
         return entry
 
     def unread(self, seat: str) -> dict[str, Any]:
-        """Index the oldest unread items; their bodies stay in the archive until asked for.
+        """Index the oldest and newest unread items; bodies stay archived until asked for.
 
-        The inline window is the oldest ``INLINE_OUTCOMES`` unread items and
-        ``more`` is how many unread items it did not carry, so a seat can tell the
-        window from the queue (§4: "the inline window is a subset").
+        At or below ``INLINE_OUTCOMES`` every unread item rides unchanged. Above
+        it, the window retains the oldest four and newest four in chronological
+        order. ``more`` is the total unread count minus the shown count. Paging
+        starts after the oldest prefix, so the unshown middle is reachable and a
+        recent failure cannot make it skip.
 
         Each entry is the index above, so no body travels on a request. Delivery is
-        unchanged: being shown these ids is what lets ``ack_through`` reach them, and
-        nothing here acknowledges anything.
+        bounded: the oldest prefix is delivered, while the newest four are marked
+        ``preview: true`` and are discovery only, just like ``outcome.list``. A
+        preview becomes a durable sparse delivery only when the seat fetches it with
+        ``outcome.get``. Thus repeated requests against an unread growing backlog do
+        not grow checkpoint state, and acknowledgement cannot cross the hidden gap.
         """
         cursor = self.cursors.get(seat, 0)
         rows = [r for r in self.items.get(seat, ()) if r["seq"] > cursor]
-        window = rows[:INLINE_OUTCOMES]
-        for record in window:
+        preview_seqs: set[int] = set()
+        if len(rows) <= INLINE_OUTCOMES:
+            window = rows
+            oldest_prefix = window
+        else:
+            oldest_prefix = rows[:INLINE_OUTCOMES // 2]
+            newest = rows[-(INLINE_OUTCOMES // 2):]
+            preview_seqs = {record["seq"] for record in newest}
+            selected = {record["seq"]: record for record in (*oldest_prefix, *newest)}
+            window = [selected[seq] for seq in sorted(selected)]
+        for record in oldest_prefix:
             self._mark_delivered(seat, record["seq"])
-        return {"count": len(rows), "more": len(rows) - len(window),
-                "items": [self.index_of(seat, r) for r in window],
+        page_after = oldest_prefix[-1]["seq"] if oldest_prefix else 0
+        more = len(rows) - len(window)
+        items = []
+        for record in window:
+            entry = self.index_of(seat, record)
+            if record["seq"] in preview_seqs:
+                entry["preview"] = True
+            items.append(entry)
+        return {"count": len(rows), "more": more,
+                "items": items,
                 "bodies": OUTCOME_BODIES,
-                "next_after": window[-1]["seq"] if len(rows) > len(window) else None,
+                "next_after": page_after if more else None,
                 "read_with": {"tool": "outcome.get",
                               "args": {"outcome_id": "<outcome_id from items>"}},
                 "paging": {"tool": "outcome.list",
-                           "args": {"after": window[-1]["seq"] if window else 0,
-                                    "limit": INLINE_OUTCOMES}}}
+                           "args": {"after": page_after,
+                                    "limit": INLINE_OUTCOMES}},
+                **({"preview_semantics": OUTCOME_PREVIEWS} if preview_seqs else {})}
 
     def list(self, seat: str, after: int = 0,
              limit: int = INLINE_OUTCOMES) -> dict[str, Any]:
