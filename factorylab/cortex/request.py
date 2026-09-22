@@ -624,8 +624,7 @@ class Request:
         }
         tool_call_instruction = (
             f"\nThis response may contain at most {next(iter(common_tool_call_limits))} "
-            "tool_calls; "
-            "prioritize the reads you need."
+            "tool_calls."
             if (len(tool_call_limits) == len(shapes)
                 and all(type(limit) is int for limit in tool_call_limits)
                 and len(common_tool_call_limits) == 1) else ""
