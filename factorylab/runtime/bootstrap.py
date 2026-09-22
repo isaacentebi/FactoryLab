@@ -24,7 +24,6 @@ from factorylab.kernel.queue import DecisionQueue
 from factorylab.kernel.registry import Contract, PriceSpec, Registry, ResourceBounds
 from factorylab.kernel.reserve import NoveltyReserve
 from factorylab.kernel.termination import Termination
-from factorylab.kernel.timing import TimingRegistry, UpwardBuffer
 from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Wallet
 from factorylab.runtime import release, witness
 from factorylab.runtime.cadence import GovernanceCadence
@@ -274,12 +273,6 @@ class BootstrapMixin:
             sample=manifest.timing.cadence_sample,
             min_ratio=manifest.timing.min_ratio,
             backstop=self.ev.consequence_backstop_ticks,
-        )
-        self.timing = TimingRegistry()
-        self.timing.register_loop("leaf", [])
-        self.timing.register_loop("governance", ["leaf"])
-        self.buffer = UpwardBuffer(
-            self.timing, "governance", min_ratio=manifest.timing.min_ratio, seed=self.seed
         )
 
         # settlement
@@ -779,7 +772,6 @@ class BootstrapMixin:
         self.verdicts_graded: set[str] = set()
         self.balance_at: list[int] = [self.wallet.balance]  # index = event number
         self.events_log: list[dict[str, Any]] = [{"kind": "Launch", "payload": {}}]
-        self.last_closure_ns = -1
         self.reserve_window_start: int | None = None
         self.internal: deque[Event] = deque()
         self.n = 0

@@ -74,7 +74,6 @@ def _record_types() -> dict[str, type]:
     from factorylab.kernel.events import Event, EventKind
     from factorylab.kernel.queue import Decision, LearningReturn, PropensityRecord, SettleStatus
     from factorylab.kernel.registry import Contract, PriceSpec, ResourceBounds
-    from factorylab.kernel.timing import DistributionSummary
     from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Reservation
     from factorylab.runtime.cascade import CascadeGate
     from factorylab.runtime.feedback import PendingJudgement
@@ -116,7 +115,7 @@ def _record_types() -> dict[str, type]:
         AssemblySpec, WorkAssemblySpec, ProgramAssemblySpec, Predicate, PredicateForecast,
         PopulationTool, Event, PopulationEvent, EventKind, Decision,
         LearningReturn, PropensityRecord,
-        SettleStatus, Contract, PriceSpec, ResourceBounds, DistributionSummary, DripSchedule,
+        SettleStatus, Contract, PriceSpec, ResourceBounds, DripSchedule,
         ReleaseSchedule,
         Reservation, Retirement, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast,
         GroundedContract,
@@ -546,7 +545,7 @@ _RUNTIME_FIELDS = (
     "funding_to_date", "spot_inventory", "handle_to_assembly", "tool_specs",
     "population_tools",
     "tool_owner", "pending_votes", "regions", "priced", "rolling", "unparsed_logged", "window",
-    "pending", "balance_at", "events_log", "last_closure_ns", "reserve_window_start", "internal",
+    "pending", "balance_at", "events_log", "reserve_window_start", "internal",
     "n", "emitted", "insolvency_count", "_compute_routed", "_compute_unaffordable",
     "world_consumed", "ticks_consumed", "drips_consumed", "started", "catalogue",
     "catalogue_completion_limits", "sellers",
@@ -667,7 +666,9 @@ _UNORDERED_STATE = {
     "OutcomeInbox.delivered_through": "per-seat delivery cursor, read by seat",
     "OutcomeInbox.delivered_sparse": "out-of-order delivered ids, read by seat",
 }
-_KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
+# An older checkpoint's ``timing`` and ``buffer`` entries (the deleted TimingRegistry
+# and UpwardBuffer, time audit T9) are not read.
+_KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve")
 _COMPONENT_FIELDS = (
     ("book", "_ForecastBook__", ("forecasts", "settled", "requested")),
     ("baseline", "_PrevalenceBaseline__", ("counts",)),

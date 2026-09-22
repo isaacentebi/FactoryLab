@@ -40,7 +40,6 @@ class RunStats:
     forecasts_sealed: int = 0
     forecasts_settled: int = 0
     timeouts: int = 0
-    upward_releases: int = 0
     reserve_windows: int = 0
     exclusions: int = 0
     registrations_accepted: int = 0

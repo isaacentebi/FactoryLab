@@ -1296,20 +1296,6 @@ class FeedbackMixin:
             if s.brier is None:
                 continue
             self._deliver_consequence_to_inbox(s)
-            self.last_closure_ns = max(self.clock.now_ns, self.last_closure_ns + 1)
-            self.timing.record_closure("leaf", self.last_closure_ns)
-            self.buffer.add(
-                LearningReturn(
-                    s.handle, CH_CONSEQUENCE, float(s.brier), "brier-v1", SettleStatus.SETTLED, None
-                ),
-                self.clock.now_ns,
-            )
-            released = self.buffer.release()
-            if released is not None:
-                self.stats.upward_releases += 1
-                self.ledger.append(
-                    {"kind": "upward.release", "summary": released, "ts": self.clock.now_ns}
-                )
 
     def _commit_verdicts(self) -> None:
         """Every announced verdict is committed once, before any payoff about its return
