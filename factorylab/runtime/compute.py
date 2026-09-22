@@ -1255,11 +1255,6 @@ class ComputeMixin:
                 from factorylab.world.venue_tools import _validate
 
                 _validate(args, spec["args_schema"])
-                duplicate = self.duplicate_resting_order(
-                    action_id, handle, f"{handle}:{slot}", tool_id, args)
-                if duplicate:
-                    self.venue_attempts[handle] = duplicate
-                    return self._refuse_order(handle, duplicate, kind="order.duplicate")
                 if tool_id in ("venue.place_market", "venue.place_limit"):
                     reason = self._order_collateral(
                         handle, str(args.get("coin")), Decimal(str(args.get("size"))),

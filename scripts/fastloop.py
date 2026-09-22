@@ -105,7 +105,8 @@ class PolicyProvider(ScriptedProvider):
         n = self.decisions
         mid = (inputs.get("payload") or {}).get("mids", {}).get("BTC")
         if n % 7 == 3 and mid:
-            # The same resting sell twice (decisions 264 and 273), above the market.
+            # The same resting sell twice (decisions 264 and 273), above the market;
+            # the venue takes both (Chapter II rulings, R6).
             price = str((Decimal(str(mid)) * Decimal("1.2")).quantize(Decimal("1")))
             return {"action": "order", "tool_calls": [{"tool": "venue.place_limit", "args": {
                 "coin": "BTC", "side": "sell", "size": "0.001", "price": price}}]}
@@ -227,7 +228,6 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
         },
         "judge_unmeasured": kinds.get("evaluation.unmeasured", 0),
         "orders": {"intents": dict(intents),
-                   "duplicates_refused": kinds.get("order.duplicate", 0),
                    "reported_not_placed": kinds.get("order.reported", 0),
                    "refused": kinds.get("order.refused", 0),
                    "infeasible": kinds.get("order.infeasible", 0)},

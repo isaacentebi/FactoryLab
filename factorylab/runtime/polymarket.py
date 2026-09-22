@@ -384,10 +384,10 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     needs its notional and the taker fee it could pay in the pot's available
     USDC (less ``committed``, what earlier writes of the same batch need); a sell
     needs the tokens. It also enforces the manifest's caps (one order's notional,
-    the pot's open exposure, orders a window), the market's own tick and minimum
-    order size, and refuses an exact repeat of a
-    resting order the same seat already has. An unreadable pot refuses new risk
-    and never a cancellation.
+    the pot's open exposure, orders a window) and the market's own tick and
+    minimum order size. An order identical to one an earlier decision left
+    resting is not refused: the venue allows it and fees price it (Chapter II
+    rulings, R6). An unreadable pot refuses new risk and never a cancellation.
     """
     spec = surface.spec
     if tool_id == "polymarket.cancel":
@@ -432,19 +432,6 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
                      if p["token_id"] == args["token_id"]), Decimal(0))
         if size > held:
             return "sell exceeds the tokens the polymarket pot holds"
-    for order in account["open_orders"]:
-        client = surface.order_ids.get(order["order_id"])
-        prior = surface.intents.get(client or "")
-        if prior is None:
-            continue
-        owner = rt.handle_to_assembly.get(prior["handle"]) or rt.outcomes.seat_of(
-            prior["handle"])
-        same = (order["token_id"] == args["token_id"] and order["side"] == args["side"]
-                and Decimal(order["size"]) == size and Decimal(order["price"]) == price)
-        if same and (prior["handle"] == handle or owner == seat):
-            return (f"an identical {args['side']} {size} order on this token from you is "
-                    f"already resting (order_id {order['order_id']}); cancel or change it "
-                    "before placing another")
     return None
 
 
