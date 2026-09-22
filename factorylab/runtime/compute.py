@@ -887,21 +887,6 @@ class ComputeMixin:
             "price_micro_per_call": 0,
         })
 
-    def _artifact_entries(self) -> list[dict[str, Any]]:
-        """Every archived artifact's index row, newest first.
-
-        The rows come from ``ArtifactStore.entries()`` — ``(sha, owner, public,
-        bytes, created_ns)`` — so a scoped read and a bounded listing agree on one
-        shape and one published flag; an older store with only ``list()`` still
-        indexes, with the same fields under their record names. The listing itself
-        is not scoped: C1 makes an artifact readable when it is published *or*
-        listed in the directory, and an index of hashes, sizes and owners is what
-        makes shared memory findable without disclosing a byte of any of it.
-
-        The rows are detached copies: a caller may change them freely.
-        """
-        return [dict(row) for row in self._artifact_listing().rows()]
-
     def _artifact_listing(self) -> ArtifactListing:
         """The directory's sorted view of the archive, brought up to date with it.
 

@@ -41,7 +41,6 @@ RAIL_URLS = (
     MAINNET_API_URL, TESTNET_API_URL,                                # world/exchange.py venue
     HYPEREVM.rpc, HYPEREVM_TESTNET.rpc, BASE.rpc, BASE_SEPOLIA.rpc,  # world/evm.py RPC
     "https://openrouter.ai/api/v1",                                  # world/openrouter.py
-    "https://api.anthropic.com",                                     # world/models.py
     VENICE_URL,                                                      # world/x402.py
     DISCOVERY_URL,                                                   # world/market.py index
 )

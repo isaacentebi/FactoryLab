@@ -198,10 +198,6 @@ class BudgetBook:
         self._log("retired_credit_to_commons", assembly_id=seat, amount=amount,
                   source=source, reason=reason, unallocated_after=self.unallocated())
 
-    def _after(self, *seats: str) -> dict[str, Any]:
-        return {"entitlement_after": {seat: self.entitlement(seat) for seat in seats},
-                "unallocated_after": self.unallocated()}
-
     @staticmethod
     def _seat(assembly_id: str) -> str:
         if not isinstance(assembly_id, str) or not assembly_id:

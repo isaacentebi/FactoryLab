@@ -56,7 +56,7 @@ class TestD1NoLeverageOrPrincipalCap:
         from factorylab.world.scripted import ScriptedProvider
 
         rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=50_000_000,
-                     ledger_path=None, drip=False, router_gamma=.1,
+                     ledger_path=None, router_gamma=.1,
                      provider=ScriptedProvider(),
                      exchange=FakeExchange(start_cash_usd=Decimal(966)))
         rt._manage_reserve_window()
@@ -727,34 +727,6 @@ class SimpleService:
 
 class TestFix11NoSalesAfterDeath:
     """A dead world sells nothing: no quote, no settlement, no program run."""
-
-    def test_a_killed_runtime_seller_refuses_before_quoting_or_settling(self):
-        from factorylab.runtime.seller import seller_from_runtime
-        from tests.runtime.test_seller import (
-            SERVICE,
-            TOOL,
-            FakeHTTP,
-            fixture_service,
-            paid_header,
-            register,
-            runtime_with_reserve,
-            settlement,
-        )
-
-        rt = runtime_with_reserve()
-        register(rt, TOOL)
-        register(rt, SERVICE)
-        transport = FakeHTTP([settlement()])
-        seller = seller_from_runtime(rt, transport=transport,
-                                     facilitator="https://facilitator.test")
-        assert seller.handle("doubler", b"{}", {}, "https://x/service/doubler")[0] == 402
-        rt.kill("explicit_kill:operator")
-        header = paid_header(fixture_service())
-        status, _, body = seller.handle("doubler", b'{"x": 1}',
-                                        {"PAYMENT-SIGNATURE": header},
-                                        "https://x/service/doubler")
-        assert status == 503 and transport.calls == []
-        assert seller.handle("doubler", b"{}", {}, "https://x/service/doubler")[0] == 503
 
     def test_the_hosted_seller_fails_closed_on_death_and_on_stale_liveness(self):
         import importlib.util

@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import os
 import random
-from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from decimal import ROUND_DOWN, Decimal
 from enum import StrEnum
@@ -2110,27 +2109,3 @@ def bind_launch_nonce(exchange: Any, launch_nonce: str | None) -> None:
         target.__dict__.pop("_launch_nonce", None)
     else:
         target.__dict__["_launch_nonce"] = launch_nonce
-
-
-def stream_market(exchange: Exchange, clock: Iterator[WorldEvent]) -> Iterator[WorldEvent]:
-    """Interleave live venue reads with a clock stream.
-
-    For each tick, emits the tick, then one ``MarketMid`` per coin, then any
-    funding observations. Suitable for the ``testnet`` world's read-only probe.
-    """
-    for tick in clock:
-        yield tick
-        for coin, mid in exchange.mids().items():
-            yield WorldEvent(
-                WorldEventKind.MARKET_MID,
-                tick.ts_ns,
-                exchange.name,
-                {"coin": coin, "mid": str(mid)},
-            )
-        for f in exchange.funding():
-            yield WorldEvent(
-                WorldEventKind.FUNDING,
-                tick.ts_ns,
-                exchange.name,
-                {"coin": f.coin, "rate": str(f.rate), "premium": str(f.premium)},
-            )
