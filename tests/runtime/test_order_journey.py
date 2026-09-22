@@ -192,7 +192,23 @@ def test_a_bad_read_drops_itself_and_answers_in_the_next_round():
     continuation = "\n".join(str(m.get("content", ""))
                              for m in provider.requests[1].messages)
     assert '"tool":"venue.positions"' in continuation
-    assert '"tool_call_index":1' in continuation and "missing argument n" in continuation
+    assert '"tool":"venue.funding_history"' in continuation
+    assert "missing argument n" in continuation
+
+
+def test_a_turn_whose_every_read_was_wrong_is_still_a_continuation():
+    """PR121 seq 11547: two reads, both missing an argument, voided the decision."""
+    provider = Scripted(
+        {"tool_calls": [{"tool": "venue.funding_history", "args": {"coin": "ETH"}},
+                        {"tool": "venue.funding_history", "args": {"coin": "BTC"}}]},
+        {"tool_calls": [{"tool": "venue.funding_history", "args": {"coin": "BTC", "n": 5}}]},
+        {"action": "hold", "rationale": "funding flat"},
+    )
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    _, event = _consequence_produce(runtime)
+    assert event.payload["status"] == "ok" and len(provider.requests) == 3
+    second = "\n".join(str(m.get("content", "")) for m in provider.requests[1].messages)
+    assert second.count("missing argument n") >= 2  # both slots answered with their error
 
 
 def test_a_bad_item_in_a_batch_that_writes_still_voids_the_whole_batch():

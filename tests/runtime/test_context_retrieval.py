@@ -11,8 +11,25 @@ from factorylab.runtime.compute import _bounded_result_history, _compacted_resul
 from factorylab.runtime.continuity import HARD_STATE_BYTES
 
 
+def test_invalid_read_is_answered_in_its_slot_without_dispatch(monkeypatch):
+    """A read-only batch keeps its turn: the bad read is refused, not dispatched,
+    and its error answers in its own tool_results slot (PR121 seq 11547)."""
+    rt = runtime()
+    req = request(rt)
+    prompts = []
+    scripted(rt, monkeypatch, [
+        {"tool_calls": [{"tool": "venue.order_book", "args": {"coin": "BTC"}}]},
+        {"action": "hold", "rationale": "the book read was malformed; holding"},
+    ], prompts)
+    ret = rt._invoke("seed-decider", req, "producer")
+    assert ret.status == "ok" and len(prompts) == 2
+    assert not rows(rt, "tool.call")  # never dispatched
+    assert "depth" in prompts[1] and '"tool":"venue.order_book"' in prompts[1]
+    fault = rows(rt, "return.sections_dropped") or rows(rt, "return.validation_failed")
+    assert fault and "depth" in json.dumps(fault[-1])
+
+
 @pytest.mark.parametrize("calls,reason", [
-    ([{"tool": "venue.order_book", "args": {"coin": "BTC"}}], "depth"),
     ([{"tool": "outcome.get", "args": {"outcome_id": "outcome:1"}}] * 5,
      "more than 4 tool_calls"),
 ])

@@ -567,7 +567,7 @@ class ComputeMixin:
                      for call in calls if isinstance(call, dict))
         for index, call in enumerate(calls):
             spec = self.tool_specs.get(call["tool"])
-            if spec is None:
+            if spec is None or call.get("invalid"):
                 continue
             try:
                 if spec["kind"] == "venue":
@@ -1625,11 +1625,7 @@ class ComputeMixin:
                              "reason": "remaining budget cannot cover a tool-result answer"},
                              0, "failed")
                 break
-            # A read dropped for bad arguments answers in its own slot, so the next
-            # round can correct it rather than the seat learning of it a wake later.
-            results = [{"tool_call_index": d["index"], "result": {"error": d["reason"]}}
-                       for d in ret.dropped
-                       if d.get("section") == "tool_calls" and "index" in d]
+            results = []
             tool_cost = 0
             learned = False  # a lookup this decision had not already been given
             acted = False  # a write or a child: this decision has taken its action
@@ -1637,6 +1633,13 @@ class ComputeMixin:
             for index, call in enumerate(ret.tool_calls):
                 if self.wallet.dead:
                     break
+                if call.get("invalid"):
+                    # Refused by validation, never dispatched: its error answers in
+                    # its own slot so the next round can correct it.
+                    results.append({"tool": call.get("tool"), "args": call.get("args"),
+                                    "result": {"error": call["invalid"]}})
+                    learned = True
+                    continue
                 price = self._tool_price_bound(call)
                 # A slot is a client identity: it names the round as well as the
                 # position, so two rounds of one decision cannot collide on one

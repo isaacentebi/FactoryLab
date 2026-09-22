@@ -767,8 +767,20 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
         except SectionError as exc:
             if exc.section not in OPTIONAL_SECTIONS or exc.section not in parsed:
                 raise ValueError(exc.reason) from None
+            if (exc.section in _ATOMIC_SECTIONS and not exc.atomic and exc.index is not None
+                    and exc.section in origin
+                    and 0 <= exc.index < len(parsed[exc.section])
+                    and not parsed[exc.section][exc.index].get("invalid")):
+                # A read that cannot run stays in its slot, marked, and is answered
+                # there with its error: the turn remains a continuation even when
+                # every read in it was wrong, and nothing unvalidated is dispatched.
+                drop(exc.section, exc.reason, origin[exc.section][exc.index])
+                parsed[exc.section] = [
+                    {**item, "invalid": exc.reason[:200]} if i == exc.index else item
+                    for i, item in enumerate(parsed[exc.section])]
+                continue
             if (exc.index is None or exc.section not in origin
-                    or (exc.section in _ATOMIC_SECTIONS and exc.atomic)):
+                    or exc.section in _ATOMIC_SECTIONS):
                 where = "" if exc.index is None else f"item {exc.index}: "
                 drop(exc.section, where + exc.reason)
                 del parsed[exc.section]
