@@ -154,3 +154,23 @@ def test_forecast_return_with_an_unresolved_commitment_is_settled_priced(monkeyp
     settled = rt.queue.history(parent)[-1]
     assert settled.definition_version == UNRESOLVED_PRICED and settled.score > 0
     assert parent not in rt.forecast_returns
+
+
+def test_a_violating_seat_with_no_decision_in_the_window_is_ledgered_unattributed(
+        monkeypatch):
+    """Its part of the price has nobody to carry it: ledgered, never silently free."""
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    rt = _runtime(_card())
+    carried = [_decision(rt, PARTLY) for _ in range(2)]
+    _commitments(rt, GUILTY, censored=4)  # violates, but made no decision here
+    _commitments(rt, PARTLY, censored=2)
+    _commitments(rt, INNOCENT, censored=0)  # compliant: nothing to attribute
+    rt._close_price_window()
+    rows = [i for i in rt.ledger._recovery_items() if i["kind"] == "price.unattributed"]
+    assert [(r["card_id"], r["scope"], r["window"]) for r in rows] == [
+        ("censorship-bound", GUILTY, rt.window.index)]
+    row = rows[0]
+    assert row["lambda"] == rt.window.closed_prices["censorship-bound"] > 0
+    assert row["violation"] == pytest.approx(7 / 3) and row["part"] == pytest.approx(7 / 9)
+    # Evidence only: the seat that did respond still carries exactly its own part.
+    assert rt._penalty_terms("all", carried[0])[0]["share"] == pytest.approx(2 / 9 / 2)

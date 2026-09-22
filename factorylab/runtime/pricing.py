@@ -464,11 +464,59 @@ class PricingMixin:
         self.window.closed_cards = tuple(c for c in self.charter.cards if c.id in card_values)
         self.window.closed_prices = {c.id: self.controller.price(c.id)
                                      for c in self.window.closed_cards}
+        self._ledger_unattributed()
         # A relief lasts exactly the window it was issued for: that window's frozen prices
         # carry it, and it ends here, after them and before any new diagnosis.
         self.controller.expire_relief(window=w.index)
         close_window(self, values)
         self._prune_price_evidence()
+
+    def _ledger_unattributed(self) -> None:
+        """Guarantees a priced violation that no decision will carry is ledgered, never silent.
+
+        A scoped card routes each violating scope's part of its violation onto that
+        scope's decisions priced on this window (``_attributed_share``). A scope that
+        violates but has no such decision leaves its part uncharged, because nobody
+        will settle against it. That part is recorded at the close as
+        ``price.unattributed`` (card, scope, window, the frozen lambda, the scope's
+        own violation and its part of the card's), once per card and scope. It is
+        evidence that the charter's price did not bite there. It is not a charge:
+        no score, wallet or learner moves (essay II.II.b prices only through the
+        reward of a decision, and there is no decision here to carry it).
+        """
+        window = self.window
+        for card in window.closed_cards:
+            per = card.window.per
+            price = window.closed_prices.get(card.id, 0.0)
+            region = window.closed_regions.get(card.id)
+            scopes = window.closed_scopes.get(card.id) or {}
+            observation = self.observations.get(card.observation)
+            if (per not in ("assembly", "role") or price <= 0 or region is None
+                    or observation is None or not scopes):
+                continue
+            excess = {scope: violation(region, value) for scope, value in scopes.items()}
+            total = sum(excess.values())
+            if total <= 0:
+                continue
+            # The decisions that will settle against this window's frozen price for
+            # this card: the same origin rule ``_priced_cards`` applies.
+            carried = set()
+            for handle, origins in self.price_origins.items():
+                if origins.get(observation.id, origins.get("origin")) != window.index:
+                    continue
+                if card.answers_for != "all" and (
+                        self._scope_of(window, handle, "role") != card.answers_for):
+                    continue
+                carried.add(self._scope_of(window, handle, per))
+            for scope in sorted(excess):
+                if excess[scope] <= 0 or scope in carried:
+                    continue
+                self.ledger.append({
+                    "kind": "price.unattributed", "card_id": card.id, "scope": scope,
+                    "per": per, "window": window.index, "lambda": price,
+                    "violation": excess[scope], "part": excess[scope] / total,
+                    "ts": self.clock.now_ns,
+                })
 
     def _priced_cards(self, origins: dict[str, int]) -> list[tuple]:
         """The (card, observation, window, price) a decision is priced on, one per card id.
