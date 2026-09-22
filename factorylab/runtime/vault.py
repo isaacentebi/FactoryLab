@@ -156,9 +156,8 @@ class VaultMixin:
                 return ("vault transfer collateral unknown: the venue has not said what "
                         "resting orders hold")
             holds = Decimal(0) if view["holds_included_in_margin_used"] else _dec(raw)
-            headroom = _dec(getattr(self.m.exchange, "collateral_headroom_usd", "0"))
             free = (_dec(view["eligible_equity_usd"]) - _dec(view["margin_used_usd"])
-                    - holds - headroom)
+                    - holds)
         except (AttributeError, KeyError, ValueError, ArithmeticError, RuntimeError,
                 TypeError, IndexError) as exc:
             return f"vault transfer collateral unavailable: {type(exc).__name__}"

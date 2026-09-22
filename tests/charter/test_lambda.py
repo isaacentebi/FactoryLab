@@ -13,7 +13,7 @@ from tests.seed_charter import seed_charter
 
 def runtime():
     return Runtime(load_manifest("scripted"), events=1, seed=1, initial_balance_micro=None,
-                   ledger_path=None, drip=True, router_gamma=0.1)
+                   ledger_path=None, router_gamma=0.1)
 
 
 def amendment(**changes):

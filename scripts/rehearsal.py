@@ -136,7 +136,7 @@ def main(argv=None) -> int:
     with marker.open("x") as stream:
         stream.write(str(args.out.resolve()) + "\n")
     code = run_command(["uv", "run", "factorylab", "run", "--world", str(args.world),
-                        "--duration", "10m", "--kill-at-end", "--no-drip"], args.out)
+                        "--duration", "10m", "--kill-at-end"], args.out)
     (args.out / "preflight.json").write_text(json.dumps(evidence, indent=2) + "\n")
     return code
 

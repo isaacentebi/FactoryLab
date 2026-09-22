@@ -75,9 +75,9 @@ class ScriptedRun:
         return rt
 
 
-def _cached_scripted_run(directory, manifest, events, seed, *, mode, drip=True):
+def _cached_scripted_run(directory, manifest, events, seed, *, mode):
     """Publish only completed runs, once per key across all workers in this session."""
-    identity = (manifest.canonical_json(), events, seed, jail_available(), mode, drip)
+    identity = (manifest.canonical_json(), events, seed, jail_available(), mode)
     key = hashlib.sha256(canonical(identity)).hexdigest()
     directory.mkdir(parents=True, exist_ok=True)
     run_directory = directory / key
@@ -110,7 +110,7 @@ def _cached_scripted_run(directory, manifest, events, seed, *, mode, drip=True):
                 # These consumers originally used in-memory ledgers. Preserve that call:
                 # persisting every encrypted append here would add thousands of fsyncs.
                 rt = Runtime(manifest, events=events, seed=seed, initial_balance_micro=None,
-                             ledger_path=None, drip=drip, router_gamma=.1,
+                             ledger_path=None, router_gamma=.1,
                              provider=RecordingProvider() if mode == "recorded_runtime" else None)
                 append = rt.ledger.append
 
@@ -174,10 +174,10 @@ def scripted_run(_scripted_run_cache):
 @pytest.fixture(scope="session")
 def scripted_runtime_run(_scripted_run_cache):
     """Share direct Runtime evidence without changing run_world's separate launch checks."""
-    def run(manifest, events, seed, *, drip=True, record_requests=False):
+    def run(manifest, events, seed, *, record_requests=False):
         mode = "recorded_runtime" if record_requests else "runtime"
         return _cached_scripted_run(_scripted_run_cache, manifest, events, seed,
-                                    mode=mode, drip=drip)
+                                    mode=mode)
 
     return run
 
@@ -321,10 +321,9 @@ def make_runtime(*, balance=100_000_000, live=False, clock_source=None):
     """Return a scripted-world runtime with no ledger file, no network and no credentials."""
     manifest = load_manifest("scripted")
     if live:
-        manifest = replace(manifest, exchange=replace(manifest.exchange, kind="hyperliquid"),
-                           drip=None)
+        manifest = replace(manifest, exchange=replace(manifest.exchange, kind="hyperliquid"))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=balance,
-                   ledger_path=None, drip=False, router_gamma=.1,
+                   ledger_path=None, router_gamma=.1,
                    exchange=FakeExchange(), provider=ScriptedProvider(),
                    clock_source=clock_source)
 

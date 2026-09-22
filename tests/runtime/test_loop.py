@@ -13,7 +13,7 @@ from factorylab.world.scripted import ScriptedProvider
 
 def test_scripted_world_compute_starvation_is_final_under_phase4() -> None:
     m = load_manifest("scripted")
-    s = run_world(m, events=60, seed=2, initial_balance_micro=1, drip=False)
+    s = run_world(m, events=60, seed=2, initial_balance_micro=1)
     assert s["terminated"] and s["termination_reason"] == "insolvency:compute"
     assert s["seal_key_released"] and s["wallet_balance_micro"] == 1
     assert s["stats"]["exclusions"] > 0
@@ -121,7 +121,6 @@ def _recursive_runtime(*, events=100, provider=None):
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        drip=True,
         router_gamma=0.1,
         provider=provider or RecursiveMetaProvider(),
     )
@@ -253,7 +252,6 @@ def _consequence_runtime(*, provider=None, exchange=None, manifest=None):
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        drip=False,
         router_gamma=0.2,
         provider=provider,
         exchange=exchange,
@@ -509,7 +507,7 @@ def _market_runtime(market_http, *, provider=None, events=10, treasury=None, see
     })
     return Runtime(
         manifest, events=events, seed=1, initial_balance_micro=None, ledger_path=None,
-        drip=False, router_gamma=0.2, provider=provider or ScriptedProvider(),
+        router_gamma=0.2, provider=provider or ScriptedProvider(),
         market=X402Provider(private_key=TEST_KEY, transport=market_http),
     )
 

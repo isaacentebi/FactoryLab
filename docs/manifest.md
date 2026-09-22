@@ -1443,8 +1443,7 @@ event calls `wallet.release_due(now_ns)` before anything else spends: each
 tranche whose `launch_ns + at` has passed moves from locked to unlocked once,
 in order, ledgered as `release` with `tranche`, `amount`, `due_ns`,
 `locked_after` and `balance_after`. The balance does not change; only its
-classification does. `drip` is unrelated to releases and a final ledger
-releases nothing. `next_release_ns` is the absolute time of the next unreleased
+classification does. A final ledger releases nothing. `next_release_ns` is the absolute time of the next unreleased
 tranche, or null. The locked amount, the schedule, the anchor and the count of
 released tranches are checkpointed and checked on restore: a checkpoint whose
 locked backing disagrees with its released tranches is refused. The wake's
@@ -1488,7 +1487,7 @@ the same money, and leaving resets the insolvency count.
 While dormant the event is not routed: no seat is woken for it, so no model or
 program call, no return, no registration and no tool call comes of it, and the
 compute-insolvency streak is not advanced. Everything mandatory continues on
-every event: drips and due releases, reserve-window management (windows still
+every event: due releases, reserve-window management (windows still
 close, cards are still measured and priced, note rent still accrues and is
 collected, and an activation boundary still falls due), the treasury's window
 cap and its tick, order reconciliation, fills and settled funding from the
@@ -2085,11 +2084,9 @@ prices; an account fallback to the last complete snapshot is returned with
 the watchers, a window's opening equity and the wind-down's final reconciliation
 (`unknown`, never `flat`) all refuse it.
 
-`[venue] collateral_headroom_usd` is an exact nonnegative decimal string,
-default `"0"`: free collateral the world precommits to leaving unused, declared
-before the orders that would want it. It is not `[kill] dust_micro`, which is a
-different setting for a different thing. At its default the key is dropped from
-the canonical manifest JSON, so no world that predates it changes hash.
+`[drip]`, `[termination] max_events` and `[venue] collateral_headroom_usd` are
+removed (smuggling D-6): no world set them and nothing enforced them. A manifest
+that names one is refused.
 
 `[venue] principal_usd` and `[tools] max_leverage` are **deprecated and inert**
 (architect decision D1: a cap on the principal or the leverage the population may use

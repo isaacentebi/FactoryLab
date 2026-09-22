@@ -32,7 +32,7 @@ def _core_runtime(kinds=("ProducerReturn",)):
     manifest = replace(manifest, evaluation=replace(manifest.evaluation,
                                                     no_swap_regret_kinds=tuple(kinds)))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=100_000_000,
-                   ledger_path=None, drip=False, router_gamma=.1,
+                   ledger_path=None, router_gamma=.1,
                    exchange=FakeExchange(), provider=ScriptedProvider())
 
 

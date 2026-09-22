@@ -35,7 +35,7 @@ def world(address_enabled=True):
     manifest = replace(manifest, tools=replace(manifest.tools,
                                                address_enabled=address_enabled))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                   drip=False, router_gamma=0.1, provider=ScriptedProvider(),
+                   router_gamma=0.1, provider=ScriptedProvider(),
                    exchange=FakeExchange(coins=manifest.exchange.coins))
 
 

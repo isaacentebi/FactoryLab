@@ -42,7 +42,7 @@ def runtime(mode="reference", *, max_tool_calls=None):
     if max_tool_calls is not None:
         manifest = replace(manifest, tools=replace(manifest.tools, max_tool_calls=max_tool_calls))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                   drip=False, router_gamma=0.1, provider=ScriptedProvider(),
+                   router_gamma=0.1, provider=ScriptedProvider(),
                    exchange=FakeExchange(coins=manifest.exchange.coins))
 
 

@@ -47,7 +47,7 @@ TESTNET_BALANCE = "966"
 def custody_runtime(*, venue_usd: str = TESTNET_BALANCE) -> Runtime:
     """A scripted world on a venue holding `venue_usd`."""
     rt = Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=50_000_000,
-                 ledger_path=None, drip=False, router_gamma=.1, provider=ScriptedProvider(),
+                 ledger_path=None, router_gamma=.1, provider=ScriptedProvider(),
                  exchange=FakeExchange(start_cash_usd=Decimal(venue_usd)))
     rt._manage_reserve_window()
     return rt
@@ -163,7 +163,7 @@ def leaky_world(tmp_path_factory):
     sink: list[tuple[str, str, str]] = []
     path = tmp_path_factory.mktemp("launch-gates") / "leaky.jsonl"
     run_world(load_manifest("scripted"), events=30, seed=1, ledger_path=str(path),
-              drip=False, provider=_seats_that_leak(sink)())
+              provider=_seats_that_leak(sink)())
     return sink, path
 
 

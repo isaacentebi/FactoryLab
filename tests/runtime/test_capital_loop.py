@@ -61,7 +61,7 @@ def test_the_capital_loop_world_converts_a_seats_testnet_profit_into_its_venice_
     world = Path("worlds/edition5-capital-loop.toml")
     manifest = simulation_manifest(world, 1)
     rt = Runtime(manifest, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 drip=False, router_gamma=0.1, provider=PolicyProvider(world))
+                 router_gamma=0.1, provider=PolicyProvider(world))
     assert rt.treasury.rail.name == "scripted-hybrid"
     assert "to_venice pays its $5 from the venue" in rt.tool_specs["treasury.transfer"][
         "description"]

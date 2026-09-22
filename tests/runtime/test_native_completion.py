@@ -56,7 +56,6 @@ def runtime(manifest, provider, *, ledger_path=None):
         seed=1,
         initial_balance_micro=None,
         ledger_path=ledger_path,
-        drip=False,
         router_gamma=0.1,
         provider=provider,
     )

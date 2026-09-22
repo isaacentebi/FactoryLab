@@ -1,6 +1,6 @@
 """World manifests.
 
-A manifest is the architect's whole first move: initial balance, drip,
+A manifest is the architect's whole first move: initial balance,
 venue, priced model tiers, seed assemblies, novelty share, timing ratios,
 termination conditions and the seed. It is loaded from TOML, validated, and
 hashed into the ledger's genesis entry so a world can prove which manifest
@@ -40,14 +40,6 @@ WORLDS_DIR = Path(__file__).resolve().parents[2] / "worlds"
 
 
 @dataclass(frozen=True)
-class DripSpec:
-    amount_micro: int
-    period_ns: int
-    start_ns: int
-    end_ns: int
-
-
-@dataclass(frozen=True)
 class Shock:
     """A scripted price multiplier applied to one coin at one venue step (fake venue only)."""
 
@@ -66,11 +58,6 @@ class ExchangeSpec:
     start_cash_usd: str = "100"
     shocks: tuple[Shock, ...] = ()
     client_namespace: str | None = None
-    # Free collateral this world precommits to leaving unused at the venue, on top
-    # of the margin an order needs. A buffer declared before the orders exist, so
-    # it cannot be reasoned away by the order that wants it. Zero by default: a
-    # world that wants a cushion says so.
-    collateral_headroom_usd: str = "0"
     # DEPRECATED and inert (architect decision D1: a principal cap is a Class-2
     # imposition). Still read, validated and hashed as declared; nothing enforces it.
     # The venue's own account is the only limit on the principal used.
@@ -84,7 +71,7 @@ class ExchangeSpec:
 @dataclass(frozen=True)
 class ModelTier:
     id: str
-    provider: str  # "fake" | "openrouter" | "anthropic"
+    provider: str  # "fake" | "openrouter" | "venice" | "x402"
     input_usd_per_mtok: str
     output_usd_per_mtok: str
     reasoning: tuple[tuple[str, Any], ...] = ()  # OpenRouter `reasoning` object, e.g. effort=low
@@ -423,7 +410,6 @@ class TimingSpec:
 @dataclass(frozen=True)
 class TerminationSpec:
     balance_floor_micro: int = 0
-    max_events: int | None = None
 
 
 @dataclass(frozen=True)
@@ -486,7 +472,6 @@ class WorldManifest:
     name: str
     seed: int
     initial_balance_micro: int
-    drip: DripSpec | None
     exchange: ExchangeSpec
     models: tuple[ModelTier, ...]
     assemblies: tuple[AssemblySeed, ...]
@@ -877,8 +862,6 @@ class WorldManifest:
         for sh in self.exchange.shocks:
             if sh.step < 1 or Decimal(sh.multiplier) <= 0:
                 raise ValueError("shock step must be >= 1 and multiplier positive")
-        if self.drip is not None and (self.drip.period_ns <= 0 or self.drip.amount_micro < 0):
-            raise ValueError("drip period must be positive and amount non-negative")
         self._validate_endowment()
         from factorylab.charter.book import validate_observation_bindings
 
@@ -1051,26 +1034,16 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     clock = d.get("clock", {})
     if set(clock) - {"min_tick"}:
         raise ValueError("clock accepts only min_tick; max_tick is derived")
-    drip = None
-    if "drip" in d:
-        dd = d["drip"]
-        drip = DripSpec(
-            amount_micro=usd_to_micro(dd["amount_usd"], rounding="exact"),
-            period_ns=duration_ns(dd["period"]),
-            start_ns=duration_ns(dd.get("start", 0)),
-            end_ns=duration_ns(dd["end"]),
-        )
+    # Smuggling D-6: keys no world set and nothing enforced. A manifest naming one
+    # would describe physics the kernel does not run, so it is refused, not ignored.
+    for section, key in (("drip", None), ("termination", "max_events"),
+                         ("venue", "collateral_headroom_usd")):
+        if section in d if key is None else key in (d.get(section) or {}):
+            name = section if key is None else f"{section}.{key}"
+            raise ValueError(f"{name} was removed: no world set it and nothing enforced it")
     ex = d.get("exchange", {})
     venue = d.get("venue", {})
     spot_pairs = venue.get("spot_pairs", [])
-    headroom = str(venue.get("collateral_headroom_usd", "0"))
-    try:
-        if Decimal(headroom) < 0 or not Decimal(headroom).is_finite():
-            raise ValueError
-    except (ArithmeticError, ValueError):
-        raise ValueError(
-            "venue.collateral_headroom_usd must be a nonnegative exact decimal string"
-        ) from None
     principal = venue.get("principal_usd")
     if principal is not None:
         principal = str(principal)
@@ -1097,7 +1070,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         spot_pairs=tuple(spot_pairs),
         seed=int(ex.get("seed", d.get("seed", 0))),
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
-        collateral_headroom_usd=headroom,
         principal_usd=principal,
         vault_tools=vault_tools,
         shocks=tuple(
@@ -1183,7 +1155,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         name=d["name"],
         seed=int(d.get("seed", 0)),
         initial_balance_micro=usd_to_micro(d["initial_balance_usd"], rounding="exact"),
-        drip=drip,
         exchange=exchange,
         models=models,
         assemblies=assemblies,
@@ -1198,7 +1169,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         ),
         termination=TerminationSpec(
             usd_to_micro(term.get("balance_floor_usd", 0), rounding="exact"),
-            term.get("max_events"),
         ),
         charter=charter,
         charter_prices=charter_prices,

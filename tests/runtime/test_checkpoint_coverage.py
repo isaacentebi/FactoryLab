@@ -97,7 +97,7 @@ def restored_twin(rt):
 @pytest.mark.gate
 def test_every_attribute_a_world_carries_is_checkpointed_or_declared(tmp_path):
     rt = Runtime(load_manifest("scripted"), events=100, seed=1, initial_balance_micro=None,
-                 ledger_path=str(tmp_path / "world.jsonl"), drip=True, router_gamma=.1)
+                 ledger_path=str(tmp_path / "world.jsonl"), router_gamma=.1)
     original = rt._process_event
     differences: dict[str, tuple] = {}
     seen: set[str] = set()

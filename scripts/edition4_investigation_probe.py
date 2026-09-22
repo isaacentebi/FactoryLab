@@ -138,7 +138,7 @@ def _facts(seat: str) -> list[str]:
 
 def _runtime(manifest: Any, provider: Any, receipts: list[dict[str, Any]]) -> Runtime:
     runtime = Runtime(manifest, events=0, seed=manifest.seed, initial_balance_micro=None,
-                      ledger_path=None, drip=False, router_gamma=0.1, provider=provider,
+                      ledger_path=None, router_gamma=0.1, provider=provider,
                       market=DeniedMarket(),
                       exchange=FakeExchange(coins=manifest.exchange.coins))
     runtime.clock.now_ns = FIXED_NOW_NS

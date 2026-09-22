@@ -48,8 +48,8 @@ class Proposer(ScriptedProvider):
 
 def world(path, events, **kwargs):
     return Runtime(load_manifest("scripted"), events=events, seed=1, initial_balance_micro=None,
-                   ledger_path=None if path is None else str(path), drip=False,
-                   router_gamma=.1, provider=Proposer(), **kwargs)
+                   ledger_path=None if path is None else str(path), router_gamma=.1,
+                   provider=Proposer(), **kwargs)
 
 
 def items(path):

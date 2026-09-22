@@ -182,7 +182,6 @@ class SummaryMixin:
             "world": self.m.name,
             "manifest_hash": self.m.manifest_hash(),
             "seed": self.seed,
-            "drip": self.use_drip,
             "terminated": self.termination.final,
             "termination_reason": self.termination.reason,
             "seal_key_released": self.ledger.seal_key_released(),

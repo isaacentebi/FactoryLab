@@ -25,7 +25,7 @@ def spot_venue():
 def spot_runtime(exchange):
     """A scripted runtime with no ledger file, trading on ``exchange``."""
     return Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                   ledger_path=None, drip=False, router_gamma=.1, provider=ScriptedProvider(),
+                   ledger_path=None, router_gamma=.1, provider=ScriptedProvider(),
                    exchange=exchange)
 
 
@@ -44,8 +44,8 @@ def spot_producer(rt):
 def venue_runtime(*, venue_usd="1000", wallet_micro=1_000_000) -> Runtime:
     """A scripted world whose venue is rich and whose compute wallet is not."""
     rt = Runtime(load_manifest("scripted"), events=0, seed=1,
-                 initial_balance_micro=wallet_micro, ledger_path=None, drip=False,
-                 router_gamma=.1, provider=ScriptedProvider(),
+                 initial_balance_micro=wallet_micro, ledger_path=None, router_gamma=.1,
+                 provider=ScriptedProvider(),
                  exchange=FakeExchange(start_cash_usd=Decimal(venue_usd)))
     rt._manage_reserve_window()
     return rt

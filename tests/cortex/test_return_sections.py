@@ -264,7 +264,7 @@ class BadSectionProvider(ScriptedProvider):
 @pytest.mark.gate
 def test_in_a_world_the_order_stands_and_the_seat_reads_the_receipt(tmp_path):
     rt = Runtime(load_manifest("scripted"), events=30, seed=1, initial_balance_micro=None,
-                 ledger_path=str(tmp_path / "w.jsonl"), drip=True, router_gamma=.1,
+                 ledger_path=str(tmp_path / "w.jsonl"), router_gamma=.1,
                  provider=BadSectionProvider())
     rt.run()
     diary = rt.ledger._recovery_items()

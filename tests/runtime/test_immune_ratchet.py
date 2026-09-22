@@ -24,7 +24,7 @@ def _runtime(lambda_max=1.0):
     charter = replace(seed.charter, cards=tuple(replace(c, window=MetricWindow("windows", 1, None))
                                                for c in seed.charter.cards))
     rt = Runtime(replace(seed, charter=charter), events=1, seed=1, initial_balance_micro=None,
-                 ledger_path=None, drip=False, router_gamma=0.1)
+                 ledger_path=None, router_gamma=0.1)
     rt._derive_regions()
     return rt
 

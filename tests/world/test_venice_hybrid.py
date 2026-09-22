@@ -827,11 +827,11 @@ def test_4_a_live_hybrid_world_will_not_start_or_resume_without_the_opt_in():
 
     with pytest.raises(RailError, match="--capital-loop"):
         Runtime(capital_loop(), events=1, seed=1, initial_balance_micro=None,
-                ledger_path=None, drip=False, router_gamma=0.1, provider=ScriptedProvider(),
+                ledger_path=None, router_gamma=0.1, provider=ScriptedProvider(),
                 exchange=FakeExchange())
     # The opt-in is never checkpointed, so a resume has to be asked for it again.
     rt = Runtime(load_manifest("scripted"), events=1, seed=1, initial_balance_micro=None,
-                 ledger_path=None, drip=False, router_gamma=0.1)
+                 ledger_path=None, router_gamma=0.1)
     assert "capital_loop" not in runtime_state(rt)["config"]
 
 

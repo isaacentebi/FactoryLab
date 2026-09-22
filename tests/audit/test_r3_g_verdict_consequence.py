@@ -26,7 +26,7 @@ def test_resume_after_a_verdict_consequence_item_replays_identically(tmp_path):
     m = _short_window_manifest()
     path = tmp_path / "verdict.jsonl"
     rt = Runtime(m, events=12, seed=1, initial_balance_micro=None, ledger_path=str(path),
-                 drip=True, router_gamma=.1)
+                 router_gamma=.1)
     append = rt.ledger.append
     seen = []
 

@@ -278,7 +278,7 @@ def test_the_cli_reports_witness_unavailable_with_the_retried_exit_code(tmp_path
 def test_a_checkpoint_cannot_revive_a_killed_runtime():
     m = load_manifest("scripted")
     rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 drip=True, router_gamma=.1)
+                 router_gamma=.1)
     rt.run()
     state = runtime_state(rt)
     # The fingerprint rides beside the mapping, never in it: two runs of one manifest
@@ -305,7 +305,7 @@ def test_a_memory_only_kill_touches_no_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     m = load_manifest("scripted")
     rt = Runtime(m, events=1, seed=1, initial_balance_micro=None, ledger_path=None,
-                 drip=True, router_gamma=.1, kill_at_end=True)
+                 router_gamma=.1, kill_at_end=True)
     rt.run()
     assert rt.termination.final
     assert list(tmp_path.iterdir()) == []

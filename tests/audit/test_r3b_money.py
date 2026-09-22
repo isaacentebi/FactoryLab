@@ -21,7 +21,7 @@ import pytest
 from factorylab.runtime.custody import custody_view
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
-from factorylab.world.exchange import FakeExchange, Order, VenueUnavailable
+from factorylab.world.exchange import Order, VenueUnavailable
 from factorylab.world.scripted import ScriptedProvider
 from tests.helpers import place, venue_runtime
 from tests.helpers import spot_producer as _producer
@@ -32,7 +32,7 @@ from tests.runtime.test_fidelity import runtime as scripted_runtime
 
 def _spot_runtime(exchange):
     return Runtime(load_manifest("scripted"), events=0, seed=1, initial_balance_micro=None,
-                   ledger_path=None, drip=False, router_gamma=.1, provider=ScriptedProvider(),
+                   ledger_path=None, router_gamma=.1, provider=ScriptedProvider(),
                    exchange=exchange)
 
 
@@ -227,22 +227,6 @@ def test_the_check_admits_what_the_venue_can_carry_and_refuses_what_it_cannot():
     assert result["status"] == "rejected"
     assert result["error"] == "order collateral exceeds venue free collateral"
     assert len(ledger_items(rt, "order.infeasible")) == 1
-
-
-def test_precommitted_headroom_is_collateral_the_order_may_not_use():
-    """``[venue] collateral_headroom_usd``, declared before the orders exist."""
-    from dataclasses import replace as _replace
-
-    manifest = load_manifest("scripted")
-    manifest = _replace(manifest, exchange=_replace(
-        manifest.exchange, collateral_headroom_usd="900"))
-    rt = Runtime(manifest, events=0, seed=1, initial_balance_micro=1_000_000,
-                 ledger_path=None, drip=False, router_gamma=.1, provider=ScriptedProvider(),
-                 exchange=FakeExchange(start_cash_usd=Decimal("1000")))
-    rt._manage_reserve_window()
-    # $400 of margin fits $1,000 of equity, but not $1,000 less $900 of headroom.
-    assert place(rt, "0.02")["status"] == "rejected"
-    assert rt.m.exchange.collateral_headroom_usd == "900"
 
 
 def test_spot_and_perp_are_checked_separately_against_their_own_balances():

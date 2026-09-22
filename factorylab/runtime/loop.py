@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import json
 from collections import deque
-from itertools import islice
 from typing import Any
 
 from factorylab.cortex.registration import measured_role
@@ -78,7 +77,7 @@ from factorylab.settlement.vocabulary import (
     commission_block,
     evaluator_answer_schema,
 )
-from factorylab.world.clock import ClockSource, DripSource, merge_sources
+from factorylab.world.clock import ClockSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.market import X402Provider
 
@@ -295,22 +294,12 @@ class Runtime(
         if self.termination.final or (self.started and self._check_termination()):
             return self._summary()
         self.ledger.active = True
-        tick_ns = self.m.tick_interval_ns
         if self.clock_source is None:
             self.tick_clock.count = self.events_budget
         if self.clock_source is not None and not hasattr(self.clock_source, "events"):
             sources = [self.clock_source]
         else:
             sources = [self.tick_clock.events()]
-        if self.use_drip and self.m.drip is not None:
-            d = self.m.drip
-            drips = DripSource(
-                d.amount_micro,
-                d.period_ns,
-                max(d.start_ns, tick_ns),
-                min(d.end_ns, (self.events_budget + 1) * self.m.max_tick_ns),
-            ).events()
-            sources.append(islice(drips, self.drips_consumed, None))
         if (
             isinstance(self.tick_clock, ClockSource)
             and self.clock_source is None
@@ -382,7 +371,6 @@ class Runtime(
             dq = self.recent_mids.setdefault(coin, deque(maxlen=20))
             dq.append({"t_s": ev.ts_ns // 1_000_000_000, "mid": str(ev.payload.get("mid"))})
 
-        self.wallet.drip(self.clock.now_ns)
         # Due tranches are mandatory even while dormant; each released tranche is then
         # classified (C10): base_share across live seats, the remainder unallocated.
         released = self.wallet.release_due(self.clock.now_ns)
@@ -560,8 +548,6 @@ class Runtime(
                     self.tick_clock.gaps.append(we.ts_ns - self.tick_clock.last_ns)
                 self.tick_clock.index = self.ticks_consumed
                 self.tick_clock.last_ns = we.ts_ns
-        elif we.kind is WorldEventKind.DRIP:
-            self.drips_consumed += 1
         if isinstance(self.tick_clock, ClockSource):
             self.tick_clock.last_event_ns = we.ts_ns
         return self._kernel_event(we)
@@ -1675,7 +1661,6 @@ def run_world(
     initial_balance_micro: int | None = None,
     ledger_path: str | None = None,
     router_gamma: float = 0.1,
-    drip: bool = True,
     provider: Any | None = None,
     market: X402Provider | None = None,
     exchange: Any | None = None,
@@ -1704,7 +1689,6 @@ def run_world(
         seed=seed,
         initial_balance_micro=initial_balance_micro,
         ledger_path=ledger_path,
-        drip=drip,
         router_gamma=router_gamma,
         provider=provider,
         market=market,

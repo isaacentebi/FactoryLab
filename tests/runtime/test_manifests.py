@@ -90,7 +90,7 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     assert scripted.evaluation.grounded_horizon_ticks == 10
     assert '"grounded_horizon_ticks":10' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "ce9f0fddc2e412d455f987d732bda675140e109bd85050debb3a06fa1bdb410b"
+        "ed201a5f5f04db6d68a0d7944e9702050f494e4f0075a101390a80e64f954112"
     )
 
     implicit = manifest_from_dict(_base())
@@ -275,4 +275,17 @@ def test_the_ratchet_step_is_stated_and_the_bin_count_is_not_a_key():
     raw = _base()
     raw["immune"]["bins"] = 3
     with pytest.raises(ValueError, match="immune.bins was removed"):
+        manifest_from_dict(raw)
+
+
+@pytest.mark.parametrize("section,table", [
+    ("drip", {"amount_usd": "1", "period": "1d", "end": "7d"}),
+    ("termination", {"max_events": 100}),
+    ("venue", {"collateral_headroom_usd": "0"}),
+])
+def test_keys_no_world_set_are_refused_not_ignored(section, table):
+    """Smuggling D-6: a manifest naming a removed key would describe unrun physics."""
+    raw = _base()
+    raw[section] = table
+    with pytest.raises(ValueError, match="was removed"):
         manifest_from_dict(raw)
