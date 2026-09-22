@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Any
 
 from factorylab.cortex.assembly import PROGRAM_MODEL_ID
-from factorylab.cortex.registration import reward_contracts
+from factorylab.cortex.registration import measured_role, reward_contracts
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.registry import Contract
@@ -207,7 +207,7 @@ class RouterState:
     # rewards are on, and so what an abstention is worth to it (``neutral``).
     definitions: dict[str, int] = field(default_factory=dict)
     # This window's NOOP watch, {"window", "draws", "min_p"}; empty before a draw.
-    # Observation only: nothing in routing or learning reads it.
+    # The immune organ reads it as its frontier-invocation evidence; no draw reads it.
     watch: dict = field(default_factory=dict)
 
     def neutral(self) -> float:
@@ -811,6 +811,11 @@ class RoutingMixin:
         )
         if isinstance(state.learner, _KeyedLearner):
             self.snapshot_keys[handle] = key
+        if sample.chosen == NOOP:
+            # Ruling R9: waking nobody is a real choice and a decision in this window
+            # like any other, so it is priced on the charter cards of the role it would
+            # have filled, as a woken decision is (``_priced_abstention``).
+            self._contribution(handle, measured_role(next(iter(channels))))
         self._watch_abstention(state, sample)
         self.stats.decisions += 1
         if self.stats.sample_propensity is None and sample.chosen != NOOP:
@@ -829,11 +834,13 @@ class RoutingMixin:
         self._assembly_step(ev, handle, sample, deadline)
 
     def _watch_abstention(self, state: RouterState, sample: Sample) -> None:
-        """Watch this draw's NOOP probability for the window's learning-death entry.
+        """Watch this draw's NOOP probability: the router's frontier-invocation evidence.
 
-        Guarantees observation only: the draw is made and nothing here is read by
-        routing, learning or the manifest. A draw without NOOP on its menu is not
-        watched; a draw in a new window closes the last window's watch first.
+        Guarantees the draw is made and nothing here changes it. A draw without NOOP
+        on its menu is not watched; a draw in a new window starts a new watch. The
+        immune organ reads the watches of the window it closes as the frontier signal
+        of its one learning-death diagnosis (``frontier_invocation``; ruling R9,
+        versioning U1, time T16).
         """
         if NOOP not in sample.action_ids:
             return
@@ -846,25 +853,30 @@ class RoutingMixin:
         state.watch["min_p"] = min(state.watch["min_p"], p)
 
     def _close_abstention_watch(self, state: RouterState) -> None:
-        """Close a watch whose window has ended, ledgering it if NOOP held that window.
+        """Drop a watch whose window has ended; the immune organ read it at the close."""
+        if state.watch and state.watch["window"] != self.window.index:
+            state.watch = {}
 
-        Guarantees one ``router.learning_death`` entry per router and window in which
-        every draw gave NOOP at least ``learning_death_floor(seed_gamma)``: its seats
-        were woken only by exploration all window, the frontier "no longer being
-        invoked" (essay II.II.a). It is evidence for a reader; nothing reads it back,
-        and it is apart from the immune organ's ``pathology.learning_death`` flag.
+    def frontier_invocation(self) -> list[dict[str, Any]]:
+        """Each live router's invocation of its seats in the window now closing.
+
+        Guarantees one row per router that drew with NOOP on its menu in this
+        window: its draws, its lowest NOOP probability, and ``uninvoked`` when every
+        draw gave NOOP at least ``learning_death_floor(seed_gamma)``, so its seats were
+        woken only by exploration all window, the frontier "no longer being invoked"
+        (essay II.II.a). It is evidence inside the immune organ's learning-death
+        diagnosis, not a second definition of it.
         """
-        watch = state.watch
-        if not watch or watch["window"] == self.window.index:
-            return
-        state.watch = {}
-        floor = learning_death_floor(state.seed_gamma)
-        if watch["min_p"] >= floor:
-            self.ledger.append({"kind": "router.learning_death",
-                                "learner_id": state.learner.id, "event_kind": state.kind,
-                                "window": watch["window"], "draws": watch["draws"],
-                                "min_p_noop": watch["min_p"], "floor": floor,
-                                "neutral": state.neutral(), "ts": self.clock.now_ns})
+        rows = []
+        for state in self._all_router_states():
+            watch = state.watch
+            if not watch or watch["window"] != self.window.index:
+                continue
+            floor = learning_death_floor(state.seed_gamma)
+            rows.append({"router": state.learner.id, "event_kind": state.kind,
+                         "draws": watch["draws"], "min_p_noop": watch["min_p"],
+                         "floor": floor, "uninvoked": watch["min_p"] >= floor})
+        return sorted(rows, key=lambda row: row["router"])
 
     @staticmethod
     def _propensity(sample: Sample) -> PropensityRecord:

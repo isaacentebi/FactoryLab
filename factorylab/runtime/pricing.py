@@ -268,7 +268,9 @@ class PricingMixin:
         """Completed decisions release old attribution windows after their totals are frozen."""
         for handle in tuple(self.price_origins):
             if (self.queue.get(handle).status not in (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
-                    and handle not in self.pending and handle not in self.pending_exposure):
+                    and handle not in self.pending and handle not in self.pending_exposure
+                    # An abstention is priced when its credit falls due (ruling R9).
+                    and handle not in self.noop_credits):
                 del self.price_origins[handle]
         retained = {index for origins in self.price_origins.values() for index in origins.values()}
         self.price_windows = {index: window for index, window in self.price_windows.items()

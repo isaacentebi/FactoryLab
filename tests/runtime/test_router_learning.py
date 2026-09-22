@@ -557,38 +557,50 @@ def _draw_at(state, p_noop):
                   state.learner.id, "h", ())
 
 
-def _deaths(rt):
-    return [i for i in rt.ledger._recovery_items() if i["kind"] == "router.learning_death"]
-
-
-def test_a_window_whose_every_draw_parked_at_noop_is_ledgered_once():
+def test_a_window_whose_every_draw_parked_at_noop_is_the_frontier_signal():
+    """Ruling R9 (versioning U1, time T16): the router's own watch is the frontier
+    signal of the one learning-death diagnosis; no separate ledger kind exists."""
     rt = make_runtime()
     state, lid = _router(rt)
     window = rt.window.index
     for p in (0.95, 0.92, 0.97):
         rt._watch_abstention(state, _draw_at(state, p))
     assert state.watch == {"window": window, "draws": 3, "min_p": 0.92}
-    assert not _deaths(rt)  # the window is still open
+    (row,) = [r for r in rt.frontier_invocation() if r["router"] == lid]
+    assert row["uninvoked"] and row["draws"] == 3 and row["min_p_noop"] == 0.92
+    assert row["floor"] == pytest.approx(0.9)
     rt.window.index += 1
     rt._deliver_returns()
-    deaths = _deaths(rt)
-    assert len(deaths) == 1 and deaths[0]["learner_id"] == lid
-    assert deaths[0]["window"] == window and deaths[0]["draws"] == 3
-    assert deaths[0]["min_p_noop"] == 0.92 and deaths[0]["floor"] == pytest.approx(0.9)
-    assert not state.watch
-    rt._deliver_returns()
-    assert len(_deaths(rt)) == 1
+    assert not state.watch  # a closed window's watch is dropped, nothing ledgered
+    assert not [i for i in rt.ledger._recovery_items() if i["kind"] == "router.learning_death"]
+    assert not [r for r in rt.frontier_invocation() if r["router"] == lid]
 
 
-def test_one_draw_that_woke_a_seat_in_earnest_keeps_the_window_alive():
+def test_one_draw_that_woke_a_seat_in_earnest_keeps_the_frontier_invoked():
     rt = make_runtime()
-    state, _lid = _router(rt)
+    state, lid = _router(rt)
     for p in (0.95, 0.5, 0.97):
         rt._watch_abstention(state, _draw_at(state, p))
+    (row,) = [r for r in rt.frontier_invocation() if r["router"] == lid]
+    assert not row["uninvoked"]
     rt.window.index += 1
-    rt._watch_abstention(state, _draw_at(state, 0.99))  # a new window's draw closes the last
-    assert not _deaths(rt)
+    rt._watch_abstention(state, _draw_at(state, 0.99))  # a new window's draw starts anew
     assert state.watch == {"window": rt.window.index, "draws": 1, "min_p": 0.99}
+
+
+def test_the_immune_window_records_which_routers_left_their_frontier_uninvoked():
+    from factorylab.versioning.versions import frontier_evidence
+
+    rows = [{"router": "router:A", "uninvoked": True}, {"router": "router:B",
+                                                         "uninvoked": False}]
+    window = {"profile": {"registrations": 0, "revision": 0}, "regions": {},
+              "frontier_invocation": rows}
+    evidence = frontier_evidence([window, window])
+    assert evidence["uninvoked_routers"] == ["router:A"]
+    # An older window without the signal leaves the evidence as it was.
+    assert "uninvoked_routers" not in frontier_evidence([{**window, "frontier_invocation": rows},
+                                                         {"profile": window["profile"],
+                                                          "regions": {}}])
 
 
 def test_the_watch_is_observation_only_and_survives_a_resume():

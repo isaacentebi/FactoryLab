@@ -1479,10 +1479,36 @@ class FeedbackMixin:
                                     "ts": now})
                 continue
             prop = self.queue.get(handle).propensity
-            # Priced when due, on the scales of every seat round learned by then.
+            # Priced when due, on the scales of every seat round learned by then, less
+            # the charter prices a woken decision bears in the window it was drawn in.
             neutral = self._successor_state(drawer).neutral()
-            fb = BanditFeedback(NOOP, neutral, prop.probs[prop.action_ids.index(NOOP)])
+            reward, penalty = self._priced_abstention(handle, neutral)
+            self.ledger.append({"kind": "router.abstention_priced", "handle": handle,
+                                "router": credit["router"], "neutral": neutral,
+                                "penalty": penalty, "reward": reward, "ts": now})
+            fb = BanditFeedback(NOOP, reward, prop.probs[prop.action_ids.index(NOOP)])
             self._apply_router_round(drawer, handle, credit["p"], credit["executed"], fb)
+
+    def _priced_abstention(self, handle: str, neutral: float) -> tuple[float, float]:
+        """An abstention's credit: the router's zero-consequence reward less its price.
+
+        Ruling R9 (versioning P4, primitive F1): the arm that wakes nobody bears the
+        same charter prices a woken decision bears in the window it was drawn in,
+        its card penalty computed exactly as a woken decision's is, on the cards of
+        the role it would have filled, with that decision's own share (a card on
+        cost shares nothing to a decision that spent nothing). Waking nobody can
+        therefore never beat waking a seat merely because penalties touched only the
+        decisions that acted, and a stable failure's ratcheted prices reach it too.
+        An abstention drawn before its window recorded it is credited unpriced.
+        Returns (reward, penalty).
+        """
+        origin = self.price_origins.get(handle, {}).get("origin")
+        window = self.price_windows.get(origin)
+        sample = window.decisions.get(handle) if window is not None else None
+        if sample is None:
+            return neutral, 0.0
+        penalty = self._penalty_for(sample["role"], handle)
+        return min(1.0, max(0.0, neutral - penalty)), penalty
 
     def _router_owed_abstention(self, learner_id: str) -> bool:
         """Keep a router addressable until every abstention it drew has been credited."""
