@@ -4,11 +4,11 @@ from dataclasses import replace
 import pytest
 
 from factorylab.charter.amendment import Amendment
-from factorylab.charter.charter import seed_charter
 from factorylab.charter.controller import CardRegion, PriceController
 from factorylab.kernel.ledger import Ledger
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
+from tests.seed_charter import seed_charter
 
 
 def runtime():

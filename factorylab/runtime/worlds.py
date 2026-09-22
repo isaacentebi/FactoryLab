@@ -19,7 +19,7 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
-from factorylab.charter.charter import Charter, MetricCard, Norm, seed_charter
+from factorylab.charter.charter import Charter, MetricCard, Norm
 from factorylab.charter.provenance import (
     PROVENANCE_FIELDS,
     charter_content,
@@ -493,6 +493,8 @@ class WorldManifest:
     novelty: NoveltySpec
     timing: TimingSpec
     termination: TerminationSpec
+    # Every world writes its own charter (charter audit S3): the kernel has no default.
+    charter: Charter
     evaluation: EvaluationSpec = EvaluationSpec()
     tools: ToolsSpec = ToolsSpec()
     connectors: ConnectorsSpec = ConnectorsSpec()
@@ -511,9 +513,7 @@ class WorldManifest:
     tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
-    charter: Charter = field(default_factory=seed_charter)
     charter_prices: tuple[tuple[str, float], ...] = ()
-    charter_explicit: bool = False
     # Admission provenance for a funded launch: the digest the ratification exported,
     # the roster it was surveyed against, and the digest of the cards actually loaded.
     charter_ratified_sha256: str | None = None
@@ -558,12 +558,11 @@ class WorldManifest:
 
     def canonical_json(self) -> str:
         payload = asdict(self)
-        # Admission provenance does not change the world defined by identical cards.
-        payload.pop("charter_explicit")
         # Preserve historical manifest identities for models without an extra body.
         for model in payload["models"]:
             if not model.get("extra_body"):
                 model.pop("extra_body", None)
+        # Admission provenance does not change the world defined by identical cards.
         for name in ("charter_ratified_sha256", "charter_roster_sha256",
                      "charter_content_sha256"):
             payload.pop(name)
@@ -835,11 +834,6 @@ class WorldManifest:
         if namespace is not None and (not isinstance(namespace, str) or len(namespace) != 32
                                       or any(c not in "0123456789abcdef" for c in namespace)):
             raise ValueError("exchange.client_namespace must be 32 lowercase hex characters")
-        if (self.exchange.kind == "hyperliquid" and self.exchange.mainnet
-                and self.charter_explicit is not True):
-            # Real money launches on the population's charter, never the seed cards.
-            # Testnet rehearsals may run on the seed charter before edition 1 is drafted.
-            raise ValueError("live_exchange_requires_explicit_charter: mainnet needs [charter]")
         if self.initial_balance_micro < 0:
             raise ValueError("initial balance must be non-negative")
         share = self.endowment.base_share
@@ -1127,9 +1121,11 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     forward_cap = (d.get("treasury") or {}).get("max_forward_fees_per_window", "1")
     if type(forward_cap) not in (str, int):
         raise ValueError("treasury.max_forward_fees_per_window must be exact USD text or integer")
-    charter, charter_prices = (
-        _manifest_charter(d["charter"]) if "charter" in d else (seed_charter(), ())
-    )
+    if "charter" not in d:
+        # Charter audit S3: the charter is the world's authored input, never a default
+        # the kernel supplies.
+        raise ValueError("a world needs a [charter] table")
+    charter, charter_prices = _manifest_charter(d["charter"])
     # The cards as written, digested exactly as the ratification export digested them.
     charter_content_sha256 = (charter_digest(charter_content(d["charter"]))
                               if isinstance(d.get("charter"), dict) else None)
@@ -1287,7 +1283,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         ),
         charter=charter,
         charter_prices=charter_prices,
-        charter_explicit="charter" in d,
         charter_ratified_sha256=(d.get("charter") or {}).get("ratified_sha256"),
         charter_roster_sha256=(d.get("charter") or {}).get("roster_sha256"),
         charter_content_sha256=charter_content_sha256,

@@ -5,11 +5,11 @@ import pytest
 
 from factorylab.charter.amendment import Amendment
 from factorylab.charter.book import CharterBook
-from factorylab.charter.charter import seed_charter
 from factorylab.charter.committee import Ballot, Committee, Seat, draw
 from factorylab.kernel.events import Bus
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.termination import Termination
+from tests.seed_charter import seed_charter
 
 
 def candidate(**changes) -> Amendment:

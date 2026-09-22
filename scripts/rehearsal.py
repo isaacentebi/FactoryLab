@@ -43,7 +43,7 @@ def preflight(world: Path, charter_path: Path) -> dict:
     # (charter.ratified_sha256, charter.roster_sha256); the vote is on the cards.
     loaded = {k: v for k, v in (raw.get("charter") or {}).items()
               if k not in ("ratified_sha256", "roster_sha256")}
-    if not manifest.charter_explicit or loaded != charter:
+    if loaded != charter:
         raise ValueError("rehearsal did not load the exact voted charter")
     if manifest.exchange.kind != "hyperliquid" or manifest.exchange.mainnet:
         raise ValueError("live rehearsal requires Hyperliquid testnet")

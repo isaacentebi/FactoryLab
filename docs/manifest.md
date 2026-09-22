@@ -134,7 +134,7 @@ settings".
 | `treasury.venice_pay_to` | Nonzero EVM address; required with `venice_network`, refused without it | Absent | The only payee a Venice top-up quote may name; a quote or journaled authorization paying anyone else is refused before signing; absent, it leaves the manifest hash unchanged |
 | `committee.seats` | Integer, at least 3 so the existing three core roles can be covered | `5` | Configured resource bound, fixed for a run |
 | `committee.promise_resolution` | Finite positive number | `0.01` | Fraction of the frozen region's scale a promised move must clear to count; absent or default, it leaves the manifest hash unchanged |
-| `charter.norms` | Nonempty array of names, or of `{ id, definition }` tables | Required for explicit charters; edition 3 carries definitions, editions before it carry bare names | Read-only for the edition. A bare name loads with an empty definition, so a charter surveyed before definitions existed keeps its content digest; `Charter.render` prints each definition under its norm |
+| `charter.norms` | Nonempty array of names, or of `{ id, definition }` tables | Required; edition 3 carries definitions, editions before it carry bare names | Read-only for the edition. A bare name loads with an empty definition, so a charter surveyed before definitions existed keeps its content digest; `Charter.render` prints each definition under its norm |
 | `charter.cards[].window.kind` | `"returns"`, `"forecasts"`, or `"windows"` | Required for explicit cards | Executable selector type; its value is population amendable |
 | `charter.cards[].window.n` | Positive integer, never a boolean or float | Required; seed cost and well-formedness cards use `100`, forecast skill uses `50` | Population amendable sample horizon |
 | `charter.cards[].window.per` | `"role"`, `"assembly"`, or null | Required in JSON; omitted in TOML means null. Seed cost and well-formedness use `"role"`; forecast skill uses `"assembly"` | Population amendable scope |
@@ -639,9 +639,9 @@ the historical example. The experimenter must re-draft edition 1 with the actual
 launch roster before launch; the drafting script does not ratify a new edition
 or run the paid survey.
 
-A mainnet Hyperliquid manifest requires an explicit `[charter]`; testnet may
-use the seed charter. `charter_explicit` records admission provenance and is
-excluded from the canonical manifest hash.
+Every manifest requires a `[charter]` table (charter audit S3): the kernel has
+no default charter. The four-norm, three-card seed charter that used to be that
+default is written into the worlds that ran on it.
 
 A mainnet manifest is also refused at load unless `exchange.client_namespace` is
 set and its `[charter]` carries `ratified_sha256` and `roster_sha256`, the values

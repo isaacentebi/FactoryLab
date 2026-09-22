@@ -13,12 +13,15 @@ def test_testnet_manifest_is_not_mainnet() -> None:
 
 
 def _base() -> dict:
+    from tests.seed_charter import seed_charter_table
+
     return {
         "name": "x",
         "initial_balance_usd": "10",
         "models": [{"id": "m", "input_usd_per_mtok": "1", "output_usd_per_mtok": "5"}],
         "assemblies": [{"id": "a", "model_id": "m"}],
         "novelty": {"share": 0.1, "window": "1h"},
+        "charter": seed_charter_table(),
     }
 
 
@@ -139,7 +142,7 @@ def test_invalid_cadence_sample_is_rejected(value):
 def _with_charter():
     from dataclasses import asdict
 
-    from factorylab.charter.charter import seed_charter
+    from tests.seed_charter import seed_charter
 
     raw = _base()
     raw["charter"] = asdict(seed_charter())
@@ -249,3 +252,11 @@ def test_provider_native_completion_mode_preserves_explicit_historical_allowance
     assert manifest_from_dict(d).assemblies[0].max_tokens is None
     d["assemblies"][0]["max_tokens"] = 4096
     assert manifest_from_dict(d).assemblies[0].max_tokens == 4096
+
+
+def test_a_world_without_a_charter_is_refused():
+    """Charter audit S3: the kernel supplies no default charter."""
+    raw = _base()
+    del raw["charter"]
+    with pytest.raises(ValueError, match=r"\[charter\]"):
+        manifest_from_dict(raw)

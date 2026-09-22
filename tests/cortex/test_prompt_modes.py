@@ -87,9 +87,12 @@ def test_an_unnamed_mode_and_an_unpublished_address_leave_the_manifest_hash_alon
 
 
 def test_a_refused_mode_or_key_is_refused_at_load():
+    from tests.seed_charter import seed_charter_table
+
     def load(table):
         manifest_from_dict({"name": "w", "seed": 1, "initial_balance_usd": "1",
-                            "exchange": {"kind": "fake"}, **table})
+                            "exchange": {"kind": "fake"}, "charter": seed_charter_table(),
+                            **table})
 
     with pytest.raises(ValueError, match="prompt.mode"):
         load({"prompt": {"mode": "short"}})
