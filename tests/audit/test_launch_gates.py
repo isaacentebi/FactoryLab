@@ -211,7 +211,11 @@ class TestGateTwoContinuityAndInformationBoundaries:
         scanned = 0
         for desc, system, text in commissions:
             assert PRIVATE_MARKER not in system
-            you, rest = text.split("\n\nWORLD UPDATE\n", 1)
+            # Judges see the work, not the producer's world, so a commission may
+            # carry no WORLD UPDATE; its YOU block then ends where REQUEST begins.
+            marker = ("\n\nWORLD UPDATE\n" if "\n\nWORLD UPDATE\n" in text
+                      else "\n\nREQUEST\n")
+            you, rest = text.split(marker, 1)
             # Nothing a seat kept privately reaches the evaluator's world or inputs.
             assert PRIVATE_MARKER not in rest, desc
             assert text.count(PRIVATE_MARKER) <= 1, desc  # its own head, at most

@@ -957,7 +957,10 @@ class Runtime(
                 "routine ticks) or order (place or close); your propensity is declared over "
                 "those. You own what wakes you: subscribe {kinds, coins, cadence_floor} "
                 "changes it, defer: <n ticks> sleeps through routine ticks, and a fill or a "
-                "safety event wakes you anyway."
+                "safety event wakes you anyway. A hold or defer may name the trade it "
+                "declined, counterfactual {coin, side}: the market prices that trade at "
+                "the consequence horizon, net of fees, and the price is the decision's "
+                "score; one that names none settles at neutral."
             )
             schema = {
                 "type": "object",

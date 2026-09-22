@@ -281,43 +281,65 @@ def latest_mids(runtime: Any) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((str(coin), str(dq[-1]["mid"])) for coin, dq in rows.items() if dq))
 
 
+def declined_trade(outputs: Mapping) -> dict[str, str] | None:
+    """The trade a decision says it declined, as ``{coin, side}``, or None.
+
+    Accepts ``counterfactual: {"coin": "BTC", "side": "buy"}`` or the action-label
+    form ``"buy:BTC"``. Anything else names no trade: nothing is inferred.
+    """
+    raw = outputs.get("counterfactual") if isinstance(outputs, Mapping) else None
+    if isinstance(raw, str) and raw.count(":") >= 1:
+        side, coin = raw.split(":")[:2]
+        raw = {"side": side, "coin": coin}
+    if not isinstance(raw, Mapping):
+        return None
+    side = str(raw.get("side", "")).strip().lower()
+    coin = str(raw.get("coin", "")).strip().upper()
+    return {"coin": coin, "side": side} if side in ("buy", "sell") and coin else None
+
+
 def opportunity_cost(open_mids: Iterable[tuple[str, str]],
                      due_mids: Iterable[tuple[str, str]],
-                     round_trip_bps: Decimal) -> dict[str, Any] | None:
-    """Price the road not taken: the best long or short the decision passed up.
+                     round_trip_bps: Decimal,
+                     declined: Mapping[str, str] | None = None) -> dict[str, Any] | None:
+    """Price the road not taken: the trade the decision itself said it declined.
 
-    Guarantees the score is ``cost / (cost + regret)`` in (0, 1], where ``regret``
-    is how far the largest move of any coin over the horizon exceeded a round
-    trip's fees, in basis points of notional. Holding scores 1 exactly when no
-    trade in either direction would have paid its fees; sitting through a move
-    worth taking scores 0.5 when the missed profit equalled the fees, and falls
-    toward zero as it grows. Returns None when no coin has both prices.
+    Guarantees the benchmark is chosen ex ante, never in hindsight: the best move
+    after the fact is a trade nobody could have known to take, and scoring a hold
+    against it would teach a population to trade noise. With a named declined
+    trade (a directional forecast), ``regret`` is what that trade would have
+    netted over the horizon after a round trip's fees, and the score is
+    ``cost / (cost + regret)`` in (0, 1]: 1 when declining it was right (it would
+    have lost or not paid its fees), falling as the profit passed up grows. With
+    none named, the decision's consequence is exactly zero and it settles at the
+    neutral 0.5; trades must beat that. Returns None when the prices are missing.
     """
     opened = dict(open_mids)
     due = dict(due_mids)
-    moves = []
+    moves = {}
     for coin in sorted(set(opened) & set(due)):
         try:
             before, after = Decimal(opened[coin]), Decimal(due[coin])
         except (InvalidOperation, ValueError):
             continue
-        if before <= 0 or after <= 0:
-            continue
-        move = (after - before) / before * Decimal(10_000)
-        moves.append({"coin": coin, "open_mid": str(before), "due_mid": str(after),
-                      "move_bps": str(move.quantize(Decimal("0.01")))})
+        if before > 0 and after > 0:
+            moves[coin] = ((after - before) / before * Decimal(10_000)).quantize(
+                Decimal("0.01"))
     if not moves:
         return None
-    best = max(moves, key=lambda row: abs(Decimal(row["move_bps"])))
-    gross = abs(Decimal(best["move_bps"]))
     cost = max(Decimal(round_trip_bps), Decimal(1))
+    rows = [{"coin": c, "move_bps": str(m)} for c, m in moves.items()]
+    if declined is None:
+        return {"moves": rows, "declined": None, "round_trip_fee_bps": str(cost),
+                "regret_bps": None, "score": 0.5,
+                "basis": "no declined trade named: a decision with zero consequence"}
+    move = moves.get(declined["coin"])
+    if move is None:
+        return None
+    gross = move if declined["side"] == "buy" else -move
     regret = max(Decimal(0), gross - cost)
-    return {
-        "moves": moves,
-        "best_declined": {"coin": best["coin"],
-                          "side": "buy" if Decimal(best["move_bps"]) > 0 else "sell",
-                          "gross_bps": str(gross)},
-        "round_trip_fee_bps": str(cost),
-        "regret_bps": str(regret.quantize(Decimal("0.01"))),
-        "score": round(float(cost / (cost + regret)), 4),
-    }
+    return {"moves": rows, "declined": dict(declined), "round_trip_fee_bps": str(cost),
+            "declined_net_bps": str((gross - cost).quantize(Decimal("0.01"))),
+            "regret_bps": str(regret.quantize(Decimal("0.01"))),
+            "score": round(float(cost / (cost + regret)), 4),
+            "basis": "the named declined trade, marked to the horizon net of a round trip"}

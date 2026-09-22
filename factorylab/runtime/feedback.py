@@ -20,6 +20,7 @@ from factorylab.runtime.grounded import (
     OPPORTUNITY_DEFINITION,
     UNKNOWN_REASON,
     GroundedContract,
+    declined_trade,
     latest_mids,
     observed_evidence_refs,
     opportunity_cost,
@@ -1602,7 +1603,9 @@ class FeedbackMixin:
             fee_bps = Decimal(str(fee)) if fee is not None else DEFAULT_TAKER_FEE_BPS
         except (InvalidOperation, ValueError):
             fee_bps = DEFAULT_TAKER_FEE_BPS
-        priced = opportunity_cost(contract.reference_mids, latest_mids(self), 2 * fee_bps)
+        declined = declined_trade(outputs)
+        priced = opportunity_cost(contract.reference_mids, latest_mids(self), 2 * fee_bps,
+                                  declined)
         if priced is None:
             return False
         handle = contract.handle
@@ -1614,7 +1617,8 @@ class FeedbackMixin:
                                 definition_version=OPPORTUNITY_DEFINITION,
                                 sampling_ref=None, cards="producer")
             self.stats.verdicts += 1
-        if contract.provisional_score is not None and contract.initial_evaluator:
+        if (declined is not None and contract.provisional_score is not None
+                and contract.initial_evaluator):
             # The judge's verdict on this decision was a prediction the world has now
             # priced: graded from outside the loop it judged (essay II.III, fourth
             # principle), against an uninformed 0.5, so a judge that praises caution
@@ -1633,8 +1637,10 @@ class FeedbackMixin:
             self.outcomes.append(owner, handle=handle, evidence=f"opportunity:{handle}",
                                  outcome={"kind": "opportunity_cost", "phase": "final",
                                           "score": priced["score"],
-                                          "best_declined": priced["best_declined"],
-                                          "regret_bps": priced["regret_bps"],
+                                          "declined": priced["declined"],
+                                          "declined_net_bps": priced.get("declined_net_bps"),
+                                          "moves": priced["moves"],
+                                          "basis": priced["basis"],
                                           "round_trip_fee_bps": priced["round_trip_fee_bps"]})
         self.pending.pop(handle, None)
         self.grounded_pending.pop(handle, None)

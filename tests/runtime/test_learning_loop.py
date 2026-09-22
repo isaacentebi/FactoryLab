@@ -70,26 +70,41 @@ def test_first_provisional_verdict_is_kept_and_a_grounded_score_still_wins():
 # --- the road not taken: inaction is priced by the market, not by an opinion ---------
 
 
-def test_holding_through_a_flat_market_is_right_and_scores_one():
-    priced = opportunity_cost([("BTC", "100")], [("BTC", "100.05")], Decimal("9"))
-    assert priced["regret_bps"] == "0.00" and priced["score"] == 1.0
+def test_a_bare_hold_has_zero_consequence_and_settles_neutral():
+    priced = opportunity_cost([("BTC", "100")], [("BTC", "103")], Decimal("9"))
+    assert priced["score"] == 0.5 and priced["declined"] is None
 
 
-def test_sitting_through_a_move_worth_taking_is_priced_as_regret():
-    # A 1% rally against a 9 bp round trip: 91 bp of profit passed up.
-    priced = opportunity_cost([("BTC", "100"), ("ETH", "10")],
-                              [("BTC", "101"), ("ETH", "10")], Decimal("9"))
-    assert priced["best_declined"] == {"coin": "BTC", "side": "buy", "gross_bps": "100.00"}
-    assert priced["regret_bps"] == "91.00"
-    assert priced["score"] == round(9 / 100, 4)
-    # A fall is a missed short, priced the same way.
-    short = opportunity_cost([("BTC", "100")], [("BTC", "99")], Decimal("9"))
-    assert short["best_declined"]["side"] == "sell" and short["score"] == priced["score"]
+def test_a_named_declined_trade_is_priced_ex_ante_never_in_hindsight():
+    # Declined a buy; the market rallied 1%: 91 bp passed up against a 9 bp round trip.
+    missed = opportunity_cost([("BTC", "100")], [("BTC", "101")], Decimal("9"),
+                              {"coin": "BTC", "side": "buy"})
+    assert missed["regret_bps"] == "91.00" and missed["score"] == round(9 / 100, 4)
+    # Declined a sell into the same rally: declining it was right.
+    right = opportunity_cost([("BTC", "100")], [("BTC", "101")], Decimal("9"),
+                             {"coin": "BTC", "side": "sell"})
+    assert right["regret_bps"] == "0.00" and right["score"] == 1.0
+    # A move smaller than the fees vindicates any declined trade.
+    flat = opportunity_cost([("BTC", "100")], [("BTC", "100.05")], Decimal("9"),
+                            {"coin": "BTC", "side": "buy"})
+    assert flat["score"] == 1.0
 
 
 def test_no_shared_prices_means_the_world_did_not_speak():
     assert opportunity_cost([("BTC", "100")], [("ETH", "10")], Decimal("9")) is None
     assert opportunity_cost([], [], Decimal("9")) is None
+    assert opportunity_cost([("BTC", "100")], [("BTC", "101")], Decimal("9"),
+                            {"coin": "ETH", "side": "buy"}) is None
+
+
+def test_declined_trade_is_read_only_from_what_the_decision_said():
+    from factorylab.runtime.grounded import declined_trade
+
+    assert declined_trade({"counterfactual": {"coin": "btc", "side": "BUY"}}) == {
+        "coin": "BTC", "side": "buy"}
+    assert declined_trade({"counterfactual": "sell:ETH"}) == {"coin": "ETH", "side": "sell"}
+    assert declined_trade({"counterfactual": "would have bought"}) is None
+    assert declined_trade({"action": "hold"}) is None
 
 
 def _mids(rt, **prices):
@@ -97,14 +112,14 @@ def _mids(rt, **prices):
         rt.recent_mids.setdefault(coin, deque(maxlen=20)).append({"t_s": 0, "mid": mid})
 
 
-def _frozen_hold(rt, action="hold"):
+def _frozen_hold(rt, action="hold", **outputs):
     from factorylab.runtime.feedback import PendingJudgement
     from tests.runtime.test_loop import _consequence_decision
 
     producer = _consequence_decision(rt, "seed-decider", CH_VERDICT)
     rt.handle_to_assembly[producer] = "seed-decider"
     contract = freeze_contract(rt, producer, "seed-decider", {}).with_outputs(
-        {"action": action, "rationale": "no edge yet"})
+        {"action": action, "rationale": "no edge yet", **outputs})
     rt.grounded_pending[producer] = contract
     rt.pending[producer] = PendingJudgement(producer, CH_VERDICT, rt.n,
                                             opened_at_tick=rt.ticks_consumed)
@@ -114,7 +129,7 @@ def _frozen_hold(rt, action="hold"):
 def test_a_hold_is_settled_by_the_trade_it_passed_up_at_the_horizon():
     rt = _runtime()
     _mids(rt, BTC="100")
-    producer, contract = _frozen_hold(rt)
+    producer, contract = _frozen_hold(rt, counterfactual={"coin": "BTC", "side": "buy"})
     assert contract.reference_mids == (("BTC", "100"),)
     _mids(rt, BTC="102")
     rt.ticks_consumed = contract.due_tick
@@ -148,7 +163,7 @@ def test_defer_is_inaction_too_but_a_decision_that_traded_keeps_the_judge_path()
 def test_the_world_grades_the_judge_who_praised_a_hold_it_then_punished():
     rt = _runtime()
     _mids(rt, BTC="100")
-    producer, contract = _frozen_hold(rt)
+    producer, contract = _frozen_hold(rt, counterfactual="buy:BTC")
     rt.grounded_pending[producer] = contract.with_initial(
         judge_handle="judge-1", evaluator_id="eval-a", forecast_handles=(), score=0.9)
     _mids(rt, BTC="103")  # 300 bp passed up: the prudent hold was expensive
@@ -158,3 +173,16 @@ def test_the_world_grades_the_judge_who_praised_a_hold_it_then_punished():
     assert standing  # graded
     graded = [i for i in rt.ledger._recovery_items() if i.get("kind") == "verdict.opportunity"]
     assert len(graded) == 1 and graded[0]["brier"] > graded[0]["baseline_brier"]
+
+
+def test_a_bare_hold_is_neutral_and_its_judge_is_not_graded_against_it():
+    rt = _runtime()
+    _mids(rt, BTC="100")
+    producer, contract = _frozen_hold(rt)
+    rt.grounded_pending[producer] = contract.with_initial(
+        judge_handle="judge-1", evaluator_id="eval-a", forecast_handles=(), score=0.9)
+    _mids(rt, BTC="103")
+    rt.ticks_consumed = contract.due_tick
+    rt._settle_due_grounded()
+    assert rt.queue.history(producer)[0].definition_version == OPPORTUNITY_DEFINITION
+    assert not [i for i in rt.ledger._recovery_items() if i.get("kind") == "verdict.opportunity"]

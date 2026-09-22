@@ -112,8 +112,11 @@ class PolicyProvider(ScriptedProvider):
         if n % 5 == 0:
             return {"action": "investigate", "tool_calls": [
                 {"tool": "venue.positions", "args": {}}]}
-        return {"action": "hold", "rationale": "no mechanism worth trading yet",
+        hold = {"action": "hold", "rationale": "no mechanism worth trading yet",
                 "propensity": {"hold": 0.7, "investigate": 0.2, "order": 0.1}}
+        if n % 2:
+            hold["counterfactual"] = {"coin": "BTC", "side": "buy" if n % 4 == 1 else "sell"}
+        return hold
 
     @staticmethod
     def _judge(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -209,8 +212,11 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
             "priced": len(opportunity),
             "mean_score": (round(statistics.fmean(e["score"] for e in opportunity), 3)
                            if opportunity else None),
-            "regret_rate": (round(sum(Decimal(e["regret_bps"]) > 0 for e in opportunity)
-                                  / len(opportunity), 3) if opportunity else None),
+            "named_declined": sum(1 for e in opportunity if e.get("declined")),
+            "named_regret_rate": (
+                round(sum(Decimal(e["regret_bps"]) > 0 for e in opportunity
+                          if e.get("declined")) / named, 3)
+                if (named := sum(1 for e in opportunity if e.get("declined"))) else None),
         },
         "judge_unmeasured": kinds.get("evaluation.unmeasured", 0),
         "orders": {"intents": dict(intents),
