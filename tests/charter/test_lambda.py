@@ -1,4 +1,3 @@
-import random
 from dataclasses import replace
 
 import pytest
@@ -8,7 +7,6 @@ from factorylab.charter.controller import CardRegion, PriceController
 from factorylab.kernel.ledger import Ledger
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
-from tests.seed_charter import seed_charter
 
 
 def runtime():
@@ -17,22 +15,28 @@ def runtime():
 
 
 def amendment(**changes):
-    return replace(Amendment("priced-card", "decision-1", 1, (),
-                             (replace(seed_charter().cards[1], acceptable_region="above 0.8"),), (),
+    """A lambda motion: one change class, prices for current cards only (charter audit P3)."""
+    return replace(Amendment("priced-card", "decision-1", 1, (), (), (),
                    {"card_id": "cost_per_return", "direction": "decrease",
-                    "window": 1}),
+                    "window": 1}, proposed_prices=(("well_formed_rate", 0.8),)),
                    **changes)
 
 
-def pass_amendment(rt, am):
-    rt.charter_book.propose(am)
-    committee = rt.charter_book.seat(am.id, {"one": "producer"}, random.Random(1))
-    rt.charter_book.vote(committee, "seat-1", True, "yes")
-    assert rt.charter_book.tally(committee) == "passed"
-    rt.cadence.approve(am.id)
+def seated_yes(rt, monkeypatch):
+    """Three eligible seats, and a committee whose every voter says yes."""
+    seats = sorted(rt.assemblies)[:3]
+    monkeypatch.setattr(rt, "_committee_eligible",
+                        lambda: {a: rt.assemblies[a].spec.role for a in seats})
+
+    def yes(am, committee, **_):
+        for alias in rt.charter_book.voters(committee, am.id):
+            rt.charter_book.vote(committee, am.id, alias, True, "yes")
+        rt.cadence.approve(am.id)
+
+    monkeypatch.setattr(rt, "_hold_vote", yes)
 
 
-def activate_after_backstop(rt):
+def activate_after_backstop(rt, activated=1):
     edition = rt.charter.edition
     # No settlement samples exist: the current backstop is the period.
     delay = (rt.m.timing.min_ratio * rt.m.evaluation.consequence_backstop_events
@@ -44,7 +48,7 @@ def activate_after_backstop(rt):
     rt.n = rt.cadence.earliest_event()
     rt.cadence.advance(rt.n)
     rt._activate_charter_if_due()
-    assert rt.charter.edition == edition + 1
+    assert rt.charter.edition == edition + activated
 
 
 def test_controller_ledger_first_bounds_history_and_removal(monkeypatch):
@@ -105,28 +109,31 @@ def test_unreadable_bounds_are_refused_before_prices_change():
     rt = runtime()
     card = replace(rt.charter.cards[1], acceptable_region="use judgment")
     with pytest.raises(ValueError, match="bounds"):
-        pass_amendment(rt, amendment(replace=(card,), proposed_prices=((card.id, 0.8),)))
+        rt.charter_book.propose(amendment(replace=(card,), proposed_prices=()))
     assert rt.charter.edition == 1
     assert rt.controller.price(card.id) == 0
 
 
-def test_prices_wait_for_approval_and_later_passed_proposals_win():
+def test_lambda_names_only_a_current_card():
     rt = runtime()
+    with pytest.raises(ValueError, match="lambda names card no-such-card"):
+        rt.charter_book.propose(amendment(proposed_prices=(("no-such-card", 0.4),)))
+
+
+def test_prices_wait_for_the_boundary_and_later_proposals_win(monkeypatch):
+    rt = runtime()
+    seated_yes(rt, monkeypatch)
     rt._derive_regions()
     first = amendment(proposed_prices=(("well_formed_rate", 0.3),))
     rt.charter_book.propose(first)
     rt._activate_charter_if_due()
     assert rt.controller.price("well_formed_rate") == 0
     second = amendment(id="second-price", proposed_prices=(("well_formed_rate", 0.9),))
-    pass_amendment(rt, second)
-    committee = rt.charter_book.seat(first.id, {"one": "producer"}, random.Random(1))
-    rt.charter_book.vote(committee, "seat-1", True, "yes")
-    assert rt.charter_book.tally(committee) == "passed"
-    rt.cadence.approve(first.id)
-    activate_after_backstop(rt)
-    assert rt.charter.edition == 2
-    assert rt.controller.price("well_formed_rate") == 0.3
-    assert rt.charter_book.pending() == [second]
-    activate_after_backstop(rt)
+    rt.charter_book.propose(second)
+    # One boundary: its committee passes both, and each activates as its own edition,
+    # in proposal order, so the later proposal's price stands.
+    activate_after_backstop(rt, activated=2)
     assert rt.charter.edition == 3
+    assert rt.charter_book.activated_amendment(2).id == first.id
     assert rt.controller.price("well_formed_rate") == 0.9
+    assert rt.charter_book.pending() == []

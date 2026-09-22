@@ -77,6 +77,9 @@ class MeasureWindow:
     # spent without a return to carry it, so it enters the cost mass of a
     # per-return observation and never that observation's denominator.
     storage_cost_micro: int = 0
+    # Every invocation's metered cost plus retained-storage rent, in micro-USD: the
+    # window's compute burn (``burn_per_window``; charter audit M6).
+    compute_spend_micro: int = 0
 
 
 #: The definition of a censored settlement that carries a price: its decision left
@@ -165,6 +168,7 @@ class PricingMixin:
             return
         sample = self._contribution(handle, self._decision_role(handle))
         sample["cost"] += cost_micro
+        self.window.compute_spend_micro += cost_micro
         self.card_samples.stored(handle=handle, assembly=self.handle_to_assembly.get(handle),
                                  role=sample["role"], window=self.window.index, cost=cost_micro)
         if sample["role"] == "producer":
@@ -195,6 +199,7 @@ class PricingMixin:
         sample["role"] = observed_role
         for name, value in evidence.items():
             sample[name] += value
+        self.window.compute_spend_micro += ret.cost
         return ret
 
     def _record_pricing_fills(self, events) -> None:

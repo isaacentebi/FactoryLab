@@ -65,7 +65,7 @@ class _ReplayFault(BaseException):
 def _record_types() -> dict[str, type]:
     from factorylab.charter.amendment import Amendment, PredictedEffect
     from factorylab.charter.charter import Charter, MetricCard
-    from factorylab.charter.committee import Ballot, Committee, Seat
+    from factorylab.charter.committee import Ballot, Committee, Seat, StandingCommittee
     from factorylab.charter.controller import CardRegion, _CardState
     from factorylab.charter.measurement import CardSamples
     from factorylab.charter.windows import MetricWindow
@@ -111,7 +111,7 @@ def _record_types() -> dict[str, type]:
 
     classes = (
         Amendment, PredictedEffect, Charter, MetricCard, MetricWindow, CardSamples,
-        Ballot, Committee, Seat, CardRegion, _CardState,
+        Ballot, Committee, Seat, StandingCommittee, CardRegion, _CardState,
         AssemblySpec, WorkAssemblySpec, ProgramAssemblySpec, Predicate, PredicateForecast,
         PopulationTool, Event, PopulationEvent, EventKind, Decision,
         LearningReturn, PropensityRecord,
@@ -680,6 +680,9 @@ _COMPONENT_FIELDS = (
     ("charter_book", "_CharterBook__", (
         "editions", "proposals", "committees", "ballots", "activated", "activations",
         "bindings",
+        # Charter audit C1: the standing committees by boundary, the boundaries
+        # below quorum, each motion's voters.
+        "sittings", "deferrals", "voters",
     )),
     ("controller", "_PriceController__", (
         "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
@@ -922,6 +925,10 @@ def restore_runtime(rt, state: dict) -> None:
                 continue
             if name == "charter_book" and field == "bindings" and field not in components[name]:
                 # Older checkpoints predate the frozen observation version per proposal.
+                continue
+            if (name == "charter_book" and field in ("sittings", "deferrals", "voters")
+                    and field not in components[name]):
+                # Older checkpoints predate the standing committee: none was seated.
                 continue
             if name == "artifacts" and name not in components:
                 # Older checkpoints predate the artifact archive; it starts empty.

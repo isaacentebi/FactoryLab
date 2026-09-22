@@ -250,7 +250,6 @@ class ScriptedProvider:
                             "acceptable_region": "below 5",
                             "observation": "turnover",
                             "answers_for": "producer",
-                            "lambda": 0.6,
                         }
                     ],
                     "replace": [],

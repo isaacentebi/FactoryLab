@@ -39,7 +39,8 @@ def register(rt, monkeypatch, owner="seed-decider", origin="https://example.org"
     handle = decision(rt, owner)
     # Unit fixture supplies eligibility; the scripted acceptance test uses real consequences.
     monkeypatch.setattr(rt, "_committee_eligible", lambda: {
-        "seed-decider": "producer", "eval-a": "evaluator", "meta-a": "meta"})
+        "seed-decider": "producer", "eval-a": "evaluator", "meta-a": "meta",
+        "antagonist-a": "antagonist"})
     rt._apply_registrations(handle, Return(handle, {"register": [{
         "kind": "connector", "id": "source", "description": "Public data", "origin": origin,
         "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease", "window": 1},
@@ -64,9 +65,9 @@ def test_preflight_vote_then_versioned_admission_with_proposer_excluded(monkeypa
     assert kinds.index("connector.call") < kinds.index("connector.seated")
     assert kinds.index("connector.tally") < kinds.index("connector.registered")
     seats = ledger_items(rt, "connector.seated")[0]["seats"]
-    assert {seat["assembly_id"] for seat in seats} == {"eval-a", "meta-a"}
+    assert {seat["assembly_id"] for seat in seats} == {"eval-a", "meta-a", "antagonist-a"}
     ballots = ledger_items(rt, "connector.vote")
-    assert len(ballots) == 2 and all(row["vote"] is True for row in ballots)
+    assert len(ballots) == 3 and all(row["vote"] is True for row in ballots)
     assert all(not rt.queue.history(row["handle"]) for row in ballots)
     assert {v["handle"] for v in rt.pending_votes} == {row["handle"] for row in ballots}
     assert all(v["activation_window"] == rt.window.index for v in rt.pending_votes)

@@ -360,6 +360,11 @@ class CommitteeSpec:
     # A promised move counts once it clears this fraction of the frozen region's scale
     # (the observation's declared unit width); smaller moves are "did not move".
     promise_resolution: float = 0.01
+    # The fewest seats that may decide a motion (charter audit C2). Below it no
+    # committee is seated and the motion waits for the next governance boundary.
+    # Three is the smallest body in which a strict majority is not unanimity, so
+    # no one seat can pass or block a motion alone; it is also committee.seats' floor.
+    quorum: int = 3
 
 
 @dataclass(frozen=True)
@@ -965,6 +970,8 @@ def _committee(raw: dict) -> CommitteeSpec:
     if (type(resolution) not in (int, float) or isinstance(resolution, bool)
             or not isfinite(resolution) or resolution <= 0):
         raise ValueError("committee.promise_resolution must be a finite positive number")
+    if type(spec.quorum) is not int or not 1 <= spec.quorum <= spec.seats:
+        raise ValueError("committee.quorum must be an integer in [1, committee.seats]")
     return replace(spec, promise_resolution=float(resolution))
 
 

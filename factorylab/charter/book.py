@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass
 
 from factorylab.charter.amendment import Amendment
 from factorylab.charter.charter import Charter
-from factorylab.charter.committee import Ballot, Committee, draw
+from factorylab.charter.committee import Ballot, Committee, StandingCommittee, draw
 from factorylab.charter.measurement import preflight_card
 from factorylab.kernel.ledger import Ledger
 
@@ -43,6 +43,11 @@ class CharterBook:
         self.__activated: set[str] = set()
         self.__activations: dict[int, Amendment] = {}
         self.__bindings: dict[str, dict[str, dict]] = {}
+        # Standing committees by governance boundary (charter audit C1), the
+        # boundaries that fell below quorum, and each motion's voting aliases.
+        self.__sittings: dict[int, StandingCommittee] = {}
+        self.__deferrals: set[int] = set()
+        self.__voters: dict[str, tuple[str, ...]] = {}
 
     def bind_observations(self, observations) -> None:
         """Resolve the runtime vocabulary afresh, including after checkpoint restoration."""
@@ -99,9 +104,14 @@ class CharterBook:
                 raise ValueError(f"unknown card id: {card_id}; norms are read-only")
         if any(card.id in ids for card in amendment.add):
             raise ValueError("added card id already exists")
+        for card_id, _ in amendment.proposed_prices:
+            if card_id not in ids:
+                raise ValueError(f"lambda names card {card_id}, which the current edition "
+                                 "does not carry")
         resulting = {c.id: c for c in charter.cards if c.id not in amendment.remove}
         resulting.update((c.id, c) for c in (*amendment.replace, *amendment.add))
-        if amendment.predicted_effect.card_id not in ids | set(resulting):
+        effect = amendment.predicted_effect
+        if effect.observation is None and effect.card_id not in ids | set(resulting):
             raise ValueError("predicted_effect.card_id must name a current or proposed card")
         if (tuple(resulting.values()) == charter.cards
                 and not amendment.proposed_prices and amendment.tick_interval is None):
@@ -116,50 +126,108 @@ class CharterBook:
             if amendment_id not in self.__activated
             and (
                 amendment_id not in self.__committees
-                or self.tally(self.__committees[amendment_id]) != "failed"
+                or self.tally(self.__committees[amendment_id], amendment_id) != "failed"
             )
         ]
 
+    def agenda(self) -> list[Amendment]:
+        """Motions no committee has voted on yet, in proposal order: the next committee's."""
+        return [amendment for amendment_id, amendment in self.__proposals.items()
+                if amendment_id not in self.__activated and amendment_id not in self.__committees]
+
+    def sittings(self) -> tuple[StandingCommittee, ...]:
+        """Every standing committee seated so far, in boundary order."""
+        return tuple(self.__sittings.values())
+
+    def deferrals(self) -> int:
+        """How many governance boundaries seated no committee, for want of a quorum."""
+        return len(self.__deferrals)
+
     def seat(
-        self, amendment_id: str, eligible: dict[str, str], rng: random.Random, *, size: int = 5,
-    ) -> Committee:
-        """Issue exactly one committee per proposal and seal its alias-to-assembly mapping."""
-        if amendment_id not in self.__proposals:
-            raise ValueError("unknown amendment id")
-        if amendment_id in self.__committees:
-            raise ValueError("amendment already has a committee")
-        committee = Committee(amendment_id, len(self.__committees) + 1, draw(eligible, rng, size))
+        self, boundary: int, eligible: dict[str, str], rng: random.Random, *, size: int = 5,
+        quorum: int = 3, learners: dict[str, frozenset[str]] | None = None,
+        recusals: dict[str, frozenset[str]] | None = None,
+    ) -> StandingCommittee | None:
+        """Seat exactly one committee per governance boundary, or none below quorum.
+
+        Essay II.IV.a: "On the cadence of charter revision, a sample of the
+        factory's population is seated … and that seat is consistently rotated."
+        The committee's agenda is every motion no committee has voted on. Each
+        motion's proposer (``recusals``) does not vote on it; a motion left with
+        fewer voting seats than ``quorum`` is deferred to the next boundary. A
+        population with fewer eligible assemblies than ``quorum`` seats no one:
+        the deferral is ledgered and every motion waits. The seating entry seals
+        the alias-to-assembly mapping and states the draw's stratum coverage.
+        """
+        from factorylab.charter.committee import coverage
+
+        if type(boundary) is not int or boundary < 0:
+            raise ValueError("boundary must be a nonnegative integer")
+        if boundary in self.__sittings or boundary in self.__deferrals:
+            raise ValueError("this boundary already has a committee")
+        if type(quorum) is not int or quorum < 1:
+            raise ValueError("quorum must be a positive integer")
+        motions = [amendment.id for amendment in self.agenda()]
+        if len(eligible) < quorum:
+            self.__ledger.append({"kind": "charter.seat_deferred", "boundary": boundary,
+                                  "eligible": len(eligible), "quorum": quorum,
+                                  "agenda": motions,
+                                  "coverage": coverage(eligible, (), learners)})
+            self.__deferrals.add(boundary)
+            return None
+        seats = draw(eligible, rng, size, learners=learners)
+        recused = recusals or {}
+        voters = {motion: tuple(seat.alias for seat in seats
+                                if seat.assembly_id not in recused.get(motion, ()))
+                  for motion in motions}
+        agenda = tuple(motion for motion in motions if len(voters[motion]) >= quorum)
+        deferred = tuple(motion for motion in motions if motion not in agenda)
+        committee = StandingCommittee(boundary, len(self.__sittings) + 1, seats,
+                                      agenda, deferred)
         self.__ledger.append(
             {
                 "kind": "charter.seat",
-                "amendment_id": amendment_id,
+                "boundary": boundary,
                 "round": committee.round,
                 "seats": [seat._asdict() for seat in committee.seats],
+                "agenda": list(agenda),
+                "deferred": list(deferred),
+                "voters": {motion: len(voters[motion]) for motion in motions},
+                "quorum": quorum,
+                "coverage": coverage(eligible, seats, learners),
             }
         )
-        self.__committees[amendment_id] = committee
-        self.__ballots[amendment_id] = {}
+        self.__sittings[boundary] = committee
+        for motion in agenda:
+            self.__committees[motion] = committee
+            self.__voters[motion] = voters[motion]
+            self.__ballots[motion] = {}
         return committee
 
-    def vote(self, committee: Committee, alias: str, vote: bool, reason: str) -> None:
+    def voters(self, committee, motion_id: str) -> tuple[str, ...]:
+        """The aliases entitled to vote on a motion: every seat but its proposer's."""
+        self._require_committee(committee, motion_id)
+        return self.__voters.get(motion_id, tuple(seat.alias for seat in committee.seats))
+
+    def vote(self, committee, motion_id: str, alias: str, vote: bool, reason: str) -> None:
         """Record one strictly boolean vote per seated alias, without an assembly id."""
         if type(vote) is not bool:
             raise ValueError("vote must be a boolean; use abstain for malformed votes")
-        self._record(committee, Ballot(alias, vote, reason))
+        self._record(committee, motion_id, Ballot(alias, vote, reason))
 
-    def abstain(self, committee: Committee, alias: str) -> None:
+    def abstain(self, committee, motion_id: str, alias: str) -> None:
         """Consume an alias's ballot without contributing a yes vote."""
-        self._record(committee, Ballot(alias, None, "abstained"))
+        self._record(committee, motion_id, Ballot(alias, None, "abstained"))
 
-    def tally(self, committee: Committee) -> str | None:
-        """Pass only a strict majority; fail once remaining seats cannot reach that majority."""
-        self._require_committee(committee)
-        ballots = self.__ballots[committee.amendment_id]
-        threshold = len(committee.seats) // 2 + 1
+    def tally(self, committee, motion_id: str) -> str | None:
+        """Pass only a strict majority of the motion's voters; fail once it is out of reach."""
+        voters = self.voters(committee, motion_id)
+        ballots = self.__ballots[motion_id]
+        threshold = len(voters) // 2 + 1
         yes = sum(ballot.vote is True for ballot in ballots.values())
         if yes >= threshold:
             return "passed"
-        if yes + len(committee.seats) - len(ballots) < threshold:
+        if yes + len(voters) - len(ballots) < threshold:
             return "failed"
         return None
 
@@ -187,7 +255,7 @@ class CharterBook:
             if (
                 amendment_id in self.__activated
                 or committee is None
-                or self.tally(committee) != "passed"
+                or self.tally(committee, amendment_id) != "passed"
             ):
                 continue
             current = self.current()
@@ -198,7 +266,19 @@ class CharterBook:
                 cards[card.id] = card
             patched = tuple(cards.values())
             reason = None
-            if (patched == current.cards and not amendment.proposed_prices
+            unknown_norm = next((card for card in (*amendment.replace, *amendment.add)
+                                 if card.norm not in current.norms), None)
+            unpriced = next((card_id for card_id, _ in amendment.proposed_prices
+                             if card_id not in cards), None)
+            if unknown_norm is not None:
+                # A norm edition removed the norm this card interprets (essay II.IV.a:
+                # the norm layer sits behind a read-only wall).
+                reason = (f"card {unknown_norm.id} names norm {unknown_norm.norm}, which "
+                          f"edition {current.edition} does not carry")
+            elif unpriced is not None:
+                reason = f"lambda names card {unpriced}, which edition {current.edition} " \
+                         "does not carry"
+            elif (patched == current.cards and not amendment.proposed_prices
                     and amendment.tick_interval is None):
                 # An earlier activation already made this exact change; proposal
                 # time checked a base edition that no longer states the effect.
@@ -221,6 +301,7 @@ class CharterBook:
                     "kind": "charter.activate",
                     "amendment_id": amendment_id,
                     "round": committee.round,
+                    "change": list(amendment.change_classes()),
                     "edition": edition.edition,
                     "ts": now_ns,
                 }
@@ -259,26 +340,25 @@ class CharterBook:
         """Return the frozen amendment that produced an edition; unknown editions raise KeyError."""
         return self.__activations[edition]
 
-    def _require_committee(self, committee: Committee) -> None:
+    def _require_committee(self, committee, motion_id: str) -> None:
         if (
-            not isinstance(committee, Committee)
-            or self.__committees.get(committee.amendment_id) is not committee
+            not isinstance(committee, (Committee, StandingCommittee))
+            or self.__committees.get(motion_id) is not committee
         ):
             raise ValueError("committee was not issued by this charter book")
 
-    def _record(self, committee: Committee, ballot: Ballot) -> None:
-        self._require_committee(committee)
-        if ballot.alias not in {seat.alias for seat in committee.seats}:
+    def _record(self, committee, motion_id: str, ballot: Ballot) -> None:
+        if ballot.alias not in self.voters(committee, motion_id):
             raise ValueError("unknown seat alias")
-        ballots = self.__ballots[committee.amendment_id]
+        ballots = self.__ballots[motion_id]
         if ballot.alias in ballots:
             raise ValueError("alias already cast a ballot")
-        if committee.amendment_id in self.__activated:
+        if motion_id in self.__activated:
             raise ValueError("amendment already activated")
         self.__ledger.append(
             {
                 "kind": "charter.vote",
-                "amendment_id": committee.amendment_id,
+                "amendment_id": motion_id,
                 "round": committee.round,
                 **asdict(ballot),
             }

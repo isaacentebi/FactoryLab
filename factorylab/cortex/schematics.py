@@ -261,13 +261,11 @@ class SchematicsMixin:
                     "acceptable_region": "…",
                     "observation": "one of world.observations ids",
                     "answers_for": "producer",
-                    "lambda": 0.1,
                 }
             ],
             "replace": [],
             "remove": ["card-id"],
             "predicted_effect": {"card_id": "card-id", "direction": "increase", "window": 1},
-            "tick_interval": "30s",
         },
         "challenge": {
             "kind": "challenge",
@@ -346,9 +344,14 @@ class SchematicsMixin:
         "decisions settle at. Cards answer for any registered emitted kind, "
         "the seed aliases producer, evaluator, meta, antagonist, or all; window is "
         "{kind: returns|forecasts|windows, n: positive integer, per: role|assembly|null}. "
-        "Insufficient samples are unmeasured. Lambda is optional and bounded by prices.lambda_max; "
-        "tick_interval is an optional duration within world.clock bounds. A prediction names a "
-        "card_id, direction (increase or decrease), and a positive window count after activation. "
+        "Insufficient samples are unmeasured. An amendment carries one change class: cards "
+        "(add, replace, remove, as in proposal_shapes.amendment), lambda ({\"lambda\": "
+        "{card_id: value}} over current cards, bounded by prices.lambda_max) or clock "
+        "(tick_interval, a duration within world.clock bounds). A prediction names a "
+        "card_id, direction (increase or decrease), and a positive window count after activation; "
+        "a clock amendment's prediction names an observation instead of a card_id: "
+        "burn_per_window or a registered observation. An amendment waits for the next "
+        "governance boundary, where a committee is seated and votes on every waiting one. "
         "Unmeasurable windows, duplicate role/observation bindings and unchanged amendments "
         "are refused before a vote. A connector may omit preflight_path (default /), pay, "
         "and max_call_usd; pay=x402 requires an exact max_call_usd cap. A market proposal "
@@ -479,7 +482,10 @@ class SchematicsMixin:
                         "max_lifetime_windows": self.m.novelty.max_lifetime_windows},
             "novelty_reserve_remaining_usd": str(money_to_usd(self.reserve.remaining())),
             "addressing": _ADDRESSING,
-            "governance": self.cadence.world_block(self.tick_clock),
+            "governance": {**self.cadence.world_block(self.tick_clock),
+                           # Amendments admitted since the last boundary: the next
+                           # committee's agenda (charter audit C1).
+                           "agenda": [am.id for am in self.charter_book.agenda()]},
             "tick_intervals": tick_intervals(self.tick_clock),
             # Moving by construction: the sampling actuator and the immune controller
             # change these, so they are published here and never inside the prefix.
@@ -494,6 +500,9 @@ class SchematicsMixin:
                         if (r := self.regions.get(cid)) is not None
                         else None
                     ),
+                    # Charter audit M7: closed windows priced at lambda_max, and the
+                    # current run of consecutive windows in violation.
+                    **self.controller.saturation(cid),
                 }
                 for cid in sorted(self.priced)
             ],
@@ -654,7 +663,7 @@ class SchematicsMixin:
                      'read input shapes and readiness with world.read {"section":"work"}',
         "observation": "register a measurement over a closed window's public facts",
         "learner": "give one assembly a learner over an action set it declares",
-        "amendment": "add, replace or remove charter cards, with a predicted effect",
+        "amendment": "one charter change (cards, lambda or clock) with its own predicted effect",
         "challenge": "contest a current card with evidence and a replacement",
     }
 
@@ -995,7 +1004,7 @@ class SchematicsMixin:
         }
 
     def _charter_view(self) -> dict[str, Any]:
-        """The charter in force, actual pending changes, and amendment eligibility."""
+        """The charter in force, actual pending changes, the agenda and the next boundary."""
         cadence = self.cadence.world_block(self.tick_clock)
         waiting = list(cadence.get("waiting") or ())
         eligibility = {
@@ -1004,9 +1013,10 @@ class SchematicsMixin:
             "outstanding_forecasts": cadence["outstanding_forecasts"],
             "eligible_no_earlier_than_event": cadence["earliest_activation_event"],
             "eligible_no_earlier_than": cadence["earliest_activation"],
-            "meaning": "a cadence boundary at which a waiting change could become eligible; "
-                       "it is not a scheduled charter change",
+            "meaning": "the earliest governance boundary, where a committee is seated and "
+                       "votes on the agenda; it is not a scheduled charter change",
         }
+        agenda = [am.id for am in self.charter_book.agenda()]
         return {
             "edition": self.charter.edition,
             "text": self._charter_text(),
@@ -1030,6 +1040,7 @@ class SchematicsMixin:
                 "waiting": waiting,
                 **({"eligibility": eligibility} if waiting else {}),
             },
+            "agenda": agenda,
             "amendment_eligibility": eligibility,
         }
 
@@ -1547,15 +1558,24 @@ class SchematicsMixin:
                       "continuations_per_request": 1},
             "committee": {
                 "seats": self.m.committee.seats,
-                "threshold": "floor(number of seated delegates / 2) + 1 yes votes",
+                "quorum": self.m.committee.quorum,
+                "threshold": "floor(number of voting delegates / 2) + 1 yes votes",
                 "min_settled": self.m.committee.min_settled,
                 "eligibility": "distinct independently requested decisions with settled "
-                "consequences; the proposer's assembly is excluded",
+                "consequences; the proposer's assembly does not vote on its own motion",
+                "seating": "at each governance boundary (world.governance) a new committee "
+                "is drawn by sortition from the eligible assemblies, one seat per role present "
+                "and each learner type present (exp3, blum_mansour) before the rest are drawn "
+                "uniformly, under fresh aliases. Its agenda is every amendment admitted since "
+                "the last boundary. With fewer eligible assemblies than quorum no committee is "
+                "seated; an amendment with fewer voting seats than quorum waits for the next "
+                "boundary. Passed amendments take effect at the boundary, each as an edition",
                 "liability": "yes votes forecast the predicted direction; no votes its negation. "
                 "Brier = 1 - (vote - outcome)^2, measured at the declared window after activation "
                 "against the pre-activation value. No activation or missing evidence is censored. "
-                "Feedback returns to the voting assembly's durable identity. Retirements "
-                "use the same eligibility, draw, majority and cadence; with no predicted "
+                "Feedback returns to the voting assembly's durable identity. Retirements and "
+                "connectors are voted when proposed, by a committee drawn the same way; a "
+                "passed retirement takes effect at the next window boundary. With no predicted "
                 "effect in a retire proposal, their ballots are unscored and censored.",
             },
             "novelty": {"share": nov.share, "window_ns": nov.window_ns,

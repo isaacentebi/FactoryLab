@@ -524,7 +524,7 @@ class GovernanceMixin:
                 challenge["status"] = "due"
 
     def _ballot_due_challenges(self) -> None:
-        """A completed trial goes to the existing amendment ballot at the next boundary.
+        """A completed trial goes on the agenda of the next standing committee.
 
         The adoption candidate is the ordinary replace amendment, proposed under
         the challenge's id with the observation bindings frozen at admission, so
@@ -562,17 +562,7 @@ class GovernanceMixin:
             challenge["amendment_id"] = am.id
             self.stats.amendments_proposed += 1
             self.window.amendments_proposed += 1
-            eligible = self._committee_eligible()
-            proposer = self.handle_to_assembly.get(challenge["handle"])
-            if proposer is None:
-                try:
-                    proposer = self.queue.get(challenge["handle"]).propensity.chosen
-                except KeyError:
-                    pass
-            eligible.pop(proposer, None)
-            committee = self.charter_book.seat(am.id, eligible, self.rng,
-                                               size=self.m.committee.seats)
-            self._hold_vote(am, committee)
+
     def _register_proposal(self, contract: Contract, handle: str, *, reason: str) -> None:
         """Register a proposal's contract and charge its proposer the trial, as any
         registration is charged.
@@ -914,8 +904,6 @@ class GovernanceMixin:
         """Only bounded preflight and a proposer-excluding sortition majority admit an origin."""
         from types import SimpleNamespace
 
-        from factorylab.charter.committee import Committee, draw
-
         predicted_effect = self._policy_prediction(predicted_effect)
         if prop.pay == "x402" and prop.max_call_micro > self.m.treasury.max_request_micro:
             raise ValueError("connector cap exceeds treasury.max_request_micro")
@@ -925,6 +913,11 @@ class GovernanceMixin:
                 owner = self.queue.get(handle).propensity.chosen
             except KeyError:
                 raise ValueError("connector proposal needs a caller decision") from None
+        eligible = self._committee_eligible()
+        eligible.pop(owner, None)
+        if len(eligible) < self.m.committee.quorum:
+            raise ValueError(f"{len(eligible)} eligible seats are fewer than "
+                             f"committee.quorum {self.m.committee.quorum}")
         result, _ = self._fetch_connector(
             owner, handle, {"id": prop.id, "path": prop.preflight_path}, origin=prop.origin)
         # Preflight establishes bounds, not information for the proposer.
@@ -937,13 +930,12 @@ class GovernanceMixin:
         # The proposer pays its trial (defect 13): one that cannot is refused before
         # a committee is drawn and its ballots are bought.
         self._require_trial(handle, self.ev.trial_amount_micro)
-        eligible = self._committee_eligible()
-        eligible.pop(owner, None)
         vote_id = f"connector:{prop.id}:v{version}:{handle}"
-        committee = Committee(vote_id, 1, draw(eligible, self.rng, self.m.committee.seats))
+        committee, strata = self._seat_internal(vote_id, eligible)
         self.ledger.append({"kind": "connector.seated", "id": prop.id,
                             "vote_id": vote_id, "handle": handle,
-                            "seats": [seat._asdict() for seat in committee.seats]})
+                            "seats": [seat._asdict() for seat in committee.seats],
+                            "coverage": strata})
         proposal = SimpleNamespace(id=vote_id, proposer_handle=handle,
                                    predicted_effect=predicted_effect)
         if not self._hold_vote(proposal, committee, connector=prop):
@@ -1045,14 +1037,49 @@ class GovernanceMixin:
             if spec.id in self.tool_specs:
                 self.tool_specs[spec.id]["args_schema"].update(_to_plain(spec.args_schema))
 
+    def _refuse_amendment(self, item: dict[str, Any], reason: str) -> None:
+        """Ledger a refused motion and publish its reason, then raise it."""
+        feedback = {"id": str(item.get("id", "")), "reason": reason}
+        self.ledger.append({"kind": "amendment.rejected", **feedback})
+        self.amendment_feedback = feedback
+        raise ValueError(reason)
+
+    def _burn_observations(self) -> frozenset[str]:
+        """The observations a clock motion may predict on: the seed burn and any registered.
+
+        Essay II.IV: speed "is categorically indistinguishable from a specific
+        approach to cash burn". The seed is ``burn_per_window``; the population
+        may register its own measure of burn and name that instead.
+        """
+        from factorylab.charter.amendment import BURN_OBSERVATION
+
+        return frozenset({BURN_OBSERVATION, *(o.id for o in self.observations.all()
+                                              if o.registered)})
+
     def _propose_amendment(self, handle: str, item: dict[str, Any]) -> None:
+        """Admit one motion to the agenda; the next standing committee votes on it.
+
+        A motion carries one change class (charter audit P3): cards, lambda
+        (``{"lambda": {card_id: value}}`` over current cards) or clock
+        (``tick_interval``), each with its own prediction; a clock motion's names
+        a burn observation (M6). Nothing is seated here: a motion arriving between
+        governance boundaries waits for the next committee (C1).
+        """
         from factorylab.charter.amendment import (
+            CHANGE_CLASSES,
             proposed_answers_for,
             proposed_price,
             proposed_tick_interval,
         )
         from factorylab.charter.charter import MetricCard
 
+        present = {"cards": any(item.get(key) for key in ("add", "replace", "remove")),
+                   "lambda": "lambda" in item, "clock": "tick_interval" in item}
+        classes = [name for name in CHANGE_CLASSES if present[name]]
+        if len(classes) > 1:
+            self._refuse_amendment(
+                item, "a motion carries one change class (cards, lambda or clock); "
+                f"this one carries {' and '.join(classes)}")
         tick_interval = None
         if "tick_interval" in item:
             try:
@@ -1060,12 +1087,24 @@ class GovernanceMixin:
                     item["tick_interval"], self.m.clock.min_tick_ns, self.m.max_tick_ns
                 )
             except ValueError as exc:
-                feedback = {"id": str(item.get("id", "")), "reason": str(exc)}
-                self.ledger.append({"kind": "amendment.rejected", **feedback})
-                self.amendment_feedback = feedback
-                raise
+                self._refuse_amendment(item, str(exc))
             tick_interval = item["tick_interval"]
+            effect = item.get("predicted_effect")
+            observation = effect.get("observation") if isinstance(effect, dict) else None
+            if observation not in self._burn_observations():
+                self._refuse_amendment(
+                    item, "a clock motion's predicted_effect names a burn observation: "
+                    f"{', '.join(sorted(self._burn_observations()))}")
         prices = []
+        if "lambda" in item:
+            raw = item["lambda"]
+            if not isinstance(raw, dict) or not raw:
+                self._refuse_amendment(item, "lambda must map current card ids to prices")
+            for card_id, value in raw.items():
+                try:
+                    prices.append((str(card_id), proposed_price(value, self.m.prices.lambda_max)))
+                except ValueError as exc:
+                    self._refuse_amendment(item, str(exc))
 
         def cards(key: str) -> tuple[MetricCard, ...]:
             raw = item.get(key) or []
@@ -1076,14 +1115,9 @@ class GovernanceMixin:
                 if not isinstance(c, dict):
                     raise ValueError(f"{key} entries must be objects")
                 if "lambda" in c:
-                    try:
-                        value = proposed_price(c["lambda"], self.m.prices.lambda_max)
-                    except ValueError as exc:
-                        feedback = {"id": str(item.get("id", "")), "reason": str(exc)}
-                        self.ledger.append({"kind": "amendment.rejected", **feedback})
-                        self.amendment_feedback = feedback
-                        raise
-                    prices.append((str(c.get("id", "")), value))
+                    self._refuse_amendment(
+                        item, "a card carries no lambda: a motion carries one change class "
+                        "(cards, lambda or clock)")
                 out.append(
                     MetricCard(
                         str(c.get("id", "")),
@@ -1149,16 +1183,66 @@ class GovernanceMixin:
         self.charter_book.propose(am, self.observations)
         self.stats.amendments_proposed += 1
         self.window.amendments_proposed += 1
-        eligible = self._committee_eligible()
+
+    def _proposer_assembly(self, handle: str) -> str | None:
+        """The assembly a proposing decision belongs to, when the queue knows it."""
         proposer = self.handle_to_assembly.get(handle)
         if proposer is None:
             try:
                 proposer = self.queue.get(handle).propensity.chosen
             except KeyError:
                 pass
-        eligible.pop(proposer, None)
-        committee = self.charter_book.seat(am.id, eligible, self.rng, size=self.m.committee.seats)
-        self._hold_vote(am, committee)
+        return proposer
+
+    def _seat_learners(self, eligible: dict[str, str]) -> dict[str, frozenset[str]]:
+        """Each eligible assembly's learner types: the strata sortition covers besides roles.
+
+        Essay II.IV.a seats "no-regret learners, no-swap-regret learners". An
+        assembly with its own registered learner is that learner's type; any other
+        is the type of the routers that sample it (the routers of the kinds it
+        accepts), both types when both kinds of router do.
+        """
+        from factorylab.learners.blum_mansour import BlumMansour
+
+        def kind(learner) -> str:
+            seen = set()
+            while learner is not None and id(learner) not in seen:
+                if isinstance(learner, BlumMansour):
+                    return "blum_mansour"
+                seen.add(id(learner))
+                learner = getattr(learner, "inner", None)
+            return "exp3"
+
+        out = {}
+        for assembly_id in eligible:
+            own = self.assembly_learners.get(assembly_id)
+            if own is not None:
+                out[assembly_id] = frozenset({kind(own)})
+                continue
+            accepts = self.assemblies[assembly_id].spec.accepts
+            out[assembly_id] = frozenset(
+                kind(state.learner) for event_kind in sorted(accepts)
+                for state in self.routers.get(event_kind, ())
+                if assembly_id in state.universe) or frozenset({"exp3"})
+        return out
+
+    def _seat_internal(self, motion_id: str, eligible: dict[str, str], round: int = 1):
+        """A per-motion committee for internal self-organization, never a rump.
+
+        Retirements and connectors are the factory's own organization, not
+        charter governance (charter audit P4): they keep sortition, stratified
+        like the standing committee, and a population with fewer eligible seats
+        than ``committee.quorum`` is refused rather than seated.
+        """
+        from factorylab.charter.committee import Committee, coverage, draw
+
+        quorum = self.m.committee.quorum
+        if len(eligible) < quorum:
+            raise ValueError(f"{len(eligible)} eligible seats are fewer than "
+                             f"committee.quorum {quorum}")
+        learners = self._seat_learners(eligible)
+        seats = draw(eligible, self.rng, self.m.committee.seats, learners=learners)
+        return Committee(motion_id, round, seats), coverage(eligible, seats, learners)
 
     def _committee_eligible(self) -> dict[str, str]:
         """Distinct independently requested decisions need observed consequences to qualify.
@@ -1193,9 +1277,12 @@ class GovernanceMixin:
 
     def _propose_retirement(self, handle: str, proposal: RetireProposal, *,
                             predicted_effect: PredictedEffect | None = None) -> None:
-        """Any assembly may request a seed or population retirement through the amendment draw."""
-        from factorylab.charter.committee import Committee, draw
+        """Any assembly may request a seed or population retirement through an internal draw.
 
+        A retirement is the factory's internal self-organization, not charter
+        governance (charter audit P4): it keeps its own sortition and its own
+        queue, and never waits on or stalls a charter activation.
+        """
         predicted_effect = self._policy_prediction(predicted_effect)
         target = proposal.assembly_id
         if target not in self.assemblies or target in self.retired_assemblies:
@@ -1205,6 +1292,13 @@ class GovernanceMixin:
                and row["status"] in ("voting", "passed")
                for row in self.retirement_proposals.values()):
             raise ValueError("retirement is already pending for this assembly version")
+        eligible = self._committee_eligible()
+        proposer = self.handle_to_assembly.get(handle, self.queue.get(handle).propensity.chosen)
+        eligible.pop(proposer, None)
+        eligible.pop(target, None)
+        if len(eligible) < self.m.committee.quorum:
+            raise ValueError(f"{len(eligible)} eligible seats are fewer than "
+                             f"committee.quorum {self.m.committee.quorum}")
         # The motion id reaches the public wake through the governance queue, and
         # the wake never names an assembly — so the id identifies the proposal, not its
         # target. The target is on the sealed ledger row below.
@@ -1215,23 +1309,17 @@ class GovernanceMixin:
             input_schema={"type": "object"}, output_schema={"type": "object"},
             price=PriceSpec({}), permissions=frozenset(), resource_bounds=ResourceBounds())
         self._register_proposal(contract, handle, reason="trial:retirement")
-        eligible = self._committee_eligible()
-        proposer = self.handle_to_assembly.get(handle, self.queue.get(handle).propensity.chosen)
-        eligible.pop(proposer, None)
-        eligible.pop(target, None)
-        committee = Committee(motion.id, len(self.retirement_proposals) + 1,
-                              draw(eligible, self.rng, self.m.committee.seats))
+        committee, strata = self._seat_internal(motion.id, eligible,
+                                                len(self.retirement_proposals) + 1)
         self.ledger.append({"kind": "retirement.proposed", **asdict(motion),
-                            "committee": asdict(committee)})
+                            "committee": asdict(committee), "coverage": strata})
         self.retirement_proposals[motion.id] = {
             "proposal": motion, "committee": committee, "ballots": {}, "status": "voting"}
         self._hold_vote(motion, committee)
 
     def _prune_cadence_waiting(self) -> list[str]:
-        """Spent or stale heads cannot block another approved proposal."""
+        """Only charter motions wait on the cadence; spent or stale heads leave it."""
         active = {am.id for am in self.charter_book.pending()}
-        active.update(pid for pid, row in self.retirement_proposals.items()
-                      if row["status"] == "passed")
         waiting = self.cadence.world_block(self.tick_clock)["waiting"]
         for proposal_id in waiting:
             if proposal_id not in active:
@@ -1239,33 +1327,28 @@ class GovernanceMixin:
         return [pid for pid in waiting if pid in active]
 
     def _activate_retirements_if_due(self) -> None:
-        """Retire one approved version at the same cadence boundary used by amendments."""
-        waiting = self._prune_cadence_waiting()
+        """Retire every approved version at the first window boundary after its vote.
+
+        Charter audit P4: retirements are the factory's internal self-organization.
+        They have their own queue, in approval order, and never consult or advance
+        the governance cadence, so a passed retirement cannot stall a charter
+        activation and a charter motion cannot delay a retirement.
+        """
         for row in self.retirement_proposals.values():
             if row["status"] != "passed":
                 continue
-            if waiting and waiting[0] != row["proposal"].id:
-                continue
-            if not self.cadence.ready(now_ns=self.clock.now_ns,
-                                      tick_interval_ns=self.tick_clock,
-                                      window=self.stats.reserve_windows):
-                return
             motion = row["proposal"]
             if (motion.assembly_id in self.retired_assemblies
                     or self.assemblies[motion.assembly_id].spec.version != motion.version):
                 self.ledger.append({"kind": "retirement.stale", "proposal_id": motion.id})
                 row["status"] = "stale"
-                self.cadence.refused(motion.id, "retirement target version is stale")
                 self._censor_ballots(motion.id)
-                waiting = self._prune_cadence_waiting()
                 continue
             self._retire_assembly(motion.assembly_id, motion.id)
             row["status"] = "activated"
             self._activate_policy_ballots(motion.id)
-            self.cadence.activated(motion.id, self.clock.now_ns, self.tick_clock)
             self.card_samples.revised(motion.proposer_handle)
             self.window.revision_returns += 1
-            return
 
     def _independent_decision(self, handle: str, assembly: str) -> bool:
         """A self-request anywhere in the decision's ancestry cannot manufacture eligibility."""
@@ -1288,11 +1371,19 @@ class GovernanceMixin:
 
     def _hold_vote(self, am: Any, committee: Any, *,
                    connector: ConnectorProposal | None = None) -> bool | None:
-        """Amendments and connectors share seats, metered ballot requests and majority counting."""
+        """Amendments and connectors share seats, metered ballot requests and majority counting.
+
+        On a standing committee only the motion's voters (every seat but its
+        proposer's) are asked, and each ballot also carries the committee's agenda.
+        """
+        from factorylab.charter.committee import StandingCommittee
+
         if am.id in self.voted_amendments:
             return
         retiring = isinstance(am, Retirement)
         prices = {} if retiring or connector is not None else dict(am.proposed_prices)
+        standing = isinstance(committee, StandingCommittee)
+        voters = set(self.charter_book.voters(committee, am.id)) if standing else None
         # A challenge-originated amendment shows its voters the trial (C7); an
         # ordinary amendment's ballot is unchanged.
         challenge_inputs = (None if retiring or connector is not None
@@ -1302,6 +1393,8 @@ class GovernanceMixin:
             if self.wallet.dead:
                 break
             alias, assembly_id = seat[0], seat[1]
+            if voters is not None and alias not in voters:
+                continue
             event_id = f"vote-{am.id}-{alias}"
             if event_id in self.vote_handles:
                 continue
@@ -1332,7 +1425,7 @@ class GovernanceMixin:
             self.stats.decisions += 1
             if connector is not None:
                 inputs = {"connector": {**asdict(connector),
-                                        "predicted_effect": asdict(am.predicted_effect)},
+                                        "predicted_effect": am.predicted_effect.as_dict()},
                           # A ballot reads the motion like a machine (C7): its own
                           # operating access, not the whole world block.
                           "actor_context": self._operating_context(assembly_id,
@@ -1342,23 +1435,21 @@ class GovernanceMixin:
                 inputs = {
                     ("retirement" if retiring else "amendment"): ({
                         "assembly_id": am.assembly_id, "version": am.version,
-                        "predicted_effect": asdict(am.predicted_effect),
+                        "predicted_effect": am.predicted_effect.as_dict(),
                     } if retiring else {
                         "id": am.id,
-                        "add": [
-                            {**asdict(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
-                            for c in am.add
-                        ],
-                        "replace": [
-                            {**asdict(c), **({"lambda": prices[c.id]} if c.id in prices else {})}
-                            for c in am.replace
-                        ],
+                        **({"change": list(am.change_classes())}
+                           if hasattr(am, "change_classes") else {}),
+                        "add": [asdict(c) for c in am.add],
+                        "replace": [asdict(c) for c in am.replace],
                         "remove": list(am.remove),
-                        "predicted_effect": asdict(am.predicted_effect),
+                        **({"lambda": prices} if prices else {}),
+                        "predicted_effect": am.predicted_effect.as_dict(),
                         **({"tick_interval": am.tick_interval}
                            if am.tick_interval is not None else {}),
                     }),
                     **({"challenge": challenge_inputs} if challenge_inputs else {}),
+                    **({"agenda": self._agenda_block(committee)} if standing else {}),
                     "charter": self._charter_text(),
                     "actor_context": self._operating_context(assembly_id,
                                                              self._world_block()),
@@ -1380,7 +1471,7 @@ class GovernanceMixin:
                  "challenge: inputs.challenge carries the challenger's evidence and both "
                  "measured series, incumbent and replacement per trial window."
                  if challenge_inputs else
-                 "Vote on an amendment to the charter's metric cards."),
+                 self._motion_description(am)),
                 inputs,
                 schema,
                 self.clock.now_ns + self.tick_clock.interval_ns * 10,
@@ -1420,12 +1511,12 @@ class GovernanceMixin:
                 continue
             if isinstance(vote, bool):
                 self.charter_book.vote(
-                    committee, alias, vote, str(ret.outputs.get("reason", ""))[:1000]
+                    committee, am.id, alias, vote, str(ret.outputs.get("reason", ""))[:1000]
                 )
                 self.stats.votes_cast += 1
                 self._record_policy_ballot(am, handle, assembly_id, vote)
             else:
-                self.charter_book.abstain(committee, alias)
+                self.charter_book.abstain(committee, am.id, alias)
                 self._settle_policy(handle, 0.0, SettleStatus.CENSORED)
         self.ledger.append({"kind": "committee.completed", "amendment_id": am.id})
         self.voted_amendments.add(am.id)
@@ -1445,42 +1536,48 @@ class GovernanceMixin:
                                 "outcome": outcome})
             row["status"] = outcome
         else:
-            outcome = self.charter_book.tally(committee)
+            outcome = self.charter_book.tally(committee, am.id)
         if outcome == "passed":
-            self.cadence.approve(am.id)
-            self.cadence.ready(
-                now_ns=self.clock.now_ns,
-                tick_interval_ns=self.tick_clock,
-                window=self.stats.reserve_windows,
-            )
             if not retiring:
+                self.cadence.approve(am.id)
                 self.stats.amendments_passed += 1
         elif outcome == "failed":
             self._censor_ballots(am.id)
 
-    def _next_charter_activation(self) -> Charter | None:
-        """Activate only at a boundary that meets the measured governance separation."""
-        waiting = self._prune_cadence_waiting()
-        if waiting and waiting[0] in self.retirement_proposals:
-            return None
-        if not self.cadence.ready(
-            now_ns=self.clock.now_ns,
-            tick_interval_ns=self.tick_clock,
-            window=self.stats.reserve_windows,
-        ):
-            return None
+    @staticmethod
+    def _motion_description(am: Any) -> str:
+        """What a ballot is about, by the motion's change class; it states the motion only."""
+        classes = am.change_classes() if hasattr(am, "change_classes") else ("cards",)
+        if "lambda" in classes:
+            return "Vote on a motion setting lambda on current charter cards."
+        if "clock" in classes:
+            return "Vote on a motion changing the world's tick interval."
+        return "Vote on an amendment to the charter's metric cards."
+
+    def _card_statistics(self) -> list[dict]:
+        """Each priced card's lambda, windows priced at lambda_max and violation duration (M7)."""
+        return [{"card_id": card_id, "lambda": self.controller.price(card_id),
+                 **self.controller.saturation(card_id)}
+                for card_id in sorted(self.priced)]
+
+    def _agenda_block(self, committee) -> dict:
+        """The seated committee's agenda: its motions, the deferred ones and the card record."""
+        return {"boundary": committee.boundary, "round": committee.round,
+                "motions": list(committee.agenda), "deferred": list(committee.deferred),
+                "lambda_max": self.m.prices.lambda_max, "cards": self._card_statistics()}
+
+    def _activate_passed(self) -> None:
+        """Activate every passed motion at this boundary, each as its own edition, in order."""
         new = self.charter_book.activate_due(self.clock.now_ns)
-        while isinstance(new, Refusal):
-            self._close_refused_ballots(new)
-            waiting = self._prune_cadence_waiting()
-            if waiting and waiting[0] in self.retirement_proposals:
-                return None
+        while new is not None:
+            if isinstance(new, Refusal):
+                self._close_refused_ballots(new)
+            else:
+                am = self.charter_book.activated_amendment(new.edition)
+                self._activate_policy_ballots(am.id)
+                self.cadence.activated(am.id, self.clock.now_ns, self.tick_clock)
+                self._apply_edition(new, am)
             new = self.charter_book.activate_due(self.clock.now_ns)
-        if new is not None:
-            am = self.charter_book.activated_amendment(new.edition)
-            self._activate_policy_ballots(am.id)
-            self.cadence.activated(am.id, self.clock.now_ns, self.tick_clock)
-        return new
 
     def _close_refused_ballots(self, refusal: Any) -> None:
         """A refused activation leaves nothing to grade: close its ballots, release its card."""
@@ -1497,45 +1594,92 @@ class GovernanceMixin:
         self.pending_votes[:] = [v for v in self.pending_votes
                                  if v["amendment_id"] != amendment_id]
 
+    def _apply_edition(self, new: Charter, am: Amendment) -> None:
+        """Put an activated motion's edition in force: cards, prices and clock."""
+        self.charter = new
+        self._drop_cards({c.id for c in new.cards}, am.id)
+        self._derive_regions()
+        for card_id, value in am.proposed_prices:
+            if card_id not in self.priced:
+                self.controller.register_pending(card_id)
+                self.priced.add(card_id)
+            self.controller.set_price(card_id, value, amendment_id=am.id)
+        if am.tick_interval is not None:
+            from factorylab.charter.amendment import proposed_tick_interval
+
+            interval = proposed_tick_interval(
+                am.tick_interval, self.m.clock.min_tick_ns, self.m.max_tick_ns
+            )
+            if interval != self.tick_clock.interval_ns:
+                self.ledger.append(
+                    {
+                        "kind": "clock.changed",
+                        "edition": new.edition,
+                        "old_ns": self.tick_clock.interval_ns,
+                        "new_ns": interval,
+                    }
+                )
+                self.tick_clock.set_interval(interval)
+                self.stats.clock_changes += 1
+        self.stats.amendments_activated += 1
+        self.window.amendments_activated += 1
+        self.card_samples.revised(am.proposer_handle)
+        self.window.revision_returns += 1  # An activated amendment is a revision
+
+    def _drop_cards(self, kept: set[str], reason_id: str) -> None:
+        """Unprice every priced card the edition in force no longer carries."""
+        for card_id in sorted(self.priced - kept):
+            self.controller.remove(card_id, amendment_id=reason_id)
+            self.priced.remove(card_id)
+            self.regions.pop(card_id, None)
+
     def _activate_charter_if_due(self) -> None:
+        """Every window boundary: internal motions; a governance boundary: the committee.
+
+        Challenges that finished their trial join the agenda, and passed
+        retirements take effect on their own queue (charter audit P4). When the
+        measured governance cadence opens a boundary (essay II.IV.c: the charter
+        revises no faster than ``min_ratio`` times its slowest loop), a standing
+        committee is seated and the boundary is held.
+        """
         self._ballot_due_challenges()
         self._activate_retirements_if_due()
-        new = self._next_charter_activation()
-        while new is not None:
-            self.charter = new
-            am = self.charter_book.activated_amendment(new.edition)
-            for card_id in sorted(self.priced - {c.id for c in new.cards}):
-                self.controller.remove(card_id, amendment_id=am.id)
-                self.priced.remove(card_id)
-                self.regions.pop(card_id, None)
-            self._derive_regions()
-            for card_id, value in am.proposed_prices:
-                if card_id not in self.priced:
-                    self.controller.register_pending(card_id)
-                    self.priced.add(card_id)
-                self.controller.set_price(card_id, value, amendment_id=am.id)
-            if am.tick_interval is not None:
-                from factorylab.charter.amendment import proposed_tick_interval
+        if getattr(self, "dormancy", None) is not None:
+            # Dormant (C2): no paid cognition; the boundary waits for the world to wake.
+            return
+        self._prune_cadence_waiting()
+        if self.cadence.ready(now_ns=self.clock.now_ns, tick_interval_ns=self.tick_clock,
+                              window=self.stats.reserve_windows):
+            self._hold_governance_boundary()
 
-                interval = proposed_tick_interval(
-                    am.tick_interval, self.m.clock.min_tick_ns, self.m.max_tick_ns
-                )
-                if interval != self.tick_clock.interval_ns:
-                    self.ledger.append(
-                        {
-                            "kind": "clock.changed",
-                            "edition": new.edition,
-                            "old_ns": self.tick_clock.interval_ns,
-                            "new_ns": interval,
-                        }
-                    )
-                    self.tick_clock.set_interval(interval)
-                    self.stats.clock_changes += 1
-            self.stats.amendments_activated += 1
-            self.window.amendments_activated += 1
-            self.card_samples.revised(am.proposer_handle)
-            self.window.revision_returns += 1  # An activated amendment is a revision
-            new = self._next_charter_activation()
+    def _hold_governance_boundary(self) -> None:
+        """Seat the boundary's committee and decide its agenda.
+
+        Essay II.IV.a: "On the cadence of charter revision, a sample of the
+        factory's population is seated … and that seat is consistently rotated."
+        A new committee is drawn at every boundary, stratified over roles and
+        learner types (C2); its agenda is every motion admitted since the last
+        (C1). Passed motions then take effect, each as its own edition.
+        """
+        boundary = len(self.charter_book.sittings()) + self.charter_book.deferrals() + 1
+        self.cadence.boundary(boundary, window=self.window.index, now_ns=self.clock.now_ns,
+                              tick_interval_ns=self.tick_clock)
+        agenda = self.charter_book.agenda()
+        eligible = self._committee_eligible()
+        recusals = {}
+        for am in agenda:
+            proposer = self._proposer_assembly(am.proposer_handle)
+            recusals[am.id] = frozenset({proposer} if proposer is not None else ())
+        committee = self.charter_book.seat(
+            boundary, eligible, self.rng, size=self.m.committee.seats,
+            quorum=self.m.committee.quorum, learners=self._seat_learners(eligible),
+            recusals=recusals)
+        if committee is not None:
+            pending = {am.id: am for am in self.charter_book.pending()}
+            for motion in committee.agenda:
+                if motion in pending and not self.wallet.dead:
+                    self._hold_vote(pending[motion], committee)
+        self._activate_passed()
 
     def _record_policy_ballot(self, proposal, handle: str, assembly: str,
                               vote: bool | None) -> None:
@@ -1543,10 +1687,14 @@ class GovernanceMixin:
         if vote is None:
             self._settle_policy(handle, 0.0, SettleStatus.CENSORED)
             return
-        cards = {c.id: c for c in (*self.charter.cards, *getattr(proposal, "replace", ()),
-                                   *getattr(proposal, "add", ()))}
-        cards.update(self._challenge_cards())  # a promise may name a challenge under trial
-        card = cards[proposal.predicted_effect.card_id]
+        effect = proposal.predicted_effect
+        if effect.observation is not None:
+            card = self._observation_card(effect.observation)
+        else:
+            cards = {c.id: c for c in (*self.charter.cards, *getattr(proposal, "replace", ()),
+                                       *getattr(proposal, "add", ()))}
+            cards.update(self._challenge_cards())  # a promise may name a challenge under trial
+            card = cards[effect.card_id]
         observation = self.observations.get(card.observation)
         definitions = ({observation.id: deepcopy(self.registered_observations[observation.id])}
                        if observation.registered else {})
@@ -1560,6 +1708,22 @@ class GovernanceMixin:
         }
         self.ledger.append({"kind": "policy.promised", **ballot})
         self.pending_votes.append(ballot)
+
+    def _observation_card(self, observation_id: str) -> MetricCard:
+        """The measurement a clock motion's promise is graded on: one whole window, unpriced.
+
+        A clock motion predicts its effect on a burn observation, not on a card
+        (charter audit M6). Its ballots are graded exactly as a card's are, on this
+        frame: the observation over one closed window, its region the
+        observation's declared range, so a move counts once it clears
+        ``committee.promise_resolution`` of that range. It never enters the charter.
+        """
+        observation = self.observations.get(observation_id)
+        return MetricCard(
+            f"observation:{observation.id}", "clock", observation.description,
+            observation.units, {"kind": "windows", "n": 1, "per": None},
+            f"between {observation.unit_range[0]!r} and {observation.unit_range[1]!r}",
+            observation.id, "all")
 
     def _policy_observations(self, vote: dict) -> ObservationBook:
         """A later observation registration cannot rewrite a frozen ballot's measurement."""
