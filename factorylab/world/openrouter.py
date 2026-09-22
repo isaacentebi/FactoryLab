@@ -12,9 +12,12 @@ from urllib import error, request
 from factorylab.kernel.money import nonnegative_usd_micro, usd_to_micro
 from factorylab.world.models import CatalogueEntry, ModelRequest, ModelResponse
 from factorylab.world.openai_wire import dispatched, parse_completion
+from factorylab.world.x402 import MODEL_COMPLETION_TIMEOUT_S
 
-#: Control-plane reads are bounded. Paid completions have no client processing
-#: deadline: a slow model must not lose its answer to an invented thinking cutoff.
+#: Control-plane reads are bounded tightly. A paid completion gets a long idle-socket
+#: deadline instead (x402.MODEL_COMPLETION_TIMEOUT_S): a slow model must not lose its
+#: answer to an invented thinking cutoff, and a stalled connection must not hold the
+#: world forever.
 MODEL_HTTP_TIMEOUT_S = 180
 
 
@@ -96,7 +99,8 @@ class OpenRouterProvider:
             method=method,
         )
         opener = request.build_opener(_NoRedirect())
-        timeout = None if method == "POST" and path == "/chat/completions" else MODEL_HTTP_TIMEOUT_S
+        timeout = (MODEL_COMPLETION_TIMEOUT_S if method == "POST" and path == "/chat/completions"
+                   else MODEL_HTTP_TIMEOUT_S)
         with opener.open(req, timeout=timeout) as response:
             body = response.read().decode("utf-8", errors="replace")
             if not 200 <= response.status < 300:
