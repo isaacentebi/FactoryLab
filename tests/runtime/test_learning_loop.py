@@ -143,3 +143,18 @@ def test_defer_is_inaction_too_but_a_decision_that_traded_keeps_the_judge_path()
     rt2.ticks_consumed = contract2.due_tick
     rt2._settle_due_grounded()
     assert rt2.grounded_pending[ordered].final_requested  # a fresh judge is commissioned
+
+
+def test_the_world_grades_the_judge_who_praised_a_hold_it_then_punished():
+    rt = _runtime()
+    _mids(rt, BTC="100")
+    producer, contract = _frozen_hold(rt)
+    rt.grounded_pending[producer] = contract.with_initial(
+        judge_handle="judge-1", evaluator_id="eval-a", forecast_handles=(), score=0.9)
+    _mids(rt, BTC="103")  # 300 bp passed up: the prudent hold was expensive
+    rt.ticks_consumed = contract.due_tick
+    rt._settle_due_grounded()
+    standing = rt.standing.snapshot()["eval-a"]
+    assert standing  # graded
+    graded = [i for i in rt.ledger._recovery_items() if i.get("kind") == "verdict.opportunity"]
+    assert len(graded) == 1 and graded[0]["brier"] > graded[0]["baseline_brier"]

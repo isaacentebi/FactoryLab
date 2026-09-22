@@ -1614,6 +1614,20 @@ class FeedbackMixin:
                                 definition_version=OPPORTUNITY_DEFINITION,
                                 sampling_ref=None, cards="producer")
             self.stats.verdicts += 1
+        if contract.provisional_score is not None and contract.initial_evaluator:
+            # The judge's verdict on this decision was a prediction the world has now
+            # priced: graded from outside the loop it judged (essay II.III, fourth
+            # principle), against an uninformed 0.5, so a judge that praises caution
+            # the market punished loses standing and one that saw it gains.
+            world, said = float(priced["score"]), float(contract.provisional_score)
+            brier, baseline = (said - world) ** 2, (0.5 - world) ** 2
+            self.standing.record_verdict(contract.initial_evaluator, brier, baseline)
+            self.ledger.append({"kind": "verdict.opportunity", "handle": handle,
+                                "evaluator_id": contract.initial_evaluator,
+                                "judge_handle": contract.provisional_judge,
+                                "verdict": said, "world_score": world,
+                                "brier": round(brier, 6), "baseline_brier": round(baseline, 6),
+                                "ts": self.clock.now_ns})
         owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
         if owner is not None:
             self.outcomes.append(owner, handle=handle, evidence=f"opportunity:{handle}",
