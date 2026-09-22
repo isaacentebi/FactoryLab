@@ -141,7 +141,7 @@ def test_a_lost_write_is_confirmed_by_exactly_one_ledger_row():
     assert match_intent(rows, "venue.vault_deposit", {"vault": "0xv", "usd": "11"},
                         "0xme")["status"] == "uncertain"
     twice = ledger_rows([*page, {**page[0], "hash": "0xd"}])
-    assert "two matching" in match_intent(twice, "venue.vault_deposit",
+    assert "confirm nothing" in match_intent(twice, "venue.vault_deposit",
                                           {"vault": "0xv", "usd": "10"}, "0xme")["error"]
 
 

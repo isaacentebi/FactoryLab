@@ -1015,7 +1015,16 @@ difference from its basis is venue P&L (`venue.settled`, custody
 service `vault.leader_commission`, custody `venue_perps`), except the
 commission a leader's own withdrawal is charged and repaid in the same
 transaction, which is ledgered `vault.commission_returned` and booked as
-nothing.
+nothing. Each acknowledged write is bound to its own venue transaction hash
+(checkpointed with the intent); a row bound to one write never confirms
+another, and writes alike in operation, vault and amount are paired with their
+rows in submission order. A commission row names no vault, so it is income only
+while every vault the account leads is one this world created, and never on a
+page with a vault row that could not be read (`vault.commission_skipped`
+otherwise). A withdrawal whose row never arrives within the poll bound is
+ledgered `vault.unbooked`. At a kill, vault equity is residual exposure
+(`wind_down_pending`), never withdrawn by the wind-down, and the summary reports
+`vault_equity_usd` beside `exchange_equity_usd`.
 
 Class transfer confirmation requires a unique hashed `accountClassTransfer`
 row matching the signed direction and exact amount, executed within the

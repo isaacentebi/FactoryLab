@@ -1017,12 +1017,15 @@ class FakeExchange:
         """This account's vault ledger rows at or after an inclusive cursor, oldest first."""
         return [dict(r) for r in self.__dict__.get("_vault_rows", []) if r["ts_ns"] >= since_ns]
 
-    def vault_lookup(self, client_id: str, *, operation: str | None = None,
-                     args: dict | None = None, since_ns: int = 0) -> dict:
-        """The answer a client id already received; the fake never loses one it gave."""
-        result = self.__dict__.get("_vault_results", {}).get(client_id)
-        return dict(result) if result else {"status": "uncertain",
-                                            "error": "vault write not observed"}
+    def vault_lookup(self, client_id: str, *, operation: str, args: dict, since_ns: int = 0,
+                     claimed: frozenset = frozenset(), position: int = 0,
+                     peers: int = 1) -> dict:
+        """Resolve a vault write from this account's own ledger rows, as the live venue
+        must: the fake answers by the row, never by the client id it remembers."""
+        from factorylab.world.vaults import match_intent
+
+        return match_intent(self.vault_ledger(since_ns), operation, args, FAKE_ACCOUNT,
+                            claimed=claimed, position=position, peers=peers)
 
     def simulate_vault(self, name: str, leader: str, usd: Decimal) -> str:
         """An outside party's vault, for this account to deposit into; returns its address."""
@@ -1916,13 +1919,15 @@ class HyperliquidExchange:
             start = latest
         return sorted(rows.values(), key=lambda r: (r["ts_ns"], r["hash"], r["type"]))
 
-    def vault_lookup(self, client_id: str, *, operation: str, args: dict,
-                     since_ns: int) -> dict:
+    def vault_lookup(self, client_id: str, *, operation: str, args: dict, since_ns: int,
+                     claimed: frozenset = frozenset(), position: int = 0,
+                     peers: int = 1) -> dict:
         """Resolve a vault write by its own ledger row; never submits anything."""
         from factorylab.world.vaults import match_intent
 
         try:
-            return match_intent(self.vault_ledger(since_ns), operation, args, self._address)
+            return match_intent(self.vault_ledger(since_ns), operation, args, self._address,
+                                claimed=claimed, position=position, peers=peers)
         except Exception as exc:
             return {"status": "uncertain", "error": f"lookup exception: {type(exc).__name__}"}
 

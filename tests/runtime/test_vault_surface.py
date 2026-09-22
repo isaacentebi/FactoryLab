@@ -58,6 +58,27 @@ class LosesAcknowledgements(FakeExchange):
         return result
 
 
+class LiveLike(FakeExchange):
+    """A fake venue whose vault writes answer as a live one can.
+
+    ``mode`` "drop": the write never reaches the venue and the call fails; "lose":
+    the write lands and its answer is lost; "bare": the write lands and the answer
+    is the live venue's bare ``ok``, with no transaction or amounts.
+    """
+
+    mode = None
+
+    def vault_transfer(self, vault, is_deposit, usd, *, client_id=None):
+        if self.mode == "drop":
+            raise ConnectionError("never sent")
+        result = super().vault_transfer(vault, is_deposit, usd, client_id=client_id)
+        if self.mode == "lose":
+            raise ConnectionError("acknowledgement lost")
+        if self.mode == "bare" and result["status"] == "ok":
+            return {"status": "ok", "vault": result["vault"], "usd": result["usd"]}
+        return result
+
+
 def _manifest(on=True):
     manifest = load_manifest("scripted")
     return replace(manifest, exchange=replace(manifest.exchange, vault_tools=on))
@@ -337,3 +358,155 @@ def test_a_vault_write_interrupted_before_its_answer_replays_as_uncertain_never_
     assert result == {"status": "uncertain"}
     assert recorded[-1] == {"kind": "io.result", "call": 0,
                             "result": encode({"status": "uncertain"})}
+
+
+# ---- cold review: row binding, wind-down, attribution, mixed batches ----------------
+
+
+def _pnl(rt):
+    return [i for i in _items(rt, "venue.settled") if i["reference"].startswith("vault_withdraw")]
+
+
+def test_a_lost_withdrawal_never_borrows_an_acknowledged_ones_row():
+    rt = _runtime(_exchange(LiveLike))
+    _, vault = _create(rt)
+    rt.exchange.mark_vaults(Decimal(1000))
+    first = _decision(rt)
+    assert _call(rt, first, "venue.vault_withdraw", vault=vault, usd="50")["status"] == "ok"
+    rt.exchange.mode = "drop"  # the second withdrawal of 50 never reaches the venue
+    second = _decision(rt)
+    result = _call(rt, second, "venue.vault_withdraw", vault=vault, usd="50")
+    assert result["status"] == "uncertain"
+    for _ in range(6):
+        rt._reconcile_orders()
+    assert len(_pnl(rt)) == 1 and _pnl(rt)[0]["handle"] == first
+    assert rt.vault_intents[f"{second}:tool:0"]["unresolved"]
+    assert [i["client_id"] for i in _items(rt, "vault.unresolved")] == [f"{second}:tool:0"]
+
+
+def test_a_lost_deposit_is_not_confirmed_by_an_earlier_deposits_row():
+    rt = _runtime(_exchange(LiveLike))
+    _, vault = _create(rt)
+    assert _call(rt, _decision(rt), "venue.vault_deposit", vault=vault, usd="500")[
+        "status"] == "ok"
+    rt.exchange.mode = "drop"
+    lost = _decision(rt)
+    assert _call(rt, lost, "venue.vault_deposit", vault=vault, usd="500")[
+        "status"] == "uncertain"
+    rt._reconcile_orders()
+    assert rt.vault_intents[f"{lost}:tool:0"]["result"]["status"] == "uncertain"
+    assert rt.exchange._vault_equity() == Decimal(1500)
+
+
+def test_two_real_writes_of_one_amount_each_bind_their_own_row_and_settle():
+    rt = _runtime(_exchange(LiveLike))
+    _, vault = _create(rt)
+    rt.exchange.mark_vaults(Decimal(1000))
+    rt.exchange.mode = "bare"  # a live acknowledgement: no transaction, no amounts
+    handles = [_decision(rt), _decision(rt)]
+    for handle in handles:
+        assert _call(rt, handle, "venue.vault_withdraw", vault=vault, usd="100")[
+            "status"] == "ok"
+    assert _pnl(rt) == []  # nothing is booked before the rows are bound
+    rt._reconcile_orders()
+    hashes = [rt.vault_intents[f"{h}:tool:0"]["result"]["hash"] for h in handles]
+    assert len(set(hashes)) == 2
+    assert sorted(i["handle"] for i in _pnl(rt)) == sorted(handles)
+    arrived = [i["micro"] for i in _items(rt, "vault.custody") if i["to"] == "venue_perps"]
+    assert arrived == [100_000_000, 100_000_000]  # net plus the leader's own repaid share
+    restored = _runtime(_exchange(LiveLike))
+    restore_runtime(restored, runtime_state(rt))
+    assert [restored.vault_intents[f"{h}:tool:0"]["result"]["hash"] for h in handles] == hashes
+    restored._reconcile_orders()
+    assert _pnl(restored) == []  # a resumed world books nothing again
+
+
+def test_an_acknowledged_write_whose_row_never_arrives_is_named_unbooked():
+    rt = _runtime(_exchange(LiveLike))
+    _, vault = _create(rt)
+    rt.exchange.mode = "bare"
+    handle = _decision(rt)
+    assert _call(rt, handle, "venue.vault_withdraw", vault=vault, usd="100")["status"] == "ok"
+    rt.exchange._vault_rows.clear()  # the venue never shows the row
+    for _ in range(6):
+        rt._reconcile_orders()
+    assert [i["client_id"] for i in _items(rt, "vault.unbooked")] == [f"{handle}:tool:0"]
+
+
+def test_money_in_a_vault_is_pending_exposure_at_a_kill_never_flat():
+    from factorylab.runtime.winddown import PENDING, UNKNOWN, execute
+    from tests.runtime.test_winddown_retry import Diary
+
+    rt = _runtime()
+    _create(rt)
+    report = execute(rt.exchange.target, Diary())
+    assert report["exposure_state"] == PENDING
+    assert [v["equity_usd"] for v in report["residual"]["vaults"]] == ["1000"]
+    summary = rt._summary()
+    assert summary["vault_equity_usd"] == "1000"
+    assert Decimal(summary["exchange_equity_usd"]) == Decimal(20000 - 11000)
+
+    class Unreadable(FakeExchange):
+        def vault_equities(self):
+            raise ConnectionError("no answer")
+
+    assert execute(_exchange(Unreadable), Diary())["exposure_state"] == UNKNOWN
+
+
+def test_commission_is_income_only_when_every_led_vault_is_this_worlds():
+    rt = _runtime(_exchange(cash="40000"))
+    _, vault = _create(rt)
+    # A vault the operator created on the same account, outside this world.
+    rt.exchange.vault_create("operator", "created by the operator", Decimal(1000))
+    rt.exchange.simulate_deposit(vault, OUTSIDE, Decimal(5000))
+    rt.exchange.mark_vaults(Decimal(1000))
+    rt.exchange.simulate_withdraw(vault, OUTSIDE, Decimal(5500))
+    rt._collect_income()
+    assert rt.treasury.income["earned_micro"] == 0
+    skipped = _items(rt, "vault.commission_skipped")
+    assert len(skipped) == 1 and "did not create" in skipped[0]["reason"]
+
+
+def test_a_commission_in_an_own_withdrawal_or_beside_an_unread_row_is_never_income():
+    rt = _runtime()
+    _, vault = _create(rt)
+    rt.exchange.mark_vaults(Decimal(1000))
+    # The account's own withdrawal, with a repayment of a different amount.
+    tx = "0x" + "ab" * 32
+    rows = rt.exchange._vault_rows
+    rows.append({"ts_ns": 1, "hash": tx, "type": "vaultWithdraw", "vault": vault,
+                 "user": None, "requested": Decimal(10), "commission": Decimal(1),
+                 "closing_cost": Decimal(0), "basis": Decimal(9), "net": Decimal(9)})
+    rows.append({"ts_ns": 1, "hash": tx, "type": "vaultLeaderCommission", "vault": None,
+                 "user": None, "usd": Decimal("1.5")})
+    # An outside commission on a page that carries a row this surface could not read.
+    rows.append({"ts_ns": 2, "hash": "0x" + "cd" * 32, "type": "unparsed",
+                 "kind": "vaultWithdraw", "vault": None, "user": None})
+    rows.append({"ts_ns": 2, "hash": "0x" + "cd" * 32, "type": "vaultLeaderCommission",
+                 "vault": None, "user": None, "usd": Decimal(3)})
+    rt._collect_income()
+    assert rt.treasury.income["earned_micro"] == 0 and not _items(rt, "income.earned")
+    assert [i["micro"] for i in _items(rt, "vault.commission_returned")] == [1_500_000]
+    skipped = _items(rt, "vault.commission_skipped")
+    assert [i["micro"] for i in skipped] == [3_000_000]
+    assert "could not be read" in skipped[0]["reason"]
+
+
+def test_an_unread_vault_row_is_kept_as_unparsed_not_dropped():
+    from factorylab.world.vaults import UNPARSED, ledger_rows, own_withdraw_hashes
+
+    rows = ledger_rows([{"time": 5, "hash": "0xab", "delta": {
+        "type": "vaultWithdraw", "vault": "0xv", "requestedUsd": "not a number"}}])
+    assert [(r["type"], r["hash"]) for r in rows] == [(UNPARSED, "0xab")]
+    assert own_withdraw_hashes(rows, "0xme") == set()
+
+
+def test_a_deposit_and_an_order_that_each_fit_alone_are_refused_together():
+    rt, _ = _vault_batch(lambda vault: [
+        {"tool": "venue.vault_deposit", "args": {"vault": vault, "usd": "8000"}},
+        {"tool": "venue.place_market", "args": {"coin": "BTC", "side": "buy", "size": "40"}}])
+    assert rt.vault_intents == {} and rt.order_intents == {}
+    assert _items(rt, "order.batch_refused")
+    # Each fits alone: 9000 of perps collateral is free after the vault's creation.
+    alone = _decision(rt)
+    assert rt._order_collateral(alone, "BTC", Decimal(40), True) is None

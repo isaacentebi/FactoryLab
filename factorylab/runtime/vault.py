@@ -31,9 +31,10 @@ from factorylab.runtime.venue import UNCERTAIN_ORDER_POLLS
 from factorylab.world.vaults import (
     CREATE_FEE_USD,
     LEADER_MIN_FRACTION,
+    UNPARSED,
     check_create,
     leader_share_after,
-    rebates,
+    own_withdraw_hashes,
 )
 from factorylab.world.venue_tools import _json_value
 
@@ -42,9 +43,11 @@ COMMISSION_SERVICE = "vault.leader_commission"
 #: A lost vault write is looked for in the venue ledger from this long before its
 #: intent, so a clock difference between this host and the venue cannot hide its row.
 LOOKUP_SKEW_NS = 60 * 10**9
-#: The fields a settled write must carry before its P&L can be booked.
-_SETTLEMENT_FIELDS = {"venue.vault_create": ("fee_usd",),
-                      "venue.vault_withdraw": ("net", "basis")}
+#: The fields a settled write must carry: the venue transaction it is bound to, and
+#: the amounts its fee or P&L is booked from.
+_SETTLEMENT_FIELDS = {"venue.vault_create": ("fee_usd", "hash"),
+                      "venue.vault_deposit": ("hash",),
+                      "venue.vault_withdraw": ("net", "basis", "hash")}
 
 
 def _dec(value: Any) -> Decimal:
@@ -212,24 +215,60 @@ class VaultMixin:
             return self._recover_vault(client_id)
         return self._record_vault_result(client_id, result)
 
+    def _vault_key(self, intent: dict) -> tuple:
+        args = intent["args"]
+        return (intent["operation"], str(args.get("vault") or "").lower(), _dec(args["usd"]))
+
+    def _vault_claimed(self, client_id: str) -> frozenset[str]:
+        """The venue transactions other vault writes are already bound to."""
+        return frozenset(i["result"]["hash"] for cid, i in self.vault_intents.items()
+                         if cid != client_id and i["result"].get("hash"))
+
+    def _vault_lookup(self, client_id: str) -> dict:
+        """Ask the venue's ledger which row is this write's; never resubmit anything.
+
+        Guarantees a row another write is bound to is never offered, and that writes
+        alike in operation, vault and amount and still unbound are resolved together,
+        in submission order, so two real writes of one amount each find their own row
+        and a lost one never borrows an acknowledged one's.
+        """
+        intent = self.vault_intents[client_id]
+        key = self._vault_key(intent)
+        peers = sorted(
+            ((int(i["since_ns"]), cid) for cid, i in self.vault_intents.items()
+             if not i.get("unresolved") and not i["result"].get("hash")
+             and i["result"]["status"] in ("uncertain", "ok") and self._vault_key(i) == key),
+        )
+        order = [cid for _since, cid in peers]
+        since = min((s for s, _ in peers), default=int(intent["since_ns"]))
+        try:
+            return self.exchange.vault_lookup(
+                client_id, operation=intent["operation"], args=intent["args"],
+                since_ns=max(0, since - LOOKUP_SKEW_NS), claimed=self._vault_claimed(client_id),
+                position=order.index(client_id) if client_id in order else 0,
+                peers=max(1, len(order)))
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "uncertain", "error": f"lookup exception: {type(exc).__name__}"}
+
     def _recover_vault(self, client_id: str) -> dict:
         """Ask the venue what became of an uncertain write; never resubmit it."""
-        intent = self.vault_intents[client_id]
         self._venue_moved()
-        try:
-            result = self.exchange.vault_lookup(
-                client_id, operation=intent["operation"], args=intent["args"],
-                since_ns=max(0, int(intent["since_ns"]) - LOOKUP_SKEW_NS))
-        except Exception as exc:  # noqa: BLE001
-            result = {"status": "uncertain", "error": f"recovery exception: {type(exc).__name__}"}
-        return self._record_vault_result(client_id, result)
+        return self._record_vault_result(client_id, self._vault_lookup(client_id))
 
     def _record_vault_result(self, client_id: str, result: dict) -> dict:
+        """Guarantees an acknowledgement binds its venue transaction to this write alone.
+
+        The bound hash is part of the intent, so it is checkpointed with it and a
+        resumed world still knows which row is whose.
+        """
         result = json.loads(json.dumps(result, default=str))
         intent = self.vault_intents[client_id]
         if result.get("status") not in ("ok", "rejected"):
             result = {"status": "uncertain", "error": str(
                 result.get("error") or "venue acknowledgement unavailable")[:300]}
+        elif result.get("hash") and result["hash"] in self._vault_claimed(client_id):
+            result = {"status": "uncertain",
+                      "error": "venue row already bound to another vault write"}
         uncertain = result["status"] == "uncertain"
         polls = int(intent.get("polls", 0)) + int(uncertain)
         self.ledger.append({"kind": "vault.uncertain" if uncertain else "vault.acknowledged",
@@ -246,11 +285,19 @@ class VaultMixin:
         return intent is not None and int(intent.get("polls", 0)) >= UNCERTAIN_ORDER_POLLS
 
     def _give_up_on_vault(self, client_id: str) -> None:
-        """Say once that this vault write's outcome was never confirmed, and stop asking."""
+        """Say once that this write's outcome, or its amounts, were never confirmed.
+
+        An uncertain write is ``vault.unresolved``. An acknowledged one whose venue
+        row never arrived is ``vault.unbooked``: its custody move is ledgered, and
+        the fee or P&L its row would have stated is named as not booked, rather than
+        silently absent.
+        """
         intent = self.vault_intents[client_id]
         if intent.get("unresolved"):
             return
-        self.ledger.append({"kind": "vault.unresolved", "client_id": client_id,
+        kind = "vault.unresolved" if intent["result"]["status"] == "uncertain" else (
+            "vault.unbooked")
+        self.ledger.append({"kind": kind, "client_id": client_id,
                             "handle": intent["handle"], "operation": intent["operation"],
                             "polls": int(intent.get("polls", 0)),
                             "result": dict(intent["result"])})
@@ -259,30 +306,28 @@ class VaultMixin:
     def _vault_settle(self, client_id: str) -> None:
         """Book one acknowledged vault write's custody move and venue effect, each once.
 
-        Guarantees the custody move is ledgered on acknowledgement, and the venue
-        effect -- the creation fee, or a withdrawal's realised P&L (net received plus
-        any commission repaid to this leader, less the basis withdrawn) -- when the
-        venue has stated the amounts: a live acknowledgement carries none, and the
-        transfer's own ledger row supplies them later.
+        Guarantees money leaving perps is ledgered as moved on acknowledgement, at the
+        amount requested; money arriving from a vault is ledgered at the amount the
+        venue says arrived, once its row states it. The venue effect -- the creation
+        fee, or a withdrawal's realised P&L (net received plus any commission repaid
+        to this leader, less the basis withdrawn) -- is booked when the venue has
+        stated the amounts and its row is bound: a live acknowledgement carries
+        neither, and the transfer's own ledger row supplies them later.
         """
         intent = self.vault_intents[client_id]
         result, operation, handle = intent["result"], intent["operation"], intent["handle"]
         vault = result.get("vault") or str(intent["args"].get("vault", "")).lower() or None
         usd = _dec(intent["args"]["usd"])
+        withdraw = operation == "venue.vault_withdraw"
         if not intent.get("custody_booked"):
             seat = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
             if vault is not None and vault not in self.vault_book:
                 self.vault_book[vault] = {"seat": seat, "handle": handle,
                                           "leader": operation == "venue.vault_create",
                                           "since_ns": self.clock.now_ns}
-            leaving = operation != "venue.vault_withdraw"
-            self.ledger.append({
-                "kind": "vault.custody", "client_id": client_id, "handle": handle,
-                "vault": vault, "operation": operation,
-                "from": "venue_perps" if leaving else "venue_vaults",
-                "to": "venue_vaults" if leaving else "venue_perps",
-                "requested_micro": usd_to_micro(usd, rounding="nearest"),
-                "ts": self.clock.now_ns})
+            if not withdraw:
+                self._vault_custody(intent, vault, "venue_perps", "venue_vaults",
+                                    usd_to_micro(usd, rounding="nearest"))
             intent = {**intent, "custody_booked": True}
         needed = _SETTLEMENT_FIELDS.get(operation, ())
         if not intent.get("settled") and all(result.get(k) is not None for k in needed):
@@ -290,13 +335,22 @@ class VaultMixin:
                 self._book_vault_effect(handle, -usd_to_micro(_dec(result["fee_usd"]),
                                                               rounding="nearest"),
                                         f"vault_fee:{client_id}", "venue_perps")
-            elif operation == "venue.vault_withdraw":
-                realized = (_dec(result["net"]) + _dec(result.get("commission_rebate") or 0)
-                            - _dec(result["basis"]))
-                self._book_vault_effect(handle, usd_to_micro(realized, rounding="nearest"),
+            elif withdraw:
+                arrived = _dec(result["net"]) + _dec(result.get("commission_rebate") or 0)
+                self._vault_custody(intent, vault, "venue_vaults", "venue_perps",
+                                    usd_to_micro(arrived, rounding="nearest"))
+                self._book_vault_effect(handle, usd_to_micro(arrived - _dec(result["basis"]),
+                                                             rounding="nearest"),
                                         f"vault_withdraw:{client_id}", "venue_vaults")
             intent = {**intent, "settled": True}
         self.vault_intents[client_id] = intent
+
+    def _vault_custody(self, intent: dict, vault: str | None, source: str, dest: str,
+                       micro: int) -> None:
+        self.ledger.append({"kind": "vault.custody", "client_id": intent["client_id"],
+                            "handle": intent["handle"], "vault": vault,
+                            "operation": intent["operation"], "from": source, "to": dest,
+                            "micro": micro, "ts": self.clock.now_ns})
 
     def _book_vault_effect(self, handle: str, delta: int, reference: str, custody: str) -> None:
         """A vault's venue effect is booked where ``_settle_venue`` books a fill's."""
@@ -310,13 +364,16 @@ class VaultMixin:
         by_custody[custody] = by_custody.get(custody, 0) + delta
 
     def _reconcile_vault_intents(self, *, final: bool = False) -> None:
-        """Resolve uncertain vault writes, and settle acknowledged ones missing amounts.
+        """Resolve uncertain vault writes, and bind and settle acknowledged ones.
 
         Both are asked about on the bounded schedule orders are: at most
-        ``UNCERTAIN_ORDER_POLLS`` reads, then one ``vault.unresolved`` and no more,
-        except the terminal reconciliation of a dying runtime, which asks once more.
+        ``UNCERTAIN_ORDER_POLLS`` reads, then one ``vault.unresolved`` (or
+        ``vault.unbooked``) and no more, except the terminal reconciliation of a
+        dying runtime, which asks once more.
         """
-        for client_id, intent in list(self.vault_intents.items()):
+        for client_id in sorted(self.vault_intents,
+                                key=lambda c: (int(self.vault_intents[c]["since_ns"]), c)):
+            intent = self.vault_intents[client_id]
             if intent.get("unresolved"):
                 continue
             status = intent["result"]["status"]
@@ -329,12 +386,7 @@ class VaultMixin:
             if status == "uncertain":
                 self._recover_vault(client_id)
                 continue
-            try:
-                found = self.exchange.vault_lookup(
-                    client_id, operation=intent["operation"], args=intent["args"],
-                    since_ns=max(0, int(intent["since_ns"]) - LOOKUP_SKEW_NS))
-            except Exception:  # noqa: BLE001
-                found = {}
+            found = self._vault_lookup(client_id)
             polls = int(intent.get("polls", 0)) + 1
             if found.get("status") == "ok":
                 merged = {**intent["result"],
@@ -347,19 +399,25 @@ class VaultMixin:
                 self.vault_intents[client_id] = {**intent, "polls": polls}
 
     def _collect_vault_income(self) -> None:
-        """Book each leader commission the venue paid this account as income, once.
+        """Book each leader commission the venue paid this account from outside, once.
 
-        Guarantees a commission row is income only when it is money from outside: a
-        row that repays this account's own withdrawal commission in the same
-        transaction is ledgered as returned and booked as nothing. Income is booked
-        through ``Treasury.earn``, which is idempotent on the row's identity, and then
-        the runtime's income path; the seat credited is the one that created the
-        vaults this account leads, when they all share one, and otherwise the pool.
+        A ``vaultLeaderCommission`` row names no vault, so a commission is this
+        world's income only when every vault the account leads is one this world's
+        seats created; otherwise it could be an operator's vault or one that predates
+        the world, and it is ledgered as skipped. A commission in the transaction of
+        one of this account's own withdrawals is its own money repaid, whatever the
+        amount, and is booked as nothing. A page carrying a vault row that could not
+        be read books no commission at all: the unread row could be that withdrawal.
+        Income is booked through ``Treasury.earn``, idempotent on the row's identity,
+        and then the runtime's income path; the seat credited is the one that created
+        the vaults this account leads, when they all share one, and otherwise the pool.
         """
         if not getattr(self.m.exchange, "vault_tools", False):
             return
         try:
             rows = self.exchange.vault_ledger(self.vault_ledger_cursor_ns)
+            leading = ({str(v["vault"]).lower() for v in self.exchange.vault_equities()["leading"]}
+                       if any(r["type"] == "vaultLeaderCommission" for r in rows) else set())
         except Exception as exc:  # noqa: BLE001 - an unread ledger books nothing
             self.ledger.append({"kind": "vault.ledger_unavailable",
                                 "reason": type(exc).__name__, "ts": self.clock.now_ns})
@@ -367,8 +425,11 @@ class VaultMixin:
         if not rows:
             return
         account = self._vault_account()
-        returned = rebates(rows, account)
-        seats = {entry.get("seat") for entry in self.vault_book.values() if entry.get("leader")}
+        own = own_withdraw_hashes(rows, account)
+        unparsed = [r["hash"] for r in rows if r["type"] == UNPARSED]
+        led = {vault for vault, entry in self.vault_book.items() if entry.get("leader")}
+        foreign = sorted(leading - led)
+        seats = {self.vault_book[vault].get("seat") for vault in led}
         seat = next(iter(seats)) if len(seats) == 1 else None
         for row in rows:
             if row["type"] != "vaultLeaderCommission" or not row.get("usd"):
@@ -376,9 +437,19 @@ class VaultMixin:
             micro = usd_to_micro(row["usd"], rounding="nearest")
             if micro <= 0:
                 continue
-            if (row["hash"], row["usd"]) in returned:
+            if row["hash"] in own:
                 self.ledger.append({"kind": "vault.commission_returned", "tx": row["hash"],
                                     "micro": micro, "ts": self.clock.now_ns})
+                continue
+            reason = ("the ledger page carries vault rows that could not be read"
+                      if unparsed else
+                      "the account leads vaults this world did not create" if foreign
+                      else "the account leads no vault this world created" if not led
+                      else None)
+            if reason is not None:
+                self.ledger.append({"kind": "vault.commission_skipped", "tx": row["hash"],
+                                    "micro": micro, "reason": reason, "unparsed": unparsed,
+                                    "foreign_vaults": foreign, "ts": self.clock.now_ns})
                 continue
             tx = row["hash"] if not _null_hash(row["hash"]) else f"{row['hash']}@{row['ts_ns']}"
             try:

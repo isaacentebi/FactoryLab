@@ -187,15 +187,27 @@ def details_from_wire(raw: Any, account: str | None, observed_ns: int) -> dict:
     }
 
 
+#: The row type a vault row the venue sent but this surface could not read becomes.
+UNPARSED = "unparsed"
+
+
 def ledger_rows(page: Any) -> list[dict]:
-    """Guarantees only well-formed vault rows, normalised, from a non-funding ledger page."""
+    """Guarantees every vault row of a non-funding ledger page, normalised, in page order.
+
+    A row of a vault kind this surface cannot read is kept as an ``unparsed`` row with
+    whatever identity it has, never dropped: a dropped own ``vaultWithdraw`` would make
+    the commission repaid in its transaction look like income from outside.
+    """
     rows = []
     for row in page if isinstance(page, list) else []:
         try:
             delta = row["delta"]
             kind = delta.get("type")
-            if kind not in LEDGER_KINDS:
-                continue
+        except (KeyError, TypeError, AttributeError):
+            continue
+        if kind not in LEDGER_KINDS:
+            continue
+        try:
             item = {"ts_ns": int(row["time"]) * 1_000_000, "hash": str(row.get("hash") or ""),
                     "type": kind, "vault": str(delta.get("vault") or "").lower() or None,
                     "user": str(delta.get("user") or "").lower() or None}
@@ -207,58 +219,89 @@ def ledger_rows(page: Any) -> list[dict]:
                     if value is None:
                         raise ValueError(wire)
                     item[key] = value
-            rows.append(item)
         except (KeyError, TypeError, ValueError, AttributeError):
-            continue
+            try:
+                ts_ns = int(row["time"]) * 1_000_000
+            except (KeyError, TypeError, ValueError):
+                ts_ns = 0
+            item = {"ts_ns": ts_ns, "hash": str(row.get("hash") or ""), "type": UNPARSED,
+                    "kind": str(kind), "vault": None, "user": None}
+        rows.append(item)
     return rows
 
 
-def rebates(rows: list[dict], account: str | None) -> set[tuple[str, Decimal]]:
-    """Commission rows that are this account's own withdrawal commission returning.
+def own_withdraw_hashes(rows: list[dict], account: str | None) -> set[str]:
+    """The transactions of this account's own vault withdrawals.
 
     A leader's withdrawal from its own vault is charged the commission and repaid it
-    in the same transaction; the repayment names the same hash and the same amount
-    as the account's own ``vaultWithdraw`` row. Guarantees each such (hash, amount)
-    is named, so it is never booked as income from outside.
+    in the same transaction, as a ``vaultLeaderCommission`` row with the same hash.
+    Guarantees every such hash is named, whatever amount the repayment carries, so a
+    commission in one of them is never booked as income from outside.
     """
     me = (account or "").lower()
-    return {(r["hash"], r["commission"]) for r in rows
-            if r["type"] == "vaultWithdraw" and r.get("commission")
-            and (r.get("user") in (None, me))}
+    return {r["hash"] for r in rows
+            if r["type"] == "vaultWithdraw" and r.get("user") in (None, me)}
 
 
-def match_intent(rows: list[dict], operation: str, args: dict,
-                 account: str | None) -> dict:
-    """Resolve one unacknowledged vault write from the venue's own ledger rows.
+def rebates(rows: list[dict], account: str | None) -> set[tuple[str, Decimal]]:
+    """The (hash, amount) of each commission row repaying this account's own withdrawal."""
+    own = own_withdraw_hashes(rows, account)
+    return {(r["hash"], r.get("usd")) for r in rows
+            if r["type"] == "vaultLeaderCommission" and r["hash"] in own}
 
-    Guarantees exactly one matching row confirms the write, with the venue's own
-    amounts; no row leaves it uncertain (an unread write is not a failed one); and
-    two matching rows confirm nothing, because either could be another write.
+
+def _matches(rows: list[dict], operation: str, args: dict, me: str) -> list[dict]:
+    usd = _usd(args["usd"])
+    if operation == "venue.vault_create":
+        return [r for r in rows if r["type"] == "vaultCreate" and r.get("usd") == usd]
+    if operation == "venue.vault_deposit":
+        return [r for r in rows if r["type"] == "vaultDeposit" and r.get("usd") == usd
+                and r["vault"] == str(args["vault"]).lower()]
+    return [r for r in rows if r["type"] == "vaultWithdraw"
+            and r.get("requested") == usd and r["vault"] == str(args["vault"]).lower()
+            and r.get("user") in (None, me)]
+
+
+def match_intent(rows: list[dict], operation: str, args: dict, account: str | None, *,
+                 claimed: frozenset[str] | set[str] = frozenset(), position: int = 0,
+                 peers: int = 1) -> dict:
+    """Resolve one vault write from the venue's own ledger rows.
+
+    ``claimed`` are the transaction hashes other writes are already bound to; a row
+    one of them names is never this write's. ``peers`` is how many unbound writes
+    share this one's operation, vault and amount (this one included), and
+    ``position`` is this write's place among them in submission order.
+
+    Guarantees a write is confirmed by a row nobody else holds: when the unclaimed
+    matching rows are exactly as many as the unbound writes that could own them,
+    they are paired in order and this write takes its own; when this write is the
+    only candidate and one row matches, it takes that row. Any other count confirms
+    nothing -- no row is an unread write, not a failed one, and a surplus row could
+    be anyone's.
     """
     usd = _usd(args["usd"])
     me = (account or "").lower()
-    if operation == "venue.vault_create":
-        found = [r for r in rows if r["type"] == "vaultCreate" and r.get("usd") == usd]
-    elif operation == "venue.vault_deposit":
-        found = [r for r in rows if r["type"] == "vaultDeposit" and r.get("usd") == usd
-                 and r["vault"] == str(args["vault"]).lower()]
-    else:
-        found = [r for r in rows if r["type"] == "vaultWithdraw"
-                 and r.get("requested") == usd and r["vault"] == str(args["vault"]).lower()
-                 and r.get("user") in (None, me)]
+    found = sorted((r for r in _matches(rows, operation, args, me)
+                    if r["hash"] not in claimed), key=lambda r: (r["ts_ns"], r["hash"]))
     if not found:
         return {"status": "uncertain", "error": "vault write not observed in the venue ledger"}
-    if len(found) > 1:
-        return {"status": "uncertain", "error": "two matching venue rows confirm nothing"}
-    row = found[0]
+    if len(found) == peers and 0 <= position < peers:
+        row = found[position]
+    elif peers == 1 and len(found) == 1:
+        row = found[0]
+    else:
+        return {"status": "uncertain",
+                "error": f"{len(found)} unclaimed matching venue rows for {peers} "
+                         "unbound writes confirm nothing"}
     result = {"status": "ok", "vault": row["vault"], "usd": str(usd), "hash": row["hash"]}
     if operation == "venue.vault_create" and "fee" in row:
         result["fee_usd"] = str(row["fee"])
     if operation == "venue.vault_withdraw":
-        rebate = row.get("commission") if (row["hash"], row.get("commission")) in {
-            (r["hash"], r.get("usd")) for r in rows
-            if r["type"] == "vaultLeaderCommission"} else Decimal(0)
+        rebate = sum((r.get("usd") or Decimal(0) for r in rows
+                      if r["type"] == "vaultLeaderCommission" and r["hash"] == row["hash"]
+                      and r.get("user") in (None, me)), Decimal(0))
         result.update({key: str(row[key]) for key in ("net", "basis", "commission")
                        if key in row})
-        result["commission_rebate"] = str(rebate or Decimal(0))
+        result["commission_rebate"] = str(rebate)
     return result
+
