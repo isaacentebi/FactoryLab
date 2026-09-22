@@ -389,6 +389,14 @@ class RecoveryJournal:
                 from factorylab.world.metering import UnbilledFailure
 
                 raise UnbilledFailure("interrupted event: external write was never dispatched")
+            if ambiguous_retry and args and args[0] in getattr(
+                    getattr(function, "__self__", None), "poll_only_steps", ()):
+                # A real mainnet top-up whose acknowledgment died with the process is
+                # never submitted again on resume: its outcome is unknown, and the rail
+                # only observes it until it confirms or its authorization expires unused.
+                from factorylab.world.evm import Pending
+
+                raise Pending("replayed submission requires receipt reconciliation")
             result = function(*args, **kwargs)
             encoded_result = encode(result)
         except Exception as exc:

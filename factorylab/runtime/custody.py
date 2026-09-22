@@ -122,7 +122,10 @@ def _pending(treasury: Any, observed_at_ns: int | None) -> dict[str, Any]:
         rows.append({
             "transfer_id": item.get("id"),
             "direction": item.get("direction"),
-            "source": SOURCE_OF.get(item.get("direction")),
+            # A hybrid conversion's observed source is the venue: its shadow leg pays
+            # the testnet pots while real mainnet USDC buys the credit (II.IV).
+            "source": ("venue_perps" if "shadow_send" in (item.get("steps") or ())
+                       else SOURCE_OF.get(item.get("direction"))),
             "destination": DESTINATION_OF.get(item.get("direction")),
             "held_micro": item.get("amount_micro"),
             "claim_micro": item.get("received_micro"),

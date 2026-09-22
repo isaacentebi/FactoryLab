@@ -195,9 +195,12 @@ class BootstrapMixin:
 
         if self.live:
             if manifest.treasury.reserve_address is not None:
-                from factorylab.world.treasury_rails import LiveRail
+                from factorylab.world.treasury_rails import HybridRail, LiveRail
 
-                rail = LiveRail(self.exchange, manifest.treasury)
+                # A hybrid capital-loop rehearsal buys real Venice credit on Base mainnet
+                # and pays for it from the testnet pots through a shadow leg (II.IV).
+                hybrid = getattr(manifest.treasury, "venice_network", None) == "base-mainnet"
+                rail = (HybridRail if hybrid else LiveRail)(self.exchange, manifest.treasury)
                 # A Venice purchase is confirmed on the chain's debit; the diary's own
                 # metered spend since the purchase started is recorded beside the
                 # advisory balance so a lost acknowledgment stays explainable (C5).
@@ -310,6 +313,7 @@ class BootstrapMixin:
                 fee_micro=manifest.treasury.fake_fee_micro,
                 max_venice_per_window=manifest.treasury.max_venice_per_window,
                 clock_ns=self.clock,
+                venice_shadow_sink=getattr(manifest.treasury, "venice_shadow_sink", None),
             )
         else:
             self.treasury = Treasury(
@@ -526,6 +530,12 @@ class BootstrapMixin:
             "price_micro_per_call": 0,
             "kind": "treasury",
         }
+        if getattr(manifest.treasury, "venice_network", None) == "base-mainnet":
+            # The population is told where a conversion is paid from in this world: the
+            # description is the only place a seat learns which pot its profit leaves.
+            self.tool_specs["treasury.transfer"]["description"] += (
+                " In this world to_venice pays its $5 from the venue's perps withdrawable "
+                "(no reserve USDC is needed) and buys real Venice credit.")
         self.tool_specs["catalogue.search"] = {
             "id": "catalogue.search",
             "description": "Find tools, complete proposal shapes and model offers by substring. "

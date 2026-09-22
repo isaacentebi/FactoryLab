@@ -697,6 +697,53 @@ def test_fake_treasury_trading_shock_replays_fee_unfunded_cut(tmp_path, monkeypa
     assert restored.run()['ledger_verify']
 
 
+@pytest.mark.parametrize('cut', ['treasury.advance', 'treasury.step_submitted',
+                                 'treasury.confirmed'])
+def test_hybrid_conversion_killed_between_its_legs_resumes_without_a_second_spend(
+        tmp_path, cut):
+    """A kill anywhere in a hybrid conversion replays each leg once: one shadow send out
+    of the venue, one real top-up, one financing, whatever the cut point."""
+    sink = '0x000000000000000000000000000000000000dEaD'
+    base = load_manifest('scripted')
+    m = replace(base, treasury=replace(base.treasury, venice_network='base-mainnet',
+                                       venice_shadow_sink=sink))
+    path = tmp_path / 'hybrid-cut.jsonl'
+    rt = Runtime(m, events=4, seed=1, initial_balance_micro=None, ledger_path=str(path),
+                 drip=False, router_gamma=.1)
+    assert rt.treasury.rail.name == 'scripted-hybrid'
+    cash = rt.exchange._cash
+    mainnet = rt.treasury.rail.hybrid_books['mainnet_reserve']
+    submitted = rt.treasury.transfer('to_venice', '5', handle='parent', now_ns=0)
+    assert submitted['status'] == 'submitted'
+    append = rt.ledger.append
+
+    def interrupt(entry):
+        seq = append(entry)
+        if entry['kind'] == cut:
+            raise ProcessDeath
+        return seq
+
+    rt.ledger.append = interrupt
+    with pytest.raises(ProcessDeath):
+        rt.run()
+    restored = resume_runtime(m, str(path))
+    now = restored.clock.now_ns
+    for step in range(1, 4):
+        if restored.treasury.state['status'] == 'confirmed':
+            break
+        restored.treasury.tick(now + step)
+    assert restored.treasury.state['status'] == 'confirmed'
+    books = restored.treasury.rail.hybrid_books
+    assert books['shadow_sent'] == 5_000_000 and restored.exchange._cash == cash - 5
+    assert books['mainnet_reserve'] == mainnet - 5_000_000
+    assert len(books['submissions']) == 1 and restored.treasury.rail.venice == 5_000_000
+    financing = [i for i in items(path, m) if i['kind'] == 'treasury.financing']
+    assert len(financing) == 1 and financing[0]['source'] == 'venue_perps'
+    assert restored.wallet.check_conservation()
+    assert not restored.wallet.state()['reservations']
+    assert restored.run()['ledger_verify']
+
+
 class OrderCutProvider(ScriptedProvider):
     def __init__(self, operation, args):
         super().__init__()
