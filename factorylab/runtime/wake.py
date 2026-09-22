@@ -924,11 +924,13 @@ def _open_snapshot(path: Path):
     # Match the public genesis to an installed manifest, never a summary or diary.
     with path.open("rb") as stream:
         header = json.loads(stream.readline())
-    # Past worlds are archived in worlds/history (R8: history is forensic), and a
-    # ledger born from one still finds it there. A manifest this kernel no longer
-    # loads hashes nothing it could compare, so it is passed over, not fatal.
-    paths = [*WORLDS_DIR.glob("*.toml"), *(WORLDS_DIR / "history").glob("*.toml")]
-    for manifest_path in sorted(paths):
+    # Only worlds the running kernel loads are candidates. The files archived in
+    # worlds/history are reading material, not identities: a kernel change is a new
+    # world (essay II.b: "a new factory begins from a new v0"), and configuration is
+    # forensic metadata that cannot constitute a version (II), so a ledger born under
+    # an earlier kernel is read by the key-only readers (postmortem, versions), not
+    # re-derived here. A manifest this kernel no longer loads is passed over.
+    for manifest_path in sorted(WORLDS_DIR.glob("*.toml")):
         try:
             manifest = load_manifest(str(manifest_path))
         except (ValueError, TypeError, KeyError):
