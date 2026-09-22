@@ -16,7 +16,7 @@ from factorylab.kernel.registry import Contract
 from factorylab.learners.base import NEUTRAL_REWARD, ObservedRewards
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
-from factorylab.runtime.grounded import GROUNDED_DEFINITION, OPPORTUNITY_DEFINITION
+from factorylab.runtime.grounded import OPPORTUNITY_DEFINITION
 from factorylab.runtime.shared import (
     CH_CONSEQUENCE,
     CH_FAST,
@@ -156,8 +156,6 @@ class ContractQueue:
 ZERO_CONSEQUENCE: Mapping[str, float] = MappingProxyType({
     # Producer scores on the midpoint scale, where 0.5 is a return that moved nothing.
     DEF_VERDICT: 0.5,  # a judge's opinion of a producer return
-    GROUNDED_DEFINITION: 0.5,  # realized consequence: contrary 0, supported (0, 1]
-    f"{GROUNDED_DEFINITION}-provisional": 0.5,  # the fast opinion standing in for it
     OPPORTUNITY_DEFINITION: 0.5,  # a hold with no named counterfactual settles at 0.5
     # A meta's probability that a verdict was right: an uninformed meta says 0.5.
     DEF_CONFORMITY: 0.5,
@@ -472,16 +470,11 @@ class RoutingMixin:
         lid = state.learner.id
         if self.queue.outstanding(lid) or (
             len(self.queue.returns_for(lid)) > self.delivered_seen.get(lid, 0)
-        ) or self._router_owns_grounded_pending(lid) or self._router_owed_abstention(lid):
+        ) or self._router_owed_abstention(lid):
             self.ledger.append({"kind": "router.retained", "learner_id": lid})
             self.retired_routers[lid] = state
         else:
             self.queue.retire_actor(lid)
-
-    def _router_owns_grounded_pending(self, learner_id: str) -> bool:
-        """Keep a router addressable until every grounded decision it sampled is final."""
-        pending = getattr(self, "grounded_pending", {})
-        return any(self.queue.get(handle).actor == learner_id for handle in pending)
 
     def _fresh_router_id(self, base: str) -> str:
         """Fresh learners never receive an active or retired learner's delayed returns."""
@@ -691,36 +684,10 @@ class RoutingMixin:
             if ev is None:
                 return
         states = list(self.routers.get(kind, []))
-        if self._is_final_grounded_commission(ev) and states:
-            # A grounded consequence is one commission, so additive routers do
-            # not multiply its paid final answer. Router registration order is
-            # checkpointed and deterministic; the selected router still samples
-            # an evaluator (or NOOP) and records that draw's full propensity.
-            selected = states[0]
-            self.ledger.append({
-                "kind": "consequence.final_router",
-                "event_id": ev.id,
-                "policy": "first-active-router-v1",
-                "router": selected.learner.id,
-                "eligible_routers": [state.learner.id for state in states],
-                "ts": self.clock.now_ns,
-            })
-            states = [selected]
         for state in states:
             if self.wallet.dead:
                 break
             self._route_with(state, ev)
-
-    @staticmethod
-    def _is_final_grounded_commission(ev: Event) -> bool:
-        """True only for the frozen-contract request, not its recursive verdict."""
-        inputs = ev.payload.get("inputs")
-        return (
-            ev.payload.get("grounded_consequence") is True
-            and isinstance(ev.payload.get("contract"), Mapping)
-            and isinstance(inputs, Mapping)
-            and inputs.get("kind") == "RealizedConsequence"
-        )
 
     def _addressed_seat(self, ev: Event) -> str | None:
         """The one seat an event is addressed to, or None when the draw is open.

@@ -80,9 +80,7 @@ def commission_block(*, subject: str | None, scope: str, horizon: int, budget_mi
     }
 
 
-def evaluator_answer_schema(
-    forecasts: dict, register: dict, *, include_realized: bool = False
-) -> dict:
+def evaluator_answer_schema(forecasts: dict, register: dict) -> dict:
     """The evaluator answer schema.
 
     It lives here rather than inline in ``runtime.loop`` so the charter's own
@@ -106,31 +104,7 @@ def evaluator_answer_schema(
         "register": register,
         "about_handle": {"type": "string"},
     }
-    if include_realized:
-        # The final grounded commission reads an already-fixed return outcome.
-        # A new payoff claim or optional forecast cannot settle before that fact
-        # and the grounded branch deliberately does not open either one.  Keep
-        # them on ordinary evaluator requests, but do not advertise dead fields
-        # here.
-        properties.pop("payoff")
-        properties.pop("forecasts")
-        properties["realized_consequence"] = {
-            "type": "object",
-            "properties": {
-                "status": {"enum": ["supported", "contrary", "unknown"]},
-                "score": {"type": "number", "minimum": 0, "maximum": 1},
-                "evidence": {"type": "array", "items": {"type": "string"}},
-                "reason": {"type": "string"},
-            },
-            "required": ["status", "reason"],
-            "additionalProperties": False,
-        }
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": (["rationale", "verdict", "realized_consequence"]
-                     if include_realized else ["rationale"]),
-    }
+    return {"type": "object", "properties": properties, "required": ["rationale"]}
 
 
 @dataclass(frozen=True)

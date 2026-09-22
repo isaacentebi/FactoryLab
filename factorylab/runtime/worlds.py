@@ -301,18 +301,11 @@ class EvaluationSpec:
     min_coverage: float = 0.5
     trial_amount_micro: int = 100_000  # novelty trial paid per registration
     forecast_horizon_events: int = 10
-    grounded_horizon_ticks: int = 10
     consequence_backstop_events: int = 200
     adversarial_share: float = 0.15  # cap on router mass over antagonist assemblies
     sibling_share: float = 0.5  # share of the representative's meta score a sibling settles at
     sampling_step: float = 0.1  # consequence-mix step per divergent window
     sampling_cap: float = 0.7  # ceiling of the raised consequence mix
-    #: What finally settles a producer decision. ``verdict`` is the shipped line: a
-    #: judge opinion is the producer score. ``realized`` settles on observed
-    #: consequence instead, so an approval that nothing bore out does not pay. The
-    #: default is ``verdict``, so a world that predates the key is unchanged and a
-    #: run turns the new line on deliberately.
-    producer_feedback: str = "verdict"
     #: The retentive core (essay II.a): the event kinds whose router the runtime seeds
     #: as a no-swap-regret learner (Blum-Mansour over EXP3 rows) instead of mean-based
     #: EXP3. Every other kind stays at the frontier. Empty keeps every earlier world.
@@ -702,8 +695,6 @@ class WorldManifest:
         namespace = self.exchange.client_namespace
         if self.prompt.mode not in ("reference", "compact"):
             raise ValueError("prompt.mode must be reference or compact")
-        if self.evaluation.producer_feedback not in ("verdict", "realized"):
-            raise ValueError("evaluation.producer_feedback must be verdict or realized")
         core = self.evaluation.no_swap_regret_kinds
         if (not isinstance(core, tuple) or len(set(core)) != len(core)
                 or any(not isinstance(k, str) or not k for k in core)):
@@ -817,9 +808,6 @@ class WorldManifest:
         backstop = self.evaluation.consequence_backstop_events
         if type(backstop) is not int or backstop < 1:
             raise ValueError("consequence_backstop_events must be a positive integer")
-        grounded = self.evaluation.grounded_horizon_ticks
-        if type(grounded) is not int or grounded < 1:
-            raise ValueError("evaluation.grounded_horizon_ticks must be a positive integer")
         for a in self.assemblies:
             if not isinstance(a.role, str) or not a.role.strip():
                 raise ValueError(f"assembly {a.id} has an empty role label")
@@ -1090,6 +1078,14 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         for a in d.get("assemblies", [])
     )
     ev = d.get("evaluation", {})
+    # Ruling R1: producers learn from verdicts, and the kernel-commissioned final
+    # judge is deleted, so neither the feedback mode nor its horizon names physics
+    # this kernel runs. A manifest that sets one is refused, not ignored (R8).
+    for key in ("producer_feedback", "grounded_horizon_ticks"):
+        if key in ev:
+            raise ValueError(f"evaluation.{key} was removed (ruling R1): a producer's "
+                             "reward is its judges' verdict, and realized consequence "
+                             "grades the judges")
     evaluation = EvaluationSpec(
         consequence_share=float(ev.get("consequence_share", 0.3)),
         max_forecasts_per_verdict=int(ev.get("max_forecasts_per_verdict", 2)),
@@ -1097,13 +1093,11 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         min_coverage=float(ev.get("min_coverage", 0.5)),
         trial_amount_micro=usd_to_micro(ev.get("trial_amount_usd", "0.10"), rounding="exact"),
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
-        grounded_horizon_ticks=ev.get("grounded_horizon_ticks", 10),
         consequence_backstop_events=_tick_horizon(ev, "consequence_backstop", 200),
         adversarial_share=ev.get("adversarial_share", 0.15),
         sibling_share=ev.get("sibling_share", 0.5),
         sampling_step=ev.get("sampling_step", 0.1),
         sampling_cap=ev.get("sampling_cap", 0.7),
-        producer_feedback=_manifest_producer_feedback(ev.get("producer_feedback", "verdict")),
         no_swap_regret_kinds=_manifest_kinds(ev.get("no_swap_regret_kinds", [])),
     )
     pr = d.get("prices") or {}
@@ -1261,13 +1255,6 @@ def _manifest_kinds(raw: Any) -> tuple[str, ...]:
     if not isinstance(raw, list | tuple) or any(not isinstance(k, str) for k in raw):
         raise ValueError("evaluation.no_swap_regret_kinds must be a list of event kind names")
     return tuple(sorted(raw))
-
-
-def _manifest_producer_feedback(raw: Any) -> str:
-    """``[evaluation] producer_feedback``: a judge opinion or an observed consequence."""
-    if raw not in ("verdict", "realized"):
-        raise ValueError("evaluation.producer_feedback must be verdict or realized")
-    return raw
 
 
 def _manifest_storage(raw: Any, legacy: Any) -> StorageSpec:

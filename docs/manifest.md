@@ -2104,21 +2104,13 @@ change. The inbox carries eight typed indices, not eight full bodies. `outcome.l
 pages further unread indices without acknowledgement, and `outcome.get` returns an
 exact body. An index is notice of an outcome, not evidence that its body was read.
 
-Grounded evaluators and meta-judges receive operational capabilities and their own
-account separately from the frozen judging record. Their prompt does not preload
-mutable memory, inbox text, population tool descriptions, current charter or current
-world observations as judging evidence. Discovery remains available; only the
-commission's preserved evidence can support its finding.
-
 Every judge, first tier, meta and ballot, reads the same machine view (Chapter II
 §I.b; information audit C1, C2, C7, P5, P8): its own operating access
 (`actor_context`: the capability index without population prose, its own seat row,
 the clock and provider inventory), never the world block. The judged return's
 `description` is the event it answered, with no role clause. Its outputs lose
 `payoff` (an author's sealed forecast) and `propensity`, which the request's
-PROPENSITY block renders once. No judge-facing projection carries `producer_id`,
-`initial_evaluators`, `final_evaluators` or `excluded_evaluators`; they stay on the
-ledger and on the event, where routing reads them. A judge is not shown its own
+PROPENSITY block renders once. No event payload names its author. A judge is not shown its own
 consequence standing, and `your_action_policy` is absent when a seat has no
 registered learner.
 
@@ -2129,34 +2121,12 @@ prices do not extend them. Actual metering remains authoritative. Older tool res
 have exact invocation-local `artifact.get` references that expire when the decision
 returns; they create no permanent archive entries. The current round's results are
 included once. External text retains its restricted continuation. Public `world.read` is available in both prompt
-modes, including grounded commissions that omit the full reference manual.
+modes.
 
 
-`[evaluation] producer_feedback` is `"verdict"` (the default) or `"realized"`. Under
-`verdict` a producer decision settles on the judge opinion it drew, which is the
-shipped line. Under `realized`, initial opinion is provisional. Before the producer
-acts, the runtime freezes all charter norm definitions, the separate pricing cards,
-existing predicate versions, evidence baseline and tick horizon. A fresh independent
-evaluator later interprets attributable economic outcomes, execution receipts and
-resolved forecasts against the producer's claim under those frozen norms. Windowed
-pricing cards are not the sole criteria for valuing an individual decision. Historical
-contracts without frozen norms retain that absence on restore; current norms are not
-silently substituted. The current feedback definition is `realized-consequence-v2`. This is
-consequence-grounded evaluation, not an objective utility oracle or a pure-P&L score.
-Supported and contrary findings must cite supplied evidence. Unknown findings have no
-numeric score and produce no learner update; a timed-out pending assessment also cannot
-train early. One malformed final finding can be retried by a different evaluator,
-within the close horizon. Both top-level and child producer decisions use this path.
-
-Additive routers may commission several provisional opinions; all participating
-provisional evaluators and their eligible forecasts remain attached to the contract.
-None of those evaluators may supply its final independent finding. The final
-commission uses the producer's selected emitted kind, including custom judged kinds.
-It uses the first active router in that kind's checkpointed registration order for
-one ordinary, propensity-logged draw. A NOOP ends that commission without forcing
-a judge or trying the other routers. This single-router rule applies only to the
-final commission, not the subsequent recursive evaluation of its finding. Historical
-contracts lacking the emitted-kind field retain the old `ProducerReturn` fallback.
+`[evaluation] producer_feedback` and `grounded_horizon_ticks` were removed by ruling
+R1 and are refused at load: a producer decision settles on its judges' verdict, and the
+kernel-commissioned final judge, its rubric and its provisional fallback are deleted.
 
 `[evaluation] no_swap_regret_kinds` is a list of event kind names, default `[]`, fixed
 for the world's life. Every router the runtime seeds for a named kind (at genesis, or
@@ -2182,17 +2152,6 @@ stepped at the size of the universe they were drawn over when that was larger
 at least `1 - gamma` is ledgered `router.learning_death` when the window closes; the
 entry is observation only and changes no draw.
 
-`grounded_horizon_ticks` is an exact positive integer, default `10`. It controls when
-the first final consequence-grounded commission becomes due and is independent of
-`forecast_horizon_events`, which continues to govern ordinary forecasts. Closure is
-bounded by a further `max(horizon + 1, verdict_timeout_ticks)` ticks. A final unknown
-finding may close earlier. Late adoption is not retroactively scored. Card
-penalties retain the existing originating-measurement-window rule, including the lambda
-at that window's close; the numeric lambda is not frozen at decision time.
-
-In realized mode, paid population-tool executions generate version-bound receipts for
-caller and maker. These distinguish same-lineage and cross-lineage use. They contain
-result hashes, not private argument or result bodies, and execution alone earns no score.
 An unknown configuration value is refused at load. All factors are fixed at launch.
 
 Assembly proposals may include `endowment_micro`, an exact positive integer transferred

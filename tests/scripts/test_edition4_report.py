@@ -666,7 +666,7 @@ def _screen_pair():
     control = {
         "status": "completed", "source": {"sha256": "code", "runner_sha256": "runner"},
         "world": {"manifest": {"name": "control", "exchange": {"client_namespace": "one"},
-                               "evaluation": {"producer_feedback": "verdict"},
+                               "prompt": {"mode": "reference"},
                                "charter": {"norms": ["truth"]}}},
         "cost": {"cap_micro": 3_000_000, "max_calls": 500, "attempted": 20,
                  "known_calls": 20, "known_micro": 5000,
@@ -679,44 +679,44 @@ def _screen_pair():
         "behavioral_screen": {"status": "sufficient"},
     }
     treatment = deepcopy(control)
-    treatment["world"]["manifest"]["evaluation"]["producer_feedback"] = "realized"
+    treatment["world"]["manifest"]["prompt"]["mode"] = "compact"
     treatment["world"]["manifest"]["exchange"]["client_namespace"] = "two"
     return control, treatment
 
 
 def test_comparison_requires_matching_physics_and_known_bills():
     control, treatment = _screen_pair()
-    result = compare_rehearsals(control, treatment, factors=["feedback"])
+    result = compare_rehearsals(control, treatment, factors=["prompt"])
     assert result["status"] == "screen_complete"
-    assert result["manifest_difference_paths"] == ["evaluation.producer_feedback"]
-    result = compare_rehearsals(control, treatment, factors=["feedback", "prompt"])
+    assert result["manifest_difference_paths"] == ["prompt.mode"]
+    result = compare_rehearsals(control, treatment, factors=["prompt", "reasoning"])
     assert result["status"] == "unmatched"
-    assert "declared factor prompt did not change" in result["problems"]
+    assert "declared factor reasoning did not change" in result["problems"]
     treatment["world"]["manifest"]["charter"]["norms"] = ["profit"]
-    result = compare_rehearsals(control, treatment, factors=["feedback"])
+    result = compare_rehearsals(control, treatment, factors=["prompt"])
     assert result["status"] == "unmatched"
     assert result["unexpected_difference_paths"] == ["charter.norms.0"]
     assert "profit" not in json.dumps(result)  # no population-facing text exported
     control, treatment = _screen_pair()
     treatment["cost"]["known_calls"] = 19
-    assert compare_rehearsals(control, treatment, factors=["feedback"])["status"] == "unmatched"
+    assert compare_rehearsals(control, treatment, factors=["prompt"])["status"] == "unmatched"
 
 
 def test_comparison_distinguishes_unfinished_evidence_from_unmatched_source():
     control, treatment = _screen_pair()
     treatment["behavioral_screen"]["status"] = "inconclusive"
-    assert compare_rehearsals(control, treatment, factors=["feedback"])["status"] == "inconclusive"
+    assert compare_rehearsals(control, treatment, factors=["prompt"])["status"] == "inconclusive"
     treatment["source"]["sha256"] = "different"
-    assert compare_rehearsals(control, treatment, factors=["feedback"])["status"] == "unmatched"
+    assert compare_rehearsals(control, treatment, factors=["prompt"])["status"] == "unmatched"
     control, treatment = _screen_pair()
     treatment["venue_after"]["positions"] = [{"size": "1"}]
-    assert compare_rehearsals(control, treatment, factors=["feedback"])["status"] == "unmatched"
+    assert compare_rehearsals(control, treatment, factors=["prompt"])["status"] == "unmatched"
     control, treatment = _screen_pair()
     del treatment["cost"]["cap_micro"]
-    assert compare_rehearsals(control, treatment, factors=["feedback"])["status"] == "unmatched"
+    assert compare_rehearsals(control, treatment, factors=["prompt"])["status"] == "unmatched"
 
     control, treatment = _screen_pair()
     treatment["protocol"]["duration_ns"] *= 2
-    result = compare_rehearsals(control, treatment, factors=["feedback"])
+    result = compare_rehearsals(control, treatment, factors=["prompt"])
     assert result["status"] == "unmatched"
     assert "protocol duration_ns missing or different" in result["problems"]

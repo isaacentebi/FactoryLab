@@ -319,7 +319,6 @@ sibling_share = 0.5
 sampling_step = 0.1
 sampling_cap = 0.7
 
-producer_feedback = "realized"
 # The retentive core: judge routing is a no-swap-regret (Blum-Mansour) learner, while
 # producer routing stays mean-based EXP3 at the frontier (essay II.a).
 no_swap_regret_kinds = ["ProducerReturn"]

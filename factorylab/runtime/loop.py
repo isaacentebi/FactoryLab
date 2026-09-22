@@ -48,7 +48,6 @@ from factorylab.runtime.feedback import (
     PendingJudgement,
 )
 from factorylab.runtime.governance import GovernanceMixin
-from factorylab.runtime.grounded import freeze_contract
 from factorylab.runtime.live import LiveClock, Reconciler
 from factorylab.runtime.pricing import PricingMixin
 from factorylab.runtime.resume import decode, encode, runtime_state
@@ -81,26 +80,6 @@ from factorylab.world.clock import ClockSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.market import X402Provider
 
-#: What a grounded commission's evidence was read at, as the settling code froze
-#: it. The names are that snapshot's own; nothing here is recomputed from the
-#: runtime's current position.
-SNAPSHOT_FIELDS = ("as_of_tick", "event_cursor", "receipt_cursor", "observation_due_tick",
-                   "assessment_timeout_tick", "scope")
-
-#: The frozen record a released grounded verdict carries for its reviewers.
-GROUNDED_FIELDS = ("realized_finding", "grounded_contract", "grounded_evidence",
-                   "grounded_evidence_snapshot")
-
-#: How many uncited rows one review carries as context. Cited rows are never cut.
-GROUNDED_REVIEW_CONTEXT = 24
-
-#: Kernel bookkeeping no judge-facing projection carries: who produced the judged
-#: work, and who judged it or may not (information audit C2). It stays on the
-#: ledger and on the event, where routing reads it. A judge should "simply look at
-#: it like a machine: input, output" (essay II.I.b).
-IDENTITY_FIELDS = frozenset({"producer_id", "initial_evaluators", "final_evaluators",
-                             "excluded_evaluators"})
-
 #: What a return carries that is not the work under judgement: the author's own
 #: payoff forecast, sealed separately (C1), and its propensity, which the request's
 #: PROPENSITY block renders once (P8).
@@ -117,113 +96,19 @@ def judged_outputs(outputs: Any) -> Any:
 def judge_view(payload: dict[str, Any]) -> dict[str, Any]:
     """An event payload as a judge reads it.
 
-    Guarantees no key in ``IDENTITY_FIELDS`` appears at the top level or inside a
-    frozen contract, that judged outputs lose ``UNJUDGED_OUTPUT_FIELDS``, and that
-    the payload's own ``propensity`` is left to the PROPENSITY block. Everything
-    else is the event as emitted.
+    Guarantees judged outputs lose ``UNJUDGED_OUTPUT_FIELDS`` and the payload's own
+    ``propensity`` is left to the PROPENSITY block. Everything else is the event as
+    emitted: a judge should "simply look at it like a machine: input, output"
+    (essay II.I.b), and no event payload names its author.
     """
     out: dict[str, Any] = {}
     for key, value in payload.items():
-        if key in IDENTITY_FIELDS or key == "propensity":
+        if key == "propensity":
             continue
-        if key in ("contract", "grounded_contract") and isinstance(value, dict):
-            value = {k: (judged_outputs(v) if k == "producer_outputs" else v)
-                     for k, v in value.items() if k not in IDENTITY_FIELDS}
-        elif key in ("outputs", "producer_outputs"):
+        if key in ("outputs", "producer_outputs"):
             value = judged_outputs(value)
         out[key] = value
     return out
-
-
-def _grounded_review(payload: Any) -> dict[str, Any] | None:
-    """The frozen facts a final grounded finding rests on, for the judge above it.
-
-    Guarantees the reviewer reads every row the finding cited, the norms and
-    horizon frozen with the contract, and the commission's own evidence-time
-    snapshot — not a fresh charter, a fresh world block or a fresh reading of
-    when the evidence was taken. Uncited rows are context and are bounded; the
-    number dropped is stated, so a short list is visibly short rather than
-    absent. Nothing here scores the finding or repairs it.
-    """
-    finding = payload.get("realized_finding")
-    contract = payload.get("grounded_contract")
-    if not isinstance(finding, dict) or not isinstance(contract, dict):
-        return None
-    supplied = payload.get("grounded_evidence")
-    rows = [row for row in supplied if isinstance(row, dict)] if isinstance(supplied, list) else []
-    cited = {ref for ref in finding.get("evidence", []) if isinstance(ref, str)}
-    shown = ([row for row in rows if row.get("ref") in cited]
-             + [row for row in rows if row.get("ref") not in cited][:GROUNDED_REVIEW_CONTEXT])
-    return {
-        "finding": finding,
-        "frozen_norms": contract.get("norms", []),
-        "producer_claim": judged_outputs(contract.get("producer_outputs", {})),
-        "price_constraints": contract.get("criteria", []),
-        "observation_contract": {key: contract.get(key) for key in
-                                 ("handle", "opened_tick", "due_tick",
-                                  "close_tick", "charter_edition")},
-        "evidence_snapshot": _evidence_snapshot(payload.get("grounded_evidence_snapshot")),
-        "evidence": shown,
-        "evidence_supplied": len(rows),
-        "evidence_omitted": len(rows) - len(shown),
-    }
-
-
-def _evidence_snapshot(snapshot: Any) -> dict[str, Any]:
-    """Copy the commission's frozen evidence-time metadata, or say it is unknown.
-
-    Guarantees every field is the one the commission carried and none is filled
-    in from the runtime's current tick, cursor or clock: a commission emitted
-    before this metadata existed reports each field as null, which is what a
-    judge needs in order to treat the reading time as unknown rather than as now.
-    """
-    source = snapshot if isinstance(snapshot, dict) else {}
-    return {key: source.get(key) for key in SNAPSHOT_FIELDS}
-
-
-def _citable_evidence_schema(schema: dict[str, Any], evidence: Any) -> dict[str, Any]:
-    """Bind a grounded finding's evidence field to the refs its commission supplied.
-
-    Guarantees the answer contract names every reference this finding may cite and
-    nothing else, by the same rule settlement checks the citations against: the
-    ref of each supplied evidence row, in the order supplied. A commission that
-    supplied no evidence admits the empty list alone.
-
-    The field was an array of any string, so a judge with a real receipt beside a
-    claim and a contract had no way to tell which of them was a reference, and one
-    invented string refused an otherwise sound finding. Nothing here interprets
-    the evidence, scores it, or repairs a citation after the fact.
-
-    Guarantees the contract narrows which strings are references and nothing else
-    about the answer: a citation repeated is as valid as it was before, because
-    settlement drops the repeat and reads the same set. No length bound is stated
-    where there is anything to cite.
-    """
-    refs = [row["ref"] for row in evidence
-            if isinstance(row, dict) and isinstance(row.get("ref"), str)
-            ] if isinstance(evidence, list) else []
-    refs = list(dict.fromkeys(refs))
-    realized = schema["properties"]["realized_consequence"]
-    # With nothing supplied the only valid answer is the empty list, and that is
-    # said with a length of zero rather than an empty set of allowed strings,
-    # which reads as a field whose every value is wrong.
-    evidence_field: dict[str, Any] = (
-        {"type": "array", "items": {"type": "string", "enum": refs}} if refs
-        else {"type": "array", "items": {"type": "string"}, "maxItems": 0}
-    )
-    properties = {
-        **realized["properties"],
-        "evidence": {
-            **evidence_field,
-            "description": (
-                "The references above, copied exactly; nothing else is one. Name the "
-                "claim, the norms you applied and what the evidence shows in reason."
-            ),
-        },
-    }
-    return {**schema, "properties": {**schema["properties"],
-                                     "realized_consequence": {**realized,
-                                                              "properties": properties}}}
 
 
 class Runtime(
@@ -293,13 +178,6 @@ class Runtime(
         if ev is None:
             return universe
         excluded = self._subject_authors(kind, ev)
-        if self._is_final_grounded_commission(ev):
-            excluded |= set(ev.payload.get("excluded_evaluators", ()))
-            # This event is a kernel commission for a final independent evaluator,
-            # not a new opportunity for producers to answer and recursively create
-            # more producer contracts from the act of judging one.
-            universe = [a for a in universe if a == NOOP or (
-                a in self.assemblies and "Verdict" in self.assemblies[a].spec.emits)]
         return [a for a in universe
                 if a == NOOP or a not in excluded
                 or not set(assembly_rewards(self.assemblies[a].spec).values())
@@ -479,7 +357,6 @@ class Runtime(
         # the fills, treasury and releases above already did.
 
         self._settle_due_forecasts()
-        self._settle_due_grounded()
         self._censor_stale_judgements()
         self.stats.timeouts += len(self.queue.expire(self.clock.now_ns))
         self._deliver_returns()
@@ -968,20 +845,6 @@ class Runtime(
             "unread_outcomes": self.outcomes.unread(sample.chosen),
             **self._action_policy_input(sample.chosen),  # private
         }
-        grounded_contract = None
-        binding = self.return_bindings.get(handle)
-        admissible_channels = (
-            set(binding["channels"].values())
-            if binding is not None else {self.queue.get(handle).channel}
-        )
-        if (
-            sample.chosen != NOOP
-            and getattr(self.ev, "producer_feedback", "verdict") == "realized"
-            and CH_VERDICT in admissible_channels
-        ):
-            # Freeze the world-facing basis before the model call, tool execution,
-            # registrations or orders can create the evidence later used to assess it.
-            grounded_contract = freeze_contract(self, handle, sample.chosen, {})
         if sample.chosen == NOOP:
             self.stats.noops += 1
             ret = Return(handle, {"action": "noop"}, 0, "ok")
@@ -1081,19 +944,6 @@ class Runtime(
         self.window.noop_returns += int(noop)
         self.window.revision_returns += int(revision)
         self.window.revision_handles.discard(handle)
-        if grounded_contract is not None and self.queue.get(handle).channel == CH_VERDICT:
-            self.grounded_pending[handle] = grounded_contract.with_outputs(
-                public_return(ret.outputs), subject_kind=emitted)
-            self.ledger.append({
-                "kind": "consequence.contract",
-                "handle": handle,
-                "opened_tick": self.grounded_pending[handle].opened_tick,
-                "due_tick": self.grounded_pending[handle].due_tick,
-                "close_tick": self.grounded_pending[handle].close_tick,
-                "charter_edition": self.grounded_pending[handle].charter_edition,
-                "predicate_versions": list(self.grounded_pending[handle].predicate_versions),
-                "ts": self.clock.now_ns,
-            })
         if self.queue.get(handle).channel == CH_EXPOSURE:
             self.pending_exposure[handle] = self.ticks_consumed
         else:
@@ -1221,8 +1071,7 @@ class Runtime(
             },
             "world": self._world_block(),
             "your_state": self.working_state.render(sample.chosen),
-            "unread_outcomes": ({} if payload.get("grounded_consequence") else
-                                self.outcomes.unread(sample.chosen)),
+            "unread_outcomes": self.outcomes.unread(sample.chosen),
             **self._action_policy_input(sample.chosen),  # private
             # Evaluation is a commission, not an obligation (§6.B): a subject, a
             # scope, an evidence horizon and a budget, which may be declined.
@@ -1234,101 +1083,38 @@ class Runtime(
             ),
         }
         generic = ev.kind is not EventKind.PRODUCER_RETURN
-        grounded = bool(payload.get("grounded_consequence"))
-        if not grounded:
-            # A judge looks at the work like a machine — request, answer, acts,
-            # propensity — and never at the whole world the producer was shown
-            # (essay II.I.b, after Yan 2026). It keeps its own operating access,
-            # its private state and inbox, and the charter it judges against.
-            inputs["actor_context"] = self._operating_context(sample.chosen, inputs.pop("world"))
-            producer_inputs = inputs["producer"].get("inputs")
-            if isinstance(producer_inputs, dict) and isinstance(
-                    producer_inputs.get("payload"), dict):
-                inputs["producer"]["inputs"] = {**producer_inputs, "payload": {
-                    k: v for k, v in producer_inputs["payload"].items()
-                    if k != "since_you_last_woke"}}
-            inputs["producer"]["executed_operations"] = payload.get("executed_operations", [])
-        if grounded:
-            frozen = payload.get("contract")
-            frozen = frozen if isinstance(frozen, dict) else {}
-            # The commission's normative basis and observations are its frozen
-            # record, not a fresh market snapshot or the current pricing cards.
-            inputs["actor_context"] = self._operating_context(sample.chosen, inputs["world"])
-            for key in ("charter", "predicates", "forecast_example", "world",
-                        "your_state", "unread_outcomes"):
-                inputs.pop(key, None)
-            inputs["commission"].pop("horizon_events", None)
-            inputs["commission"]["horizon_ticks"] = (
-                frozen.get("due_tick", 0) - frozen.get("opened_tick", 0))
-            inputs["realized_consequence"] = {
-                "frozen_norms": frozen.get("norms", []),
-                "producer_claim": judged_outputs(
-                    frozen.get("producer_outputs", payload.get("outputs", {}))),
-                "price_constraints": frozen.get("criteria", []),
-                "observation_contract": {
-                    key: frozen.get(key)
-                    for key in ("handle", "opened_tick", "due_tick",
-                                "close_tick", "charter_edition", "predicate_versions")
-                },
-                "observation_contract_ticks": (
-                    "due_tick is when this observation first matures; close_tick is when "
-                    "this assessment times out, not a deadline the producer's claim named"
-                ),
-                "evidence_snapshot": _evidence_snapshot(payload.get("evidence_snapshot")),
-                "evidence": payload.get("evidence", []),
-                "answer_with": (
-                    "realized_consequence: {status: supported|contrary|unknown, "
-                    "score: number only when supported, evidence: [references], reason}"
-                ),
-            }
+        # A judge looks at the work like a machine — request, answer, acts,
+        # propensity — and never at the whole world the producer was shown
+        # (essay II.I.b, after Yan 2026). It keeps its own operating access,
+        # its private state and inbox, and the charter it judges against.
+        inputs["actor_context"] = self._operating_context(sample.chosen, inputs.pop("world"))
+        producer_inputs = inputs["producer"].get("inputs")
+        if isinstance(producer_inputs, dict) and isinstance(
+                producer_inputs.get("payload"), dict):
+            inputs["producer"]["inputs"] = {**producer_inputs, "payload": {
+                k: v for k, v in producer_inputs["payload"].items()
+                if k != "since_you_last_woke"}}
+        inputs["producer"]["executed_operations"] = payload.get("executed_operations", [])
         if generic:
             inputs["event"] = {"kind": str(ev.kind), "payload": judge_view(payload)}
             inputs["subject_handle"] = about
-        schema = evaluator_answer_schema(
-            self._forecast_schema(), self._register_schema(), include_realized=grounded)
-        if grounded:
-            schema = _citable_evidence_schema(schema, payload.get("evidence", []))
-        if grounded:
-            instruction = (
-                "Evaluate independently the observed effect of producer_claim under the "
-                "complete frozen_norms. In reason, name the frozen norm or norms you applied, "
-                "the claim or effect, and the cited evidence; if frozen_norms is empty, do not "
-                "reconstruct it from the current charter. price_constraints are role- and "
-                "window-level pricing measurements, not the sole criterion for this decision. "
-                "Uptake, profit, execution, and other measurements are evidence only when "
-                "relevant to the frozen claim and norms; none is mandatory. A true predicate "
-                "or execution receipt is evidence, not automatic usefulness. Use contrary "
-                "only when cited observed evidence falsifies an express proposition or accepted "
-                "promise in producer_claim, or contradicts an applicable frozen norm or "
-                "criterion. Name that exact claim, promise, norm, or criterion. A direct "
-                "observed violation of a frozen norm does not require producer_claim to repeat "
-                "that norm. Zero earnings, zero net, or compute cost alone is not "
-                "contrary unless producer_claim expressly promised a financial result or an "
-                "applicable frozen criterion measures it. When the evidence merely fails to "
-                "show usefulness, answer unknown. Do not return payoff or forecasts because "
-                "this return's consequence is already fixed. Explain what "
-                "the observed consequences establish about this undertaking, what they "
-                "contradict, and what remains unresolved. Also give verdict as your "
-                "normative quality judgment so the ordinary recursive evaluation path can "
-                "judge your interpretation."
-            )
-        else:
-            instruction = (
-                ("Evaluate, on commission, the public return addressed by about_handle. The "
-                 "input's subject_handle is the default when present. Give verdict = its quality "
-                 if generic else
-                 "Evaluate, on commission, a producer return. Give verdict = its quality ") +
-                "against the charter (0 to 1). Judge it against what it committed to — a claim, "
-                "a counterfactual, an observation rule, a resource decision, an accepted promise "
-                "— and if it committed to nothing this evidence can measure, answer status: "
-                "unmeasured with a reason instead: that is a complete answer and carries no "
-                "penalty. You may decline the commission with status: cannot and a reason; you "
-                "are then charged for this call alone. Optionally give "
-                "payoff = your probability that return_paid_off, the kernel's consequence "
-                "predicate, resolves true for the return, and up to "
-                f"{self.ev.max_forecasts_per_verdict} forecasts: for each, a predicate from the "
-                "list and q = your probability it happens within its horizon."
-            )
+        schema = evaluator_answer_schema(self._forecast_schema(), self._register_schema())
+        instruction = (
+            ("Evaluate, on commission, the public return addressed by about_handle. The "
+             "input's subject_handle is the default when present. Give verdict = its quality "
+             if generic else
+             "Evaluate, on commission, a producer return. Give verdict = its quality ") +
+            "against the charter (0 to 1). Judge it against what it committed to — a claim, "
+            "a counterfactual, an observation rule, a resource decision, an accepted promise "
+            "— and if it committed to nothing this evidence can measure, answer status: "
+            "unmeasured with a reason instead: that is a complete answer and carries no "
+            "penalty. You may decline the commission with status: cannot and a reason; you "
+            "are then charged for this call alone. Optionally give "
+            "payoff = your probability that return_paid_off, the kernel's consequence "
+            "predicate, resolves true for the return, and up to "
+            f"{self.ev.max_forecasts_per_verdict} forecasts: for each, a predicate from the "
+            "list and q = your probability it happens within its horizon."
+        )
         req = self._request(
             handle,
             instruction,
@@ -1343,11 +1129,6 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self._apply_registrations(handle, ret)
         self.handle_to_assembly[handle] = sample.chosen
-        if grounded:
-            self._complete_grounded_evaluation(
-                handle, sample.chosen, about, ret, payload.get("evidence", []),
-                payload.get("evidence_snapshot"))
-            return
         answered = str(ret.outputs.get("status", "")).strip().lower()
         reason = str(ret.outputs.get("reason", ""))[:500]
         if ret.status == "refused" or answered == "cannot":
@@ -1383,12 +1164,6 @@ class Runtime(
             self.stats.conformities += 1
             self.window.outcomes += 1
             return
-        if about in self.grounded_pending:
-            # A numeric provisional opinion makes this evaluator non-fresh even
-            # when the subject has no commitment the runtime can measure.
-            self.grounded_pending[about] = self.grounded_pending[about].with_initial(
-                judge_handle=handle, evaluator_id=sample.chosen, forecast_handles=(),
-                score=verdict)
         if self._judged_commitment(about, payload) is None:
             # Nothing was committed to, so there is nothing to be right or wrong
             # about. The commission is answered unmeasured: no standing moves and
@@ -1396,64 +1171,28 @@ class Runtime(
             self._settle_unmeasured(handle, CH_CONFORMITY, UNMEASURED_REASON_UNCOMMITTED)
             return
         about_decision = self.queue.get(about)
-        grounded_subject = (
-            getattr(self.ev, "producer_feedback", "verdict") == "realized"
-            and about_decision.channel == CH_VERDICT
-            and about in self.grounded_pending
-        )
-        pend = (self.pending.get(about) if grounded_subject else self.pending.pop(about, None))
+        pend = self.pending.pop(about, None)
         if about_decision.channel == CH_EXPOSURE:
             self._deliver_verdict_to_inbox(about, verdict, judge_handle=handle)
         if (
             pend is not None
             and about_decision.channel in (CH_VERDICT, CH_CONFORMITY)
-            and (
-                about_decision.status is SettleStatus.PENDING
-                or (grounded_subject and about_decision.status is SettleStatus.TIMED_OUT)
-            )
+            and about_decision.status is SettleStatus.PENDING
         ):
-            if not grounded_subject:
-                self._settle_priced(
-                    about,
-                    channel=about_decision.channel,
-                    score=verdict,
-                    definition_version=(DEF_VERDICT if about_decision.channel == CH_VERDICT
-                                        else DEF_CONFORMITY),
-                    sampling_ref=handle,
-                    cards="producer" if about_decision.channel == CH_VERDICT else "evaluator",
-                )
-                self.stats.verdicts += 1
+            self._settle_priced(
+                about,
+                channel=about_decision.channel,
+                score=verdict,
+                definition_version=(DEF_VERDICT if about_decision.channel == CH_VERDICT
+                                    else DEF_CONFORMITY),
+                sampling_ref=handle,
+                cards="producer" if about_decision.channel == CH_VERDICT else "evaluator",
+            )
+            self.stats.verdicts += 1
             self.stats.max_settlement_latency_events = max(
                 self.stats.max_settlement_latency_events, self.n - pend.opened_at_event
             )
             self._deliver_verdict_to_inbox(about, verdict, judge_handle=handle)
-            if grounded_subject:
-                forecasts = self._open_forecasts(
-                    handle, sample.chosen, about, ret.outputs.get("forecasts"))
-                opened = {f.handle: f for f in self.book.pending() if f.handle in forecasts}
-                claims = []
-                frozen_predicates = dict(self.grounded_pending[about].predicate_versions)
-                for forecast_handle in forecasts:
-                    forecast = opened[forecast_handle]
-                    predicate = self.predicates.get(forecast.predicate_id)
-                    version = predicate.version if predicate is not None else 1
-                    if frozen_predicates.get(forecast.predicate_id) != version:
-                        # The forecast remains the evaluator's ordinary public claim,
-                        # but a predicate born with or after this action cannot define
-                        # that action's own success retrospectively.
-                        continue
-                    claims.append({
-                        "handle": forecast.handle,
-                        "predicate": forecast.predicate_id,
-                        "predicate_version": version,
-                        "params": dict(forecast.params),
-                        "q": forecast.q,
-                        "made_at_event": forecast.made_at_event,
-                        "due_at_event": forecast.due_at_event,
-                    })
-                self.grounded_pending[about] = self.grounded_pending[about].with_initial(
-                    judge_handle=handle, evaluator_id=sample.chosen,
-                    forecast_handles=[claim["handle"] for claim in claims], forecasts=claims)
         forecast = None
         if payoff is not None:
             # None when the judged return's outcome was already fixed or determined:
@@ -1477,8 +1216,7 @@ class Runtime(
             # judged, so it is committed here under its own handle rather than
             # under a kernel forecast it never made.
             self._commit_verdict_without_payoff(handle, sample.chosen, about, verdict)
-        if not grounded_subject:
-            self._open_forecasts(handle, sample.chosen, about, ret.outputs.get("forecasts"))
+        self._open_forecasts(handle, sample.chosen, about, ret.outputs.get("forecasts"))
         self.pending[handle] = PendingJudgement(handle, CH_CONFORMITY, self.n,
                                                 opened_at_tick=self.ticks_consumed)
         self._emit(
@@ -1516,7 +1254,6 @@ class Runtime(
                 sampling_ref=None,
             )
             return
-        review = _grounded_review(payload)
         inputs = {
             "verdict": {
                 "verdict": payload.get("score") if recursive else payload.get("verdict"),
@@ -1531,20 +1268,11 @@ class Runtime(
         }
         inputs.update(self._action_policy_input(sample.chosen))  # private
         inputs["your_state"] = self.working_state.render(sample.chosen)
-        inputs["unread_outcomes"] = (self.outcomes.unread(sample.chosen)
-                                    if review is None else {})
+        inputs["unread_outcomes"] = self.outcomes.unread(sample.chosen)
         if "window" in payload:
             inputs["window"] = payload["window"]
         if recursive:
-            # The grounded record is given once, below.
-            inputs["meta_verdict"] = judge_view({key: value for key, value in payload.items()
-                                                 if key not in GROUNDED_FIELDS})
-        if review is not None:
-            # The judge answered under frozen norms; the current charter would grade
-            # it against a standard it was not answering to.
-            for key in ("charter", "your_state", "unread_outcomes"):
-                inputs.pop(key, None)
-            inputs["realized_consequence"] = review
+            inputs["meta_verdict"] = judge_view(payload)
         generic = ev.kind not in (EventKind.VERDICT, EventKind.META_VERDICT)
         if generic:
             inputs["event"] = {"kind": str(ev.kind), "payload": judge_view(payload)}
@@ -1562,28 +1290,15 @@ class Runtime(
             },
             "required": ["conformity"],
         }
-        grounded_prompt = (
-            "Assess the immediate meta verdict in meta_verdict, identified by "
-            "meta_verdict.by, for conformity using realized_consequence as its preserved "
-            "grounded record. Judge that meta verdict's score and rationale, not the "
-            "original finding as a new first-tier review. Do not reconstruct the norms "
-            "from the current charter."
-            if review is not None and recursive else
-            "Assess the final grounded judgement in realized_consequence: whether its "
-             "finding is what the cited evidence supports under the complete frozen_norms, "
-             "and whether those norms bear on producer_claim. evidence lists the cited rows "
-             "first and evidence_supplied says how many the judge was shown. A finding of "
-             "unknown is reviewable like any other; evidence_snapshot says when the facts "
-             "were read. Do not reconstruct the norms from the current charter."
-             if review is not None else
-             "Assess the public return addressed by about_handle for conformity with the charter. "
-             "The input's subject_handle is the default when present." if generic else
-             "Assess the released representative verdict for conformity with the charter, "
-             "using its window as context."
+        prompt = (
+            "Assess the public return addressed by about_handle for conformity with the charter. "
+            "The input's subject_handle is the default when present." if generic else
+            "Assess the released representative verdict for conformity with the charter, "
+            "using its window as context."
         )
         req = self._request(
             handle,
-            grounded_prompt,
+            prompt,
             inputs,
             schema,
             deadline,
@@ -1660,9 +1375,6 @@ class Runtime(
                     "evaluator_handle": judge_handle,
                     "propensity": self._public_propensity(handle),
                     "rationale": str(ret.outputs.get("rationale", ""))[:2000],
-                    # The frozen record travels with the judgement, so a higher tier
-                    # reads the same facts rather than an opinion about them.
-                    **{key: payload[key] for key in GROUNDED_FIELDS if key in payload},
                     **({"about_handle": handle} if emitted != "MetaVerdict" else {}),
                 },
             )

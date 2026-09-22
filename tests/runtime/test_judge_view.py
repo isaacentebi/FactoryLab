@@ -11,11 +11,8 @@ from types import SimpleNamespace
 from factorylab.cortex.request import Return
 from factorylab.kernel.events import Event, EventKind
 from factorylab.runtime.shared import CH_CONFORMITY, CH_EXPOSURE, CH_FAST
-from tests.runtime.test_grounded_commission_scope import CaptureFinal
-from tests.runtime.test_grounded_feedback import _open_contract, _runtime
 from tests.runtime.test_loop import (
     _consequence_decision,
-    _consequence_judge,
     _consequence_runtime,
 )
 
@@ -69,24 +66,6 @@ def test_first_tier_judge_is_not_told_the_author_role_or_its_payoff(monkeypatch)
     assert "your_consequence_standing" not in req.inputs
     assert "your_action_policy" not in req.inputs
     assert "antagonist-a" not in json.dumps(producer)
-
-
-def test_final_commission_names_no_producer_or_evaluator(monkeypatch):
-    provider = CaptureFinal()
-    rt = _runtime(provider=provider)
-    _, contract = _open_contract(rt)
-    rt.ticks_consumed = contract.due_tick
-    rt._settle_due_grounded()
-    commission = rt.internal[-1]
-    # The ledger and the event keep the exclusions routing needs.
-    assert "seed-decider" in commission.payload["excluded_evaluators"]
-    _consequence_judge(rt, commission, "eval-b")
-    grounded = provider.final_inputs["realized_consequence"]
-    # C2: neither the producer's name nor who judged it reaches the judge.
-    assert "producer_id" not in grounded["observation_contract"]
-    for field in ("producer_id", "excluded_evaluators", "initial_evaluators",
-                  "final_evaluators"):
-        assert field not in json.dumps(provider.final_inputs)
 
 
 def test_meta_judge_reads_the_machine_view_not_the_world(monkeypatch):

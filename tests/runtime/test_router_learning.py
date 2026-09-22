@@ -103,8 +103,7 @@ def test_an_unscored_arm_without_its_own_record_is_neutral_not_its_siblings_mean
 # Every score definition a router's seat round can settle with a score, and what a seat
 # that delivered nothing scores on it.
 _ZERO = {
-    "verdict-v1": 0.5, "realized-consequence-v2": 0.5,
-    "realized-consequence-v2-provisional": 0.5, "opportunity-cost-v1": 0.5,
+    "verdict-v1": 0.5, "opportunity-cost-v1": 0.5,
     "conformity-v1": 0.5, "policy-promise-brier-v2": 0.5,
     "brier-v1": 0.75, "forecast-mean-v1": 0.75, "meta-consequence-v1": 0.75,
     "fast-v1": 0.75, "exposure-v1": 0.0,
@@ -135,7 +134,7 @@ def test_the_table_names_every_scored_definition_the_runtime_settles_with():
 
     scored = {shared.DEF_VERDICT, shared.DEF_CONFORMITY, shared.DEF_FAST,
               shared.DEF_EXPOSURE, shared.DEF_META_CONSEQUENCE,
-              grounded.GROUNDED_DEFINITION, grounded.OPPORTUNITY_DEFINITION}
+              grounded.OPPORTUNITY_DEFINITION}
     assert scored <= set(ZERO_CONSEQUENCE) and set(ZERO_CONSEQUENCE) == set(_ZERO)
 
 

@@ -78,7 +78,6 @@ def _record_types() -> dict[str, type]:
     from factorylab.runtime.cascade import CascadeGate
     from factorylab.runtime.feedback import PendingJudgement
     from factorylab.runtime.governance import Retirement, WorkAssemblySpec
-    from factorylab.runtime.grounded import GroundedContract
     from factorylab.runtime.pricing import MeasureWindow
     from factorylab.runtime.routing import PopulationEvent
     from factorylab.runtime.summary import RunStats
@@ -112,7 +111,6 @@ def _record_types() -> dict[str, type]:
         SettleStatus, Contract, PriceSpec, ResourceBounds, DripSchedule,
         ReleaseSchedule,
         Reservation, Retirement, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast,
-        GroundedContract,
         Lot,
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
         AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position,
@@ -229,14 +227,16 @@ def decode(value: Any) -> Any:
 
 
 # Records of deleted mechanisms that older checkpoints still carry. They decode to
-# None and are dropped where they sit (evaluations U1): the fidelity
-# objection and its adjudication.
-_RETIRED_RECORDS = frozenset({"FidelityObjection", "Adjudication"})
+# None and are dropped where they sit: the fidelity objection and its adjudication
+# (evaluations U1), and the grounded final judge's frozen contract (ruling R1).
+_RETIRED_RECORDS = frozenset({"FidelityObjection", "Adjudication", "GroundedContract"})
 
 # Runtime fields of deleted mechanisms that older checkpoints still carry: not restored.
 _RETIRED_RUNTIME = frozenset({
     # The fidelity adjudication queue (evaluations U1).
     "open_adjudications",
+    # The grounded final judge's open contracts and finality (ruling R1).
+    "grounded_pending", "grounded_closed",
 })
 
 # Fields of deleted mechanisms that older checkpoints still carry: read and ignored.
@@ -621,8 +621,6 @@ _RUNTIME_FIELDS = (
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {
     "meta_waiting_since": "_meta_waiting_since",
-    "grounded_pending": "_grounded_pending",
-    "grounded_closed": "_grounded_closed",
 }
 # The settlement receipt books, by the path from the runtime to each. A receipt's
 # id is its content address, so a book is saved as its receipts in record order
@@ -747,12 +745,6 @@ def runtime_state(rt) -> Checkpoint:
     """Retain learning, FIFO lots, private memory and exact source cursors in one checkpoint."""
     rt._ensure_connector_tool()
     runtime = {name: getattr(rt, name) for name in _RUNTIME_FIELDS}
-    # The experimental delayed line retains its frozen contracts and finality.
-    # Reference worlds keep their previous checkpoint shape; older checkpoints
-    # restore with the mixin's empty defaults.
-    if getattr(rt.ev, "producer_feedback", "verdict") == "realized":
-        runtime["grounded_pending"] = rt.grounded_pending
-        runtime["grounded_closed"] = rt.grounded_closed
     runtime["amendment_feedback"] = getattr(rt, "amendment_feedback", None)
     receipts = {path: list(_resolve(rt, path)) for path in _RECEIPT_BOOKS}
     components = {

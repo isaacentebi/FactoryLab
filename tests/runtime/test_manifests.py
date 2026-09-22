@@ -87,28 +87,31 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     """R8 / versioning S1: no key leaves the hash at its default, so the pinned identity
     of the scripted world moved when the shims went; it is a new v0."""
     scripted = load_manifest("scripted")
-    assert scripted.evaluation.grounded_horizon_ticks == 10
-    assert '"grounded_horizon_ticks":10' in scripted.canonical_json()
+    assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "de2de140a637cb9e7275eebccea678d174b264e6bff18a5ed661247ccc590c1c"
+        "bbb27cfd3c4894416e2bd5ef2700903df3d9fe021574ba8ecec1764b013258ce"
     )
 
     implicit = manifest_from_dict(_base())
     explicit_raw = _base()
-    explicit_raw["evaluation"] = {"grounded_horizon_ticks": 10}
+    explicit_raw["evaluation"] = {"forecast_horizon_events": 10}
     explicit = manifest_from_dict(explicit_raw)
     assert explicit.manifest_hash() == implicit.manifest_hash()
 
     changed_raw = _base()
-    changed_raw["evaluation"] = {"grounded_horizon_ticks": 11}
+    changed_raw["evaluation"] = {"forecast_horizon_events": 11}
     assert manifest_from_dict(changed_raw).manifest_hash() != implicit.manifest_hash()
 
 
-@pytest.mark.parametrize("value", [0, -1, True, 1.5, "10", None])
-def test_grounded_horizon_requires_a_positive_exact_integer(value):
+@pytest.mark.parametrize("key,value", [("producer_feedback", "realized"),
+                                       ("producer_feedback", "verdict"),
+                                       ("grounded_horizon_ticks", 10)])
+def test_the_deleted_realized_feedback_keys_are_refused_not_ignored(key, value):
+    """Ruling R1 deleted the realized feedback mode and the grounded final judge; R8
+    refuses a manifest that names physics this kernel does not run."""
     raw = _base()
-    raw["evaluation"] = {"grounded_horizon_ticks": value}
-    with pytest.raises(ValueError, match="grounded_horizon_ticks"):
+    raw["evaluation"] = {key: value}
+    with pytest.raises(ValueError, match=f"evaluation.{key} was removed"):
         manifest_from_dict(raw)
 
 
