@@ -924,8 +924,15 @@ def _open_snapshot(path: Path):
     # Match the public genesis to an installed manifest, never a summary or diary.
     with path.open("rb") as stream:
         header = json.loads(stream.readline())
-    for manifest_path in sorted(WORLDS_DIR.glob("*.toml")):
-        manifest = load_manifest(str(manifest_path))
+    # Past worlds are archived in worlds/history (R8: history is forensic), and a
+    # ledger born from one still finds it there. A manifest this kernel no longer
+    # loads hashes nothing it could compare, so it is passed over, not fatal.
+    paths = [*WORLDS_DIR.glob("*.toml"), *(WORLDS_DIR / "history").glob("*.toml")]
+    for manifest_path in sorted(paths):
+        try:
+            manifest = load_manifest(str(manifest_path))
+        except (ValueError, TypeError, KeyError):
+            continue
         genesis = hashlib.sha256(canonical(
             {"manifest": json.loads(manifest.canonical_json())},
         )).hexdigest()

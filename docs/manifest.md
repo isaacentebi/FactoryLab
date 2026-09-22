@@ -634,7 +634,7 @@ The draft survey accepts any number of cards returned within the existing model
 output budget, with no card-count cap. It withholds existing cards from both
 proposals and ballots, preflights each candidate through the pricing measurement,
 includes `answers_for` and typed windows in the exported TOML, and records the
-surveyed roster hash. `worlds/edition1-example.toml` is only a schema migration of
+surveyed roster hash. `worlds/history/edition1-example.toml` is only a schema migration of
 the historical example. The experimenter must re-draft edition 1 with the actual
 launch roster before launch; the drafting script does not ratify a new edition
 or run the paid survey.

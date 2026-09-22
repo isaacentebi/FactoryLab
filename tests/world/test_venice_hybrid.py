@@ -262,7 +262,7 @@ def test_the_keys_are_hash_neutral_at_their_defaults():
         for key in HYBRID_VENICE_KEYS:
             assert (key in treasury) is hybrid_world
         seen += 1
-    assert seen > 10
+    assert seen >= 9
     assert all(getattr(TreasurySpec(), key) is None for key in HYBRID_VENICE_KEYS)
 
 
