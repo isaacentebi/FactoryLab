@@ -1203,6 +1203,19 @@ class Runtime(
             }
         generic = ev.kind is not EventKind.PRODUCER_RETURN
         grounded = bool(payload.get("grounded_consequence"))
+        if not grounded:
+            # A judge looks at the work like a machine — request, answer, acts,
+            # propensity — and never at the whole world the producer was shown
+            # (essay II.I.b, after Yan 2026). It keeps its own operating access,
+            # its private state and inbox, and the charter it judges against.
+            inputs["actor_context"] = self._operating_context(sample.chosen, inputs.pop("world"))
+            producer_inputs = inputs["producer"].get("inputs")
+            if isinstance(producer_inputs, dict) and isinstance(
+                    producer_inputs.get("payload"), dict):
+                inputs["producer"]["inputs"] = {**producer_inputs, "payload": {
+                    k: v for k, v in producer_inputs["payload"].items()
+                    if k != "since_you_last_woke"}}
+            inputs["producer"]["executed_operations"] = payload.get("executed_operations", [])
         if grounded:
             frozen = payload.get("contract")
             frozen = frozen if isinstance(frozen, dict) else {}

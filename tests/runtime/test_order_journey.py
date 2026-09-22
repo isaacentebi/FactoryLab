@@ -158,3 +158,22 @@ def test_continuation_turn_labelled_order_still_dispatches_its_cancel():
     assert event.payload["status"] == "ok"
     assert all(e.kind != EventKind.PRODUCER_RETURN or e.payload["status"] == "ok"
                for e in runtime.internal)
+
+
+def test_judge_sees_the_work_and_its_acts_not_the_producers_world():
+    """Essay II.I.b: a judge sees request, answer, acts and propensity — input and output."""
+    from tests.runtime.test_loop import _consequence_judge
+
+    provider = Scripted(
+        {"action": "order", "tool_calls": [LIMIT]},
+        {"action": "order", "rationale": "BTC sell resting"},
+        {"verdict": 0.6, "rationale": "the report matches the resting order"},
+    )
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    _, event = _consequence_produce(runtime)
+    _consequence_judge(runtime, event, "eval-a")
+    prompt = "\n".join(str(m.get("content", "")) for m in provider.requests[-1].messages)
+    assert "WORLD UPDATE" not in prompt  # the producer's world is not the judge's
+    assert "OPERATING ACCESS" in prompt  # its own tools remain
+    assert '"executed_operations":[{' in prompt and '"status":"resting"' in prompt
+    assert "since_you_last_woke" not in prompt

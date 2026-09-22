@@ -363,7 +363,7 @@ def test_oversize_intermediate_state_is_refused_without_changing_the_head(monkey
 
     assert ret.status == "ok" and len(prompts) == 2
     assert rt.working_state.head(seat) == before_head
-    assert '"keep": "baseline"' in prompts[1]
+    assert '"keep":"baseline"' in prompts[1]
     assert "Z" * 1000 not in prompts[1]
     refused = rows(rt, "state.refused")
     assert len(refused) == 1 and str(HARD_STATE_BYTES) in refused[0]["reason"]

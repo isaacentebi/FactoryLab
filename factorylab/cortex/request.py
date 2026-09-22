@@ -377,6 +377,10 @@ Do not invent a condition merely to justify a pause.
 Use monetary quantities with an explicit asset, custody account and unit.
 Keep resource facts separate from learning scores."""
 
+#: Every moving block is rendered as compact JSON, like the stable prefix: the
+#: indentation carried no information and cost about an eighth of every prompt.
+_COMPACT = (",", ":")
+
 #: What a slot says when the source it would be rendered from is missing. It is a
 #: string and never a number, so no reader can mistake an absent fact for a zero.
 UNAVAILABLE = "unavailable"
@@ -668,7 +672,7 @@ class Request:
         if not isinstance(self.inputs.get("world"), dict):
             return ""
         return (f"{WORLD_UPDATE_HEADER}"
-                f"{json.dumps(self.world_update_block(), sort_keys=True, indent=2)}\n\n")
+                f"{json.dumps(self.world_update_block(), sort_keys=True, separators=_COMPACT)}\n\n")
 
     def _coalesced_update(self) -> Any:
         """The fold of everything that happened while this seat slept, or None."""
@@ -679,7 +683,8 @@ class Request:
 
     def seat_text(self) -> str:
         """The rendered ``YOU`` block; empty only when there is no request to describe."""
-        return f"{YOU_HEADER}{json.dumps(self.seat_block(), sort_keys=True, indent=2)}\n\n"
+        body = json.dumps(self.seat_block(), sort_keys=True, separators=_COMPACT)
+        return f"{YOU_HEADER}{body}\n\n"
 
     def stable_prefix(self) -> str:
         """The leading text every request in this world renders identically.
@@ -728,7 +733,7 @@ class Request:
                       "payload": {k: v for k, v in payload.items() if k != COALESCED_UPDATE}}
         blocks = [
             ("request", f"REQUEST\n{self.description}"),
-            ("inputs", f"INPUTS\n{json.dumps(inputs, sort_keys=True, indent=2)}"),
+            ("inputs", f"INPUTS\n{json.dumps(inputs, sort_keys=True, separators=_COMPACT)}"),
         ]
         if self.propensity is not None:
             blocks.append((
@@ -736,7 +741,7 @@ class Request:
                 "PROPENSITY\nThe distribution the deciding agent says it drew from, and the "
                 f"action it took ({self.propensity_chosen}). The roads it did not take are "
                 "here so you can price them.\n"
-                f"{json.dumps(self.propensity, sort_keys=True, indent=2)}",
+                f"{json.dumps(self.propensity, sort_keys=True, separators=_COMPACT)}",
             ))
         shapes = self.outcome_schema.get("anyOf", (self.outcome_schema,))
         tool_call_limits = [
@@ -756,7 +761,8 @@ class Request:
         )
         blocks.extend([
             ("outcome_schema",
-             f"OUTCOME SCHEMA\n{json.dumps(self.outcome_schema, sort_keys=True, indent=2)}"
+             "OUTCOME SCHEMA\n"
+             f"{json.dumps(self.outcome_schema, sort_keys=True, separators=_COMPACT)}"
              f"{tool_call_instruction}"),
             # §8's outcome-schema text, once per request and immediately after the
             # schema it is about: what an execution claim must distinguish, what a
