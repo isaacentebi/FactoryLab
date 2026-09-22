@@ -676,13 +676,21 @@ class Runtime(
         return schemas[0] if len(schemas) == 1 else {"anyOf": schemas}
 
     def _hindsight_reason(self, handle: str, about: str) -> str | None:
-        """Name why a chosen target cannot carry a payoff forecast, or None if it can.
+        """Name why a chosen target cannot carry a prediction, or None if it can.
 
-        A forecast precedes its outcome. The router's subject is not chosen, but a
+        A prediction precedes its outcome. The router's subject is not chosen, but a
         return that names an older target instead may not name one whose
         consequence is already fixed, one at or past its backstop, or one whose
-        backstop falls before this judgement's own decision deadline.
+        backstop falls before this judgement's own decision deadline. A judgement of
+        an evaluator decision predicts that decision's consequence score (ruling R1),
+        so it may not name one whose score is already known; its economic account
+        says nothing about it.
         """
+        target = self.return_events.get(about)
+        if target is not None and self._judged_tier(target, self.pending.get(about)):
+            if about in self.consequence_scores:
+                return "judgement needs a chosen judgement whose consequence is still open"
+            return None
         try:
             account = self.consequences.table.account(about)
         except KeyError:
@@ -1125,9 +1133,14 @@ class Runtime(
         payload = _to_plain(target.payload)
         about_decision = self.queue.get(about)
         pend = self.pending.get(about)
+        # A tier grades the tier below it (II.III.b): a verdict on a producer return is
+        # tier one, and one on an evaluator decision sits one tier above that decision,
+        # end to end: it grades it, it is published at that tier, and the world scores
+        # it against that decision's consequence, never against a world outcome of a
+        # judgement.
+        tier = self._judged_tier(target, pend) + 1
         if pend is not None and pend.evaluation:
-            # A verdict on an evaluator decision is its grade from the tier above.
-            self._grade_evaluation(about, verdict, by=handle, tier=pend.tier + 1)
+            self._grade_evaluation(about, verdict, by=handle, tier=tier)
         elif (pend is not None and about_decision.channel == CH_VERDICT
               and about_decision.status is SettleStatus.PENDING):
             # The producer's reward: the mean of its judges' verdicts, settled once
@@ -1140,18 +1153,35 @@ class Runtime(
         # The verdict is also a prediction about the return's measured outcome: the
         # judge's decision waits on that and on the tier above (ruling R1).
         self._open_evaluation(handle, about=about, q=verdict, evaluator_id=sample.chosen,
-                              tier=1)
+                              tier=tier)
         self._emit(
             EventKind.VERDICT,
             {
                 "about_handle": about,
                 "evaluator_handle": handle,
                 "verdict": verdict,
+                **({"tier": tier} if tier > 1 else {}),
                 "rationale": str(ret.outputs.get("rationale", ""))[:2000],
                 "producer_outputs": payload.get("outputs", payload),
                 "propensity": self._public_propensity(handle),
             },
         )
+
+    def _judged_tier(self, target: Event, pend: PendingJudgement | None) -> int:
+        """The tier of the decision a judgement is about: 0 for a producing return.
+
+        Guarantees an evaluator decision's own tier while it waits on its signals,
+        and otherwise the tier its published judgement states (a Verdict is tier one
+        unless it says otherwise; a conformity-shaped judgement always says).
+        """
+        if pend is not None and pend.evaluation:
+            return pend.tier
+        kind = str(target.kind)
+        if target.kind is EventKind.VERDICT:
+            return int(target.payload.get("tier", 1))
+        if target.kind is EventKind.META_VERDICT or self._kind_rewards().get(kind) == "conformity":
+            return int(target.payload.get("tier", 2))
+        return 0
 
     def _meta_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
                    *, returned: Return | None = None) -> None:
@@ -1160,7 +1190,10 @@ class Runtime(
         recursive = (ev.kind is EventKind.META_VERDICT
                      or self._kind_rewards().get(str(ev.kind)) == "conformity")
         about = self._event_subject(ev)
-        tier = payload["tier"] + 1 if recursive else 2
+        # A Verdict published above tier one (a judge that graded an evaluator decision)
+        # states its tier; the meta reading it sits one above.
+        tier = (payload["tier"] + 1 if recursive
+                else payload.get("tier", 1) + 1 if ev.kind is EventKind.VERDICT else 2)
         channel = self.queue.get(handle).channel
         definition = DEF_FAST if channel == CH_FAST else DEF_CONFORMITY
         if sample.chosen == NOOP:

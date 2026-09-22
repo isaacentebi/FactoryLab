@@ -63,13 +63,14 @@ def event_tier(event: Event) -> int:
     """Only judgement events enter the cascade; producer judgements occupy tier one.
 
     A judgement of a producer return is the seed ``Verdict`` and occupies tier
-    one. Every higher arrival — the seed ``MetaVerdict`` or a population kind
+    one; a ``Verdict`` on an evaluator decision states the tier it sits at. Every
+    higher arrival — the seed ``MetaVerdict`` or a population kind
     whose declared reward shape is ``conformity`` — states the tier it judges in
     its own payload, so a window is separated by declared position rather than
     by a fixed pair of kind names. Which kinds are admitted at all is the
     caller's reward-shape decision; anything else has no tier here.
     """
-    if event.kind is EventKind.VERDICT:
+    if event.kind is EventKind.VERDICT and "tier" not in event.payload:
         return 1
     tier = event.payload.get("tier")
     if type(tier) is not int or tier < 2:

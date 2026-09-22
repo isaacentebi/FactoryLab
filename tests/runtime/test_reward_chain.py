@@ -386,3 +386,53 @@ def test_a_judge_decision_lives_until_its_return_can_be_measured():
     horizon = rt.ev.consequence_backstop_ticks * rt.tick_clock.interval_ns
     assert all(i["deadline_ns"] - i["opened_ns"] > horizon for i in opened)
 
+
+def test_a_verdict_redirected_to_a_judges_decision_sits_one_tier_above_it_end_to_end():
+    """Codex review of #128: a Verdict whose about_handle names a pending judge decision
+    graded it from the tier above but was itself opened at tier one, so the world
+    'scored' it against the economic account of a judgement. It now carries the derived
+    tier: it grades the judge, is published at that tier, and is scored against the
+    judge's consequence score (ruling R1: a tier grades the tier below)."""
+    from factorylab.runtime.cascade import event_tier
+
+    rt = _runtime(counterfactual={"coin": "BTC", "side": "buy"}, verdicts=(0.9,))
+    _mids(rt, BTC="100")
+    _producer, event = _consequence_produce(rt)
+    lower = _judge(rt, event, "eval-a")
+    rt._settle_arrived_verdicts()
+    upper = _judge(rt, event, "eval-b",
+                   returned=Return("x", {"verdict": 0.2, "about_handle": lower}, 0, "ok"))
+    record = rt.pending[upper]
+    assert record.about == lower and record.tier == 2
+    (grade,) = _rows(rt, "evaluator.meta_grade", handle=lower)
+    assert grade["by"] == upper and grade["tier"] == 2
+    published = next(e for e in rt.internal if e.kind is EventKind.VERDICT
+                     and e.payload["evaluator_handle"] == upper)
+    assert published.payload["tier"] == 2 and published.payload["about_handle"] == lower
+    assert event_tier(published) == 2
+    # The world resolves the return: the lower judge is scored on it, the upper one on
+    # the lower judge's consequence score, never on a world outcome of a judgement.
+    _advance(rt, rt.ev.consequence_backstop_ticks - 1)
+    _mids(rt, BTC="101")
+    _advance(rt, 2)
+    (judged,) = _rows(rt, "verdict.consequence", handle=lower)
+    assert not _rows(rt, "verdict.consequence", handle=upper)
+    (graded,) = _rows(rt, "meta.consequence", handle=upper)
+    assert graded["about_handle"] == lower
+    assert graded["judged_consequence"] == judged["score"]
+    # The upper verdict (0.2) doubted a judge the world proved wrong: it earns above 0.5.
+    assert judged["score"] < 0.5 < graded["score"]
+
+
+def test_a_judgement_may_not_name_a_judge_decision_whose_consequence_is_known():
+    rt = _runtime(verdicts=(0.9,))
+    _producer, event = _consequence_produce(rt)
+    lower = _judge(rt, event, "eval-a")
+    rt._settle_arrived_verdicts()
+    rt._close_consequence(lower, 0.3, rt.pending[lower])
+    upper = _judge(rt, event, "eval-b",
+                   returned=Return("x", {"verdict": 0.4, "about_handle": lower}, 0, "ok"))
+    (settled,) = rt.queue.history(upper)
+    assert settled.status is SettleStatus.CENSORED
+    (refused,) = _rows(rt, "return.refused", handle=upper)
+    assert "consequence is still open" in refused["reason"]
