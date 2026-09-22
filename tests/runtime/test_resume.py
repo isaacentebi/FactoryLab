@@ -697,16 +697,22 @@ def test_fake_treasury_trading_shock_replays_fee_unfunded_cut(tmp_path, monkeypa
     assert restored.run()['ledger_verify']
 
 
-@pytest.mark.parametrize('cut', ['treasury.advance', 'treasury.step_submitted',
+@pytest.mark.parametrize('cut', ['treasury.advance', 'treasury.venice_authorized',
+                                 'treasury.step_submitted',
                                  'treasury.confirmed'])
 def test_hybrid_conversion_killed_between_its_legs_resumes_without_a_second_spend(
         tmp_path, cut):
     """A kill anywhere in a hybrid conversion replays each leg once: one shadow send out
     of the venue, one real top-up, one financing, whatever the cut point."""
     sink = '0x000000000000000000000000000000000000dEaD'
+    payee = '0x2670b922ef37c7df47158725c0cc407b5382293f'
     base = load_manifest('scripted')
     m = replace(base, treasury=replace(base.treasury, venice_network='base-mainnet',
-                                       venice_shadow_sink=sink))
+                                       venice_shadow_sink=sink,
+                                       max_venice_total_micro=10_000_000,
+                                       venice_reserve_floor_micro=0,
+                                       venice_pay_to=payee))
+    m.validate()
     path = tmp_path / 'hybrid-cut.jsonl'
     rt = Runtime(m, events=4, seed=1, initial_balance_micro=None, ledger_path=str(path),
                  drip=False, router_gamma=.1)
@@ -737,6 +743,7 @@ def test_hybrid_conversion_killed_between_its_legs_resumes_without_a_second_spen
     assert books['shadow_sent'] == 5_000_000 and restored.exchange._cash == cash - 5
     assert books['mainnet_reserve'] == mainnet - 5_000_000
     assert len(books['submissions']) == 1 and restored.treasury.rail.venice == 5_000_000
+    assert restored.treasury.venice_authorized_micro == 5_000_000  # counted once, kept
     financing = [i for i in items(path, m) if i['kind'] == 'treasury.financing']
     assert len(financing) == 1 and financing[0]['source'] == 'venue_perps'
     assert restored.wallet.check_conservation()

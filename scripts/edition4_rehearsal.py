@@ -499,7 +499,9 @@ def effective_manifest(
     # construct a signer; the charter, seed roster, $300 endowment and venue cash stay.
     treasury = replace(base.treasury, reserve_address=None, cctp_forwarding="never",
                        hyperevm_gas_budget_wei=0, base_gas_budget_wei=0,
-                       venice_network=None, venice_shadow_sink=None)
+                       venice_network=None, venice_shadow_sink=None,
+                       max_venice_total_micro=None, venice_reserve_floor_micro=None,
+                       venice_pay_to=None)
     if capital_loop:
         # The capital loop keeps its reserve and hybrid keys; the CCTP routes stay
         # unfunded (no gas budgets) and CapitalLoopRail refuses them before signing.
@@ -792,6 +794,10 @@ def run_rehearsal(
             native_completions=True,
             capital_loop=capital_loop,
         )
+        if capital_loop and not manifest.treasury.venice_reserve_floor_micro:
+            # A zero floor lets a fresh run spend the whole real reserve again: the
+            # operator states, on chain terms, what this rehearsal may never go below.
+            raise RehearsalRefused("capital_loop_requires_reserve_floor")
         source_path, frozen_hash = source_hash(Path(source_root) if source_root else None)
     except Exception as exc:
         report = {"status": "failed", "error": _safe_exception(exc),
@@ -913,6 +919,9 @@ def run_rehearsal(
             "venice_network": manifest.treasury.venice_network,
             "venice_shadow_sink": manifest.treasury.venice_shadow_sink,
             "max_venice_per_window_micro": manifest.treasury.max_venice_per_window,
+            "max_venice_total_micro": manifest.treasury.max_venice_total_micro,
+            "venice_reserve_floor_micro": manifest.treasury.venice_reserve_floor_micro,
+            "venice_pay_to": manifest.treasury.venice_pay_to,
             "reserve_address": manifest.treasury.reserve_address,
         }
     runtime = None
@@ -934,7 +943,7 @@ def run_rehearsal(
                 ledger_path=None if output_dir is None else str(output_dir / "ledger.jsonl"),
                 drip=False, router_gamma=0.1, provider=guarded, market=DeniedMarket(),
                 exchange=exchange, clock_source=clock_source,
-                kill_at_end=True,
+                kill_at_end=True, capital_loop=capital_loop,
             )
         finally:
             # The hybrid rail captured its signer during construction; the running

@@ -27,12 +27,17 @@ from factorylab.runtime.worlds import TreasurySpec, load_manifest
 from factorylab.world.evm import BASE, BASE_SEPOLIA, Pending, RailError, event_topic, word_address
 from factorylab.world.exchange import FakeExchange
 from factorylab.world.treasury import (
+    CREDIT_SHORT,
     FAKE_MAINNET_RESERVE_MICRO,
+    HYBRID_STRANDED,
+    RESERVE_FLOOR,
     TOP_UP_WAIT_EXCEEDED,
+    TRANSFER_BLOCKED,
+    VENICE_TOTAL_EXHAUSTED,
     FakeTreasury,
 )
 from factorylab.world.treasury_rails import HybridRail
-from factorylab.world.x402 import HTTPResponse
+from factorylab.world.x402 import HTTPResponse, X402Error
 from tests.world.test_treasury_rails import Chain, Info
 from tests.world.test_x402 import quote as quote_fixture
 
@@ -227,18 +232,38 @@ def test_the_mode_is_refused_on_mainnet_without_a_sink_and_off_its_one_network()
         replace(world, treasury=replace(world.treasury, venice_network=None)).validate()
 
 
+@pytest.mark.parametrize(("field", "value", "message"), [
+    ("max_venice_total_micro", None, "requires treasury.max_venice_total_usd"),
+    ("max_venice_total_micro", 0, "max_venice_total_usd must be positive"),
+    ("venice_reserve_floor_micro", None, "requires treasury.venice_reserve_floor_usd"),
+    ("venice_pay_to", None, "requires treasury.venice_pay_to"),
+    ("venice_pay_to", "0x" + "0" * 40, "venice_pay_to must be a nonzero EVM address"),
+])
+def test_real_money_mode_needs_an_absolute_bound_a_floor_and_a_pinned_payee(
+        field, value, message):
+    world = capital_loop()
+    with pytest.raises(ValueError, match=message):
+        replace(world, treasury=replace(world.treasury, **{field: value})).validate()
+    plain = load_manifest("worlds/edition5-testnet-rehearsal.toml")
+    if value is not None:
+        with pytest.raises(ValueError, match="requires treasury.venice_network"):
+            replace(plain, treasury=replace(plain.treasury, **{field: value})).validate()
+
+
 def test_the_keys_are_hash_neutral_at_their_defaults():
     import glob
+
+    from factorylab.runtime.worlds import HYBRID_VENICE_KEYS
 
     seen = 0
     for path in sorted(glob.glob("worlds/*.toml")):
         treasury = json.loads(load_manifest(path).canonical_json())["treasury"]
         hybrid_world = path.endswith("edition5-capital-loop.toml")
-        assert ("venice_network" in treasury) is hybrid_world
-        assert ("venice_shadow_sink" in treasury) is hybrid_world
+        for key in HYBRID_VENICE_KEYS:
+            assert (key in treasury) is hybrid_world
         seen += 1
     assert seen > 10
-    assert TreasurySpec().venice_network is None and TreasurySpec().venice_shadow_sink is None
+    assert all(getattr(TreasurySpec(), key) is None for key in HYBRID_VENICE_KEYS)
 
 
 def test_the_capital_loop_world_puts_most_seats_on_venice_and_caps_two_conversions():
@@ -248,6 +273,8 @@ def test_the_capital_loop_world_puts_most_seats_on_venice_and_caps_two_conversio
     assert 2 * len(venice) >= len(world.assemblies)
     assert world.treasury.venice_network == "base-mainnet"
     assert world.treasury.max_venice_per_window == 2 * FIVE
+    assert world.treasury.max_venice_total_micro == 2 * FIVE
+    assert world.treasury.venice_pay_to == PAYEE
     assert int(world.treasury.venice_shadow_sink, 16) != 0
     assert (menu["venice:openai-gpt-56-luna"].input_usd_per_mtok,
             menu["venice:openai-gpt-56-luna"].output_usd_per_mtok) == ("0.25", "1.50")
@@ -306,6 +333,8 @@ class Client:
     def __init__(self, account):
         self.address, self._account = account.address, account
         self.credit = 1_000_000
+        self.quote = quote_fixture.__wrapped__()  # the recorded unpaid 402, no network
+        self.requests = []
 
     def usdc_balance(self):
         return 50_000_000
@@ -314,7 +343,26 @@ class Client:
         return self.credit
 
     def _request(self, method, path, body, **headers):
-        return HTTPResponse(402, quote_fixture.__wrapped__())
+        self.requests.append((method, path, sorted(headers)))
+        return HTTPResponse(402, deepcopy(self.quote))
+
+
+# Venice's payee in the unpaid 402 quote recorded live on 11 September 2026
+# (docs/research/venice.md, "x402 flow") and pinned by the capital-loop world.
+PAYEE = "0x2670b922ef37c7df47158725c0cc407b5382293f"
+
+
+class Final(Chain):
+    """A Base whose finalized head and scan coverage the test sets."""
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.final = {"number": hex(500), "timestamp": hex(10_000)}
+
+    def call(self, method, args):
+        if method == "eth_getBlockByNumber" and args[0] == "finalized":
+            return self.final
+        return super().call(method, args)
 
 
 def live(monkeypatch):
@@ -325,9 +373,13 @@ def live(monkeypatch):
     rail.venue_address = signer.address
     rail.reserve_address = reserve.address
     rail.sink = SINK
+    rail.pay_to = PAYEE
+    rail.reserve_floor_micro = 0
+    rail.metered_usage_since = lambda since_ns: 0
     rail.spec = TreasurySpec(reserve_address=reserve.address, venice_network="base-mainnet",
-                             venice_shadow_sink=SINK)
-    rail.base, rail.venice_base = Chain(BASE_SEPOLIA), Chain(BASE)
+                             venice_shadow_sink=SINK, venice_pay_to=PAYEE,
+                             max_venice_total_micro=2 * FIVE, venice_reserve_floor_micro=0)
+    rail.base, rail.venice_base = Chain(BASE_SEPOLIA), Final(BASE)
     rail.exchange = SimpleNamespace(name="hyperliquid-testnet", _info=Roles())
     rail.posts = []
     rail._sdk = SimpleNamespace(wallet=signer, _post_action=lambda a, s, n: (
@@ -491,20 +543,262 @@ def test_the_hybrid_rail_refuses_a_mainnet_venue_and_a_sink_inside_the_pots(monk
     reserve = Account.create()
     monkeypatch.setenv("RESERVE_PRIVATE_KEY", reserve.key.hex())
     signer = Account.create()
-    sdk = SimpleNamespace(wallet=signer, vault_address=None)
 
-    def exchange(url):
-        return SimpleNamespace(base_url=url, _exchange=sdk, _address=signer.address,
-                               name="hyperliquid")
+    def exchange(url, account=signer):
+        return SimpleNamespace(base_url=url, _address=account.address, name="hyperliquid",
+                               _exchange=SimpleNamespace(wallet=account, vault_address=None))
 
     spec = TreasurySpec(reserve_address=reserve.address, venice_network="base-mainnet",
-                        venice_shadow_sink=SINK)
+                        venice_shadow_sink=SINK, venice_pay_to=PAYEE,
+                        max_venice_total_micro=2 * FIVE, venice_reserve_floor_micro=0)
     with pytest.raises(RailError, match="testnet venue only"):
         HybridRail(exchange(MAINNET_API_URL), spec)
     from hyperliquid.utils.constants import TESTNET_API_URL
 
     with pytest.raises(RailError, match="outside every observed pot"):
         HybridRail(exchange(TESTNET_API_URL), replace(spec, venice_shadow_sink=signer.address))
+    # Finding 5: one key for the venue and the reserve is refused.
+    with pytest.raises(RailError, match="venue and the reserve must be different"):
+        HybridRail(exchange(TESTNET_API_URL, reserve), spec)
+    with pytest.raises(RailError, match="payee, total and floor"):
+        HybridRail(exchange(TESTNET_API_URL), replace(spec, venice_pay_to=None))
     rail = HybridRail(exchange(TESTNET_API_URL), spec)
     assert rail.venice_base.chain.id == 8453 and rail.base.chain.id == 84532
     assert rail.venice_base.gas_budget_wei == 0  # mainnet is read, never written, by EVM
+    assert rail.pay_to.lower() == PAYEE
+
+
+# ---- cold review of feat/venice-hybrid: one regression per finding
+
+
+def top_up_state(rail):
+    state = {"amount_micro": FIVE, "nonce": 1, "id": "treasury-0", "started_ns": 0,
+             "route_data": {"shadow": {"sink": SINK}}}
+    state["reference"] = rail.prepare("venice_top_up", state, {})
+    return state
+
+
+def debit(rail, reference):
+    """A finalized AuthorizationUsed debit of ``reference`` on Base mainnet."""
+    topics = [event_topic("AuthorizationUsed(address,bytes32)"),
+              "0x" + word_address(rail.reserve_address).hex(),
+              reference["authorization"]["nonce"]]
+    rail.venice_base.log_rows = [{"address": BASE.usdc, "topics": topics,
+                                  "transactionHash": "0x" + "12" * 32}]
+    rail.venice_base.proved = {"status": "0x1", "blockHash": "0x" + "34" * 32,
+                               "logs": [{"address": BASE.usdc, "topics": topics}]}
+
+
+def test_1_an_authorization_expires_only_on_finalized_base_never_on_the_runtime_clock(
+        monkeypatch):
+    rail = live(monkeypatch)
+    state = top_up_state(rail)
+    valid_before = int(state["reference"]["authorization"]["validBefore"])
+    chain, far_future = rail.venice_base, 10**30  # a virtual or runaway runtime clock
+    chain.final = {"number": hex(500), "timestamp": hex(valid_before)}
+    chain.scanned_to = 500
+    assert rail.expired("venice_top_up", state, far_future) is None  # not past validBefore
+    chain.final["timestamp"] = hex(valid_before + 1)
+    chain.scanned_to = 499
+    assert rail.expired("venice_top_up", state, far_future) is None  # scan short of it
+    chain.scanned_to = 500
+    debit(rail, state["reference"])
+    assert rail.expired("venice_top_up", state, far_future) is None  # it did settle
+    chain.log_rows = []
+    assert rail.expired("venice_top_up", state, 0) == (
+        "Venice authorization expired unused on finalized Base")
+
+    def unreachable(*args, **kwargs):
+        raise TimeoutError
+
+    chain.scan = unreachable
+    assert rail.expired("venice_top_up", state, far_future) is None
+
+
+def test_1_a_superseded_authorization_is_still_polled_and_its_late_debit_booked(monkeypatch):
+    rail = live(monkeypatch)
+    old = top_up_state(rail)["reference"]
+    state = top_up_state(rail)
+    state["route_data"]["superseded_references"] = [old]
+    debit(rail, old)
+    rail._x402.credit = 6_000_000
+    confirmed = rail.poll("venice_top_up", state)
+    assert confirmed["confirmed"] and confirmed["evidence"]["nonce"] == old["authorization"][
+        "nonce"]
+
+
+def test_1_a_late_debit_found_at_recovery_is_booked_and_nothing_new_is_authorized():
+    treasury, _, _, ledger = hybrid(max_venice_total_micro=2 * FIVE)
+    rail, books = treasury.rail, treasury.rail.hybrid_books
+    rail.script.update(top_up="unknown_lost", expire=True)
+    treasury.transfer("to_venice", "5", handle="h", now_ns=1)
+    treasury.tick(2)
+    assert treasury.state["status"] == "stranded"
+    rail.land("treasury-0:authorization-0")  # settled after all
+    treasury.tick(3)  # recovery polls the superseded authorization before anything else
+    assert treasury.tick(4)[0]["status"] == "confirmed"
+    assert books["authorizations"] == 1 and treasury.venice_authorized_micro == FIVE
+    assert books["mainnet_reserve"] == FAKE_MAINNET_RESERVE_MICRO - FIVE
+    assert kinds(ledger, "treasury.recovered")[-1]["late_debit"] is True
+    assert len(kinds(ledger, "treasury.financing")) == 1
+
+
+def test_2_the_reviewers_probe_six_strands_then_top_ups_never_passes_the_absolute_cap():
+    treasury, _, _, ledger = hybrid(max_venice_per_window=100 * FIVE,
+                                    max_venice_total_micro=2 * FIVE)
+    rail, books = treasury.rail, treasury.rail.hybrid_books
+    rail.script["top_up_unavailable"] = True
+    now, window, results = 1, 1, []
+    for n in range(6):  # try to park six paid shadows, each past forward_wait_windows
+        results.append(treasury.transfer("to_venice", "5", handle=f"seat-{n}", now_ns=now))
+        for _ in range(3):
+            now += 1
+            treasury.tick(now)
+            window += 1
+            treasury.open_window(window)
+    assert results[0]["status"] == "submitted"
+    assert {r["error"] for r in results[1:]} <= {HYBRID_STRANDED, TRANSFER_BLOCKED}
+    assert len(treasury.stranded) == 1 and books["shadow_sent"] == FIVE
+    rail.script["top_up_unavailable"] = False
+    for _ in range(30):  # every free slot is taken, every window renewed
+        now += 1
+        treasury.tick(now)
+        treasury.transfer("to_venice", "5", handle=f"late-{now}", now_ns=now)
+        window += 1
+        treasury.open_window(window)
+    spent = FAKE_MAINNET_RESERVE_MICRO - books["mainnet_reserve"]
+    assert spent == treasury.venice_authorized_micro == 2 * FIVE  # the cap, never past it
+    assert sum(i["amount_micro"] for i in kinds(ledger, "treasury.venice_authorized")) == spent
+    assert all(i["authorized_micro"] <= i["cap_micro"]
+               for i in kinds(ledger, "treasury.venice_authorized"))
+    assert VENICE_TOTAL_EXHAUSTED in {i["reason"] for i in kinds(ledger, "treasury.refused")}
+
+
+def test_2_re_authorizations_count_and_a_strand_past_the_cap_signs_nothing_across_a_kill():
+    treasury, wallet, exchange, ledger = hybrid(max_venice_per_window=100 * FIVE,
+                                                max_venice_total_micro=2 * FIVE)
+    rail, books = treasury.rail, treasury.rail.hybrid_books
+    rail.script.update(top_up="unknown_lost", expire=True)
+    treasury.transfer("to_venice", "5", handle="h", now_ns=1)
+    for now in range(2, 10):
+        treasury.tick(now)
+    # One authorization, one re-authorization after it provably expired, then the cap.
+    assert books["authorizations"] == 2 and treasury.venice_authorized_micro == 2 * FIVE
+    assert treasury.state["status"] == "stranded" and treasury.stranded
+    assert treasury.transfer("to_venice", "5", handle="h2", now_ns=10)["error"] == (
+        HYBRID_STRANDED)
+    saved = json.loads(json.dumps(treasury.snapshot()))
+    assert saved["venice_authorized_micro"] == 2 * FIVE
+    restored = FakeTreasury(ledger, wallet, exchange=exchange, venice_shadow_sink=SINK,
+                            max_venice_total_micro=2 * FIVE, max_venice_per_window=100 * FIVE)
+    restored.restore(saved)
+    restored.rail.script["top_up"] = "settled"
+    for now in range(11, 20):
+        restored.tick(now)
+    assert restored.venice_authorized_micro == 2 * FIVE
+    assert restored.rail.hybrid_books["authorizations"] == 2  # nothing past the cap
+    assert restored.stranded
+
+
+def test_2_a_recovery_is_charged_to_the_window_it_authorizes_in():
+    treasury, _, _, _ = hybrid(max_venice_per_window=FIVE)
+    rail, books = treasury.rail, treasury.rail.hybrid_books
+    rail.script.update(top_up="unknown_lost", expire=True)
+    treasury.transfer("to_venice", "5", handle="h", now_ns=1)
+    treasury.tick(2)
+    rail.script.update(top_up="settled", expire=False)
+    treasury.tick(3)
+    assert books["authorizations"] == 1 and treasury.stranded  # window 1 is spent
+    treasury.open_window(2)
+    treasury.tick(4)
+    assert treasury.tick(5)[0]["status"] == "confirmed"
+    assert books["authorizations"] == 2 and treasury.venice_spent == FIVE
+
+
+def test_2_the_on_chain_reserve_floor_bounds_every_run(monkeypatch):
+    treasury, _, _, _ = hybrid(venice_reserve_floor_micro=FAKE_MAINNET_RESERVE_MICRO - FIVE)
+    treasury.transfer("to_venice", "5", handle="h", now_ns=1)
+    treasury.tick(2)
+    assert treasury.tick(3)[0]["status"] == "confirmed"
+    assert treasury.transfer("to_venice", "5", handle="h2", now_ns=4)["error"] == RESERVE_FLOOR
+    rail = live(monkeypatch)
+    rail.venice_base.usdc = 50_000_000
+    rail.reserve_floor_micro = 45_000_000
+    rail.preflight("to_venice", FIVE, {})
+    rail.reserve_floor_micro = 45_000_001
+    with pytest.raises(RailError, match="venice_reserve_floor_usd"):
+        rail.preflight("to_venice", FIVE, {})
+    with pytest.raises(RailError, match="venice_reserve_floor_usd"):
+        top_up_state(rail)
+
+
+def test_3_a_quote_or_reference_naming_another_payee_is_refused_before_signing(monkeypatch):
+    rail = live(monkeypatch)
+    state = top_up_state(rail)
+    assert state["reference"]["accepted"]["payTo"] == PAYEE
+    tampered = deepcopy(state["reference"])
+    tampered["accepted"]["payTo"] = tampered["authorization"]["to"] = rail.reserve_address
+    before = list(rail._x402.requests)
+    with pytest.raises(X402Error, match="payee differs"):
+        rail.send("venice_top_up", tampered)
+    assert rail._x402.requests == before  # nothing was submitted, let alone signed
+    rail._x402.quote["accepts"][0]["payTo"] = rail.reserve_address
+    with pytest.raises(RailError, match="payee differs"):
+        top_up_state(rail)
+
+
+def test_3_financing_waits_for_the_credit_the_tranche_bought(monkeypatch):
+    rail = live(monkeypatch)
+    state = top_up_state(rail)  # credit before: $1
+    debit(rail, state["reference"])
+    rail._x402.credit = 3_000_000  # rose $2 of the $5
+    with pytest.raises(Pending, match="financing held unresolved"):
+        rail.poll("venice_top_up", state)
+    rail.metered_usage_since = lambda since_ns: 3_000_000  # the seats spent $3 meanwhile
+    confirmed = rail.poll("venice_top_up", state)
+    assert confirmed["confirmed"] and confirmed["evidence"]["credited_micro"] == FIVE
+    rail.metered_usage_since = None  # no diary: unknown books nothing
+    with pytest.raises(Pending):
+        rail.poll("venice_top_up", state)
+
+
+def test_3_a_short_credit_holds_the_principal_and_is_never_re_authorized():
+    treasury, wallet, _, ledger = hybrid()
+    rail, books = treasury.rail, treasury.rail.hybrid_books
+    rail.script.update(short_credit=True, expire=True)
+    treasury.transfer("to_venice", "5", handle="h", now_ns=1)
+    for now in range(2, 6):
+        treasury.tick(now)
+    assert treasury.state["status"] == "submitted"
+    assert treasury.pots()["pending_reason"] == CREDIT_SHORT
+    assert books["authorizations"] == 1 and not kinds(ledger, "treasury.financing")
+    assert wallet.available == wallet.balance - FIVE
+    rail.script["short_credit"] = False
+    assert treasury.tick(6)[0]["status"] == "confirmed"
+    assert len(kinds(ledger, "treasury.financing")) == 1
+
+
+def test_4_a_live_hybrid_world_will_not_start_or_resume_without_the_opt_in():
+    from factorylab.runtime.loop import Runtime
+    from factorylab.runtime.resume import runtime_state
+    from factorylab.world.scripted import ScriptedProvider
+
+    with pytest.raises(RailError, match="--capital-loop"):
+        Runtime(capital_loop(), events=1, seed=1, initial_balance_micro=None,
+                ledger_path=None, drip=False, router_gamma=0.1, provider=ScriptedProvider(),
+                exchange=FakeExchange())
+    # The opt-in is never checkpointed, so a resume has to be asked for it again.
+    rt = Runtime(load_manifest("scripted"), events=1, seed=1, initial_balance_micro=None,
+                 ledger_path=None, drip=False, router_gamma=0.1)
+    assert "capital_loop" not in runtime_state(rt)["config"]
+
+
+def test_6_a_shadow_send_executing_late_is_matched_inside_its_nonce_window(monkeypatch):
+    rail = live(monkeypatch)
+    state = {"amount_micro": FIVE, "nonce": 1_700_000_000_000, "id": "treasury-0"}
+    state["reference"] = rail.prepare("shadow_send", state, {})
+    late = {**shadow_row(rail), "time": 1_700_000_000_000 + 10 * 60_000}  # ten minutes
+    rail.exchange._info.updates = [late]
+    assert rail.poll("shadow_send", state)["confirmed"]
+    rail.exchange._info.updates = [{**late, "time": 1_700_000_000_000 + 4 * 86_400_000}]
+    assert rail.poll("shadow_send", state) is None  # past the window it never executed

@@ -22,6 +22,14 @@ FORWARD_WAIT_EXCEEDED = "forwarded mint not delivered within treasury.forward_wa
 # top-up could not even be prepared (no quote, no mainnet USDC) past the same bound.
 TOP_UP_WAIT_EXCEEDED = "Venice top-up not prepared within treasury.forward_wait_windows"
 TRANSFER_BLOCKED = "a previous transfer is still pending or stranded"
+# Hybrid mode's absolute bound, and the rule that one owed top-up blocks the next.
+VENICE_TOTAL_EXHAUSTED = "treasury.max_venice_total_usd exhausted"
+HYBRID_STRANDED = "a hybrid Venice conversion is stranded; recover or resolve it first"
+# A hybrid top-up may not take the real reserve below the manifest's on-chain floor.
+RESERVE_FLOOR = "mainnet reserve would fall below treasury.venice_reserve_floor_usd"
+# The debit landed but the credit Venice shows does not account for the tranche: the
+# financing is held unresolved (never booked) and the wait is public.
+CREDIT_SHORT = "Venice credit short of the tranche; financing held unresolved"
 # Directions that reserve no transfer fee: the fixed Venice tranche and class moves.
 FEE_FREE = ("to_venice", "spot_to_perps", "perps_to_spot")
 # A step resent this many times without evidence is repriced at its own nonce (when the
@@ -144,8 +152,17 @@ class Treasury:
         max_forward_fees_per_window=1_000_000,
         forward_wait_windows=2,
         clock_ns=None,
+        max_venice_total_micro=None,
     ):
         self.ledger, self.wallet, self.rail, self.provider = ledger, wallet, rail, provider
+        if max_venice_total_micro is not None and (
+                type(max_venice_total_micro) is not int or max_venice_total_micro < 0):
+            raise ValueError("Venice total budget must be nonnegative integer micro-USD")
+        # The absolute bound on real Venice spend (hybrid mode): every authorization ever
+        # accepted counts against it, re-authorizations and expired ones included, so a
+        # strand's recovery cannot reach the reserve outside it. ``None``: unbounded.
+        self.max_venice_total_micro = max_venice_total_micro
+        self.venice_authorized_micro = 0
         # Custody without freshness is a rumour: every pot observation is stamped
         # with the moment it was read, and the custody view reports that stamp.
         self.clock_ns = clock_ns if callable(clock_ns) else time_ns
@@ -504,6 +521,12 @@ class Treasury:
                     raise RailError("to_venice requires the fixed $5 tranche")
                 if self.venice_spent + amount > self.max_venice_per_window:
                     raise RailError("treasury.max_venice_per_window exhausted")
+                if any(self._shadowed(entry["state"]) for entry in self.stranded):
+                    # A paid shadow leg whose top-up is still owed is a conversion in
+                    # progress: another one must not start beside it.
+                    raise RailError(HYBRID_STRANDED)
+                if self._venice_total_exhausted(amount):
+                    raise RailError(VENICE_TOTAL_EXHAUSTED)
             if self._blocking():
                 raise RailError(TRANSFER_BLOCKED)
             self.rail.preflight(direction, amount, self.gas_spent)
@@ -570,6 +593,8 @@ class Treasury:
         self.last_nonce = nonce
         if direction == "to_venice":
             self.venice_spent = state["venice_spent_after"]
+            if steps[0] == "venice_top_up":  # the ordinary rail authorizes at submission
+                self._authorize_top_up(charge_window=False)
         if "forward_spent_after" in state:
             self.forward_spent = state["forward_spent_after"]
         self._send()
@@ -578,6 +603,62 @@ class Treasury:
             "transfer_id": state["id"],
             "tx_refs": [deepcopy(reference)],
         }
+
+    def _venice_total_exhausted(self, amount: int) -> bool:
+        """A new conversion would exceed the absolute bound with every owed one counted.
+
+        Guarantees authorized + $5 for each conversion in flight or stranded + this one
+        stays within ``max_venice_total_micro``: an owed top-up is counted as spent before
+        it is authorized, so no sequence of strands and recoveries can outrun the bound.
+        """
+        cap = self.max_venice_total_micro
+        if cap is None:
+            return False
+        owed = sum(entry["state"]["direction"] == "to_venice" for entry in self.stranded)
+        state = self.state
+        if state and state["status"] == "submitted" and state["direction"] == "to_venice":
+            owed += 1
+        return self.venice_authorized_micro + TOP_UP_MICRO * owed + amount > cap
+
+    def _charges_window(self, state: dict) -> bool:
+        """An authorization not already paid for by its transfer's submission window.
+
+        A transfer's first authorization in the window it was submitted in was charged
+        at submission; a re-authorization, or one accepted in a later window, is charged
+        to the window it is accepted in, so a recovery cannot bypass the window cap.
+        """
+        return (state.get("top_up_authorizations", 0) > 0
+                or state.get("venice_window") != self.venice_window)
+
+    def _top_up_refusal(self, state: dict) -> str | None:
+        """Why a Venice authorization for this transfer may not be accepted now, if so."""
+        amount = state["amount_micro"]
+        cap = self.max_venice_total_micro
+        if cap is not None and self.venice_authorized_micro + amount > cap:
+            return VENICE_TOTAL_EXHAUSTED
+        if (self._charges_window(state)
+                and self.venice_spent + amount > self.max_venice_per_window):
+            return "treasury.max_venice_per_window exhausted"
+        return None
+
+    def _authorize_top_up(self, *, charge_window: bool) -> None:
+        """Count one accepted Venice authorization before anything can sign it.
+
+        Every authorization counts, the expired ones too: counting an authorization
+        that can never settle is the fail-safe direction, and the bound then holds on
+        what was ever authorized, not on what the chain has shown so far.
+        """
+        state = self.state
+        amount = state["amount_micro"]
+        self.venice_authorized_micro += amount
+        if charge_window:
+            self.venice_spent += amount
+        self.state = {**state, "venice_window": self.venice_window,
+                      "top_up_authorizations": state.get("top_up_authorizations", 0) + 1}
+        self._write("venice_authorized", transfer_id=state["id"], amount_micro=amount,
+                    authorized_micro=self.venice_authorized_micro,
+                    cap_micro=self.max_venice_total_micro, window=self.venice_window,
+                    window_spent_micro=self.venice_spent)
 
     def _check_fee(self, reference: dict, state: dict) -> None:
         ceiling = reference.get("fee_ceiling_micro", 0)
@@ -752,7 +833,12 @@ class Treasury:
     def _prepare_next(self, now_ns: int, ref: dict | None = None) -> None:
         state = self.state
         step = state["steps"][state["index"]]
+        top_up = step == "venice_top_up"
         try:
+            if top_up and (refusal := self._top_up_refusal(state)):
+                # Checked before the rail is asked for a quote: no authorization past the
+                # absolute or window bound is ever prepared, let alone signed.
+                raise RailError(refusal)
             if ref is None:
                 ref = self.rail.prepare(step, deepcopy(state), self.gas_spent)
             self._check_fee(ref, state)
@@ -775,6 +861,10 @@ class Treasury:
                           else TOP_UP_WAIT_EXCEEDED)
                 self._fail(reason, now_ns, waited=self.state["pending"])
             return
+        if top_up:
+            # Counted, and written, before step_submitted carries it toward a signature.
+            self._authorize_top_up(charge_window=self._charges_window(state))
+            state = self.state
         updated = {**self._settled(state), "reference": ref}
         self._write("step_submitted", state=updated, tx_refs=[ref])
         self.state = updated
@@ -850,16 +940,34 @@ class Treasury:
         the pots view and in its ``treasury.failed`` item until it moves.
 
         A hybrid strand re-enters at its top-up step with a newly prepared authorization.
-        It was parked only once its previous authorization could never execute (expired
-        past the rail's grace with no debit found) or was never prepared, so a second
-        authorization cannot double-spend the first; the shadow leg is not re-sent.
+        It was parked only once its previous authorization provably can never execute
+        (the rail's finalized chain is past its ``validBefore`` and was scanned to there
+        without a debit) or was never prepared, so a second authorization cannot
+        double-spend the first; the shadow leg is not re-sent. The superseded
+        authorization is kept in ``route_data`` and polled first and ever after: a debit
+        of it, however late, is booked, and then nothing new is authorized. A new
+        authorization is prepared only within the absolute and window bounds.
         """
         entry = self.stranded[0]
         state = entry["state"]
         step = state["steps"][state["index"]]
+        poll_only = step in getattr(self.rail, "poll_only_steps", ())
+        landed = False
+        if poll_only and state.get("reference"):
+            data = state["route_data"]
+            state = {**state, "route_data": {**data, "superseded_references": [
+                *data.get("superseded_references", []), state["reference"]]}, "reference": None}
         try:
-            ref = self.rail.prepare(step, deepcopy(state), self.gas_spent)
-            self._check_fee(ref, state)
+            if poll_only and state["route_data"].get("superseded_references"):
+                landed = self.rail.poll(step, {**deepcopy(state),
+                                               "gas_spent": dict(self.gas_spent)}) is not None
+            if landed:
+                ref = state["route_data"]["superseded_references"][-1]
+            else:
+                if step == "venice_top_up" and self._top_up_refusal(state):
+                    return  # the strand stays parked and public; nothing is authorized
+                ref = self.rail.prepare(step, deepcopy(state), self.gas_spent)
+                self._check_fee(ref, state)
         except Exception:
             return
         self.stranded.pop(0)
@@ -868,6 +976,13 @@ class Treasury:
                      if k not in ("reason", "recoverable", "stranded_ns")}
         recovered.update(status="submitted", reference=None, attempts=0, last_send_ns=now_ns,
                          recovered_ns=now_ns)
+        if landed:
+            # A superseded authorization settled after all: book it, sign nothing new.
+            recovered["reference"] = ref
+            self.state = recovered
+            self._write("recovered", state=recovered, ts=now_ns, late_debit=True)
+            self._reserve_fees()
+            return
         self.state = recovered
         self._write("recovered", state=recovered, ts=now_ns)
         self._reserve_fees()
@@ -1026,6 +1141,10 @@ class Treasury:
             # The scripted mainnet reserve and sink sit outside every observed pot, so
             # only the checkpoint carries them; a world without the mode never has them.
             saved["fake_hybrid"] = deepcopy(self.rail.hybrid_books)
+        if self.venice_authorized_micro or self.max_venice_total_micro is not None:
+            # The absolute bound's counter survives every kill; a checkpoint of a world
+            # that never authorized a top-up and has no bound keeps its old shape.
+            saved["venice_authorized_micro"] = self.venice_authorized_micro
         return saved
 
     def restore(self, snapshot: dict) -> None:
@@ -1055,6 +1174,7 @@ class Treasury:
         self.pots_observed_ns = saved.get("pots_observed_ns")
         self.venice_window, self.venice_spent = saved["venice_window"], saved["venice_spent"]
         self.forward_spent = saved.get("forward_spent", 0)  # checkpoints predate forwarding
+        self.venice_authorized_micro = saved.get("venice_authorized_micro", 0)
         self.income = {**_fresh_income(), **saved.get("income", {})}  # and income classes
         if saved["fake_reserve"] is not None:
             self.rail.reserve = saved["fake_reserve"]
@@ -1194,8 +1314,10 @@ class FakeHybridRail(FakeRail):
     A test scripts failures through ``script``: ``reject_shadow`` (the venue refuses the
     send), ``top_up_unavailable`` (no quote can be prepared), ``top_up`` as ``"settled"``,
     ``"unknown_lost"`` (the reply is lost and the authorization never executed) or
-    ``"unknown_landed"`` (the reply is lost but it did), and ``expire`` (every unused
-    authorization is past its expiry). The script is a test's hand, never world state.
+    ``"unknown_landed"`` (the reply is lost but it did), ``expire`` (every unused
+    authorization is past its expiry) and ``short_credit`` (the debit landed but Venice
+    showed less credit than it bought). ``land`` settles a superseded authorization
+    late. The script is a test's hand, never world state.
     """
 
     name = "scripted-hybrid"
@@ -1203,13 +1325,15 @@ class FakeHybridRail(FakeRail):
     poll_only_steps = ("venice_top_up",)
 
     def __init__(self, wallet, *, sink: str, fee_micro: int = 10_000, exchange=None,
-                 mainnet_reserve_micro: int = FAKE_MAINNET_RESERVE_MICRO):
+                 mainnet_reserve_micro: int = FAKE_MAINNET_RESERVE_MICRO,
+                 reserve_floor_micro: int = 0):
         super().__init__(wallet, fee_micro=fee_micro, exchange=exchange)
         self.sink = sink
+        self.reserve_floor_micro = reserve_floor_micro
         self.hybrid_books = {"mainnet_reserve": mainnet_reserve_micro, "shadow_sent": 0,
                              "authorizations": 0, "submissions": [], "used": []}
         self.script = {"reject_shadow": False, "top_up_unavailable": False,
-                       "top_up": "settled", "expire": False}
+                       "top_up": "settled", "expire": False, "short_credit": False}
 
     def plan(self, direction: str) -> tuple[str, ...]:
         return ("shadow_send", "venice_top_up") if direction == "to_venice" else (direction,)
@@ -1223,8 +1347,21 @@ class FakeHybridRail(FakeRail):
             raise RailError("to_venice requires the fixed $5 tranche")
         if amount > int(self.exchange._perp_withdrawable() * 1_000_000):
             raise RailError("amount exceeds available venue pot")
+        self._above_floor(amount)
+
+    def _above_floor(self, amount: int) -> None:
         if amount > self.hybrid_books["mainnet_reserve"]:
             raise RailError("amount exceeds available mainnet reserve")
+        if self.hybrid_books["mainnet_reserve"] - amount < self.reserve_floor_micro:
+            raise RailError(RESERVE_FLOOR)
+
+    def land(self, authorization: str) -> None:
+        """A superseded authorization settles late (a test's hand, as ``script`` is)."""
+        books = self.hybrid_books
+        if authorization not in books["used"]:
+            books["used"].append(authorization)
+            books["mainnet_reserve"] -= TOP_UP_MICRO
+            self.venice += TOP_UP_MICRO
 
     def prepare(self, step: str, state: dict, gas_spent: dict) -> dict:
         if step == "shadow_send":
@@ -1233,6 +1370,7 @@ class FakeHybridRail(FakeRail):
         if step == "venice_top_up":
             if self.script["top_up_unavailable"]:
                 raise RailError("Venice top-up quote unavailable")
+            self._above_floor(state["amount_micro"])
             number = self.hybrid_books["authorizations"]
             self.hybrid_books["authorizations"] = number + 1
             return {"network": "scripted-base-mainnet", "leg": "top_up",
@@ -1264,7 +1402,7 @@ class FakeHybridRail(FakeRail):
         super().send(step, reference)
 
     def poll(self, step: str, state: dict) -> dict | None:
-        reference = state["reference"]
+        reference = state.get("reference")
         if step == "shadow_send":
             if reference["tx_hash"] not in self.hybrid_books["used"]:
                 return None
@@ -1273,11 +1411,17 @@ class FakeHybridRail(FakeRail):
                     "route_data": {"shadow": {"sink": self.sink, "micro": state["amount_micro"],
                                               "evidence": reference}}}
         if step == "venice_top_up":
-            if reference["authorization"] not in self.hybrid_books["used"]:
+            # The current authorization and every superseded one, as the live rail polls.
+            candidates = [r for r in (reference, *state["route_data"].get(
+                "superseded_references", ())) if r]
+            used = [r for r in candidates if r["authorization"] in self.hybrid_books["used"]]
+            if not used:
                 return None
+            if self.script["short_credit"]:
+                raise Pending(CREDIT_SHORT)
             return {"confirmed": True, "received_micro": state["amount_micro"],
                     "fee_micro": 0, "principal_moved": True,
-                    "evidence": {**reference, "venice_credit_micro": state["amount_micro"]}}
+                    "evidence": {**used[0], "venice_credit_micro": state["amount_micro"]}}
         return super().poll(step, state)
 
     def expired(self, step: str, state: dict, now_ns: int) -> str | None:
@@ -1299,11 +1443,13 @@ SCRIPTED_RAILS = (FakeRail.name, FakeHybridRail.name)
 
 class FakeTreasury(Treasury):
     def __init__(self, ledger, wallet, *, fee_micro=10_000, max_venice_per_window=10_000_000,
-                 exchange=None, clock_ns=None, venice_shadow_sink=None):
+                 exchange=None, clock_ns=None, venice_shadow_sink=None,
+                 max_venice_total_micro=None, venice_reserve_floor_micro=None):
         # A hybrid world rehearses both conversion legs on scripted custodians: the
         # fast harness runs its fake venue, and no real money exists to spend.
         rail = (FakeHybridRail(wallet, sink=venice_shadow_sink, fee_micro=fee_micro,
-                               exchange=exchange)
+                               exchange=exchange,
+                               reserve_floor_micro=venice_reserve_floor_micro or 0)
                 if venice_shadow_sink is not None
                 else FakeRail(wallet, fee_micro=fee_micro, exchange=exchange))
         super().__init__(
@@ -1311,6 +1457,7 @@ class FakeTreasury(Treasury):
             fee_ceiling_micro=fee_micro,
             max_venice_per_window=max_venice_per_window,
             clock_ns=clock_ns,
+            max_venice_total_micro=max_venice_total_micro,
         )
         self.refresh_pots()
 
