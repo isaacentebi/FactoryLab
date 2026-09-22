@@ -714,6 +714,20 @@ def build_prepaid_provider(manifest: WorldManifest, *, keep_reserve_env: bool = 
     return MultiProvider(openrouter, venice, DeniedMarket())
 
 
+def _http_request():
+    from factorylab.world.x402 import http_request
+
+    return http_request
+
+
+def _sibling_runs(output_dir: Path | None) -> tuple[Path, ...]:
+    """Earlier runs beside this one (``work/capital-loop/<run>``) that kept a diary."""
+    if output_dir is None:
+        return ()
+    return tuple(sorted(p for p in output_dir.parent.iterdir()
+                        if p != output_dir and (p / "ledger.jsonl").exists()))
+
+
 def _denied_rails(capital_loop: bool) -> list[str]:
     """The rails this rehearsal refuses before signing; a capital loop admits to_venice."""
     denied = ["x402", "treasury.to_reserve", "treasury.to_venue", "treasury.to_venice"]
@@ -753,6 +767,8 @@ def run_rehearsal(
     minimum_grounded_samples: int | None = None,
     minimum_contrary_samples: int | None = None,
     capital_loop: bool = False,
+    previous_runs: tuple = (),
+    capital_loop_transport: Callable | None = None,
 ) -> dict[str, Any]:
     """Run a fresh bounded testnet rehearsal and persist a sanitized evidence report.
 
@@ -794,14 +810,30 @@ def run_rehearsal(
             native_completions=True,
             capital_loop=capital_loop,
         )
-        if capital_loop and not manifest.treasury.venice_reserve_floor_micro:
-            # A zero floor lets a fresh run spend the whole real reserve again: the
-            # operator states, on chain terms, what this rehearsal may never go below.
-            raise RehearsalRefused("capital_loop_requires_reserve_floor")
+        launch = None
+        if capital_loop:
+            # The typed floor bounds nothing across runs unless the chain agrees: the
+            # reserve, read keylessly now, may lose at most max_venice_total_usd before
+            # reaching it, and no earlier run may have left an authorization that can
+            # still settle (a crashed world's last one stays valid for its timeout).
+            from factorylab.runtime.capital_loop import launch_check
+
+            runs = tuple(previous_runs) + _sibling_runs(output_dir)
+            launch = launch_check(manifest, previous_runs=runs,
+                                  transport=capital_loop_transport or _http_request())
+            print(json.dumps({"capital_loop_launch_check": {
+                k: v for k, v in launch.items() if k != "previous_runs"}}), flush=True)
         source_path, frozen_hash = source_hash(Path(source_root) if source_root else None)
     except Exception as exc:
         report = {"status": "failed", "error": _safe_exception(exc),
                   "cost": admission.report(), "denied_rails": _denied_rails(capital_loop)}
+        refusal = getattr(exc, "reason", None)
+        if isinstance(refusal, str):
+            # Locally generated reason codes and numbers only; never a response body.
+            report["refusal"] = {"reason": refusal, **getattr(exc, "detail", {})}
+            if capital_loop:
+                print(json.dumps({"capital_loop_refused": report["refusal"]}, default=str),
+                      flush=True)
         if report_path is not None:
             report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
         return report
@@ -923,6 +955,7 @@ def run_rehearsal(
             "venice_reserve_floor_micro": manifest.treasury.venice_reserve_floor_micro,
             "venice_pay_to": manifest.treasury.venice_pay_to,
             "reserve_address": manifest.treasury.reserve_address,
+            "launch_check": launch,
         }
     runtime = None
     observer = None
@@ -1044,6 +1077,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--capital-loop", action="store_true",
                         help="hybrid Venice world only: admit to_venice, which spends REAL "
                         "Base mainnet USDC (docs/architecture/capital-loop-rehearsal.md)")
+    parser.add_argument("--previous-run", type=Path, action="append", default=[],
+                        help="with --capital-loop: an earlier run directory whose top-up "
+                        "authorizations must all be settled or expired before launch "
+                        "(sibling run directories of --out are always checked)")
     args = parser.parse_args(argv)
     from factorylab.runtime.worlds import duration_ns
 
@@ -1057,7 +1094,8 @@ def main(argv: list[str] | None = None) -> int:
                            minimum_ticks=args.minimum_ticks,
                            minimum_grounded_samples=args.minimum_grounded_samples,
                            minimum_contrary_samples=args.minimum_contrary_samples,
-                           capital_loop=args.capital_loop)
+                           capital_loop=args.capital_loop,
+                           previous_runs=tuple(args.previous_run))
     print(json.dumps({"status": report["status"], "out": str(args.out),
                       "cost": report["cost"],
                       "behavioral_screen": report.get("behavioral_screen")}, indent=2))

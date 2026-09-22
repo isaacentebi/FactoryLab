@@ -43,8 +43,9 @@ The other order could leave real USDC spent against a testnet leg that never pay
 | Shadow row charges a fee | `treasury.pending` "shadow send charged a fee; the conversion needs an operator" | Stalls publicly; the preflight's `missing`-sink refusal exists to prevent it |
 | Top-up cannot be prepared after the shadow paid (no quote, reserve at its floor, payee differs, a cap reached) | `treasury.pending` each attempt, then `treasury.failed` status `stranded`, `recoverable`, reason `Venice top-up not prepared within treasury.forward_wait_windows` | Hold stays; no new `to_venice` may start beside it; when the slot is free a tick re-prepares the top-up (`treasury.recovered`), within the absolute and window caps. The shadow leg is never re-sent |
 | Top-up submission outcome unknown | `treasury.pending` "submission outcome unknown" | **Never resubmitted.** The step is poll-only: it confirms on the `AuthorizationUsed` debit, or strands recoverably only when a **finalized** Base block is past its `validBefore` and the receipt scan covered every block up to it with no debit. The runtime clock is never consulted. Recovery first polls the superseded authorization (a late debit is booked and nothing new is signed), then prepares a *new* authorization, counted against the caps. A kill during the submission resumes as unknown too (the journal refuses to replay a poll-only send) |
-| Debit found but Venice credit short (risen by less than $5 minus the diary's metered Venice spend since the authorization), or unreadable | `treasury.pending` "Venice credit short of the tranche; financing held unresolved", with the numbers in its carry | No financing is booked and the principal stays held; the step keeps polling, is never tested for expiry and never re-authorized. It confirms when the credit accounts for the tranche; otherwise it needs an operator |
-| Kill anywhere | Checkpoint + journal | Resume replays each leg once and keeps the authorization counter (`tests/runtime/test_resume.py`, hybrid cut test) |
+| Debit found, credit read | `treasury.confirmed` and `treasury.financing`, the credit reads and `credit_shortfall_micro` in the evidence | Financing is booked on the canonical debit, as the ordinary rail books it. Metered spend is an estimate, the balance rounds down and seats spend the credit through the finality wait, so a shortfall is recorded, not held |
+| Debit found, but the credit rose by less than $5 − metered spend − $0.25 (`CREDIT_TOLERANCE_MICRO`) | `treasury.pending` "Venice credit short of the tranche; financing held unresolved", with the numbers in its carry | Only a missing credit, not spend or rounding, is held: no financing is booked, the principal stays held, the step keeps polling and is never tested for expiry or re-authorized. It confirms if the credit shows up; otherwise it needs an operator |
+| Kill anywhere | Checkpoint + journal on disk; the live world is **not** resumed | `factorylab resume` refuses a live hybrid world (the opt-in is not checkpointed) and the rehearsal runner has no resume. Follow "After a crash": read what is outstanding, wait, and launch a fresh run; its launch check refuses while any earlier authorization can still settle. Journal replay of both legs is exact (`tests/runtime/test_resume.py`, hybrid cut test, on the scripted world), but a live hybrid world is never replayed in place |
 
 Every accepted authorization, re-authorizations included, is counted in
 `venice_authorized_micro` and ledgered as `treasury.venice_authorized` before it can be
@@ -74,7 +75,7 @@ venice_network = "base-mainnet"          # refused on a mainnet venue
 venice_shadow_sink = "0x...dEaD"         # required; PLACEHOLDER, confirm before a live run
 max_venice_per_window = "10"             # two conversions per reserve window
 max_venice_total_usd = "10"              # required: every authorization ever, counted
-venice_reserve_floor_usd = "0"           # required; PLACEHOLDER, the runner refuses 0
+venice_reserve_floor_usd = "0"           # required; PLACEHOLDER, checked at launch
 venice_pay_to = "0x2670b922ef37c7df47158725c0cc407b5382293f"  # required: Venice's payee
 ```
 
@@ -100,7 +101,19 @@ September 2026 (docs/research/venice.md) and cannot be verified offline.
 The manifest alone never switches the mode on. `factorylab run` and `factorylab resume`
 refuse a live hybrid world; only `scripts/edition4_rehearsal.py --capital-loop` passes
 the runtime opt-in, and the opt-in is not checkpointed. A hybrid world interrupted
-mid-run is therefore not resumable by the CLI: see "After the run".
+mid-run is therefore never resumed: see "After a crash".
+
+The floor is only a cross-run bound if it sits close to the balance, so the runner
+checks it against the chain at launch: it reads the reserve's USDC keylessly (a public
+`eth_call` on the manifest's `reserve_address`) and refuses unless
+reserve − floor ≤ `max_venice_total_usd`, printing both numbers
+(`capital_loop_launch_check`). A $1 floor on a $15 reserve with a $10 cap is refused.
+
+Expiry is the same rule on both rails, the ordinary mainnet `LiveRail` included: a
+top-up authorization is abandoned only when a finalized Base block is past its
+`validBefore`, the USDC contract's `authorizationState(reserve, nonce)` is false at
+that block (so a lagging RPC returning no logs cannot fake it), and the log scan
+covered every block up to it. The runtime clock is never consulted.
 
 ## Before a live run
 
@@ -127,8 +140,9 @@ mid-run is therefore not resumable by the CLI: see "After the run".
    Venice credit (a SIWE sign-in, which moves nothing). Record all three numbers.
    Fund the mainnet reserve with the most you are willing to spend and no more.
 4. **Set the floor.** Put `venice_reserve_floor_usd` at the reserve's USDC (step 3)
-   minus the total this rehearsal may spend; the runner refuses a zero floor. Keep
-   `max_venice_total_usd` at or below that allowance.
+   minus the total this rehearsal may spend, and `max_venice_total_usd` at or above
+   that difference; the runner re-reads the reserve at launch and refuses unless
+   reserve − floor ≤ `max_venice_total_usd`.
 5. **Confirm the payee.** An unpaid quote signs nothing and moves nothing; its Base
    `payTo` must equal `venice_pay_to`:
 
@@ -154,7 +168,11 @@ mid-run is therefore not resumable by the CLI: see "After the run".
    bounds model spend only, not conversions.)
 
    `report.json` carries a `capital_loop` section naming the network, sink, window cap,
-   total cap, floor, payee and reserve.
+   total cap, floor, payee and reserve, and the launch check's numbers. Before building
+   anything the runner also reads every sibling run directory of `--out` that kept a
+   diary (and each `--previous-run DIR`) and refuses while any of their top-up
+   authorizations could still settle; a directory whose ledger key file is missing is
+   refused too, since it cannot be read.
 
 ## After the run
 
@@ -164,12 +182,13 @@ mid-run is therefore not resumable by the CLI: see "After the run".
 - The last `treasury.venice_authorized` shows `authorized_micro` at or below
   `cap_micro`; the number of these items is the number of authorizations ever built.
 - No transfer is left `submitted` or in `stranded`; if one is, its `reason` says which
-  leg is waiting. A hybrid strand's shadow already paid; the CLI will not resume the
-  world, so settle it by reading the chain (below) before any manual action.
-- A `treasury.pending` "Venice credit short of the tranche" means real USDC left but
-  the credit did not show it: compare `observed_micro`, `credit_before_micro` and
-  `metered_usage_since_micro` in its carry with Venice's transaction list
-  (`/x402/transactions/{wallet}`) before anything else.
+  leg is waiting. A hybrid strand's shadow already paid; the world is never resumed,
+  so settle it by reading the chain ("After a crash") before any manual action.
+- Each confirmation's evidence carries `credit_shortfall_micro`: spend and rounding
+  the tolerance absorbed. A `treasury.pending` "Venice credit short of the tranche"
+  means real USDC left but the credit did not show it: compare `observed_micro`,
+  `credit_before_micro` and `metered_usage_since_micro` in its carry with Venice's
+  transaction list (`/x402/transactions/{wallet}`) before anything else.
 - Re-read the mainnet reserve (step 3): it fell by exactly $5 × confirmed conversions,
   and it is not below the floor. Each confirmation's `tx_hash` is a Base mainnet
   transaction to check on a block explorer; its `nonce` is the authorization's.
@@ -181,6 +200,31 @@ mid-run is therefore not resumable by the CLI: see "After the run".
   means an authorization may still be live: do not top up by hand until it confirmed,
   or a finalized Base block is past its `validBefore` with no `AuthorizationUsed` for
   its nonce.
+
+## After a crash
+
+A killed or crashed capital-loop world is not resumed. Instead:
+
+1. **Wait 10 minutes.** A crashed world's last top-up authorization stays valid on
+   chain until its `validBefore` (at most the quote's `maxTimeoutSeconds`, capped at
+   600 seconds after it was prepared), and Base needs its finality lag on top.
+2. **Read what is outstanding**, read-only and keyless (the run's diary is opened with
+   its own `ledger.jsonl.key`, as `factorylab postmortem` opens it; the reserve key is
+   never loaded, nothing is signed):
+
+       uv run python scripts/capital_loop_outstanding.py work/capital-loop/<run>
+
+   For every top-up authorization the run journaled, current and superseded, it prints
+   the nonce, `validBefore`, the finalized head's timestamp, the USDC contract's
+   `authorizationState` and any `AuthorizationUsed` debit, and a verdict: `settled`,
+   `expired unused`, or `LIVE: may still settle`. It also lists shadow sends left
+   unconfirmed. It exits 1 while anything is live or pending.
+3. **Settle the books by hand from that output.** A `settled` authorization with no
+   `treasury.financing` in the dead diary bought real credit the dead world never
+   booked; the next run counts it in its first credit observation. A pending shadow
+   send is testnet money only.
+4. **Relaunch** as in "Before a live run". The launch check re-reads every sibling run
+   directory and refuses while any authorization could still settle.
 
 ## What is not proven live
 
