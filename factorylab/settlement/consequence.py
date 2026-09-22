@@ -286,15 +286,42 @@ class ReturnConsequences:
         elif kind == "OrderRejected" and payload.get("order_id") is not None:
             self.cancel(str(payload["order_id"]), event)
 
-    def resolve(self, event: int) -> list[Payoff]:
-        """Persist all newly fixed outcomes before publishing the successor accounting state."""
+    def redeem(self, coin: str, payout: str, event: int, facts: dict) -> dict[str, int]:
+        """Close every event lot of ``coin`` at its market's resolution, with evidence first.
+
+        Guarantees the resolution is ledgered before any lot moves, and that each
+        decision that held the token is given one ``resolution`` execution receipt
+        naming what it held, the payout and what that realised: a resolution is a
+        fact about the world, addressed to the decisions it settled. Returns the
+        signed micro-USD realised per handle, floored once.
+        """
+        table, credited = self.table.redeem(coin, payout)
+        if table is self.table:
+            return {}
+        self._apply("resolution", {"coin": coin, "payout": str(payout), "event": event,
+                                   **facts}, table)
+        realized = {}
+        for handle, net in credited.items():
+            realized[handle] = net.numerator // net.denominator
+            self._execution("resolution", handle, event, {
+                **facts, "coin": coin, "payout": str(payout),
+                "realized_micro": realized[handle]})
+        return realized
+
+    def resolve(self, event: int, held: tuple[str, ...] = ()) -> list[Payoff]:
+        """Persist all newly fixed outcomes before publishing the successor accounting state.
+
+        ``held`` names returns whose outcome waits on an event market's resolution
+        (``LotTable.resolve``); they stay open whatever the backstop says.
+        """
         # An outcome censored for documented unobservability was fixed the moment
         # its hold was released; it is handed over here with everything else.
         fixed, self.censored_payoffs = self.censored_payoffs, []
         if self.pending_orders:
             return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         table = self.table.resolve(event, self.backstop, self.mids,
-                                   censored=self._unknown_portions(), tick=self._tick(event))
+                                   censored=self._unknown_portions(), tick=self._tick(event),
+                                   held=held)
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})

@@ -9,9 +9,13 @@ opener's entry price and the closer's exit price on the closed quantity): the
 opener's part is net of its opening fee and funding, the closer's net of its
 closing fee. A handle closing its own lot receives the whole profit once.
 Only a decision with an open account can own an order or a lot.
+
+An ``event`` lot is an outcome token of a binary event market (Polymarket). It
+is held long only, it is never marked, and its consequence is fixed by the
+market's resolution (``redeem``), never guessed from a price at the backstop.
 """
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from fractions import Fraction
@@ -303,10 +307,10 @@ class LotTable:
         _require_id(order_id)
         if "/" in coin:
             market = "spot"
-        if market not in ("perp", "spot"):
+        if market not in ("perp", "spot", "event"):
             raise ValueError("unknown market")
-        if market == "spot" and liquidation:
-            raise ValueError("spot lots cannot be liquidated")
+        if market in ("spot", "event") and liquidation:
+            raise ValueError(f"{market} lots cannot be liquidated")
         _require_id(coin)
         if type(is_buy) is not bool or type(liquidation) is not bool:
             raise ValueError("fill side and liquidation must be booleans")
@@ -318,7 +322,7 @@ class LotTable:
         accounts = {r.handle: r for r in self.returns}
         if not liquidation and owner not in accounts:
             raise ValueError("fill without an open consequence account")
-        if market == "spot" and not is_buy and quantity > sum(
+        if market in ("spot", "event") and not is_buy and quantity > sum(
             (lot.size for lot in self.lots if lot.coin == coin and lot.market == market),
             Fraction(0),
         ):
@@ -406,9 +410,42 @@ class LotTable:
             ),
         )
 
+    def redeem(self, coin: str, payout: str) -> tuple["LotTable", dict[str, Fraction]]:
+        """Close every event lot of ``coin`` at the price its market resolved to.
+
+        Guarantees each lot's owner is credited once with exactly what the
+        resolution paid for it, ``(payout - entry) * size`` net of the lot's
+        opening fee, and that no closer is credited: the market's resolution
+        closes the position, not another decision. ``payout`` is the price one
+        outcome token redeemed at, 0 to 1 inclusive (0.5 each on a 50-50
+        resolution). Only ``event`` lots move; a coin with none is unchanged.
+        Returns the successor table and the signed micro-USD credited per
+        handle, exact, for the caller's receipts.
+        """
+        _require_id(coin)
+        price = exact(payout)
+        if not 0 <= price <= 1:
+            raise ValueError("an event market pays between 0 and 1 per token")
+        accounts = {r.handle: r for r in self.returns}
+        lots, credited = [], {}
+        for lot in self.lots:
+            if lot.coin != coin or lot.market != "event":
+                lots.append(lot)
+                continue
+            net = (price - lot.px) * lot.size * 1_000_000 - lot.charges_micro
+            if lot.handle in accounts:
+                account = accounts[lot.handle]
+                accounts[lot.handle] = replace(
+                    account, realized_micro=account.realized_micro + net,
+                    closed_lots=account.closed_lots + 1)
+                credited[lot.handle] = credited.get(lot.handle, Fraction(0)) + net
+        if len(lots) == len(self.lots):
+            return self, {}
+        return replace(self._accounts(accounts), lots=tuple(lots)), credited
+
     def resolve(self, event: int, backstop: int, mids: Mapping[str, str], *,
                 censored: Mapping[str, str] | None = None,
-                tick: int | None = None) -> "LotTable":
+                tick: int | None = None, held: Collection[str] = ()) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
         The backstop counts from the return's opening, including any time awaiting
@@ -423,6 +460,12 @@ class LotTable:
         like any other, and its outcome carries the money its observed orders
         produced; only the answer to whether it paid off is unknown, because the
         unobserved order could have changed it, so the outcome is censored.
+
+        ``held`` names returns whose consequence is owed by a future resolution
+        (an event market order still resting): they are skipped whatever their
+        age. A return holding an event lot is skipped the same way without being
+        named, because an outcome token has no mark: its value is known only when
+        its market resolves, and the backstop does not turn that into a guess.
         """
         _require_event_index(event, "event")
         _require_event_index(backstop, "backstop", positive=True)
@@ -430,7 +473,11 @@ class LotTable:
         for account in self.returns:
             if account.voided or account.cost_micro is None or account.payoff is not None:
                 continue
+            if account.handle in held:
+                continue
             lots = [lot for lot in self.lots if lot.handle == account.handle]
+            if any(lot.market == "event" for lot in lots):
+                continue
             waiting = any(o.handle == account.handle and o.remaining for o in self.orders)
             age = (tick - account.opened_at_tick
                    if tick is not None and account.opened_at_tick is not None
