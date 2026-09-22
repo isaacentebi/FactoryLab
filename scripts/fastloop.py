@@ -131,7 +131,14 @@ class PolicyProvider(ScriptedProvider):
                         "reason": "no attributable evidence"})
             return {"verdict": 0.5, "rationale": "scripted final",
                     "realized_consequence": finding}
-        return {"verdict": 0.6, "payoff": 0.3, "rationale": "scripted provisional"}
+        # One seed-vocabulary claim per provisional verdict, as the paid judges seal
+        # (PR121: 141 in 240 ticks). A holding population's payoff forecasts are all
+        # refused as hindsight, so without it no forecast ever comes due, and a
+        # forecast-windowed card (edition 5's censorship-bound) is never measured
+        # or priced on the free tier.
+        return {"verdict": 0.6, "payoff": 0.3, "rationale": "scripted provisional",
+                "forecasts": [{"predicate": "wallet_up", "q": 0.4,
+                               "params": {"horizon_events": 10}}]}
 
 
 # --- the scorecard ------------------------------------------------------------------
