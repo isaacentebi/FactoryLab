@@ -144,6 +144,10 @@ settings".
 | `charter.cards[].window.n` | Positive integer, never a boolean or float | Required; seed cost and well-formedness cards use `100`, forecast skill uses `50` | Population amendable sample horizon |
 | `charter.cards[].window.per` | `"role"`, `"assembly"`, or null | Required in JSON; omitted in TOML means null. Seed cost and well-formedness use `"role"`; forecast skill uses `"assembly"` | Population amendable scope |
 | `charter.cards[].answers_for` | `producer`, `evaluator`, `meta`, `antagonist`, `all`, or any registered emitted kind | Required | Population amendable pricing responsibility |
+| `charter.cards[].region` | `{ rule, lo, hi }`: `rule` one of `at least`, `above` (with `lo`), `at most`, `below` (with `hi`), `between` (both, `lo < hi`), `below the median of the previous window` (neither) | Required unless `acceptable_region` states it | The typed acceptable region (charter audit P2); the rendered sentence is derived from it. Hashed with the card |
+| `charter.cards[].acceptable_region` | One of the historical sentences (`at most 0.30`, `above zero`, …) | Accepted in place of `region`; with both, they must agree | Read into the same typed rule; a sentence no rule reads holds no region and carries no price, and a manifest refuses it |
+| `charter.cards[].holdout` | Array of `predicate-id@version` | `[]` | Registered predicates a closed window must also satisfy (charter audit M3); appended by a holdout motion, never by a cards motion |
+| `charter.cards[].window.interval` | Absent, or `{ level, half_width }`, `level` in (0, 1), `half_width` > 0 | Absent | A scope is measured only when the `level` interval of its mean is at most `half_width` wide on each side (charter audit M3) |
 | Proposal `predicted_effect.card_id` | Current or proposed card id for cards and lambda amendments; current card id for connectors and retirements | Required unless `observation` is given; no default | Liability binds to a measurable card |
 | Proposal `predicted_effect.observation` | `burn_per_window` or a population-registered observation id | Required for, and only for, a clock amendment (`tick_interval`) | Speed is cash burn (charter audit M6): the promise is graded on the observation over one closed window, its region the observation's declared range |
 | Proposal `predicted_effect.direction` | `increase` or `decrease` | Required; no default | The promise graded against the baseline recorded at activation |
@@ -609,13 +613,78 @@ whether the region is satisfied. A move counts once it clears
 region at the baseline kept the promise only by moving in the promised
 `direction` that far; a card already inside kept it by staying inside without
 moving against the promise. A vote that backed a change whose value went the
-wrong way is wrong even if the region still holds. Yes votes predict a kept
-promise; no votes predict its negation. The score is `1 - (vote - outcome)^2`,
-recorded as `policy-promise-brier-v2`; `policy.outcome` carries `baseline`,
-`direction`, `resolution`, `value` and `y`. Amendments, connectors and
-retirements use this same liability. Abstentions, failed proposals and missing
-baseline, measurement or region evidence are censored, with no fast reward.
-Subsequent ballots receive that assembly's private policy-return history.
+wrong way is wrong even if the region still holds. Each vote is a bet on the
+branch the committee takes (charter audit P1): a yes vote says the motion makes
+the promised difference, so it is `q = 1` that the promise holds if enacted and
+`q = 0` that it holds on the unchanged charter; a no vote is the opposite. A
+charter motion that passes is graded on the enact branch from its activation; one
+that fails its vote (`policy.rejected`) is graded on the reject branch, against
+the unchanged charter measured from the failing boundary over the same horizon.
+The score is `1 - (q - outcome)^2`, recorded as `policy-promise-brier-v2`;
+`policy.outcome` carries `branch`, `q`, `baseline`, `direction`, `resolution`,
+`value` and `y`. Connectors and retirements use the enact-branch liability; a
+failed one is censored. Abstentions, refused activations and missing baseline,
+measurement or region evidence are censored, with no fast reward. Subsequent
+ballots receive that assembly's private policy-return history.
+
+## The charter's markets
+
+Charter audit M1, M2, M3, M5, C3 (essay II.IV.a: λ "reaches the committee as a
+speculative price posted by the factory"; "vote on values, bet on beliefs").
+No manifest key: the formulas are published in `world.mechanics.committee` and
+`world.mechanics.controller`.
+
+- **Posted λ.** Any return may carry `shadow_prices: {card_id: lambda}` for cards
+  priced now, each in `[0, prices.lambda_max]`, one per seat, card and reserve
+  window (`lambda_post.posted`; a refusal is `lambda_post.refused` and reaches the
+  poster's inbox). Each post opens its own `policy` decision under
+  `assembly:<id>`, settled after `timing.min_ratio` window closes as
+  `lambda-post-quadratic-v1` with `1 - ((p - y) / lambda_max)^2`, `y` the card's
+  λ after that close (`lambda_post.settled`); a card no longer priced censors it.
+  The posted price is the median of each seat's latest unsettled post weighted by
+  `(1/2 + sum of its settled post scores) / (1 + their count)`, ledgered at every
+  close (`lambda_post.aggregate`), published in `world.card_prices[].posted` and on
+  every ballot's `inputs.agenda.cards`. A lambda motion may name `"posted"` for a
+  card: the aggregate at admission (`lambda_post.adopted`).
+- **Conditional forecasts on motions.** Any return may carry
+  `motion_forecasts: [{motion, branch, q}]` on a motion on the agenda, `branch`
+  `enact` or `reject`, one per seat, motion and branch (`policy.forecast`). Each is
+  frozen on the motion's promise like a ballot, opens its own `policy` decision and
+  is graded as `motion-forecast-brier-v1` on the branch taken; the other branch's
+  forecasts are void (`policy.void`, censored). Each agenda motion's forecasts per
+  branch are on `inputs.agenda.markets`.
+- **Feed-forward.** At a window close, for a card named by the predicted effect of
+  forecasts on the branch in force (reject while the motion is undecided, the
+  branch taken until its horizon), the price law adds
+  `F = prices.kp * max(e - v, -v)`, `e` the forecasts' expected violation; the
+  integral and derivative stay on realized measurement. `price.update` carries `f`
+  and `anticipated` when a market exists. With `prices.kp = 0` there is none.
+- **Holdouts.** An evaluator or antagonist seat proposes
+  `{"kind": "amendment", "id", "holdout": {card_id, predicate, evidence,
+  trial_windows}, "predicted_effect"}`; `predicate` is a registered predicate,
+  frozen at its version. Admission costs one novelty trial (`holdout:<id>`,
+  `holdout.proposed`); its trial windows record `holdout: {predicate, held}` in
+  `challenge.window`, and it then joins the next committee's agenda as the replace
+  of the card with the holdout appended. At each close a card's holdouts are
+  resolved on the window's public facts (`price.window.holdouts`); `k` failed of
+  `n` named is a violation of `k / n`, and the card is priced on the larger of that
+  and its region violation.
+- **Scoped population observations.** A registered observation may be named by a
+  `windows` card with `per` role or assembly: its code runs once per scope on that
+  scope's share of the window facts, with no identity in them, and the card carries
+  attributable blame like a seed one.
+- **λ in dollars.** Each close ledgers `price.dollars {window, reward_mass,
+  compute_spend_micro, cards: {id: {lambda, penalty, micro_usd}}}`:
+  `micro_usd = round(penalty * compute_spend_micro / reward_mass)`, the penalty
+  mass a card's price took from the window's settlements at the window's own cost
+  of a unit of reward. `world.card_prices[].last_window_dollars` publishes it.
+  `scripts/charter_session.py report` computes the same from rehearsal diaries.
+- **The charter session.** `scripts/charter_session.py session` (with `--dry-run`
+  for a scripted provider) has the seed population draft cards from the manifest's
+  norms, a sortition vote on each, a fresh sortition adopt or reject the drafted
+  charter whole, and exports it with typed regions and the digests the load path
+  verifies. It replaces `draft_edition1.py`, `ratify_charter.py` and
+  `adopt_charter.py`.
 
 ## Venice transfer and first move
 
@@ -1759,7 +1828,8 @@ measures without the card it challenges judging the change:
 {"kind": "challenge", "card_id": "censorship-bound", "evidence": "text",
  "replacement": {"observation": "censored_share", "rule": "at most", "value": 0.2,
                  "window": {"kind": "windows", "n": 5}},
- "trial_windows": 6}
+ "trial_windows": 6,
+ "predicted_effect": {"card_id": "censorship-bound", "direction": "decrease", "window": 2}}
 ```
 
 Exactly those keys. `card_id` names a current card that is not already under
@@ -1768,7 +1838,9 @@ challenge; `evidence` is a nonempty string of at most 4,000 chars;
 (`at most`, `at least`, `above`, `below`), a finite `value` and a typed
 `window`, and may add `description`, `units` and `answers_for`; it keeps the
 challenged card's `id` and `norm`, so adopting it is the ordinary replace
-amendment. `trial_windows` is an integer in `[1, 50]`. An unchanged
+amendment. A challenge also carries its own `predicted_effect`, naming the
+challenged card; its ballot is graded on that promise (charter audit P2), and the
+replacement's region is built as typed data from `rule` and `value`. `trial_windows` is an integer in `[1, 50]`. An unchanged
 replacement, an unmeasurable window, an unparsable region, a duplicate
 observation binding or a refused preflight is refused with the reason before
 anything is spent.
