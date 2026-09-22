@@ -306,3 +306,32 @@ def test_a_charter_after_edition_one_names_its_parent():
                                                "parent_charter_sha256": parent}})
     with pytest.raises(ValueError, match="positive integer"):
         manifest_from_dict({**raw, "charter": {**raw["charter"], "edition": 0}})
+
+
+def test_a_crash_mid_write_leaves_no_edition_and_the_sequence_can_be_written_again(
+        tmp_path, monkeypatch):
+    """Codex review of #129: a truncated file would block norm governance for good."""
+    from factorylab.runtime import cli
+    from factorylab.runtime.cli import main
+
+    world = _world_file(tmp_path, HOUSE_KEY)
+    norms = tmp_path / "norms.json"
+    norms.write_text(json.dumps({"norms": ["truthful commitments"]}))
+    ledger = tmp_path / "w.jsonl"
+    args = ["norm-edition", "--world", str(world), "--ledger", str(ledger), "--norms",
+            str(norms), "--sequence", "1", "--key-file", str(_key_file(tmp_path, HOUSE_KEY))]
+    real_dump = json.dump
+
+    def dies_half_way(obj, f, **kw):
+        f.write('{"format": ')
+        raise OSError("disk full")
+
+    monkeypatch.setattr(cli.json, "dump", dies_half_way)
+    try:
+        assert main(args) != 0  # the command reports the failure
+    except OSError:
+        pass  # or lets it propagate; either way nothing may be left behind
+    assert not inbox_path(ledger, 1).exists()
+    assert [p.name for p in inbox_path(ledger, 1).parent.iterdir()] == []
+    monkeypatch.setattr(cli.json, "dump", real_dump)
+    assert main(args) == 0 and json.loads(inbox_path(ledger, 1).read_text())["sequence"] == 1

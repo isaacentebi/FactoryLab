@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -623,13 +624,24 @@ def _cmd_norm_edition(args: argparse.Namespace) -> int:
         return ARGUMENT_EXIT
     path = inbox_path(args.ledger, args.sequence)
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Published atomically: the whole body is written and synced under a temporary
+    # name, then hard-linked into place. A link never replaces an existing file, so
+    # a sequence is written at most once, and a crash leaves either nothing or the
+    # complete file -- never a truncated one that would block the next edition.
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        with open(path, "x") as f:
+        with open(tmp, "x") as f:
             json.dump(body, f, sort_keys=True, indent=1)
-    except FileExistsError:
-        print(f"factorylab norm-edition: sequence {args.sequence} is already written",
-              file=sys.stderr)
-        return ARGUMENT_EXIT
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            print(f"factorylab norm-edition: sequence {args.sequence} is already written",
+                  file=sys.stderr)
+            return ARGUMENT_EXIT
+    finally:
+        tmp.unlink(missing_ok=True)
     print(json.dumps({"world": manifest.name, "sequence": args.sequence, "path": str(path),
                       "signer": body["signer"], "norms": len(body["norms"])}))
     return 0
