@@ -279,3 +279,28 @@ def test_in_a_world_the_order_stands_and_the_seat_reads_the_receipt(tmp_path):
     addressed = {(i["assembly_id"], i["handle"]) for i in diary
                  if i["kind"] == "outcome.addressed"}
     assert all((i["assembly_id"], i["handle"]) in addressed for i in receipts)
+
+
+# PR121: four answers were voided for habits that change nothing they said.
+JUDGE = {"type": "object", "properties": {
+    "verdict": {"type": "number", "minimum": 0, "maximum": 1},
+    "payoff": {"type": "number"}, "status": {"enum": ["unmeasured", "cannot"]},
+    "reason": {"type": "string"}, "rationale": {"type": "string"}},
+    "required": ["rationale"]}
+
+
+def test_null_for_an_optional_field_is_the_field_left_out():
+    ret = invoke({"verdict": None, "payoff": None, "status": "unmeasured",
+                  "rationale": "nothing committed"}, JUDGE)
+    assert ret.status == "ok" and "verdict" not in ret.outputs and "payoff" not in ret.outputs
+
+
+def test_null_in_a_required_field_is_still_malformed():
+    schema = {**JUDGE, "required": ["rationale", "verdict"]}
+    assert invoke({"verdict": None, "rationale": "x"}, schema).status == "malformed"
+
+
+def test_a_reason_stands_for_a_missing_required_rationale():
+    ret = invoke({"status": "unmeasured", "reason": "a hold with no commitment"}, JUDGE)
+    assert ret.status == "ok" and ret.outputs["rationale"] == "a hold with no commitment"
+    assert invoke({"status": "unmeasured", "reason": "  "}, JUDGE).status == "malformed"

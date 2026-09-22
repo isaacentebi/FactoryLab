@@ -670,6 +670,16 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     If supplied, ``rejected`` retains section faults even when the whole answer fails.
     """
     parsed = dict(parsed)
+    required = schema.get("required", ()) if isinstance(schema, dict) else ()
+    # Two habits every model has, neither of which changes what an answer says:
+    # ``null`` for a field it is leaving out, and its explanation under ``reason``
+    # when the contract names it ``rationale``. A null optional field is absent; a
+    # missing required rationale is read from a string reason. Nothing else is
+    # coerced, and a null in a required field still fails.
+    parsed = {k: v for k, v in parsed.items() if v is not None or k in required}
+    if ("rationale" in required and "rationale" not in parsed
+            and isinstance(parsed.get("reason"), str) and parsed["reason"].strip()):
+        parsed["rationale"] = parsed["reason"]
     dropped: list[dict[str, Any]] = [] if rejected is None else rejected
     origin: dict[str, list[int]] = {}
 
