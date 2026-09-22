@@ -81,6 +81,9 @@ from factorylab.world.market import X402Provider
 #: What a return carries that is not the work under judgement: its propensity, which
 #: the request's PROPENSITY block renders once (P8).
 UNJUDGED_OUTPUT_FIELDS = frozenset({"propensity"})
+#: The seed kinds a judge reads through the producer view (the machine view of
+#: essay II.I.b): the one kind a producer emits and the one an antagonist emits.
+PRODUCING_KINDS = frozenset({"ProducerReturn", "Exposure"})
 
 
 def judged_outputs(outputs: Any) -> Any:
@@ -966,11 +969,10 @@ class Runtime(
                 # judge can price the roads this return did not take.
                 "propensity": self._public_propensity(handle),
             }
-        # Exposure retains its producer-shaped judgment route for the shipped seeds;
-        # assemblies may also subscribe to its explicit kind.
-        self._emit(EventKind.PRODUCER_RETURN if emitted == "Exposure" else emitted, payload)
-        if emitted == "Exposure" and self.routers.get("Exposure"):
-            self._emit("Exposure", payload)
+        # A return is published as the kind it is, and only as that kind (primitive
+        # audit F12): a judge of Exposure says so in its contract, accepts =
+        # ["Exposure"], rather than meeting one disguised as a ProducerReturn.
+        self._emit(emitted, payload)
 
     def _forecast_step(self, ev, handle, sample, ret, emitted) -> None:
         """Population forecast work is rewarded only by its future public facts."""
@@ -1070,12 +1072,17 @@ class Runtime(
             # scope, an evidence horizon and a budget, which may be declined.
             "commission": commission_block(
                 subject=about,
-                scope=f"the public return addressed by about_handle, judged on {ev.kind}",
+                scope=("the public return addressed by about_handle"
+                       + ("" if str(ev.kind) in PRODUCING_KINDS else f", judged on {ev.kind}")),
                 horizon=self.ev.forecast_horizon_events,
                 budget_micro=self.queue.get(handle).cost_ceiling,
             ),
         }
-        generic = ev.kind is not EventKind.PRODUCER_RETURN
+        # The two seed producing kinds are judged through one machine view: an
+        # Exposure arrives as its own kind (F12), and the kind is routing, never a
+        # clause that tells the judge its author was an antagonist (essay II.I.b:
+        # the author "should be either irrelevant, or fungible, or private").
+        generic = str(ev.kind) not in PRODUCING_KINDS
         # A judge looks at the work like a machine — request, answer, acts,
         # propensity — and never at the whole world the producer was shown
         # (essay II.I.b, after Yan 2026). It keeps its own operating access,

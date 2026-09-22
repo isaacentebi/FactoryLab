@@ -219,7 +219,7 @@ initial_state = { lens = "Your starting prior is that the value of any use of re
 id = "judge-consequence"
 role = "evaluator"
 model_id = "openai/gpt-5.6-luna"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
 initial_state = { lens = "Your starting prior is that an outcome is noisy evidence about the quality of the decision that preceded it.", open_questions = [], active_commitments = [] }
@@ -229,7 +229,7 @@ initial_state = { lens = "Your starting prior is that an outcome is noisy eviden
 id = "judge-fidelity"
 role = "evaluator"
 model_id = "z-ai/glm-5.3-flash"
-accepts = ["ProducerReturn"]
+accepts = ["ProducerReturn", "Exposure"]
 max_tokens = "provider"
 effort = "low"
 initial_state = { lens = "Your starting prior is that a favourable measurement can diverge from the value it is meant to represent.", open_questions = [], active_commitments = [] }

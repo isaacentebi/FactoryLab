@@ -266,10 +266,13 @@ def _consequence_produce(runtime, action="seed-decider", channel="verdict"):
         SimpleNamespace(chosen=action),
         runtime.queue.get(handle).deadline_ns,
     )
+    # A return is published as its own kind (primitive audit F12): an antagonist's
+    # is an Exposure, never a ProducerReturn.
     event = next(
         e
         for e in runtime.internal
-        if e.kind == EventKind.PRODUCER_RETURN and e.payload["about_handle"] == handle
+        if str(e.kind) in (str(EventKind.PRODUCER_RETURN), "Exposure")
+        and e.payload["about_handle"] == handle
     )
     runtime._settle_due_forecasts()
     return handle, event

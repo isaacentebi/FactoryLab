@@ -2251,9 +2251,8 @@ class ComputeMixin:
                        "outputs": public_return(ret.outputs),
                        "cost": ret.cost, "status": ret.status,
                        "propensity": self._public_propensity(handle)}
-            self._emit("ProducerReturn" if emitted == "Exposure" else emitted, payload)
-            if emitted == "Exposure" and self.routers.get("Exposure"):
-                self._emit("Exposure", payload)
+            # Published as its own kind only (primitive audit F12).
+            self._emit(emitted, payload)
         return {"tool": f"assembly:{target}", "args": item.inputs,
                 "result": {"outputs": public_return(ret.outputs), "status": ret.status,
                            "cost_micro": ret.cost}}, ret.cost
