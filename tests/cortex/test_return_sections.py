@@ -274,7 +274,9 @@ def test_in_a_world_the_order_stands_and_the_seat_reads_the_receipt(tmp_path):
     assert all("working_state" not in json.loads(i["outputs"]) for i in orders)
     receipts = [i for i in diary if i["kind"] == "return.sections_dropped"]
     assert {i["handle"] for i in receipts} == {i["handle"] for i in orders}
-    assert all([d["section"] for d in i["dropped"]] == ["working_state", "register"]
+    # One receipt per decision; a decision that took a tool round made two calls,
+    # each with the same two bad sections, and each is reported.
+    assert all({d["section"] for d in i["dropped"]} == {"working_state", "register"}
                for i in receipts)
     addressed = {(i["assembly_id"], i["handle"]) for i in diary
                  if i["kind"] == "outcome.addressed"}
