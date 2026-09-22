@@ -10,6 +10,10 @@ Three tiers, one scorecard:
            (plumbing, prompt size); ``--provider live`` buys real model calls through
            the prepaid guard under ``--cap-usd`` (behaviour).
 
+The scorecard measures plumbing, cost and prompt size. ``producer_actions`` is an
+observation and never a target: no prompt change may be justified by an action-mix
+delta (Chapter II §I.a, Carroll's robust simplicity; Chapter II rulings R12).
+
 Examples::
 
     uv run python scripts/fastloop.py score work/population-pr121/live/events.json
