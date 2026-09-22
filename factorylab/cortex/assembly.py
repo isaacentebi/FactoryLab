@@ -25,7 +25,12 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 
-from factorylab.cortex.registration import output_contracts, reward_contracts, seed_emits
+from factorylab.cortex.registration import (
+    MAX_CONTRACT_DESCRIPTION_CHARS,
+    output_contracts,
+    reward_contracts,
+    seed_emits,
+)
 from factorylab.cortex.request import (
     CONTINUITY_RETURN_FIELDS,
     ChildRequest,
@@ -64,18 +69,63 @@ class AssemblySpec:
     role: str = "producer"  # descriptive label; dispatch depends only on accepts/emits
     emits: tuple[str, ...] | None = None
     schemas: dict[str, dict] = field(default_factory=dict)
+    # The public self-description carried with the contract (essay II.I: "the
+    # contract has to carry enough self-description that a primitive can be picked
+    # up against a constraint that did not exist when the contract was written").
+    # Empty means the catalogue publishes the contract's own line
+    # (``public_description``). A checkpoint written before this field restores "".
+    description: str = ""
 
     def __post_init__(self) -> None:
         if self.memory_policy not in ("none", "handle-scoped"):
             raise ValueError("unknown memory policy")
         if not isinstance(self.role, str) or not self.role.strip():
             raise ValueError("assembly role must be a nonempty label")
+        if (not isinstance(self.description, str)
+                or len(self.description) > MAX_CONTRACT_DESCRIPTION_CHARS):
+            raise ValueError(
+                f"description must be text of at most {MAX_CONTRACT_DESCRIPTION_CHARS} chars")
         emits, schemas = output_contracts(
             self.emits if self.emits is not None else seed_emits(self.role), self.schemas)
         object.__setattr__(self, "emits", emits)
         object.__setattr__(self, "schemas", schemas)
         if type(self.max_tokens) is not int or self.max_tokens <= 0:
             raise ValueError("max_tokens must be a resolved positive integer")
+
+
+#: What a return of each seed kind is and how it settles: one neutral line each,
+#: stating the contract and never how to behave under it (essay II.I.b: an agent
+#: card is "complete, semantically rich, but also neutral self-description").
+SEED_KIND_LINES: dict[str, str] = {
+    "ProducerReturn": "an answer to the accepted event, which may act on the world; it "
+                      "settles on the mean verdict of the judges that read it",
+    "Verdict": "a verdict in [0, 1] on one return; it settles on the grade of the tier "
+               "above and the world's score of the verdict against the measured outcome",
+    "MetaVerdict": "a conformity grade in [0, 1] of one judgement; it settles on the grade "
+                   "of any tier above and the world's score of the grade",
+    "Exposure": "an answer to the accepted event, which may act on the world; it settles "
+                "on how far its judges' verdicts missed its measured outcome",
+}
+
+
+def contract_line(accepts: Any, emits: Any) -> str:
+    """One line naming what a contract takes and what each emitted kind is.
+
+    Guarantees a string built from the contract alone (accepted kinds, emitted
+    kinds, and each seed kind's ``SEED_KIND_LINES`` entry), at most
+    ``MAX_CONTRACT_DESCRIPTION_CHARS`` long, so two seats with one contract carry
+    one line and nothing about either seat's lens reaches the catalogue.
+    """
+    kinds = [f"{kind}: {SEED_KIND_LINES[kind]}" if kind in SEED_KIND_LINES
+             else f"{kind}: a declared kind; its schema is in event_schemas"
+             for kind in emits or ()]
+    line = f"accepts {', '.join(sorted(accepts))}; emits " + "; ".join(kinds)
+    return line[:MAX_CONTRACT_DESCRIPTION_CHARS]
+
+
+def public_description(spec: AssemblySpec) -> str:
+    """The description an assembly publishes: its own, else its contract's line."""
+    return spec.description or contract_line(spec.accepts, spec.emits)
 
 
 @dataclass
@@ -906,7 +956,8 @@ def validate_proposal(proposal: dict) -> None:
                    "endowment_micro": {"type": "integer", "minimum": 1},
                    "range": {"type": "array", "items": {"type": "number"}},
                    "actions": {"type": "array", "items": {"type": "string"}},
-                   "args_schema": {"type": "object"}})
+                   "args_schema": {"type": "object"},
+                   "returns_schema": {"type": "object"}})
     validate_schema(proposal, {"type": "object", "properties": fields, "required": ["kind"]})
     if proposal["kind"] == "router" and "add" in proposal:
         add = proposal["add"]

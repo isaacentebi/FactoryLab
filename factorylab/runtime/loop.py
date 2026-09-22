@@ -42,6 +42,7 @@ from factorylab.kernel.termination import DORMANT
 from factorylab.learners.router import Sample
 from factorylab.runtime.bootstrap import BootstrapMixin
 from factorylab.runtime.cadence import settle_forecasts
+from factorylab.runtime.composition import CompositionMixin
 from factorylab.runtime.compute import ComputeMixin
 from factorylab.runtime.feedback import (
     FeedbackMixin,
@@ -111,6 +112,7 @@ class Runtime(
     SchematicsMixin,
     ThinkingMixin,
     RoutingMixin,
+    CompositionMixin,
     GovernanceMixin,
     VenueMixin,
     VaultMixin,

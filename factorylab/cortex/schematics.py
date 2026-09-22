@@ -9,7 +9,11 @@ from decimal import Decimal
 from typing import Any
 
 from factorylab.charter.measurement import measurement_catalogue
-from factorylab.cortex.assembly import SEED_SYSTEM_PROMPT, reserved_return_fields
+from factorylab.cortex.assembly import (
+    SEED_SYSTEM_PROMPT,
+    public_description,
+    reserved_return_fields,
+)
 from factorylab.kernel.money import money_to_usd
 from factorylab.runtime.cadence import tick_intervals
 from factorylab.runtime.custody import UNAVAILABLE
@@ -183,6 +187,8 @@ class SchematicsMixin:
             "effort": "low",
             "endowment_micro": "optional positive integer micro-USD transferred from the "
             "founder's available entitlement; omission uses the published trial amount",
+            "description": "optional, at most 500 chars: what this contract does, published "
+            "with it in the catalogue; omission publishes the contract's own line",
         },
         "router": {
             "kind": "router",
@@ -204,6 +210,8 @@ class SchematicsMixin:
             "id": "slug",
             "description": "what it computes",
             "args_schema": {"type": "object", "properties": {"x": {"type": "number"}}},
+            "returns_schema": {"type": "object", "properties": {"y": {"type": "number"}},
+                               "required": ["y"]},
             "code": "python: read a JSON object from stdin, print a JSON object",
             "timeout_s": 2,
         },
@@ -606,13 +614,14 @@ class SchematicsMixin:
                     for a in self.assemblies.values()
                     if a.spec.id not in self.retired_assemblies})
             ],
-            # Ids and contracts are public schematics: every assembly can be named
-            # in requests[].target, retire.assembly_id and learner.assembly_id. The
-            # model behind an id, its prompt, its learner state, the routers'
-            # weights and who judged whom stay sealed.
+            # Ids and contracts are public schematics, each an agent card (essay
+            # II.I): id, accepts, emits and a bounded description of what the
+            # contract does. The model behind an id, its prompt, its learner
+            # state, the routers' weights and who judged whom stay sealed.
             "catalogue": [
                 {"id": a.spec.id, "version": a.spec.version,
-                 "accepts": sorted(a.spec.accepts), "emits": list(a.spec.emits)}
+                 "accepts": sorted(a.spec.accepts), "emits": list(a.spec.emits),
+                 "description": public_description(a.spec)}
                 for a in sorted(self.assemblies.values(), key=lambda a: a.spec.id)
                 if a.spec.id not in self.retired_assemblies
             ],

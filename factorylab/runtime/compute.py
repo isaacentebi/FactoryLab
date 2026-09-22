@@ -631,6 +631,29 @@ class ComputeMixin:
         specs.sort(key=lambda spec: str(spec.get("id")))
         return specs[: max(1, min(limit, 50))]
 
+    def _assembly_search(self, substring: str, limit: int) -> list[dict[str, Any]]:
+        """Live assembly contracts whose id, kinds or description match the substring.
+
+        Guarantees each row is the catalogue's agent card for one live assembly
+        (id, version, accepts, emits, description; primitive audit F6), so a seat
+        can find a contract by what it does and address a request to its kind. An
+        empty substring matches every live assembly.
+        """
+        from factorylab.cortex.assembly import public_description
+
+        needle = substring.lower()
+        rows = []
+        for assembly in sorted(self.assemblies.values(), key=lambda a: a.spec.id):
+            spec = assembly.spec
+            if spec.id in self.retired_assemblies:
+                continue
+            row = {"id": spec.id, "version": spec.version, "accepts": sorted(spec.accepts),
+                   "emits": list(spec.emits), "description": public_description(spec)}
+            text = " ".join([spec.id, *row["accepts"], *row["emits"], row["description"]])
+            if needle in text.lower():
+                rows.append(row)
+        return rows[: max(1, min(limit, 50))]
+
     def _proposal_shape_search(self, substring: str) -> dict[str, Any]:
         """Full proposal shapes whose kind or one-line index entry matches the substring."""
         needle = substring.lower()
@@ -1268,6 +1291,8 @@ class ComputeMixin:
                     # and this is where their full schemas are read when a seat
                     # actually means to call a tool or register something.
                     "tools": self._tool_schema_search(needle, limit),
+                    # Agent cards (essay II.I): a contract is found by what it does.
+                    "assemblies": self._assembly_search(needle, limit),
                     "proposal_shapes": self._proposal_shape_search(needle),
                 }
             if spec["kind"] == "market":

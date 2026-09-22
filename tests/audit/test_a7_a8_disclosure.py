@@ -13,7 +13,10 @@ def test_a8_initial_block_has_counts_and_no_assembly_model_edges():
     block = rt._world_block()
     for view in ("assemblies", "routers"):
         assert all(set(row) == {"event_kind", "count"} for row in block[view])
-    assert all(set(row) == {"id", "version", "accepts", "emits"} for row in block["catalogue"])
+    # W4 (primitive audit F6): each row is an agent card, with the contract's own
+    # bounded description beside its kinds.
+    assert all(set(row) == {"id", "version", "accepts", "emits", "description"}
+               for row in block["catalogue"])
     assert {row["id"] for row in block["catalogue"]} == {a.id for a in rt.m.assemblies}
     text = json.dumps(block)
     assert '"menu"' not in text

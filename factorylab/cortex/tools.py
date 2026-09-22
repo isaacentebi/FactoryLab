@@ -17,7 +17,11 @@ class PopulationTool:
     args_schema: dict
     code: str
     timeout_s: int
-    provenance: str
+    provenance: str  # the handle of the decision that registered the tool
+    # What the tool promises to return (essay II.I: a contract says "what it promises
+    # to return"; primitive audit F9). None promises only a JSON object. A checkpoint
+    # written before this field restores None.
+    returns_schema: dict | None = None
 
 
 class ToolRunner:
@@ -66,6 +70,13 @@ class ToolRunner:
                 return {"error": "output is not a JSON object"}
             if not isinstance(output, dict):
                 return {"error": "output is not a JSON object"}
+            if tool.returns_schema is not None:
+                # A result that breaks the tool's published promise never reaches the
+                # caller as if it kept it: the caller composed against the contract.
+                broken = _check_object(tool.returns_schema, output, "result",
+                                       additional_default=True)
+                if broken is not None:
+                    return {"error": f"result breaks returns_schema: {broken}"}
             return output
         except NoJail:
             return {"error": "no jail on this host"}
@@ -149,48 +160,72 @@ def _reject_constant(value: str) -> None:
     raise ValueError("non-JSON numeric constant")
 
 
-def _validate_args(schema: dict, args: dict) -> str | None:
+_TYPES = {
+    "string": (str,),
+    "number": (int, float),
+    "integer": (int,),
+    "boolean": (bool,),
+    "array": (list,),
+    "object": (dict,),
+}
+
+
+def object_schema_error(schema: object) -> str | None:
+    """Why ``schema`` is not a top-level object schema this runner enforces, or None.
+
+    Guarantees the accepted subset is exactly what ``_check_object`` checks: type
+    object, properties naming one supported type each, a list of required names
+    and a boolean additionalProperties. Nested constraints are outside it.
+    """
     if (
         not isinstance(schema, dict)
         or schema.get("type") != "object"
         or not isinstance(schema.get("properties"), dict)
     ):
-        return "invalid args_schema: expected object with properties"
-    properties = schema["properties"]
-    types = {
-        "string": (str,),
-        "number": (int, float),
-        "integer": (int,),
-        "boolean": (bool,),
-        "array": (list,),
-        "object": (dict,),
-    }
-    for name, prop in properties.items():
+        return "expected object with properties"
+    for name, prop in schema["properties"].items():
         if (
             not isinstance(name, str)
             or not isinstance(prop, dict)
             or not isinstance(prop.get("type"), str)
-            or prop["type"] not in types
+            or prop["type"] not in _TYPES
         ):
-            return "invalid args_schema: properties must name supported types"
+            return "properties must name supported types"
     required = schema.get("required", [])
     if not isinstance(required, list) or any(not isinstance(name, str) for name in required):
-        return "invalid args_schema: required must be a list of strings"
-    additional = schema.get("additionalProperties", False)
-    if type(additional) is not bool:
-        return "invalid args_schema: additionalProperties must be a boolean"
-    if not isinstance(args, dict) or any(not isinstance(name, str) for name in args):
-        return "invalid args: expected an object with string keys"
-    for name in required:
-        if name not in args:
-            return f"invalid args: missing required property {name}"
-    for name, value in args.items():
+        return "required must be a list of strings"
+    if type(schema.get("additionalProperties", False)) is not bool:
+        return "additionalProperties must be a boolean"
+    return None
+
+
+def _check_object(schema: dict, value: object, what: str, *,
+                  additional_default: bool) -> str | None:
+    """Why ``value`` does not satisfy the object schema, or None when it does."""
+    error = object_schema_error(schema)
+    if error is not None:
+        return f"invalid {what} schema: {error}"
+    properties = schema["properties"]
+    additional = schema.get("additionalProperties", additional_default)
+    if not isinstance(value, dict) or any(not isinstance(name, str) for name in value):
+        return f"invalid {what}: expected an object with string keys"
+    for name in schema.get("required", []):
+        if name not in value:
+            return f"invalid {what}: missing required property {name}"
+    for name, item in value.items():
         if name not in properties:
             if not additional:
-                return f"invalid args: additional property {name}"
-        elif type(value) not in types[properties[name]["type"]]:
-            return f"invalid args: property {name} must be {properties[name]['type']}"
+                return f"invalid {what}: additional property {name}"
+        elif type(item) not in _TYPES[properties[name]["type"]]:
+            return f"invalid {what}: property {name} must be {properties[name]['type']}"
     return None
+
+
+def _validate_args(schema: dict, args: dict) -> str | None:
+    error = object_schema_error(schema)
+    if error is not None:
+        return f"invalid args_schema: {error}"
+    return _check_object(schema, args, "args", additional_default=False)
 
 
 def connector_spec(price_micro_per_call: int) -> dict:
@@ -248,6 +283,8 @@ def as_spec(tool: PopulationTool, price_micro_per_call: int) -> dict:
         "id": tool.id,
         "description": tool.description,
         "args_schema": deepcopy(tool.args_schema),
+        **({"returns_schema": deepcopy(tool.returns_schema)}
+           if tool.returns_schema is not None else {}),
         "price_micro_per_call": price_micro_per_call,
         "kind": "population",
     }

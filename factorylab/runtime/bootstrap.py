@@ -571,9 +571,10 @@ class BootstrapMixin:
                 "(no reserve USDC is needed) and buys real Venice credit.")
         self.tool_specs["catalogue.search"] = {
             "id": "catalogue.search",
-            "description": "Find tools, complete proposal shapes and model offers by substring. "
-            "Returns exact tool argument schemas and prices, proposal contracts, and "
-            "matching model ids with token prices and context length.",
+            "description": "Find tools, assemblies, complete proposal shapes and model offers "
+            "by substring. Returns exact tool argument and return schemas and prices, live "
+            "assembly contracts with their descriptions, proposal contracts, and matching "
+            "model ids with token prices and context length.",
             "args_schema": {
                 "type": "object",
                 "properties": {
