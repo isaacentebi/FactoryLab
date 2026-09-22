@@ -1494,9 +1494,11 @@ class FeedbackMixin:
 
         Ruling R9 (versioning P4, primitive F1): the arm that wakes nobody bears the
         same charter prices a woken decision bears in the window it was drawn in,
-        its card penalty computed exactly as a woken decision's is, on the cards of
-        the role it would have filled, with that decision's own share (a card on
-        cost shares nothing to a decision that spent nothing). Waking nobody can
+        its card penalty computed exactly as a woken decision's is, with that
+        decision's own share (a card on cost shares nothing to a decision that spent
+        nothing), on the cards of each role it would have filled, weighted by the
+        odds the draw gave that role's seats (``_abstention_roles``): the price a
+        woken decision of this draw bears in expectation. Waking nobody can
         therefore never beat waking a seat merely because penalties touched only the
         decisions that acted, and a stable failure's ratcheted prices reach it too.
         An abstention drawn before its window recorded it is credited unpriced.
@@ -1507,7 +1509,9 @@ class FeedbackMixin:
         sample = window.decisions.get(handle) if window is not None else None
         if sample is None:
             return neutral, 0.0
-        penalty = self._penalty_for(sample["role"], handle)
+        roles = sample.get("menu_roles") or {sample["role"]: 1.0}
+        penalty = sum(weight * self._penalty_for(role, handle)
+                      for role, weight in sorted(roles.items()))
         return min(1.0, max(0.0, neutral - penalty)), penalty
 
     def _router_owed_abstention(self, learner_id: str) -> bool:

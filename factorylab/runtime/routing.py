@@ -813,9 +813,11 @@ class RoutingMixin:
             self.snapshot_keys[handle] = key
         if sample.chosen == NOOP:
             # Ruling R9: waking nobody is a real choice and a decision in this window
-            # like any other, so it is priced on the charter cards of the role it would
+            # like any other, so it is priced on the charter cards of the roles it would
             # have filled, as a woken decision is (``_priced_abstention``).
-            self._contribution(handle, measured_role(next(iter(channels))))
+            roles = self._abstention_roles(sample)
+            row = self._contribution(handle, max(sorted(roles), key=roles.get))
+            row["menu_roles"] = roles
         self._watch_abstention(state, sample)
         self.stats.decisions += 1
         if self.stats.sample_propensity is None and sample.chosen != NOOP:
@@ -832,6 +834,24 @@ class RoutingMixin:
             # and it ends whatever sleep the seat had bought itself.
             book.woke(sample.chosen, now=self.tick_index)
         self._assembly_step(ev, handle, sample, deadline)
+
+    def _abstention_roles(self, sample: Sample) -> dict[str, float]:
+        """The roles an abstention stood in for: the draw's own odds over the woken arms.
+
+        Guarantees weights over measured roles that sum to 1: each seat on the menu
+        contributes its drawn probability, renormalised over the seats, to the role its
+        contract is measured in (equal weights if the draw gave the seats no mass). A
+        menu of one role is that role alone; a judge router whose menu also holds a
+        producing seat stood in for both, in the proportion it would have woken them.
+        """
+        mass: dict[str, float] = {}
+        seats = [(a, p) for a, p in zip(sample.action_ids, sample.probs, strict=True)
+                 if a != NOOP and a in self.assemblies]
+        total = sum(p for _a, p in seats)
+        for action, p in seats:
+            role = measured_role(self.assemblies[action].spec.emits)
+            mass[role] = mass.get(role, 0.0) + (p / total if total > 0 else 1 / len(seats))
+        return mass or {"producer": 1.0}
 
     def _watch_abstention(self, state: RouterState, sample: Sample) -> None:
         """Watch this draw's NOOP probability: the router's frontier-invocation evidence.
