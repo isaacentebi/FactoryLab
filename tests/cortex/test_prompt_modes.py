@@ -72,18 +72,14 @@ def test_reference_is_the_default_and_renders_what_it_always_rendered(modes):
         assert f'"{section}"' in prefix
 
 
-def test_an_unnamed_mode_and_an_unpublished_address_leave_the_manifest_hash_alone():
-    raw = {"name": "scripted", "seed": 1, "initial_balance_usd": "10",
-           "exchange": {"kind": "fake"}}
+def test_the_prompt_mode_is_hashed_named_or_not():
+    """R8: the default mode is part of the identity too, not dropped to keep an old hash."""
     base = load_manifest("worlds/scripted.toml")
     assert base.manifest_hash() == replace(
         base, prompt=PromptSpec(mode="reference")).manifest_hash()
-    assert "prompt" not in base.canonical_json()
-    assert "address_enabled" not in base.canonical_json()
-    assert base.tools.address_enabled is False
-    # A named mode is part of the world it defines, so it does change the identity.
+    assert '"prompt":{"mode":"reference"}' in base.canonical_json()
+    # A different mode is a different world.
     assert base.manifest_hash() != replace(base, prompt=PromptSpec(mode="compact")).manifest_hash()
-    assert raw  # the loader is exercised through load_manifest above
 
 
 def test_a_refused_mode_or_key_is_refused_at_load():

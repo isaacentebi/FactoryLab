@@ -72,14 +72,12 @@ class ExchangeSpec:
     # world that wants a cushion says so.
     collateral_headroom_usd: str = "0"
     # DEPRECATED and inert (architect decision D1: a principal cap is a Class-2
-    # imposition). Still read, validated and hashed exactly as declared, so the
-    # manifests that carry it load and keep their historical manifest hashes; nothing
-    # enforces it. The venue's own account is the only limit on the principal used.
-    # Dropped from the canonical JSON at its ``None`` default, as it always was.
+    # imposition). Still read, validated and hashed as declared; nothing enforces it.
+    # The venue's own account is the only limit on the principal used.
     principal_usd: str | None = None
     # Whether the venue's vaults are a surface of this world (``[venue] vault_tools``):
     # the vault reads and writes are published, and a vault's equity is a custody pot.
-    # Off by default, and dropped from the canonical JSON when off.
+    # Off by default.
     vault_tools: bool = False
 
 
@@ -141,7 +139,7 @@ class AssemblySeed:
 class ToolsSpec:
     population_tool_micro_per_call: int = 50
     # DEPRECATED and inert (architect decision D1): leverage is whatever the venue
-    # allows. Kept only because every manifest hash was computed with it.
+    # allows. Still read, validated and hashed; nothing enforces it.
     max_leverage: int = 3
     max_routers_per_kind: int = 3
     max_depth: int = 4
@@ -190,7 +188,7 @@ class WebSpec:
 
     ``search_model`` names a model on the menu; the tool calls its ``:online``
     route. With no model named there is no ``[web]`` block and no ``web.search``
-    tool: a world that predates this keeps its manifest identity exactly.
+    tool.
     """
 
     search_model: str | None = None
@@ -208,7 +206,7 @@ class WebSpec:
             raise ValueError("web.max_call_usd must leave room above the flat call price")
 
 
-#: The hybrid capital-loop keys: each absent from the canonical hash when unset.
+#: The hybrid capital-loop keys: unset (``None``) in every world but the capital loop.
 HYBRID_VENICE_KEYS = ("venice_network", "venice_shadow_sink", "max_venice_total_micro",
                       "venice_reserve_floor_micro", "venice_pay_to")
 
@@ -217,9 +215,8 @@ HYBRID_VENICE_KEYS = ("venice_network", "venice_shadow_sink", "max_venice_total_
 class PolymarketSpec:
     """``[polymarket]``: Polymarket event markets as a surface, off unless enabled.
 
-    ``enabled = false`` registers no tool, opens no custody pot and hashes the
-    manifest exactly as it did before the block existed, whatever else the
-    disabled block names. ``venue`` names what the
+    ``enabled = false`` registers no tool and opens no custody pot, whatever else
+    the disabled block names. ``venue`` names what the
     tools reach: ``fake`` is the seeded simulated venue for reads and writes;
     ``live`` is the public read API only, and no write tool is registered, because
     live order signing on Polygon is not built (``world/polymarket.py``,
@@ -281,13 +278,13 @@ class TreasurySpec:
     # "base-mainnet" buys real Venice credit from the Base mainnet reserve while the
     # venue stays on testnet, and a shadow leg sends the same $5 of testnet USDC from
     # the venue to ``venice_shadow_sink`` so the observed pots pay for it. Both absent
-    # (the default) keep the rail's own network and hash as before the keys existed.
+    # (the default) keep the rail's own network.
     venice_network: str | None = None
     venice_shadow_sink: str | None = None
     # Required with ``venice_network``: the most real USDC the world may ever authorize
     # for Venice (re-authorizations included), the Base mainnet reserve balance below
     # which no top-up is prepared (a bound a fresh run cannot reset), and the only payee
-    # a Venice quote may name. Absent, each leaves the manifest hash unchanged.
+    # a Venice quote may name.
     max_venice_total_micro: int | None = None
     venice_reserve_floor_micro: int | None = None
     venice_pay_to: str | None = None
@@ -467,7 +464,7 @@ class PromptSpec:
     the same block the validators read.
 
     The default is ``reference``: a manifest that does not name a mode gets the
-    prompt it always got, and hashes as it always did.
+    prompt it always got.
     """
 
     mode: str = "reference"
@@ -560,108 +557,21 @@ class WorldManifest:
         return {m.id: dict(m.extra_body) for m in self.models if m.extra_body}
 
     def canonical_json(self) -> str:
+        """Guarantees the manifest hashes every key the world runs under, at any value.
+
+        R8 and versioning S1: no key is dropped at its default so that an older world
+        keeps its hash. A kernel change that adds a key renames every world, because a
+        world whose physics changed is a new world that starts again from v0. Only
+        admission provenance is left out: the ratification digests and the digest of
+        the loaded cards say how identical cards were admitted, not what world they make.
+        """
         payload = asdict(self)
-        # Preserve historical manifest identities for models without an extra body.
-        for model in payload["models"]:
-            if not model.get("extra_body"):
-                model.pop("extra_body", None)
-        # Admission provenance does not change the world defined by identical cards.
         for name in ("charter_ratified_sha256", "charter_roster_sha256",
                      "charter_content_sha256"):
             payload.pop(name)
-        # Preserve historical manifest identities when the opt-in namespace is absent.
-        if payload["exchange"]["client_namespace"] is None:
-            payload["exchange"].pop("client_namespace")
-        # Preserve historical manifest identities while the gas-route keys keep their defaults.
-        for key, default in (("cctp_forwarding", "on_empty_gas"),
-                             ("max_forward_fee_micro", 300_000),
-                             ("max_forward_fees_per_window", 1_000_000),
-                             ("forward_wait_windows", 2)):
-            if payload["treasury"].get(key) == default:
-                payload["treasury"].pop(key)
-        # A world that buys no Venice credit across networks hashes as it did before the
-        # hybrid rehearsal existed: an added key may not rename a world that predates it.
-        for key in HYBRID_VENICE_KEYS:
-            if payload["treasury"].get(key) is None:
-                payload["treasury"].pop(key, None)
-        # Edition 2 keys keep the identity of every manifest that predates them: a world
-        # without locked backing, or at the default byte-day rent, hashes as it always did.
-        if payload["endowment"] == asdict(EndowmentSpec()):
-            payload.pop("endowment")
-        # Edition 3's keys are hash-neutral at their defaults, so every world that predates
-        # the kill contract, the provider inventories and the per-seat fields keeps both its
-        # manifest identity and the roster hash its charter was ratified against.
-        if payload["kill"] == asdict(KillSpec()):
-            payload.pop("kill")
-        if payload["providers"] == asdict(ProvidersSpec()):
-            payload.pop("providers")
-        # A world that names no prompt mode hashes exactly as it did before the key
-        # existed: an added key may not rename a world that predates it, and every
-        # roster digest a charter was ratified against stays what it was.
-        if payload["prompt"] == asdict(PromptSpec()):
-            payload.pop("prompt")
-        # Likewise for the addressing switch: a world that does not publish address
-        # hashes exactly as it did before the capability existed.
-        if payload["tools"].get("address_enabled") is False:
-            payload["tools"].pop("address_enabled")
-        # And for the feedback line: a world settling producers on judge opinion is
-        # the world every manifest already described.
-        if payload["evaluation"].get("producer_feedback") == "verdict":
-            payload["evaluation"].pop("producer_feedback")
-        if payload["evaluation"].get("grounded_horizon_ticks") == 10:
-            payload["evaluation"].pop("grounded_horizon_ticks")
-        if payload["evaluation"].get("exploration_share") == 0.0:
-            payload["evaluation"].pop("exploration_share")
-        # A world that seeds no swap-regret core hashes as it did before the key existed,
-        # and one that does names the same core whatever order it listed the kinds in.
-        if not payload["evaluation"].get("no_swap_regret_kinds"):
-            payload["evaluation"].pop("no_swap_regret_kinds", None)
-        else:
-            payload["evaluation"]["no_swap_regret_kinds"] = sorted(
-                payload["evaluation"]["no_swap_regret_kinds"])
-        # An absent [web] block registers no search tool, so a world without one hashes
-        # exactly as it did before web search existed.
-        if payload["web"] == asdict(WebSpec()):
-            payload.pop("web")
-        # Likewise [polymarket]: a world that does not enable event markets hashes
-        # exactly as it did before the surface existed, whatever caps a disabled
-        # block names, since a disabled block registers nothing they could limit.
-        if not payload["polymarket"]["enabled"]:
-            payload.pop("polymarket")
-        for assembly in payload["assemblies"]:
-            if assembly.get("cadence_floor") == 1:
-                assembly.pop("cadence_floor", None)
-            if not assembly.get("initial_state"):
-                assembly.pop("initial_state", None)
-            if assembly.get("system_prompt") is None:
-                assembly.pop("system_prompt", None)
-        if payload["notes"].get("micro_per_byte_day") == NotesSpec().micro_per_byte_day:
-            payload["notes"].pop("micro_per_byte_day")
-        # Preserve historical manifest identities while the blame floor keeps its default.
-        if payload["prices"].get("min_blame_share") == 0.1:
-            payload["prices"].pop("min_blame_share")
-        # Preserve historical manifest identities while promise grading keeps its resolution.
-        if payload["committee"].get("promise_resolution") == 0.01:
-            payload["committee"].pop("promise_resolution")
-        # Preserve historical manifest identities while the program call price is its default.
-        if payload["prices"].get("program_micro_per_call") == 50:
-            payload["prices"].pop("program_micro_per_call")
-        # A world that names no price law runs the integrator and hashes as it did
-        # before the PID existed: an added key may not rename a world that predates it.
-        for key, default in (("controller", "integral"), ("kp", 0.0), ("kd", 0.0)):
-            if payload["prices"].get(key) == default:
-                payload["prices"].pop(key)
-        # A world that precommits no collateral headroom hashes as it did before
-        # the key existed: an added key may not rename a world that predates it.
-        if payload["exchange"].get("collateral_headroom_usd") == "0":
-            payload["exchange"].pop("collateral_headroom_usd")
-        # A world that declares no trading principal hashes as it did before the key
-        # existed: an added key may not rename a world that predates it.
-        if payload["exchange"].get("principal_usd") is None:
-            payload["exchange"].pop("principal_usd", None)
-        # A world without the vault surface hashes as it did before the key existed.
-        if payload["exchange"].get("vault_tools") is False:
-            payload["exchange"].pop("vault_tools")
+        # A set, not a sequence: the same core whatever order the manifest listed it in.
+        payload["evaluation"]["no_swap_regret_kinds"] = sorted(
+            payload["evaluation"]["no_swap_regret_kinds"])
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:

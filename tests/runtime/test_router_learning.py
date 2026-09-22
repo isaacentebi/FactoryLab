@@ -324,9 +324,9 @@ def test_a_kind_that_first_gains_an_acceptor_later_is_seeded_in_the_core():
     assert isinstance(rt.routers["Later"][0].learner, _KeyedLearner)
 
 
-def test_the_core_key_is_hash_neutral_when_absent_and_named_when_present():
+def test_the_core_key_is_hashed_absent_or_present():
     base = load_manifest("scripted")
-    assert "no_swap_regret_kinds" not in base.canonical_json()
+    assert '"no_swap_regret_kinds":[]' in base.canonical_json()
     core = replace(base, evaluation=replace(base.evaluation,
                                             no_swap_regret_kinds=("ProducerReturn",)))
     assert "no_swap_regret_kinds" in core.canonical_json()

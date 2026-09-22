@@ -83,12 +83,14 @@ def test_prices_section_defaults_and_validation() -> None:
             manifest_from_dict(d)
 
 
-def test_grounded_horizon_default_keeps_legacy_identity_and_nondefault_changes_it():
+def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
+    """R8 / versioning S1: no key leaves the hash at its default, so the pinned identity
+    of the scripted world moved when the shims went; it is a new v0."""
     scripted = load_manifest("scripted")
     assert scripted.evaluation.grounded_horizon_ticks == 10
-    assert "grounded_horizon_ticks" not in scripted.canonical_json()
+    assert '"grounded_horizon_ticks":10' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "55321db805e10b974f4b6d2d188e4846fa1a329368306856fc74b79061849ff5"
+        "ce9f0fddc2e412d455f987d732bda675140e109bd85050debb3a06fa1bdb410b"
     )
 
     implicit = manifest_from_dict(_base())

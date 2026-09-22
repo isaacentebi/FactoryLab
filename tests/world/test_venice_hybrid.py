@@ -250,7 +250,7 @@ def test_real_money_mode_needs_an_absolute_bound_a_floor_and_a_pinned_payee(
             replace(plain, treasury=replace(plain.treasury, **{field: value})).validate()
 
 
-def test_the_keys_are_hash_neutral_at_their_defaults():
+def test_only_the_capital_loop_world_names_the_hybrid_keys():
     import glob
 
     from factorylab.runtime.worlds import HYBRID_VENICE_KEYS
@@ -260,7 +260,8 @@ def test_the_keys_are_hash_neutral_at_their_defaults():
         treasury = json.loads(load_manifest(path).canonical_json())["treasury"]
         hybrid_world = path.endswith("edition5-capital-loop.toml")
         for key in HYBRID_VENICE_KEYS:
-            assert (key in treasury) is hybrid_world
+            # R8: every key is hashed; only the capital-loop world gives these a value.
+            assert (treasury[key] is not None) is hybrid_world
         seen += 1
     assert seen >= 9
     assert all(getattr(TreasurySpec(), key) is None for key in HYBRID_VENICE_KEYS)

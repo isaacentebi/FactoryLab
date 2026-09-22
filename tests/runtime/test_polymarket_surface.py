@@ -67,7 +67,7 @@ def kinds(rt):
 
 # --- the manifest ------------------------------------------------------------------------
 
-def test_a_world_without_the_block_has_no_surface_and_its_identity_is_unchanged():
+def test_a_world_without_the_block_has_no_surface_and_a_named_block_is_hashed():
     rt = _consequence_runtime()
     assert not hasattr(rt, "polymarket")
     assert not any(tool.startswith("polymarket.") for tool in rt.tool_specs)
@@ -79,9 +79,9 @@ def test_a_world_without_the_block_has_no_surface_and_its_identity_is_unchanged(
     assert manifest_from_dict(raw).manifest_hash() == base.manifest_hash()
     off = manifest_from_dict({**raw, "polymarket": {"enabled": False}})
     assert off.manifest_hash() == manifest_from_dict(raw).manifest_hash()
-    # A disabled block never hashes, whatever caps it names.
+    # R8: a disabled block's caps are what the manifest says, so they are hashed too.
     capped = manifest_from_dict({**raw, "polymarket": {"enabled": False, "max_order_usd": "1"}})
-    assert capped.manifest_hash() == off.manifest_hash()
+    assert capped.manifest_hash() != off.manifest_hash()
     on = manifest_from_dict({**raw, "polymarket": {"enabled": True, "max_order_usd": "5"}})
     assert on.manifest_hash() != off.manifest_hash()
     assert on.polymarket.max_order_micro == 5_000_000
