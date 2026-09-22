@@ -86,6 +86,49 @@ MESSAGE_RECEIVED = "MessageReceived(address,uint32,bytes32,bytes32,uint32,bytes)
 FORWARD_SCAN_PAGES = 40
 
 
+AUTHORIZATION_USED = "AuthorizationUsed(address,bytes32)"
+#: How far short of "tranche less metered spend" a hybrid top-up's observed Venice credit
+#: may fall before financing is held. The comparison is between three imperfect reads:
+#: the diary's metered spend is an estimate (a table price when Venice reports no cost),
+#: ``venice_balance`` rounds down to the micro, and Venice seats keep spending the credit
+#: through the 15-20 minutes Base finality takes. $0.25 is 5% of the tranche: it absorbs
+#: all three, and a real missing credit (the whole $5, or most of it) still exceeds it.
+CREDIT_TOLERANCE_MICRO = 250_000
+
+
+def authorization_status(base: EVM, authorizer: str, reference: dict) -> dict:
+    """Read, keylessly, whether one Venice top-up authorization can still settle.
+
+    Guarantees ``expired`` only when three independent reads agree: a FINALIZED Base
+    block is past ``validBefore`` (EIP-3009 executes only while a block's timestamp is
+    before it, and Base timestamps only grow, so nothing later can use it); the USDC
+    contract's ``authorizationState(authorizer, nonce)`` at that same block is false;
+    and the ``AuthorizationUsed`` log scan from the reference's ``start_block`` covered
+    every block up to that one and found nothing. The contract read is the check a
+    lagging RPC cannot fake by returning ``[]`` for logs. The runtime clock is never
+    consulted and no grace is needed: finality lag delays the answer, never flips it.
+    Every read is ``eth_getBlockByNumber``, ``eth_call`` or ``eth_getLogs``: nothing
+    here signs, so an operator's script may call it with ``EVM(BASE, None)``.
+    """
+    auth = reference["authorization"]
+    nonce = auth["nonce"]
+    final = base.call("eth_getBlockByNumber", ["finalized", False])
+    number, timestamp = int(final["number"], 16), int(final["timestamp"], 16)
+    data = calldata("authorizationState(address,bytes32)", ["address", "bytes32"],
+                    [address(authorizer), bytes.fromhex(nonce.removeprefix("0x"))])
+    state = base.call("eth_call", [{"to": address(base.chain.usdc), "data": data}, hex(number)])
+    used = int(state, 16) != 0
+    topics = [event_topic(AUTHORIZATION_USED), "0x" + word_address(authorizer).hex(), nonce]
+    logs, scanned_to = base.scan(base.chain.usdc, topics, int(reference["start_block"]))
+    valid_before = int(auth["validBefore"])
+    return {"nonce": nonce, "valid_before": valid_before, "finalized_block": number,
+            "finalized_timestamp": timestamp, "authorization_used": used,
+            "debits": [log.get("transactionHash") for log in logs], "scanned_to": scanned_to,
+            "live": timestamp <= valid_before and not used and not logs,
+            "expired": (timestamp > valid_before and not used and not logs
+                        and scanned_to >= number)}
+
+
 def hype_text(wei: int) -> str:
     amount = Decimal(wei) / Decimal(10**18)
     whole = amount == amount.to_integral()
@@ -96,6 +139,9 @@ class LiveRail(ClassTransferRail):
     """Only pinned, receipt-confirmed native USDC transfers advance the treasury's opaque plan."""
 
     name = "hypercore-hyperevm-base-cctp-v2"
+    #: A real top-up is submitted once, then only observed (X402Client.top_up's rule for
+    #: an unknown outcome): never resent by the retry loop, never replayed on resume.
+    poll_only_steps = ("venice_top_up",)
 
     def __init__(self, exchange: Any, spec: Any, *, transport: Transport = http_request):
         from hyperliquid.utils.constants import MAINNET_API_URL, TESTNET_API_URL
@@ -696,10 +742,6 @@ class LiveRail(ClassTransferRail):
         if response.get("status") != "ok":
             raise RailError("venue rejected withdrawal")
 
-    #: A Venice authorization cannot be used after its ``validBefore``; a use mined just
-    #: before it is finalized on Base within minutes. Past this grace with no receipt,
-    #: it never executed and never will.
-    VENICE_EXPIRY_GRACE_S = 3_600
     #: Hyperliquid accepts an action only while its nonce is within about two days of
     #: the venue's clock. A withdrawal whose nonce is older than this and that no
     #: ledger update shows can never execute.
@@ -711,15 +753,16 @@ class LiveRail(ClassTransferRail):
         Only steps whose principal has not left are answered: the Venice top-up's
         EIP-3009 authorization and the venue withdrawal's signed action. The
         treasury abandons such a step only after a clean poll found no evidence.
+        A top-up is judged on finalized Base alone (``_authorization_expired``), never
+        on ``now_ns``: a runtime clock ahead of the chain, or a virtual one, used to
+        abandon a real authorization that could still settle.
         """
         reference = state.get("reference") or {}
         if step == "venice_top_up":
-            valid_before = (reference.get("authorization") or {}).get("validBefore")
-            if valid_before is None:
+            try:
+                return self._authorization_expired(state)
+            except Exception:  # noqa: BLE001 - an unreadable chain proves nothing expired
                 return None
-            if now_ns // 1_000_000_000 > int(valid_before) + self.VENICE_EXPIRY_GRACE_S:
-                return "Venice authorization expired unused"
-            return None
         if step == "withdraw_burn":
             nonce = reference.get("nonce", state.get("nonce"))
             if nonce is None:
@@ -727,6 +770,21 @@ class LiveRail(ClassTransferRail):
             if now_ns // 1_000_000 > int(nonce) + self.WITHDRAWAL_NONCE_WINDOW_MS:
                 return "withdrawal nonce expired unexecuted"
         return None
+
+    def _authorization_expired(self, state: dict) -> str | None:
+        """Guarantees a top-up authorization is abandoned only when it can never settle.
+
+        See ``authorization_status``: dead exactly when finalized Base is past its
+        ``validBefore``, the USDC contract says its nonce is unused at that block, and
+        the log scan covered every block up to it without an ``AuthorizationUsed``.
+        """
+        reference = state.get("reference") or {}
+        if ((reference.get("authorization") or {}).get("validBefore") is None
+                or reference.get("start_block") is None):
+            return None
+        status = authorization_status(self._venice_base(), self.reserve_address, reference)
+        return "Venice authorization expired unused on finalized Base" if status[
+            "expired"] else None
 
     def replace(self, step: str, reference: dict, gas_spent: dict) -> dict:
         """A repriced replacement for a stuck EVM step at its original nonce."""
@@ -1123,8 +1181,6 @@ class HybridRail(LiveRail):
     """
 
     name = "hypercore-testnet-venice-base-mainnet-hybrid"
-    #: Submitted once, then only observed: X402Client.top_up's rule for an unknown outcome.
-    poll_only_steps = ("venice_top_up",)
 
     def __init__(self, exchange: Any, spec: Any, *, transport: Transport = http_request):
         from factorylab.world.x402 import X402Client
@@ -1294,12 +1350,13 @@ class HybridRail(LiveRail):
 
         Every authorization the transfer ever had is polled, the superseded ones too,
         so a debit that lands late is still found and booked (and nothing new is signed
-        after it). A debit proves real USDC left; financing is booked only when the
-        Venice credit shows it arrived: the credit must have risen from the balance read
-        before the authorization by at least the tranche less the diary's metered Venice
-        spend since then. Short or unreadable, the step stays pending with the numbers
-        carried in its public stall and the principal held, never booked and never
-        re-authorized (a pending step is not tested for expiry).
+        after it). Financing is booked on the proven canonical debit, exactly as the
+        ordinary rail books it, and the credit reads are recorded beside it as evidence
+        (``credit_shortfall_micro``). The credit only vetoes: the step is held, with the
+        numbers carried in its public stall and the principal kept, only when every
+        read is known and the credit rose by less than the tranche less the diary's
+        metered Venice spend since the authorization less ``CREDIT_TOLERANCE_MICRO``.
+        A held step is never re-authorized (a pending step is not tested for expiry).
         """
         from factorylab.world.treasury import CREDIT_SHORT
 
@@ -1310,7 +1367,7 @@ class HybridRail(LiveRail):
                 continue
             try:
                 observed = self._x402.venice_balance()
-            except Exception:  # noqa: BLE001 - unread is unknown, and unknown books nothing
+            except Exception:  # noqa: BLE001 - unread is unknown: the debit still decides
                 observed = None
             before = ref.get("credit_before_micro")
             metered = None
@@ -1320,17 +1377,20 @@ class HybridRail(LiveRail):
                                                        * 1_000_000_000)
                 except Exception:  # noqa: BLE001
                     metered = None
+            known = all(type(v) is int for v in (observed, before, metered))
+            shortfall = max(0, amount - metered - (observed - before)) if known else None
             evidence = {**outcome["evidence"], "credit_before_micro": before,
                         "observed_micro": observed, "credit_after_micro": observed,
-                        "balance_source": "balance_read", "metered_usage_since_micro": metered}
-            if (type(observed) is not int or type(before) is not int
-                    or type(metered) is not int or observed - before < amount - metered):
+                        "balance_source": "balance_read", "metered_usage_since_micro": metered,
+                        "credit_shortfall_micro": shortfall,
+                        "credit_tolerance_micro": CREDIT_TOLERANCE_MICRO}
+            if known and shortfall > CREDIT_TOLERANCE_MICRO:
                 raise Pending(CREDIT_SHORT, carry={
                     "tx_hash": evidence.get("tx_hash"), "nonce": evidence.get("nonce"),
                     "credit_before_micro": before, "observed_micro": observed,
-                    "metered_usage_since_micro": metered, "required_micro": amount})
-            return {**outcome, "evidence": {**evidence,
-                                            "credited_micro": observed - before + metered}}
+                    "metered_usage_since_micro": metered, "required_micro": amount,
+                    "shortfall_micro": shortfall, "tolerance_micro": CREDIT_TOLERANCE_MICRO})
+            return {**outcome, "evidence": evidence}
         return None
 
     def _shadow_receipt(self, state: dict) -> dict | None:
@@ -1402,35 +1462,5 @@ class HybridRail(LiveRail):
                     self.WITHDRAWAL_NONCE_WINDOW_MS):
                 return "shadow send nonce expired unexecuted"
             return None
-        if step == "venice_top_up":
-            try:
-                return self._authorization_expired(state)
-            except Exception:  # noqa: BLE001 - an unreadable chain proves nothing expired
-                return None
+        # The top-up (on finalized Base) and the CCTP steps are LiveRail's own rules.
         return super().expired(step, state, now_ns)
-
-    def _authorization_expired(self, state: dict) -> str | None:
-        """Guarantees an authorization is abandoned only when it can never settle.
-
-        EIP-3009 executes only in a block whose timestamp is before ``validBefore``,
-        and Base timestamps only grow. So the authorization is dead exactly when a
-        FINALIZED Base block is past ``validBefore`` and the receipt scan covered every
-        block up to that one without finding its ``AuthorizationUsed``. The runtime's
-        clock is never consulted (a virtual or fast clock cannot expire it) and no grace
-        is needed: finality lag only delays the answer, it cannot make it wrong.
-        """
-        reference = state.get("reference") or {}
-        valid_before = (reference.get("authorization") or {}).get("validBefore")
-        if valid_before is None or reference.get("start_block") is None:
-            return None
-        base = self.venice_base
-        final = base.call("eth_getBlockByNumber", ["finalized", False])
-        if not final or int(final["timestamp"], 16) <= int(valid_before):
-            return None
-        topics = [event_topic("AuthorizationUsed(address,bytes32)"),
-                  "0x" + word_address(self.reserve_address).hex(),
-                  reference["authorization"]["nonce"]]
-        logs, scanned_to = base.scan(base.chain.usdc, topics, reference["start_block"])
-        if logs or scanned_to < int(final["number"], 16):
-            return None
-        return "Venice authorization expired unused on finalized Base"

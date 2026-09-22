@@ -358,10 +358,15 @@ class Final(Chain):
     def __init__(self, config):
         super().__init__(config)
         self.final = {"number": hex(500), "timestamp": hex(10_000)}
+        self.authorization_used = False  # USDC's authorizationState(reserve, nonce)
+        self.state_reads = []
 
     def call(self, method, args):
         if method == "eth_getBlockByNumber" and args[0] == "finalized":
             return self.final
+        if method == "eth_call":
+            self.state_reads.append(args)
+            return "0x" + ("1" if self.authorization_used else "0").rjust(64, "0")
         return super().call(method, args)
 
 
@@ -589,21 +594,46 @@ def debit(rail, reference):
                                "logs": [{"address": BASE.usdc, "topics": topics}]}
 
 
-def test_1_an_authorization_expires_only_on_finalized_base_never_on_the_runtime_clock(
-        monkeypatch):
-    rail = live(monkeypatch)
-    state = top_up_state(rail)
+def ordinary_rail(monkeypatch):
+    """The ordinary mainnet LiveRail on the same fakes: its own base is Base mainnet."""
+    from factorylab.world.treasury_rails import LiveRail
+
+    hybrid_rail = live(monkeypatch)
+    rail = LiveRail.__new__(LiveRail)
+    rail.reserve_address = hybrid_rail.reserve_address
+    rail.base = hybrid_rail.venice_base
+    rail.venice_base = rail.base  # so ``debit`` below writes to the chain it reads
+    return rail, top_up_state(hybrid_rail)
+
+
+@pytest.mark.parametrize("kind", ["ordinary", "hybrid"])
+def test_1_5_the_reviewers_probe_expiry_is_on_finalized_base_for_both_rails(
+        monkeypatch, kind):
+    from factorylab.world.treasury_rails import LiveRail
+
+    if kind == "ordinary":
+        rail, state = ordinary_rail(monkeypatch)
+        assert not hasattr(LiveRail, "VENICE_EXPIRY_GRACE_S")
+        assert LiveRail.poll_only_steps == ("venice_top_up",)
+    else:
+        rail = live(monkeypatch)
+        state = top_up_state(rail)
+    chain = rail._venice_base()
     valid_before = int(state["reference"]["authorization"]["validBefore"])
-    chain, far_future = rail.venice_base, 10**30  # a virtual or runaway runtime clock
-    chain.final = {"number": hex(500), "timestamp": hex(valid_before)}
+    probe = (valid_before + 3_601) * S  # the review's runtime clock: past the old grace
+    chain.final = {"number": hex(500), "timestamp": hex(valid_before)}  # Base lags
     chain.scanned_to = 500
-    assert rail.expired("venice_top_up", state, far_future) is None  # not past validBefore
+    assert rail.expired("venice_top_up", state, probe) is None
     chain.final["timestamp"] = hex(valid_before + 1)
     chain.scanned_to = 499
-    assert rail.expired("venice_top_up", state, far_future) is None  # scan short of it
+    assert rail.expired("venice_top_up", state, probe) is None  # scan short of the head
     chain.scanned_to = 500
+    chain.authorization_used = True  # a lagging RPC returned [] logs; the contract knows
+    assert rail.expired("venice_top_up", state, probe) is None
+    assert chain.state_reads[-1][1] == hex(500)  # read at the finalized block itself
+    chain.authorization_used = False
     debit(rail, state["reference"])
-    assert rail.expired("venice_top_up", state, far_future) is None  # it did settle
+    assert rail.expired("venice_top_up", state, probe) is None  # it did settle
     chain.log_rows = []
     assert rail.expired("venice_top_up", state, 0) == (
         "Venice authorization expired unused on finalized Base")
@@ -612,7 +642,7 @@ def test_1_an_authorization_expires_only_on_finalized_base_never_on_the_runtime_
         raise TimeoutError
 
     chain.scan = unreachable
-    assert rail.expired("venice_top_up", state, far_future) is None
+    assert rail.expired("venice_top_up", state, probe) is None
 
 
 def test_1_a_superseded_authorization_is_still_polled_and_its_late_debit_booked(monkeypatch):
@@ -747,18 +777,29 @@ def test_3_a_quote_or_reference_naming_another_payee_is_refused_before_signing(m
         top_up_state(rail)
 
 
-def test_3_financing_waits_for_the_credit_the_tranche_bought(monkeypatch):
+def test_2_financing_books_on_the_debit_despite_real_spend_and_rounding(monkeypatch):
+    from factorylab.world.treasury_rails import CREDIT_TOLERANCE_MICRO
+
     rail = live(monkeypatch)
-    state = top_up_state(rail)  # credit before: $1
+    state = top_up_state(rail)  # credit before: $1.000000
     debit(rail, state["reference"])
-    rail._x402.credit = 3_000_000  # rose $2 of the $5
-    with pytest.raises(Pending, match="financing held unresolved"):
-        rail.poll("venice_top_up", state)
-    rail.metered_usage_since = lambda since_ns: 3_000_000  # the seats spent $3 meanwhile
+    # Seats spent through the finality wait: the diary metered $1.37, Venice charged
+    # $0.12 more than the table estimate, and the balance rounded down a micro.
+    rail.metered_usage_since = lambda since_ns: 1_370_000
+    rail._x402.credit = 1_000_000 + FIVE - 1_370_000 - 120_000 - 1
     confirmed = rail.poll("venice_top_up", state)
-    assert confirmed["confirmed"] and confirmed["evidence"]["credited_micro"] == FIVE
-    rail.metered_usage_since = None  # no diary: unknown books nothing
-    with pytest.raises(Pending):
+    assert confirmed["confirmed"]
+    assert confirmed["evidence"]["credit_shortfall_micro"] == 120_001  # recorded, not held
+    rail.metered_usage_since = None  # no diary: the canonical debit alone decides
+    assert rail.poll("venice_top_up", state)["evidence"]["credit_shortfall_micro"] is None
+    rail.metered_usage_since = lambda since_ns: 1_370_000
+    rail._x402.credit = 1_000_000 + FIVE - 1_370_000 - CREDIT_TOLERANCE_MICRO
+    assert rail.poll("venice_top_up", state)["confirmed"]  # exactly at the tolerance
+    rail._x402.credit -= 1
+    with pytest.raises(Pending, match="financing held unresolved"):  # the credit is missing
+        rail.poll("venice_top_up", state)
+    rail._x402.credit = 1_000_000  # nothing arrived at all
+    with pytest.raises(Pending, match="financing held unresolved"):
         rail.poll("venice_top_up", state)
 
 
