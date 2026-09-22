@@ -487,7 +487,11 @@ class Wallet:
             self.__novelty._refund_compute(allocation, spent)
 
     def settle(self, delta: Money, handle: str, reason: str) -> None:
-        """Book signed exchange P&L, funding or earned income only while the world remains alive."""
+        """Book signed exchange P&L, funding, earned income or financing while the world lives.
+
+        ``financing`` is provider credit the factory bought with its own capital
+        and a confirmed rail delivered: new spending authority, never income.
+        """
         self.settle_batch([(delta, handle, reason)])
 
     def settle_batch(self, settlements: list[tuple[Money, str, str]]) -> None:
@@ -505,10 +509,11 @@ class Wallet:
         exhausted = self.__exhausted
         for delta, handle, reason in settlements:
             require_money(delta)
-            if reason not in ("exchange_pnl", "funding", "income"):
-                raise ValueError("settlement source must be exchange_pnl, funding or income")
-            if reason == "income" and delta <= 0:
-                raise ValueError("income must be positive")
+            if reason not in ("exchange_pnl", "funding", "income", "financing"):
+                raise ValueError(
+                    "settlement source must be exchange_pnl, funding, income or financing")
+            if reason in ("income", "financing") and delta <= 0:
+                raise ValueError(f"{reason} must be positive")
             if not isinstance(handle, str) or not handle:
                 raise ValueError("settlement handle is required")
             balance += delta

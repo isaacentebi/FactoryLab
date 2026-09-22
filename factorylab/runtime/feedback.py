@@ -1103,6 +1103,33 @@ class FeedbackMixin:
         # A spool row is a claim; only a confirmed chain read makes it income.
         for item in self.treasury.verify_receipts():
             self._book_income(item)
+        self._classify_financing()
+
+    def _classify_financing(self) -> None:
+        """Give converted capital to whoever earned it: the seat's own venue profit first.
+
+        Guarantees each confirmed conversion is classified once. Up to the
+        converting seat's positive venue claim becomes that seat's entitlement and
+        leaves its claim (its own profit, now thinking money); the rest came from
+        shared principal and stays in the unallocated pool the wallet already holds.
+        """
+        collect = getattr(self.treasury, "collect_financing", None)
+        for item in (collect() if collect else []):
+            handle = item.get("handle")
+            seat = (self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+                    if handle else None)
+            own = 0
+            if seat is not None:
+                own = max(0, min(int(item["micro"]),
+                                 self.budget.venue_claims().get(seat, 0)))
+                if own:
+                    own = self.budget.credit(seat, own, "financing:own venue profit")
+                    self.budget.claim_venue(seat, -own, "converted to compute")
+            self.ledger.append({"kind": "financing.classified",
+                                "transfer_id": item.get("transfer_id"), "seat": seat,
+                                "micro": item["micro"], "to_seat_micro": own,
+                                "to_pool_micro": int(item["micro"]) - own,
+                                "ts": self.clock.now_ns})
 
     def _settle_due_forecasts(self) -> None:
         self._settle_late()

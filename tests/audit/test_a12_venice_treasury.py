@@ -33,7 +33,12 @@ def test_a12_fake_venice_leg_holds_then_moves_five_and_preserves_budget_on_resum
     assert treasury.tick(4)[0]["status"] == "confirmed"
     assert treasury.pots()["reserve"] == reserve - 5_000_000
     assert treasury.pots()["sellers"]["venice"] == 5_000_000
-    assert restored.wallet.balance == balance
+    # Delivered provider credit is spending authority (financing, never income):
+    # the factory's own capital became thinking money it may now spend.
+    assert restored.wallet.balance == balance + 5_000_000
+    owed = treasury.collect_financing()
+    assert [(o["handle"], o["micro"]) for o in owed] == [("population", 5_000_000)]
+    assert treasury.collect_financing() == []  # handed over exactly once
     assert treasury.tick(5) == []
     treasury.transfer("to_venice", "5", handle="population-again", now_ns=5)
     treasury.tick(6)

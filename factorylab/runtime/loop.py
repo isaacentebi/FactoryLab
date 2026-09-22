@@ -399,6 +399,7 @@ class Runtime(
             self._reconcile_orders()
             self._collect_income()  # C10: each receipt credits its owning seat before the tick
             self.treasury.tick(self.clock.now_ns)
+            self._classify_financing()  # a conversion confirmed this tick is spendable now
             self._reconcile_x402()
             if self.venue is not None:
                 observed = [
@@ -509,6 +510,7 @@ class Runtime(
             self._settle_exchange_effects(observed)
             self._collect_income()
             self.treasury.tick(now_ns)
+            self._classify_financing()
         snapshot = Reconciler.snapshot(
             self.wallet.balance,
             self.provider,

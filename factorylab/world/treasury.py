@@ -381,6 +381,13 @@ class Treasury:
             self.income = {**self.income, "verified_unbooked": []}
         return booked
 
+    def collect_financing(self) -> list[dict]:
+        """Hand over, exactly once, the financing booked since the last collection."""
+        owed = list(self.income.get("financing_owed", []))
+        if owed:
+            self.income = {**self.income, "financing_owed": []}
+        return owed
+
     def collect_income(self) -> list[dict]:
         """Read the seller's receipt spool through the journal and ledger each new receipt.
 
@@ -681,6 +688,17 @@ class Treasury:
                     "principal_micro": finished["amount_micro"],
                     "credit_micro": finished["received_micro"],
                     "implies_openrouter_replenishment": False, "ts": now_ns})
+                if finished["received_micro"] > 0:
+                    # Credit a provider actually delivered is authority to spend it: the
+                    # factory's own capital becoming thinking money (essay II.IV: a
+                    # reciprocal flow of capital is an objective requirement). Booked
+                    # once, here, and owed to the runtime to classify by owner.
+                    self.wallet.settle(finished["received_micro"],
+                                       finished.get("handle") or finished["id"], "financing")
+                    self.income = {**self.income, "financing_owed": [
+                        *self.income.get("financing_owed", []),
+                        {"transfer_id": finished["id"], "handle": finished.get("handle"),
+                         "micro": finished["received_micro"]}]}
             self.wallet.release(self.principal_hold)
             if self.fee_hold is not None:
                 self.wallet.release(self.fee_hold)
