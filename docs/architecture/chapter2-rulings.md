@@ -2,7 +2,8 @@
 
 Branch `fast-loop-harness`, 2026-09-22. Seven auditors held the codebase to
 Chapter II, one slice each plus a cross-cutting Class 1/2 sweep. Their reports are
-in the session scratchpad (`audit/{primitive,information,versioning,evaluations,charter,time,smuggling}.md`).
+in `docs/audits/chapter2/` (primitive, information, versioning, evaluations, charter,
+time, smuggling).
 They list about 150 findings. This document rules on them.
 
 - Where an auditor misread the chapter, the ruling says so and cites the text.
