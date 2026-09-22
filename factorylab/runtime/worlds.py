@@ -268,6 +268,11 @@ class EvaluationSpec:
     #: default is ``verdict``, so a world that predates the key is unchanged and a
     #: run turns the new line on deliberately.
     producer_feedback: str = "verdict"
+    #: The exploration niche (essay II.II.b: learning death is prevented "as a fact
+    #: about the world"). The share of producer decisions on which the kernel, not the
+    #: seat, draws the action class, uniformly over the classes that act, and records
+    #: that draw as the decision's propensity. Zero keeps every earlier world as it was.
+    exploration_share: float = 0.0
 
     # Both horizons count world ticks consumed, not internal events (defect 1). The
     # field names predate that and are kept so every manifest keeps its meaning; the
@@ -523,6 +528,8 @@ class WorldManifest:
             payload["evaluation"].pop("producer_feedback")
         if payload["evaluation"].get("grounded_horizon_ticks") == 10:
             payload["evaluation"].pop("grounded_horizon_ticks")
+        if payload["evaluation"].get("exploration_share") == 0.0:
+            payload["evaluation"].pop("exploration_share")
         # An absent [web] block registers no search tool, so a world without one hashes
         # exactly as it did before web search existed.
         if payload["web"] == asdict(WebSpec()):
@@ -647,6 +654,8 @@ class WorldManifest:
             raise ValueError("prompt.mode must be reference or compact")
         if self.evaluation.producer_feedback not in ("verdict", "realized"):
             raise ValueError("evaluation.producer_feedback must be verdict or realized")
+        if not 0.0 <= self.evaluation.exploration_share <= 1.0:
+            raise ValueError("evaluation.exploration_share must be within [0, 1]")
         if namespace is not None and (not isinstance(namespace, str) or len(namespace) != 32
                                       or any(c not in "0123456789abcdef" for c in namespace)):
             raise ValueError("exchange.client_namespace must be 32 lowercase hex characters")
@@ -1040,6 +1049,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         sampling_step=ev.get("sampling_step", 0.1),
         sampling_cap=ev.get("sampling_cap", 0.7),
         producer_feedback=_manifest_producer_feedback(ev.get("producer_feedback", "verdict")),
+        exploration_share=float(ev.get("exploration_share", 0.0)),
     )
     pr = d.get("prices") or {}
     prices = PricesSpec(

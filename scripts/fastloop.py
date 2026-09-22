@@ -184,6 +184,7 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                      "unknown" if version.endswith("-unknown") else version)
             producer_settle[f"{ret.get('status')}:{label}"] += 1
     kinds = collections.Counter(e.get("kind") for e in events)
+    taken = [e for e in events if e.get("kind") == "exploration.taken"]
     findings = collections.Counter(e.get("status") for e in events
                                    if e.get("kind") == "consequence.finding")
     intents = collections.Counter(e.get("operation") for e in events
@@ -219,6 +220,10 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                 if (named := sum(1 for e in opportunity if e.get("declined"))) else None),
         },
         "judge_unmeasured": kinds.get("evaluation.unmeasured", 0),
+        "exploration": {"draws": kinds.get("exploration.draw", 0),
+                        "complied": sum(1 for e in taken if e.get("complied")),
+                        "by_class": dict(collections.Counter(
+                            f"{e['drawn']}->{e['taken']}" for e in taken))},
         "orders": {"intents": dict(intents),
                    "duplicates_refused": kinds.get("order.duplicate", 0),
                    "reported_not_placed": kinds.get("order.reported", 0),
@@ -233,7 +238,7 @@ def print_card(card: dict[str, Any]) -> None:
 
 # --- running ------------------------------------------------------------------------
 
-def simulation_manifest(world: Path, seed: int) -> Any:
+def simulation_manifest(world: Path, seed: int, exploration: float | None = None) -> Any:
     """The launch identity with only the venue swapped for the deterministic fake.
 
     ``effective_manifest`` freezes the roster, charter, seed lenses, prompts and
@@ -250,18 +255,21 @@ def simulation_manifest(world: Path, seed: int) -> Any:
     exchange = replace(manifest.exchange, kind="fake", mainnet=False, seed=seed,
                        spot_pairs=(), client_namespace=None)
     manifest = replace(manifest, exchange=exchange, seed=seed)
+    if exploration is not None:
+        manifest = replace(manifest, evaluation=replace(
+            manifest.evaluation, exploration_share=exploration))
     manifest.validate()
     return manifest
 
 
 def run(provider_kind: str, ticks: int, world: Path, out: Path, cap_usd: str,
-        seed: int) -> dict[str, Any]:
+        seed: int, exploration: float | None = None) -> dict[str, Any]:
     from factorylab.runtime.loop import Runtime
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
     target = out / f"{provider_kind}-{stamp}-s{seed}"
     target.mkdir(parents=True, exist_ok=True)
-    manifest = simulation_manifest(world, seed)
+    manifest = simulation_manifest(world, seed, exploration)
     admission = rehearsal.Admission(cap_micro=int(Decimal(cap_usd) * 1_000_000),
                                     max_calls=10_000, recover_provider_failures=True)
     inner = (PolicyProvider(world) if provider_kind == "scripted"
@@ -305,7 +313,8 @@ def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
     for card in cards:
         add(total, {k: card.get(k) for k in (
             "ticks", "calls", "invocations", "malformed_reasons", "producer_actions",
-            "producer_settlements", "grounded_findings", "judge_unmeasured", "orders")
+            "producer_settlements", "grounded_findings", "judge_unmeasured", "orders",
+            "exploration", "opportunity_cost")
             if card.get(k) is not None})
     settled = total.get("producer_settlements", {})
     scored = sum(v for k, v in settled.items() if k.startswith("settled:"))
@@ -330,7 +339,8 @@ def run_seeds(args: argparse.Namespace, seeds: list[int]) -> dict[str, Any]:
     procs = [subprocess.Popen(
         [sys.executable, __file__, "run", "--provider", args.provider,
          "--ticks", str(args.ticks), "--world", str(args.world), "--out", str(args.out),
-         "--cap-usd", args.cap_usd, "--seed", str(seed)],
+         "--cap-usd", args.cap_usd, "--seed", str(seed),
+         *(["--exploration", str(args.exploration)] if args.exploration is not None else [])],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=ROOT) for seed in seeds]
     cards = []
     for seed, proc in zip(seeds, procs, strict=True):
@@ -355,6 +365,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--out", type=Path, default=DEFAULT_OUT)
     r.add_argument("--cap-usd", default="2")
     r.add_argument("--seed", type=int, default=1)
+    r.add_argument("--exploration", type=float, default=None,
+                   help="evaluation.exploration_share for this run (the manifest's otherwise)")
     r.add_argument("--seeds", default=None,
                    help="comma-separated seeds run in parallel processes, e.g. 1,2,3,4")
     args = parser.parse_args(argv)
@@ -365,7 +377,8 @@ def main(argv: list[str] | None = None) -> int:
         card = run_seeds(args, [int(x) for x in args.seeds.split(",")])
         print_card(card)
         return 0 if all(c.get("status") == "completed" for c in card["seeds"]) else 1
-    card = run(args.provider, args.ticks, args.world, args.out, args.cap_usd, args.seed)
+    card = run(args.provider, args.ticks, args.world, args.out, args.cap_usd, args.seed,
+               args.exploration)
     print_card(card)
     return 0 if card.get("status") == "completed" else 1
 

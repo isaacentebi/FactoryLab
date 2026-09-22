@@ -104,6 +104,8 @@ class BootstrapMixin:
         self.events_budget = events
         self.seed = manifest.seed if seed is None else seed
         self.rng = random.Random(self.seed)
+        # Exploration draws awaiting the propensity record of their decision (C-X).
+        self.exploration_draws: dict[str, dict] = {}
         self.cascade: dict[int, CascadeGate] = {}
         self.cascade_windows: dict[str, list[str]] = {}  # representative -> other handles
         self.clock = SimClock(0) if _journal is None else _journal.clock
