@@ -9,6 +9,13 @@ opener's entry price and the closer's exit price on the closed quantity): the
 opener's part is net of its opening fee and funding, the closer's net of its
 closing fee. A handle closing its own lot receives the whole profit once.
 Only a decision with an open account can own an order or a lot.
+
+An ``event`` lot is an outcome token of a binary event market (Polymarket). It
+is held long only and is marked like a spot lot, at the market's own midpoint:
+the price is the market's anticipatory settlement of the belief (essay II.IV.b),
+so the decision is scored at the backstop rather than waiting on a resolution
+that may come after its learner has moved on. The resolution itself closes the
+lot later (``redeem``) and its money reaches the owner as a late realization.
 """
 
 from collections.abc import Mapping
@@ -303,10 +310,10 @@ class LotTable:
         _require_id(order_id)
         if "/" in coin:
             market = "spot"
-        if market not in ("perp", "spot"):
+        if market not in ("perp", "spot", "event"):
             raise ValueError("unknown market")
-        if market == "spot" and liquidation:
-            raise ValueError("spot lots cannot be liquidated")
+        if market in ("spot", "event") and liquidation:
+            raise ValueError(f"{market} lots cannot be liquidated")
         _require_id(coin)
         if type(is_buy) is not bool or type(liquidation) is not bool:
             raise ValueError("fill side and liquidation must be booleans")
@@ -318,7 +325,7 @@ class LotTable:
         accounts = {r.handle: r for r in self.returns}
         if not liquidation and owner not in accounts:
             raise ValueError("fill without an open consequence account")
-        if market == "spot" and not is_buy and quantity > sum(
+        if market in ("spot", "event") and not is_buy and quantity > sum(
             (lot.size for lot in self.lots if lot.coin == coin and lot.market == market),
             Fraction(0),
         ):
@@ -405,6 +412,39 @@ class LotTable:
                 for lot in self.lots
             ),
         )
+
+    def redeem(self, coin: str, payout: str) -> tuple["LotTable", dict[str, Fraction]]:
+        """Close every event lot of ``coin`` at the price its market resolved to.
+
+        Guarantees each lot's owner is credited once with exactly what the
+        resolution paid for it, ``(payout - entry) * size`` net of the lot's
+        opening fee, and that no closer is credited: the market's resolution
+        closes the position, not another decision. ``payout`` is the price one
+        outcome token redeemed at, 0 to 1 inclusive (0.5 each on a 50-50
+        resolution). Only ``event`` lots move; a coin with none is unchanged.
+        Returns the successor table and the signed micro-USD credited per
+        handle, exact, for the caller's receipts.
+        """
+        _require_id(coin)
+        price = exact(payout)
+        if not 0 <= price <= 1:
+            raise ValueError("an event market pays between 0 and 1 per token")
+        accounts = {r.handle: r for r in self.returns}
+        lots, credited = [], {}
+        for lot in self.lots:
+            if lot.coin != coin or lot.market != "event":
+                lots.append(lot)
+                continue
+            net = (price - lot.px) * lot.size * 1_000_000 - lot.charges_micro
+            if lot.handle in accounts:
+                account = accounts[lot.handle]
+                accounts[lot.handle] = replace(
+                    account, realized_micro=account.realized_micro + net,
+                    closed_lots=account.closed_lots + 1)
+                credited[lot.handle] = credited.get(lot.handle, Fraction(0)) + net
+        if len(lots) == len(self.lots):
+            return self, {}
+        return replace(self._accounts(accounts), lots=tuple(lots)), credited
 
     def resolve(self, event: int, backstop: int, mids: Mapping[str, str], *,
                 censored: Mapping[str, str] | None = None,

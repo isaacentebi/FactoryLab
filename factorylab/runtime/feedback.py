@@ -1007,7 +1007,7 @@ class FeedbackMixin:
                          "marked": payoff.marked, "liquidated": payoff.liquidated})
         if payoff.marked or owner is None or owner not in self.assemblies:
             return
-        self._book_consequence(owner, payoff.net_micro, "return_paid_off")
+        self._book_consequence(owner, payoff.net_micro, "return_paid_off", payoff.handle)
 
     def _address_unknown_outcome(self, payoff: Any) -> None:
         """Tell the owner that its return's consequence is unknown, and why (R4-C).
@@ -1040,7 +1040,8 @@ class FeedbackMixin:
                      "position_open": True, "commitment_settled": False,
                      "marked": payoff.marked, "liquidated": payoff.liquidated})
         if not payoff.marked and owner in self.assemblies:
-            self._book_consequence(owner, payoff.net_micro, "return_known_portion")
+            self._book_consequence(owner, payoff.net_micro, "return_known_portion",
+                                   payoff.handle)
 
     def _venue_last_answer(self, handle: str) -> dict | None:
         """The last thing the venue said about this return's unresolved intent."""
@@ -1068,8 +1069,18 @@ class FeedbackMixin:
             return False
         return account.opened_lots > account.closed_lots
 
-    def _book_consequence(self, owner: str, micro: int, reason: str) -> None:
-        """Book a return's realised venue P&L to its owner as a venue-custody claim."""
+    def _book_consequence(self, owner: str, micro: int, reason: str,
+                          handle: str | None = None) -> None:
+        """Book a return's realised venue P&L to its owner as a claim on its custody.
+
+        A Polymarket share is a claim on the polymarket pot and never on the venue:
+        financing converts only venue claims, so a profit made on Polygon cannot be
+        withdrawn from Hyperliquid money (runtime/polymarket.py).
+        """
+        if getattr(self, "polymarket", None) is not None and handle is not None:
+            from factorylab.runtime.polymarket import claim_share
+
+            micro -= claim_share(self, owner, handle, micro, reason)
         if micro:
             self.budget.claim_venue(owner, micro, reason)
 
@@ -1086,7 +1097,7 @@ class FeedbackMixin:
             if owner is None or owner not in self.assemblies:
                 self._undeliverable("late_realization", handle, "no live seat owns that decision")
                 continue
-            self._book_consequence(owner, micro, "late_consequence")
+            self._book_consequence(owner, micro, "late_consequence", handle)
             # A realisation after the outcome was fixed is still this seat's news (C1).
             self.outcomes.append(owner, handle=handle, delta_micro=micro, evidence=handle,
                                  outcome={"late_realization_micro": micro})

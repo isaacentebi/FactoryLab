@@ -435,6 +435,9 @@ def _read_only(name: str) -> bool:
                                          "gas_view")
     ):
         return True
+    if name.startswith("polymarket.") and name.rsplit(".", 1)[-1] in (
+            "search_markets", "market", "market_of_token", "midpoint"):
+        return True  # the public Polymarket reads (world/polymarket.py)
     return name.rsplit(".", 1)[-1] in (
         "mids", "account", "funding", "fills", "candles", "order_book", "funding_history",
         "open_orders", "balance_micro", "balance_of", "affordable", "catalogue", "discover",
@@ -771,6 +774,10 @@ def runtime_state(rt) -> Checkpoint:
         "fake_exchange": encode(vars(rt.exchange.target)) if rt.exchange.deterministic else None,
         "fake_provider": encode(vars(rt.provider.target)) if rt.provider.deterministic else None,
     })
+    if getattr(rt, "polymarket", None) is not None:
+        # Only a world that enables event markets carries this key, so every other
+        # checkpoint keeps its shape.
+        state["polymarket"] = encode(rt.polymarket.state())
     # The diary this state descends from, beside the mapping and never in it.
     state.diary = rt.diary_id or rt.ledger.diary_id
     state.origin = rt.ledger.path
@@ -946,6 +953,8 @@ def restore_runtime(rt, state: dict) -> None:
                 raise ResumeError(f"{name} requires the original deterministic adapter")
             component.target.__dict__.clear()
             component.target.__dict__.update(decode(state[name]))
+    if state.get("polymarket") is not None and getattr(rt, "polymarket", None) is not None:
+        rt.polymarket.restore(decode(state["polymarket"]))
     bind_launch_nonce(rt.exchange, rt.launch_nonce)
     for model_id in rt.sellers:
         rt.market.register(model_id, rt.prices.price(model_id).per_request_micro)

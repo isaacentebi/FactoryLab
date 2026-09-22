@@ -385,6 +385,19 @@ class ContractConsequences(ReturnConsequences):
         """The runtime's world ticks consumed: the unit the backstop counts (defect 1)."""
         return self.runtime.ticks_consumed
 
+    def observe(self, kind, payload, event):
+        if kind != "Fill" or payload.get("market") != "event":
+            return super().observe(kind, payload, event)
+        from factorylab.runtime.polymarket import credit_realized
+
+        # What an event fill realises is the polymarket pot's, kept apart from the
+        # venue's (runtime/polymarket.py); a deferred fill replays through here too.
+        before = {r.handle: r.realized_micro for r in self.table.returns}
+        super().observe(kind, payload, event)
+        credit_realized(self.runtime, {
+            r.handle: r.realized_micro - before.get(r.handle, 0)
+            for r in self.table.returns if r.realized_micro != before.get(r.handle, 0)})
+
     def resolve(self, event):
         resolved = super().resolve(event)
         return [payoff for payoff in resolved
@@ -557,6 +570,7 @@ class ComputeMixin:
         writes = any(str(call.get("tool")) in EFFECT_TOOLS
                      or str(call.get("tool")).startswith("treasury.")
                      or call.get("tool") in ("address.send", "note.put")
+                     or call.get("tool") in self.CONSEQUENCE_WRITES
                      for call in calls if isinstance(call, dict))
         for section, limit in (("requests", self.m.tools.max_children),
                                ("tool_calls", self.m.tools.max_tool_calls)):
@@ -1074,7 +1088,14 @@ class ComputeMixin:
         # The vault surface ([venue] vault_tools): money moving between perps
         # collateral and a vault is a consequence exactly as an order is.
         "venue.vault_create", "venue.vault_deposit", "venue.vault_withdraw",
+        # Polymarket event markets (runtime/polymarket.py), on the simulated venue.
+        "polymarket.place_limit", "polymarket.cancel",
     })
+
+    #: Reads whose answers carry text third parties wrote, jailed like a fetched
+    #: body: Polymarket's market questions, rules and slugs (runtime/polymarket.py).
+    OUTSIDE_TEXT_TOOLS = frozenset({"connector.fetch", "web.search", "polymarket.search",
+                                    "polymarket.market", "polymarket.book"})
 
     #: The most continuation calls one decision can buy, whatever it retrieves.
     #: The budget is the live limit; this is the backstop that makes the worst
@@ -1096,7 +1117,7 @@ class ComputeMixin:
     #: for it, and a round that ran only these has not acted.
     READ_ONLY_KINDS = frozenset({
         "institution", "catalogue", "outcome", "artifact", "market", "venue",
-        "connector", "web",
+        "connector", "web", "polymarket",
     })
 
     #: The reads inside a kind that also writes.
@@ -1254,7 +1275,8 @@ class ComputeMixin:
         """
         writes = [(index, call) for index, call in enumerate(ret.tool_calls)
                   if not call.get("invalid") and call.get("tool") in self.CONSEQUENCE_WRITES
-                  and self.tool_specs.get(str(call.get("tool")), {}).get("kind") == "venue"
+                  and self.tool_specs.get(str(call.get("tool")), {}).get("kind") in (
+                      "venue", "polymarket")
                   and isinstance(call.get("args"), dict)]
         if len(writes) < 2 or not self._may_write(handle):
             return ret  # a lone write meets these same tests where it is dispatched
@@ -1268,9 +1290,19 @@ class ComputeMixin:
         if stranger is not None:
             refusal, failing = (None, "unknown or disallowed tool"), stranger
         else:
-            refusal = self.venue_batch_refusal(
-                action_id, handle, [(slot(i), str(c["tool"]), c["args"]) for i, c in held])
-            failing = None if refusal is None else held[refusal[0]][0]
+            refusal, failing = None, None
+            # Each venue weighs its own legs; the first leg either would refuse holds
+            # back every write in the batch, on both venues.
+            for legs, weigh in (
+                    ([(i, c) for i, c in held if not str(c["tool"]).startswith("polymarket.")],
+                     self.venue_batch_refusal),
+                    ([(i, c) for i, c in held if str(c["tool"]).startswith("polymarket.")],
+                     self._polymarket_batch_refusal)):
+                found = weigh(action_id, handle,
+                              [(slot(i), str(c["tool"]), c["args"]) for i, c in legs]
+                              ) if legs else None
+                if found is not None and (failing is None or legs[found[0]][0] < failing):
+                    refusal, failing = found, legs[found[0]][0]
         if refusal is None:
             return ret
         reason = refusal[1]
@@ -1283,6 +1315,13 @@ class ComputeMixin:
         return replace(ret, tool_calls=tuple(
             {**call, "invalid": reason} if i in refused else call
             for i, call in enumerate(ret.tool_calls)))
+
+    def _polymarket_batch_refusal(self, seat: str, handle: str,
+                                  writes: list[tuple[str, str, dict]]):
+        """The first Polymarket write of a batch that would be refused, and why, or None."""
+        from factorylab.runtime.polymarket import batch_refusal
+
+        return batch_refusal(self, seat, handle, writes)
 
     def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
                   slot: str = "tool:0") -> tuple[dict, int]:
@@ -1464,6 +1503,10 @@ class ComputeMixin:
                 return self.treasury.transfer(
                     direction, usd, handle=handle, now_ns=self.clock.now_ns
                 )
+            if spec["kind"] == "polymarket":
+                from factorylab.runtime import polymarket
+
+                return polymarket.execute(self, action_id, handle, tool_id, args, slot)
             if spec["kind"] == "calc":
                 # Deterministic arithmetic (R3-E): a pure function of its arguments,
                 # no jail, no rail, no clock. It is metered and ledgered like any
@@ -1783,7 +1826,7 @@ class ComputeMixin:
                 # retains the ordinary continuation. A round earned by outside text
                 # runs jailed tools only, so a seat can read and then compose within
                 # the same wake instead of spending another decision on it.
-                if ok and (call["tool"] in ("connector.fetch", "web.search")
+                if ok and (call["tool"] in self.OUTSIDE_TEXT_TOOLS
                            or (call["tool"] == "catalogue.search"
                                and isinstance(result, dict) and result.get("models"))):
                     outside_text = True
