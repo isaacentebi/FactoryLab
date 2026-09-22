@@ -129,12 +129,10 @@ def normative_brier(q: float, outcome: float) -> float:
 class Settler:
     """Each due forecast is scored at most once and missing facts never become performance.
 
-    Every registered predicate a judge forecast trains consequence standing, at
-    the weight the charter's cards give a claim about that return's scope
-    (``settlement.weights``). ``return_paid_off`` is still a kernel fact — cash
-    settlement is immutable — and is now an ordinary forecastable predicate with
-    no standing privilege of its own: with no card naming a scope every claim
-    counts equally, and removing a card removes its effect on standing entirely.
+    Every registered predicate a judge forecast trains consequence standing, and
+    every settled claim counts once. No charter card weights it: the realized
+    consequence signal "sits outside the factory's input entirely" (essay
+    II.III.b; ruling R1).
     """
 
     def __init__(
@@ -144,7 +142,6 @@ class Settler:
         standing: ConsequenceStanding,
         baseline: PrevalenceBaseline,
         observer: Observer,
-        weight_for: Callable[[Forecast], float] | None = None,
         receipts: ReceiptBook | None = None,
     ) -> None:
         self.__book = book
@@ -155,9 +152,6 @@ class Settler:
         self.__standing = standing
         self.__baseline = baseline
         self.__observer = observer
-        # The charter's weight on one settled claim; without one every claim
-        # counts equally, which is what a charter with no scoped card means.
-        self.__weight_for = weight_for
         # judge return handle -> the fidelity objection that return carried
         self.__objections: dict[str, FidelityObjection] = {}
         # forecast handle -> the documented reason its settlement is an excluded
@@ -236,10 +230,7 @@ class Settler:
                 self.__baseline.record(key, y)
                 answered.add(question)
             if score is not None:
-                # No predicate is privileged: this claim trains the judge's
-                # standing at the charter's weight, like any other.
-                self.__standing.record(forecast.evaluator_id, score, baseline_score,
-                                       self.__weight(forecast))
+                self.__standing.record(forecast.evaluator_id, score, baseline_score)
                 self.__standing.set_requested(
                     forecast.evaluator_id, self.__book.requested(forecast.evaluator_id))
             self.__book.mark_settled(forecast.handle)
@@ -296,10 +287,6 @@ class Settler:
         so it is not retained and cannot grow without bound.
         """
         return self.__excluded.pop(handle, None)
-
-    def __weight(self, forecast: Forecast) -> float:
-        """The charter's weight on this claim, or an equal 1.0 without a charter."""
-        return 1.0 if self.__weight_for is None else float(self.__weight_for(forecast))
 
     def settle_consequences(
         self, payoff_for: Callable[[str], Payoff | None]
@@ -366,8 +353,7 @@ class Settler:
                 )
                 if payoff.handle not in self.__recorded:
                     outcomes[payoff.handle] = payoff.y
-                self.__standing.record(forecast.evaluator_id, score, baseline,
-                                       self.__weight(forecast))
+                self.__standing.record(forecast.evaluator_id, score, baseline)
                 self.__book.mark_settled(forecast.handle)
                 self.__standing.set_requested(
                     forecast.evaluator_id, self.__book.requested(forecast.evaluator_id),

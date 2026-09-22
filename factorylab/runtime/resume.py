@@ -238,6 +238,10 @@ def decode(value: Any) -> Any:
 _RETIRED_FIELDS = {
     "_CardState": frozenset({"relief_window"}),
     "RunStats": frozenset({"upward_releases"}),
+    # ``weight_sum``: the charter's weight on the outside signal (settlement.weights),
+    # deleted by ruling R1. Every shipped world's cards named no scope, so an older
+    # standing's sums were accumulated at weight 1.0 and read the same without it.
+    "_Standing": frozenset({"weight_sum"}),
 }
 
 
