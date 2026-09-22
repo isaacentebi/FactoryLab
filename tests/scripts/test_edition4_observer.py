@@ -198,20 +198,6 @@ def test_unmatched_wallet_income_settlement_is_not_independent_income(tmp_path):
     assert report["income"]["unknown_provenance"] == 1
 
 
-def test_message_delivery_keeps_unknown_and_delivered_counts(tmp_path):
-    ledger = FakeLedger()
-    observer = RehearsalObserver(ledger, tmp_path, admission_report=_admission)
-    observer.attach()
-    ledger.append({"kind": "message", "handle": "delivered", "delivered": True})
-    ledger.append({"kind": "message", "handle": "unknown"})
-    _tick(ledger, 0)
-    ledger.append({"kind": "runtime.event_done", "n": 1})
-    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
-    assert report["messages"]["attempted"] == 2
-    assert report["messages"]["delivered"] == 1
-    assert report["messages"]["unknown_delivery"] == 1
-
-
 def test_assessment_finding_score_and_typed_evidence_reach_question_card(tmp_path):
     ledger = FakeLedger()
     observer = RehearsalObserver(ledger, tmp_path, admission_report=_admission)
@@ -341,7 +327,8 @@ def test_runtime_manifest_labels_capability_and_governance_runway(tmp_path):
     report = observer.last_report
 
     assert report["configuration"]["source"] == "runtime_manifest"
-    assert report["messages"]["capability_status"] == "disabled"
+    assert "messages" not in report
+    assert "address_enabled" not in report["configuration"]
     runway = report["configuration"]["governance_runway"]
     backstop = runtime.m.evaluation.consequence_backstop_ticks
     assert type(runtime.m.timing.min_ratio) is int

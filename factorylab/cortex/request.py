@@ -25,138 +25,31 @@ from typing import Any
 Money = int
 
 
-#: The capability whose payload is private even from the judge who prices the act.
-#: A message is addressed to a participant who may ignore it; a judge that reads
-#: every body turns a private channel into a broadcast, and a sender that knows it
-#: will be read writes for the judge instead of the recipient.
-ADDRESS_TOOL = "address.send"
-
-#: The argument names that carry a body rather than an address. Everything else an
-#: address call declares -- who it went to, what it cost, whether it was delivered
-#: -- survives the projection, because that a message occurred is a public fact and
-#: what it said is not.
-ADDRESS_BODY_FIELDS = frozenset({"text", "body", "message", "content", "payload"})
-
-#: Address-shaped child inputs do not always repeat the tool name: a parent can
-#: delegate the complete arguments of an address call as the child's task.
-_ADDRESS_RECIPIENT_FIELDS = frozenset({"recipient", "to"})
-
-#: Where an address call keeps its arguments, whatever the caller named them.
-_ARGUMENT_FIELDS = ("args", "arguments", "inputs")
-
-#: A projection walks model-authored JSON, which is shallow. Past this depth it
-#: drops the subtree rather than passing it through unread: a redaction that gives
-#: up quietly is not one.
-_PROJECTION_DEPTH = 24
-
-
-def _names_address(value: dict[str, Any]) -> bool:
-    """True when this mapping is a record of a call to the addressing capability."""
-    return any(value.get(key) == ADDRESS_TOOL for key in ("tool", "tool_id", "name"))
-
-
-def _address_shaped(value: dict[str, Any]) -> bool:
-    """True when a child-input mapping contains both an address and a body."""
-    return bool(_ADDRESS_RECIPIENT_FIELDS & value.keys()) and bool(
-        ADDRESS_BODY_FIELDS & value.keys()
-    )
-
-
-def _redact_projected_body(projected: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
-    """A projected mapping with raw body fields represented only by their receipt."""
-    kept = {k: v for k, v in projected.items() if k not in ADDRESS_BODY_FIELDS}
-    dropped = [k for k in raw if k in ADDRESS_BODY_FIELDS]
-    if dropped:
-        kept["body"] = {
-            "redacted": "the recipient holds the only readable copy",
-            "fields": sorted(dropped),
-            "bytes": sum(
-                len(json.dumps(raw[k], sort_keys=True, default=str).encode("utf-8"))
-                for k in dropped
-            ),
-        }
-    return kept
-
-
-def _project(value: Any, depth: int = 0, *, address_shapes: bool = False) -> Any:
-    """A structure with every addressed body redacted, at any nesting a return reached.
-
-    Guarantees an address call is redacted wherever it sits -- at the top of a
-    return, inside a list of calls, or inside the result a child handed back --
-    because a model chooses where to put it and a projection that only checked one
-    place would be a convention rather than a guarantee.
-    """
-    if depth >= _PROJECTION_DEPTH:
-        return {"omitted": "nested deeper than this projection reads"}
-    if isinstance(value, dict):
-        addressed = _names_address(value)
-        out = {k: _project(v, depth + 1, address_shapes=(
-                   address_shapes or (addressed and k in _ARGUMENT_FIELDS)))
-               for k, v in value.items()}
-        if addressed:
-            for field in _ARGUMENT_FIELDS:
-                if field in out:
-                    raw = value[field]
-                    projected = out[field]
-                    out[field] = (
-                        _redact_projected_body(projected, raw)
-                        if isinstance(raw, dict) and isinstance(projected, dict)
-                        else projected
-                    )
-            # A call that inlined its body beside the tool name rather than under
-            # arguments is the same call and is redacted the same way.
-            out = _redact_projected_body(out, value)
-        elif address_shapes and _address_shaped(value):
-            out = _redact_projected_body(out, value)
-        return out
-    if isinstance(value, (list, tuple)):
-        return [_project(item, depth + 1, address_shapes=address_shapes) for item in value]
-    return value
-
-
-def public_tool_calls(calls: Any) -> list[Any]:
-    """The executed tool calls of a return, as a reader across the boundary may see them.
-
-    Guarantees every call is still listed -- which capability ran, with what
-    address and at what price -- and that an addressed body is not among what is
-    listed. Nothing here is the caller's own record: a seat keeps what it wrote in
-    its own working state, which no projection touches.
-    """
-    if not isinstance(calls, (list, tuple)):
-        return []
-    return [_project(call) for call in calls]
+#: Continuity fields are the author's own record and never cross a contract boundary.
+_CONTINUITY_FIELDS = frozenset({"working_state", "ack_through", "raw"})
 
 
 def public_return(outputs: Any) -> dict[str, Any]:
     """Project a return across a contract boundary, excluding continuity internals.
 
-    Guarantees the continuity fields never cross, as before, and that the body of
-    an addressed message does not cross either, wherever in the return it was
-    written. What crosses is that the message happened: the capability, the
-    recipient and the size of what was said. A judge prices an act it can see the
-    shape of; it does not read the population's post.
+    Guarantees the continuity fields (``working_state``, ``ack_through``, ``raw``)
+    never cross: they are the author's private record, and a reader across the
+    boundary sees what the return published and nothing it kept.
     """
     if not isinstance(outputs, dict):
         return {"invalid_return": True}
-    visible = {k: v for k, v in outputs.items()
-               if k not in {"working_state", "ack_through", "raw"}}
-    return _project(visible)
+    return {k: v for k, v in outputs.items() if k not in _CONTINUITY_FIELDS}
 
 
 def public_child_inputs(inputs: Any) -> dict[str, Any]:
     """Project delegated inputs for a public child-evaluation event.
 
-    Guarantees an addressed body stays private even when the parent delegates raw
-    address arguments without naming ``address.send``. A mapping is treated as an
-    address only when it contains both ``recipient``/``to`` and a body field, so
-    ordinary task text remains visible to the evaluator.
+    Guarantees the same continuity fields ``public_return`` withholds are
+    withheld from delegated inputs; everything else is the task, and is visible.
     """
     if not isinstance(inputs, dict):
         return {"invalid_return": True}
-    visible = {
-        k: v for k, v in inputs.items() if k not in {"working_state", "ack_through", "raw"}
-    }
-    return _project(visible, address_shapes=True)
+    return {k: v for k, v in inputs.items() if k not in _CONTINUITY_FIELDS}
 
 
 def _utc(ns: Any) -> str | None:
@@ -197,7 +90,7 @@ def _outcome_id(item: Any) -> Any:
 # consecutive calls to one assembly begin with byte-identical text and a provider's
 # automatic prefix cache (DeepSeek and OpenAI cache on an identical prefix, with no
 # cache_control marker) can hit. Everything not named here moves — the account,
-# the mids, the pots, the note counts, the pathologies, the reserve, the card prices,
+# the mids, the pots, the reserve, the card prices,
 # the scoring values the runtime's own adaptation changes, the governance queue,
 # the measured tick — and is rendered after the block, inside ``INPUTS`` with the
 # request itself. A key absent from this set is treated as moving, which costs
@@ -293,7 +186,7 @@ PREFIX_SOURCE_KEYS = PREFIX_INDEX_KEYS | PREFIX_CONSTANT_KEYS
 UPDATE_WORLD_KEY = "world_update"
 UPDATE_SOURCE_KEYS = frozenset({
     "charter", "charter_edition", "card_prices", "continuity", "governance",
-    "pathologies", "recent_mids",
+    "recent_mids",
 })
 
 # The world keys that are about the acting seat rather than about the world, and
@@ -811,8 +704,6 @@ class ChildRequest:
     """A neutral composition contract names a target capability and its complete task.
 
     ``description`` is public task documentation shown to the child evaluator.
-    Private addressed content belongs in ``inputs``, where the public event applies
-    the same body projection as an executed ``address.send`` call.
     """
 
     target: str

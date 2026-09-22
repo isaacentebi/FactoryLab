@@ -22,7 +22,6 @@ def test_final_commission_does_not_inject_live_world_or_metric_context(monkeypat
     _, contract = _open_contract(rt)
     monkeypatch.setattr(rt, "_charter_text", lambda: "LATER-CHARTER-MARKER")
     monkeypatch.setattr(rt, "_world_block", lambda: {"marker": "LATER-MARKET-MARKER"})
-    monkeypatch.setattr(rt, "_standing_for", lambda _: "LATER-STANDING-MARKER")
     rt.ticks_consumed = contract.due_tick
     rt._settle_due_grounded()
     _consequence_judge(rt, rt.internal[-1], "eval-b")

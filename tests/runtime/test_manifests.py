@@ -83,8 +83,10 @@ def test_grounded_horizon_default_keeps_legacy_identity_and_nondefault_changes_i
     scripted = load_manifest("scripted")
     assert scripted.evaluation.grounded_horizon_ticks == 10
     assert "grounded_horizon_ticks" not in scripted.canonical_json()
+    # R8/R11: the notebook's [notes] table left the manifest and [storage] entered
+    # it, so this identity changed with the physics it names.
     assert scripted.manifest_hash() == (
-        "f3bf34acc6aa2e9a530bd176453c1968e526b4083f7f3dedbea59636bdad2dd8"
+        "2f61a08bdffaa4288a993ad72e0a1135c1842f6e4a3f7b83944c2d9e9fd940c5"
     )
 
     implicit = manifest_from_dict(_base())

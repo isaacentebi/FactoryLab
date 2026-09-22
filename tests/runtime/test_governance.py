@@ -47,7 +47,8 @@ def test_a_router_add_at_the_cap_is_refused_before_the_receipt_is_spent():
     rt._apply_registrations('author', Return('author', {'register': [
         {'kind': 'router', 'learner': 'exp3', 'event_kind': 'Tick', 'add': True}]}, 0, 'ok'))
     assert rt.stats.registrations_rejected == 1 and rt.stats.registrations_accepted == 0
-    assert 'router cap reached' in rt.registration_feedback[-1]['reason']
+    rejected = [i for i in rt.ledger._recovery_items() if i['kind'] == 'registration.rejected']
+    assert 'router cap reached' in rejected[-1]['reason']
     assert len(rt.routers['Tick']) == cap
     assert rt.registry.state() == registry and rt.reserve.remaining() == remaining
     assert not [i for i in rt.ledger._recovery_items() if i['kind'] == 'novelty.release']

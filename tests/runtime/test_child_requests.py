@@ -28,7 +28,6 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
     # quoted maximum, even though this fixture's actual completions are tiny.
     req = parent_request(rt, ceiling=3_000_000)
     calls = []
-    private_child_text = 'This message is only for the delegated recipient.'
 
     def provider(request):
         text = request.messages[-1]['content']
@@ -45,8 +44,7 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
             body = {'action': 'hold', 'answer': 'used child'}
         else:
             body = {'requests': [{'target': 'helper', 'description': 'child task',
-                                  'inputs': {'question': 'value', 'recipient': 'seed-observer',
-                                             'text': private_child_text}, 'outcome_schema': {
+                                  'inputs': {'question': 'value'}, 'outcome_schema': {
                                       'type': 'object',
                                       'properties': {'answer': {'type': 'integer'}},
                                       'required': ['answer']}}]}
@@ -68,11 +66,7 @@ def test_child_and_grandchild_are_judged_and_returned_to_parent(monkeypatch):
     assert not any(i['kind'] == 'requests.refused' for i in items)
     event = next(ev for ev in rt.internal if ev.payload.get('about_handle') == child['handle'])
     assert str(event.kind) == 'ProducerReturn' and event.payload['outputs']['answer'] == 42
-    assert private_child_text not in str(event.payload)
-    assert 'text' not in event.payload['inputs']
-    assert event.payload['inputs']['recipient'] == 'seed-observer'
-    assert event.payload['inputs']['question'] == 'value'
-    assert event.payload['inputs']['body']['fields'] == ('text',)
+    assert dict(event.payload['inputs']) == {'question': 'value'}
     restored = make_runtime()
     monkeypatch.undo()
     rt.provider.target.__dict__.pop("complete", None)

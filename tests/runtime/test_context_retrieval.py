@@ -66,14 +66,13 @@ def test_discover_page_read_and_act_in_one_budget(monkeypatch):
         {"tool_calls": [{"tool": "world.read", "args": {"section": "composition"}}]},
         {"tool_calls": [{"tool": "outcome.list", "args": {"after": 8}}]},
         {"tool_calls": [{"tool": "outcome.get", "args": {"outcome_id": "outcome:12"}}]},
-        {"tool_calls": [{"tool": "note.put", "args": {"key": "evidence", "text": "exact-11"}}]},
-        {"action": "hold", "rationale": "Saved the retrieved fact."},
+        {"action": "hold", "rationale": "Read the retrieved fact."},
     ], prompts)
     before = rt.wallet.balance
     ret = rt._invoke(seat, req, "producer")
-    assert ret.status == "ok" and len(prompts) == 5
+    assert ret.status == "ok" and len(prompts) == 4
     assert [r["tool"] for r in rows(rt, "tool.call")] == [
-        "world.read", "outcome.list", "outcome.get", "note.put"]
+        "world.read", "outcome.list", "outcome.get"]
     assert all(r["ok"] for r in rows(rt, "tool.call"))
     assert "exact-11" in prompts[3]
     assert ret.cost == before - rt.wallet.balance
@@ -129,12 +128,9 @@ def test_late_public_history_is_exactly_addressable_while_current_facts_stay_inl
     assert after["public_observations"]["last_closed_window_values"] == (
         before["public_observations"]["last_closed_window_values"]
     )
-    assert after["public_observations"]["pathologies"] == (
-        before["public_observations"]["pathologies"]
-    )
-    assert after["public_observations"]["shared_directory"] == (
-        before["public_observations"]["shared_directory"]
-    )
+    # U4: pathology labels are for observers and the wake, never a seat's prompt.
+    assert "pathologies" not in before["public_observations"]
+    assert "pathologies" not in after["public_observations"]
     assert after["public_observations"]["recent_mids"] == {
         "BTC": [before["public_observations"]["recent_mids"]["BTC"][-1]]
     }
@@ -417,8 +413,8 @@ def test_loop_ending_tool_return_handles_working_state_only_once(
     req = request(rt)
     prompts = []
     scripted(rt, monkeypatch, [
-        {"tool_calls": [{"tool": "note.put",
-                         "args": {"key": "done", "text": "the action is complete"}}]},
+        {"tool_calls": [{"tool": "venue.set_leverage",
+                         "args": {"coin": "ETH", "leverage": 1}}]},
         {"working_state": state,
          "tool_calls": [{"tool": "world.read", "args": {"section": "composition"}}]},
     ], prompts)

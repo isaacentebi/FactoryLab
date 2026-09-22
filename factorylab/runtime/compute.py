@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import bisect
 import hashlib
-import heapq
 import json
 import math
 from dataclasses import dataclass, replace
@@ -13,13 +12,11 @@ from typing import Any
 
 from factorylab.cortex.assembly import Assembly, AssemblySpec, ProgramAssembly
 from factorylab.cortex.request import (
-    ADDRESS_TOOL,
     ChildRequest,
     Request,
     Return,
     public_child_inputs,
     public_return,
-    public_tool_calls,
 )
 from factorylab.kernel.artifacts import PRIVATE_REFUSAL
 from factorylab.kernel.budget import SeatWallet
@@ -194,24 +191,21 @@ def _venue_aliases(call: dict) -> None:
         args["side"] = "buy" if args.pop("is_buy") else "sell"
 
 class ArtifactListing:
-    """The archive's directory rows in listing order, kept sorted as the archive changes.
+    """Each owner's directory rows in listing order, kept sorted as the archive changes.
 
     Listing order is newest reference first, then by hash, then by the order the
-    references were made: exactly the order a stable sort of ``store.entries()``
-    by ``(-created_ns, sha)`` produces. Each row is the dict the directory always
-    built for that reference. Rows are shared with the listing; the runtime hands
-    out copies.
+    references were made. Rows are indexed by owner only: a seat lists what it
+    owns and nothing else (essay II.I.b: "the local state of a given agent ...
+    should be absolutely private"). Rows are shared with the listing; the runtime
+    hands out copies.
     """
 
     def __init__(self, store: Any) -> None:
         self.store = store
         self.epoch: int | None = None
-        self.keys: list[tuple] = []                 # every row's sort key, sorted
         self.row: dict[tuple, dict[str, Any]] = {}  # sort key -> row
         self.by_sha: dict[str, list[tuple]] = {}
         self.by_owner: dict[str, list[tuple]] = {}  # each sorted
-        self.public: list[tuple] = []               # sorted
-        self.owner_public: dict[str, int] = {}      # rows both owned and published
 
     def sync(self) -> None:
         """Fold every change the store reports into the listing."""
@@ -230,100 +224,56 @@ class ArtifactListing:
             for key, row in self._rows_for_sha(sha):
                 self._insert(key, row)
 
-    def rows(self) -> list[dict[str, Any]]:
-        return [self.row[key] for key in self.keys]
-
     def rows_for(self, owner: str) -> list[dict[str, Any]]:
         return [self.row[key] for key in self.by_owner.get(owner, ())]
-
-    def count(self) -> int:
-        return len(self.keys)
-
-    def newest(self, limit: int) -> list[dict[str, Any]]:
-        return [self.row[key] for key in self.keys[:limit]]
-
-    def visible_to(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
-        """The count and newest rows a seat owns or that are published, in listing order."""
-        own = self.by_owner.get(seat, [])
-        count = len(own) + len(self.public) - self.owner_public.get(seat, 0)
-        newest: list[dict[str, Any]] = []
-        last = None
-        for key in heapq.merge(own, self.public):
-            if key == last:
-                continue
-            if len(newest) >= limit:
-                break
-            last = key
-            newest.append(self.row[key])
-        return count, newest
 
     @staticmethod
     def _key(row: dict[str, Any], position: int) -> tuple:
         return (-(row["updated_ns"] or 0), str(row["sha"]), position)
+
+    @staticmethod
+    def _row(sha: str, owner: str, kind: Any, size: int, ts: int) -> dict[str, Any]:
+        return {"sha": sha, "owner": owner, "bytes": size, "updated_ns": ts,
+                "title": str(sha)[:12], "type": kind, "kind": kind}
 
     def _rows_for_sha(self, sha: str):
         store = self.store
         record = store.index.get(sha)
         if record is None:
             return
-        kind = record.get("kind")
         references = store.references(sha, record)
         for position, (owner, reference) in enumerate(references.items()):
-            row = {"sha": sha, "owner": owner, "public": bool(reference.get("public")),
-                   "bytes": record["bytes"], "updated_ns": reference.get("ts", record["ts"])}
-            row["title"] = str(sha)[:12]
-            row["type"] = row["kind"] = kind
+            row = self._row(sha, owner, record.get("kind"), record["bytes"],
+                            reference.get("ts", record["ts"]))
             yield self._key(row, position), row
 
     def _rows_from_list(self, store: Any):  # pragma: no cover - a store from before C1
         kinds = {sha: record.get("kind") for sha, record in store.index.items()}
-        if hasattr(store, "entries"):
-            rows = [{"sha": sha, "owner": owner, "public": bool(public), "bytes": size,
-                     "updated_ns": ts} for sha, owner, public, size, ts in store.entries()]
-        else:
-            rows = [{"sha": row["sha"], "owner": row["owner"],
-                     "public": bool(row.get("public")), "bytes": row["bytes"],
-                     "updated_ns": row["ts"]} for row in store.list()]
-        for position, row in enumerate(rows):
-            row["title"] = str(row["sha"])[:12]
-            row["type"] = row["kind"] = kinds.get(row["sha"])
+        for position, row in enumerate(store.list()):
+            row = self._row(row["sha"], row["owner"], kinds.get(row["sha"]), row["bytes"],
+                            row["ts"])
             yield self._key(row, position), row
 
     def _rebuild(self, keyed) -> None:
-        self.keys, self.row, self.by_sha = [], {}, {}
-        self.by_owner, self.public, self.owner_public = {}, [], {}
+        self.row, self.by_sha, self.by_owner = {}, {}, {}
         for key, row in keyed:
             self.row[key] = row
-            self.keys.append(key)
             self.by_sha.setdefault(row["sha"], []).append(key)
             self.by_owner.setdefault(row["owner"], []).append(key)
-            if row["public"]:
-                self.public.append(key)
-                self.owner_public[row["owner"]] = self.owner_public.get(row["owner"], 0) + 1
-        self.keys.sort()
-        self.public.sort()
         for keys in self.by_owner.values():
             keys.sort()
 
     def _insert(self, key: tuple, row: dict[str, Any]) -> None:
         self.row[key] = row
-        bisect.insort(self.keys, key)
         self.by_sha.setdefault(row["sha"], []).append(key)
         bisect.insort(self.by_owner.setdefault(row["owner"], []), key)
-        if row["public"]:
-            bisect.insort(self.public, key)
-            self.owner_public[row["owner"]] = self.owner_public.get(row["owner"], 0) + 1
 
     def _remove(self, key: tuple) -> None:
         row = self.row.pop(key)
-        _discard_sorted(self.keys, key)
         owned = self.by_owner[row["owner"]]
         _discard_sorted(owned, key)
         if not owned:
             del self.by_owner[row["owner"]]
-        if row["public"]:
-            _discard_sorted(self.public, key)
-            self.owner_public[row["owner"]] -= 1
 
 
 def _discard_sorted(keys: list[tuple], key: tuple) -> None:
@@ -438,7 +388,7 @@ class ComputeMixin:
 
     def _world_chars(self, world: Any) -> int:
         """The rendered size of a request's world block, the part of every prompt that
-        grows with the factory (registrations, notes, artifacts, charter).
+        grows with the factory (registrations, artifacts, charter).
 
         Compact worlds are measured through the same pure projection an invocation
         receives. Routing therefore prices growth in inline context, not history
@@ -565,11 +515,10 @@ class ComputeMixin:
         from factorylab.runtime.propensity import EFFECT_TOOLS
 
         calls = parsed.get("tool_calls", [])
-        # A batch that writes (the venue, the treasury, a message, a note) runs whole
+        # A batch that writes (the venue, the treasury) runs whole
         # or not at all; a batch of reads loses only the read that cannot run.
         writes = any(str(call.get("tool")) in EFFECT_TOOLS
                      or str(call.get("tool")).startswith("treasury.")
-                     or call.get("tool") in ("address.send", "note.put")
                      or call.get("tool") in self.CONSEQUENCE_WRITES
                      for call in calls if isinstance(call, dict))
         for section, limit in (("requests", self.m.tools.max_children),
@@ -856,60 +805,35 @@ class ComputeMixin:
     DIRECTORY_PAGE = 50
 
     def _ensure_directory_tools(self) -> None:
-        """Expose the shared directory: an index of the notebook and of the archive.
+        """Expose the caller's own archive index: sha, kind, bytes and when, never contents.
 
-        Public storage without a discovery surface is a poor shared memory. Both
-        tools are indexes — key or sha, title, type, bytes, owner seat, when it
-        was updated, whether it is public — so a reader need not already know a
-        key or a hash to find what the population has written down. Neither
-        returns contents: ``note.get`` and ``artifact.get`` do that, at their own
-        prices.
+        ``artifact.get`` returns contents, at its own price.
         """
-        from factorylab.runtime.notes import list_spec
-
         page = self.DIRECTORY_PAGE
-        self.tool_specs.setdefault("note.list", list_spec())
         self.tool_specs.setdefault("artifact.list", {
             "id": "artifact.list",
             "kind": "artifact",
-            "description": f"Index the artifact archive: up to {page} rows of sha, kind, "
-            "bytes, owner seat, when it was archived and whether it is public, newest "
-            "first, with a cursor for the next page. Optionally filtered by owner seat. "
-            "Free, like artifact.get.",
+            "description": f"Index your own archived artifacts: up to {page} rows of sha, "
+            "kind, bytes and when it was archived, newest first, with a cursor for the "
+            "next page. Free, like artifact.get.",
             "args_schema": {
                 "type": "object",
-                "properties": {"owner": {"type": "string", "maxLength": 64},
-                               "cursor": {"type": "string", "maxLength": 128}},
+                "properties": {"cursor": {"type": "string", "maxLength": 128}},
                 "additionalProperties": False,
                 # Every published tool carries examples its own schema accepts (B1).
-                "examples": [{}, {"owner": "seed-decider"}],
+                "examples": [{}, {"cursor": "0" * 64}],
             },
             "price_micro_per_call": 0,
         })
-
-    def _artifact_entries(self) -> list[dict[str, Any]]:
-        """Every archived artifact's index row, newest first.
-
-        The rows come from ``ArtifactStore.entries()`` — ``(sha, owner, public,
-        bytes, created_ns)`` — so a scoped read and a bounded listing agree on one
-        shape and one published flag; an older store with only ``list()`` still
-        indexes, with the same fields under their record names. The listing itself
-        is not scoped: C1 makes an artifact readable when it is published *or*
-        listed in the directory, and an index of hashes, sizes and owners is what
-        makes shared memory findable without disclosing a byte of any of it.
-
-        The rows are detached copies: a caller may change them freely.
-        """
-        return [dict(row) for row in self._artifact_listing().rows()]
 
     def _artifact_listing(self) -> ArtifactListing:
         """The directory's sorted view of the archive, brought up to date with it.
 
         One listing lives as long as its store; each call folds in only the hashes
         put or collected since the last one (``ArtifactStore.drain_changes``), so
-        a world block that lists the archive for every seat no longer re-reads
-        and re-sorts all of it once per seat. A store without change tracking is
-        listed from scratch on every call, as it always was.
+        a world block that lists each seat's own rows does not re-read and re-sort
+        the archive once per seat. A store without change tracking is listed from
+        scratch on every call, as it always was.
         """
         store = self.artifacts
         listing = self.__dict__.get("_artifact_listing_view")
@@ -920,35 +844,31 @@ class ComputeMixin:
         listing.sync()
         return listing
 
-    def _artifact_index(self, owner: str | None = None,
-                        cursor: str | None = None) -> list[dict[str, Any]]:
-        """The archive's rows, optionally one owner's; the full list for the world block."""
-        listing = self._artifact_listing()
-        rows = listing.rows() if owner is None else listing.rows_for(owner)
+    def _artifact_index(self, owner: str, cursor: str | None = None) -> list[dict[str, Any]]:
+        """One owner's rows, newest first, after ``cursor`` when one is named.
+
+        Guarantees no row another seat owns is returned: the index is keyed by
+        owner and there is no unscoped read (information audit C4).
+        """
+        rows = self._artifact_listing().rows_for(owner)
         if cursor:
             shas = [row["sha"] for row in rows]
             start = shas.index(cursor) + 1 if cursor in shas else len(rows)
             rows = rows[start:]
-        return [dict(row) for row in rows]
+        return [{k: v for k, v in row.items() if k != "owner"} for row in rows]
 
-    def _artifacts_visible_to(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
-        """How many rows ``seat`` owns or sees published, and the newest ``limit`` of them.
+    def _artifacts_owned_by(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
+        """How many rows ``seat`` owns, and the newest ``limit`` of them."""
+        rows = self._artifact_index(seat)
+        return len(rows), rows[:limit]
 
-        Exactly ``[row for row in self._artifact_index() if row["owner"] == seat or
-        row["public"]]`` counted and truncated, without walking the whole archive.
+    def _artifact_page(self, owner: str, args: dict) -> dict[str, Any]:
+        """One ``artifact.list`` page of the caller's own rows, the total, and the cursor.
+
+        ``count`` is the caller's whole listing, not the remainder, so a reader
+        knows how much it has not seen; an unknown cursor ends the listing rather
+        than restarting it, so paging can never loop.
         """
-        count, rows = self._artifact_listing().visible_to(seat, limit)
-        return count, [dict(row) for row in rows]
-
-    def _artifact_page(self, args: dict) -> dict[str, Any]:
-        """One ``artifact.list`` page: rows, the total, and the cursor that continues it.
-
-        ``count`` is the whole listing under this filter, not the remainder, so a
-        reader knows how much it has not seen; an unknown cursor ends the listing
-        rather than restarting it, so paging can never loop.
-        """
-        owner = args.get("owner")
-        owner = owner if isinstance(owner, str) and owner else None
         cursor = args.get("cursor") if isinstance(args.get("cursor"), str) else None
         total = len(self._artifact_index(owner))
         remaining = self._artifact_index(owner, cursor)
@@ -1074,10 +994,6 @@ class ComputeMixin:
                 # The flat price is not what a search costs: the metered completion
                 # rides with it, and the manifest's ceiling is what must fit.
                 price = self.m.web.max_call_micro
-            if tool in ("note.put", "note.get"):
-                from factorylab.runtime.notes import prepare
-
-                _, price = prepare(self.notes, self.m.notes, tool, call["args"], self.window.index)
         except (KeyError, ValueError):
             pass  # The normal dispatcher supplies the shape or identity refusal.
         return price
@@ -1110,7 +1026,7 @@ class ComputeMixin:
     #: Tool kinds a round earned by text from outside may still run. Fetched or
     #: searched bytes cannot reach the venue, the treasury or a transport inside
     #: the same wake that read them.
-    PARSE_KINDS = frozenset({"population", "note", "artifact", "outcome"})
+    PARSE_KINDS = frozenset({"population", "artifact", "outcome"})
 
     #: Tool kinds that answer with state and change none. Reading one can be worth
     #: another round, because what it returned arrives after the answer that asked
@@ -1120,22 +1036,17 @@ class ComputeMixin:
         "connector", "web", "polymarket",
     })
 
-    #: The reads inside a kind that also writes.
-    READ_ONLY_TOOLS = frozenset({"note.get", "note.list"})
-
     def _read_only_call(self, tool_id: str) -> bool:
         """Whether this tool answers with state without changing any.
 
         Guarantees the answer is False for anything this runtime does not know to
-        be a read: a write, a transport, a notebook entry, population code and any
+        be a read: a write, a transport, population code and any
         tool the population registers later. Retrieval is extended by reads and
         ended by everything else, so a new capability cannot become a way to buy
         more rounds of acting.
         """
         if tool_id in self.CONSEQUENCE_WRITES:
             return False
-        if tool_id in self.READ_ONLY_TOOLS:
-            return True
         return self.tool_specs.get(tool_id, {}).get("kind") in self.READ_ONLY_KINDS
 
     def _call_reserve(self, assembly: Any, req: Request) -> int | None:
@@ -1158,74 +1069,6 @@ class ComputeMixin:
         except Exception:
             return None
 
-    def _address_send(self, action_id: str, handle: str, args: dict, *,
-                      slot: Any, price: int) -> tuple[dict, int]:
-        """Deliver one addressed message: validated free, delivered once, paid once.
-
-        Guarantees a refused message costs nothing. Validation runs before the
-        seat's meter is touched, so a seat that names an unknown recipient, writes
-        too much text or addresses itself pays no transport for a message that was
-        never carried.
-
-        Guarantees a fresh delivery is paid exactly once, by the sender. The charge
-        is the transport price and it is settled around the one append that puts
-        the message in the recipient's inbox.
-
-        Guarantees a replay is free. The slot is this decision's own tool index, so
-        a return replayed after an interruption prepares the same message id, finds
-        the item already in the inbox, and pays nothing to learn that it arrived.
-
-        Guarantees the recipient is not charged and not woken. Nothing here opens a
-        decision, meters another seat or touches a router: the message waits in an
-        inbox the recipient reads when it next decides to.
-
-        Guarantees the sender's receipt carries no body. What comes back is that the
-        message was delivered, to whom, under which id and at what size -- the text
-        the sender wrote is already the sender's own, and the copy that matters now
-        belongs to the recipient.
-        """
-        from factorylab.runtime import address as addressing
-
-        def refused(reason: str, cost: int = 0) -> tuple[dict, int]:
-            self.ledger.append({"kind": "address.refused", "handle": handle,
-                                "assembly_id": action_id, "reason": reason[:200],
-                                "cost": cost, "ts": self.clock.now_ns})
-            return {"error": reason}, cost
-
-        try:
-            prepared = addressing.prepare(self, action_id, handle, args, slot)
-        except addressing.AddressRefused as exc:
-            return refused(str(exc))
-        receipt = {"status": "delivered", "message_id": prepared.message_id,
-                   "recipient": prepared.recipient,
-                   "text_bytes": len(prepared.text.encode("utf-8"))}
-        if prepared.replay:
-            self.ledger.append({"kind": "address.replayed", "handle": handle,
-                                "assembly_id": action_id, "recipient": prepared.recipient,
-                                "message_id": prepared.message_id, "ts": self.clock.now_ns})
-            return {**receipt, "replay": True}, 0
-        try:
-            metered = self._seat_meter(action_id).run(
-                handle=handle,
-                reason="tool:address.send",
-                ceiling=price,
-                execute=lambda: addressing.deliver(self, prepared),
-                cost_of=lambda _r: price,
-            )
-        except addressing.AddressRefused as exc:
-            # The recipient retired or filled up between validation and delivery.
-            # Nothing was appended, so nothing is owed.
-            return refused(str(exc))
-        except Exception as exc:  # reservation refused: the seat cannot afford transport
-            return refused(f"{type(exc).__name__}: {exc}"[:200])
-        record = metered.result if isinstance(metered.result, dict) else {}
-        self.ledger.append({"kind": "address.delivered", "handle": handle,
-                            "assembly_id": action_id, "recipient": prepared.recipient,
-                            "message_id": prepared.message_id,
-                            "text_bytes": receipt["text_bytes"],
-                            "item": record.get("seq"), "cost": metered.cost,
-                            "ts": self.clock.now_ns})
-        return {**receipt, "replay": False}, metered.cost
     WRITE_REFUSAL = ("venue and treasury writes require a producing return kind and an open "
                      "consequence account; judging decisions and their children cannot write")
 
@@ -1339,31 +1182,15 @@ class ComputeMixin:
             from factorylab.runtime import websearch
 
             return websearch.run(self, action_id, handle, args)
-        if tool_id == "note.list":
-            # An index of public keys, free like artifact.get: a directory nobody
-            # can afford to read is not a directory. It is ledgered like any call.
-            from factorylab.runtime.notes import index
-
-            cursor = args.get("cursor")
-            result = index(self.notes, cursor if isinstance(cursor, str) else None)
-            self.ledger.append({"kind": "note.list", "handle": handle,
+        if tool_id == "artifact.list":
+            result = self._artifact_page(action_id, args)
+            self.ledger.append({"kind": "artifact.list", "handle": handle,
                                 "assembly_id": action_id, "rows": len(result["items"]),
                                 "count": result["count"], "ts": self.clock.now_ns})
             return result, 0
-        if tool_id == "artifact.list":
-            result = self._artifact_page(args)
-            self.ledger.append({"kind": "artifact.list", "handle": handle,
-                                "assembly_id": action_id, "rows": len(result["items"]),
-                                "count": result["count"], "owner": args.get("owner"),
-                                "ts": self.clock.now_ns})
-            return result, 0
-        if tool_id in ("note.put", "note.get"):
-            from factorylab.runtime.notes import run
-
-            return run(self, action_id, handle, tool_id, args)
         if tool_id == "artifact.get":
             # Free by contract (C9) and scoped by contract (C1): a seat reads what it
-            # wrote, what was published, and a program's state within its own lineage.
+            # wrote and a program's state within its own lineage.
             # Every read is ledgered, refusals included.
             result = self.artifacts.read(args.get("sha"), reader=action_id,
                                          lineage_of=self.budget.lineage)
@@ -1416,16 +1243,6 @@ class ComputeMixin:
             return {"error": self.WRITE_REFUSAL}, 0
         spec = self.tool_specs[tool_id]
         price = int(spec["price_micro_per_call"])
-
-        if spec["kind"] == "address":
-            from factorylab.cortex.assembly import validate_schema
-
-            try:
-                validate_schema(call.get("args"), spec["args_schema"])
-            except (ValueError, TypeError, RecursionError):
-                # Do not echo an invalid field name or value into the receipt.
-                return {"error": "invalid address arguments"}, 0
-            return self._address_send(action_id, handle, args, slot=slot, price=price)
 
         def execute() -> dict:
             if spec["kind"] == "institution":
@@ -1494,10 +1311,12 @@ class ComputeMixin:
                     "direction": direction,
                     "usd": str(usd),
                     "reason": str(args.get("reason", ""))[:500],
-                    "by": action_id,
                     "handle": handle,
                 }
-                self.ledger.append({"kind": "treasury.intent", **intent, "ts": self.clock.now_ns})
+                self.ledger.append({"kind": "treasury.intent", **intent, "by": action_id,
+                                    "ts": self.clock.now_ns})
+                # The event every subscriber reads carries the handle, not the author's
+                # seat (information audit C8; essay II.I.b, the author is private).
                 self._emit(EventKind.TRANSFER_INTENT, intent, source="kernel")
                 self.stats.transfer_intents += 1
                 return self.treasury.transfer(
@@ -1670,8 +1489,8 @@ class ComputeMixin:
         charter edition, cards and pending changes stay inline while its full
         text is addressable as canonical bytes. Public observation history moves
         only when there is prior midpoint history to remove; the latest exact row
-        for every market, freshness, closed-window values, pathologies and shared
-        directory remain inline. The returned request owns the same immutable
+        for every market, freshness and closed-window values
+        remain inline. The returned request owns the same immutable
         inputs for its first call and every continuation, while ``retrieved``
         survives for the whole invocation and nowhere else.
         """
@@ -1692,8 +1511,9 @@ class ComputeMixin:
         assembly = self.assemblies[action_id]
         retrieved: dict[str, bytes] = {}  # same-handle only; never checkpointed or published
         # Programs receive the request directly on jailed stdin and cannot use a
-        # model continuation's transient ``artifact.get`` map. Keep their inputs
-        # whole; only model assemblies receive same-handle snapshot references.
+        # model continuation's transient ``artifact.get`` map, so their inputs are
+        # not compacted; only model assemblies receive same-handle snapshot
+        # references. ``ProgramAssembly.build_stdin`` scopes the seats to their own.
         if isinstance(assembly, Assembly):
             req = self._compact_invocation_context(req, retrieved)
         prompt_cache = (_safe_prompt_cache_identity(assembly, req)
@@ -1844,7 +1664,7 @@ class ComputeMixin:
                 answered.add(signature)
                 if dispatched and not read_only:
                     # Anything that is not a known read ends the retrieval, whether or
-                    # not it names an action: a notebook entry, a message, population
+                    # not it names an action: population
                     # code and an unrecognised tool all stop the wake at one round of
                     # doing, so nothing executed here can be executed again below.
                     acted = True
@@ -1852,11 +1672,7 @@ class ComputeMixin:
                 if not ok:
                     self.stats.tool_call_failures += 1
                 # Parser arguments can contain a connector body. They are transient.
-                # An addressed body belongs to its recipient, and the wake page is
-                # built from these rows: what is logged is that the message went,
-                # to whom and how large it was, never what it said.
-                visible = (public_tool_calls([call])[0].get("args")
-                           if call.get("tool") == ADDRESS_TOOL else call.get("args"))
+                visible = call.get("args")
                 # A continuation's arguments are redacted once text from outside has
                 # entered this wake, because from then on an argument can carry
                 # fetched bytes. A retrieval that never left this world keeps its
@@ -2007,8 +1823,7 @@ class ComputeMixin:
             # outside text, so a seat that looked a capability up may call the
             # capability it looked up, which is the whole point of looking.
             if (granted and ret.tool_calls and outside_text
-                    and any(c["tool"] == "note.put" or
-                            self.tool_specs.get(c["tool"], {}).get("kind") not in self.PARSE_KINDS
+                    and any(self.tool_specs.get(c["tool"], {}).get("kind") not in self.PARSE_KINDS
                             for c in ret.tool_calls)):
                 granted = False
             if ret.tool_calls and not granted:
@@ -2220,6 +2035,31 @@ class ComputeMixin:
                 "note": "your own learner's current policy over the action set you registered; "
                         "declare a propensity on your return to train it"}
 
+    def _refusal_to_owner(self, handle: str, kind: str, reason: str, **extra: Any) -> None:
+        """Address one refusal to the inbox of the seat whose decision it was, and to no one else.
+
+        Guarantees the reason reaches only the decision's owner, under its handle,
+        through the stateful queue (essay II.I.b: reward "must find its way back to
+        the exact decision"); a refusal with no owner is ledgered undeliverable by
+        the inbox. Nothing is broadcast (information audit C5).
+        """
+        owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+        self.outcomes.append(owner, handle=handle,
+                             outcome={"kind": kind, "status": "rejected", "reason": reason,
+                                      **extra},
+                             delta_micro=0,
+                             evidence={"kind": kind, "handle": handle,
+                                       "ts": self.clock.now_ns})
+
+    def _action_policy_input(self, assembly_id: str) -> dict[str, Any]:
+        """``your_action_policy`` as a request input, or nothing when there is no learner.
+
+        Guarantees the key is absent rather than null for an assembly without a
+        registered learner (information audit U5): a null slot is a standing hint.
+        """
+        policy = self._action_policy(assembly_id)
+        return {} if policy is None else {"your_action_policy": policy}
+
     def _record_declared_propensity(self, action_id: str, req: Request, ret: Return, role: str,
                                     *, effects: tuple[str, ...] = ()):
         """Log the woken assembly's own distribution as a second propensity on the handle.
@@ -2269,8 +2109,8 @@ class ComputeMixin:
             floored = len(record.action_ids) > 1
             self.ledger.append({"kind": "propensity.floored" if floored else "propensity.refused",
                                 "handle": req.handle, "reason": reason, "ts": self.clock.now_ns})
-            self.registration_feedback.append({"kind": "propensity",
-                                               "reason": f"propensity: {reason}"})
+            self._refusal_to_owner(req.handle, "propensity_floored" if floored
+                                   else "propensity_refused", reason)
         self._open_assembly_round(action_id, req.handle, record)
         return record
 

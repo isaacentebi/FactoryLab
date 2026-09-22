@@ -215,7 +215,10 @@ def test_a_refused_vault_write_is_explained_and_never_submitted(tool, args, why)
     assert [i for i in rt.vault_intents.values() if i["handle"] == handle] == []
     refused = [i for i in _items(rt, "vault.refused") if i["handle"] == handle]
     assert len(refused) == 1 and why in refused[0]["reason"]
-    assert why in rt.registration_feedback[-1]["reason"]
+    # The reason reaches the ordering seat's own inbox under this handle (C5).
+    told = [rt.outcomes.body(r["sha"])["outcome"]
+            for r in rt.outcomes.items.get("seed-decider", ()) if r["handle"] == handle]
+    assert any(why in item["reason"] for item in told)
 
 
 def test_a_leader_is_refused_a_withdrawal_below_its_minimum_share():

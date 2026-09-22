@@ -67,8 +67,15 @@ def test_a_declaration_that_omits_the_action_taken_is_refused_with_a_reason():
     handle, _event = _consequence_produce(runtime)
     declared = _declared(runtime, handle)
     assert declared.action_ids == ("hold",)  # degenerate, not the agent's claim
-    assert any("propensity must include the action taken (hold)" in f["reason"]
-               for f in runtime.registration_feedback)
+    # The reason reaches the declaring seat's own inbox under this handle, and no
+    # other seat's (information audit C5).
+    told = {seat: [runtime.outcomes.body(r["sha"])["outcome"] for r in records
+                   if r["handle"] == handle]
+            for seat, records in runtime.outcomes.items.items()}
+    assert any("propensity must include the action taken (hold)" in item["reason"]
+               for item in told["seed-decider"])
+    assert not any(items for seat, items in told.items() if seat != "seed-decider")
+    assert "return_feedback" not in runtime._world_block()
 
 
 def test_a_declared_record_needs_no_seed_but_a_sampled_one_must_replay():

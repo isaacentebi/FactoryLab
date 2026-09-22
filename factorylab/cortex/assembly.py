@@ -330,8 +330,20 @@ class ProgramAssembly:
         self.model = _ProgramPrice(self.price)
 
     def build_stdin(self, req: Request, state: Any) -> str:
-        """Render what the program reads: the request as a model would see it, plus state."""
-        req = replace(req, inputs={**req.inputs, "you": self.spec.id})
+        """Render what the program reads: the request as a model would see it, plus state.
+
+        Guarantees the world block's ``seats`` carries this program's own row and no
+        other: the partition the prompt already applies (``Request.seat_block``),
+        applied to the raw inputs too, because a program reads them whole
+        (information audit C3; essay II.I.b, local state is private).
+        """
+        inputs = {**req.inputs, "you": self.spec.id}
+        world = inputs.get("world")
+        if isinstance(world, dict) and isinstance(world.get("seats"), (list, tuple)):
+            inputs["world"] = {**world, "seats": [
+                row for row in world["seats"]
+                if isinstance(row, dict) and row.get("seat_id") == self.spec.id]}
+        req = replace(req, inputs=inputs)
         return json.dumps({
             "prompt": req.prompt_text(),
             "description": req.description,

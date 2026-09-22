@@ -726,5 +726,5 @@ class ThinkingMixin:
     def _thinking_refused(self, handle: str, reason: str) -> None:
         self.ledger.append({"kind": "subscription.refused", "handle": handle,
                             "reason": reason, "ts": self.clock.now_ns})
-        self.registration_feedback.append({"kind": "subscription", "reason": reason})
+        self._refusal_to_owner(handle, "subscription_refused", reason)
 

@@ -34,7 +34,7 @@ MIN_BURN_OBSERVATION_NS = 6 * NS_PER_HOUR
 #: Spend is accumulated in half-day buckets and at most two are kept per seat, so
 #: the reported window is between twelve and twenty-four hours of real spending.
 SPEND_BUCKET_NS = 12 * NS_PER_HOUR
-#: What ``note.list`` and ``artifact.list`` return in one page, before a cursor.
+#: What ``artifact.list`` returns in one page, before a cursor.
 DIRECTORY_PAGE = 50
 #: What the world block's own directory preview carries; the tools page the rest.
 DIRECTORY_PREVIEW = 10
@@ -155,13 +155,6 @@ def _rail_for_model(model_id: Any) -> str:
     if text.startswith("venice:"):
         return "venice"
     return "openrouter"
-
-
-def _is_registration_feedback(item: dict) -> bool:
-    """Old checkpoints and new typed refusals retain their actual operation category."""
-    if "kind" in item:
-        return item["kind"] == "registration.rejected"
-    return not str(item.get("reason", "")).startswith(("propensity:", "judgement:", "order:"))
 
 
 class SchematicsMixin:
@@ -315,8 +308,8 @@ class SchematicsMixin:
             "about, exactly as it appears in the request (inputs.subject_handle when present, "
             "otherwise the delivered return); omit it to judge the delivered return. A value "
             "you cannot address here — prose, or a handle this judgement may not be about — "
-            "is not used: the delivered return is judged instead and the reason appears in "
-            "return_feedback"
+            "is not used: the delivered return is judged instead and the reason reaches "
+            "your outcome inbox"
         ),
         "propensity": (
             "optional on any return: your own distribution over the actions you were "
@@ -405,7 +398,6 @@ class SchematicsMixin:
         """Facts about the world any assembly may see. No rules, no goals, no private state."""
         self._ensure_connector_tool()
         from factorylab.runtime.custody import custody_view
-        from factorylab.runtime.notes import counts
         try:
             acct = self._tick_account()
             account = {
@@ -473,28 +465,23 @@ class SchematicsMixin:
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
             "venue": self._traded_instruments(),
-            "notes": {**counts(self.notes), "max_keys": self.m.notes.max_keys,
-                      "max_bytes": self.m.notes.max_bytes,
-                      "micro_per_byte_day": self.m.notes.micro_per_byte_day,
-                      "pricing": "Reading and writing the notebook is free of any per-byte "
-                      "transfer charge; retained text pays storage rent of "
-                      "micro_per_byte_day per byte by elapsed time, collected at each window "
-                      "boundary. Unpaid storage rent is due before a read or overwrite; text "
-                      "is retained. note.list indexes the keys.",
-                      "call_price_micro": self.m.notes.byte_window_micro},
+            # A price is a public schematic (essay II.I.b): the rent a seat's retained
+            # working state pays is stated here, with how it is collected.
+            "storage": {"micro_per_byte_day": self.m.storage.micro_per_byte_day,
+                        "units": "micro-USD per byte per day",
+                        "pricing": "Your retained working_state pays storage rent of "
+                        "micro_per_byte_day per byte by elapsed time from the moment it is "
+                        "written, collected at each reserve-window boundary from your own "
+                        "spending authority and scored against the decision that wrote it. "
+                        "Rent a boundary cannot collect stays due on the state."},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
                         "max_lifetime_windows": self.m.novelty.max_lifetime_windows},
-            "pathologies": dict(self.stats.pathologies),
             "novelty_reserve_remaining_usd": str(money_to_usd(self.reserve.remaining())),
             "addressing": _ADDRESSING,
             "governance": self.cadence.world_block(self.tick_clock),
             "tick_intervals": tick_intervals(self.tick_clock),
-            "registration_feedback": [dict(f) for f in self.registration_feedback
-                                      if _is_registration_feedback(f)],
-            "return_feedback": [dict(f) for f in self.registration_feedback
-                                if not _is_registration_feedback(f)],
             # Moving by construction: the sampling actuator and the immune controller
             # change these, so they are published here and never inside the prefix.
             "adaptive_scoring": self._adaptive_scoring_block(),
@@ -578,7 +565,7 @@ class SchematicsMixin:
                            "the flat call price is additional. Omit pay for free sources.",
                            "result": "UTF-8 text in seen_tool_results[].result.body",
                            "tool_rounds": 2,
-                           "continuation_tool_kinds": ["population", "note", "artifact"],
+                           "continuation_tool_kinds": ["population", "artifact"],
                            "encoding": "UTF-8 with replacement", "redirects": "refused",
                            "oversize": "refused", "credentials": False},
             "population_tools": {
@@ -945,7 +932,13 @@ class SchematicsMixin:
         return out
 
     def _public_observations(self) -> dict[str, Any]:
-        """Aggregated facts of the last closed window: values, pathologies, prints.
+        """Aggregated facts of the last closed window: values and prints.
+
+        The immune organ's pathology labels are not here: they are the architect's
+        diagnosis of the population, published to observers and the wake through
+        the ``pathology.*`` ledger items, never to seats (information audit U4;
+        essay II.I.b, "overdisclosure hands a given agent signals that it will
+        either overfit to or game").
 
         What can be *registered* as an observation is a capability and stays in
         the capability disclosure (``world.observations``); what was actually
@@ -954,11 +947,7 @@ class SchematicsMixin:
         """
         return {
             "last_closed_window_values": dict(self.stats.last_window_values),
-            "pathologies": dict(self.stats.pathologies),
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
-            # The shared directory is a public fact about the world, not about the
-            # seat: what a seat owns is in its own ``YOU`` directory slot.
-            "shared_directory": self._directory_changes(),
         }
 
     def _catalogue_view(self) -> dict[str, Any]:
@@ -1144,16 +1133,13 @@ class SchematicsMixin:
                 "basis": "the kernel records the tick index of a paid wake, not a wall clock"}
 
     def _seat_directory(self, seat: str) -> dict[str, Any]:
-        """The seat's own note index and the artifacts it may read, bounded and paged."""
-        notes = sorted(key for key, entry in self.notes.items()
-                       if entry.get("owner") == seat)
-        count, artifacts = self._artifacts_visible_to(seat, DIRECTORY_PREVIEW)
+        """The artifacts the seat owns, bounded and paged; no other seat's rows."""
+        count, artifacts = self._artifacts_owned_by(seat, DIRECTORY_PREVIEW)
         return {
-            "notes": {"count": len(notes), "keys": notes[:DIRECTORY_PREVIEW]},
             "artifacts": {"count": count,
-                          "newest": [{k: row[k] for k in ("sha", "kind", "bytes", "owner")}
+                          "newest": [{k: row[k] for k in ("sha", "kind", "bytes")}
                                      for row in artifacts]},
-            "paging": f"note.list and artifact.list return {DIRECTORY_PAGE} rows a page",
+            "paging": f"artifact.list returns {DIRECTORY_PAGE} rows a page",
         }
 
     def _charter_text(self) -> str:
@@ -1515,35 +1501,13 @@ class SchematicsMixin:
                 "events_so_far": self.n}
 
     def _continuity_block(self) -> dict[str, Any]:
-        """What changed in shared memory, and how old the market data is.
+        """How old the market data is.
 
-        The seat's own working state and its unread outcomes are request inputs
-        (edition 3 C1), not world facts, and ``Request.prompt_text`` joins them to
-        this block; what a world can say for everyone is what the directory holds
-        and when each price was last seen.
+        The seat's own working state, its unread outcomes and its own artifact
+        directory are the seat's (edition 3 C1; information audit C4), not world
+        facts; what a world can say for everyone is when each price was last seen.
         """
-        return {
-            "shared_directory_changes": self._directory_changes(),
-            "market_data_as_of": self._market_data_as_of(),
-        }
-
-    def _directory_changes(self) -> dict[str, Any]:
-        """A bounded preview of the shared directory; the list tools page the rest."""
-        notes = sorted(
-            ({"key": key, "bytes": entry["bytes"], "version": entry["version"],
-              "owner": entry.get("owner"), "updated_window": entry.get("window")}
-             for key, entry in self.notes.items()),
-            key=lambda row: (-(row["updated_window"] or 0), row["key"]))
-        listing = self._artifact_listing()
-        return {
-            "notes": {"count": len(notes), "newest": notes[:DIRECTORY_PREVIEW]},
-            "artifacts": {"count": listing.count(),
-                          "newest": [{k: row[k] for k in
-                                      ("sha", "kind", "bytes", "owner", "public")}
-                                     for row in listing.newest(DIRECTORY_PREVIEW)]},
-            "paging": f"note.list and artifact.list return {DIRECTORY_PAGE} rows a page with "
-                      "a cursor; both are indexes, not contents",
-        }
+        return {"market_data_as_of": self._market_data_as_of()}
 
     def _market_data_as_of(self) -> dict[str, Any]:
         """Per traded coin: when its mid was last seen, and whether that is stale or missing.
@@ -1821,8 +1785,8 @@ class SchematicsMixin:
             "policy": self._mechanics_block()["committee"]["liability"],
             "novelty_reserve": (
                 "registrations draw on the novelty reserve at the trial amount; a refused "
-                "proposal returns its trial to the window and carries a reason in "
-                "registration_feedback; a registered assembly keeps protected compute until "
+                "proposal returns its trial to the window and its reason reaches the "
+                "proposer's outcome inbox; a registered assembly keeps protected compute until "
                 f"{self.m.novelty.trials} settled consequences have been delivered to it or "
                 f"{self.m.novelty.max_lifetime_windows} windows have passed since registration "
                 "(continuations and children do not count; a learning-death window grants one "
