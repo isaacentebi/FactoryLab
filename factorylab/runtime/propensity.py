@@ -168,7 +168,10 @@ def action_label(role: str, outputs: dict[str, Any], status: str,
     parts = list(effects)
     action = str(outputs.get("action", "")).strip().lower()
     if action == "order":
-        parts.append(_order_label(outputs))
+        # After a venue write the answer's "order" reports that trade and is never
+        # executed (a decision acts once), so it adds no second name to the label.
+        if not parts:
+            parts.append(_order_label(outputs))
     elif action.startswith(("buy:", "sell:")):
         # A propensity label is not an executable order or an observed trade.
         parts.append(MALFORMED)

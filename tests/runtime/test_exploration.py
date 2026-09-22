@@ -106,3 +106,13 @@ def test_a_hold_can_name_its_declined_trade_in_the_published_schema():
     _, event = _consequence_produce(rt)
     assert '"counterfactual"' in provider.requests[0].messages[-1]["content"]
     assert event.payload["outputs"]["counterfactual"] == {"coin": "BTC", "side": "buy"}
+
+
+def test_a_tool_trade_reported_as_order_is_named_by_the_trade():
+    from factorylab.runtime.propensity import action_label
+
+    report = {"action": "order", "rationale": "submitted a tiny market buy"}
+    assert action_label("producer", report, "ok", ("buy:BTC:xs",)) == "buy:BTC:xs"
+    assert action_label("producer", {**report, "coin": "BTC", "side": "buy",
+                                     "size": "0.001"}, "ok", ("buy:BTC:xs",)) == "buy:BTC:xs"
+    assert action_label("producer", report, "ok") == "malformed"  # nothing traded

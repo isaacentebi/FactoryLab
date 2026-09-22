@@ -316,6 +316,17 @@ def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
             "producer_settlements", "grounded_findings", "judge_unmeasured", "orders",
             "exploration", "opportunity_cost")
             if card.get(k) is not None})
+    # Averages and rates are recomputed from the seeds, never summed.
+    priced = [c.get("opportunity_cost") or {} for c in cards]
+    n = sum(p.get("priced") or 0 for p in priced)
+    named = sum(p.get("named_declined") or 0 for p in priced)
+    total["opportunity_cost"] = {
+        "priced": n, "named_declined": named,
+        "mean_score": (round(sum((p.get("mean_score") or 0) * (p.get("priced") or 0)
+                                 for p in priced) / n, 3) if n else None),
+        "named_regret_rate": (round(sum((p.get("named_regret_rate") or 0)
+                                        * (p.get("named_declined") or 0)
+                                        for p in priced) / named, 3) if named else None)}
     settled = total.get("producer_settlements", {})
     scored = sum(v for k, v in settled.items() if k.startswith("settled:"))
     total["learning_signal_rate"] = (round(scored / sum(settled.values()), 3)
