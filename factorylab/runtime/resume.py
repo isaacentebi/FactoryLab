@@ -566,7 +566,11 @@ _RUNTIME_FIELDS = (
     "fees_to_date",
     "funding_to_date", "spot_inventory", "handle_to_assembly", "tool_specs",
     "population_tools",
-    "tool_owner", "pending_votes", "regions", "priced", "rolling", "unparsed_logged", "window",
+    "tool_owner",
+    # W4: population-tool calls awaiting their calling decision's settlement, to
+    # credit the tool's builder. Defaults empty when an older checkpoint lacks it.
+    "tool_uses",
+    "pending_votes", "regions", "priced", "rolling", "unparsed_logged", "window",
     "pending", "balance_at", "events_log", "reserve_window_start", "internal",
     "n", "emitted", "insolvency_count", "_compute_routed", "_compute_unaffordable",
     "world_consumed", "ticks_consumed", "started", "catalogue",

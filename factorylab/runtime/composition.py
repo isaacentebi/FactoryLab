@@ -10,15 +10,23 @@ from __future__ import annotations
 
 import math
 from dataclasses import replace
+from statistics import fmean
 from typing import Any
 
 from factorylab.cortex.registration import AssemblyProposal, ToolProposal
 from factorylab.cortex.request import ChildRequest, Request, public_return
 from factorylab.cortex.tools import as_spec
-from factorylab.kernel.queue import PropensityRecord
+from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.learners.router import Sample
+from factorylab.runtime.feedback import composed_reward
 from factorylab.runtime.routing import _KeyedLearner
-from factorylab.runtime.shared import NOOP, request_router_key
+from factorylab.runtime.shared import (
+    CH_VERDICT,
+    DEF_COMPOSED,
+    DEF_VERDICT,
+    NOOP,
+    request_router_key,
+)
 from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 
 #: The learner-state tag of a requester's forwarded propensity on its child's handle.
@@ -198,6 +206,153 @@ class CompositionMixin:
                       propensity=dict(item.propensity) if forwarded else None,
                       propensity_chosen=item.chosen if forwarded else None)
         ret = self._run_child(parent, item, handle, target, sample, req)
+        if item.target != "self":
+            self._compose(parent.handle, handle, action_id, target, ret)
         return {"tool": f"request:{item.target}", "args": item.inputs,
                 "result": {"outputs": public_return(ret.outputs), "status": ret.status,
                            "cost_micro": ret.cost}}, ret.cost
+
+    # --- the collaboration credit (rulings §2, W4; ``feedback.composed_reward``) ------
+
+    def _compose(self, requester_handle: str, handle: str, requester: str, executor: str,
+                 ret: Any) -> None:
+        """Hold a consumed child's settlement for its requester's, or say why it earns none.
+
+        Guarantees a child is credited only when a request router drew it, its return
+        reached its requester ok (consumed), it settles on its judges' verdicts (a
+        producer-shaped kind), and its executor is of another lineage than its
+        requester: a lineage requesting its own work earns nothing extra
+        (``composed_reward`` gives the reasons for each exclusion).
+        """
+        pend = self.pending.get(handle)
+        if (ret.status != "ok" or pend is None or pend.evaluation
+                or pend.channel != CH_VERDICT):
+            return
+        if self.budget.lineage(executor) == self.budget.lineage(requester):
+            self.ledger.append({"kind": "credit.withheld", "handle": handle,
+                                "requester_handle": requester_handle,
+                                "reason": "requester and executor share a lineage",
+                                "ts": self.clock.now_ns})
+            return
+        pend.requester = requester_handle
+        self.ledger.append({"kind": "credit.composed", "handle": handle,
+                            "requester_handle": requester_handle, "ts": self.clock.now_ns})
+
+    def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
+                  slot: str = "tool:0") -> tuple[dict, int]:
+        """Run a tool as the kernel does, and note a population tool used across lineages.
+
+        Guarantees nothing about the call changes. A population tool that answered
+        without an error, called by a seat of another lineage than the seat that
+        registered it, is counted against the calling decision, whose settlement
+        later credits the builder (``_credit_requested``). A seat calling its own
+        lineage's tool earns nothing extra.
+        """
+        result, cost = super()._run_tool(action_id, handle, call, slot=slot)
+        tool_id = str(call.get("tool"))
+        builder = self.tool_owner.get(tool_id)
+        if (tool_id not in self.population_tools or builder is None
+                or not isinstance(result, dict) or "error" in result):
+            return result, cost
+        across = self.budget.lineage(builder) != self.budget.lineage(action_id)
+        self.ledger.append({"kind": "tool.population_call", "tool": tool_id,
+                            "handle": handle, "across_lineage": across,
+                            "ts": self.clock.now_ns})
+        if across:
+            uses = self.tool_uses.setdefault(handle, {})
+            uses[tool_id] = uses.get(tool_id, 0) + 1
+        return result, cost
+
+    def _credit_requested(self, handle: str, score: float | None) -> None:
+        """Carry one settled decision's score to what it composed, once.
+
+        Guarantees, for the decision ``handle`` that just settled with the raw
+        (pre-penalty) ``score``, or with none: each child it consumed and holds
+        (``_compose``) has its credit closed with that score, and each population
+        tool it used across lineages credits its builder once, as an outcome
+        addressed to the handle that registered the tool. Nothing is credited
+        twice: a child's credit closes once, and a decision's tool uses are
+        consumed by its one settlement.
+        """
+        for pend in self.pending.values():
+            if pend.requester == handle and not pend.credit_closed:
+                pend.credit, pend.credit_closed = score, True
+        uses = self.tool_uses.pop(handle, None)
+        if not uses or score is None:
+            return
+        for tool_id, calls in sorted(uses.items()):
+            tool = self.population_tools.get(tool_id)
+            builder = self.tool_owner.get(tool_id)
+            if tool is None or builder is None:
+                continue
+            seq = self.ledger.append({
+                "kind": "credit.tool", "tool": tool_id, "builder": builder,
+                "registered_by": tool.provenance, "caller_handle": handle, "calls": calls,
+                "credit": score, "ts": self.clock.now_ns})
+            # The kernel settles a handle once, and the registering decision settled
+            # long ago: the credit is addressed to that handle in its builder's
+            # outcome inbox, the stateful queue a seat learns from (essay II.I.b), and
+            # trains no router a second time.
+            self.outcomes.append(builder, handle=tool.provenance, evidence=seq, outcome={
+                "kind": "tool_use_credit", "tool": tool_id, "calls": calls,
+                "credit": round(score, 6)})
+
+    def _settle_composed(self) -> None:
+        """Settle every held child whose two signals are in (``composed_reward``).
+
+        Guarantees a held child settles once, on its judges' mean verdict and its
+        requester's credit, each when it exists: its credit closes empty when its
+        requester closed without a priced score or past the consequence backstop,
+        and its verdict is waited for no longer than an ordinary return's
+        (``verdict_timeout_ticks``). With neither it settles censored, as an
+        unjudged return does. A decision's population-tool uses are dropped once it
+        closed without a priced score.
+        """
+        timeout = self.ev.verdict_timeout_ticks
+        backstop = self.ev.consequence_backstop_ticks
+        open_states = (SettleStatus.PENDING, SettleStatus.TIMED_OUT)
+        for handle in [h for h in self.tool_uses
+                       if self.queue.get(h).status not in open_states]:
+            del self.tool_uses[handle]
+        held = sorted((p for p in self.pending.values()
+                       if p.requester is not None and not p.evaluation),
+                      key=lambda p: p.handle)
+        for pend in held:
+            age = self._tick_age(pend)
+            if not pend.credit_closed and (
+                    self.queue.get(pend.requester).status not in open_states
+                    or age > timeout + backstop):
+                pend.credit_closed = True
+            if not pend.credit_closed or (not pend.verdicts and age <= timeout):
+                continue
+            del self.pending[pend.handle]
+            if self.queue.get(pend.handle).status not in open_states:
+                continue
+            verdict = fmean(v for _judge, v in pend.verdicts) if pend.verdicts else None
+            reward = composed_reward(verdict, pend.credit)
+            self.ledger.append({"kind": "composed.settled", "handle": pend.handle,
+                                "requester_handle": pend.requester, "verdict": verdict,
+                                "credit": pend.credit, "reward": reward,
+                                "ts": self.clock.now_ns})
+            if reward is None:
+                self.queue.settle(pend.handle, channel=pend.channel, score=0.0,
+                                  status=SettleStatus.CENSORED,
+                                  definition_version="censored-v1", sampling_ref=None)
+                self.stats.censored += 1
+                self.window.outcomes += 1
+                self.window.censored += 1
+                continue
+            self._settle_priced(
+                pend.handle, channel=pend.channel, score=reward,
+                definition_version=DEF_COMPOSED if pend.credit is not None else DEF_VERDICT,
+                sampling_ref=pend.verdicts[0][0] if pend.verdicts else None, cards="producer")
+            if pend.verdicts:
+                self.stats.verdicts += 1
+            executor = self.handle_to_assembly.get(pend.handle)
+            if pend.credit is not None and executor in self.assemblies:
+                # The executor's own inbox, under its own handle: the score its
+                # requester settled at, and what its decision settled on.
+                self.outcomes.append(executor, handle=pend.handle, outcome={
+                    "kind": "composed_settled", "requester_score": round(pend.credit, 6),
+                    "verdict": None if verdict is None else round(verdict, 6),
+                    "reward": round(reward, 6)})

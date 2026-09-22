@@ -1773,6 +1773,21 @@ class SchematicsMixin:
                 "scored on it of (1 - their consequence score), less the antagonist's card "
                 "penalty; censored when no judge's verdict on it was scored"
             ),
+            "composed_return": (
+                "a requested child drawn by a kind's request router, whose return reached "
+                "its requester ok, settles after its requester does, on the mean of its "
+                "judges' verdict and its requester's settled score before the requester's "
+                "card penalty (each alone when only one exists), less its own card "
+                "penalty; that request router learns from it. A child of the requester's "
+                "own lineage, or self, settles on its verdict alone"
+            ),
+            "tool_use_credit": (
+                "when a decision that called a population tool registered by another "
+                "lineage settles on a score, that score before its card penalty reaches "
+                "the tool's builder once, as an outcome addressed to the handle that "
+                "registered the tool; a call that errored, or a decision that settled "
+                "without a score, credits nothing"
+            ),
             "antagonist_routing": (
                 "router probability mass on contracts declaring Exposure is renormalised to "
                 "at most "
