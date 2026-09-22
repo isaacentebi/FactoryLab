@@ -64,6 +64,8 @@ class ScriptedProvider:
             reply = self._meta(inputs)
         elif desc.startswith("Vote"):
             reply = {"vote": True, "reason": "scripted yes"}
+        elif desc.startswith("Testify"):
+            reply = {"assessment": "scripted testimony"}
         else:
             reply = self._produce(desc, inputs)
         return ModelResponse(

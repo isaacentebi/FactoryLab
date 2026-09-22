@@ -1577,6 +1577,10 @@ class SchematicsMixin:
                 "connectors are voted when proposed, by a committee drawn the same way; a "
                 "passed retirement takes effect at the next window boundary. With no predicted "
                 "effect in a retire proposal, their ballots are unscored and censored.",
+                "norm_editions": "the charter's norms are written by the norm house, the "
+                "signer the manifest names; a signed norm edition takes effect at a governance "
+                "boundary as the next edition, after each seated delegate's recorded, "
+                "non-binding testimony. Cards on a removed norm are refused",
             },
             "novelty": {"share": nov.share, "window_ns": nov.window_ns,
                         "window": _duration_str(nov.window_ns),

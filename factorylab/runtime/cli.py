@@ -585,6 +585,56 @@ def _cmd_kill(args: argparse.Namespace) -> int:
         return 1
 
 
+def _cmd_norm_edition(args: argparse.Namespace) -> int:
+    """Write the norm house's signed norm edition where the living world reads it.
+
+    Essay II.IV.a: the norm layer is written by a house outside the factory and is
+    read-only from inside it. This writes one signed file beside the ledger
+    (``<ledger>.norms/<sequence>.json``); the world reads it at its next governance
+    boundary, hears its committee's testimony and applies it as the next charter
+    edition. The file carries norms and nothing else: no money, no price, no card,
+    no kernel parameter is reachable through it. The key must be the manifest's
+    ``[norm_house] signer``; a manifest that names none refuses every edition.
+    Writes nothing if the sequence's file already exists. Never prints the key.
+    """
+    import tomllib
+    from pathlib import Path
+
+    from factorylab.charter.norm_edition import build, inbox_path
+
+    manifest = load_manifest(args.world)
+    if manifest.norm_house.signer is None:
+        print("factorylab norm-edition: the manifest casts no norm_house.signer",
+              file=sys.stderr)
+        return ARGUMENT_EXIT
+    with open(args.norms, "rb") as f:
+        raw = tomllib.load(f) if str(args.norms).endswith(".toml") else json.load(f)
+    if not isinstance(raw, dict) or set(raw) != {"norms"}:
+        print("factorylab norm-edition: the norms file holds exactly one key, norms",
+              file=sys.stderr)
+        return ARGUMENT_EXIT
+    key = _read_key_file(Path(args.key_file), Path(args.key_file).name)
+    body = build(world=manifest.name, manifest_sha256=manifest.manifest_hash(),
+                 sequence=args.sequence, norms=raw["norms"], private_key=key)
+    del key
+    if body["signer"] != manifest.norm_house.signer:
+        print("factorylab norm-edition: the key is not the manifest's norm_house.signer",
+              file=sys.stderr)
+        return ARGUMENT_EXIT
+    path = inbox_path(args.ledger, args.sequence)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "x") as f:
+            json.dump(body, f, sort_keys=True, indent=1)
+    except FileExistsError:
+        print(f"factorylab norm-edition: sequence {args.sequence} is already written",
+              file=sys.stderr)
+        return ARGUMENT_EXIT
+    print(json.dumps({"world": manifest.name, "sequence": args.sequence, "path": str(path),
+                      "signer": body["signer"], "norms": len(body["norms"])}))
+    return 0
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
     with open(args.summary) as f:
         s = json.load(f)
@@ -899,6 +949,23 @@ def build_parser() -> argparse.ArgumentParser:
     kill.add_argument("--ledger", required=True, help="the living world's ledger")
     kill.set_defaults(func=_cmd_kill)
 
+    norms = sub.add_parser(
+        "norm-edition", help="sign the norm house's next norm edition for a living world",
+        description="Write a signed norm edition beside the world's ledger. The world "
+                    "reads it at its next governance boundary, records its committee's "
+                    "testimony and applies it as the next charter edition. It carries "
+                    "norms only; the key must be the manifest's [norm_house] signer.")
+    norms.add_argument("--world", required=True, help="the world's original manifest name")
+    norms.add_argument("--ledger", required=True, help="the living world's ledger")
+    norms.add_argument("--norms", required=True,
+                       help="a .toml or .json file holding exactly norms = [...]: names, "
+                            "or tables of id and definition")
+    norms.add_argument("--sequence", required=True, type=int,
+                       help="this edition's place in the world's norm editions: 1, 2, ...")
+    norms.add_argument("--key-file", required=True,
+                       help="the signer's private key file (mode 0400 or 0600); never printed")
+    norms.set_defaults(func=_cmd_norm_edition)
+
     resume = sub.add_parser("resume", help="continue a process-interrupted world",
                             description="Reopen an existing world after its process died, "
                                         "replay its authenticated tail and carry on. Refuses "
@@ -993,6 +1060,16 @@ def main(argv: list[str] | None = None) -> int:
             # name which subsystem refused.
             refuse("run", Reason.ADAPTER_UNAVAILABLE, exc)
             return 1
+    if args.cmd == "norm-edition":
+        # Reads only the signer's key file it is given; loads no other credential.
+        try:
+            return int(args.func(args))
+        except KeyFileModeError:
+            refuse("norm-edition", Reason.CREDENTIAL_UNSAFE)
+            return ARGUMENT_EXIT
+        except Exception:
+            refuse("norm-edition", Reason.ARGUMENTS_INCOMPLETE)
+            return ARGUMENT_EXIT
     if args.cmd == "treasury":
         try:
             _load_dotenv()

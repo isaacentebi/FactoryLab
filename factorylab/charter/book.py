@@ -1,6 +1,7 @@
 """Charter changes require sealed evidence, a committee majority and a boundary."""
 
 import random
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 
 from factorylab.charter.amendment import Amendment
@@ -44,10 +45,12 @@ class CharterBook:
         self.__activations: dict[int, Amendment] = {}
         self.__bindings: dict[str, dict[str, dict]] = {}
         # Standing committees by governance boundary (charter audit C1), the
-        # boundaries that fell below quorum, and each motion's voting aliases.
+        # boundaries that fell below quorum, each motion's voting aliases, and the
+        # editions a norm edition produced (charter audit M4).
         self.__sittings: dict[int, StandingCommittee] = {}
         self.__deferrals: set[int] = set()
         self.__voters: dict[str, tuple[str, ...]] = {}
+        self.__norm_editions: dict[int, dict] = {}
 
     def bind_observations(self, observations) -> None:
         """Resolve the runtime vocabulary afresh, including after checkpoint restoration."""
@@ -339,6 +342,56 @@ class CharterBook:
     def activated_amendment(self, edition: int) -> Amendment:
         """Return the frozen amendment that produced an edition; unknown editions raise KeyError."""
         return self.__activations[edition]
+
+    def norm_editions(self) -> dict[int, dict]:
+        """Each charter edition a norm edition produced, with its sequence, digest and signer."""
+        return deepcopy(self.__norm_editions)
+
+    def apply_norm_edition(self, norms, *, sequence: int, digest: str, signer: str,
+                           now_ns: int) -> tuple[Charter, tuple[str, ...], tuple[str, ...]]:
+        """Issue ``edition + 1`` with the norm house's norms and the factory's cards carried over.
+
+        Essay II.IV.a: the norm layer is "read-only" from the factory's
+        perspective, authored by a house outside it, "though the factory is
+        expected to testify within the assembly". Only norms change. Every card
+        whose norm the edition keeps is carried over unchanged; a card on a
+        removed norm is refused, and so is every undecided or passed motion
+        whose cards name a removed norm. Each refusal is ledgered before the
+        edition exists. Returns the edition, the refused card ids and the
+        refused motion ids.
+        """
+        if type(sequence) is not int or sequence != len(self.__norm_editions) + 1:
+            raise ValueError("norm edition sequence must follow the last one applied")
+        current = self.current()
+        edition = Charter(current.edition + 1, tuple(norms),
+                          tuple(card for card in current.cards if card.norm in norms))
+        kept = set(edition.norms)
+        refused_cards = tuple(card.id for card in current.cards if card.norm not in kept)
+        refused_motions = tuple(
+            amendment.id for amendment in self.pending()
+            if any(card.norm not in kept for card in (*amendment.replace, *amendment.add)))
+        self.__ledger.append({
+            "kind": "charter.norm_edition", "sequence": sequence, "digest": digest,
+            "signer": signer, "edition": edition.edition, "base_edition": current.edition,
+            "norms": [norm.as_dict() for norm in edition.norms],
+            "removed": [str(n) for n in current.norms if n not in kept],
+            "added": [str(n) for n in edition.norms if n not in current.norms],
+            "ts": now_ns,
+        })
+        for card in current.cards:
+            if card.norm not in kept:
+                self.__ledger.append({"kind": "charter.refused", "card_id": card.id,
+                                      "reason": f"norm {card.norm} removed by norm edition "
+                                                f"{sequence}", "ts": now_ns})
+        for amendment_id in refused_motions:
+            self.__ledger.append({"kind": "charter.refused", "amendment_id": amendment_id,
+                                  "reason": f"a card names a norm removed by norm edition "
+                                            f"{sequence}", "ts": now_ns})
+            self.__activated.add(amendment_id)
+        self.__editions.append(edition)
+        self.__norm_editions[edition.edition] = {"sequence": sequence, "digest": digest,
+                                                 "signer": signer}
+        return edition, refused_cards, refused_motions
 
     def _require_committee(self, committee, motion_id: str) -> None:
         if (

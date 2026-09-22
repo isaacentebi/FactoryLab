@@ -86,12 +86,12 @@ def test_prices_section_defaults_and_validation() -> None:
 def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     """R8 / versioning S1: no key leaves the hash at its default, so the pinned identity
     of the scripted world moved when the shims went, and again when the standing committee
-    added committee.quorum; each time it is a new v0."""
+    added committee.quorum, norm_house and charter_parent_sha256; each time it is a new v0."""
     scripted = load_manifest("scripted")
     assert scripted.evaluation.grounded_horizon_ticks == 10
     assert '"grounded_horizon_ticks":10' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "1ec09f86609f8f13941dece81f4619c8c6ea815957fed07960e0e5ddc52e84fc"
+        "3f7d28cac26498bbb7fd1504ff504ccd1238cb9df1ec6a3803d73a97f56282d9"
     )
 
     implicit = manifest_from_dict(_base())

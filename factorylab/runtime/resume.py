@@ -655,6 +655,8 @@ _TRANSIENT_STATE = {
     "LedgerLock": "this process's exclusive hold on the diary file",
     "Runtime.diary_id": "bound by the restore to the diary the checkpoint came from",
     "ArtifactStore.root": "where this process finds the archive's bytes beside the ledger",
+    "NormInbox.ledger_path": "where this process finds the norm house's files beside the "
+                             "ledger; what they said is journaled at the boundary that read it",
     "JournalProxy.call_metrics": "this process's wall-clock timing of its own adapter calls",
 }
 # Unordered: mappings a checkpoint saves in sorted order because nothing reads
@@ -680,9 +682,9 @@ _COMPONENT_FIELDS = (
     ("charter_book", "_CharterBook__", (
         "editions", "proposals", "committees", "ballots", "activated", "activations",
         "bindings",
-        # Charter audit C1: the standing committees by boundary, the boundaries
-        # below quorum, each motion's voters.
-        "sittings", "deferrals", "voters",
+        # Charter audit C1 and M4: the standing committees by boundary, the
+        # boundaries below quorum, each motion's voters, the norm editions applied.
+        "sittings", "deferrals", "voters", "norm_editions",
     )),
     ("controller", "_PriceController__", (
         "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
@@ -926,9 +928,11 @@ def restore_runtime(rt, state: dict) -> None:
             if name == "charter_book" and field == "bindings" and field not in components[name]:
                 # Older checkpoints predate the frozen observation version per proposal.
                 continue
-            if (name == "charter_book" and field in ("sittings", "deferrals", "voters")
+            if (name == "charter_book" and field in ("sittings", "deferrals", "voters",
+                                                     "norm_editions")
                     and field not in components[name]):
-                # Older checkpoints predate the standing committee: none was seated.
+                # Older checkpoints predate the standing committee and the norm
+                # edition: none was seated, deferred or applied.
                 continue
             if name == "artifacts" and name not in components:
                 # Older checkpoints predate the artifact archive; it starts empty.

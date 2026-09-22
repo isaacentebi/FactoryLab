@@ -368,6 +368,19 @@ class CommitteeSpec:
 
 
 @dataclass(frozen=True)
+class NormHouseSpec:
+    """Who may write the charter's norms into a living world (essay II.IV.a).
+
+    The input layer's write permissions are part of the hard kernel: "Any change to
+    those rules should also result in the termination of the factory". ``signer`` is
+    the one EVM address whose signature makes a norm edition valid; with none, no
+    norm edition is possible for the world's life.
+    """
+
+    signer: str | None = None
+
+
+@dataclass(frozen=True)
 class ImmuneSpec:
     """Detection horizons and bounded interventions are immutable launch casts.
 
@@ -486,6 +499,7 @@ class WorldManifest:
     treasury: TreasurySpec = TreasurySpec()
     clock: ClockSpec = ClockSpec()
     committee: CommitteeSpec = CommitteeSpec()
+    norm_house: NormHouseSpec = NormHouseSpec()
     endowment: EndowmentSpec = EndowmentSpec()
     kill: KillSpec = KillSpec()
     providers: ProvidersSpec = ProvidersSpec()
@@ -494,6 +508,9 @@ class WorldManifest:
     extra: dict[str, Any] = field(default_factory=dict)
 
     charter_prices: tuple[tuple[str, float], ...] = ()
+    # Charter audit P5: an edition after 1 names the charter it descends from. Hashed:
+    # a charter's lineage is part of the world it makes.
+    charter_parent_sha256: str | None = None
     # Admission provenance for a funded launch: the digest the ratification exported,
     # the roster it was surveyed against, and the digest of the cards actually loaded.
     charter_ratified_sha256: str | None = None
@@ -907,7 +924,7 @@ def duration_ns(value: Any) -> int:
 
 
 def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]:
-    """Explicit charter tables yield edition 1 and card-specific errors for invalid fields."""
+    """Explicit charter tables yield their edition and card-specific errors for invalid fields."""
     if not isinstance(raw, dict):
         raise ValueError("charter must be a table")
     for name in PROVENANCE_FIELDS:
@@ -926,8 +943,18 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
         norms = [Norm.parse(n) for n in norms]
     except ValueError as exc:
         raise ValueError(f"charter.norms: {exc}") from None
-    if "edition" in raw and (type(raw["edition"]) is not int or raw["edition"] != 1):
-        raise ValueError("charter.edition must be 1")
+    # Charter audit P5: a charter keeps its lineage across a rebirth. Edition n > 1
+    # names the digest of the edition it descends from; edition 1 has no parent.
+    edition = raw.get("edition", 1)
+    if type(edition) is not int or edition < 1:
+        raise ValueError("charter.edition must be a positive integer")
+    parent = raw.get("parent_charter_sha256")
+    if edition == 1 and parent is not None:
+        raise ValueError("charter.parent_charter_sha256 names the parent of an edition after 1")
+    if edition > 1 and (not isinstance(parent, str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", parent)):
+        raise ValueError("charter.edition after 1 needs parent_charter_sha256: "
+                         "64 lowercase hex characters")
     rows = raw.get("cards", [])
     if not isinstance(rows, list):
         raise ValueError("charter.cards must be a list of tables")
@@ -949,7 +976,7 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
                                    if name != "window"}, window=window))
         if "lambda" in row:
             prices.append((card_id, row["lambda"]))
-    return Charter(1, tuple(norms), tuple(cards)), tuple(prices)
+    return Charter(edition, tuple(norms), tuple(cards)), tuple(prices)
 
 
 def _manifest_immune(raw: Any) -> ImmuneSpec:
@@ -973,6 +1000,19 @@ def _committee(raw: dict) -> CommitteeSpec:
     if type(spec.quorum) is not int or not 1 <= spec.quorum <= spec.seats:
         raise ValueError("committee.quorum must be an integer in [1, committee.seats]")
     return replace(spec, promise_resolution=float(resolution))
+
+
+def _norm_house(raw: Any) -> NormHouseSpec:
+    """``[norm_house] signer``: the EVM address allowed to sign norm editions, or none."""
+    if raw is None:
+        return NormHouseSpec()
+    if not isinstance(raw, dict) or set(raw) - {"signer"}:
+        raise ValueError("norm_house accepts only signer")
+    signer = raw.get("signer")
+    if signer is not None and (not isinstance(signer, str)
+                               or not re.fullmatch(r"0x[0-9a-fA-F]{40}", signer)):
+        raise ValueError("norm_house.signer must be a 0x-prefixed 20-byte hex address")
+    return NormHouseSpec(signer.lower() if signer is not None else None)
 
 
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
@@ -1162,6 +1202,8 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         charter_ratified_sha256=(d.get("charter") or {}).get("ratified_sha256"),
         charter_roster_sha256=(d.get("charter") or {}).get("roster_sha256"),
         charter_content_sha256=charter_content_sha256,
+        charter_parent_sha256=(d.get("charter") or {}).get("parent_charter_sha256"),
+        norm_house=_norm_house(d.get("norm_house")),
         evaluation=evaluation,
         connectors=connectors,
         web=web,

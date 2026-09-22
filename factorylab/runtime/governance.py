@@ -92,6 +92,13 @@ class GovernanceMixin:
         # challenge id -> frozen incumbent and replacement cards, trial series, status
         self.challenges: dict[str, dict] = {}
         self.predicate_runner = JournalProxy(PredicateRunner(), self.ledger, "predicate")
+        # The norm house's files beside the ledger, read only at a governance
+        # boundary and through the journal, so a resumed world reads what the
+        # original read (charter audit M4).
+        from factorylab.charter.norm_edition import NormInbox
+
+        self.norm_inbox = JournalProxy(NormInbox(getattr(self.ledger, "path", None)),
+                                       self.ledger, "norms")
         self.observer.predicates = self.predicates
         self.PROPOSAL_SHAPES = deepcopy(self.PROPOSAL_SHAPES)
         for kind in ("connector", "retire"):
@@ -1653,13 +1660,15 @@ class GovernanceMixin:
             self._hold_governance_boundary()
 
     def _hold_governance_boundary(self) -> None:
-        """Seat the boundary's committee and decide its agenda.
+        """Seat the boundary's committee, hear it on any norm edition, decide its agenda.
 
         Essay II.IV.a: "On the cadence of charter revision, a sample of the
         factory's population is seated … and that seat is consistently rotated."
         A new committee is drawn at every boundary, stratified over roles and
         learner types (C2); its agenda is every motion admitted since the last
-        (C1). Passed motions then take effect, each as its own edition.
+        (C1). A signed norm edition from the norm house takes effect only here,
+        after the committee's ledgered, non-binding testimony (M4). Passed
+        motions then take effect, each as its own edition.
         """
         boundary = len(self.charter_book.sittings()) + self.charter_book.deferrals() + 1
         self.cadence.boundary(boundary, window=self.window.index, now_ns=self.clock.now_ns,
@@ -1674,12 +1683,129 @@ class GovernanceMixin:
             boundary, eligible, self.rng, size=self.m.committee.seats,
             quorum=self.m.committee.quorum, learners=self._seat_learners(eligible),
             recusals=recusals)
+        edition = self._norm_edition_due()
+        if edition is not None:
+            self._testify(edition, committee)
+            self._apply_norm_edition(edition)
         if committee is not None:
             pending = {am.id: am for am in self.charter_book.pending()}
             for motion in committee.agenda:
                 if motion in pending and not self.wallet.dead:
                     self._hold_vote(pending[motion], committee)
         self._activate_passed()
+
+    def _norm_edition_due(self) -> dict | None:
+        """The next norm edition beside the ledger, verified, or None; a refusal is ledgered.
+
+        The write permission is the manifest's ``[norm_house] signer``, a launch
+        cast (essay II.IV.a: "the read/write permissions of the factory's input
+        layer are part of the factory's hard kernel"). A file that is unsigned,
+        signed by anyone else, for another world or out of sequence is refused
+        with its reason and changes nothing.
+        """
+        from factorylab.charter.norm_edition import verify
+
+        sequence = len(self.charter_book.norm_editions()) + 1
+        found = self.norm_inbox.lookup(sequence)
+        if found is None:
+            return None
+        try:
+            if "unreadable" in found:
+                raise ValueError(f"unreadable: {found['unreadable']}")
+            norms, digest = verify(found["body"], signer=self.m.norm_house.signer,
+                                   world=self.m.name, manifest_sha256=self.m.manifest_hash(),
+                                   sequence=sequence)
+        except ValueError as exc:
+            self.ledger.append({"kind": "norm_edition.refused", "sequence": sequence,
+                                "reason": str(exc)[:300], "ts": self.clock.now_ns})
+            return None
+        return {"sequence": sequence, "norms": norms, "digest": digest,
+                "signer": self.m.norm_house.signer}
+
+    def _testify(self, edition: dict, committee) -> None:
+        """Each seat's assessment of a norm edition, ledgered and non-binding.
+
+        Essay II.IV.a: the norm house is "read-only" from the factory's perspective,
+        "though the factory is expected to testify within the assembly". Testimony
+        is an ordinary metered return on the policy channel; it decides nothing, so
+        nothing grades it and its decision closes unscored. With no committee
+        seated (below quorum), the absence is ledgered and the edition still applies.
+        """
+        sequence = edition["sequence"]
+        if committee is None:
+            self.ledger.append({"kind": "norm_edition.testimony_absent", "sequence": sequence,
+                                "reason": "no committee is seated at this boundary",
+                                "ts": self.clock.now_ns})
+            return
+        current = [str(n) for n in self.charter.norms]
+        proposed = [n.as_dict() for n in edition["norms"]]
+        names = [str(n) for n in edition["norms"]]
+        view = {"sequence": sequence, "norms": proposed,
+                "removed": [n for n in current if n not in names],
+                "added": [n for n in names if n not in current],
+                "cards_refused": [c.id for c in self.charter.cards if c.norm not in names]}
+        schema = {"type": "object", "properties": {"assessment": {"type": "string"}},
+                  "required": ["assessment"]}
+        for seat in committee.seats:
+            if self.wallet.dead:
+                break
+            alias, assembly_id = seat.alias, seat.assembly_id
+            event_id = f"testimony-{sequence}-{alias}"
+            if event_id in self.vote_handles:
+                continue
+            lid = f"assembly:{assembly_id}"
+            handle = self.queue.open(
+                actor=lid, event_id=event_id,
+                propensity=PropensityRecord((assembly_id,), (1.,), assembly_id, 0, lid,
+                                            "direct-committee-seat"),
+                channel="policy", deadline_ns=self.clock.now_ns + self.m.novelty.window_ns,
+                parent_handle=None, cost_ceiling=max(0, self.wallet.available),
+            )
+            self.ledger.append({"kind": "committee.decision", "event_id": event_id,
+                                "handle": handle})
+            self.vote_handles[event_id] = handle
+            self.handle_to_assembly[handle] = assembly_id
+            self._start_return(handle)
+            self.stats.decisions += 1
+            req = self._request(
+                handle,
+                "Testify on a norm edition. inputs.norm_edition is the norm house's edition; "
+                "it takes effect at this boundary. Your assessment is recorded in the diary "
+                "and does not bind.",
+                {"norm_edition": view, "charter": self._charter_text(),
+                 "agenda": self._agenda_block(committee),
+                 "actor_context": self._operating_context(assembly_id, self._world_block())},
+                schema, self.clock.now_ns + self.tick_clock.interval_ns * 10, "policy")
+            asm = self.assemblies.get(assembly_id)
+            ret = (Return(handle, {"reason": "assembly unavailable"}, 0, "failed")
+                   if asm is None else self._invoke(assembly_id, req, "voter", child=True))
+            self.consequences.finish(handle, ret.cost)
+            self._compute_routed = True
+            assessment = ret.outputs.get("assessment") if ret.status == "ok" else None
+            self.ledger.append({"kind": "norm_edition.testimony", "sequence": sequence,
+                                "alias": alias, "handle": handle,
+                                "assessment": (str(assessment)[:4000]
+                                               if isinstance(assessment, str) else None),
+                                "ts": self.clock.now_ns})
+            # Non-binding: nothing is predicted, so nothing grades it.
+            self.queue.settle(handle, channel="policy", score=0.0,
+                              status=SettleStatus.CENSORED,
+                              definition_version="norm-testimony-unscored-v1",
+                              sampling_ref=None)
+
+    def _apply_norm_edition(self, edition: dict) -> None:
+        """Put the norm house's edition in force: new norms, the factory's cards carried over."""
+        sequence = edition["sequence"]
+        new, refused_cards, refused_motions = self.charter_book.apply_norm_edition(
+            edition["norms"], sequence=sequence, digest=edition["digest"],
+            signer=edition["signer"], now_ns=self.clock.now_ns)
+        self.charter = new
+        self._drop_cards({c.id for c in new.cards}, f"norm-edition:{sequence}")
+        for motion in refused_motions:
+            self._censor_ballots(motion)
+            self.cadence.refused(motion, f"a card names a norm removed by norm edition "
+                                         f"{sequence}")
+        self._derive_regions()
 
     def _record_policy_ballot(self, proposal, handle: str, assembly: str,
                               vote: bool | None) -> None:
