@@ -230,7 +230,10 @@ def action_vocabulary() -> dict[str, str]:
         "finer label below. The finer label is hold, or "
         '"<side>:<COIN>:<size band>" for an order, e.g. '
         '"buy:BTC:xs". Labels belong in propensity, not the action field: execute with '
-        '"action": "order" and explicit coin, side and numeric size. The size band '
+        '"action": "order" and explicit coin, side and numeric size. A decision acts '
+        "once: after a venue tool wrote in this decision, \"action\": \"order\" with no "
+        "coin, side or size reports that trade, and an answer never places a second "
+        'order. The size band '
         'buckets the size you declared, in base units: '
         f'{size_band_vocabulary()}; "malformed" when the return did not parse or '
         "named no placeable size. What a return executes before its final answer is "

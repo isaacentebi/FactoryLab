@@ -1063,6 +1063,9 @@ class Runtime(
                 # state, its inbox or its copy of the world block, and never its name.
                 "inputs": {"kind": inputs["kind"], "payload": inputs["payload"]},
                 "outputs": public_return(ret.outputs),
+                # What the decision actually did at the venue, from its durable
+                # intents and the venue's answers: a claim is judged beside its acts.
+                "executed_operations": self.executed_operations(handle),
                 "cost": ret.cost,
                 "status": ret.status,
                 # The one private thing the essay directs forward (II.I.b), so the

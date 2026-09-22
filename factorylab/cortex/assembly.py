@@ -789,7 +789,11 @@ def _validate_return(parsed: dict, schema: dict) -> None:
     """Validate reply effects; each registration is admitted independently by the runtime."""
     properties = reserved_return_fields()
     validate_schema(parsed, {"type": "object", "properties": properties})
-    if parsed.get("action") == "order":
+    # "order" is both an instruction and the name of a trade already made through a
+    # tool. An answer carrying any order field is an instruction and validates
+    # whole; one carrying none reports what the decision did (the runtime refuses
+    # it to the seat if nothing was done), so a report is never a malformed return.
+    if parsed.get("action") == "order" and any(k in parsed for k in ("coin", "side", "size")):
         validate_schema(parsed, {"properties": {
             "side": {"enum": ["buy", "sell"]}}, "required": ["coin", "size"]})
         positive_wire_decimal(parsed["size"])

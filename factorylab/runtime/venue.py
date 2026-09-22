@@ -462,6 +462,79 @@ class VenueMixin:
         if observe_positions:
             self._observe_positions()
 
+    def tool_writes(self, handle: str) -> list[dict]:
+        """The venue writes this decision made through tools, in submission order.
+
+        Guarantees only intents durably written under this handle's tool slots
+        are returned; the answer's own market order (client id == handle) is not.
+        """
+        return [intent for client_id, intent in self.order_intents.items()
+                if intent["handle"] == handle and client_id != handle]
+
+    def executed_operations(self, handle: str) -> list[dict]:
+        """What this decision executed at the venue, as its evaluators may see it.
+
+        Guarantees each row is a durable intent and the venue's latest answer to
+        it — never the producer's own narrative — so a judge can weigh a claim
+        against the operations the decision actually took.
+        """
+        intents = list(self.tool_writes(handle))
+        if handle in self.order_intents:
+            intents.append(self.order_intents[handle])
+        rows = []
+        for intent in intents:
+            result = intent.get("result") or {}
+            rows.append({
+                "operation": intent["operation"], "client_id": intent["client_id"],
+                "args": dict(intent["args"]), "status": result.get("status"),
+                **{key: result[key] for key in ("order_id", "filled_size", "avg_px", "error")
+                   if result.get(key) is not None},
+            })
+        return rows
+
+    def duplicate_resting_order(self, seat: str, handle: str, client_id: str,
+                                operation: str, args: dict) -> str | None:
+        """Why a new order would repeat one this seat already has resting, or None.
+
+        Guarantees only an exact repeat is named: same seat, coin, side, market and
+        size as an order the venue acknowledged as resting whose unfilled quantity
+        is still open. A retry of the same client identity is never a duplicate
+        (it reconciles), and neither is a reduction, a different size, or another
+        seat's order.
+        """
+        if operation not in ("venue.place_market", "venue.place_limit"):
+            return None
+        if args.get("reduce_only") is True or client_id in self.order_intents:
+            return None
+        resting = {str(intent["result"].get("order_id")): intent
+                   for intent in self.order_intents.values()
+                   if intent["operation"] in ("venue.place_market", "venue.place_limit")
+                   and (intent.get("result") or {}).get("order_id") is not None}
+        try:
+            size = Decimal(str(args.get("size")))
+        except ArithmeticError:
+            return None
+        for order in self.consequences.table.orders:
+            prior = resting.get(str(order.order_id))
+            if not order.remaining or prior is None:
+                continue
+            owner = (self.handle_to_assembly.get(prior["handle"])
+                     or self.outcomes.seat_of(prior["handle"]))
+            if prior["handle"] != handle and owner != seat:
+                continue
+            before = prior["args"]
+            try:
+                same_size = Decimal(str(before.get("size"))) == size
+            except ArithmeticError:
+                continue
+            if (same_size and before.get("coin") == args.get("coin")
+                    and before.get("side") == args.get("side")
+                    and before.get("market", "perp") == args.get("market", "perp")):
+                return (f"an identical {args.get('side')} {size} {args.get('coin')} order "
+                        f"from you is already resting (order_id {order.order_id}); cancel "
+                        "or change it before placing another")
+        return None
+
     def _execute_outputs(self, ret: Return) -> None:
         out = ret.outputs
         if self.wallet.dead or ret.status != "ok":
@@ -470,6 +543,15 @@ class VenueMixin:
             if str(out.get("action", "")).lower().startswith(("buy:", "sell:")):
                 self._refuse_order(ret.handle, 'action labels are not orders; use action="order" '
                                    'with explicit coin, side and size')
+            return
+        # A decision acts once. When it already wrote to the venue through a tool,
+        # "order" in its answer names that trade; executing it would trade twice.
+        written = self.tool_writes(ret.handle)
+        if written:
+            self.ledger.append({"kind": "order.reported", "handle": ret.handle,
+                                "client_ids": [w["client_id"] for w in written],
+                                "reason": "the decision already wrote to the venue "
+                                          "through tools; the answer reports it"})
             return
         if str(out.get("side", "buy")).lower() not in ("buy", "sell"):
             self._refuse_order(ret.handle, "order side must be buy or sell")

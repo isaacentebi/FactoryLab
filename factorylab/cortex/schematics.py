@@ -295,6 +295,8 @@ class SchematicsMixin:
             'world\'s coins), "side" ("buy" | "sell") and "size" (base units as a decimal '
             'string, e.g. "0.005"), and is placed at market on return; limit, reduce-only, '
             '"market" defaults to "perp" or accepts "spot" with a configured BASE/USDC pair; '
+            '"order" with no coin, side or size reports a trade this decision already made '
+            'through a venue tool and places nothing; '
             "close, leverage and cancel are tool_calls on the venue.* tools"
         ),
         "order_example": '{"action": "order", "coin": "ETH", "side": "buy", "size": "0.004"}',
