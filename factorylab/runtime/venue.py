@@ -537,6 +537,7 @@ class VenueMixin:
 
     def _execute_outputs(self, ret: Return) -> None:
         out = ret.outputs
+        attempted = self.venue_attempts.pop(ret.handle, None)
         if self.wallet.dead or ret.status != "ok":
             return
         if out.get("action") != "order":
@@ -553,27 +554,50 @@ class VenueMixin:
                                 "reason": "the decision already wrote to the venue "
                                           "through tools; the answer reports it"})
             return
-        if str(out.get("side", "buy")).lower() not in ("buy", "sell"):
-            self._refuse_order(ret.handle, "order side must be buy or sell")
+        # A decision whose venue write was refused, or whose writing batch was
+        # dropped whole, has not acted -- and its answer must not act in the write's
+        # place: the answer names the trade the refused write meant (or reports it),
+        # and a market order is not the resting limit, the hedge or the close it was.
+        batch_dropped = any(d.get("section") == "tool_calls" and "index" not in d
+                            for d in ret.dropped)
+        if attempted or batch_dropped:
+            self._refuse_order(
+                ret.handle, "nothing was submitted: this decision's venue write was refused "
+                f"({attempted or 'its tool batch was dropped'}), so its answer's order was "
+                "not executed in the write's place -- a decision acts once. Correct the "
+                "write and place it next decision")
             return
-        try:
-            order = Order(
-                str(out["coin"]),
-                str(out.get("side", "buy")).lower() == "buy",
-                Decimal(str(out["size"])),
-                client_id=ret.handle,
-                market=out.get("market", "perp"),
-            )
-        except KeyError:
+        side = out.get("side")
+        if not isinstance(side, str) or side.lower() not in ("buy", "sell"):
             self._refuse_order(
                 ret.handle, 'nothing was submitted: action "order" named no coin, side and '
                 "size, and this decision placed nothing through a venue tool. A market "
                 'order is the answer {"action": "order", "coin", "side", "size"}; a limit '
                 "order is the tool venue.place_limit {coin, side, size, price}")
             return
+        try:
+            order = Order(
+                str(out["coin"]),
+                side.lower() == "buy",
+                Decimal(str(out["size"])),
+                client_id=ret.handle,
+                market=out.get("market", "perp"),
+            )
+        except KeyError:
+            self._refuse_order(ret.handle, 'nothing was submitted: an answer order names its '
+                               'coin, side and size')
+            return
         except (ValueError, ArithmeticError) as exc:
             self._refuse_order(ret.handle,
                                f"order output is not a readable order: {type(exc).__name__}")
+            return
+        args = {"coin": order.coin, "side": "buy" if order.is_buy else "sell",
+                "size": str(order.size), "market": order.market}
+        seat = self.handle_to_assembly.get(ret.handle) or self.outcomes.seat_of(ret.handle)
+        duplicate = self.duplicate_resting_order(seat, ret.handle, ret.handle,
+                                                 "venue.place_market", args)
+        if duplicate:
+            self._refuse_order(ret.handle, duplicate, kind="order.duplicate")
             return
         reason = self._order_collateral(ret.handle, order.coin, order.size, order.is_buy)
         result = ({"status": "rejected", "error": reason} if reason else self._venue_write(
@@ -587,14 +611,81 @@ class VenueMixin:
         if hasattr(self.exchange, "drain_events"):  # fake venue fills synchronously
             self._settle_exchange_effects(self.exchange.drain_events())
 
+    def _class_transfer_pending(self) -> bool:
+        pending = getattr(self.treasury, "state", None)
+        return bool(pending and pending["status"] == "submitted"
+                    and pending["direction"] in ("spot_to_perps", "perps_to_spot"))
+
+    def _spot_shortfall(self, operation: str, args: dict) -> str | None:
+        """Why a spot sell or close exceeds the inventory this world accounts, or None."""
+        if args.get("market") != "spot" or not (
+            operation == "venue.close" or (
+                operation in ("venue.place_market", "venue.place_limit")
+                and args.get("side") == "sell"
+            )
+        ):
+            return None
+        held = self.spot_inventory.get(args["coin"], (Decimal(0), Decimal(0)))[0]
+        quantity = held if args.get("size") is None else Decimal(str(args["size"]))
+        lots = sum((lot.size for lot in self.consequences.table.lots
+                    if lot.coin == args["coin"] and lot.market == "spot"), 0)
+        if quantity <= 0 or quantity > min(held, lots):
+            return "spot sell exceeds accounted inventory"
+        return None
+
+    def venue_batch_refusal(self, seat: str, handle: str,
+                            writes: list[tuple[str, str, dict]]) -> tuple[int, str] | None:
+        """The first write of a batch that would be refused, and why, or None.
+
+        Guarantees a batch of venue writes is weighed whole before any of it is
+        submitted: each write meets the same duplicate, collateral, class-transfer
+        and spot-inventory tests it would meet alone, and two identical placements
+        in one batch are one order written twice. ``writes`` is (slot, tool, args)
+        in batch order. A hedge whose second leg would be refused therefore never
+        leaves its first leg standing alone. Collateral is weighed per write against
+        the account as it is now, not as the earlier legs would leave it.
+        """
+        placed: set[tuple] = set()
+        for index, (slot, tool, args) in enumerate(writes):
+            client_id = f"{handle}:{slot}"
+            if client_id in self.order_intents:
+                continue  # a retry reconciles; it is not a new write
+            if self._class_transfer_pending() and tool != "venue.cancel":
+                return index, "class transfer awaiting receipt"
+            shortfall = self._spot_shortfall(tool, args)
+            if shortfall:
+                return index, shortfall
+            if tool not in ("venue.place_market", "venue.place_limit"):
+                continue
+            key = (tool, args.get("coin"), args.get("side"), str(args.get("size")),
+                   str(args.get("price")), args.get("market", "perp"))
+            if key in placed:
+                return index, "the same order is placed twice in one batch"
+            placed.add(key)
+            duplicate = self.duplicate_resting_order(seat, handle, client_id, tool, args)
+            if duplicate:
+                return index, duplicate
+            try:
+                size = Decimal(str(args.get("size")))
+                price = Decimal(str(args["price"])) if "price" in args else None
+            except ArithmeticError:
+                return index, "size or price is not a number"
+            reason = self._order_collateral(handle, str(args.get("coin")), size,
+                                            args.get("side") == "buy", price,
+                                            reduce_only=args.get("reduce_only") is True)
+            if reason:
+                return index, reason
+        return None
+
     def _venue_write(self, handle: str, operation: str, args: dict, *, slot: str) -> dict:
         """Every venue write has a durable intent and a stable identity before submission."""
-        pending = getattr(self.treasury, "state", None)
-        if (pending and pending["status"] == "submitted"
-                and pending["direction"] in ("spot_to_perps", "perps_to_spot")
-                and operation != "venue.cancel"):
+        if self._class_transfer_pending() and operation != "venue.cancel":
             return self._refuse_order(handle, "class transfer awaiting receipt")
         client_id = handle if slot == "output" else f"{handle}:{slot}"
+        if client_id not in self.order_intents:
+            blocked = self._spot_shortfall(operation, args)
+            if blocked:
+                return self._refuse_order(handle, blocked)
         previous = self.order_intents.get(client_id)
         if previous is not None:
             if previous["operation"] != operation or previous["args"] != args:
@@ -608,18 +699,6 @@ class VenueMixin:
                     return dict(previous["result"])
                 return self._recover_order(client_id)
             return dict(previous["result"])
-        if args.get("market") == "spot" and (
-            operation == "venue.close" or (
-                operation in ("venue.place_market", "venue.place_limit")
-                and args.get("side") == "sell"
-            )
-        ):
-            held = self.spot_inventory.get(args["coin"], (Decimal(0), Decimal(0)))[0]
-            quantity = held if args.get("size") is None else Decimal(str(args["size"]))
-            lots = sum((lot.size for lot in self.consequences.table.lots
-                        if lot.coin == args["coin"] and lot.market == "spot"), 0)
-            if quantity <= 0 or quantity > min(held, lots):
-                return self._refuse_order(handle, "spot sell exceeds accounted inventory")
         # An uncertain intent blocks only its own identity: repeating it reconciles
         # (above) and never resubmits. It never shuts the coin: another write on the
         # same coin -- another seat's, or a close or cancel -- carries its own identity,

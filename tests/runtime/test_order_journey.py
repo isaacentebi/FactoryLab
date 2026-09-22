@@ -7,6 +7,7 @@ resting is not placed twice.
 """
 
 import json
+import copy
 from decimal import Decimal
 
 from factorylab.kernel.events import EventKind
@@ -273,3 +274,79 @@ def test_the_venue_sdks_own_argument_names_are_translated_not_refused():
     writes = _writes(runtime, handle)
     assert [(w["args"]["side"], w["args"]["size"], w["args"]["price"]) for w in writes] == [
         ("sell", "0.01", "150")]
+
+
+def _kinds(runtime, handle):
+    return [i["kind"] for i in _consequence_diary(runtime) if i.get("handle") == handle]
+
+
+def test_an_answer_order_written_in_sdk_names_never_defaults_its_side():
+    """Cold review: is_buy false beside no side executed a market BUY."""
+    for answer in ({"action": "order", "coin": "BTC", "is_buy": False, "size": "0.01"},
+                   {"action": "order", "coin": "BTC", "is_buy": False, "sz": "0.01"},
+                   {"action": "order", "coin": "BTC", "size": "0.01"},
+                   {"action": "order", "coin": "BTC", "side": "sell", "size": "0.01",
+                    "price": "150"}):
+        runtime = _consequence_runtime(provider=Scripted(answer), exchange=_exchange())
+        handle, _ = _consequence_produce(runtime)
+        assert _writes(runtime, handle) == [], answer
+
+
+def test_a_refused_writing_batch_does_not_trade_through_the_answer():
+    """Cold review: the dropped limit's answer filled as a market sell."""
+    bad = {"tool": "venue.place_limit",
+           "args": {"coin": "BTC", "side": "sell", "size": "0.01", "price": "150", "tif": "Gtc"}}
+    provider = Scripted({"action": "order", "coin": "BTC", "side": "sell", "size": "0.01",
+                         "tool_calls": [bad]})
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    handle, _ = _consequence_produce(runtime)
+    assert _writes(runtime, handle) == []
+
+
+def test_a_duplicate_refused_as_a_tool_is_not_placed_through_the_answer():
+    """Cold review: a refused duplicate limit came back as a market sell."""
+    provider = Scripted({"action": "investigate", "tool_calls": [LIMIT]},
+                        {"action": "hold"},
+                        {"action": "investigate", "tool_calls": [copy.deepcopy(LIMIT)]},
+                        {"action": "order", "coin": "BTC", "side": "sell", "size": "0.01"})
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    _consequence_produce(runtime)
+    second, _ = _consequence_produce(runtime)
+    assert _writes(runtime, second) == []
+    kinds = _kinds(runtime, second)
+    assert "order.duplicate" in kinds and "order.refused" in kinds
+
+
+def test_a_repeat_of_a_resting_order_through_the_answer_is_a_duplicate():
+    resting = {"tool": "venue.place_limit",
+               "args": {"coin": "BTC", "side": "sell", "size": "0.01", "price": "150"}}
+    provider = Scripted({"action": "investigate", "tool_calls": [resting]},
+                        {"action": "hold"},
+                        {"action": "order", "coin": "BTC", "side": "sell", "size": "0.01"})
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    _consequence_produce(runtime)
+    second, _ = _consequence_produce(runtime)
+    assert _writes(runtime, second) == []
+    assert "order.duplicate" in _kinds(runtime, second)
+
+
+def test_a_hedge_whose_second_leg_would_be_refused_places_neither_leg():
+    """Cold review: the ETH leg filled alone beside a refused duplicate."""
+    leg = {"tool": "venue.place_market", "args": {"coin": "ETH", "side": "buy", "size": "0.5"}}
+    provider = Scripted({"action": "investigate", "tool_calls": [LIMIT]},
+                        {"action": "hold"},
+                        {"action": "investigate", "tool_calls": [leg, copy.deepcopy(LIMIT)]},
+                        {"action": "hold"})
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    _consequence_produce(runtime)
+    second, _ = _consequence_produce(runtime)
+    assert _writes(runtime, second) == []
+    assert "order.batch_refused" in _kinds(runtime, second)
+
+
+def test_one_order_written_twice_in_one_batch_places_nothing():
+    provider = Scripted({"action": "investigate", "tool_calls": [LIMIT, copy.deepcopy(LIMIT)]},
+                        {"action": "hold"})
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    handle, _ = _consequence_produce(runtime)
+    assert _writes(runtime, handle) == []

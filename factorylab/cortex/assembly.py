@@ -838,6 +838,12 @@ def _check_child(child: dict) -> None:
     _schema_definition(child["outcome_schema"])
 
 
+#: Fields a venue tool takes that an answer's market order cannot honour, and the
+#: venue SDK's own names for fields it can. Each would change which trade executes.
+_NOT_AN_ANSWER_ORDER = ("is_buy", "sz", "limit_px", "price", "tif", "reduce_only",
+                        "reduceOnly", "order_type", "orderType")
+
+
 def _validate_return(parsed: dict, schema: dict) -> None:
     """Validate reply effects; each registration is admitted independently by the runtime."""
     properties = reserved_return_fields()
@@ -846,9 +852,20 @@ def _validate_return(parsed: dict, schema: dict) -> None:
     # tool. An answer carrying any order field is an instruction and validates
     # whole; one carrying none reports what the decision did (the runtime refuses
     # it to the seat if nothing was done), so a report is never a malformed return.
-    if parsed.get("action") == "order" and any(k in parsed for k in ("coin", "side", "size")):
+    if parsed.get("action") == "order" and any(
+            k in parsed for k in ("coin", "side", "size", *_NOT_AN_ANSWER_ORDER)):
+        named = sorted(k for k in _NOT_AN_ANSWER_ORDER if k in parsed)
+        if named:
+            # An answer's order is a market order in this world's names. A limit
+            # price, a time in force or reduce-only would be silently dropped, and an
+            # SDK name like is_buy would leave the side to a default: each would
+            # execute a different trade from the one written.
+            raise ValueError(
+                f"an answer order cannot carry {', '.join(named)}: it is a market order "
+                '{"action": "order", "coin", "side": "buy"|"sell", "size"}; a limit, '
+                "reduce-only or close is a venue tool call")
         validate_schema(parsed, {"properties": {
-            "side": {"enum": ["buy", "sell"]}}, "required": ["coin", "size"]})
+            "side": {"enum": ["buy", "sell"]}}, "required": ["coin", "side", "size"]})
         positive_wire_decimal(parsed["size"])
     # Tool/child requests may precede the final answer, but fields already supplied are typed.
     continuation = bool(parsed.get("tool_calls") or parsed.get("requests"))

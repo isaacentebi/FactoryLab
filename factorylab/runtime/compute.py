@@ -1239,6 +1239,47 @@ class ComputeMixin:
         """Every registered tool is a public primitive; schematics are public."""
         return set(self.tool_specs)
 
+    def _weigh_venue_batch(self, action_id: str, handle: str, ret: Return,
+                           tool_round: int) -> Return:
+        """Refuse a batch's venue writes together when any one of them would be refused.
+
+        Guarantees no venue write in a batch is submitted unless every write in it
+        passes the tests it would meet alone: a hedge never leaves one leg standing.
+        Each refused write is answered in its own slot with the reason, reads in the
+        batch still run, and nothing is ledgered as an intent.
+        """
+        writes = [(index, call) for index, call in enumerate(ret.tool_calls)
+                  if not call.get("invalid") and call.get("tool") in self.CONSEQUENCE_WRITES
+                  and self.tool_specs.get(str(call.get("tool")), {}).get("kind") == "venue"
+                  and isinstance(call.get("args"), dict)]
+        if len(writes) < 2 or not self._may_write(handle):
+            return ret  # a lone write meets these same tests where it is dispatched
+        # A tool the seat does not hold is refused where it is dispatched, as always;
+        # it still holds back the writes beside it.
+        allowed = self._allowed_tools(action_id)
+        held = [(i, c) for i, c in writes if c["tool"] in allowed]
+        stranger = next((i for i, c in writes if c["tool"] not in allowed), None)
+        slot = (lambda i: f"tool:{i}") if tool_round == 0 else (
+            lambda i: f"round{tool_round}:{i}")
+        if stranger is not None:
+            refusal, failing = (None, "unknown or disallowed tool"), stranger
+        else:
+            refusal = self.venue_batch_refusal(
+                action_id, handle, [(slot(i), str(c["tool"]), c["args"]) for i, c in held])
+            failing = None if refusal is None else held[refusal[0]][0]
+        if refusal is None:
+            return ret
+        reason = refusal[1]
+        writes = held
+        reason = (f"nothing in this batch was submitted: {ret.tool_calls[failing]['tool']} "
+                  f"(call {failing}) would be refused: {reason}")
+        self.venue_attempts[handle] = reason
+        self._refuse_order(handle, reason, kind="order.batch_refused", index=failing)
+        refused = {i for i, _ in writes}
+        return replace(ret, tool_calls=tuple(
+            {**call, "invalid": reason} if i in refused else call
+            for i, call in enumerate(ret.tool_calls)))
+
     def _run_tool(self, action_id: str, handle: str, call: dict[str, Any], *,
                   slot: str = "tool:0") -> tuple[dict, int]:
         """Execute one tool call through metering. Returns (result, cost)."""
@@ -1357,6 +1398,7 @@ class ComputeMixin:
                 duplicate = self.duplicate_resting_order(
                     action_id, handle, f"{handle}:{slot}", tool_id, args)
                 if duplicate:
+                    self.venue_attempts[handle] = duplicate
                     return self._refuse_order(handle, duplicate, kind="order.duplicate")
                 if tool_id in ("venue.place_market", "venue.place_limit"):
                     reason = self._order_collateral(
@@ -1366,10 +1408,14 @@ class ComputeMixin:
                         reduce_only=args.get("reduce_only") is True,
                     )
                     if reason:
+                        self.venue_attempts[handle] = reason
                         return {"status": "rejected", "error": reason}
                 if tool_id in ("venue.place_market", "venue.place_limit", "venue.close",
                                "venue.cancel"):
-                    return self._venue_write(handle, tool_id, args, slot=slot)
+                    result = self._venue_write(handle, tool_id, args, slot=slot)
+                    if f"{handle}:{slot}" not in self.order_intents:
+                        self.venue_attempts[handle] = str(result.get("error") or "refused")
+                    return result
                 return self.venue_tools.call(tool_id, args)
             if spec["kind"] == "catalogue":
                 needle = str(args["substring"])
@@ -1670,6 +1716,7 @@ class ComputeMixin:
             learned = False  # a lookup this decision had not already been given
             acted = False  # a write or a child: this decision has taken its action
             delivered_reads = []
+            ret = self._weigh_venue_batch(action_id, req.handle, ret, tool_round)
             for index, call in enumerate(ret.tool_calls):
                 if self.wallet.dead:
                     break

@@ -43,7 +43,7 @@ def test_unknown_ack_defers_fill_attribution_until_recovery(monkeypatch):
     monkeypatch.setattr(rt.exchange.target, 'lookup', lambda *a, **k: (_ for _ in ()).throw(
         TimeoutError('lookup unavailable')))
     rt._execute_outputs(Return('caller', {
-        'action': 'order', 'coin': 'ETH', 'size': '.001'}, 0, 'ok'))
+        'action': 'order', 'coin': 'ETH', 'side': 'buy', 'size': '.001'}, 0, 'ok'))
     rt.consequences.finish('caller', 0)
     assert rt.order_intents['caller']['result']['status'] == 'uncertain'
     assert rt.stats.orders_rejected == 0

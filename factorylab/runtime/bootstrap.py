@@ -420,6 +420,9 @@ class BootstrapMixin:
         }
         self.vote_handles: dict[str, str] = {}
         self.order_intents: dict[str, dict] = {}
+        # Decision handle -> why a venue write it attempted was refused, read once
+        # by that decision's own answer: a refused write is not an answer's licence.
+        self.venue_attempts: dict[str, str] = {}
         self.voted_amendments: set[str] = set()
         self.snapshot_keys: dict[str, str] = {}  # decision handle -> snapshot key
         # NOOP handle -> the abstention credit its router is owed, and when it is due.
