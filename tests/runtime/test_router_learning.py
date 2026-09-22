@@ -208,6 +208,65 @@ def test_the_scales_a_router_learned_survive_a_resume_and_default_when_absent():
     assert "definitions" not in _router(make_runtime())[0].state()
 
 
+def test_a_round_that_trains_nothing_books_no_delay_baseline_or_scale():
+    """A swap router's round whose frozen snapshot is gone trains nothing; it moved the
+    abstention due time and the seat baseline all the same before the fix."""
+    rt = _core_runtime()
+    state = rt.routers["ProducerReturn"][0]
+    arm = next(a for a in state.universe if a != NOOP)
+    handle = _drawn(rt, state, arm)  # no snapshot key: nothing to train
+    rt.clock.now_ns += 5_000_000_000
+    _scored(rt, handle, 0.9, "forecast-mean-v1")
+    before = state.learner.inner.inner.state()
+    rt._deliver_returns()
+    assert state.learner.inner.inner.state() == before
+    assert state.latency == [0, 0] and not state.observed.state() and not state.definitions
+
+
+def test_an_owed_abstention_whose_router_is_gone_is_ledgered_not_dropped():
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    handle = _drawn(rt, state, NOOP)
+    rt.noop_credits[handle] = {"router": "router:gone", "due_ns": 0, "p": None,
+                               "executed": None}
+    rt._credit_abstentions()
+    assert not rt.noop_credits
+    assert any(i["kind"] == "propensity.unlearned" and i["handle"] == handle
+               and i["learner_id"] == "router:gone"
+               for i in rt.ledger._recovery_items())
+
+
+def test_a_plain_router_credits_an_abstention_once_whatever_returns_repeat():
+    """A keyed router spends its snapshot on the first return; a plain EXP3 router had no
+    such guard, so a later return for the same NOOP (a timeout, then a final outcome the
+    cutoff rule does not cover) was credited again."""
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    lid = state.learner.id
+    arms = tuple(state.universe)
+    probs = tuple(1 / len(arms) for _ in arms)
+    probs = (*probs[:-1], 1 - sum(probs[:-1]))
+    seed = next(s for s in range(10_000)
+                if random.Random(s).choices(arms, weights=probs, k=1)[0] == NOOP)
+    handle = rt.queue.open(actor=lid, event_id="noop-twice",
+                           propensity=PropensityRecord(arms, probs, NOOP, seed, lid, "d"),
+                           channel="test", deadline_ns=rt.clock.now_ns + 1, parent_handle=None,
+                           cost_ceiling=0)
+    rt.clock.now_ns += 1
+    rt.queue.expire(rt.clock.now_ns)
+    rt._deliver_returns()
+    once = _weights(state)
+    assert once[NOOP] > min(once.values())  # credited at its deadline
+    rt.queue.settle(handle, channel="test", score=0.0, status=SettleStatus.INAPPLICABLE,
+                    definition_version="realized-consequence-v2-x", sampling_ref=None)
+    rt._deliver_returns()
+    assert _weights(state) == once
+    lr = rt.queue.returns_for(lid)[-1]
+    rt._learn_router_return(state, lr)  # the same return delivered twice
+    rt._credit_abstentions()
+    assert _weights(state) == once and not rt.noop_credits
+
+
 def _one_seat_router(rt, seat):
     rt._universe_for = lambda _kind, _ev=None: [seat, NOOP]
     return rt._build_router("ProducerReturn", "exp3", 0.1)
