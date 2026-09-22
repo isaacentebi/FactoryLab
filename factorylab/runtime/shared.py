@@ -24,6 +24,27 @@ DEF_FAST, DEF_VERDICT, DEF_CONFORMITY = "fast-v1", "verdict-v1", "conformity-v1"
 DEF_EVALUATION = "evaluation-v1"
 
 
+# A composed return (a requested child) settled on its judges' verdict and the
+# settled score of the decision that requested and consumed it (rulings §2, W4).
+DEF_COMPOSED = "composed-v1"
+
+
+#: The router key of requests for one kind of work: ``REQUEST_ROUTER + kind``. The
+#: space cannot occur in an event kind (``registration.event_name``), so a request
+#: router never shares a key with an event router (Chapter II rulings §2, Composition).
+REQUEST_ROUTER = "request "
+
+
+def request_router_key(kind: str) -> str:
+    """The key under which the router for requests of ``kind`` is kept."""
+    return REQUEST_ROUTER + kind
+
+
+def is_request_router(learner_id: str) -> bool:
+    """Whether a learner id names a request router (``router:request <kind>``)."""
+    return isinstance(learner_id, str) and learner_id.startswith("router:" + REQUEST_ROUTER)
+
+
 _PREDICATE_HARNESS = '''
 import json as _predicate_json, sys as _predicate_sys
 _predicate_result = resolve(_predicate_json.load(_predicate_sys.stdin))

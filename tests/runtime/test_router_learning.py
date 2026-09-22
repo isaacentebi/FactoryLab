@@ -105,6 +105,8 @@ def test_an_unscored_arm_without_its_own_record_is_neutral_not_its_siblings_mean
 _ZERO = {
     "verdict-v1": 0.5, "evaluation-v1": 0.5, "policy-promise-brier-v2": 0.5,
     "brier-v1": 0.75, "forecast-mean-v1": 0.75, "exposure-v1": 0.5,
+    # W4: a composed return settles on its verdict and its requester's score.
+    "composed-v1": 0.5,
 }
 
 
@@ -129,7 +131,8 @@ def test_the_table_names_every_scored_definition_the_runtime_settles_with():
     from factorylab.runtime import shared
     from factorylab.runtime.routing import ZERO_CONSEQUENCE
 
-    scored = {shared.DEF_VERDICT, shared.DEF_EVALUATION, shared.DEF_EXPOSURE}
+    scored = {shared.DEF_VERDICT, shared.DEF_EVALUATION, shared.DEF_EXPOSURE,
+              shared.DEF_COMPOSED}
     assert scored <= set(ZERO_CONSEQUENCE) and set(ZERO_CONSEQUENCE) == set(_ZERO)
 
 

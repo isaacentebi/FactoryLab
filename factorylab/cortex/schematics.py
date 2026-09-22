@@ -25,8 +25,12 @@ from factorylab.settlement.vocabulary import COMMISSIONED_JUDGE_REFUSAL
 
 _ADDRESSING = (
     "inputs.you is your own assembly id. catalogue lists every live assembly "
-    "as {id, version, accepts, emits}; those ids are what requests[].target, "
-    "a retire proposal's assembly_id and a learner proposal's assembly_id name. "
+    "as {id, version, accepts, emits, description}; those ids are what a retire "
+    "proposal's assembly_id and a learner proposal's assembly_id name. "
+    "requests[].target names a kind of work, never an id: a kind some live contract "
+    "emits, else one it accepts, and that kind's request router draws the executor "
+    "from those contracts (never the requester) with a logged propensity; self names "
+    "your own contract. "
     + COMMISSIONED_JUDGE_REFUSAL
 )
 
@@ -395,13 +399,17 @@ class SchematicsMixin:
             "schema uses a new name. Built-in world and kernel events cannot be emitted."
         ),
         "requests": (
-            'objects: {"target":"an id from world.catalogue, or self","description":"task",'
-            '"inputs":{},"outcome_schema":{"type":"object"}}; children have tools and '
+            'objects: {"target":"a kind of work, or self","description":"task",'
+            '"inputs":{},"outcome_schema":{"type":"object"}}, optionally with '
+            '"propensity" {action_id: probability} over what you chose among and '
+            '"chosen", the action you took; both travel on the child\'s request and '
+            'are recorded on its handle. The target kind\'s request router draws the '
+            'executor (see addressing). Children have tools and '
             'may request children to mechanics.tools.max_depth (root depth 0), with '
             'mechanics.tools.max_children children per request. Each depth spends '
             'within its parent\'s remaining cost ceiling. '
             'Outputs arrive in tool_results as '
-            '{"tool":"assembly:<target>","args":<inputs>,"result":{"outputs":{},'
+            '{"tool":"request:<target>","args":<inputs>,"result":{"outputs":{},'
             '"status":"ok","cost_micro":0}} before your second call. '
             'Outcome schemas support object/array/scalar types, properties, required, enum, '
             'minimum, maximum, minItems, maxItems and additionalProperties.'

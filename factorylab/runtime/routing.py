@@ -22,10 +22,12 @@ from factorylab.runtime.shared import (
     CH_EXPOSURE,
     CH_FAST,
     CH_VERDICT,
+    DEF_COMPOSED,
     DEF_EVALUATION,
     DEF_EXPOSURE,
     DEF_VERDICT,
     NOOP,
+    REQUEST_ROUTER,
     assembly_rewards,
     return_channel,
 )
@@ -155,6 +157,9 @@ class ContractQueue:
 ZERO_CONSEQUENCE: Mapping[str, float] = MappingProxyType({
     # Producer scores on the midpoint scale: the mean verdict of an uninformed judge.
     DEF_VERDICT: 0.5,
+    # A composed return's two signals, its verdict and its requester's settled score,
+    # are both on the producer scale.
+    DEF_COMPOSED: 0.5,
     # An evaluator decision's two signals are both centred at 0.5: an uninformed tier
     # grade, and a prediction no better than the base rate (``consequence_score``).
     DEF_EVALUATION: 0.5,
@@ -379,7 +384,26 @@ class RoutingMixin:
             and set(assembly_rewards(a.spec).values()) & {"forecast", "conformity"}
         )
 
+    def _request_universe(self, kind: str) -> list[str]:
+        """The live contracts a request for ``kind`` can be drawn from, in id order.
+
+        Guarantees a request names a kind of work, never a peer (primitive audit
+        F5; essay II.I: composition "without any single system or agent needing to
+        hold the full topology"): the contracts that emit ``kind`` ("I want a
+        Verdict"), or, when none emits it, those that accept it (work on an input
+        of that kind). A retired contract is never in it, so retirement changes
+        the menu and never fails a request. A judging contract is never in it
+        either: it cannot be commissioned (``_commissioned_judge_refusal``).
+        """
+        live = [a.spec for a in self.assemblies.values()
+                if a.spec.id not in self.retired_assemblies
+                and self._commissioned_judge_refusal(a.spec.id) is None]
+        emitters = sorted(s.id for s in live if kind in s.emits)
+        return emitters or sorted(s.id for s in live if kind in s.accepts)
+
     def _universe_for(self, kind: str, ev: Event | None = None) -> list[str]:
+        if kind.startswith(REQUEST_ROUTER):
+            return self._request_universe(kind[len(REQUEST_ROUTER):]) + [NOOP]
         excluded = self._subject_authors(kind, ev)
         ids = sorted(
             a.spec.id

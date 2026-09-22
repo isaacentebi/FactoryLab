@@ -2163,56 +2163,22 @@ class ComputeMixin:
             return
         self.assembly_rounds[handle] = action_id
 
-    def _invoke_child(
-        self, action_id: str, parent: Request, item: ChildRequest, ceiling: int,
-    ) -> tuple[dict, int]:
-        """A bounded child retains its own decision and spends only its parent's remaining cap."""
-        target = action_id if item.target == "self" else item.target
-        depth = 0
-        cursor = parent.handle
-        while self.queue.get(cursor).parent_handle is not None:
-            depth += 1
-            cursor = self.queue.get(cursor).parent_handle
-        if depth >= self.m.tools.max_depth:
-            reason = "tools.max_depth reached"
-            self.ledger.append({"kind": "requests.refused", "handle": parent.handle,
-                                "reason": reason, "depth": depth})
-            return {"tool": f"assembly:{target}", "args": item.inputs,
-                    "result": {"error": reason}}, 0
-        # A child spends its parent's money: whatever the parent's remaining request
-        # ceiling says, the ceiling never exceeds what the parent's own decision may
-        # spend now, so a fresh target cannot be bought compute the parent lacks.
-        ceiling = min(ceiling, max(0, self._compute_available(parent.handle)))
-        # The child is opened under the learner that woke its parent, so its
-        # returns have an addressable home. Its propensity is the parent's choice,
-        # recorded as such ("parent-selected"): no router sampled it, so no router
-        # is trained on it (defect 3, ``FeedbackMixin._router_sampled``).
-        actor = self.queue.get(parent.handle).actor
-        channels = self._return_channels(target) if target in self.assemblies else {}
-        handle = self.queue.open(
-            actor=actor, event_id=f"child-{parent.handle}",
-            propensity=PropensityRecord((target,), (1.,), target, 0, actor, "parent-selected"),
-            channel=next(iter(channels.values()), CH_VERDICT), deadline_ns=parent.deadline_ns,
-            parent_handle=parent.handle, cost_ceiling=ceiling,
-            return_channels=channels,
-        )
-        self.ledger.append({"kind": "request.child", "handle": handle, "target": target,
-                            "resource_liability": parent.handle, "cost_ceiling": ceiling,
-                            "description": item.description, "inputs": item.inputs,
-                            "outcome_schema": item.outcome_schema})
-        self.stats.decisions += 1
-        self.consequences.start(handle, self.n)
-        req = Request(handle, item.description, {**item.inputs, "world": self._world_block()},
-                      {}, item.outcome_schema,
-                      parent.deadline_ns, ceiling, parent.handle,
-                      "a JSON object satisfying the outcome schema", CH_VERDICT, parent.handle)
-        if target in self.assemblies and target not in self.retired_assemblies:
-            self.handle_to_assembly[handle] = target
-            ret = self._invoke(target, req, "child", child=True)
-        else:
-            ret = Return(handle, {"reason": "target assembly unavailable"}, 0, "failed")
-            self.ledger.append({"kind": "request.failed", "handle": handle,
-                                "reason": "target assembly unavailable"})
+    def _run_child(
+        self, parent: Request, item: ChildRequest, handle: str, target: str,
+        sample: Sample, req: Request,
+    ) -> Return:
+        """Run one opened child decision on its drawn executor and publish its return.
+
+        Guarantees the child is invoked once, under its own handle, within the
+        ceiling its request carries (its parent's remaining cap), and that its
+        return is published as the kind it emitted (primitive audit F12) for the
+        judges that accept that kind. ``CompositionMixin._invoke_child`` opened the
+        decision and drew ``target``; this is only the executor's side of it.
+        """
+        channels = self.return_bindings.get(handle, {}).get("channels") or {
+            self.assemblies[target].spec.emits[0]: self.queue.get(handle).channel}
+        self.handle_to_assembly[handle] = target
+        ret = self._invoke(target, req, "child", child=True)
         emitted = self.return_kinds.get(handle, next(iter(channels), "ProducerReturn"))
         if len(channels) > 1 and handle not in self.return_kinds:
             from factorylab.kernel.queue import SettleStatus
@@ -2221,20 +2187,16 @@ class ComputeMixin:
             self.queue.settle(handle, channel=self.queue.get(handle).channel, score=0.0,
                               status=SettleStatus.CENSORED,
                               definition_version="unselected-return-v1", sampling_ref=None)
-            return {"tool": f"assembly:{target}", "args": item.inputs,
-                    "result": {"outputs": public_return(ret.outputs), "status": ret.status,
-                               "cost_micro": ret.cost}}, ret.cost
+            return ret
         if emitted in ("Verdict", "MetaVerdict"):
-            sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
             event = Event(f"child-input-{handle}", EventKind.REGISTERED,
                           self.clock.now_ns, item.inputs, "request")
             step = self._evaluator_step if emitted == "Verdict" else self._meta_step
             step(event, handle, sample, parent.deadline_ns, returned=ret)
         else:
-            if target in self.assemblies:
-                if self._may_write(handle):
-                    self._execute_outputs(ret, emitted)
-                self._apply_registrations(handle, ret)
+            if self._may_write(handle):
+                self._execute_outputs(ret, emitted)
+            self._apply_registrations(handle, ret)
             self.consequences.finish(handle, ret.cost)
             if ret.status == "ok":
                 self._freeze_declined_trade(handle, ret.outputs)
@@ -2249,13 +2211,14 @@ class ComputeMixin:
                        # The judge that prices the child sees the task, not the body.
                        "inputs": public_child_inputs(item.inputs),
                        "outputs": public_return(ret.outputs),
+                       # The judge of a child reads its acts beside its claim, as the
+                       # judge of a routed return does (rulings §2, Information).
+                       "executed_operations": self.executed_operations(handle),
                        "cost": ret.cost, "status": ret.status,
                        "propensity": self._public_propensity(handle)}
             # Published as its own kind only (primitive audit F12).
             self._emit(emitted, payload)
-        return {"tool": f"assembly:{target}", "args": item.inputs,
-                "result": {"outputs": public_return(ret.outputs), "status": ret.status,
-                           "cost_micro": ret.cost}}, ret.cost
+        return ret
 
     def _check_compute_return(self, handle: str, ret: Return) -> None:
         """Assembly-wrapped affordability failures join the enclosing event's insolvency count."""

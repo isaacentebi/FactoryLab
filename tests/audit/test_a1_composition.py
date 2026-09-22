@@ -83,8 +83,9 @@ def test_a1_custom_child_schema_cannot_be_weakened_to_execute_effects(monkeypatc
         request.model_id, json.dumps({'answer': 'wrong type', 'tool_calls': [{
             'tool': 'venue.place_market', 'args': {'coin': 'BTC', 'side': 'buy', 'size': '0.1'}}]}),
         1, 1, 'end_turn'))
+    # A request names the kind (primitive audit F5); custom-child alone emits Finding.
     result, cost = rt._invoke_child('seed-decider', req, ChildRequest(
-        'custom-child', 'custom task', {}, {'type': 'object'}), req.cost_ceiling)
+        'Finding', 'custom task', {}, {'type': 'object'}), req.cost_ceiling)
     assert result['result']['status'] == 'malformed' and cost > 0
     assert not items(rt, 'tool.call') and not items(rt, 'consequence.order')
     assert rt.internal[-1].kind == 'Finding' and rt.internal[-1].payload['status'] == 'malformed'

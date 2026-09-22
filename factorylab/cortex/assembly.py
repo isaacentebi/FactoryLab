@@ -36,6 +36,7 @@ from factorylab.cortex.request import (
     ChildRequest,
     Request,
     Return,
+    validate_propensity,
 )
 from factorylab.cortex.sandbox import MAX_PROGRAM_TIMEOUT_S
 from factorylab.kernel.ledger import utf8_text
@@ -283,7 +284,11 @@ def _children(req: Request, parsed: dict[str, Any],
     if child_factory is not None:
         return tuple(child_factory(req, item, i) for i, item in enumerate(raw))
     return tuple(ChildRequest(item["target"], item["description"], item["inputs"],
-                              item["outcome_schema"]) for item in raw)
+                              item["outcome_schema"],
+                              validate_propensity(item["propensity"])
+                              if "propensity" in item else None,
+                              item["chosen"].strip() if "propensity" in item else None)
+                 for item in raw)
 
 
 # --- programs as seats (contract C8) -----------------------------------------
@@ -677,7 +682,10 @@ def reserved_return_fields(*, max_children: int | None = None,
         "requests": {"type": "array", "items": {
             "type": "object", "properties": {
                 "target": {"type": "string"}, "description": {"type": "string"},
-                "inputs": {"type": "object"}, "outcome_schema": {"type": "object"}},
+                "inputs": {"type": "object"}, "outcome_schema": {"type": "object"},
+                # The requester's own distribution over the alternatives it chose
+                # among, and the one it took: forwarded with the request (M1).
+                "propensity": {"type": "object"}, "chosen": {"type": "string"}},
             "required": ["target", "description", "inputs", "outcome_schema"]}},
         "forecasts": {"type": "array", "items": {"type": "object", "properties": {
             "predicate": {"type": "string"},
@@ -944,12 +952,24 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
 
 
 def _check_child(child: dict) -> None:
-    """A child request names a target and a task, carries no authorship, and a real schema."""
+    """A child request names a target and a task, carries no authorship, and a real schema.
+
+    Guarantees a forwarded propensity is a distribution (``validate_propensity``)
+    whose ``chosen`` action it declares with positive mass, and that ``chosen``
+    never travels without the distribution it was chosen from.
+    """
     if not child["target"] or not child["description"].strip():
         raise ValueError("child needs target and description")
     if any(k in child["inputs"] for k in ("author", "author_id", "requester", "lineage")):
         raise ValueError("child inputs contain author metadata")
     _schema_definition(child["outcome_schema"])
+    if "propensity" in child:
+        declared = validate_propensity(child["propensity"])
+        chosen = child.get("chosen")
+        if not isinstance(chosen, str) or declared.get(chosen.strip(), 0) <= 0:
+            raise ValueError("a request's propensity names its chosen action with positive mass")
+    elif "chosen" in child:
+        raise ValueError("chosen needs the propensity it was chosen from")
 
 
 #: Fields a venue tool takes that an answer's market order cannot honour, and the

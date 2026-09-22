@@ -33,11 +33,11 @@ from collections import deque
 from typing import Any
 
 from factorylab.cortex.registration import measured_role
-from factorylab.cortex.request import Request, Return, public_return
+from factorylab.cortex.request import Return, public_return
 from factorylab.cortex.sandbox import NoJail, jail_probe
 from factorylab.cortex.schematics import SchematicsMixin
 from factorylab.kernel.events import Event, EventKind
-from factorylab.kernel.queue import PropensityRecord, SettleStatus
+from factorylab.kernel.queue import SettleStatus
 from factorylab.kernel.termination import DORMANT
 from factorylab.learners.router import Sample
 from factorylab.runtime.bootstrap import BootstrapMixin
@@ -987,53 +987,24 @@ class Runtime(
                              "cost": ret.cost, "status": ret.status,
                              "propensity": self._public_propensity(handle)})
 
-    def _invoke_child(self, action_id, parent, item, ceiling):
-        """New work shapes use the same bounded child admission and declared-shape dispatch."""
-        target = action_id if item.target == "self" else item.target
-        if (reason := self._commissioned_judge_refusal(target)) is not None:
-            return self._refuse_commissioned_judge(parent, item, target, reason)
-        spec = self.assemblies[target].spec if target in self.assemblies else None
-        if (spec is None or target in self.retired_assemblies
-                or not any(k not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
-                           and shape != "judged" for k, shape in assembly_rewards(spec).items())):
-            return super()._invoke_child(action_id, parent, item, ceiling)
-        depth, cursor = 0, parent.handle
-        while self.queue.get(cursor).parent_handle is not None:
-            depth += 1
-            cursor = self.queue.get(cursor).parent_handle
-        if depth >= self.m.tools.max_depth:
-            reason = "tools.max_depth reached"
-            self.ledger.append({"kind": "requests.refused", "handle": parent.handle,
-                                "reason": reason, "depth": depth})
-            return {"tool": f"assembly:{target}", "args": item.inputs,
-                    "result": {"error": reason}}, 0
-        ceiling = min(ceiling, max(0, self._compute_available(parent.handle)))
-        actor = self.queue.get(parent.handle).actor
-        channels = self._return_channels(target)
-        channel = next(iter(channels.values()))
-        handle = self.queue.open(
-            actor=actor, event_id=f"child-{parent.handle}",
-            propensity=PropensityRecord((target,), (1.,), target, 0, actor, "parent-selected"),
-            channel=channel, deadline_ns=parent.deadline_ns, parent_handle=parent.handle,
-            cost_ceiling=ceiling, return_channels=channels)
-        self.ledger.append({"kind": "request.child", "handle": handle, "target": target,
-                            "resource_liability": parent.handle, "cost_ceiling": ceiling,
-                            "description": item.description, "inputs": item.inputs,
-                            "outcome_schema": item.outcome_schema})
-        self.stats.decisions += 1
-        self.consequences.start(handle, self.n)
+    def _run_child(self, parent, item, handle, target, sample, req):
+        """A declared work shape answers through its own reward path, like a routed return.
+
+        Guarantees a child whose executor declared a custom kind with a reward shape
+        other than ``judged`` (a forecast, a conformity or an exposure) is dispatched
+        by that shape through ``_producer_step``, exactly as a routed return of the
+        same contract would be; every other child takes the seed path.
+        """
+        spec = self.assemblies[target].spec
+        if not any(k not in ("ProducerReturn", "Verdict", "MetaVerdict", "Exposure")
+                   and shape != "judged" for k, shape in assembly_rewards(spec).items()):
+            return super()._run_child(parent, item, handle, target, sample, req)
         self.handle_to_assembly[handle] = target
-        req = Request(handle, item.description, {**item.inputs, "world": self._world_block()},
-                      {}, item.outcome_schema, parent.deadline_ns, ceiling, parent.handle,
-                      "a JSON object satisfying the outcome schema", channel, parent.handle)
         ret = self._invoke(target, req, "child", child=True)
         event = Event(f"child-input-{handle}", EventKind.REGISTERED,
                       self.clock.now_ns, item.inputs, "request")
-        sample = Sample((target,), (1.,), target, 0, actor, "parent-selected", ())
         self._producer_step(event, handle, sample, parent.deadline_ns, returned=ret)
-        return {"tool": f"assembly:{target}", "args": item.inputs,
-                "result": {"outputs": public_return(ret.outputs), "status": ret.status,
-                           "cost_micro": ret.cost}}, ret.cost
+        return ret
 
     def _evaluator_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
                         *, returned: Return | None = None) -> None:

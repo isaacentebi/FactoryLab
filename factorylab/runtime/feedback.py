@@ -1471,14 +1471,19 @@ class FeedbackMixin:
     def _router_sampled(decision: Any) -> bool:
         """Whether the router that holds this decision drew it (defect 3).
 
-        A child request is opened under its parent's router so its score has an
-        addressable home, but the parent chose the target: its propensity of 1.0
-        is the parent's choice, not a probability the router sampled from, and a
-        router trained on it would learn from a round it never played.
+        A request for a kind of work is drawn by that kind's request router, with
+        the propensity it sampled, so the router learns composition from the
+        child's settlement (primitive audit F5). A ``self`` request is opened under
+        its parent's router so its score has an addressable home, but the parent
+        chose itself: its propensity of 1.0 is not a probability any router
+        sampled, and a router trained on it would learn from a round it never
+        played.
         """
+        from factorylab.runtime.shared import is_request_router
+
         prop = decision.propensity
-        return (decision.parent_handle is None and prop.source == "sampled"
-                and prop.learner_state_hash != "parent-selected")
+        return ((decision.parent_handle is None or is_request_router(decision.actor))
+                and prop.source == "sampled" and prop.learner_state_hash != "parent-selected")
 
     def _learn_router_return(self, state: Any, lr: LearningReturn) -> None:
         """Train a router once per decision it drew, on the evidence that decision has.

@@ -51,7 +51,8 @@ class ScriptedProvider:
         if desc == "A1 helper":
             reply = ({"emits": "Finding", "answer": 1} if "tool_results" in inputs else {
                 "emits": "Finding", "requests": [{
-                    "target": "funding-watcher", "description": "A1 grandchild", "inputs": {},
+                    # A kind of work, never a peer's id (primitive audit F5).
+                    "target": "Funding", "description": "A1 grandchild", "inputs": {},
                     "outcome_schema": {"type": "object", "required": ["action"]}}]})
         elif desc == "A1 grandchild":
             reply = ({"action": "hold"} if "tool_results" in inputs else {
@@ -211,7 +212,7 @@ class ScriptedProvider:
             ])
         if n == self.tool_at_calls[3]:
             reply["requests"] = [{
-                "target": "composition-helper", "description": "A1 helper", "inputs": {},
+                "target": "Finding", "description": "A1 helper", "inputs": {},
                 "outcome_schema": {"type": "object", "required": ["answer"]},
             }]
         # Offered on three calls rather than one: a registration carried by a child

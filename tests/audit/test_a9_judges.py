@@ -56,13 +56,15 @@ def test_a_judge_is_never_routed_to_its_own_childs_return_nor_to_its_own_output(
     spec = runtime.assemblies["eval-a"].spec
     # A judge that also accepts producer returns as a child target, and a parent producer.
     runtime._instantiate(replace(spec, id="eval-child", role="evaluator",
-                                 accepts=frozenset({"ProducerReturn", "Tick"}),
+                                 accepts=frozenset({"ProducerReturn", "Tick", "Audit"}),
                                  emits=("ProducerReturn",)))
     parent = _consequence_decision(runtime, "seed-decider", CH_VERDICT)
     runtime.handle_to_assembly[parent] = "seed-decider"
     runtime.consequences.start(parent, 0)
     request = runtime._request(parent, "parent", {}, {"type": "object"}, 10**18, CH_VERDICT)
-    child_item = ChildRequest("eval-child", "child task", {}, {"type": "object"})
+    # A request names a kind (primitive audit F5): no contract emits Audit, and
+    # eval-child alone accepts it, so the Audit request router can draw only it.
+    child_item = ChildRequest("Audit", "child task", {}, {"type": "object"})
     child_handle = None
 
     def invoke(target, req, role, *, child=False):
