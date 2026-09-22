@@ -36,7 +36,6 @@ def test_fixed_cells_preserve_missing_dimensions_and_ignore_unpriced_channels(di
                 {"verdict": 1, "cards": {"cost": 7}},
             ]
         ),
-        bins=3,
     )
     op = report["operator"]
     assert op["dimensions"] == ["cost", "registrations", "revision"]

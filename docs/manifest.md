@@ -686,21 +686,19 @@ parameters; the observer never substitutes a second set of thresholds.
 | `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating and leaks `decay` once compliant, held in `[0, lambda_max]` and not integrated only while `P + I` already reaches `lambda_max` and the violation is growing (anti-windup); `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |
 | `prices.kd` | finite nonnegative number | `0.0` | Yes: the PID's derivative-on-measurement gain. |
 | `immune.k` | integer, at least 2 | `3` | Yes: consecutive windows or changes required for diagnosis. |
-| `immune.bins` | integer, exactly 3 | `3` | Yes: inside, up to one scale unit outside, more than one unit outside. |
 | `immune.registration_bins` | increasing nonnegative numeric array | `[0, 2]` | Yes: zero, 1–2, 3+ registrations. Values equal to a cut enter the lower bin. |
 | `immune.revision_bins` | increasing nonnegative numeric array | `[0]` | Yes: zero versus positive revision. |
 | `immune.tv_threshold` | finite number in (0, 1] | `0.2` | Yes: behavioral version boundaries, not the thrash predicate. |
 | `immune.gap_threshold` | finite number in (0, 1] | `0.8` | Yes: the operator's `durable` readout, not an additional pathology gate. |
-| `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment, and the stable-failure price ratchet's step per window of duration unless `immune.price_step` is set. |
-| `immune.price_step` | absent, or a finite number in (0, `prices.lambda_max`] | absent (`gain_step`) | Yes: the stable-failure price ratchet's lambda step per window of duration, set apart from the exploration-gain step. Absent from the hash while absent. |
+| `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment. |
+| `immune.price_step` | finite number in (0, `prices.lambda_max`] | Required | Yes: the stable-failure price ratchet's lambda step per window of duration. A lambda step and an exploration-gain step are different units, so `gain_step` never stands in (versioning S3). The profile's three region-relative bins (inside, up to one scale unit outside, beyond) are fixed in the kernel; `immune.bins` is refused (versioning U5). |
 | `immune.gamma_max` | finite number in (0, 1] | `0.5` | Yes: exploration-gain ceiling. |
 | `immune.decay_step` | finite number in (0, 1] | `0.1` | Yes: extra price decay for the window following thrash. |
 
 These launch settings are immutable parameters of an experiment. Effective
 prices, gain, diagnoses and the currently negotiated tick interval remain runtime
 state. Stable failure is priced by its duration (essay II.II.b): the n-th
-consecutive diagnosed window adds `n * immune.price_step` (`immune.gain_step` when
-absent) to each violated card's
+consecutive diagnosed window adds `n * immune.price_step` to each violated card's
 price and accumulated pressure, bounded by `prices.lambda_max`
 (`immune.price_ratchet`), and the count restarts once the card leaves the
 attractor (`immune.price_ratchet_ended`). The exploration gain raised for stable

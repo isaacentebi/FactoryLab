@@ -134,7 +134,9 @@ min_settled = 5
 
 [immune]
 k = 3
-bins = 3
+# The stable-failure ratchet's lambda step per window of duration: the value the
+# ratchet borrowed from gain_step until the two units were set apart.
+price_step = 0.05
 tv_threshold = 0.2
 gap_threshold = 0.8
 gain_step = 0.05

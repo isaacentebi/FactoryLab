@@ -5,6 +5,7 @@ from factorylab.runtime.loop import run_world
 from factorylab.runtime.worlds import load_manifest, manifest_from_dict
 from factorylab.world.events import WorldEventKind
 from factorylab.world.exchange import AccountState, Fill, FundingEvent, Order, OrderResult
+from tests.seed_charter import seed_charter_table
 
 
 class FakeTime:
@@ -170,6 +171,8 @@ def test_runtime_runs_a_live_shaped_world_with_stub_venue_and_scripted_models() 
             {"id": "meta-a", "role": "meta", "model_id": "fake-haiku", "accepts": ["Verdict"]},
         ],
         "novelty": {"share": 0.1, "window": "1d"},
+        "charter": seed_charter_table(),
+        "immune": {"price_step": 0.05},
     }
     m = manifest_from_dict(d)
     ft = FakeTime()

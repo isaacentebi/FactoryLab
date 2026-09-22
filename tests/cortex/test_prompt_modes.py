@@ -92,7 +92,7 @@ def test_a_refused_mode_or_key_is_refused_at_load():
     def load(table):
         manifest_from_dict({"name": "w", "seed": 1, "initial_balance_usd": "1",
                             "exchange": {"kind": "fake"}, "charter": seed_charter_table(),
-                            **table})
+                            "immune": {"price_step": 0.05}, **table})
 
     with pytest.raises(ValueError, match="prompt.mode"):
         load({"prompt": {"mode": "short"}})

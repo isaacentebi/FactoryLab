@@ -55,7 +55,7 @@ def test_stable_failure_raises_violated_price_with_duration_and_never_halves_it(
     assert steps[-1] - steps[-2] > 0
     assert [r["duration"] for r in ratchets] == list(range(1, len(ratchets) + 1))
     assert [r["step"] for r in ratchets] == [
-        rt.m.immune.gain_step * r["duration"] for r in ratchets]
+        rt.m.immune.price_step * r["duration"] for r in ratchets]
     assert all(r["lambda_after"] >= r["lambda_before"] for r in ratchets)
     assert prices == sorted(prices) and prices[-1] <= rt.m.prices.lambda_max
 
@@ -77,15 +77,13 @@ def test_leaving_the_attractor_ends_the_ratchet_and_unwinds_exploration():
     assert cleared and all(max(i["gamma_after"]) < max(i["gamma_before"]) for i in cleared)
 
 
-def test_price_step_sets_the_ratchet_apart_from_the_gain_step_and_hashes_absent():
+def test_price_step_alone_sets_the_ratchet_and_is_part_of_the_identity():
     seed = load_manifest("scripted")
-    explicit = replace(seed, immune=replace(seed.immune, price_step=None))
-    assert explicit.canonical_json() == seed.canonical_json()
-    assert "price_step" not in seed.canonical_json()
+    assert '"price_step":0.05' in seed.canonical_json()
     stepped = replace(seed, immune=replace(seed.immune, price_step=0.2))
     stepped.validate()
     assert stepped.canonical_json() != seed.canonical_json()
-    for bad in (0.0, -0.1, float("nan"), seed.prices.lambda_max * 2, True):
+    for bad in (None, 0.0, -0.1, float("nan"), seed.prices.lambda_max * 2, True):
         with pytest.raises(ValueError):
             replace(seed, immune=replace(seed.immune, price_step=bad)).validate()
 

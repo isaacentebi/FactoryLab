@@ -22,6 +22,7 @@ def _base() -> dict:
         "assemblies": [{"id": "a", "model_id": "m"}],
         "novelty": {"share": 0.1, "window": "1h"},
         "charter": seed_charter_table(),
+        "immune": {"price_step": 0.05},
     }
 
 
@@ -87,7 +88,7 @@ def test_grounded_horizon_default_keeps_legacy_identity_and_nondefault_changes_i
     assert scripted.evaluation.grounded_horizon_ticks == 10
     assert "grounded_horizon_ticks" not in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "97160fcb7c2e78bb6ba9037f12e5332c93ba50648cc481f68ee9bb24e87ccc04"
+        "55321db805e10b974f4b6d2d188e4846fa1a329368306856fc74b79061849ff5"
     )
 
     implicit = manifest_from_dict(_base())
@@ -207,7 +208,8 @@ def test_manifest_card_rejects_unknown_role(value):
     ("evaluation", "adversarial_share", 1.5), ("evaluation", "sibling_share", -0.1),
     ("evaluation", "sampling_step", 2), ("evaluation", "sampling_cap", 0.2),
     ("committee", "min_settled", False), ("immune", "k", 1), ("immune", "k", 3.0),
-    ("immune", "bins", 1), ("immune", "tv_threshold", -1),
+    ("immune", "price_step", 0), ("immune", "price_step", 2.0),
+    ("immune", "tv_threshold", -1),
     ("immune", "gamma_max", 1.1), ("immune", "gap_threshold", float("nan")),
     ("immune", "gain_step", True), ("immune", "decay_step", 0),
 ])
@@ -259,4 +261,16 @@ def test_a_world_without_a_charter_is_refused():
     raw = _base()
     del raw["charter"]
     with pytest.raises(ValueError, match=r"\[charter\]"):
+        manifest_from_dict(raw)
+
+
+def test_the_ratchet_step_is_stated_and_the_bin_count_is_not_a_key():
+    """Versioning S3 and U5: price_step is required, and immune.bins is refused."""
+    raw = _base()
+    del raw["immune"]["price_step"]
+    with pytest.raises(ValueError, match="immune.price_step is required"):
+        manifest_from_dict(raw)
+    raw = _base()
+    raw["immune"]["bins"] = 3
+    with pytest.raises(ValueError, match="immune.bins was removed"):
         manifest_from_dict(raw)

@@ -494,6 +494,7 @@ def market_http(monkeypatch):
 def _market_runtime(market_http, *, provider=None, events=10, treasury=None, seed_price="0"):
     from factorylab.runtime.worlds import manifest_from_dict
     from factorylab.world.market import X402Provider
+    from tests.seed_charter import seed_charter_table
     from tests.world.test_market import TEST_KEY
 
     manifest = manifest_from_dict({
@@ -504,6 +505,7 @@ def _market_runtime(market_http, *, provider=None, events=10, treasury=None, see
         "evaluation": {"trial_amount_usd": "0.001"},
         "novelty": {"share": 0.5},
         "treasury": treasury or {"insolvency_events": 3},
+        "charter": seed_charter_table(), "immune": {"price_step": 0.05},
     })
     return Runtime(
         manifest, events=events, seed=1, initial_balance_micro=None, ledger_path=None,

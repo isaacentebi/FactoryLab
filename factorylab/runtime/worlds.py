@@ -390,19 +390,22 @@ class CommitteeSpec:
 
 @dataclass(frozen=True)
 class ImmuneSpec:
-    """Detection horizons and bounded interventions are immutable launch casts."""
+    """Detection horizons and bounded interventions are immutable launch casts.
 
+    The profile's cells are the three region-relative bins (inside, up to one scale
+    unit outside, beyond), fixed in the kernel rather than cast (versioning U5).
+    """
+
+    #: The stable-failure price ratchet's lambda step per window of duration (essay
+    #: II.II.b). Required: a lambda step and the exploration-gain step are different
+    #: units, so neither stands in for the other (versioning S3).
+    price_step: float
     k: int = 3
-    bins: int = 3
     tv_threshold: float = 0.2
     gap_threshold: float = 0.8
     gain_step: float = 0.05
     gamma_max: float = 0.5
     decay_step: float = 0.1
-    # The stable-failure price ratchet's lambda step per window of duration. None
-    # keeps the step every earlier world ran, ``gain_step``: an exploration-gain
-    # step and a price step are different units, so a world may set them apart.
-    price_step: float | None = None
     registration_bins: tuple[float, ...] = (0.0, 2.0)
     revision_bins: tuple[float, ...] = (0.0,)
 
@@ -495,6 +498,7 @@ class WorldManifest:
     termination: TerminationSpec
     # Every world writes its own charter (charter audit S3): the kernel has no default.
     charter: Charter
+    immune: ImmuneSpec
     evaluation: EvaluationSpec = EvaluationSpec()
     tools: ToolsSpec = ToolsSpec()
     connectors: ConnectorsSpec = ConnectorsSpec()
@@ -505,7 +509,6 @@ class WorldManifest:
     treasury: TreasurySpec = TreasurySpec()
     clock: ClockSpec = ClockSpec()
     committee: CommitteeSpec = CommitteeSpec()
-    immune: ImmuneSpec = ImmuneSpec()
     endowment: EndowmentSpec = EndowmentSpec()
     kill: KillSpec = KillSpec()
     providers: ProvidersSpec = ProvidersSpec()
@@ -648,10 +651,6 @@ class WorldManifest:
         for key, default in (("controller", "integral"), ("kp", 0.0), ("kd", 0.0)):
             if payload["prices"].get(key) == default:
                 payload["prices"].pop(key)
-        # A world that names no separate ratchet step prices stable failure by
-        # gain_step, as before the key existed, and hashes as it did then.
-        if payload["immune"].get("price_step") is None:
-            payload["immune"].pop("price_step", None)
         # A world that precommits no collateral headroom hashes as it did before
         # the key existed: an added key may not rename a world that predates it.
         if payload["exchange"].get("collateral_headroom_usd") == "0":
@@ -904,7 +903,7 @@ class WorldManifest:
             ("tools.max_depth", self.tools.max_depth, 0),
             ("tools.max_children", self.tools.max_children, 0),
             ("tools.max_tool_calls", self.tools.max_tool_calls, 0),
-            ("immune.k", self.immune.k, 2), ("immune.bins", self.immune.bins, 2),
+            ("immune.k", self.immune.k, 2),
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
@@ -913,11 +912,9 @@ class WorldManifest:
             if type(value) not in (int, float) or not isfinite(value) or not 0 < value <= 1:
                 raise ValueError(f"immune.{name} must be finite and in (0, 1]")
         step = self.immune.price_step
-        if step is not None and (type(step) not in (int, float) or not isfinite(step)
-                                 or not 0 < step <= self.prices.lambda_max):
+        if (type(step) not in (int, float) or not isfinite(step)
+                or not 0 < step <= self.prices.lambda_max):
             raise ValueError("immune.price_step must be finite and in (0, prices.lambda_max]")
-        if self.immune.bins != 3:
-            raise ValueError("immune.bins must be 3 for fixed region-relative cells")
         for name in ("registration_bins", "revision_bins"):
             cuts = getattr(self.immune, name)
             if (not isinstance(cuts, (tuple, list)) or not cuts
@@ -1067,6 +1064,18 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
         if "lambda" in row:
             prices.append((card_id, row["lambda"]))
     return Charter(1, tuple(norms), tuple(cards)), tuple(prices)
+
+
+def _manifest_immune(raw: Any) -> ImmuneSpec:
+    """The immune casts, with the ratchet's lambda step stated and no bin count."""
+    if not isinstance(raw, dict):
+        raise ValueError("immune must be a table")
+    if "bins" in raw:
+        raise ValueError("immune.bins was removed: the three region-relative bins are fixed")
+    if "price_step" not in raw:
+        raise ValueError("immune.price_step is required: the stable-failure ratchet's "
+                         "lambda step per window")
+    return ImmuneSpec(**raw)
 
 
 def _committee(raw: dict) -> CommitteeSpec:
@@ -1271,7 +1280,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         novelty=NoveltySpec(nov.get("share", 0.1), duration_ns(nov.get("window", "1d")),
                             nov.get("trials", 3), nov.get("max_lifetime_windows", 6)),
         committee=_committee(d.get("committee", {})),
-        immune=ImmuneSpec(**d.get("immune", {})),
+        immune=_manifest_immune(d.get("immune", {})),
         timing=TimingSpec(
             int(tim.get("min_ratio", 3)), float(tim.get("jitter_fraction", 0.2)),
             tim.get("cadence_sample", 200),
