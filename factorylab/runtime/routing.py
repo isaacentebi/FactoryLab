@@ -182,6 +182,16 @@ def zero_consequence(definition: str) -> float:
     return ZERO_CONSEQUENCE.get(definition, NEUTRAL_REWARD)
 
 
+def learning_death_floor(gamma: float) -> float:
+    """The NOOP probability at or above which a draw woke its seats only by exploration.
+
+    Learning death is the frontier that "is no longer being invoked" (essay II.II.a).
+    A router whose every draw in a whole window gave NOOP at least ``1 - gamma`` left
+    its seats at most the exploration mass: they sat at the gamma floor all window.
+    """
+    return 1.0 - gamma
+
+
 @dataclass
 class RouterState:
     kind: str
@@ -202,6 +212,9 @@ class RouterState:
     # definition -> learned seat rounds settled under it: the scales this router's
     # rewards are on, and so what an abstention is worth to it (``neutral``).
     definitions: dict[str, int] = field(default_factory=dict)
+    # This window's NOOP watch, {"window", "draws", "min_p"}; empty before a draw.
+    # Observation only: nothing in routing or learning reads it.
+    watch: dict = field(default_factory=dict)
 
     def neutral(self) -> float:
         """Guarantees the zero-consequence reward of the rounds this router learns from.
@@ -235,6 +248,8 @@ class RouterState:
             saved["latency"] = list(self.latency)
         if self.definitions:
             saved["definitions"] = dict(self.definitions)
+        if self.watch:
+            saved["watch"] = dict(self.watch)
         return saved
 
     @classmethod
@@ -253,7 +268,7 @@ class RouterState:
         return cls(state["kind"], universe, learner, router, state["epoch"],
                    state.get("seed_gamma", 0.1), ObservedRewards(state.get("observed")),
                    state.get("successor"), list(state.get("latency", [0, 0])),
-                   dict(state.get("definitions", {})))
+                   dict(state.get("definitions", {})), dict(state.get("watch", {})))
 
 
 class _KeyedLearner:
@@ -832,6 +847,7 @@ class RoutingMixin:
         )
         if isinstance(state.learner, _KeyedLearner):
             self.snapshot_keys[handle] = key
+        self._watch_abstention(state, sample)
         self.stats.decisions += 1
         if self.stats.sample_propensity is None and sample.chosen != NOOP:
             self.stats.sample_propensity = {
@@ -847,6 +863,44 @@ class RoutingMixin:
             # and it ends whatever sleep the seat had bought itself.
             book.woke(sample.chosen, now=self.tick_index)
         self._assembly_step(ev, handle, sample, deadline)
+
+    def _watch_abstention(self, state: RouterState, sample: Sample) -> None:
+        """Watch this draw's NOOP probability for the window's learning-death entry.
+
+        Guarantees observation only: the draw is made and nothing here is read by
+        routing, learning or the manifest. A draw without NOOP on its menu is not
+        watched; a draw in a new window closes the last window's watch first.
+        """
+        if NOOP not in sample.action_ids:
+            return
+        p = sample.probs[list(sample.action_ids).index(NOOP)]
+        self._close_abstention_watch(state)
+        if not state.watch:
+            state.watch = {"window": self.window.index, "draws": 1, "min_p": p}
+            return
+        state.watch["draws"] += 1
+        state.watch["min_p"] = min(state.watch["min_p"], p)
+
+    def _close_abstention_watch(self, state: RouterState) -> None:
+        """Close a watch whose window has ended, ledgering it if NOOP held that window.
+
+        Guarantees one ``router.learning_death`` entry per router and window in which
+        every draw gave NOOP at least ``learning_death_floor(seed_gamma)``: its seats
+        were woken only by exploration all window, the frontier "no longer being
+        invoked" (essay II.II.a). It is evidence for a reader; nothing reads it back,
+        and it is apart from the immune organ's ``pathology.learning_death`` flag.
+        """
+        watch = state.watch
+        if not watch or watch["window"] == self.window.index:
+            return
+        state.watch = {}
+        floor = learning_death_floor(state.seed_gamma)
+        if watch["min_p"] >= floor:
+            self.ledger.append({"kind": "router.learning_death",
+                                "learner_id": state.learner.id, "event_kind": state.kind,
+                                "window": watch["window"], "draws": watch["draws"],
+                                "min_p_noop": watch["min_p"], "floor": floor,
+                                "neutral": state.neutral(), "ts": self.clock.now_ns})
 
     @staticmethod
     def _propensity(sample: Sample) -> PropensityRecord:
@@ -945,6 +999,7 @@ class RoutingMixin:
                     ObservedRewards(state.observed.state()),
                     latency=list(state.latency),
                     definitions=dict(state.definitions),
+                    watch=dict(state.watch),
                 )
             self.stats.epochs += 1
 

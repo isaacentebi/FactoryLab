@@ -549,3 +549,66 @@ def test_a_round_learned_over_the_same_universe_is_not_rescaled():
     _scored(rt, _drawn(rt, state, arm), 1.0, "verdict-v1")
     rt._deliver_returns()
     assert not any(i["kind"] == "router.step_rescaled" for i in rt.ledger._recovery_items())
+
+
+# --- learning death, observed ----------------------------------------------------------
+
+
+def _draw_at(state, p_noop):
+    from factorylab.learners.router import Sample
+
+    seats = [a for a in state.universe if a != NOOP]
+    rest = (1 - p_noop) / len(seats)
+    return Sample((*seats, NOOP), (*(rest for _ in seats), p_noop), NOOP, 1,
+                  state.learner.id, "h", ())
+
+
+def _deaths(rt):
+    return [i for i in rt.ledger._recovery_items() if i["kind"] == "router.learning_death"]
+
+
+def test_a_window_whose_every_draw_parked_at_noop_is_ledgered_once():
+    rt = make_runtime()
+    state, lid = _router(rt)
+    window = rt.window.index
+    for p in (0.95, 0.92, 0.97):
+        rt._watch_abstention(state, _draw_at(state, p))
+    assert state.watch == {"window": window, "draws": 3, "min_p": 0.92}
+    assert not _deaths(rt)  # the window is still open
+    rt.window.index += 1
+    rt._deliver_returns()
+    deaths = _deaths(rt)
+    assert len(deaths) == 1 and deaths[0]["learner_id"] == lid
+    assert deaths[0]["window"] == window and deaths[0]["draws"] == 3
+    assert deaths[0]["min_p_noop"] == 0.92 and deaths[0]["floor"] == pytest.approx(0.9)
+    assert not state.watch
+    rt._deliver_returns()
+    assert len(_deaths(rt)) == 1
+
+
+def test_one_draw_that_woke_a_seat_in_earnest_keeps_the_window_alive():
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    for p in (0.95, 0.5, 0.97):
+        rt._watch_abstention(state, _draw_at(state, p))
+    rt.window.index += 1
+    rt._watch_abstention(state, _draw_at(state, 0.99))  # a new window's draw closes the last
+    assert not _deaths(rt)
+    assert state.watch == {"window": rt.window.index, "draws": 1, "min_p": 0.99}
+
+
+def test_the_watch_is_observation_only_and_survives_a_resume():
+    from factorylab.runtime.routing import RouterState
+
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    before = state.learner.state()
+    rt._watch_abstention(state, _draw_at(state, 0.95))
+    assert state.learner.state() == before and state.neutral() == NEUTRAL_REWARD
+    restored = make_runtime()
+    restore_runtime(restored, runtime_state(rt))
+    assert _router(restored)[0].watch == state.watch
+    old = state.state()
+    del old["watch"]
+    assert RouterState.restore(old).watch == {}
+    assert "watch" not in _router(make_runtime())[0].state()

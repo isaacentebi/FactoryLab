@@ -2185,6 +2185,9 @@ class FeedbackMixin:
                 self._learn_router_return(state, lr)
             self.delivered_seen[lid] = total
         self._credit_abstentions()
+        for state in self._all_router_states():
+            # A router that stopped drawing still has its last window's watch closed.
+            self._close_abstention_watch(state)
         for state in list(self.retired_routers.values()):
             lid = state.learner.id
             if (
