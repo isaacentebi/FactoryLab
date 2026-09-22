@@ -95,6 +95,46 @@ GROUNDED_FIELDS = ("realized_finding", "grounded_contract", "grounded_evidence",
 #: How many uncited rows one review carries as context. Cited rows are never cut.
 GROUNDED_REVIEW_CONTEXT = 24
 
+#: Kernel bookkeeping no judge-facing projection carries: who produced the judged
+#: work, and who judged it or may not (information audit C2). It stays on the
+#: ledger and on the event, where routing reads it. A judge should "simply look at
+#: it like a machine: input, output" (essay II.I.b).
+IDENTITY_FIELDS = frozenset({"producer_id", "initial_evaluators", "final_evaluators",
+                             "excluded_evaluators"})
+
+#: What a return carries that is not the work under judgement: the author's own
+#: payoff forecast, sealed separately (C1), and its propensity, which the request's
+#: PROPENSITY block renders once (P8).
+UNJUDGED_OUTPUT_FIELDS = frozenset({"payoff", "propensity"})
+
+
+def judged_outputs(outputs: Any) -> Any:
+    """A return's outputs as a judge reads them: the work, without its sealed side-claims."""
+    if not isinstance(outputs, dict):
+        return outputs
+    return {k: v for k, v in outputs.items() if k not in UNJUDGED_OUTPUT_FIELDS}
+
+
+def judge_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """An event payload as a judge reads it.
+
+    Guarantees no key in ``IDENTITY_FIELDS`` appears at the top level or inside a
+    frozen contract, that judged outputs lose ``UNJUDGED_OUTPUT_FIELDS``, and that
+    the payload's own ``propensity`` is left to the PROPENSITY block. Everything
+    else is the event as emitted.
+    """
+    out: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key in IDENTITY_FIELDS or key == "propensity":
+            continue
+        if key in ("contract", "grounded_contract") and isinstance(value, dict):
+            value = {k: (judged_outputs(v) if k == "producer_outputs" else v)
+                     for k, v in value.items() if k not in IDENTITY_FIELDS}
+        elif key in ("outputs", "producer_outputs"):
+            value = judged_outputs(value)
+        out[key] = value
+    return out
+
 
 def _grounded_review(payload: Any) -> dict[str, Any] | None:
     """The frozen facts a final grounded finding rests on, for the judge above it.
@@ -118,10 +158,10 @@ def _grounded_review(payload: Any) -> dict[str, Any] | None:
     return {
         "finding": finding,
         "frozen_norms": contract.get("norms", []),
-        "producer_claim": contract.get("producer_outputs", {}),
+        "producer_claim": judged_outputs(contract.get("producer_outputs", {})),
         "price_constraints": contract.get("criteria", []),
         "observation_contract": {key: contract.get(key) for key in
-                                 ("handle", "producer_id", "opened_tick", "due_tick",
+                                 ("handle", "opened_tick", "due_tick",
                                   "close_tick", "charter_edition")},
         "evidence_snapshot": _evidence_snapshot(payload.get("grounded_evidence_snapshot")),
         "evidence": shown,
@@ -925,6 +965,10 @@ class Runtime(
             payload["since_you_last_woke"] = self.subscription_book.take(
                 sample.chosen, now=self.tick_index)
         description = f"Respond to event {ev.kind} on {ev.source}."
+        # What a judge of this return is told it answered: the event, and no clause
+        # that names the author's role (C1: an antagonist's payoff clause told its
+        # judge who wrote the return).
+        judged_description = description
         adversarial = (sample.chosen != NOOP
                        and self.assemblies[sample.chosen].spec.emits == ("Exposure",))
         if adversarial:
@@ -939,7 +983,7 @@ class Runtime(
             "world": self._world_block(),
             "your_state": self.working_state.render(sample.chosen),
             "unread_outcomes": self.outcomes.unread(sample.chosen),
-            "your_action_policy": self._action_policy(sample.chosen),  # private
+            **self._action_policy_input(sample.chosen),  # private
         }
         grounded_contract = None
         binding = self.return_bindings.get(handle)
@@ -1087,7 +1131,7 @@ class Runtime(
                                         else self.assemblies[sample.chosen].spec.emits[0])
         payload = {
                 "about_handle": handle,
-                "description": description,
+                "description": judged_description,
                 # Judges see the event the producer answered, never the producer's own
                 # state, its inbox or its copy of the world block, and never its name.
                 "inputs": {"kind": inputs["kind"], "payload": inputs["payload"]},
@@ -1188,11 +1232,9 @@ class Runtime(
             "producer": {
                 "description": payload.get("description", f"Return on {ev.kind}"),
                 "inputs": payload.get("inputs", {}),
-                "outputs": payload.get("outputs", payload),
+                "outputs": judged_outputs(payload.get("outputs", payload)),
                 "cost_micro_usd": payload.get("cost", 0),
                 "status": payload.get("status", "ok"),
-                # what it says it was choosing among, and what it chose.
-                "propensity": payload.get("propensity"),
             },
             "charter": self._charter_text(),
             "predicates": [
@@ -1208,8 +1250,7 @@ class Runtime(
             "your_state": self.working_state.render(sample.chosen),
             "unread_outcomes": ({} if payload.get("grounded_consequence") else
                                 self.outcomes.unread(sample.chosen)),
-            "your_consequence_standing": self._standing_for(sample.chosen),
-            "your_action_policy": self._action_policy(sample.chosen),  # private
+            **self._action_policy_input(sample.chosen),  # private
             # Evaluation is a commission, not an obligation (§6.B): a subject, a
             # scope, an evidence horizon and a budget, which may be declined.
             "commission": commission_block(
@@ -1252,18 +1293,19 @@ class Runtime(
             # record, not a fresh market snapshot or the current pricing cards.
             inputs["actor_context"] = self._operating_context(sample.chosen, inputs["world"])
             for key in ("charter", "predicates", "forecast_example", "world",
-                        "your_consequence_standing", "your_state", "unread_outcomes"):
+                        "your_state", "unread_outcomes"):
                 inputs.pop(key, None)
             inputs["commission"].pop("horizon_events", None)
             inputs["commission"]["horizon_ticks"] = (
                 frozen.get("due_tick", 0) - frozen.get("opened_tick", 0))
             inputs["realized_consequence"] = {
                 "frozen_norms": frozen.get("norms", []),
-                "producer_claim": frozen.get("producer_outputs", payload.get("outputs", {})),
+                "producer_claim": judged_outputs(
+                    frozen.get("producer_outputs", payload.get("outputs", {}))),
                 "price_constraints": frozen.get("criteria", []),
                 "observation_contract": {
                     key: frozen.get(key)
-                    for key in ("handle", "producer_id", "opened_tick", "due_tick",
+                    for key in ("handle", "opened_tick", "due_tick",
                                 "close_tick", "charter_edition", "predicate_versions")
                 },
                 "observation_contract_ticks": (
@@ -1278,7 +1320,7 @@ class Runtime(
                 ),
             }
         if generic:
-            inputs["event"] = {"kind": str(ev.kind), "payload": payload}
+            inputs["event"] = {"kind": str(ev.kind), "payload": judge_view(payload)}
             inputs["subject_handle"] = about
         schema = evaluator_answer_schema(
             self._forecast_schema(), self._register_schema(), include_realized=grounded)
@@ -1519,14 +1561,14 @@ class Runtime(
                 "verdict": payload.get("score") if recursive else payload.get("verdict"),
                 **({} if recursive else {"payoff": payload.get("payoff")}),
                 "rationale": payload.get("rationale", ""),
-                # The judge's own account of the verdicts it was choosing among.
-                "propensity": payload.get("propensity"),
             },
-            "producer_outputs": payload.get("producer_outputs", {}),
+            "producer_outputs": judged_outputs(payload.get("producer_outputs", {})),
             "charter": self._charter_text(),
-            "world": self._world_block(),
+            # A meta judge reads the verdict like a machine, as a first-tier judge
+            # reads a return (C7): its own operating access, not the whole world.
+            "actor_context": self._operating_context(sample.chosen, self._world_block()),
         }
-        inputs["your_action_policy"] = self._action_policy(sample.chosen)  # private
+        inputs.update(self._action_policy_input(sample.chosen))  # private
         inputs["your_state"] = self.working_state.render(sample.chosen)
         inputs["unread_outcomes"] = (self.outcomes.unread(sample.chosen)
                                     if review is None else {})
@@ -1534,18 +1576,17 @@ class Runtime(
             inputs["window"] = payload["window"]
         if recursive:
             # The grounded record is given once, below.
-            inputs["meta_verdict"] = {key: value for key, value in payload.items()
-                                      if key not in GROUNDED_FIELDS}
+            inputs["meta_verdict"] = judge_view({key: value for key, value in payload.items()
+                                                 if key not in GROUNDED_FIELDS})
         if review is not None:
-            # The judge answered under frozen norms; the current charter and a fresh
-            # world block would grade it against a standard it was not answering to.
-            inputs["actor_context"] = self._operating_context(sample.chosen, inputs["world"])
-            for key in ("charter", "world", "your_state", "unread_outcomes"):
+            # The judge answered under frozen norms; the current charter would grade
+            # it against a standard it was not answering to.
+            for key in ("charter", "your_state", "unread_outcomes"):
                 inputs.pop(key, None)
             inputs["realized_consequence"] = review
         generic = ev.kind not in (EventKind.VERDICT, EventKind.META_VERDICT)
         if generic:
-            inputs["event"] = {"kind": str(ev.kind), "payload": payload}
+            inputs["event"] = {"kind": str(ev.kind), "payload": judge_view(payload)}
             inputs["subject_handle"] = about
         # The root judge whose payoff forecast eventually grades this tier's top meta.
         judge_handle = payload.get("evaluator_handle", about)

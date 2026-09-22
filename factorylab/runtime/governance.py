@@ -1334,7 +1334,11 @@ class GovernanceMixin:
             if connector is not None:
                 inputs = {"connector": {**asdict(connector),
                                         "predicted_effect": asdict(am.predicted_effect)},
-                          "world": self._world_block(), "charter": self._charter_text()}
+                          # A ballot reads the motion like a machine (C7): its own
+                          # operating access, not the whole world block.
+                          "actor_context": self._operating_context(assembly_id,
+                                                                   self._world_block()),
+                          "charter": self._charter_text()}
             else:
                 inputs = {
                     ("retirement" if retiring else "amendment"): ({
@@ -1357,7 +1361,8 @@ class GovernanceMixin:
                     }),
                     **({"challenge": challenge_inputs} if challenge_inputs else {}),
                     "charter": self._charter_text(),
-                    "world": self._world_block(),
+                    "actor_context": self._operating_context(assembly_id,
+                                                             self._world_block()),
                     "your_policy_returns": [asdict(lr) for lr in self.queue.returns_for(lid)
                                             if lr.channel == "policy"],
                 }

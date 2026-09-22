@@ -2032,6 +2032,15 @@ class ComputeMixin:
                 "note": "your own learner's current policy over the action set you registered; "
                         "declare a propensity on your return to train it"}
 
+    def _action_policy_input(self, assembly_id: str) -> dict[str, Any]:
+        """``your_action_policy`` as a request input, or nothing when there is no learner.
+
+        Guarantees the key is absent rather than null for an assembly without a
+        registered learner (information audit U5): a null slot is a standing hint.
+        """
+        policy = self._action_policy(assembly_id)
+        return {} if policy is None else {"your_action_policy": policy}
+
     #: The classes an exploration draw may name: the ones that act on the world.
     EXPLORATION_CLASSES = ("order", "investigate", "build", "govern")
 

@@ -2128,6 +2128,18 @@ mutable memory, inbox text, population tool descriptions, current charter or cur
 world observations as judging evidence. Discovery remains available; only the
 commission's preserved evidence can support its finding.
 
+Every judge, first tier, meta and ballot, reads the same machine view (Chapter II
+§I.b; information audit C1, C2, C7, P5, P8): its own operating access
+(`actor_context`: the capability index without population prose, its own seat row,
+the clock and provider inventory), never the world block. The judged return's
+`description` is the event it answered, with no role clause. Its outputs lose
+`payoff` (an author's sealed forecast) and `propensity`, which the request's
+PROPENSITY block renders once. No judge-facing projection carries `producer_id`,
+`initial_evaluators`, `final_evaluators` or `excluded_evaluators`; they stay on the
+ledger and on the event, where routing reads them. A judge is not shown its own
+consequence standing, and `your_action_policy` is absent when a seat has no
+registered learner.
+
 A decision may buy up to five tool rounds, bounded by its existing money and model
 call ceilings. Known reads can extend retrieval; a write or child call ends it.
 Continuation pricing reserves another call before extending reads, and unknown
