@@ -24,6 +24,7 @@ from factorylab.charter.market import (
     BRANCHES,
     LAMBDA_POST_DEFINITION,
     expected_violation,
+    lambda_dollars,
     post_score,
     standing,
     violation_sign,
@@ -59,6 +60,8 @@ class MarketsMixin:
         # (n, sum of scores): the standing its posts are weighted by.
         self.lambda_posts: list[dict[str, Any]] = []
         self.lambda_standing: dict[str, tuple[int, float]] = {}
+        # Charter audit M5: the last closed window's λ-to-dollar statistic per card.
+        self.lambda_dollars: dict[str, Any] = {}
         self.A_RETURN_MAY_INCLUDE = {**self.A_RETURN_MAY_INCLUDE, **MARKET_RETURN_FIELDS}
 
     # --- intake -------------------------------------------------------------------
@@ -235,6 +238,30 @@ class MarketsMixin:
                                     "ts": self.clock.now_ns})
         super()._close_price_window()
         self._settle_lambda_posts(index)
+        self._close_lambda_dollars(index)
+
+    def _close_lambda_dollars(self, index: int) -> None:
+        """Ledger and keep the closed window's λ-to-dollar statistic (charter audit M5).
+
+        Per card priced in the window: its λ at the close, the penalty mass its price
+        took from the window's settlements, and that mass in micro-USD at the
+        window's own cost of a unit of reward (``charter.market.lambda_dollars``).
+        """
+        window = self.window
+        cards = sorted(set(window.closed_prices) | set(window.penalties))
+        if not cards:
+            self.lambda_dollars = {}
+            return
+        usd = lambda_dollars({c: window.penalties.get(c, 0.0) for c in cards},
+                             window.reward_mass, window.compute_spend_micro)
+        self.lambda_dollars = {
+            "window": index, "reward_mass": window.reward_mass,
+            "compute_spend_micro": window.compute_spend_micro,
+            "cards": {c: {"lambda": window.closed_prices.get(c, self.controller.price(c)),
+                          "penalty": window.penalties.get(c, 0.0), "micro_usd": usd[c]}
+                      for c in cards}}
+        self.ledger.append({"kind": "price.dollars", **self.lambda_dollars,
+                            "ts": self.clock.now_ns})
 
     def _settle_lambda_posts(self, index: int) -> None:
         """Score every post due at this close against the price the law now holds.
@@ -300,10 +327,15 @@ class MarketsMixin:
     def _world_block(self) -> dict[str, Any]:
         """``world.card_prices`` carries each card's posted price beside the controller's."""
         block = super()._world_block()
+        dollars = self.lambda_dollars.get("cards") or {}
         for row in block.get("card_prices", ()):
             posted = self._posted_lambda(row["card_id"])
             if posted is not None:
                 row["posted"] = posted
+            if row["card_id"] in dollars:
+                # Charter audit M5: what the card's price cost in the last closed window.
+                row["last_window_dollars"] = {"window": self.lambda_dollars["window"],
+                                              **dollars[row["card_id"]]}
         return block
 
     def _mechanics_block(self) -> dict[str, Any]:
@@ -335,6 +367,12 @@ class MarketsMixin:
             "published in world.card_prices and on the standing committee's agenda beside "
             "the controller's lambda. A lambda motion may name \"posted\" as a card's value: "
             "the posted price when the motion is admitted.")
+        committee["lambda_dollars"] = (
+            "per closed window, each card's penalty mass P (the reward its price took from "
+            "the window's settlements: each settlement's penalty apportioned by lambda * v * "
+            "share), the reward mass R (the settlements' raw scores) and the window's "
+            "compute spend C in micro-USD: micro_usd = round(P * C / R); unmeasured when "
+            "R = 0. Published in world.card_prices as last_window_dollars")
         committee["motion_forecasts"] = (
             "a seat may forecast q, the probability that an agenda motion's predicted_effect "
             "holds on its enact or reject branch; scored as the liability states. Each "

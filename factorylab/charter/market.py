@@ -112,3 +112,24 @@ def expected_violation(violation: float, forecasts: list[tuple[float, int]],
     values = [((1 - q) * violation) if sign < 0 else (violation + q * step)
               for q, sign in forecasts]
     return max(0.0, sum(values) / len(values))
+
+
+def lambda_dollars(penalties: dict[str, float], reward_mass: float,
+                   spend_micro: int) -> dict[str, int | None]:
+    """Each card's penalty in one window, converted to micro-USD.
+
+    Essay II.IV: "the correlation between the pricing λ of a factory's norm set and
+    the material costs established as constraints needs to be profoundly understood
+    at charter time" (charter audit M5). λ prices a unit-interval reward; the window
+    bought ``reward_mass`` units of reward with ``spend_micro`` of compute, so one
+    unit of reward cost ``spend_micro / reward_mass``. A card's penalty mass (reward
+    units its price took from the window's settlements) is worth
+    ``penalty * spend_micro / reward_mass`` micro-USD, rounded to the integer. With
+    no reward settled the conversion is unmeasured (None), never zero.
+    """
+    if type(spend_micro) is not int or spend_micro < 0:
+        raise ValueError("spend_micro is a nonnegative integer of micro-USD")
+    if not isfinite(reward_mass) or reward_mass <= 0:
+        return {card_id: None for card_id in penalties}
+    return {card_id: round(mass * spend_micro / reward_mass)
+            for card_id, mass in penalties.items()}

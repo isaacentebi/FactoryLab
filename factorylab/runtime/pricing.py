@@ -66,6 +66,11 @@ class MeasureWindow:
     closed_scopes: dict[str, dict[str, float]] = field(default_factory=dict)
     # Each measured card's holdout violation at the close (charter audit M3).
     closed_holdouts: dict[str, float] = field(default_factory=dict)
+    # Charter audit M5: the penalty each card took from the window's settlements, in
+    # reward units, and the raw scores those settlements carried. Private: the per-card
+    # dollar statistic built from them is published in world.card_prices.
+    penalties: dict[str, float] = field(default_factory=dict)
+    reward_mass: float = 0.0
     mids: list[dict] = field(default_factory=list)
     funding: list[dict] = field(default_factory=list)
     wallet_balance_micro: list[list[int]] = field(default_factory=list)
@@ -851,3 +856,23 @@ class PricingMixin:
         self.ledger.append(entry)
         if penalty > 0:
             self.stats.penalized_settlements += 1
+        self._account_penalty(penalty, entry["terms"], None if unresolved else score)
+
+    def _account_penalty(self, penalty: float, terms: list[dict], raw: float | None) -> None:
+        """Charter audit M5: the penalty a settlement took, apportioned to its cards.
+
+        Each card's part is its term's ``lambda * v * share`` over the terms' total,
+        the same weights the penalty itself was allocated by. ``raw`` is the score
+        the settlement carried before the penalty; the window's reward mass is their
+        sum, the reward the window's compute bought.
+        """
+        if raw is not None:
+            self.window.reward_mass += raw
+        total = sum(t["weight"] * t["share"] for t in terms)
+        if penalty <= 0 or total <= 0:
+            return
+        for term in terms:
+            part = penalty * term["weight"] * term["share"] / total
+            if part > 0:
+                self.window.penalties[term["card_id"]] = (
+                    self.window.penalties.get(term["card_id"], 0.0) + part)

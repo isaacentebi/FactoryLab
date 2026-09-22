@@ -20,7 +20,7 @@
 # to change, not the architect's. Its `ratified_sha256` and `roster_sha256` are left
 # out rather than claimed, because they bind that charter to edition 5's roster. Before
 # any funded launch, the population must re-ratify on this roster with
-# scripts/ratify_charter.py (it makes live model calls), and the export's digests go
+# scripts/charter_session.py (it makes live model calls), and the export's digests go
 # back into [charter]; a mainnet load refuses this file until then.
 name = "edition6-testnet-rehearsal"
 seed = 3

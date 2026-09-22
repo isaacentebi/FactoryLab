@@ -719,7 +719,7 @@ default is written into the worlds that ran on it.
 
 A mainnet manifest is also refused at load unless `exchange.client_namespace` is
 set and its `[charter]` carries `ratified_sha256` and `roster_sha256`, the values
-`scripts/ratify_charter.py` wrote as the artifact's `charter_sha256` and
+`scripts/charter_session.py` wrote as the artifact's `charter_sha256` and
 `roster_sha256` comments: the loaded cards must hash to the first and
 the manifest's own assemblies and models to the second, so a funded launch cannot
 run an edited charter or a different roster. Both fields are admission provenance

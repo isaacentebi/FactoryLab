@@ -403,3 +403,26 @@ def test_posts_and_forecasts_survive_a_checkpoint_and_an_older_one_has_none(monk
     assert twin.lambda_posts == [] and twin.lambda_standing == {}
     ballot = {"vote": True}
     assert twin._branch_probability(ballot, ballot.get("branch", "enact")) == 1.0
+
+
+def test_each_window_publishes_what_a_card_s_price_cost_in_micro_usd(monkeypatch):
+    """Charter audit M5: λ at runtime beside the dollars its penalty stood for."""
+    rt = _runtime(monkeypatch, SMALL)
+    _sample(rt, ok=False)
+    rt.controller.set_price("ok-rate", 0.5, amendment_id="test")
+    _next_window(rt)
+    handle = _handle(rt, "seed-observer", "priced")
+    rt._contribution(handle, "producer")["invocations"] = 1  # one malformed return
+    rt.window.compute_spend_micro += 9_000
+    rt._settle_priced(handle, channel="verdict", score=0.9, definition_version="t",
+                      sampling_ref=None, cards="producer")
+    penalty = rt.window.penalties["ok-rate"]
+    assert penalty > 0 and rt.window.reward_mass == 0.9
+    closing = rt.window.index
+    _next_window(rt)
+    dollars = _items(rt, "price.dollars")[-1]
+    assert dollars["window"] == closing
+    assert dollars["cards"]["ok-rate"]["micro_usd"] == round(penalty * 9_000 / 0.9)
+    row = next(r for r in rt._world_block()["card_prices"] if r["card_id"] == "ok-rate")
+    assert row["last_window_dollars"]["micro_usd"] == round(penalty * 9_000 / 0.9)
+    assert "lambda_dollars" in rt._mechanics_block()["committee"]

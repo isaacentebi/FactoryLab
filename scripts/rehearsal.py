@@ -14,8 +14,8 @@ import tomllib
 from pathlib import Path
 from uuid import uuid4
 
+from factorylab.charter.provenance import charter_digest, roster_hash
 from factorylab.runtime.worlds import load_manifest, manifest_from_dict
-from scripts.draft_edition1 import charter_digest, roster_hash
 
 
 def voted_charter(path: Path, manifest) -> dict:

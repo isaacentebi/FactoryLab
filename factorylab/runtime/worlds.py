@@ -612,7 +612,7 @@ class WorldManifest:
 
         The namespace keeps a funded world's client order IDs out of every other
         world's; the two digests bind the loaded cards and the roster that voted them
-        to the exact artifact ``scripts/ratify_charter.py`` exported. The same digest
+        to the exact artifact ``scripts/charter_session.py`` exported. The same digest
         functions serve both, so an existing ratified artifact verifies unchanged.
         """
         from factorylab.charter.provenance import roster_hash
