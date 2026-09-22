@@ -294,14 +294,10 @@ class SchematicsMixin:
         ),
         "order_example": '{"action": "order", "coin": "ETH", "side": "buy", "size": "0.004"}',
         "verdict": (
-            "evaluator returns (required): the judged return's quality against the charter, "
-            "0 to 1; it settles the producer's verdict channel and is graded by meta conformity"
-        ),
-        "payoff": (
-            "evaluator returns (required): your probability that the kernel's consequence "
-            "predicate resolves true for the judged return; antagonist returns (optional): the "
-            "same probability about your own return. Either is sealed as the kernel's payoff "
-            "forecast and graded by Brier against the realised predicate (see scoring)"
+            "evaluator returns (required): the judged return against the charter, 0 to 1; "
+            "the judged return settles on its judges' mean verdict, and the verdict is "
+            "graded by the tier above and scored against the return's measured outcome "
+            "(see scoring)"
         ),
         "about_handle": (
             "judging returns (optional): the return handle your verdict or conformity is "
@@ -371,8 +367,8 @@ class SchematicsMixin:
         ),
         "emits": (
             "the selected return kind from your registered emits; optional for a single kind. "
-            "ProducerReturn uses verdict feedback, Verdict uses conformity and payoff, "
-            "MetaVerdict uses conformity or terminal consequence, Exposure uses exposure. "
+            "ProducerReturn uses verdict feedback, Verdict and MetaVerdict the grade from "
+            "above and the world's score of the judgement, Exposure uses exposure. "
             "A custom kind is declared in registration.schemas[kind] as a JSON object schema "
             "and declares registration.reward_shapes[kind] as judged, forecast, conformity "
             "or exposure (default judged). See world.work for the reward contracts. "
@@ -1668,9 +1664,8 @@ class SchematicsMixin:
 
     def _scoring_block(self) -> dict[str, Any]:
         """How decisions settle, stated as facts about the world (schematics are
-        public; no goals). Run 7 showed judges grading conformity alone because nothing told
-        them a verdict is also a forecast, and producers reinforced by verdicts that never
-        answered to money. Every formula here is the one the runtime applies.
+        public; no goals). Every formula here is the one the runtime applies: the
+        reward chain of ruling R1 (essay II.III.b), and nothing else.
 
         Guarantees the formulas name the weights the runtime's adaptation moves
         rather than quoting them, so this block holds still between calls of one
@@ -1678,60 +1673,73 @@ class SchematicsMixin:
         force is in ``world.adaptive_scoring``.
         """
         ev = self.ev
+        backstop = ev.consequence_backstop_ticks
         return {
-            "producer_or_antagonist_return": (
-                "ProducerReturn and custom return kinds settle on the verdict channel: "
-                "the score is the verdict (0 to 1) a judging return "
-                f"gives it within {ev.verdict_timeout_ticks} ticks, less the card penalty; "
-                "unjudged returns are censored (no score, no learning)"
+            "producer_or_custom_return": (
+                "ProducerReturn and custom return kinds settle on the verdict channel: the "
+                "score is the mean of the verdicts (0 to 1) the judges that read it gave, "
+                f"less the card penalty; a return no judge read within {ev.verdict_timeout_ticks} "
+                "ticks is censored (no score, no learning)"
+            ),
+            "verdict_is_a_prediction": (
+                "a verdict q is also scored against the judged return's measured outcome y: "
+                "for a return that executed venue operations (or earned service income), "
+                "y = return_paid_off, 1 when its realised or marked P&L exceeds its own "
+                "compute and tool cost, fixed when its lots close or at the consequence "
+                f"backstop ({backstop} ticks from the return); for a return that executed "
+                "nothing and named a counterfactual {coin, side}, y = that declined trade's "
+                "opportunity price at the backstop: with m the declined trade's gross return "
+                "in bp over the horizon (signed by its side) and f the round-trip fee in bp, "
+                "y = f / (f + max(0, m - f)); any "
+                "other return has no y. brier = 1 - (q - y)^2; base = 1 - (b - y)^2, b the "
+                "base rate of that kind of y before this return's entered it; consequence "
+                "score = clip(0.5 + brier - base, 0, 1)"
+            ),
+            "evaluator_return": (
+                "a judge's decision settles on the conformity channel on two signals: g, the "
+                f"mean grade the tier above gave it within {ev.verdict_timeout_ticks} ticks, "
+                "and c, its consequence score; score = mean of those that exist, less the "
+                "card penalty; censored when neither exists. A meta judges one verdict in "
+                f"every {self.m.timing.min_ratio} (with jitter), the window's representative; "
+                "the others are not graded by it"
+            ),
+            "meta_return": (
+                "a meta's conformity k is also a prediction of the consequence score s of the "
+                "decision it graded: c = clip(0.5 + (1 - (k - s)^2) - (1 - (b - s)^2), 0, 1), "
+                "b the base rate of those scores; no s, no c. A meta settles like a judge on "
+                "the grade from a tier above, when one exists, and on c; a top-tier meta on "
+                "c alone"
+            ),
+            "malformed_judgement": (
+                "a judgement with no verdict or conformity in [0, 1], a model refusal, or one "
+                "whose target is refused settles censored; its call is charged. status: "
+                "cannot declines the commission: the call is charged and nothing is scored"
             ),
             "antagonist_exposure": (
-                "an Exposure return settles on the exposure channel, less the antagonist's "
-                "card penalty: 1 only when the judge's mandatory payoff forecast about it "
-                "scored a worse Brier than the prevalence baseline and the antagonist's own "
-                "payoff forecast about it scored better; a judge's optional forecasts never "
-                "count; otherwise 0 once nothing about the return is pending"
+                "an Exposure return settles on the exposure channel: the mean over the judges "
+                "scored on it of (1 - their consequence score), less the antagonist's card "
+                "penalty; censored when no judge's verdict on it was scored"
             ),
             "antagonist_routing": (
                 "router probability mass on contracts declaring Exposure is renormalised to "
                 "at most "
                 f"{ev.adversarial_share} before every draw"
             ),
-            "verdict_and_payoff": (
-                "an evaluator gives two numbers: verdict (charter quality) settles the judged "
-                "return and is graded by meta conformity; payoff is sealed as a forecast with "
-                "q = payoff that return_paid_off resolves true for the judged return and is "
-                "graded by Brier against the realised predicate; the two never substitute for "
-                "each other"
+            "abstention": (
+                "a router's NOOP draw is credited the zero-consequence reward of the rounds "
+                "that router learns from, less the card penalty a decision of the role it "
+                "would have filled bears in the window it was drawn in"
             ),
-            "return_paid_off": (
-                "the kernel's consequence predicate about a return, resolved 1 or 0 by the "
-                "runtime once the return's consequence is fixed; the payoff field is the only "
-                "forecast sealed about it and it cannot be proposed"
-            ),
-            "payoff_standing": (
-                "mean Brier of the evaluator's payoff forecasts minus the prevalence "
-                "baseline's, capped below minimum coverage; it enters selection among contracts "
-                "declaring Verdict on any accepted event kind with "
+            "consequence_standing": (
+                "mean Brier of an evaluator's settled forecasts and scored verdicts minus the "
+                "base rates', capped below minimum coverage; it enters selection among "
+                "contracts declaring Verdict on any accepted event kind with "
                 f"weight consequence_mix (committed {ev.consequence_share}; the weight in "
                 "force this window is world.adaptive_scoring.consequence_mix) beside the "
                 "learned selection; when the verdict mean "
-                f"rises while payoff skill falls over {self.m.immune.k} windows the mix rises by "
-                f"{ev.sampling_step} for the next window, capped at {ev.sampling_cap}, and "
-                "steps back otherwise"
-            ),
-            "evaluator_return": (
-                "settles on the conformity channel: the score a meta gives the verdict within "
-                f"{ev.verdict_timeout_ticks} ticks, less the card penalty; metas judge one "
-                f"verdict in every {self.m.timing.min_ratio} (with jitter) as the window's "
-                "representative; the representative settles at the meta's score and each "
-                f"unread sibling at {ev.sibling_share} of it"
-            ),
-            "meta_return": (
-                "a top-tier meta's conformity c is graded by Brier 1 - (c - y)^2 where y = 1 "
-                "when the judged verdict's payoff forecast scored at least the prevalence "
-                "baseline; a malformed conformity settles 0; a lower tier settles on "
-                "conformity like an evaluator"
+                f"rises while consequence skill falls over {self.m.immune.k} windows the mix "
+                f"rises by {ev.sampling_step} for the next window, capped at "
+                f"{ev.sampling_cap}, and steps back otherwise"
             ),
             "card_penalty": (
                 "v_j = distance outside card j's inclusive region / observation.scale; "
@@ -1747,9 +1755,9 @@ class SchematicsMixin:
                 "closed observations with current contribution totals. "
                 "score = clip(raw_score - penalty, 0, 1). Prices and region scales are in "
                 "card_prices. "
-                "Stable failure halves effective lambda on violated cards for the next window; "
-                "underlying duration pressure is retained. Duplicate observations on overlapping "
-                "roles are refused in amendments."
+                "Stable failure raises each violated card's lambda by n * immune.price_step in "
+                "its n-th consecutive failing window, bounded by lambda_max. Duplicate "
+                "observations on overlapping roles are refused in amendments."
             ),
             "propensity": (
                 "every decision carries two propensities: the router's distribution over "

@@ -376,7 +376,8 @@ class PricingMixin:
         cost_per_return: mean wallet cost (micro-USD) of well-formed producer
         returns; well_formed_rate: ok returns over all invocations;
         forecast_skill: mean consequence-standing skill over evaluators with
-        settled forecasts; turnover: filled notional over equity at the window
+        settled forecasts or verdicts the world scored (ruling R1: a verdict is a
+        forecast too); turnover: filled notional over equity at the window
         start (0 with no fills). A quantity without support is not observed.
         """
         evaluators = {a.spec.id for a in self.assemblies.values()
@@ -384,7 +385,7 @@ class PricingMixin:
         skills = [
             v["skill"]
             for eid, v in self.standing.snapshot().items()
-            if eid in evaluators and v.get("n")
+            if eid in evaluators and (v.get("n") or v.get("verdict_n"))
         ]
         w = replace(self.window, forecast_skills=skills)
         book = self.observations

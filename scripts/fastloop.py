@@ -56,7 +56,7 @@ class PolicyProvider(ScriptedProvider):
 
     It is not a model of behaviour. It exists so every institution a paid run
     reaches — tool rounds, a limit order reported as ``order``, a repeated order,
-    provisional and grounded judgments, metas — is reached for free, and so the
+    verdicts scored against the world, metas — is reached for free, and so the
     prompts the real seats would be sent are rendered and measured.
     """
 
@@ -82,7 +82,7 @@ class PolicyProvider(ScriptedProvider):
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
         inputs = _inputs_from_prompt(text)
         desc = _description_from_prompt(text)
-        if desc.startswith("Evaluate") or "realized_consequence" in inputs:
+        if desc.startswith(("Give verdict", "Evaluate")):
             reply = self._judge(inputs)
         elif desc.startswith("Assess"):
             reply = {"conformity": 0.8, "rationale": "scripted meta"}
@@ -120,23 +120,11 @@ class PolicyProvider(ScriptedProvider):
 
     @staticmethod
     def _judge(inputs: dict[str, Any]) -> dict[str, Any]:
-        grounded = inputs.get("realized_consequence")
-        if isinstance(grounded, dict):
-            refs = [row.get("ref") for row in grounded.get("evidence", [])
-                    if isinstance(row, dict) and str(row.get("ref", "")).startswith(
-                        ("execution:", "ExecutionReceipt"))]
-            finding = ({"status": "supported", "score": 0.6, "evidence": refs[:1],
-                        "reason": "an attributable execution receipt"} if refs else
-                       {"status": "unknown", "evidence": [],
-                        "reason": "no attributable evidence"})
-            return {"verdict": 0.5, "rationale": "scripted final",
-                    "realized_consequence": finding}
-        # One seed-vocabulary claim per provisional verdict, as the paid judges seal
-        # (PR121: 141 in 240 ticks). A holding population's payoff forecasts are all
-        # refused as hindsight, so without it no forecast ever comes due, and a
-        # forecast-windowed card (edition 5's censorship-bound) is never measured
-        # or priced on the free tier.
-        return {"verdict": 0.6, "payoff": 0.3, "rationale": "scripted provisional",
+        # One seed-vocabulary claim per verdict, as the paid judges seal (PR121: 141 in
+        # 240 ticks), so a forecast-windowed card (edition 5's censorship-bound) is
+        # measured and priced on the free tier. The verdict itself is the prediction
+        # the world scores (ruling R1).
+        return {"verdict": 0.6, "rationale": "scripted verdict",
                 "forecasts": [{"predicate": "wallet_up", "q": 0.4,
                                "params": {"horizon_events": 10}}]}
 

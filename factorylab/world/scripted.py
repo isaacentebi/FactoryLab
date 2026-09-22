@@ -16,10 +16,9 @@ class ScriptedProvider:
     """Deterministic stand-in for seed contracts and the A1 composition exercise.
 
     Producers cycle buy / hold / sell / hold on ticks (sized to the world wallet) and
-    occasionally propose registrations; every produce reply carries a low
-    ``payoff`` self-forecast, which the runtime seals only for antagonists.
-    Evaluators return a verdict, a payoff probability and two forecasts whose
-    probabilities depend on the evaluator's own prompt, so evaluators differ.
+    occasionally propose registrations. Evaluators return a verdict and two
+    forecasts whose probabilities depend on the evaluator's own prompt, so
+    evaluators differ.
     Metas return a conformity score. Token usage is declared so costs are
     exact. It exists to close the loop, not to be clever.
     """
@@ -58,7 +57,7 @@ class ScriptedProvider:
             reply = ({"action": "hold"} if "tool_results" in inputs else {
                 "tool_calls": [{"tool": "catalogue.search",
                                 "args": {"substring": "fake", "limit": 1}}]})
-        elif desc.startswith("Evaluate"):
+        elif desc.startswith(("Give verdict", "Evaluate")):
             reply = self._evaluate(req, inputs)
         elif desc.startswith("Assess"):
             reply = self._meta(inputs)
@@ -235,7 +234,10 @@ class ScriptedProvider:
                     "timeout_s": 2,
                 }
             ]
-        if n == 55:
+        # Offered on three calls for the reason spread-check is: which seat a call
+        # belongs to moves with the reward line, and a seat whose entitlement is below
+        # the trial amount cannot propose. A second offer of the same id is refused.
+        if n in (55, 57, 59):
             reply["register"] = [
                 {
                     "kind": "amendment",
@@ -311,10 +313,9 @@ class ScriptedProvider:
             verdict = 0.9 if req.model_id == "fake-haiku" else 0.1
         style = int(hashlib.sha256(req.system.encode()).hexdigest(), 16) % 4
         q = (0.3, 0.45, 0.6, 0.75)[style]
+        # The haiku judge blesses inaction; the opus judge does not.
         return {
             "verdict": verdict,
-            # The haiku judge blesses inaction as paying off; the opus judge does not.
-            "payoff": verdict,
             "rationale": "scripted judgement",
             "forecasts": [
                 {"predicate": "wallet_up", "params": {"horizon_events": 10}, "q": q},

@@ -89,7 +89,7 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "bbb27cfd3c4894416e2bd5ef2700903df3d9fe021574ba8ecec1764b013258ce"
+        "d195282a92d3498ac7bfa397fd117aa22f104af275d0af566d803645d74ae33f"
     )
 
     implicit = manifest_from_dict(_base())
@@ -105,10 +105,12 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
 
 @pytest.mark.parametrize("key,value", [("producer_feedback", "realized"),
                                        ("producer_feedback", "verdict"),
-                                       ("grounded_horizon_ticks", 10)])
-def test_the_deleted_realized_feedback_keys_are_refused_not_ignored(key, value):
-    """Ruling R1 deleted the realized feedback mode and the grounded final judge; R8
-    refuses a manifest that names physics this kernel does not run."""
+                                       ("grounded_horizon_ticks", 10),
+                                       ("sibling_share", 0.5)])
+def test_the_deleted_reward_chain_keys_are_refused_not_ignored(key, value):
+    """Ruling R1 deleted the realized feedback mode and the grounded final judge, and
+    evaluations U2 the sibling share; R8 refuses a manifest that names physics this
+    kernel does not run."""
     raw = _base()
     raw["evaluation"] = {key: value}
     with pytest.raises(ValueError, match=f"evaluation.{key} was removed"):

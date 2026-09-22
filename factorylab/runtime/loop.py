@@ -4,11 +4,12 @@ The loop owns no money, no scores and no rules; it is glue over kernel
 physics.
 
 Contracts. Any assembly may accept any event kind and select a declared
-output kind. Producer-shaped and custom returns receive verdict feedback;
-verdicts carry independent quality and payoff values; meta verdicts receive
-conformity or terminal consequence feedback; exposures retain their exposure
-channel. The shipped registrations preserve the seeded evaluation chain.
-Unjudged returns are censored, and retirement preserves delayed feedback.
+output kind. Producer-shaped and custom returns settle on the mean of their
+judges' verdicts. A verdict is also a prediction: a judge settles on its grade
+from the tier above and on the world's score of its verdict, and a meta the same
+way one tier up (ruling R1); exposures earn by how wrong the judges were. The
+shipped registrations preserve the seeded evaluation chain. Unjudged returns are
+censored, and retirement preserves delayed feedback.
 
 Prices. At each reserve-window boundary the runtime measures the window
 that closed using the factory's observation vocabulary — the twenty-three seeds
@@ -43,7 +44,6 @@ from factorylab.runtime.bootstrap import BootstrapMixin
 from factorylab.runtime.cadence import settle_forecasts
 from factorylab.runtime.compute import ComputeMixin
 from factorylab.runtime.feedback import (
-    UNMEASURED_REASON_UNCOMMITTED,
     FeedbackMixin,
     PendingJudgement,
 )
@@ -70,9 +70,6 @@ from factorylab.runtime.vault import VaultMixin
 from factorylab.runtime.venue import VenueMixin
 from factorylab.runtime.worlds import WorldManifest
 from factorylab.settlement.vocabulary import (
-    DECLINED_DEFINITION,
-    UNMEASURED,
-    UNMEASURED_DEFINITION,
     commission_block,
     evaluator_answer_schema,
 )
@@ -80,10 +77,9 @@ from factorylab.world.clock import ClockSource, merge_sources
 from factorylab.world.events import WorldEvent, WorldEventKind
 from factorylab.world.market import X402Provider
 
-#: What a return carries that is not the work under judgement: the author's own
-#: payoff forecast, sealed separately (C1), and its propensity, which the request's
-#: PROPENSITY block renders once (P8).
-UNJUDGED_OUTPUT_FIELDS = frozenset({"payoff", "propensity"})
+#: What a return carries that is not the work under judgement: its propensity, which
+#: the request's PROPENSITY block renders once (P8).
+UNJUDGED_OUTPUT_FIELDS = frozenset({"propensity"})
 
 
 def judged_outputs(outputs: Any) -> Any:
@@ -356,6 +352,9 @@ class Runtime(
         # Dormant (C2): no paid cognition is routed; the maintenance below still runs,
         # the fills, treasury and releases above already did.
 
+        # Every verdict this event's routing produced is in: each return it judged
+        # settles on their mean (ruling R1).
+        self._settle_arrived_verdicts()
         self._settle_due_forecasts()
         self._censor_stale_judgements()
         self.stats.timeouts += len(self.queue.expire(self.clock.now_ns))
@@ -539,6 +538,7 @@ class Runtime(
             reason = "insolvency:compute"
         if reason is None:
             return False
+        self._settle_arrived_verdicts()
         self._settle_due_forecasts()
         self.kill(reason)  # edition 3, C5: every runtime death winds the venue down
         return True
@@ -729,8 +729,17 @@ class Runtime(
         self._refusal_to_owner(handle, "judgement_refused", reason)
 
     def _judged_event(self, ev: Event, handle: str, ret: Return,
-                      *, seals_payoff: bool = False) -> Event | None:
-        """A judgement may address a public return handle, excluding its complete ancestry."""
+                      *, predicts: bool = False) -> Event | None:
+        """A judgement addresses a public return handle, excluding its complete ancestry.
+
+        A value in about_handle that is not a return handle from the request —
+        prose, a handle no public return carries, or the judgement's own decision —
+        is not a choice of target: the delivered subject is judged instead, and the
+        author is told why (evaluations P2: every meta that named its own handle was
+        refused and graded zero). A verdict is a prediction (ruling R1), so one about
+        a target anyone chose rather than the delivered subject must precede that
+        target's outcome (``predicts``).
+        """
         subject = self._event_subject(ev)
         about = ret.outputs.get("about_handle", subject)
 
@@ -741,10 +750,8 @@ class Runtime(
                 return False
             return True
 
-        if not addressable(about):
-            if about == subject or not addressable(subject):
-                self._refuse_judgement(handle, "judgement needs an addressable return handle")
-                return None
+        if about != subject and not (isinstance(about, str) and about != handle
+                                     and about in self.return_events and addressable(about)):
             # A value that names no return is not a choice of target: the judgement
             # stands about the return the router delivered, and its author is told
             # why its about_handle went unread.
@@ -755,6 +762,9 @@ class Runtime(
                                 "reason": reason, "ts": self.clock.now_ns})
             self._refusal_to_owner(handle, "about_handle_ignored", reason)
             about = subject
+        if not addressable(about):
+            self._refuse_judgement(handle, "judgement needs an addressable return handle")
+            return None
         target = self.return_events.get(about)
         if target is None and about == subject:
             target = ev
@@ -777,10 +787,10 @@ class Runtime(
         }:
             self._refuse_judgement(handle, "self-judgement: ancestor", about)
             return None
-        # A payoff forecast on a target anyone chose — the return itself, or the
-        # parent that requested it — rather than the one the router delivered,
-        # must still be sealed before the outcome is fixed.
-        if seals_payoff and (about != subject or parent is not None) and (
+        # A verdict on a target anyone chose — the return itself, or the parent
+        # that requested it — rather than the one the router delivered is a
+        # prediction, so it must precede the outcome it will be scored on.
+        if predicts and (about != subject or parent is not None) and (
                 reason := self._hindsight_reason(handle, about)) is not None:
             self._refuse_judgement(handle, reason, about)
             return None
@@ -790,7 +800,6 @@ class Runtime(
     def _producer_step(self, ev: Event, handle: str, sample: Sample, deadline: int,
                        *, returned: Return | None = None) -> None:
         self._start_return(handle)
-        self_forecast = None  # an antagonist's own payoff claim, sealed once it is finished
         payload = _to_plain(ev.payload)
         if ev.kind is EventKind.TICK:
             try:
@@ -826,17 +835,8 @@ class Runtime(
                 sample.chosen, now=self.tick_index)
         description = f"Respond to event {ev.kind} on {ev.source}."
         # What a judge of this return is told it answered: the event, and no clause
-        # that names the author's role (C1: an antagonist's payoff clause told its
-        # judge who wrote the return).
+        # that names the author's role (information audit C1).
         judged_description = description
-        adversarial = (sample.chosen != NOOP
-                       and self.assemblies[sample.chosen].spec.emits == ("Exposure",))
-        if adversarial:
-            description += (
-                " You may include payoff: your probability that return_paid_off, the "
-                "kernel's consequence predicate, resolves true for this return; it is "
-                "sealed as your forecast about your own return."
-            )
         inputs = {
             "kind": str(ev.kind),
             "payload": payload,
@@ -849,16 +849,14 @@ class Runtime(
             self.stats.noops += 1
             ret = Return(handle, {"action": "noop"}, 0, "ok")
         else:
+            # Physics, not a menu (smuggling A3): the kernel classifies every answer
+            # for the ledger; the seat's own action ids stand beside the classes.
             description += (
-                " Your action is one of hold, investigate (tool calls, no order), build "
-                "(a registration), govern (a proposal or a challenge), defer (sleep through "
-                "routine ticks) or order (place or close); your propensity is declared over "
-                "those. You own what wakes you: subscribe {kinds, coins, cadence_floor} "
-                "changes it, defer: <n ticks> sleeps through routine ticks, and a fill or a "
-                "safety event wakes you anyway. A hold or defer may name the trade it "
-                "declined, counterfactual {coin, side}: the market prices that trade at "
-                "the consequence horizon, net of fees, and the price is the decision's "
-                "score; one that names none settles at neutral."
+                " The kernel classifies each answer for the ledger as hold, investigate, "
+                "build, govern, defer or order; a propensity may be declared over those "
+                "or over your own action ids. You own what wakes you: subscribe {kinds, "
+                "coins, cadence_floor} changes it, defer: <n ticks> sleeps through routine "
+                "ticks, and a fill or a safety event wakes you anyway."
             )
             schema = {
                 "type": "object",
@@ -869,15 +867,12 @@ class Runtime(
                     "defer": {"type": "integer", "minimum": 0},
                     "counterfactual": {
                         "type": "object",
-                        "description": "the trade a hold or defer declined; the market "
-                                       "prices it at the horizon and that is the score",
+                        "description": "a declined trade, coin and side",
                         "properties": {"coin": {"type": "string"},
                                        "side": {"enum": ["buy", "sell"]}},
                         "required": ["coin", "side"],
                     },
                     "register": self._register_schema(),
-                    **({"payoff": {"type": "number", "minimum": 0, "maximum": 1}}
-                       if adversarial else {}),
                 },
                 "required": ["action"],
             }
@@ -910,25 +905,16 @@ class Runtime(
                                   status=SettleStatus.CENSORED,
                                   definition_version="unselected-return-v1", sampling_ref=None)
                 return
-            adversarial = shape == "exposure"
             if self._may_write(handle):
                 self._execute_outputs(ret)
             self._apply_registrations(handle, ret)
             self._apply_thinking(handle, sample.chosen, ret)
             self.handle_to_assembly[handle] = sample.chosen
-            payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
-            if adversarial and payoff is not None:
-                self_forecast = payoff
+            if ret.status == "ok":
+                # A declined trade is priced from the mids the world had broadcast
+                # when this return was made (ruling R2).
+                self._freeze_declined_trade(handle, ret.outputs)
         self.consequences.finish(handle, ret.cost)
-        if self_forecast is not None:
-            # Sealed once the return is finished, so a return that left nothing open
-            # (its outcome already determined) is refused rather than scored.
-            if self.consequences.seal_self_forecast(
-                self.book, self.queue, handle=handle, assembly_id=sample.chosen,
-                payoff=self_forecast, event=self.n, now_ns=self.clock.now_ns,
-                tick_ns=self.tick_clock.interval_ns,
-            ) is not None:
-                self.stats.forecasts_sealed += 1
         noop = str(ret.outputs.get("action", "")).lower() in ("noop", "hold")
         revision = handle in self.window.revision_handles
         self.ledger.append(
@@ -1064,11 +1050,6 @@ class Runtime(
                 {"predicate": p.id, "description": p.description, "params": list(p.param_schema)}
                 for p in self.predicates.all()
             ],
-            "forecast_example": {
-                "predicate": "wallet_up",
-                "params": {"horizon_events": self.ev.forecast_horizon_events},
-                "q": 0.4,
-            },
             "world": self._world_block(),
             "your_state": self.working_state.render(sample.chosen),
             "unread_outcomes": self.outcomes.unread(sample.chosen),
@@ -1099,21 +1080,15 @@ class Runtime(
             inputs["event"] = {"kind": str(ev.kind), "payload": judge_view(payload)}
             inputs["subject_handle"] = about
         schema = evaluator_answer_schema(self._forecast_schema(), self._register_schema())
+        # The request states what the answer is and what may be done with the
+        # commission; how a verdict is scored is a schematic (world.scoring), and no
+        # rubric says what a good return is (smuggling A7; essay II.III on
+        # predefined rubrics).
         instruction = (
-            ("Evaluate, on commission, the public return addressed by about_handle. The "
-             "input's subject_handle is the default when present. Give verdict = its quality "
-             if generic else
-             "Evaluate, on commission, a producer return. Give verdict = its quality ") +
-            "against the charter (0 to 1). Judge it against what it committed to — a claim, "
-            "a counterfactual, an observation rule, a resource decision, an accepted promise "
-            "— and if it committed to nothing this evidence can measure, answer status: "
-            "unmeasured with a reason instead: that is a complete answer and carries no "
-            "penalty. You may decline the commission with status: cannot and a reason; you "
-            "are then charged for this call alone. Optionally give "
-            "payoff = your probability that return_paid_off, the kernel's consequence "
-            "predicate, resolves true for the return, and up to "
-            f"{self.ev.max_forecasts_per_verdict} forecasts: for each, a predicate from the "
-            "list and q = your probability it happens within its horizon."
+            "Give verdict 0-1 on the public return addressed by about_handle "
+            "(subject_handle by default) against the charter; you may decline."
+            if generic else
+            "Give verdict 0-1 on the return against the charter; you may decline."
         )
         req = self._request(
             handle,
@@ -1131,102 +1106,47 @@ class Runtime(
         self.handle_to_assembly[handle] = sample.chosen
         answered = str(ret.outputs.get("status", "")).strip().lower()
         reason = str(ret.outputs.get("reason", ""))[:500]
-        if ret.status == "refused" or answered == "cannot":
+        if ret.status == "ok" and answered == "cannot":
             # A commission may be declined. The seat is charged the call it made
             # and nothing else: no score, no penalty, no quota (§6.B).
-            self._settle_unmeasured(handle, CH_CONFORMITY,
-                                    reason or "the seat declined this commission",
-                                    definition=DECLINED_DEFINITION)
+            self._settle_declined(handle, CH_CONFORMITY,
+                                  reason or "the seat declined this commission")
             return
         verdict = _as_unit(ret.outputs.get("verdict")) if ret.status == "ok" else None
-        payoff = _as_unit(ret.outputs.get("payoff")) if ret.status == "ok" else None
-        if answered == UNMEASURED and verdict is None:
-            self._settle_unmeasured(handle, CH_CONFORMITY,
-                                    reason or "the evaluator found nothing measurable here")
-            return
-        target = (self._judged_event(ev, handle, ret, seals_payoff=True)
-                  if verdict is not None else None)
-        if target is not None:
-            about = self._event_subject(target)
-            payload = _to_plain(target.payload)
-        else:
-            verdict = None
         if verdict is None:
-            # a malformed verdict is objectively non-conforming; the producer stays unjudged
-            self.queue.settle(
-                handle,
-                channel=CH_CONFORMITY,
-                score=0.0,
-                status=SettleStatus.SETTLED,
-                definition_version=DEF_CONFORMITY,
-                sampling_ref=None,
-            )
-            self.stats.conformities += 1
-            self.window.outcomes += 1
+            # Malformed, refused or without a verdict: charged, censored, never a grade.
+            self._censor_judgement(handle, f"{ret.status}: no verdict in [0, 1]")
             return
-        if self._judged_commitment(about, payload) is None:
-            # Nothing was committed to, so there is nothing to be right or wrong
-            # about. The commission is answered unmeasured: no standing moves and
-            # no price moves, and the judged return keeps its own settlement path.
-            self._settle_unmeasured(handle, CH_CONFORMITY, UNMEASURED_REASON_UNCOMMITTED)
+        target = self._judged_event(ev, handle, ret, predicts=True)
+        if target is None:
+            self._censor_judgement(handle, "the judgement's target was refused")
             return
+        about = self._event_subject(target)
+        payload = _to_plain(target.payload)
         about_decision = self.queue.get(about)
-        pend = self.pending.pop(about, None)
-        if about_decision.channel == CH_EXPOSURE:
+        pend = self.pending.get(about)
+        if pend is not None and pend.evaluation:
+            # A verdict on an evaluator decision is its grade from the tier above.
+            self._grade_evaluation(about, verdict, by=handle, tier=pend.tier + 1)
+        elif (pend is not None and about_decision.channel == CH_VERDICT
+              and about_decision.status is SettleStatus.PENDING):
+            # The producer's reward: the mean of its judges' verdicts, settled once
+            # routing is done (``_settle_arrived_verdicts``; ruling R1).
+            self.arrived_verdicts.setdefault(about, []).append([handle, verdict])
             self._deliver_verdict_to_inbox(about, verdict, judge_handle=handle)
-        if (
-            pend is not None
-            and about_decision.channel in (CH_VERDICT, CH_CONFORMITY)
-            and about_decision.status is SettleStatus.PENDING
-        ):
-            self._settle_priced(
-                about,
-                channel=about_decision.channel,
-                score=verdict,
-                definition_version=(DEF_VERDICT if about_decision.channel == CH_VERDICT
-                                    else DEF_CONFORMITY),
-                sampling_ref=handle,
-                cards="producer" if about_decision.channel == CH_VERDICT else "evaluator",
-            )
-            self.stats.verdicts += 1
-            self.stats.max_settlement_latency_events = max(
-                self.stats.max_settlement_latency_events, self.n - pend.opened_at_event
-            )
+        elif about_decision.channel == CH_EXPOSURE:
             self._deliver_verdict_to_inbox(about, verdict, judge_handle=handle)
-        forecast = None
-        if payoff is not None:
-            # None when the judged return's outcome was already fixed or determined:
-            # a claim about an answer is refused (defect 7), and the verdict stands
-            # on its own commitment below like one that made no payoff claim.
-            forecast = self.consequences.seal_verdict(
-                self.book,
-                self.queue,
-                evaluator_handle=handle,
-                evaluator_id=sample.chosen,
-                about=about,
-                payoff=payoff,
-                event=self.n,
-                now_ns=self.clock.now_ns,
-                tick_ns=self.tick_clock.interval_ns,
-            )
-            self.stats.forecasts_sealed += int(forecast is not None)
-        if forecast is None:
-            # §7: the payoff privilege is gone. A verdict with no payoff forecast
-            # is still a commitment about the charter's blame on the return it
-            # judged, so it is committed here under its own handle rather than
-            # under a kernel forecast it never made.
-            self._commit_verdict_without_payoff(handle, sample.chosen, about, verdict)
         self._open_forecasts(handle, sample.chosen, about, ret.outputs.get("forecasts"))
-        self.pending[handle] = PendingJudgement(handle, CH_CONFORMITY, self.n,
-                                                opened_at_tick=self.ticks_consumed)
+        # The verdict is also a prediction about the return's measured outcome: the
+        # judge's decision waits on that and on the tier above (ruling R1).
+        self._open_evaluation(handle, about=about, q=verdict, evaluator_id=sample.chosen,
+                              tier=1)
         self._emit(
             EventKind.VERDICT,
             {
                 "about_handle": about,
                 "evaluator_handle": handle,
                 "verdict": verdict,
-                "payoff": payoff,
-                "payoff_handle": forecast.handle if forecast is not None else None,
                 "rationale": str(ret.outputs.get("rationale", ""))[:2000],
                 "producer_outputs": payload.get("outputs", payload),
                 "propensity": self._public_propensity(handle),
@@ -1257,7 +1177,6 @@ class Runtime(
         inputs = {
             "verdict": {
                 "verdict": payload.get("score") if recursive else payload.get("verdict"),
-                **({} if recursive else {"payoff": payload.get("payoff")}),
                 "rationale": payload.get("rationale", ""),
             },
             "producer_outputs": judged_outputs(payload.get("producer_outputs", {})),
@@ -1277,7 +1196,7 @@ class Runtime(
         if generic:
             inputs["event"] = {"kind": str(ev.kind), "payload": judge_view(payload)}
             inputs["subject_handle"] = about
-        # The root judge whose payoff forecast eventually grades this tier's top meta.
+        # The root judge of the chain this meta reads, carried upward for the record.
         judge_handle = payload.get("evaluator_handle", about)
         schema = {
             "type": "object",
@@ -1310,74 +1229,48 @@ class Runtime(
         self.handle_to_assembly[handle] = sample.chosen
         self._apply_registrations(handle, ret)
         answered = str(ret.outputs.get("status", "")).strip().lower()
-        if ret.status == "refused" or answered in ("cannot", UNMEASURED):
-            # Meta work is a commission like any other: it may be declined, or
-            # answered "there is nothing here to measure", at the cost of the call.
-            self._settle_unmeasured(
+        if ret.status == "ok" and answered == "cannot":
+            # Meta work is a commission like any other: it may be declined, at the
+            # cost of the call.
+            self._settle_declined(
                 handle, channel, str(ret.outputs.get("reason", ""))[:500] or
-                "the seat declined this commission",
-                definition=(DECLINED_DEFINITION if answered != UNMEASURED
-                            else UNMEASURED_DEFINITION))
+                "the seat declined this commission")
             return
         conformity = _as_unit(ret.outputs.get("conformity")) if ret.status == "ok" else None
-        target = self._judged_event(ev, handle, ret) if conformity is not None else None
-        if target is not None:
-            about = self._event_subject(target)
-            if target is not ev:
-                payload = _to_plain(target.payload)
-                tier = payload.get("tier", 1) + 1
-                judge_handle = payload.get("evaluator_handle", about)
-        else:
-            conformity = None
-        if channel == CH_FAST and conformity is None:
-            # a malformed conformity is objectively non-conforming
-            self._settle_priced(
-                handle,
-                channel=CH_FAST,
-                score=0.0,
-                definition_version=DEF_FAST,
-                sampling_ref=None,
-                cards="meta",
-            )
-            self.stats.fast_settlements += 1
-        elif channel == CH_FAST:
-            # The top meta earns nothing for being well formed: its conformity is graded by
-            # Brier against the judged verdict's eventual consequence.
-            known = self.verdict_outcomes.get(judge_handle)
-            if known is not None:
-                y, _at, forecast_handle = known
-                self._settle_meta_consequence(handle, conformity, y, forecast_handle)
-            else:
-                self.ledger.append({"kind": "meta.awaiting_consequence", "handle": handle,
-                                    "judge_handle": judge_handle, "ts": self.clock.now_ns})
-                self.pending_meta.setdefault(judge_handle, []).append((handle, conformity))
-        else:
-            self.ledger.append(
-                {
-                    "kind": "meta.pending",
-                    "handle": handle,
-                    "tier": tier,
-                    "opened_at_event": self.n,
-                    "ts": self.clock.now_ns,
-                }
-            )
-            self.pending[handle] = PendingJudgement(handle, channel, self.n, tier,
-                                                    opened_at_tick=self.ticks_consumed)
-        if conformity is not None:
-            emitted = self.return_kinds.get(handle, "MetaVerdict")
-            self._emit(
-                EventKind.META_VERDICT if emitted == "MetaVerdict" else emitted,
-                {
-                    "about": about,
-                    "tier": tier,
-                    "score": conformity,
-                    "by": handle,
-                    "evaluator_handle": judge_handle,
-                    "propensity": self._public_propensity(handle),
-                    "rationale": str(ret.outputs.get("rationale", ""))[:2000],
-                    **({"about_handle": handle} if emitted != "MetaVerdict" else {}),
-                },
-            )
+        if conformity is None:
+            # Malformed or refused: charged, censored, never a kernel zero (evaluations S2).
+            self._censor_judgement(handle, f"{ret.status}: no conformity in [0, 1]")
+            return
+        target = self._judged_event(ev, handle, ret)
+        if target is None:
+            self._censor_judgement(handle, "the judgement's target was refused")
+            return
+        about = self._event_subject(target)
+        if target is not ev:
+            payload = _to_plain(target.payload)
+            tier = payload.get("tier", 1) + 1
+            judge_handle = payload.get("evaluator_handle", about)
+        # The grade is also a prediction: of the consequence score of the decision it
+        # graded. The meta waits on that and, below the top, on the tier above it.
+        self._open_evaluation(handle, about=about, q=conformity, evaluator_id=sample.chosen,
+                              tier=tier)
+        self.ledger.append({"kind": "meta.pending", "handle": handle, "tier": tier,
+                            "about_handle": about, "opened_at_event": self.n,
+                            "ts": self.clock.now_ns})
+        emitted = self.return_kinds.get(handle, "MetaVerdict")
+        self._emit(
+            EventKind.META_VERDICT if emitted == "MetaVerdict" else emitted,
+            {
+                "about": about,
+                "tier": tier,
+                "score": conformity,
+                "by": handle,
+                "evaluator_handle": judge_handle,
+                "propensity": self._public_propensity(handle),
+                "rationale": str(ret.outputs.get("rationale", ""))[:2000],
+                **({"about_handle": handle} if emitted != "MetaVerdict" else {}),
+            },
+        )
 
 
 def run_world(

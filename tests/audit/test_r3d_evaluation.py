@@ -1,13 +1,12 @@
 """R3-D: evaluation and time. The plan's acceptance, one test per clause.
 
 ``docs/plans/edition3-r3.md``, R3-D: "no producer return exists for an empty
-draw; a judged hold with no commitment settles ``unmeasured``; a forecast at a
-0.99 base rate moves no standing; three simultaneous arrivals do not trigger a
-tier; an objection resolves through a different judge and reprices the card only
-through the population's route", plus the two the workstream adds from the same
-reading: a declined commission costs only the call (§6.B), and the
-``pending_meta`` case PR #97 exposed settles unmeasured rather than timing out
-at zero.
+draw; a forecast at a 0.99 base rate moves no standing; three simultaneous
+arrivals do not trigger a tier", plus a declined commission costs only the call
+(§6.B). The unmeasured answer, the fidelity objection and the charter-window
+verdict commitment behind the other clauses were deleted by ruling R1 and
+evaluations S1 and U1; what remains here is that a restored runtime settles an
+evaluator decision once.
 
 No provider, network, venue, disk diary or key is used.
 """
@@ -53,18 +52,18 @@ def _verdict_rows(runtime, kind: str) -> list[dict]:
 
 
 class _Endorser(ScriptedProvider):
-    """An evaluator that endorses the return it judges and seals a payoff forecast."""
+    """An evaluator that endorses the return it judges."""
 
     def _produce(self, desc, inputs):
-        return {"action": "hold", "subscribe": {"cadence_floor": 1}}
+        return {"action": "hold"}
 
     def _evaluate(self, req, inputs):
-        return {"verdict": 1.0, "payoff": 0.0, "rationale": "fine", "forecasts": []}
+        return {"verdict": 1.0, "rationale": "fine", "forecasts": []}
 
 
-def test_a_restored_runtime_does_not_re_emit_a_verdict_it_already_closed_out():
-    """The same guarantee across a restore: what the diary already said once, a runtime
-    resumed from it does not say again."""
+def test_a_restored_runtime_settles_an_evaluator_decision_once():
+    """What the diary already said once, a runtime resumed from it does not say again:
+    a judge's two signals close and its decision settles exactly once (ruling R1)."""
     from factorylab.runtime.resume import restore_runtime, runtime_state
 
     manifest = load_manifest("scripted")
@@ -72,22 +71,21 @@ def test_a_restored_runtime_does_not_re_emit_a_verdict_it_already_closed_out():
                                                     consequence_backstop_events=30))
     runtime = _consequence_runtime(provider=_Endorser(), manifest=manifest)
     runtime._manage_reserve_window()
-    runtime.consequences.order_intent("cid-1", "decision-0", "BTC")
     _, event = _consequence_produce(runtime, "seed-decider")
     judge = _consequence_judge(runtime, event, "eval-a")
-    for _ in range(40):  # forty world ticks: the backstop counts ticks, not events
+    for _ in range(40):  # forty world ticks: the horizons count ticks, not events
         runtime.n += 1
         runtime.ticks_consumed += 1
         runtime._settle_due_forecasts()
-    assert len(_verdict_rows(runtime, "verdict.unread")) == 1
+    settled = [row for row in _verdict_rows(runtime, "evaluator.settled")
+               if row["handle"] == judge]
+    assert len(settled) == 1 and judge not in runtime.pending
     state = runtime_state(runtime)
     restored = _consequence_runtime(provider=_Endorser(), manifest=manifest)
     restore_runtime(restored, state)
-    assert judge in restored.verdicts_closed_out
-    before = len(_verdict_rows(restored, "verdict.unread"))
+    before = len(_verdict_rows(restored, "evaluator.settled"))
     for _ in range(40):
         restored.n += 1
         restored.ticks_consumed += 1
         restored._settle_due_forecasts()
-    assert len(_verdict_rows(restored, "verdict.unread")) == before
-    assert not [i for i in _verdict_rows(restored, "verdict.unmeasured") if i["handle"] == judge]
+    assert len(_verdict_rows(restored, "evaluator.settled")) == before

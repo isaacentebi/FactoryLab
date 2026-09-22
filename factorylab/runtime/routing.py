@@ -16,15 +16,14 @@ from factorylab.kernel.registry import Contract
 from factorylab.learners.base import NEUTRAL_REWARD, ObservedRewards
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
-from factorylab.runtime.grounded import OPPORTUNITY_DEFINITION
 from factorylab.runtime.shared import (
+    CH_CONFORMITY,
     CH_CONSEQUENCE,
+    CH_EXPOSURE,
     CH_FAST,
     CH_VERDICT,
-    DEF_CONFORMITY,
+    DEF_EVALUATION,
     DEF_EXPOSURE,
-    DEF_FAST,
-    DEF_META_CONSEQUENCE,
     DEF_VERDICT,
     NOOP,
     assembly_rewards,
@@ -154,11 +153,11 @@ class ContractQueue:
 #: inapplicable, unmeasured, declined, timed-out and uninformative rounds carry no
 #: score and are imputed. A definition not listed is worth ``NEUTRAL_REWARD``.
 ZERO_CONSEQUENCE: Mapping[str, float] = MappingProxyType({
-    # Producer scores on the midpoint scale, where 0.5 is a return that moved nothing.
-    DEF_VERDICT: 0.5,  # a judge's opinion of a producer return
-    OPPORTUNITY_DEFINITION: 0.5,  # a hold with no named counterfactual settles at 0.5
-    # A meta's probability that a verdict was right: an uninformed meta says 0.5.
-    DEF_CONFORMITY: 0.5,
+    # Producer scores on the midpoint scale: the mean verdict of an uninformed judge.
+    DEF_VERDICT: 0.5,
+    # An evaluator decision's two signals are both centred at 0.5: an uninformed tier
+    # grade, and a prediction no better than the base rate (``consequence_score``).
+    DEF_EVALUATION: 0.5,
     # 1 when a ballot matched the promise the world kept: a coin-flip ballot expects 0.5.
     "policy-promise-brier-v2": 0.5,
     # Brier scores, 1 - (q - y)^2: the uninformed forecaster (q = 0.5) earns 0.75
@@ -166,12 +165,9 @@ ZERO_CONSEQUENCE: Mapping[str, float] = MappingProxyType({
     # but it prices a judge's standing question by question, not a router's round.
     "brier-v1": 0.75,
     "forecast-mean-v1": 0.75,  # the mean brier-v1 of a forecast return's predictions
-    DEF_META_CONSEQUENCE: 0.75,  # a top meta's conformity, Brier against the consequence
-    DEF_FAST: 0.75,  # the fast channel's malformed zero, on the meta-consequence scale
-    # Detection: 1 when an antagonist exposed a failure, 0 when it exposed nothing. A
-    # useless antagonist ties an abstention and routing holds it at the adversarial
-    # cap: the minority is a constraint on routing (II.III.b), not a seat to starve.
-    DEF_EXPOSURE: 0.0,
+    # 1 - the judges' consequence score on the antagonist's return: an antagonist
+    # whose return they predicted exactly as well as the base rate earns 0.5.
+    DEF_EXPOSURE: 0.5,
 })
 
 
@@ -790,9 +786,10 @@ class RoutingMixin:
         deadline = (
             self.clock.now_ns + (self.ev.verdict_timeout_ticks + 2) * self.tick_clock.interval_ns
         )
-        if set(channels.values()) & {CH_FAST, CH_CONSEQUENCE}:
-            # A top meta is graded against the judged verdict's eventual consequence, so
-            # its decision lives as long as the return's backstop, like a forecast.
+        if set(channels.values()) & {CH_FAST, CH_CONFORMITY, CH_EXPOSURE, CH_CONSEQUENCE}:
+            # An evaluator decision is graded against its judged decision's measured
+            # outcome and an exposure against its judges' (ruling R1), so each lives as
+            # long as the return's backstop, like a forecast.
             deadline = self.clock.now_ns + (
                 (self.ev.consequence_backstop_ticks + 2) * self.tick_clock.interval_ns * 4
             )

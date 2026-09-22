@@ -148,13 +148,16 @@ def test_receipts_waits_and_venue_deltas_survive_a_restore():
     rt.consequences.receipts.record(ExecutionReceipt(
         kind="fill", handle="decision-3", owner="seed-decider", at_event=4,
         facts={"coin": "BTC"}))
-    rt.meta_waiting_since["eval-a"] = 17
+    rt.consequence_scores["decision-9"] = (0.625, 17)
+    rt.world_outcomes["decision-3"] = {"state": "measured", "y": 1.0,
+                                       "kind": "return_paid_off", "tick": 17}
     rt.venue_deltas["decision-3"] = {"venue_perps": -20}
     twin = restored_twin(rt)
     assert list(twin.book.receipts) == list(rt.book.receipts)
     assert list(twin.consequences.receipts) == list(rt.consequences.receipts)
     assert twin.settler.receipts() is twin.book.receipts
-    assert twin.meta_waiting_since == {"eval-a": 17}
+    assert twin.consequence_scores == {"decision-9": (0.625, 17)}
+    assert twin.world_outcomes == rt.world_outcomes
     assert twin.venue_deltas == {"decision-3": {"venue_perps": -20}}
     # An identical re-record after the restore writes nothing, as it would have before.
     written = []

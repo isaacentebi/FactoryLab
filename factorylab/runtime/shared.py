@@ -19,8 +19,9 @@ CH_EXPOSURE, DEF_EXPOSURE = "exposure", "exposure-v1"
 DEF_FAST, DEF_VERDICT, DEF_CONFORMITY = "fast-v1", "verdict-v1", "conformity-v1"
 
 
-# A top meta's conformity graded by Brier against the judged verdict's consequence.
-DEF_META_CONSEQUENCE = "meta-consequence-v1"
+# An evaluator decision (a judge's or a meta's) settled on its two signals, the tier
+# above's grade and the world's score of its prediction (ruling R1).
+DEF_EVALUATION = "evaluation-v1"
 
 
 _PREDICATE_HARNESS = '''
@@ -102,12 +103,14 @@ def work_disclosure(kinds: dict[str, str], predicates: list[dict]) -> dict:
     shapes = reward_contracts(tuple(kinds), kinds)
     return {
         "reward_shapes": {
-            "judged": "A judge's verdict now, with consequence recorded later.",
+            "judged": "The mean of the verdicts the judges that read the return gave.",
             "forecast": "Return forecasts: [{predicate, params, q}]. Reward is mean Brier "
             "when every prediction resolves; missing outcomes are unscored.",
-            "conformity": "Return conformity: a probability that the judged work beats its "
-            "baseline. Judged above, or graded by Brier against consequence at the top.",
-            "exposure": "Exposure of a judge's failed payoff prediction against consequence.",
+            "conformity": "Return conformity (0 to 1) on the judged work. Graded by the tier "
+            "above, where one exists, and scored against the judged work's consequence "
+            "score.",
+            "exposure": "Settles on how wrong the judges' verdicts on the return were "
+            "against its measured outcome.",
         },
         "default_reward_shape": "judged",
         "kind_rewards": shapes,

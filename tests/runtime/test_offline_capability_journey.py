@@ -108,7 +108,7 @@ class JourneyProvider:
         return ModelResponse(request.model_id, json.dumps(reply), 10, 10, "stop")
 
     def _reply(self, description: str, inputs: dict[str, Any]) -> dict[str, Any]:
-        if description.startswith("Evaluate"):
+        if description.startswith("Give verdict"):
             return self._judge(inputs)
         if description.startswith("Independently discover"):
             return self._caller(inputs)
@@ -364,6 +364,7 @@ def test_offline_prompt_contract_artifact_consequence_journey(monkeypatch):
     judge = _decision(runtime, "eval-b", CH_CONFORMITY)
     runtime._evaluator_step(made, judge, SimpleNamespace(chosen="eval-b"),
                             runtime.queue.get(judge).deadline_ns)
+    runtime._settle_arrived_verdicts()  # the end of the event's routing
     settlement = runtime.queue.history(maker)[-1]
     assert settlement.status is SettleStatus.SETTLED
     assert settlement.score == pytest.approx(0.8) and settlement.sampling_ref == judge

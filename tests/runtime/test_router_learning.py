@@ -103,10 +103,8 @@ def test_an_unscored_arm_without_its_own_record_is_neutral_not_its_siblings_mean
 # Every score definition a router's seat round can settle with a score, and what a seat
 # that delivered nothing scores on it.
 _ZERO = {
-    "verdict-v1": 0.5, "opportunity-cost-v1": 0.5,
-    "conformity-v1": 0.5, "policy-promise-brier-v2": 0.5,
-    "brier-v1": 0.75, "forecast-mean-v1": 0.75, "meta-consequence-v1": 0.75,
-    "fast-v1": 0.75, "exposure-v1": 0.0,
+    "verdict-v1": 0.5, "evaluation-v1": 0.5, "policy-promise-brier-v2": 0.5,
+    "brier-v1": 0.75, "forecast-mean-v1": 0.75, "exposure-v1": 0.5,
 }
 
 
@@ -117,8 +115,7 @@ def test_each_score_definition_has_its_own_zero_consequence(definition):
     assert zero_consequence(definition) == ZERO_CONSEQUENCE[definition] == _ZERO[definition]
 
 
-@pytest.mark.parametrize("definition", ["brier-v1", "forecast-mean-v1",
-                                        "meta-consequence-v1", "fast-v1"])
+@pytest.mark.parametrize("definition", ["brier-v1", "forecast-mean-v1"])
 def test_a_brier_scale_prices_nothing_at_the_coin_flip_forecasters_score(definition):
     """A coin-flip forecast scores 0.75 whatever happens: on a Brier router NOOP at 0.5
     lost to a seat that knew nothing, a dead arm the router paid to avoid every time."""
@@ -129,12 +126,10 @@ def test_a_brier_scale_prices_nothing_at_the_coin_flip_forecasters_score(definit
 
 
 def test_the_table_names_every_scored_definition_the_runtime_settles_with():
-    from factorylab.runtime import grounded, shared
+    from factorylab.runtime import shared
     from factorylab.runtime.routing import ZERO_CONSEQUENCE
 
-    scored = {shared.DEF_VERDICT, shared.DEF_CONFORMITY, shared.DEF_FAST,
-              shared.DEF_EXPOSURE, shared.DEF_META_CONSEQUENCE,
-              grounded.OPPORTUNITY_DEFINITION}
+    scored = {shared.DEF_VERDICT, shared.DEF_EVALUATION, shared.DEF_EXPOSURE}
     assert scored <= set(ZERO_CONSEQUENCE) and set(ZERO_CONSEQUENCE) == set(_ZERO)
 
 
@@ -175,7 +170,7 @@ def test_a_mixed_router_prices_nothing_at_its_own_mix_of_scales():
     for definition in ("forecast-mean-v1", "forecast-mean-v1", "verdict-v1", "exposure-v1"):
         _scored(rt, _drawn(rt, state, arm), 0.6, definition)
     rt._deliver_returns()
-    assert state.neutral() == pytest.approx((0.75 * 2 + 0.5 + 0.0) / 4)
+    assert state.neutral() == pytest.approx((0.75 * 2 + 0.5 + 0.5) / 4)
 
 
 def test_an_unscored_seat_without_a_record_is_imputed_the_routers_zero():

@@ -237,7 +237,15 @@ _RETIRED_RUNTIME = frozenset({
     "open_adjudications",
     # The grounded final judge's open contracts and finality (ruling R1).
     "grounded_pending", "grounded_closed",
+    # The charter-window verdict commitments, the payoff-forecast waits and the
+    # sibling share they fed (ruling R1; evaluations P7, U2).
+    "exposure_evidence", "pending_meta", "verdict_outcomes", "verdicts_closed_out",
+    "verdicts_graded", "meta_waiting_since", "cascade_windows",
 })
+
+#: Pending channels of the deleted charter-window verdict commitments: a restored
+#: runtime drops them (ruling R1).
+_RETIRED_PENDING = frozenset({"verdict.norm", "verdict.subject"})
 
 # Fields of deleted mechanisms that older checkpoints still carry: read and ignored.
 # ``relief_window``: the halved-price relief (charter audit U2), replaced by the ratchet.
@@ -245,6 +253,9 @@ _RETIRED_RUNTIME = frozenset({
 _RETIRED_FIELDS = {
     "_CardState": frozenset({"relief_window"}),
     "RunStats": frozenset({"upward_releases"}),
+    # The charter-window verdict commitment's fields (ruling R1).
+    "PendingJudgement": frozenset({"judge", "cards", "window", "payoff_beat", "awaits_payoff",
+                                   "verdict_closed", "verdict_beat", "graded", "unmeasured"}),
     # ``weight_sum``: the charter's weight on the outside signal (settlement.weights),
     # deleted by ruling R1. Every shipped world's cards named no scope, so an older
     # standing's sums were accumulated at weight 1.0 and read the same without it.
@@ -550,7 +561,7 @@ class JournalProxy:
 
 # Explicit schemas keep SDK clients, keys, bound callbacks and dependencies out of snapshots.
 _RUNTIME_FIELDS = (
-    "rng", "cascade", "cascade_windows", "stats", "charter", "pending_exposure",
+    "rng", "cascade", "stats", "charter", "pending_exposure",
     "delivered_seen", "snapshot_keys", "noop_credits", "recent_mids", "realized_to_date",
     "fees_to_date",
     "funding_to_date", "spot_inventory", "handle_to_assembly", "tool_specs",
@@ -565,11 +576,13 @@ _RUNTIME_FIELDS = (
     # Vault writes by client id, the vaults this world's seats created or hold, and
     # the cursor of the venue's vault ledger rows already read.
     "vault_intents", "vault_book", "vault_ledger_cursor_ns", "vault_ledger_seen",
-    "exposure_evidence", "pending_meta", "verdict_outcomes", "consequence_mix",
-    # Verdict commitments already closed out and already graded, by judge handle: a
-    # restored runtime never re-opens, re-closes or re-grades one it finished.
-    "verdicts_closed_out", "verdicts_graded",
-    "sampling_history", "novelty_grant",
+    "consequence_mix", "sampling_history", "novelty_grant",
+    # The reward chain (ruling R1): exposure scores awaiting settlement, verdicts
+    # collected while an event is routed, closed consequence scores, measured world
+    # outcomes and the mids declined trades are priced from. Each defaults empty
+    # when an older checkpoint lacks it.
+    "exposure_scores", "arrived_verdicts", "consequence_scores", "world_outcomes",
+    "reference_mids",
     "card_samples", "price_windows", "price_origins",
     "retired_assemblies", "retirement_proposals", "return_kinds", "decision_subjects",
     "event_schemas",
@@ -613,14 +626,9 @@ _RUNTIME_FIELDS = (
     # Venue effects by custody, per decision, until its outcome settles: the
     # consequence line reports them beside provider cost (edition 3, C5).
     "venue_deltas",
-    # When each judge's metas began waiting on a fact about it: a property over a
-    # private dict (``FeedbackMixin``); ``_RUNTIME_BACKING`` names the attribute a
-    # restore assigns.
-    "meta_waiting_since",
 )
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {
-    "meta_waiting_since": "_meta_waiting_since",
 }
 # The settlement receipt books, by the path from the runtime to each. A receipt's
 # id is its content address, so a book is saved as its receipts in record order
@@ -881,6 +889,8 @@ def restore_runtime(rt, state: dict) -> None:
             continue
         setattr(rt, _RUNTIME_BACKING.get(name, name), value)
     rt.diary_id = diary
+    rt.pending = {handle: p for handle, p in rt.pending.items()
+                  if p.channel not in _RETIRED_PENDING}
     # A checkpoint written before launch-bound venue identities keeps its historical
     # client order IDs rather than adopting this process's fresh nonce. The adapter
     # is rebound below, after a deterministic venue's own state has been restored.

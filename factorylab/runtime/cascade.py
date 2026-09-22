@@ -124,8 +124,8 @@ class CascadeGate:
             return replace(self, arrivals=arrivals), None
         representative = finished[-1]
         scores = [e.payload[key] for e in finished]
-        # Every arrival is named, so no verdict is judged behind its back and the
-        # sibling share still reaches it; only completed evidence is averaged.
+        # Every arrival is named, so no verdict is judged behind its back; only the
+        # representative is graded, and only completed evidence is averaged.
         others = [e.payload[handle_key] for e in arrivals if e is not representative]
         window = {
             "count": len(finished),

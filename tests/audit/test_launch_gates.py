@@ -206,7 +206,7 @@ class TestGateTwoContinuityAndInformationBoundaries:
         """
         sink, _ = leaky_world
         commissions = [(desc, system, text) for desc, system, text in sink
-                       if desc.startswith(("Evaluate", "Assess"))]
+                       if desc.startswith(("Give verdict", "Assess"))]
         assert len(commissions) > 20, "the run commissioned no evaluation to scan"
         scanned = 0
         for desc, system, text in commissions:

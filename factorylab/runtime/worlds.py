@@ -303,7 +303,6 @@ class EvaluationSpec:
     forecast_horizon_events: int = 10
     consequence_backstop_events: int = 200
     adversarial_share: float = 0.15  # cap on router mass over antagonist assemblies
-    sibling_share: float = 0.5  # share of the representative's meta score a sibling settles at
     sampling_step: float = 0.1  # consequence-mix step per divergent window
     sampling_cap: float = 0.7  # ceiling of the raised consequence mix
     #: The retentive core (essay II.a): the event kinds whose router the runtime seeds
@@ -797,7 +796,7 @@ class WorldManifest:
                 raise ValueError(f"immune.{name} must contain increasing finite nonnegative cuts")
         if not 0 <= self.evaluation.consequence_share < 1:
             raise ValueError("consequence share must be in [0, 1)")
-        for name in ("adversarial_share", "sibling_share", "sampling_step"):
+        for name in ("adversarial_share", "sampling_step"):
             value = getattr(self.evaluation, name)
             if type(value) not in (int, float) or not isfinite(value) or not 0 <= value <= 1:
                 raise ValueError(f"evaluation.{name} must be finite and in [0, 1]")
@@ -1086,6 +1085,10 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             raise ValueError(f"evaluation.{key} was removed (ruling R1): a producer's "
                              "reward is its judges' verdict, and realized consequence "
                              "grades the judges")
+    if "sibling_share" in ev:
+        # Evaluations U2: an unread verdict borrows no grade from the one a meta read.
+        raise ValueError("evaluation.sibling_share was removed (evaluations U2): an "
+                         "unread cascade sibling settles on its own signals")
     evaluation = EvaluationSpec(
         consequence_share=float(ev.get("consequence_share", 0.3)),
         max_forecasts_per_verdict=int(ev.get("max_forecasts_per_verdict", 2)),
@@ -1095,7 +1098,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         forecast_horizon_events=int(ev.get("forecast_horizon_events", 10)),
         consequence_backstop_events=_tick_horizon(ev, "consequence_backstop", 200),
         adversarial_share=ev.get("adversarial_share", 0.15),
-        sibling_share=ev.get("sibling_share", 0.5),
         sampling_step=ev.get("sampling_step", 0.1),
         sampling_cap=ev.get("sampling_cap", 0.7),
         no_swap_regret_kinds=_manifest_kinds(ev.get("no_swap_regret_kinds", [])),
