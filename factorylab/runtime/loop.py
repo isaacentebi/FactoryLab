@@ -1233,17 +1233,6 @@ class Runtime(
                 budget_micro=self.queue.get(handle).cost_ceiling,
             ),
         }
-        adjudication = self._adjudication_for(sample.chosen)
-        if adjudication is not None:
-            # An objection someone else made, given to a judge that did not write
-            # the verdict it rides on and does not own the measurement it
-            # challenges (§7: independent adjudication).
-            inputs["adjudication"] = {
-                "id": adjudication.id, "value": adjudication.value,
-                "measurement": adjudication.measurement, "evidence": adjudication.evidence,
-                "about_handle": adjudication.about_handle,
-                "answer_with": "fidelity_finding: {upheld, reason}",
-            }
         generic = ev.kind is not EventKind.PRODUCER_RETURN
         grounded = bool(payload.get("grounded_consequence"))
         if not grounded:
@@ -1354,7 +1343,6 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self._apply_registrations(handle, ret)
         self.handle_to_assembly[handle] = sample.chosen
-        self._resolve_adjudication(sample.chosen, handle, ret.outputs.get("fidelity_finding"))
         if grounded:
             self._complete_grounded_evaluation(
                 handle, sample.chosen, about, ret, payload.get("evidence", []),
@@ -1606,7 +1594,6 @@ class Runtime(
         self.consequences.finish(handle, ret.cost)
         self.handle_to_assembly[handle] = sample.chosen
         self._apply_registrations(handle, ret)
-        self._resolve_adjudication(sample.chosen, handle, ret.outputs.get("fidelity_finding"))
         answered = str(ret.outputs.get("status", "")).strip().lower()
         if ret.status == "refused" or answered in ("cannot", UNMEASURED):
             # Meta work is a commission like any other: it may be declined, or

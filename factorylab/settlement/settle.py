@@ -6,10 +6,9 @@ from dataclasses import asdict, dataclass
 from factorylab.kernel.ledger import canonical
 from factorylab.kernel.queue import DecisionQueue, SettleStatus
 from factorylab.kernel.registry import _freeze
-from factorylab.settlement.fidelity import FidelityObjection, parse_objection
 from factorylab.settlement.forecast import Forecast, ForecastBook
 from factorylab.settlement.lots import Payoff
-from factorylab.settlement.receipts import Adjudication, LearningReceipt, ReceiptBook
+from factorylab.settlement.receipts import LearningReceipt, ReceiptBook
 from factorylab.settlement.scoring import PrevalenceBaseline, _require_probability, brier
 from factorylab.settlement.standing import ConsequenceStanding
 from factorylab.settlement.vocabulary import (
@@ -88,11 +87,6 @@ class SettledVerdict:
     outcome: float
     brier: float
     baseline_brier: float
-    # A fidelity objection the same return carried, scored the same way against
-    # the same fact. It settles nothing on its own.
-    objection: FidelityObjection | None = None
-    objection_brier: float | None = None
-    objection_baseline_brier: float | None = None
 
 
 def baseline_key(forecast: Forecast) -> str:
@@ -152,8 +146,6 @@ class Settler:
         self.__standing = standing
         self.__baseline = baseline
         self.__observer = observer
-        # judge return handle -> the fidelity objection that return carried
-        self.__objections: dict[str, FidelityObjection] = {}
         # forecast handle -> the documented reason its settlement is an excluded
         # sample, read once by the measurement pass that records the sample row.
         self.__excluded: dict[str, str] = {}
@@ -375,91 +367,6 @@ class Settler:
                 self.__baseline.record(RETURN_PAID_OFF.id, y)
         return results
 
-    def record_objection(self, judge_handle: str, entries, charter=None, *,
-                         evaluator_id: str | None = None,
-                         about_handle: str | None = None) -> FidelityObjection | None:
-        """Validate and ledger the fidelity objection one judged return carried, if any.
-
-        ``entries`` is any sequence of the judge's own answers as
-        ``{"handle", "outputs"}`` mappings; the objection is read from the entry
-        whose handle is this judge's return. A malformed or unplaceable objection
-        is refused, and the refusal is ledgered with its reason: the verdict
-        itself is untouched and nothing is scored from a claim the charter
-        cannot place. Recording is idempotent per judge handle.
-        """
-        if judge_handle in self.__objections:
-            return self.__objections[judge_handle]
-        raw = None
-        for entry in entries or ():
-            if not isinstance(entry, Mapping) or entry.get("handle") != judge_handle:
-                continue
-            outputs = entry.get("outputs")
-            if isinstance(outputs, Mapping):
-                raw = outputs.get("fidelity_objection")
-            break
-        if raw is None:
-            return None
-        common = {"handle": judge_handle, "evaluator_id": evaluator_id,
-                  "about_handle": about_handle}
-        try:
-            objection = parse_objection(raw, charter=charter)
-        except ValueError as exc:
-            self.__book.record_objection({**common, "accepted": False, "reason": str(exc)})
-            return None
-        self.__book.record_objection({**common, "accepted": True, **objection.as_dict()})
-        self.__objections[judge_handle] = objection
-        # An accepted objection is an open adjudication from the moment it is
-        # made: a contestable interpretation with no finding on it yet. The
-        # challenged proxy never scores it (§7); an independent adjudicator does.
-        if self.__receipts is not None and evaluator_id and about_handle:
-            self.__receipts.record(Adjudication(
-                value=objection.value, measurement=objection.measurement,
-                evidence=objection.evidence, objector=evaluator_id,
-                objection_handle=judge_handle, about_handle=about_handle,
-                uncertainty=objection.uncertainty,
-            ))
-        return objection
-
-    def adjudication_for(self, judge_handle: str) -> Adjudication | None:
-        """The open or resolved adjudication this judge's objection became, if any."""
-        if self.__receipts is None:
-            return None
-        return next((a for a in self.__receipts.all("adjudication")
-                     if a.objection_handle == judge_handle), None)
-
-    def resolve_adjudication(self, adjudication: Adjudication, *, adjudicator: str,
-                             upheld: bool, finding: str) -> tuple[Adjudication, str | None]:
-        """Record an independent finding and the objector's own learning receipt.
-
-        The objector stated a probability that its objection was right; the
-        adjudicator's finding is the fact that claim is scored against, by the
-        same proper score every other claim is scored by. It trains nothing by
-        itself: the receipt is the assessment, and what the card is worth is the
-        population's to decide through a challenge.
-        """
-        resolved = adjudication.resolved(adjudicator=adjudicator, upheld=upheld, finding=finding)
-        if self.__receipts is None:
-            return resolved, None
-        self.__receipts.record(resolved)
-        outcome = 1 if upheld else 0
-        receipt = self.__receipts.record(LearningReceipt(
-            handle=adjudication.objection_handle,
-            assessed=adjudication.objector,
-            scoring_rule="brier",
-            rule_version="adjudication-v1",
-            horizon=None,
-            outcome=outcome,
-            score=brier(adjudication.confidence, outcome),
-            baseline=None,
-            sampling_ref=resolved.id,
-            reason=None,
-        ))
-        return resolved, receipt
-
-    def objection(self, judge_handle: str) -> FidelityObjection | None:
-        """The accepted objection this judge's return carried, if it carried one."""
-        return self.__objections.get(judge_handle)
-
     def settle_verdict(
         self, *, evaluator_id: str, about_handle: str, q: float, share: float,
         judge_handle: str | None = None
@@ -484,15 +391,11 @@ class Settler:
         score = normative_brier(q, outcome)
         baseline_score = normative_brier(baseline_q, outcome)
         self.__standing.record_verdict(evaluator_id, score, baseline_score)
-        # The challenged proxy cannot certify or refute its own fidelity.
-        # Keep the claim in the returned evidence; await independent adjudication.
-        objection = self.__objections.pop(judge_handle, None) if judge_handle else None
-        objection_score = objection_baseline = None
         if key not in self.__recorded:
             self.__recorded[key] = outcome
             self.__baseline.record_fraction(VERDICT_NOT_BLAMED, outcome)
         return SettledVerdict(evaluator_id, about_handle, q, share, outcome, score,
-                              baseline_score, objection, objection_score, objection_baseline)
+                              baseline_score)
 
     def __baseline_before(self, about_handle: str) -> float:
         """The payoff base rate as it stood before this return's outcome was first scored,

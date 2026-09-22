@@ -11,7 +11,6 @@ from fractions import Fraction
 from factorylab.kernel.events import EventKind
 from factorylab.kernel.money import require_money
 from factorylab.kernel.registry import _freeze
-from factorylab.settlement.fidelity import objection_schema
 from factorylab.settlement.scoring import _require_id, _require_probability
 
 
@@ -81,27 +80,10 @@ def commission_block(*, subject: str | None, scope: str, horizon: int, budget_mi
     }
 
 
-def finding_schema() -> dict:
-    """A fresh schema fragment for an independent finding on a queued adjudication."""
-    return {
-        "type": "object",
-        "description": (
-            "Only when the request carries an adjudication: your independent finding on "
-            "another judge's fidelity objection. You did not write the verdict it rides on "
-            "and you do not own the measurement it challenges."
-        ),
-        "properties": {
-            "upheld": {"type": "boolean"},
-            "reason": {"type": "string"},
-        },
-        "required": ["upheld", "reason"],
-    }
-
-
 def evaluator_answer_schema(
     forecasts: dict, register: dict, *, include_realized: bool = False
 ) -> dict:
-    """The evaluator answer schema, including edition 3's structured fidelity objection.
+    """The evaluator answer schema.
 
     It lives here rather than inline in ``runtime.loop`` so the charter's own
     vocabulary owns what a judge is asked to say, and the loop names it once.
@@ -123,8 +105,6 @@ def evaluator_answer_schema(
         "forecasts": forecasts,
         "register": register,
         "about_handle": {"type": "string"},
-        "fidelity_objection": objection_schema(),
-        "fidelity_finding": finding_schema(),
     }
     if include_realized:
         # The final grounded commission reads an already-fixed return outcome.

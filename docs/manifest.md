@@ -327,10 +327,7 @@ carry case of `scripts/calibrate_seats.py` exactly.
 `novelty.grant_consumed` (A13). Edition 3's third round adds
 `evaluation.unmeasured`, `verdict.unmeasured`,
 `verdict.committed_without_payoff`, `receipt.execution`, `receipt.learning`,
-`receipt.commitment`, `receipt.adjudication`,
-`fidelity.adjudication_queued`, `fidelity.adjudicated`,
-`fidelity.finding_refused`, `fidelity.challenge_opened` and
-`fidelity.challenge_skipped`.
+and `receipt.commitment`.
 
 A closed lot's realised P&L is credited once (edition 2, cold audit F7). A
 handle that opens and closes its own lot receives the whole of it, net of its
@@ -399,12 +396,11 @@ the observation still enters the base rate, the learning receipt carries
 `score: null` and the reason `uninformative_baseline`, and no standing moves.
 The bound is on the question, not on the forecaster.
 
-### Four settlement objects
+### Three settlement objects
 
-`settlement/receipts.py` keeps four things apart, each addressed by a content
+`settlement/receipts.py` keeps three things apart, each addressed by a content
 id of its own and each written to the diary before it is addressable
-(`receipt.execution`, `receipt.learning`, `receipt.commitment`,
-`receipt.adjudication`). An **execution receipt** is a fact the world produced
+(`receipt.execution`, `receipt.learning`, `receipt.commitment`). An **execution receipt** is a fact the world produced
 — a fill, a refusal, a charge, a transfer, a program result, a failed delivery
 — and carries no score. A **learning receipt** is one assessment of one
 decision: the decision handle, the scoring rule and its version, the
@@ -412,23 +408,13 @@ observation horizon, the outcome, the score, the sampling record; its score may
 be `null` with a reason, and an assessment that could not be made is never a
 zero. A **commitment** is a promise with a responsible principal, a deadline,
 an observation rule and the conditions under which it is unobservable through
-nobody's fault. An **adjudication** is a contestable interpretation: a value, a
-measurement, evidence, a finding and the adjudicator who made it.
+nobody's fault.
 
-### A fidelity objection is an adjudication
-
-An accepted objection becomes an open `Adjudication` the moment it is made, and
-it is queued (`fidelity.adjudication_queued`) for an adjudicator drawn from the
-seats that judge — never the judge that wrote the verdict, and never a seat the
-challenged card answers for. With nobody independent available the claim stays
-open: an interested finding is worse than none. The adjudicator answers with
-`fidelity_finding: {upheld, reason}` on its own judging return. The finding
-produces a learning receipt for the objector, scoring the uncertainty it stated
-against the finding by the same proper score as anything else
-(`fidelity.adjudicated`), and, when the objection is upheld, opens a
-`challenge` proposal for the card through the population's ordinary
-registration route (`fidelity.challenge_opened`). Nothing here reprices a card:
-the committee does that, or nobody does.
+The fidelity objection and its adjudication are deleted (evaluations U1): no
+passage of Chapter II calls for an adjudication protocol, and its answer to
+overfitting is realized consequence and adversarial populations (II.III.b). A
+checkpoint that still carries an adjudication receipt, an open adjudication or a
+settler objection restores without it.
 
 ### The commissioned-child-judge route is closed
 

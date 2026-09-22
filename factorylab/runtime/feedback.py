@@ -48,7 +48,6 @@ from factorylab.settlement import (
     brier,
     open_forecast_decision,
 )
-from factorylab.settlement.fidelity import challenge_proposal, choose_adjudicator
 from factorylab.settlement.settle import PredicateForecast, normative_brier
 from factorylab.settlement.vocabulary import (
     RETURN_PAID_OFF,
@@ -167,155 +166,6 @@ class FeedbackMixin:
         if not hasattr(self, "_meta_waiting_since"):
             self._meta_waiting_since: dict[str, int] = {}
         return self._meta_waiting_since
-
-    @property
-    def open_adjudications(self) -> dict[str, str]:
-        """Seat -> the id of the adjudication queued for it, while it is unanswered."""
-        if not hasattr(self, "_open_adjudications"):
-            self._open_adjudications: dict[str, str] = {}
-        return self._open_adjudications
-
-    def _judging_seats(self) -> list[str]:
-        """Live seats that judge: the other judge and the meta seats, in a stable order.
-
-        The antagonist's evidence route is what may supply a counter-case; who
-        decides the claim is a judge that has no stake in it.
-        """
-        from factorylab.runtime.shared import assembly_rewards
-
-        seats = []
-        for assembly_id, assembly in sorted(self.assemblies.items()):
-            if assembly_id in self.retired_assemblies:
-                continue
-            shapes = set(assembly_rewards(assembly.spec).values())
-            kinds = set(assembly.spec.emits)
-            if kinds & {"Verdict", "MetaVerdict"} or shapes & {"conformity", "forecast"}:
-                seats.append(assembly_id)
-        return seats
-
-    def _measurement_owners(self, measurement: str) -> set[str]:
-        """Seats the challenged measurement answers for: its standing rides on it.
-
-        A card that answers for a role is the price of every seat measured in
-        that role. Those seats own the measurement in the only sense that
-        matters here — an adjudication that went their way would raise or lower
-        their own score — so they do not decide whether it is faithful.
-        """
-        from factorylab.cortex.registration import measured_role
-
-        cards = tuple(getattr(self.charter, "cards", ()) or ())
-        card = next((c for c in cards
-                     if c.id == measurement or c.observation == measurement), None)
-        if card is None or getattr(card, "answers_for", "all") in (None, "all"):
-            return set()
-        owners = set()
-        for assembly_id, assembly in self.assemblies.items():
-            kinds = assembly.spec.emits or ()
-            if any(measured_role(kind) == card.answers_for or kind == card.answers_for
-                   for kind in kinds):
-                owners.add(assembly_id)
-        return owners
-
-    def _queue_adjudication(self, commitment: PendingJudgement) -> None:
-        """Queue one accepted objection for an adjudicator with no stake in it (§7).
-
-        The challenged proxy cannot certify its own fidelity, so the objection is
-        not scored where it was made. It is an open claim until someone who did
-        not write the verdict and does not own the measurement answers it. If
-        nobody independent exists, it stays open: an interested finding is worse
-        than none.
-        """
-        adjudication = self.settler.adjudication_for(commitment.judge)
-        if adjudication is None or adjudication.adjudicator is not None:
-            return
-        if adjudication.id in self.open_adjudications.values():
-            return
-        owners = self._measurement_owners(adjudication.measurement)
-        candidates = [s for s in self._judging_seats()
-                      if s != commitment.evaluator_id and s not in owners]
-        adjudicator, excluded = choose_adjudicator(
-            candidates, author=commitment.evaluator_id,
-            measurement_owner=next(iter(sorted(owners)), None))
-        self.ledger.append({
-            "kind": "fidelity.adjudication_queued", "adjudication": adjudication.id,
-            "objector": adjudication.objector, "objection_handle": adjudication.objection_handle,
-            "about_handle": adjudication.about_handle, "measurement": adjudication.measurement,
-            "adjudicator": adjudicator, "excluded": sorted({*excluded, *owners}),
-            "ts": self.clock.now_ns,
-        })
-        if adjudicator is not None:
-            self.open_adjudications[adjudicator] = adjudication.id
-
-    def _adjudication_for(self, seat: str) -> Any:
-        """The open adjudication queued for this seat, if it is holding one."""
-        identity = self.open_adjudications.get(seat)
-        receipts = self.settler.receipts()
-        if identity is None or receipts is None:
-            return None
-        return receipts.get(identity)
-
-    def _resolve_adjudication(self, seat: str, handle: str, raw: Any) -> None:
-        """Record this seat's independent finding on the objection it was given.
-
-        What the finding produces is a learning receipt for the objector, scored
-        on the uncertainty the objector itself stated, and — when the objection
-        is upheld — a challenge proposal for the card, opened through the
-        population's own registration route. Nothing here reprices anything: the
-        committee does that, or nobody does.
-        """
-        adjudication = self._adjudication_for(seat)
-        if adjudication is None or not isinstance(raw, dict):
-            return
-        upheld = raw.get("upheld")
-        reason = raw.get("reason")
-        if not isinstance(upheld, bool) or not isinstance(reason, str) or not reason.strip():
-            self.ledger.append({"kind": "fidelity.finding_refused", "handle": handle,
-                                "adjudication": adjudication.id, "adjudicator": seat,
-                                "reason": "a finding states upheld and why",
-                                "ts": self.clock.now_ns})
-            return
-        resolved, receipt = self.settler.resolve_adjudication(
-            adjudication, adjudicator=seat, upheld=upheld, finding=reason.strip()[:2000])
-        self.open_adjudications.pop(seat, None)
-        self.ledger.append({
-            "kind": "fidelity.adjudicated", "adjudication": resolved.id, "adjudicator": seat,
-            "handle": handle, "upheld": upheld, "objector": resolved.objector,
-            "measurement": resolved.measurement, "learning_receipt": receipt,
-            "ts": self.clock.now_ns,
-        })
-        # The objector is told how its own stated uncertainty scored, addressed to
-        # the decision that carried the objection (C1).
-        self.outcomes.append(
-            resolved.objector, handle=resolved.objection_handle, evidence=resolved.id,
-            outcome={"fidelity_objection_upheld": upheld,
-                     "your_objection_brier": (round(brier(resolved.confidence, int(upheld)), 4)),
-                     "adjudicated_by": seat, "learning_receipt": receipt})
-        if upheld:
-            self._open_fidelity_challenge(handle, resolved)
-
-    def _open_fidelity_challenge(self, handle: str, adjudication: Any) -> None:
-        """An upheld objection becomes a challenge the population votes on, or nothing.
-
-        The card keeps its price until the committee moves it. A challenge is
-        refused like any other proposal — a card that no longer exists, a
-        replacement the runtime cannot measure — and the refusal is public.
-        """
-        from factorylab.cortex.request import Return
-
-        cards = tuple(getattr(self.charter, "cards", ()) or ())
-        card = next((c for c in cards if c.id == adjudication.measurement), None)
-        if card is None:
-            self.ledger.append({"kind": "fidelity.challenge_skipped",
-                                "adjudication": adjudication.id,
-                                "measurement": adjudication.measurement,
-                                "reason": "the objection names an observation, not a live card",
-                                "ts": self.clock.now_ns})
-            return
-        proposal = challenge_proposal(adjudication, replacement=None)
-        self.ledger.append({"kind": "fidelity.challenge_opened", "handle": handle,
-                            "adjudication": adjudication.id, "card_id": card.id,
-                            "ts": self.clock.now_ns})
-        self._apply_registrations(handle, Return(handle, {"register": [proposal]}, 0, "ok"))
 
     def _cascade_evidence_complete(self, ev: Event) -> bool:
         """Whether one arrival's evidence has finished: the return it judged has an outcome.
@@ -1445,11 +1295,6 @@ class FeedbackMixin:
             total = sum(t["weight"] for t in terms)
             share = sum(t["weight"] * t["share"] for t in terms) / total if total > 0 else 0.0
             share = min(1.0, max(0.0, share))
-            objection = self.settler.record_objection(
-                c.judge, [self.outcomes.entry_for(c.judge)], self.charter,
-                evaluator_id=c.evaluator_id, about_handle=c.about)  # W3 seam (C3 fidelity)
-            if objection is not None:
-                self._queue_adjudication(c)
             result = self.settler.settle_verdict(
                 evaluator_id=c.evaluator_id, about_handle=c.about, q=c.q, share=share,
                 judge_handle=c.judge,

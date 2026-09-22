@@ -82,15 +82,9 @@ def _record_types() -> dict[str, type]:
     from factorylab.runtime.pricing import MeasureWindow
     from factorylab.runtime.routing import PopulationEvent
     from factorylab.runtime.summary import RunStats
-    from factorylab.settlement.fidelity import FidelityObjection
     from factorylab.settlement.forecast import Forecast
     from factorylab.settlement.lots import Lot, LotOrder, LotTable, Payoff, ReturnAccount
-    from factorylab.settlement.receipts import (
-        Adjudication,
-        Commitment,
-        ExecutionReceipt,
-        LearningReceipt,
-    )
+    from factorylab.settlement.receipts import Commitment, ExecutionReceipt, LearningReceipt
     from factorylab.settlement.settle import PredicateForecast
     from factorylab.settlement.standing import _Standing
     from factorylab.settlement.vocabulary import Predicate
@@ -122,8 +116,7 @@ def _record_types() -> dict[str, type]:
         Lot,
         LotOrder, LotTable, Payoff, ReturnAccount, _Standing, WorldEvent, WorldEventKind,
         AccountState, Fill, FundingEvent, FundingPayment, Order, OrderResult, Position,
-        SpotBalance, SellerModel, FidelityObjection,
-        Adjudication, Commitment, ExecutionReceipt, LearningReceipt,
+        SpotBalance, SellerModel, Commitment, ExecutionReceipt, LearningReceipt,
         CatalogueEntry, ModelRequest, ModelResponse, TokenPrice, PaymentQuote,
     )
     return {cls.__name__: cls for cls in classes}
@@ -223,6 +216,9 @@ def decode(value: Any) -> Any:
         rng.setstate(decode(value["$random"]))
         return rng
     kind = value.get("$record", value.get("$enum"))
+    if kind in _RETIRED_RECORDS:
+        # A deleted mechanism's record in an older checkpoint: read and ignored.
+        return None
     cls = _record_types().get(kind)
     if cls is None:
         raise ResumeError("unknown checkpoint record type")
@@ -231,6 +227,17 @@ def decode(value: Any) -> Any:
     retired = _RETIRED_FIELDS.get(kind, ())
     return cls(**{k: decode(v) for k, v in value["fields"].items() if k not in retired})
 
+
+# Records of deleted mechanisms that older checkpoints still carry. They decode to
+# None and are dropped where they sit (evaluations U1): the fidelity
+# objection and its adjudication.
+_RETIRED_RECORDS = frozenset({"FidelityObjection", "Adjudication"})
+
+# Runtime fields of deleted mechanisms that older checkpoints still carry: not restored.
+_RETIRED_RUNTIME = frozenset({
+    # The fidelity adjudication queue (evaluations U1).
+    "open_adjudications",
+})
 
 # Fields of deleted mechanisms that older checkpoints still carry: read and ignored.
 # ``relief_window``: the halved-price relief (charter audit U2), replaced by the ratchet.
@@ -606,23 +613,20 @@ _RUNTIME_FIELDS = (
     # Venue effects by custody, per decision, until its outcome settles: the
     # consequence line reports them beside provider cost (edition 3, C5).
     "venue_deltas",
-    # When each judge's metas began waiting on a fact about it, and the
-    # adjudication queued for each seat while it is unanswered. Both are
-    # properties over a private dict (``FeedbackMixin``); ``_RUNTIME_BACKING``
-    # names the attribute a restore assigns.
-    "meta_waiting_since", "open_adjudications",
+    # When each judge's metas began waiting on a fact about it: a property over a
+    # private dict (``FeedbackMixin``); ``_RUNTIME_BACKING`` names the attribute a
+    # restore assigns.
+    "meta_waiting_since",
 )
 # Runtime fields read through a property with no setter, and the attribute behind it.
 _RUNTIME_BACKING = {
     "meta_waiting_since": "_meta_waiting_since",
-    "open_adjudications": "_open_adjudications",
     "grounded_pending": "_grounded_pending",
     "grounded_closed": "_grounded_closed",
 }
 # The settlement receipt books, by the path from the runtime to each. A receipt's
 # id is its content address, so a book is saved as its receipts in record order
-# and rebuilt as ``{receipt.id: receipt}``: the same ids, the same order, and an
-# open adjudication resolved later stays under the id of the claim.
+# and rebuilt as ``{receipt.id: receipt}``: the same ids, the same order.
 _RECEIPT_BOOKS = ("book.receipts", "consequences.receipts")
 
 # State a runtime carries across events that the checkpoint deliberately does not
@@ -678,9 +682,7 @@ _COMPONENT_FIELDS = (
     ("cadence", "_", ("latencies", "last_activation_ns", "waiting", "deferred",
                        "current_event", "last_activation_event", "outstanding", "min_support")),
     ("standing", "_ConsequenceStanding__", ("min_coverage", "evaluators")),
-    # ``objections``: the accepted fidelity objection each judge's return carried,
-    # until its verdict settles and pairs with it.
-    ("settler", "_Settler__", ("snapshots", "recorded", "objections")),
+    ("settler", "_Settler__", ("snapshots", "recorded")),
     ("charter_book", "_CharterBook__", (
         "editions", "proposals", "committees", "ballots", "activated", "activations",
         "bindings",
@@ -883,6 +885,8 @@ def restore_runtime(rt, state: dict) -> None:
                      heads=(components.get("working_state") or {}).get("heads") or {},
                      outcomes=(components.get("outcomes") or {}).get("items") or {})
     for name, value in saved_runtime.items():
+        if name in _RETIRED_RUNTIME:
+            continue
         setattr(rt, _RUNTIME_BACKING.get(name, name), value)
     rt.diary_id = diary
     # A checkpoint written before launch-bound venue identities keeps its historical
@@ -917,7 +921,8 @@ def restore_runtime(rt, state: dict) -> None:
     rt.treasury.restore(decode(state["treasury"]))
     # Older checkpoints predate the receipt books; theirs start empty, as they did.
     for path, saved in decode(state.get("receipts") or {}).items():
-        _resolve(rt, path).restore(saved)
+        # A retired receipt kind (an adjudication) decodes to None and is dropped.
+        _resolve(rt, path).restore(r for r in saved if r is not None)
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
             if (name == "controller" and field in ("kp", "kd")
@@ -936,9 +941,6 @@ def restore_runtime(rt, state: dict) -> None:
             if (name == "consequences" and field in ("unresolved_orders", "censored_payoffs")
                     and field not in components[name]):
                 # Older checkpoints predate the released hold; nothing is released.
-                continue
-            if name == "settler" and field == "objections" and field not in components[name]:
-                # Older checkpoints predate saved objections; none is pending.
                 continue
             if name == "bill_settlement" and name not in components:
                 # Older checkpoints predate bill settlement; the next read takes a reference.
