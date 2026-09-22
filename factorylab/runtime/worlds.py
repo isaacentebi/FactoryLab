@@ -273,6 +273,10 @@ class EvaluationSpec:
     #: seat, draws the action class, uniformly over the classes that act, and records
     #: that draw as the decision's propensity. Zero keeps every earlier world as it was.
     exploration_share: float = 0.0
+    #: The retentive core (essay II.a): the event kinds whose router the runtime seeds
+    #: as a no-swap-regret learner (Blum-Mansour over EXP3 rows) instead of mean-based
+    #: EXP3. Every other kind stays at the frontier. Empty keeps every earlier world.
+    no_swap_regret_kinds: tuple[str, ...] = ()
 
     # Both horizons count world ticks consumed, not internal events (defect 1). The
     # field names predate that and are kept so every manifest keeps its meaning; the
@@ -530,6 +534,9 @@ class WorldManifest:
             payload["evaluation"].pop("grounded_horizon_ticks")
         if payload["evaluation"].get("exploration_share") == 0.0:
             payload["evaluation"].pop("exploration_share")
+        # A world that seeds no swap-regret core hashes as it did before the key existed.
+        if not payload["evaluation"].get("no_swap_regret_kinds"):
+            payload["evaluation"].pop("no_swap_regret_kinds", None)
         # An absent [web] block registers no search tool, so a world without one hashes
         # exactly as it did before web search existed.
         if payload["web"] == asdict(WebSpec()):
@@ -656,6 +663,10 @@ class WorldManifest:
             raise ValueError("evaluation.producer_feedback must be verdict or realized")
         if not 0.0 <= self.evaluation.exploration_share <= 1.0:
             raise ValueError("evaluation.exploration_share must be within [0, 1]")
+        core = self.evaluation.no_swap_regret_kinds
+        if (not isinstance(core, tuple) or len(set(core)) != len(core)
+                or any(not isinstance(k, str) or not k for k in core)):
+            raise ValueError("evaluation.no_swap_regret_kinds must be distinct event kind names")
         if namespace is not None and (not isinstance(namespace, str) or len(namespace) != 32
                                       or any(c not in "0123456789abcdef" for c in namespace)):
             raise ValueError("exchange.client_namespace must be 32 lowercase hex characters")
@@ -1050,6 +1061,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         sampling_cap=ev.get("sampling_cap", 0.7),
         producer_feedback=_manifest_producer_feedback(ev.get("producer_feedback", "verdict")),
         exploration_share=float(ev.get("exploration_share", 0.0)),
+        no_swap_regret_kinds=_manifest_kinds(ev.get("no_swap_regret_kinds", [])),
     )
     pr = d.get("prices") or {}
     prices = PricesSpec(
@@ -1177,6 +1189,13 @@ def _manifest_providers(raw: Any) -> ProvidersSpec:
             raise ValueError(f"providers.{key} must be nonnegative")
         amounts.append(micro)
     return ProvidersSpec(openrouter_micro=amounts[0], venice_micro=amounts[1])
+
+
+def _manifest_kinds(raw: Any) -> tuple[str, ...]:
+    """``[evaluation] no_swap_regret_kinds``: a list of event kind names, kept in order."""
+    if not isinstance(raw, list | tuple):
+        raise ValueError("evaluation.no_swap_regret_kinds must be a list of event kind names")
+    return tuple(raw)
 
 
 def _manifest_producer_feedback(raw: Any) -> str:

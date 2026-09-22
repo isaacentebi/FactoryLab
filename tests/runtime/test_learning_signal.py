@@ -64,7 +64,8 @@ def test_a_censored_arm_is_not_penalised_for_being_censored():
     """Defect 2. For gain-based EXP3 a skipped update is a zero reward: the arm whose
     outcomes go unobserved falls behind the arm whose outcomes are read, at the same
     true worth. Censoring is neutral now: the unobserved round is credited the
-    evidence the router has, never a zero it did not observe."""
+    arm's own evidence, else zero consequence (0.5), never a zero it did not observe
+    and never the average another arm earned."""
     rt = make_runtime()
     state, _lid = _router(rt)
     a, b = [arm for arm in state.universe if arm != NOOP][:2]
@@ -72,7 +73,9 @@ def test_a_censored_arm_is_not_penalised_for_being_censored():
     _settle(rt, _drawn(rt, state, b), SettleStatus.CENSORED)
     rt._deliver_returns()
     weights = _weights(state)
-    assert weights[b] == pytest.approx(weights[a])  # both credited 0.6 at the same odds
+    floor = min(weights.values())
+    # a credited its 0.6, b the neutral 0.5, at the same odds: b is not sunk to zero.
+    assert weights[b] - floor == pytest.approx((weights[a] - floor) * 5 / 6)
 
 
 def test_an_abstention_does_not_sink_to_the_exploration_floor():
@@ -135,7 +138,9 @@ def test_a_late_score_after_the_cutoff_trains_nothing_twice():
     rt.queue.expire(10**16)  # the cutoff passes with b's decision unscored
     rt._deliver_returns()
     at_cutoff = _weights(state)
-    assert at_cutoff[b] == pytest.approx(at_cutoff[a])  # one neutral update, not a zero
+    floor = min(at_cutoff.values())
+    # One neutral (0.5) update for b, not a zero and not a's 0.4.
+    assert at_cutoff[b] - floor == pytest.approx((at_cutoff[a] - floor) * 5 / 4)
     _settle(rt, late, SettleStatus.SETTLED, 1.0)
     assert [str(r.status) for r in rt.queue.history(late)] == ["timed_out", "settled"]
     rt._deliver_returns()

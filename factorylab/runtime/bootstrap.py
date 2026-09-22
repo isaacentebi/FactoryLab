@@ -403,7 +403,7 @@ class BootstrapMixin:
         self.routers: dict[str, list[RouterState]] = {}
         self.retired_routers: dict[str, RouterState] = {}
         for kind in self._routable_kinds():
-            self._build_router(kind, "exp3", router_gamma)
+            self._build_router(kind, self._seed_learner_kind(kind), router_gamma)
         self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened event
         # antagonist handle -> which of the two exposure facts have arrived
         self.exposure_evidence: dict[str, dict[str, bool]] = {}
@@ -422,6 +422,8 @@ class BootstrapMixin:
         self.order_intents: dict[str, dict] = {}
         self.voted_amendments: set[str] = set()
         self.snapshot_keys: dict[str, str] = {}  # decision handle -> snapshot key
+        # NOOP handle -> the abstention credit its router is owed, and when it is due.
+        self.noop_credits: dict[str, dict] = {}
 
         # world memory (public facts) and assembly memory (private to each assembly)
         self.recent_mids: dict[str, deque[dict[str, Any]]] = {}

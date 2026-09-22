@@ -80,8 +80,9 @@ def test_consumed_grounded_timeout_retains_old_router_through_restore(rotate, mo
     )
     restored._deliver_returns()
 
-    assert _weights(restored_old) != old_before
-    assert _weights(restored_fresh) == fresh_before
+    # The round the old router drew trains the router that replaced it.
+    assert _weights(restored_old) == old_before
+    assert _weights(restored_fresh) != fresh_before
     assert old_id not in restored.retired_routers
     assert any(
         item["kind"] == "actor.retire" and item["actor"] == old_id
