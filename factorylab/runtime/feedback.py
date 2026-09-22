@@ -11,7 +11,7 @@ from typing import Any
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import LearningReturn, SettleStatus
 from factorylab.kernel.wallet import Infeasible
-from factorylab.learners.base import NEUTRAL_REWARD, BanditFeedback
+from factorylab.learners.base import BanditFeedback
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_window_ns
 from factorylab.runtime.grounded import (
     DEFAULT_TAKER_FEE_BPS,
@@ -1971,14 +1971,16 @@ class FeedbackMixin:
         without an observed score (censored, inapplicable) or reached its cutoff
         unscored (timed out) is not a zero: it is credited the router's neutral
         estimate for the arm drawn (``ObservedRewards.neutral``: that arm's own
-        observed mean, else zero consequence). A score that arrives after the
+        observed mean, else the router's zero consequence). A score that arrives after the
         cutoff still settles the decision for the kernel -- its money, its
         standing, its history -- but trains no learner a second time.
 
-        An abstention (NOOP) is credited ``NEUTRAL_REWARD`` exactly, whatever its
-        settlement: waking nobody has zero consequence, so it is never worth the
-        average the seats earned (the free-average defect), and a seat is woken
-        more often only by scoring above it. The credit is deferred to the delay
+        An abstention (NOOP) is credited the router's zero-consequence reward
+        (``RouterState.neutral``), whatever its settlement: waking nobody is worth
+        what a woken seat that delivered nothing scores on the scale the router's
+        seat rounds are settled on (0.5 for producer outcomes, 0.75 for Brier), so
+        it is never worth the average the seats earned (the free-average defect),
+        and a seat is woken more often only by scoring above it. The credit is deferred to the delay
         the router's seat rounds take to be learned (``_defer_abstention``): an
         abstention settles at once, and crediting it at once would put it a whole
         feedback delay ahead of every seat it competes with. A router that has
@@ -2018,7 +2020,7 @@ class FeedbackMixin:
         else:
             # The seat's own baseline on the live successor, less any charter price
             # its settlement carries (routers-learn + charter-price-bites).
-            reward = _priced(target.observed.neutral(prop.chosen), lr)
+            reward = _priced(target.observed.neutral(prop.chosen, target.neutral()), lr)
         if reward is None:
             if key is not None:
                 state.learner.inner.discard_for(key)
@@ -2026,6 +2028,10 @@ class FeedbackMixin:
         fb = BanditFeedback(prop.chosen, reward, prop.probs[prop.action_ids.index(prop.chosen)])
         target.latency[0] += max(0, self.clock.now_ns - decision.opened_ns)
         target.latency[1] += 1
+        if lr.status is SettleStatus.SETTLED:
+            # The scale this round was scored on prices the router's abstentions.
+            target.definitions[lr.definition_version] = (
+                target.definitions.get(lr.definition_version, 0) + 1)
         if target is not state:
             if keyed and key is None:
                 return
@@ -2072,7 +2078,9 @@ class FeedbackMixin:
             if drawer is None:
                 continue
             prop = self.queue.get(handle).propensity
-            fb = BanditFeedback(NOOP, NEUTRAL_REWARD, prop.probs[prop.action_ids.index(NOOP)])
+            # Priced when due, on the scales of every seat round learned by then.
+            neutral = self._successor_state(drawer).neutral()
+            fb = BanditFeedback(NOOP, neutral, prop.probs[prop.action_ids.index(NOOP)])
             self._apply_router_round(drawer, handle, credit["p"], credit["executed"], fb)
 
     def _router_owed_abstention(self, learner_id: str) -> bool:

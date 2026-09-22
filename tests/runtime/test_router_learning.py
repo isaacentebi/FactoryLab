@@ -1,9 +1,10 @@
 """Routers learn from what waking a seat was worth (essay II.a, the frontier and the core).
 
-An abstention is worth zero consequence (0.5), never the average the seats earned, so a
-seat is woken more only by beating it. A manifest can seed its retentive core with a
-no-swap-regret (Blum-Mansour) router, and a router that is replaced hands every round it
-still owes a reward for to the router that replaced it.
+An abstention is worth zero consequence (what a seat that delivered nothing scores on the
+router's own scales: 0.5 for producer outcomes, 0.75 for Brier), never the average the
+seats earned, so a seat is woken more only by beating it. A manifest can seed its
+retentive core with a no-swap-regret (Blum-Mansour) router, and a router that is replaced
+hands every round it still owes a reward for to the router that replaced it.
 """
 
 import random
@@ -95,6 +96,116 @@ def test_an_unscored_arm_without_its_own_record_is_neutral_not_its_siblings_mean
     assert observed.neutral("a") == 0.9
     assert observed.neutral("b") == NEUTRAL_REWARD
     assert ObservedRewards().neutral("a") == NEUTRAL_REWARD
+
+
+# --- what nothing delivered is worth, per score definition ------------------------------
+
+# Every score definition a router's seat round can settle with a score, and what a seat
+# that delivered nothing scores on it.
+_ZERO = {
+    "verdict-v1": 0.5, "realized-consequence-v2": 0.5,
+    "realized-consequence-v2-provisional": 0.5, "opportunity-cost-v1": 0.5,
+    "conformity-v1": 0.5, "policy-promise-brier-v2": 0.5,
+    "brier-v1": 0.75, "forecast-mean-v1": 0.75, "meta-consequence-v1": 0.75,
+    "fast-v1": 0.75, "exposure-v1": 0.0,
+}
+
+
+@pytest.mark.parametrize("definition", sorted(_ZERO))
+def test_each_score_definition_has_its_own_zero_consequence(definition):
+    from factorylab.runtime.routing import ZERO_CONSEQUENCE, zero_consequence
+
+    assert zero_consequence(definition) == ZERO_CONSEQUENCE[definition] == _ZERO[definition]
+
+
+@pytest.mark.parametrize("definition", ["brier-v1", "forecast-mean-v1",
+                                        "meta-consequence-v1", "fast-v1"])
+def test_a_brier_scale_prices_nothing_at_the_coin_flip_forecasters_score(definition):
+    """A coin-flip forecast scores 0.75 whatever happens: on a Brier router NOOP at 0.5
+    lost to a seat that knew nothing, a dead arm the router paid to avoid every time."""
+    from factorylab.runtime.routing import zero_consequence
+    from factorylab.settlement.scoring import brier
+
+    assert zero_consequence(definition) == brier(0.5, 0) == brier(0.5, 1)
+
+
+def test_the_table_names_every_scored_definition_the_runtime_settles_with():
+    from factorylab.runtime import grounded, shared
+    from factorylab.runtime.routing import ZERO_CONSEQUENCE
+
+    scored = {shared.DEF_VERDICT, shared.DEF_CONFORMITY, shared.DEF_FAST,
+              shared.DEF_EXPOSURE, shared.DEF_META_CONSEQUENCE,
+              grounded.GROUNDED_DEFINITION, grounded.OPPORTUNITY_DEFINITION}
+    assert scored <= set(ZERO_CONSEQUENCE) and set(ZERO_CONSEQUENCE) == set(_ZERO)
+
+
+def test_an_unknown_definition_and_an_unlearned_router_are_worth_the_midpoint():
+    from factorylab.runtime.routing import zero_consequence
+
+    assert zero_consequence("test-v1") == NEUTRAL_REWARD
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    assert state.neutral() == NEUTRAL_REWARD
+
+
+def _scored(rt, handle, score, definition):
+    rt.queue.settle(handle, channel=rt.queue.get(handle).channel, score=score,
+                    status=SettleStatus.SETTLED, definition_version=definition,
+                    sampling_ref=None)
+
+
+def test_on_a_brier_router_a_know_nothing_seat_ties_an_abstention():
+    """Before: a coin-flip seat earned 0.75 and NOOP 0.5, so NOOP lost 0.25 a round to a
+    seat that knew nothing. NOOP is credited the Brier zero now, and the two tie."""
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    arm = next(a for a in state.universe if a != NOOP)
+    _scored(rt, _drawn(rt, state, arm), 0.75, "forecast-mean-v1")
+    rt._deliver_returns()
+    assert state.neutral() == 0.75 and state.definitions == {"forecast-mean-v1": 1}
+    _settle(rt, _drawn(rt, state, NOOP), SettleStatus.INAPPLICABLE)
+    rt._deliver_returns()
+    weights = _weights(state)
+    assert weights[NOOP] == pytest.approx(weights[arm])
+
+
+def test_a_mixed_router_prices_nothing_at_its_own_mix_of_scales():
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    arm = next(a for a in state.universe if a != NOOP)
+    for definition in ("forecast-mean-v1", "forecast-mean-v1", "verdict-v1", "exposure-v1"):
+        _scored(rt, _drawn(rt, state, arm), 0.6, definition)
+    rt._deliver_returns()
+    assert state.neutral() == pytest.approx((0.75 * 2 + 0.5 + 0.0) / 4)
+
+
+def test_an_unscored_seat_without_a_record_is_imputed_the_routers_zero():
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    a, b = [arm for arm in state.universe if arm != NOOP][:2]
+    _scored(rt, _drawn(rt, state, a), 0.75, "forecast-mean-v1")
+    _settle(rt, _drawn(rt, state, b), SettleStatus.CENSORED)
+    rt._deliver_returns()
+    weights = _weights(state)
+    assert weights[b] == pytest.approx(weights[a])  # both credited 0.75 at equal odds
+    assert b not in state.observed.state()
+
+
+def test_the_scales_a_router_learned_survive_a_resume_and_default_when_absent():
+    from factorylab.runtime.routing import RouterState
+
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    arm = next(a for a in state.universe if a != NOOP)
+    _scored(rt, _drawn(rt, state, arm), 0.9, "forecast-mean-v1")
+    rt._deliver_returns()
+    restored = make_runtime()
+    restore_runtime(restored, runtime_state(rt))
+    assert _router(restored)[0].definitions == {"forecast-mean-v1": 1}
+    old = state.state()
+    del old["definitions"]
+    assert RouterState.restore(old).definitions == {}
+    assert "definitions" not in _router(make_runtime())[0].state()
 
 
 def _one_seat_router(rt, seat):

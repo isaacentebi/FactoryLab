@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Any
 
 from factorylab.cortex.assembly import PROGRAM_MODEL_ID
@@ -11,13 +13,19 @@ from factorylab.cortex.registration import reward_contracts
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.registry import Contract
-from factorylab.learners.base import ObservedRewards
+from factorylab.learners.base import NEUTRAL_REWARD, ObservedRewards
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
+from factorylab.runtime.grounded import GROUNDED_DEFINITION, OPPORTUNITY_DEFINITION
 from factorylab.runtime.shared import (
     CH_CONSEQUENCE,
     CH_FAST,
     CH_VERDICT,
+    DEF_CONFORMITY,
+    DEF_EXPOSURE,
+    DEF_FAST,
+    DEF_META_CONSEQUENCE,
+    DEF_VERDICT,
     NOOP,
     assembly_rewards,
     return_channel,
@@ -137,6 +145,43 @@ class ContractQueue:
         return tuple(self._mapped(r.handle, r) for r in raw[start:]), len(raw)
 
 
+#: What a round that delivered nothing scores, per score definition a router can be
+#: trained on: the reward an abstention (NOOP) is credited, so a seat is woken more
+#: only by beating what doing nothing would have scored on the same scale. A NOOP
+#: that a know-nothing seat outscores is a dead arm: the router pays to wake someone
+#: every time, which is thrash's bill, "the entire cost of exploration" for nothing
+#: delivered (essay II.II.a). Only settled scores need a value: censored,
+#: inapplicable, unmeasured, declined, timed-out and uninformative rounds carry no
+#: score and are imputed. A definition not listed is worth ``NEUTRAL_REWARD``.
+ZERO_CONSEQUENCE: Mapping[str, float] = MappingProxyType({
+    # Producer scores on the midpoint scale, where 0.5 is a return that moved nothing.
+    DEF_VERDICT: 0.5,  # a judge's opinion of a producer return
+    GROUNDED_DEFINITION: 0.5,  # realized consequence: contrary 0, supported (0, 1]
+    f"{GROUNDED_DEFINITION}-provisional": 0.5,  # the fast opinion standing in for it
+    OPPORTUNITY_DEFINITION: 0.5,  # a hold with no named counterfactual settles at 0.5
+    # A meta's probability that a verdict was right: an uninformed meta says 0.5.
+    DEF_CONFORMITY: 0.5,
+    # 1 when a ballot matched the promise the world kept: a coin-flip ballot expects 0.5.
+    "policy-promise-brier-v2": 0.5,
+    # Brier scores, 1 - (q - y)^2: the uninformed forecaster (q = 0.5) earns 0.75
+    # whatever happens. The per-predicate prevalence baseline scores at least that,
+    # but it prices a judge's standing question by question, not a router's round.
+    "brier-v1": 0.75,
+    "forecast-mean-v1": 0.75,  # the mean brier-v1 of a forecast return's predictions
+    DEF_META_CONSEQUENCE: 0.75,  # a top meta's conformity, Brier against the consequence
+    DEF_FAST: 0.75,  # the fast channel's malformed zero, on the meta-consequence scale
+    # Detection: 1 when an antagonist exposed a failure, 0 when it exposed nothing. A
+    # useless antagonist ties an abstention and routing holds it at the adversarial
+    # cap: the minority is a constraint on routing (II.III.b), not a seat to starve.
+    DEF_EXPOSURE: 0.0,
+})
+
+
+def zero_consequence(definition: str) -> float:
+    """What a round settled under ``definition`` scores when it delivered nothing."""
+    return ZERO_CONSEQUENCE.get(definition, NEUTRAL_REWARD)
+
+
 @dataclass
 class RouterState:
     kind: str
@@ -154,6 +199,25 @@ class RouterState:
     # [total ns, rounds]: how long this router's learned seat rounds took to be
     # learned, the delay an abstention's credit is deferred by.
     latency: list[int] = field(default_factory=lambda: [0, 0])
+    # definition -> learned seat rounds settled under it: the scales this router's
+    # rewards are on, and so what an abstention is worth to it (``neutral``).
+    definitions: dict[str, int] = field(default_factory=dict)
+
+    def neutral(self) -> float:
+        """Guarantees the zero-consequence reward of the rounds this router learns from.
+
+        It is the mean of ``zero_consequence`` over the definitions its learned seat
+        rounds settled under, weighted by how many settled under each: a router whose
+        seats are scored by Brier credits NOOP 0.75, one scored on producer outcomes
+        0.5, and a mixed router what its own wakes would have scored had every woken
+        seat delivered nothing. ``NEUTRAL_REWARD`` before any seat round is learned.
+        Independent of insertion order, so a resumed router computes the same value.
+        """
+        total = sum(self.definitions.values())
+        if not total:
+            return NEUTRAL_REWARD
+        return math.fsum(zero_consequence(d) * self.definitions[d]
+                         for d in sorted(self.definitions)) / total
 
     def state(self) -> dict:
         """Retain the exact learner, public universe order, comparator epoch and successor."""
@@ -169,6 +233,8 @@ class RouterState:
             saved["successor"] = self.successor
         if self.latency[1]:
             saved["latency"] = list(self.latency)
+        if self.definitions:
+            saved["definitions"] = dict(self.definitions)
         return saved
 
     @classmethod
@@ -186,7 +252,8 @@ class RouterState:
         router = Router(learner, lambda _k: [a for a in universe if a != NOOP])
         return cls(state["kind"], universe, learner, router, state["epoch"],
                    state.get("seed_gamma", 0.1), ObservedRewards(state.get("observed")),
-                   state.get("successor"), list(state.get("latency", [0, 0])))
+                   state.get("successor"), list(state.get("latency", [0, 0])),
+                   dict(state.get("definitions", {})))
 
 
 class _KeyedLearner:
@@ -877,6 +944,7 @@ class RoutingMixin:
                     # The new identity learns on the same arms' evidence it inherits.
                     ObservedRewards(state.observed.state()),
                     latency=list(state.latency),
+                    definitions=dict(state.definitions),
                 )
             self.stats.epochs += 1
 
