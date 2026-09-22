@@ -362,13 +362,34 @@ proved right, and one that only repeats the base rate earns 0.5. `y` is:
   `return_paid_off`, 0 or 1, fixed when its lots close or marked at the
   consequence backstop;
 - for a return that executed nothing and named a declined trade
-  (`counterfactual {coin, side}`): that trade's opportunity price at the
-  consequence backstop, from the mids the world had broadcast when the return
-  was made (ruling R2; `consequence.opportunity`);
+  (`counterfactual {coin, side}`): `opportunity-cost-v2`,
+  `y = 0.5 - 0.5 * tanh(g / opportunity_scale_bps)` with `g` the trade's gross
+  move in bp, signed by its side and excluding fees, from the mids the world had
+  broadcast when the return was made (ruling R2). It is symmetric and monotone,
+  so a hold without directional skill earns 0.5 whatever trade it names;
 - for anything else (a bare hold): nothing. Only the tier above grades it.
 
-The timing is the consequence backstop, never a charter price window
-(evaluations P7). The score also trains the judge's consequence standing.
+**Anticipatory settlement** (§IV.b: an explorer is compensated sooner than the
+lifetime of what it found). A verdict's reward is scored as soon as its return's
+outcome is fixed, or at the latest `consequence_horizon_ticks` after the return
+opened, on its mark then: the lots marked to the mids then
+(`consequence.marked`), the declined trade priced then
+(`consequence.opportunity_mark`). The final measurement (a fixed payoff, or the
+declined trade priced at the backstop, `consequence.opportunity`) then trains
+the judge's standing and the base rate once (`verdict.consequence_late`) and
+never re-settles the reward. The timing is never a charter price window
+(evaluations P7). A judgement may choose a target other than its delivered
+subject only while that target's outcome is unanswered: not fixed, marked or
+priced, and before its horizon.
+
+`[evaluation] consequence_horizon_ticks` (integer in [1, backstop], default 10)
+and `opportunity_scale_bps` (positive number, default 50) are hashed.
+
+A declined commission (`status: cannot`) is credited to the router that drew the
+seat as an abstention is, the zero-consequence reward less its role's card
+penalty (`router.decline_priced`), never the seat's own mean. The meta tier's
+cascade window reads first a verdict on a return with no world outcome, since the
+tier above is that verdict's only grader.
 
 **The judge's reward is both signals.** A judge's decision settles
 (`evaluation-v1`, `evaluator.settled`) on the equal mean of its grade from the

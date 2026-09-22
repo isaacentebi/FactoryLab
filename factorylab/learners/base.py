@@ -35,8 +35,8 @@ type Feedback = FullInfoFeedback | BanditFeedback
 
 
 #: The reward of zero consequence on the midpoint scales: what a round that changed
-#: nothing is worth where 0.5 is the score of no consequence (opportunity-cost-v1
-#: settles an inaction with no named counterfactual at 0.5), so a seat earns waking
+#: nothing is worth where 0.5 is the score of no consequence (opportunity-cost-v2
+#: scores a declined trade that did not move at 0.5), so a seat earns waking
 #: only by beating it on average. It is the fallback, not the rule: a score whose
 #: scale puts "nothing delivered" elsewhere (a coin-flip forecast earns 0.75 under
 #: Brier) is given its own value by the runtime's per-definition table

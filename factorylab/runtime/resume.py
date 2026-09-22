@@ -582,7 +582,7 @@ _RUNTIME_FIELDS = (
     # outcomes and the mids declined trades are priced from. Each defaults empty
     # when an older checkpoint lacks it.
     "exposure_scores", "arrived_verdicts", "consequence_scores", "world_outcomes",
-    "reference_mids",
+    "reference_mids", "marked_outcomes", "late_verdicts",
     "card_samples", "price_windows", "price_origins",
     "retired_assemblies", "retirement_proposals", "return_kinds", "decision_subjects",
     "event_schemas",

@@ -1684,23 +1684,26 @@ class SchematicsMixin:
                 "a verdict q is also scored against the judged return's measured outcome y: "
                 "for a return that executed venue operations (or earned service income), "
                 "y = return_paid_off, 1 when its realised or marked P&L exceeds its own "
-                "compute and tool cost, fixed when its lots close or at the consequence "
-                f"backstop ({backstop} ticks from the return); for a return that executed "
-                "nothing and named a counterfactual {coin, side}, y = that declined trade's "
-                "opportunity price at the backstop: with m the declined trade's gross return "
-                "in bp over the horizon (signed by its side) and f the round-trip fee in bp, "
-                "y = f / (f + max(0, m - f)); any "
-                "other return has no y. brier = 1 - (q - y)^2; base = 1 - (b - y)^2, b the "
-                "base rate of that kind of y before this return's entered it; consequence "
-                "score = 0.5 + 0.5 * (brier - base), a proper score in [0, 1]"
+                "compute and tool cost; for a return that executed nothing and named a "
+                "counterfactual {coin, side}, y = 0.5 - 0.5 * tanh(g / "
+                f"{ev.opportunity_scale_bps}), g the declined trade's gross move in bp "
+                "(signed by its side, no fees); any other return has no y. The reward is "
+                "scored when the outcome is fixed, or at the latest "
+                f"{ev.consequence_horizon_ticks} ticks after the return, on its mark then "
+                "(lots and the declined trade marked to the mids then); the fixed outcome at "
+                f"the backstop ({backstop} ticks) then updates standing only. brier = "
+                "1 - (q - y)^2; base = 1 - (b - y)^2, b the base rate of that kind of y "
+                "before this return's entered it; consequence score = 0.5 + 0.5 * "
+                "(brier - base), a proper score in [0, 1]"
             ),
             "evaluator_return": (
                 "a judge's decision settles on the conformity channel on two signals: g, the "
                 f"mean grade the tier above gave it within {ev.verdict_timeout_ticks} ticks, "
                 "and c, its consequence score; score = mean of those that exist, less the "
                 "card penalty; censored when neither exists. A meta judges one verdict in "
-                f"every {self.m.timing.min_ratio} (with jitter), the window's representative; "
-                "the others are not graded by it"
+                f"every {self.m.timing.min_ratio} (with jitter), the window's representative, "
+                "a verdict on a return with no world outcome first; the others are not "
+                "graded by it"
             ),
             "meta_return": (
                 "a meta's conformity k is also a prediction of the consequence score s of the "
@@ -1712,7 +1715,8 @@ class SchematicsMixin:
             "malformed_judgement": (
                 "a judgement with no verdict or conformity in [0, 1], a model refusal, or one "
                 "whose target is refused settles censored; its call is charged. status: "
-                "cannot declines the commission: the call is charged and nothing is scored"
+                "cannot declines the commission: the call is charged, and the router that "
+                "drew the seat is credited as for an abstention"
             ),
             "antagonist_exposure": (
                 "an Exposure return settles on the exposure channel: the mean over the judges "

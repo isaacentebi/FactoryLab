@@ -100,15 +100,17 @@ class CascadeGate:
         return max(0, now_ns - self.opened_ns)
 
     def add(
-        self, event: Event, *, complete: Callable[[Event], bool] | None = None
+        self, event: Event, *, complete: Callable[[Event], bool] | None = None,
+        priority: Callable[[Event], int] | None = None,
     ) -> tuple[CascadeGate | None, Event | None]:
-        """Release the latest completed arrival, enriched with its window's evidence.
+        """Release one completed arrival, enriched with its window's evidence.
 
         ``complete`` answers whether one arrival's evidence has finished — for a
         verdict, whether the return it judged has an outcome. A window with no
         completed evidence in it has nothing to report upward however long it
         has been open, and an arrival count of any size reports nothing at all
-        before the duration is up.
+        before the duration is up. The representative is the completed arrival
+        with the highest ``priority`` (the latest among equals).
         """
         tier = event_tier(event)
         if self.arrivals and event_tier(self.arrivals[0]) != tier:
@@ -116,14 +118,16 @@ class CascadeGate:
         arrivals = (*self.arrivals, event)
         if self.elapsed(event.ts_ns) < self.window_ns:
             return replace(self, arrivals=arrivals), None
-        key = "verdict" if tier == 1 else "score"
-        handle_key = "evaluator_handle" if tier == 1 else "by"
+        verdicts = event.kind is EventKind.VERDICT
+        key = "verdict" if verdicts else "score"
+        handle_key = "evaluator_handle" if verdicts else "by"
         finished = [e for e in arrivals if complete is None or complete(e)]
         if not finished:
             # The duration is up and nothing in it has settled. The window stays
             # open rather than reporting an average of unfinished work upward.
             return replace(self, arrivals=arrivals), None
-        representative = finished[-1]
+        rank = priority or (lambda _e: 0)
+        representative = max(reversed(finished), key=rank)
         scores = [e.payload[key] for e in finished]
         # Every arrival is named, so no verdict is judged behind its back; only the
         # representative is graded, and only completed evidence is averaged.

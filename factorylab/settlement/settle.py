@@ -275,6 +275,24 @@ class Settler:
         """
         return self.__excluded.pop(handle, None)
 
+    def score_verdict(self, *, about_handle: str, q: float, outcome: float,
+                      key: str) -> tuple[float, float]:
+        """Score one verdict against a provisional outcome, recording nothing.
+
+        Anticipatory settlement (essay II.IV.b): a verdict's reward is scored on its
+        return's mark before the world fixes the outcome. Guarantees the same
+        pre-outcome base rate ``settle_verdict`` will use for this decision (the
+        snapshot is taken here if it was not), and that neither standing nor the base
+        rate moves: the final measurement records both, once. Returns
+        (brier, baseline_brier), higher is better.
+        """
+        _require_probability(outcome, "outcome")
+        question = f"{key}:{about_handle}"
+        baseline_q = self.__snapshots.get(question)
+        if baseline_q is None:
+            baseline_q = self.__snapshots[question] = self.__baseline.baseline_q(key)
+        return normative_brier(q, outcome), normative_brier(baseline_q, outcome)
+
     def settle_verdict(
         self, *, evaluator_id: str, about_handle: str, q: float, outcome: float, key: str
     ) -> SettledVerdict:

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import random
 from collections import deque
-from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -187,37 +186,49 @@ def test_a_verdict_on_a_bare_hold_has_no_world_outcome_and_settles_on_its_grade(
 
 
 def _declined_trade_run(verdicts, move_to="101"):
-    """A hold that named a declined BTC buy, judged, then marked at the backstop."""
+    """A hold that named a declined BTC buy, judged, then marked at its horizon."""
     rt = _runtime(counterfactual={"coin": "BTC", "side": "buy"}, verdicts=verdicts)
     _mids(rt, BTC="100")
     producer, event = _consequence_produce(rt)
     judges = [_judge(rt, event, f"eval-{c}") for c in "abcd"[:len(verdicts)]]
     rt._settle_arrived_verdicts()
-    _advance(rt, rt.ev.consequence_backstop_ticks - 1)
-    assert not _rows(rt, "verdict.consequence")  # priced at the backstop, not before
+    _advance(rt, rt.ev.consequence_horizon_ticks - 1)
+    assert not _rows(rt, "verdict.consequence")  # marked at the horizon, not before
     _mids(rt, BTC=move_to)
     _advance(rt, 2)
     return rt, producer, judges
 
 
 def test_a_verdict_on_a_declined_trade_is_scored_against_its_opportunity_price():
-    """Ruling R2: the priced road not taken is a world measurement of the verdict."""
+    """Ruling R2: the priced road not taken is a world measurement of the verdict,
+    rewarded at the horizon's mark (anticipatory settlement) and scored once more, late,
+    at the backstop, for standing only."""
     rt, producer, (wrong, right) = _declined_trade_run((0.9, 0.1))
-    price = opportunity_cost([("BTC", "100")], [("BTC", "101")], 2 * Decimal("3.5"),
+    price = opportunity_cost([("BTC", "100")], [("BTC", "101")], rt.ev.opportunity_scale_bps,
                              {"coin": "BTC", "side": "buy"})["score"]
     scored = {row["handle"]: row for row in _rows(rt, "verdict.consequence")}
     assert scored[wrong]["y"] == scored[right]["y"] == pytest.approx(price)
-    assert scored[wrong]["outcome"] == "opportunity-cost-v1"
+    assert scored[wrong]["outcome"] == "opportunity-cost-v2"
+    assert scored[wrong]["phase"] == "mark"
     # Both judges read one return and are scored against one base rate.
     assert scored[wrong]["baseline_brier"] == scored[right]["baseline_brier"]
     # The world proved the praise of a hold that passed up a rally wrong.
     assert scored[wrong]["score"] < 0.5 < scored[right]["score"]
+    # Standing waits for the final measurement at the backstop.
+    assert rt.standing.snapshot().get("eval-a", {}).get("verdict_n", 0) == 0
+    assert not _rows(rt, "verdict.consequence_late")
     _advance(rt, rt.ev.verdict_timeout_ticks + 1)
     assert _raw(rt, right) > _raw(rt, wrong)
     assert _raw(rt, right) == pytest.approx(scored[right]["score"])
     # The measurement is a fact told to the producer; its reward is still the verdicts.
     assert rt.queue.history(producer)[0].definition_version == "verdict-v1"
+    _advance(rt, rt.ev.consequence_backstop_ticks)
     assert _rows(rt, "consequence.opportunity", handle=producer)
+    late = {row["handle"]: row for row in _rows(rt, "verdict.consequence_late")}
+    assert set(late) == {wrong, right}
+    assert rt.standing.snapshot()["eval-a"]["verdict_n"] == 1
+    assert len(rt.queue.history(wrong)) == len(rt.queue.history(right)) == 1
+    assert len(_rows(rt, "verdict.consequence", handle=wrong)) == 1
 
 
 def _unsettled_produce(rt, action="seed-decider"):
@@ -266,7 +277,7 @@ def test_a_meta_is_scored_against_the_consequence_of_the_judge_it_graded():
     rt._settle_arrived_verdicts()
     meta = _meta(rt, judge)
     assert rt.pending[meta].about == judge and rt.pending[meta].grade_closed  # top tier
-    _advance(rt, rt.ev.consequence_backstop_ticks - 1)
+    _advance(rt, rt.ev.consequence_horizon_ticks - 1)
     _mids(rt, BTC="101")
     _advance(rt, 2)
     (judged,) = _rows(rt, "verdict.consequence", handle=judge)
@@ -305,7 +316,7 @@ def test_the_antagonist_earns_by_how_wrong_the_judge_was_and_only_with_a_world_o
     antagonist, event = _consequence_produce(rt, "antagonist-a", CH_EXPOSURE)
     judge = _judge(rt, event)
     rt._settle_arrived_verdicts()
-    _advance(rt, rt.ev.consequence_backstop_ticks - 1)
+    _advance(rt, rt.ev.consequence_horizon_ticks - 1)
     _mids(rt, BTC="101")
     _advance(rt, 2)
     (judged,) = _rows(rt, "verdict.consequence", handle=judge)
@@ -430,7 +441,7 @@ def test_a_verdict_redirected_to_a_judges_decision_sits_one_tier_above_it_end_to
     assert event_tier(published) == 2
     # The world resolves the return: the lower judge is scored on it, the upper one on
     # the lower judge's consequence score, never on a world outcome of a judgement.
-    _advance(rt, rt.ev.consequence_backstop_ticks - 1)
+    _advance(rt, rt.ev.consequence_horizon_ticks - 1)
     _mids(rt, BTC="101")
     _advance(rt, 2)
     (judged,) = _rows(rt, "verdict.consequence", handle=lower)
@@ -454,3 +465,152 @@ def test_a_judgement_may_not_name_a_judge_decision_whose_consequence_is_known():
     assert settled.status is SettleStatus.CENSORED
     (refused,) = _rows(rt, "return.refused", handle=upper)
     assert "consequence is still open" in refused["reason"]
+
+
+# --- anticipatory settlement (the #128 review, finding 3) ------------------------------
+
+
+def test_an_open_lot_is_rewarded_on_its_mark_at_the_horizon_and_scored_late_at_its_fix():
+    """Essay II.IV.b: an explorer is compensated sooner than the lifetime of what it
+    found. The judge's reward settles on the lot's mark at the horizon; the fixed outcome
+    at the backstop trains standing and the base rate once, ledgered late, and never
+    re-settles the reward."""
+    rt = _runtime(verdicts=(0.2,))
+    producer, event = _unsettled_produce(rt)
+    rt.consequences.order_result(producer, {"order_id": "o-1", "status": "filled",
+                                            "filled_size": "1"}, {"size": "1"}, rt.n)
+    rt.consequences.observe("Fill", {"order_id": "o-1", "coin": "BTC", "is_buy": True,
+                                     "size": "1", "px": "100", "fee_usd": "0",
+                                     "realized_usd": "0"}, rt.n)
+    judge = _judge(rt, event)
+    rt._settle_arrived_verdicts()
+    rt.consequences.observe("MarketMid", {"coin": "BTC", "mid": "200"}, rt.n)
+    _advance(rt, rt.ev.consequence_horizon_ticks + 1)
+    assert rt.consequences.payoff(producer) is None  # the world has not fixed it yet
+    (marked,) = _rows(rt, "verdict.consequence", handle=judge)
+    assert marked["phase"] == "mark" and marked["y"] == 1.0
+    assert _rows(rt, "consequence.marked", handle=producer)
+    assert rt.standing.snapshot().get("eval-a", {}).get("verdict_n", 0) == 0
+    _advance(rt, rt.ev.verdict_timeout_ticks + 1)
+    (settled,) = rt.queue.history(judge)
+    assert settled.definition_version == "evaluation-v1"
+    assert _raw(rt, judge) == pytest.approx(marked["score"])
+    _advance(rt, rt.ev.consequence_backstop_ticks)
+    assert rt.consequences.payoff(producer) is not None
+    (late,) = _rows(rt, "verdict.consequence_late", handle=judge)
+    assert late["y"] == 1.0
+    assert rt.standing.snapshot()["eval-a"]["verdict_n"] == 1
+    assert len(rt.queue.history(judge)) == 1  # the reward settled once
+    assert len(_rows(rt, "verdict.consequence", handle=judge)) == 1
+
+
+def test_a_verdict_on_an_already_fixed_outcome_is_scored_final_at_once():
+    rt = _runtime(verdicts=(0.2,))
+    producer, event = _unsettled_produce(rt)
+    # The return opened and closed its own lot at a loss: its outcome is already fixed.
+    for order, is_buy, px in (("o-1", True, "100"), ("o-2", False, "90")):
+        rt.consequences.order_result(producer, {"order_id": order, "status": "filled",
+                                                "filled_size": "1"}, {"size": "1"}, rt.n)
+        rt.consequences.observe("Fill", {"order_id": order, "coin": "BTC", "is_buy": is_buy,
+                                         "size": "1", "px": px, "fee_usd": "0",
+                                         "realized_usd": "0"}, rt.n)
+    judge = _judge(rt, event)
+    rt._settle_arrived_verdicts()
+    _advance(rt, 1)
+    (scored,) = _rows(rt, "verdict.consequence", handle=judge)
+    assert scored["phase"] == "final" and scored["y"] == 0.0
+    assert rt.standing.snapshot()["eval-a"]["verdict_n"] == 1
+    _advance(rt, rt.ev.consequence_backstop_ticks + 1)
+    assert not _rows(rt, "verdict.consequence_late")
+
+
+# --- judges may not earn more by avoiding the world (finding 1) -------------------------
+
+
+def test_a_declined_commission_is_priced_like_an_abstention_not_its_own_mean(monkeypatch):
+    from factorylab.runtime import pricing
+    from tests.runtime.test_attributable_blame import _card, _commitments
+    from tests.runtime.test_attributable_blame import _runtime as _priced_runtime
+
+    monkeypatch.setattr(pricing, "close_window", lambda *_a: None)
+    rt = _priced_runtime(_card(per=None))
+    state = rt.routers["ProducerReturn"][0]
+    state.observed.record("eval-a", 0.9)  # the arm's own mean, which a decline used to earn
+    feasible = lambda a: (a == "eval-a", "")  # noqa: E731
+    sample = next(s for s in (state.router.route("ProducerReturn", feasible, random.Random(i))
+                              for i in range(50)) if s.chosen == "eval-a")
+    handle = rt.queue.open(actor=state.learner.id, event_id="declined",
+                           propensity=rt._propensity(sample), channel=CH_CONFORMITY,
+                           deadline_ns=10**18, parent_handle=None, cost_ceiling=0)
+    rt._contribution(handle, "evaluator")["invocations"] = 1
+    _commitments(rt, "eval-a", censored=4)
+    rt._close_price_window()
+    rt._settle_declined(handle, CH_CONFORMITY, "no view")
+    rt._deliver_returns()
+    (priced,) = _rows(rt, "router.decline_priced", handle=handle)
+    assert priced["penalty"] > 0
+    assert priced["reward"] == pytest.approx(state.neutral() - priced["penalty"])
+    assert priced["reward"] < 0.9
+
+
+def test_the_meta_tier_reads_a_verdict_the_world_will_never_grade_first():
+    """A cascade window releases, as its representative, a verdict on a bare hold ahead
+    of verdicts on returns the world will measure."""
+    from factorylab.runtime.cascade import CascadeGate
+
+    rt = _runtime(counterfactual={"coin": "BTC", "side": "buy"}, verdicts=(0.6,))
+    _mids(rt, BTC="100")
+    graded_by_world, event = _unsettled_produce(rt)
+    world_verdict = Event("v-world", EventKind.VERDICT, 0, {
+        "about_handle": graded_by_world, "evaluator_handle": "j-1", "verdict": 0.6}, "rt")
+    bare = _runtime()
+    bare_return, _event = _unsettled_produce(bare)
+    rt.consequences.start(bare_return + "-bare", rt.n)
+    rt.consequences.finish(bare_return + "-bare", 0)
+    bare_verdict = Event("v-bare", EventKind.VERDICT, 1, {
+        "about_handle": bare_return + "-bare", "evaluator_handle": "j-2", "verdict": 0.4},
+        "rt")
+    assert rt._cascade_priority(bare_verdict) == 1
+    assert rt._cascade_priority(world_verdict) == 0
+    gate = CascadeGate(5, opened_ns=0)
+    gate, _ = gate.add(bare_verdict, priority=rt._cascade_priority)
+    late_world = Event("v-world-2", EventKind.VERDICT, 10, dict(world_verdict.payload), "rt")
+    _none, released = gate.add(late_world, priority=rt._cascade_priority)
+    assert released.payload["evaluator_handle"] == "j-2"
+    # Without the priority the latest completed arrival (the world-graded one) is read.
+    plain, _ = CascadeGate(5, opened_ns=0).add(bare_verdict)
+    _none, unprioritised = plain.add(late_world)
+    assert unprioritised.payload["evaluator_handle"] == "j-1"
+    # A Verdict published above tier one is windowed at its tier and read by its verdict.
+    upper = Event("v-upper", EventKind.VERDICT, 0, {"about_handle": "j-1",
+                                                    "evaluator_handle": "j-3",
+                                                    "verdict": 0.2, "tier": 2}, "rt")
+    gate2, _ = CascadeGate(5, opened_ns=0).add(upper)
+    _none, released2 = gate2.add(Event("v-upper-2", EventKind.VERDICT, 10,
+                                       dict(upper.payload, evaluator_handle="j-4"), "rt"))
+    assert released2.payload["window"]["mean"] == pytest.approx(0.2)
+
+
+# --- chosen targets (finding 5) -----------------------------------------------------------
+
+
+def test_a_judge_may_choose_an_older_open_return_until_its_horizon():
+    """The #128 review: judges now live until the backstop, so comparing their deadline
+    with the target's refused every chosen target. A chosen target is refused only when
+    the world has answered it (fixed, marked or priced) or its horizon has passed."""
+    rt = _runtime(counterfactual={"coin": "BTC", "side": "buy"}, verdicts=(0.7, 0.3))
+    _mids(rt, BTC="100")
+    older, _older_event = _unsettled_produce(rt)
+    unread, _unread_event = _unsettled_produce(rt)
+    _advance(rt, 1)
+    _producer, event = _consequence_produce(rt)
+    chosen = _judge(rt, event, "eval-a",
+                    returned=Return("x", {"verdict": 0.7, "about_handle": older}, 0, "ok"))
+    assert rt.pending[chosen].about == older and rt.pending[chosen].tier == 1
+    assert not _rows(rt, "return.refused", handle=chosen)
+    _advance(rt, rt.ev.consequence_horizon_ticks)
+    late = _judge(rt, event, "eval-b",
+                  returned=Return("x", {"verdict": 0.3, "about_handle": unread}, 0, "ok"))
+    (refused,) = _rows(rt, "return.refused", handle=late)
+    assert "before its consequence horizon" in refused["reason"]
+    assert rt.queue.history(late)[0].status is SettleStatus.CENSORED

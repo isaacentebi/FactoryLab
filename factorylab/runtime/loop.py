@@ -679,12 +679,14 @@ class Runtime(
         """Name why a chosen target cannot carry a prediction, or None if it can.
 
         A prediction precedes its outcome. The router's subject is not chosen, but a
-        return that names an older target instead may not name one whose
-        consequence is already fixed, one at or past its backstop, or one whose
-        backstop falls before this judgement's own decision deadline. A judgement of
-        an evaluator decision predicts that decision's consequence score (ruling R1),
-        so it may not name one whose score is already known; its economic account
-        says nothing about it.
+        return that names an older target instead may not name one whose outcome the
+        world has already given: a consequence already fixed, or one past the horizon
+        at which its mark settles its judges (``consequence_horizon_ticks``). The
+        judgement's own deadline is not compared: it lives until its target's
+        backstop by construction, and a verdict is scored when the world answers,
+        not when its decision expires. A judgement of an evaluator decision predicts
+        that decision's consequence score (ruling R1), so it may not name one whose
+        score is already known; its economic account says nothing about it.
         """
         target = self.return_events.get(about)
         if target is not None and self._judged_tier(target, self.pending.get(about)):
@@ -697,18 +699,17 @@ class Runtime(
             return None
         if account.voided:
             return "judgement needs a chosen return a seat authored, not an abstention"
-        if account.payoff is not None:
+        # A return that acted is answered when its payoff is fixed; one that did not
+        # has an account fixed at once that says nothing about it (its measurement, if
+        # any, is its declined trade's price), so only its mark or final price answers.
+        if ((account.payoff is not None and self._acted(about))
+                or about in self.marked_outcomes or about in self.world_outcomes):
             return "judgement needs a chosen return whose consequence is still open"
-        # The backstop counts world ticks consumed since the return opened (defect 1).
+        # The horizons count world ticks consumed since the return opened (defect 1).
         opened = (account.opened_at_tick if account.opened_at_tick is not None
                   else self.ticks_consumed)
-        due = opened + self.consequences.backstop
-        if self.ticks_consumed >= due:
-            return "judgement needs a chosen return inside its consequence backstop"
-        backstop_ns = (self.clock.now_ns
-                       + (due - self.ticks_consumed) * self.tick_clock.interval_ns)
-        if self.queue.get(handle).deadline_ns > backstop_ns:
-            return "judgement would settle after the chosen return's consequence backstop"
+        if self.ticks_consumed >= opened + self.ev.consequence_horizon_ticks:
+            return "judgement needs a chosen return before its consequence horizon"
         return None
 
     CHILD_SUBJECT_REFUSAL = ("a requested judgement may only address the requesting decision "

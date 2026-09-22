@@ -89,7 +89,7 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     scripted = load_manifest("scripted")
     assert '"forecast_horizon_events":10' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "d195282a92d3498ac7bfa397fd117aa22f104af275d0af566d803645d74ae33f"
+        "9a8e00eae68b4aca0b61b9a3e458d9c769b7d414ad0f21e5ccfaaf42dd58e287"
     )
 
     implicit = manifest_from_dict(_base())

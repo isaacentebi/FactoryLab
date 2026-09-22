@@ -322,6 +322,15 @@ class ReturnConsequences:
         self.table = table
         return fixed
 
+    def mark(self, handle: str, event: int) -> Payoff | None:
+        """This return's outcome marked to the mids now, without fixing it (``LotTable.mark``).
+
+        None while an order write is unanswered: which lots are whose is unknown.
+        """
+        if self.pending_orders:
+            return None
+        return self.table.mark(handle, event, self.mids, censored=self._unknown_portions())
+
     def payoff(self, handle: str) -> Payoff | None:
         """Return the fixed economic outcome, or None while a known return remains open."""
         return self.table.account(handle).payoff

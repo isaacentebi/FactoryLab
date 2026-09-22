@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
 from statistics import fmean
 from typing import Any
 
@@ -14,7 +13,6 @@ from factorylab.kernel.wallet import Infeasible
 from factorylab.learners.base import BanditFeedback
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_window_ns
 from factorylab.runtime.grounded import (
-    DEFAULT_TAKER_FEE_BPS,
     OPPORTUNITY_DEFINITION,
     declined_trade,
     latest_mids,
@@ -185,6 +183,28 @@ class FeedbackMixin:
         except (KeyError, TypeError):
             return True
 
+    def _cascade_priority(self, ev: Event) -> int:
+        """1 for a verdict the world will never grade, so the tier above reads it first.
+
+        Essay II.III.b: an evaluator is graded from above and by realized consequence.
+        A verdict on a bare hold has no world outcome, so the tier above is its only
+        grader; reading the window's world-graded verdicts first left those verdicts
+        ungraded and paid the ones that avoided the world best (the #128 review:
+        meta-only judge decisions 0.80 against world-scored 0.52). Guarantees 1 only
+        for a first-tier verdict whose judged return executed nothing and named no
+        declined trade; 0 otherwise.
+        """
+        if ev.kind is not EventKind.VERDICT or "tier" in ev.payload:
+            return 0
+        about = ev.payload.get("about_handle")
+        if not isinstance(about, str) or about in self.reference_mids:
+            return 0
+        try:
+            self.consequences.table.account(about)
+        except KeyError:
+            return 0
+        return int(not self._acted(about))
+
     def _cascade_arrival(self, ev: Event) -> Event | None:
         """Ledger every arrival and release before changing buffers or routing upward.
 
@@ -206,7 +226,8 @@ class FeedbackMixin:
                 ),
                 opened_ns=ev.ts_ns,
             )
-        next_gate, released = gate.add(ev, complete=self._cascade_evidence_complete)
+        next_gate, released = gate.add(ev, complete=self._cascade_evidence_complete,
+                                       priority=self._cascade_priority)
         self.ledger.append(
             {
                 "kind": "cascade.arrival",
@@ -907,8 +928,21 @@ class FeedbackMixin:
         except (AttributeError, KeyError):
             return False
 
-    def _world_outcome(self, about: str) -> tuple[str, float | None, str | None]:
-        """The measured outcome of a judged return: ``(state, y, kind)``.
+    def _horizon_reached(self, about: str, account: Any, frozen: dict | None,
+                         ticks: int) -> bool:
+        """Whether ``ticks`` world ticks have passed since the judged return opened."""
+        opened = account.opened_at_tick
+        if opened is None:
+            opened = frozen["tick"] if frozen is not None else self.ticks_consumed
+        return self.ticks_consumed >= opened + ticks
+
+    def _price_declined(self, about: str, frozen: dict) -> dict[str, Any] | None:
+        """The named declined trade priced from its frozen mids to the mids now (R2)."""
+        return opportunity_cost(tuple(tuple(m) for m in frozen["mids"]), latest_mids(self),
+                                self.ev.opportunity_scale_bps, frozen["declined"])
+
+    def _final_outcome(self, about: str) -> tuple[str, float | None, str | None]:
+        """The final measured outcome of a judged return: ``(state, y, kind)``.
 
         ``state`` is ``open`` while the world has not answered, ``none`` when it
         never will, and ``measured`` with ``y`` in [0, 1] and the kind of measurement
@@ -917,14 +951,14 @@ class FeedbackMixin:
         * a return that executed venue operations is measured by ``return_paid_off``,
           realized or marked P&L net of its compute and tool cost, as 0 or 1, once the
           consequence book fixes it (at its backstop at the latest);
-        * a return that executed nothing and named the trade it declined is
-          measured by that trade's opportunity price at the consequence backstop
-          (ruling R2), with the mids frozen when the return was made;
+        * a return that executed nothing and named the trade it declined is measured
+          by that trade's gross move at the consequence backstop (ruling R2,
+          ``opportunity_cost``), from the mids frozen when the return was made;
         * anything else (a bare hold) has no world outcome, and only the tier above
           grades a verdict about it.
 
-        A measurement is taken once and kept, so every verdict about one return is
-        scored against the same fact.
+        A measurement is taken once and kept, so every verdict about one return reads
+        the same fact.
         """
         known = self.world_outcomes.get(about)
         if known is not None:
@@ -940,25 +974,18 @@ class FeedbackMixin:
             if payoff is None:
                 return "open", None, None
             if payoff.censored is not None:
-                return self._keep_outcome(about, "none", None, None)
-            return self._keep_outcome(about, "measured", float(payoff.y), RETURN_PAID_OFF.id)
+                return self._keep_outcome(self.world_outcomes, about, "none", None, None)
+            return self._keep_outcome(self.world_outcomes, about, "measured",
+                                      float(payoff.y), RETURN_PAID_OFF.id)
         frozen = self.reference_mids.get(about)
         if frozen is None:
-            return self._keep_outcome(about, "none", None, None)
-        opened = (account.opened_at_tick if account.opened_at_tick is not None
-                  else frozen["tick"])
-        if self.ticks_consumed < opened + self.ev.consequence_backstop_ticks:
+            return self._keep_outcome(self.world_outcomes, about, "none", None, None)
+        if not self._horizon_reached(about, account, frozen, self.ev.consequence_backstop_ticks):
             return "open", None, None
-        fee = getattr(self.exchange, "fee_bps", None)
-        try:
-            fee_bps = Decimal(str(fee)) if fee is not None else DEFAULT_TAKER_FEE_BPS
-        except (InvalidOperation, ValueError):
-            fee_bps = DEFAULT_TAKER_FEE_BPS
-        priced = opportunity_cost(tuple(tuple(m) for m in frozen["mids"]), latest_mids(self),
-                                  2 * fee_bps, frozen["declined"])
+        priced = self._price_declined(about, frozen)
         self.reference_mids.pop(about, None)
         if priced is None:
-            return self._keep_outcome(about, "none", None, None)
+            return self._keep_outcome(self.world_outcomes, about, "none", None, None)
         self.ledger.append({"kind": "consequence.opportunity", "handle": about,
                             "horizon_ticks": self.ev.consequence_backstop_ticks,
                             **priced, "ts": self.clock.now_ns})
@@ -969,17 +996,57 @@ class FeedbackMixin:
             self.outcomes.append(owner, handle=about, evidence=f"opportunity:{about}",
                                  outcome={"kind": "opportunity_cost", "score": priced["score"],
                                           "declined": priced["declined"],
-                                          "declined_net_bps": priced.get("declined_net_bps"),
-                                          "moves": priced["moves"],
-                                          "round_trip_fee_bps": priced["round_trip_fee_bps"]})
-        return self._keep_outcome(about, "measured", float(priced["score"]),
-                                  OPPORTUNITY_DEFINITION)
+                                          "gross_bps": priced["gross_bps"],
+                                          "moves": priced["moves"]})
+        return self._keep_outcome(self.world_outcomes, about, "measured",
+                                  float(priced["score"]), OPPORTUNITY_DEFINITION)
 
-    def _keep_outcome(self, about: str, state: str, y: float | None,
+    def _reward_outcome(self, about: str) -> tuple[str, float | None, str | None, str]:
+        """The outcome a verdict's reward is scored on: ``(state, y, kind, phase)``.
+
+        Anticipatory settlement (essay II.IV.b: an explorer is compensated sooner than
+        the lifetime of what it found). The final measurement when the world has
+        already fixed it (``phase`` ``final``); otherwise, once
+        ``consequence_horizon_ticks`` have passed since the judged return opened, its
+        mark (``phase`` ``mark``): an executed return's lots marked to the mids then,
+        a declined trade priced to the mids then. The mark is taken once and kept, so
+        every verdict about one return is rewarded on the same fact; the final
+        measurement later updates standing and the base rate only.
+        """
+        state, y, kind = self._final_outcome(about)
+        if state != "open":
+            return state, y, kind, "final"
+        known = self.marked_outcomes.get(about)
+        if known is not None:
+            return known["state"], known["y"], known["kind"], "mark"
+        account = self.consequences.table.account(about)
+        frozen = self.reference_mids.get(about)
+        if not self._horizon_reached(about, account, frozen, self.ev.consequence_horizon_ticks):
+            return "open", None, None, "mark"
+        if self._acted(about):
+            payoff = self.consequences.mark(about, self.n)
+            if payoff is None:
+                return "open", None, None, "mark"
+            self._keep_outcome(self.marked_outcomes, about, "measured", float(payoff.y),
+                               RETURN_PAID_OFF.id)
+            self.ledger.append({"kind": "consequence.marked", "handle": about,
+                                "y": payoff.y, "net_micro": payoff.net_micro,
+                                "cost_micro": payoff.cost_micro, "ts": self.clock.now_ns})
+            return "measured", float(payoff.y), RETURN_PAID_OFF.id, "mark"
+        priced = self._price_declined(about, frozen)
+        if priced is None:
+            return "open", None, None, "mark"
+        self.ledger.append({"kind": "consequence.opportunity_mark", "handle": about,
+                            "horizon_ticks": self.ev.consequence_horizon_ticks,
+                            **priced, "ts": self.clock.now_ns})
+        self._keep_outcome(self.marked_outcomes, about, "measured", float(priced["score"]),
+                           OPPORTUNITY_DEFINITION)
+        return "measured", float(priced["score"]), OPPORTUNITY_DEFINITION, "mark"
+
+    def _keep_outcome(self, kept: dict, about: str, state: str, y: float | None,
                       kind: str | None) -> tuple[str, float | None, str | None]:
-        """Keep a final measurement so every verdict about the return reads the same one."""
-        self.world_outcomes[about] = {"state": state, "y": y, "kind": kind,
-                                      "tick": self.ticks_consumed}
+        """Keep a measurement so every verdict about the return reads the same one."""
+        kept[about] = {"state": state, "y": y, "kind": kind, "tick": self.ticks_consumed}
         return state, y, kind
 
     def _freeze_declined_trade(self, handle: str, outputs: Any) -> None:
@@ -995,34 +1062,75 @@ class FeedbackMixin:
         self.reference_mids[handle] = {"declined": declined, "mids": [list(m) for m in mids],
                                        "tick": self.ticks_consumed}
 
-    def _score_verdict(self, rec: PendingJudgement, y: float, kind: str) -> None:
+    def _score_verdict(self, rec: PendingJudgement, y: float, kind: str, phase: str) -> None:
         """Score one judge's verdict against its return's measured outcome (ruling R1).
 
         The verdict is a prediction: it is scored by Brier (higher is better,
         ``settle.normative_brier``) against y, beside the base rate of that kind of
         outcome before this return's own entered it. The consequence score is the
-        judge's own reward on its second signal, it trains the judge's standing,
-        and the judge is told, privately.
+        judge's own reward on its second signal and the judge is told, privately. On
+        a final measurement it also trains the judge's standing and the base rate; on
+        a mark (anticipatory settlement) those wait for the final measurement, which
+        is scored once more, late, and never re-settles the reward.
         """
-        result = self.settler.settle_verdict(
-            evaluator_id=rec.evaluator_id, about_handle=rec.about, q=rec.q, outcome=y,
-            key=f"{VERDICT_BASE}{kind}")
-        score = consequence_score(result.brier, result.baseline_brier)
+        key = f"{VERDICT_BASE}{kind}"
+        if phase == "final":
+            result = self.settler.settle_verdict(
+                evaluator_id=rec.evaluator_id, about_handle=rec.about, q=rec.q, outcome=y,
+                key=key)
+            brier, baseline = result.brier, result.baseline_brier
+        else:
+            brier, baseline = self.settler.score_verdict(about_handle=rec.about, q=rec.q,
+                                                         outcome=y, key=key)
+            self.late_verdicts[rec.handle] = {"about": rec.about, "q": rec.q,
+                                              "evaluator_id": rec.evaluator_id,
+                                              "tick": self.ticks_consumed}
+        score = consequence_score(brier, baseline)
         seq = self.ledger.append({
             "kind": "verdict.consequence", "handle": rec.handle, "about_handle": rec.about,
             "evaluator_id": rec.evaluator_id, "q": rec.q, "y": y, "outcome": kind,
-            "brier": result.brier, "baseline_brier": result.baseline_brier,
+            "phase": phase, "brier": brier, "baseline_brier": baseline,
             "score": score, "ts": self.clock.now_ns,
         })
         self.outcomes.append(rec.evaluator_id, handle=rec.handle, evidence=seq,
                              outcome={"judged_outcome": kind, "judged_y": round(y, 4),
-                                      "your_verdict_brier": round(result.brier, 4),
-                                      "baseline_brier": round(result.baseline_brier, 4),
+                                      "phase": phase,
+                                      "your_verdict_brier": round(brier, 4),
+                                      "baseline_brier": round(baseline, 4),
                                       "consequence_score": round(score, 4)})
         self._count_consequence(rec.evaluator_id)
         if rec.about in self.pending_exposure:
             self.exposure_scores.setdefault(rec.about, []).append(score)
         self._close_consequence(rec.handle, score, rec)
+
+    def _settle_late_verdicts(self) -> None:
+        """A verdict rewarded on a mark is scored on the final measurement, late.
+
+        Guarantees the final measurement trains the judge's standing and the base
+        rate once, against the same pre-outcome base rate the mark was scored on,
+        and never settles the judge's reward a second time (no double scoring).
+        """
+        for handle, late in sorted(self.late_verdicts.items()):
+            state, y, kind = self._final_outcome(late["about"])
+            if state == "open":
+                continue
+            del self.late_verdicts[handle]
+            if state != "measured":
+                continue
+            result = self.settler.settle_verdict(
+                evaluator_id=late["evaluator_id"], about_handle=late["about"], q=late["q"],
+                outcome=y, key=f"{VERDICT_BASE}{kind}")
+            self.ledger.append({
+                "kind": "verdict.consequence_late", "handle": handle,
+                "about_handle": late["about"], "evaluator_id": late["evaluator_id"],
+                "q": late["q"], "y": y, "outcome": kind, "brier": result.brier,
+                "baseline_brier": result.baseline_brier, "ts": self.clock.now_ns})
+            self.outcomes.append(late["evaluator_id"], handle=handle,
+                                 evidence=f"late:{handle}",
+                                 outcome={"judged_outcome": kind, "judged_y": round(y, 4),
+                                          "phase": "final",
+                                          "your_verdict_brier": round(result.brier, 4),
+                                          "baseline_brier": round(result.baseline_brier, 4)})
 
     def _score_meta(self, rec: PendingJudgement, judged: float | None) -> None:
         """Score a meta's grade against the consequence score of the decision it graded.
@@ -1083,15 +1191,16 @@ class FeedbackMixin:
             if rec.consequence_closed:
                 continue
             if rec.tier == 1:
-                state, y, kind = self._world_outcome(rec.about)
+                state, y, kind, phase = self._reward_outcome(rec.about)
                 if state == "measured":
-                    self._score_verdict(rec, y, kind)
+                    self._score_verdict(rec, y, kind, phase)
                     continue
                 if state == "none":
                     self._close_consequence(rec.handle, None, rec)
                     continue
             if self._tick_age(rec) > backstop + timeout:
                 self._close_consequence(rec.handle, None, rec)
+        self._settle_late_verdicts()
         self._settle_exposures()
         for rec in records:
             if not rec.grade_closed and self._tick_age(rec) > timeout:
@@ -1104,7 +1213,8 @@ class FeedbackMixin:
         # reads a return within its verdict window, and a declined trade is priced at
         # its backstop.
         horizon = self.ticks_consumed - backstop - timeout
-        for kept in (self.consequence_scores, self.world_outcomes, self.reference_mids):
+        for kept in (self.consequence_scores, self.world_outcomes, self.reference_mids,
+                     self.marked_outcomes, self.late_verdicts):
             for handle in [h for h, v in kept.items()
                            if (v[1] if isinstance(v, tuple) else v["tick"]) < horizon]:
                 del kept[handle]
@@ -1396,6 +1506,16 @@ class FeedbackMixin:
         settled = lr.status is SettleStatus.SETTLED
         if settled:
             reward = min(1.0, max(0.0, float(lr.score)))
+        elif lr.definition_version == DECLINED_DEFINITION:
+            # A declined commission is a seat choosing to do nothing with work it was
+            # handed: credited like an abstention, the zero-consequence reward less the
+            # card penalty of its role, never its own mean (the #128 review: judges
+            # otherwise earned more by avoiding the world than by facing it).
+            reward, penalty = self._priced_abstention(lr.handle, target.neutral())
+            self.ledger.append({"kind": "router.decline_priced", "handle": lr.handle,
+                                "router": state.learner.id, "neutral": target.neutral(),
+                                "penalty": penalty, "reward": reward,
+                                "ts": self.clock.now_ns})
         else:
             # The seat's own baseline on the live successor, less any charter price
             # its settlement carries (routers-learn + charter-price-bites).
@@ -1505,8 +1625,9 @@ class FeedbackMixin:
         woken decision of this draw bears in expectation. Waking nobody can
         therefore never beat waking a seat merely because penalties touched only the
         decisions that acted, and a stable failure's ratcheted prices reach it too.
-        An abstention drawn before its window recorded it is credited unpriced.
-        Returns (reward, penalty).
+        An abstention drawn before its window recorded it is credited unpriced. A
+        declined commission is priced the same way, on the role its seat was
+        measured in when it answered. Returns (reward, penalty).
         """
         origin = self.price_origins.get(handle, {}).get("origin")
         window = self.price_windows.get(origin)

@@ -429,6 +429,10 @@ class BootstrapMixin:
         # Judged return -> its measurement once final, so every verdict about it is
         # scored against one fact; and the mids a declined trade is priced from.
         self.world_outcomes: dict[str, dict[str, Any]] = {}
+        # Anticipatory settlement: each judged return's mark once taken, and the judge
+        # decisions rewarded on it whose final measurement is still owed to standing.
+        self.marked_outcomes: dict[str, dict[str, Any]] = {}
+        self.late_verdicts: dict[str, dict[str, Any]] = {}
         self.reference_mids: dict[str, dict[str, Any]] = {}
         self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator
         self.sampling_history: list[dict[str, Any]] = []

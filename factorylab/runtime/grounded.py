@@ -1,8 +1,8 @@
 """The priced road not taken: a world measurement of a declined trade (ruling R2).
 
 A decision that names the trade it declined, and executes nothing at the venue,
-has an outcome the world writes: what that trade would have netted over the
-consequence horizon after a round trip's fees. It is "a fact about the world ...
+has an outcome the world writes: which way the trade it named moved over the
+consequence horizon. It is "a fact about the world ...
 priced ex ante on the named trade", so it is a legitimate realized-consequence
 measurement (essay II.III.b: "a judgment of whether a given verdict predicted
 real downstream outcomes"). It grades the verdicts on that decision. It never
@@ -11,14 +11,13 @@ replaces a verdict as the producer's own score (R2).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 #: The definition an opportunity price is recorded under.
-OPPORTUNITY_DEFINITION = "opportunity-cost-v1"
-#: A venue whose fee is not published is priced at Hyperliquid's base taker tier.
-DEFAULT_TAKER_FEE_BPS = Decimal("4.5")
+OPPORTUNITY_DEFINITION = "opportunity-cost-v2"
 
 
 def latest_mids(runtime: Any) -> tuple[tuple[str, str], ...]:
@@ -51,20 +50,23 @@ def declined_trade(outputs: Mapping) -> dict[str, str] | None:
 
 def opportunity_cost(open_mids: Iterable[tuple[str, str]],
                      due_mids: Iterable[tuple[str, str]],
-                     round_trip_bps: Decimal,
-                     declined: Mapping[str, str] | None = None) -> dict[str, Any] | None:
+                     scale_bps: Decimal | int | float,
+                     declined: Mapping[str, str] | None) -> dict[str, Any] | None:
     """Price the road not taken: the trade the decision itself said it declined.
 
-    Guarantees the benchmark is chosen ex ante, never in hindsight: the best move
-    after the fact is a trade nobody could have known to take, and scoring a hold
-    against it would teach a population to trade noise. With a named declined
-    trade (a directional forecast), ``regret`` is what that trade would have
-    netted over the horizon after a round trip's fees, and the score is
-    ``cost / (cost + regret)`` in (0, 1]: 1 when declining it was right (it would
-    have lost or not paid its fees), falling as the profit passed up grows. With
-    none named, the decision's consequence is exactly zero and it settles at the
-    neutral 0.5; trades must beat that. Returns None when the prices are missing.
+    ``opportunity-cost-v2`` (the architect's ruling on the #128 review). Guarantees
+    ``y = 0.5 - 0.5 * tanh(gross_bps / scale_bps)``, where ``gross_bps`` is the named
+    trade's gross return over the horizon, signed by its side and excluding fees:
+    0.5 at no move, toward 1 as the named side moves against the trade (declining it
+    was right), toward 0 as it moves for it. The function is symmetric and monotone,
+    so without directional skill a hold earns 0.5 in expectation whatever trade it
+    names, and naming a dull coin buys nothing (the fee-netted v1 paid about 1 for
+    any trade that did not beat its fees). The benchmark is chosen ex ante, on the
+    named trade, never in hindsight. Returns None when no trade is named or its
+    prices are missing: a bare hold has no world outcome.
     """
+    if declined is None:
+        return None
     opened = dict(open_mids)
     due = dict(due_mids)
     moves = {}
@@ -76,21 +78,12 @@ def opportunity_cost(open_mids: Iterable[tuple[str, str]],
         if before > 0 and after > 0:
             moves[coin] = ((after - before) / before * Decimal(10_000)).quantize(
                 Decimal("0.01"))
-    if not moves:
-        return None
-    cost = max(Decimal(round_trip_bps), Decimal(1))
-    rows = [{"coin": c, "move_bps": str(m)} for c, m in moves.items()]
-    if declined is None:
-        return {"moves": rows, "declined": None, "round_trip_fee_bps": str(cost),
-                "regret_bps": None, "score": 0.5,
-                "basis": "no declined trade named: a decision with zero consequence"}
     move = moves.get(declined["coin"])
     if move is None:
         return None
     gross = move if declined["side"] == "buy" else -move
-    regret = max(Decimal(0), gross - cost)
-    return {"moves": rows, "declined": dict(declined), "round_trip_fee_bps": str(cost),
-            "declined_net_bps": str((gross - cost).quantize(Decimal("0.01"))),
-            "regret_bps": str(regret.quantize(Decimal("0.01"))),
-            "score": round(float(cost / (cost + regret)), 4),
-            "basis": "the named declined trade, marked to the horizon net of a round trip"}
+    scale = float(scale_bps)
+    return {"moves": [{"coin": c, "move_bps": str(m)} for c, m in moves.items()],
+            "declined": dict(declined), "gross_bps": str(gross), "scale_bps": scale,
+            "score": round(0.5 - 0.5 * math.tanh(float(gross) / scale), 6),
+            "basis": "the named declined trade's gross move, marked to the horizon"}
