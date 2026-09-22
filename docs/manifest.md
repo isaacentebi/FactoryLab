@@ -135,12 +135,17 @@ settings".
 | `treasury.venice_pay_to` | Nonzero EVM address; required with `venice_network`, refused without it | Absent | The only payee a Venice top-up quote may name; a quote or journaled authorization paying anyone else is refused before signing |
 | `committee.seats` | Integer, at least 3 so the existing three core roles can be covered | `5` | Configured resource bound, fixed for a run |
 | `committee.promise_resolution` | Finite positive number | `0.01` | Fraction of the frozen region's scale a promised move must clear to count |
+| `committee.quorum` | Integer in `[1, committee.seats]` | `3` (the smallest body in which a strict majority is not unanimity, so no one seat passes or blocks alone; also `committee.seats`' floor) | Launch cast, fixed for the world's life. Fewer eligible assemblies than this seat no committee at a governance boundary (`charter.seat_deferred`); a motion with fewer voting seats than this, once its proposer is excluded, waits for the next boundary; a retirement or connector below it is refused |
+| `norm_house.signer` | Absent, or a 0x-prefixed 20-byte EVM address (stored lower-case) | Absent: no norm edition is possible | Launch cast, fixed for the world's life and hashed: the one key whose signature makes a norm edition valid (essay II.IV.a, the input layer's write permission is part of the hard kernel) |
+| `charter.edition` | Positive integer | `1` | The edition the world launches with; after 1 it requires `parent_charter_sha256` (charter audit P5) |
+| `charter.parent_charter_sha256` | 64 lowercase hex characters | Absent; required when `edition` is after 1 and refused at 1 | The content digest of the charter this one descends from. Part of the charter's content digest and of the manifest hash (`charter_parent_sha256`) |
 | `charter.norms` | Nonempty array of names, or of `{ id, definition }` tables | Required; edition 3 carries definitions, editions before it carry bare names | Read-only for the edition. A bare name loads with an empty definition, so a charter surveyed before definitions existed keeps its content digest; `Charter.render` prints each definition under its norm |
 | `charter.cards[].window.kind` | `"returns"`, `"forecasts"`, or `"windows"` | Required for explicit cards | Executable selector type; its value is population amendable |
 | `charter.cards[].window.n` | Positive integer, never a boolean or float | Required; seed cost and well-formedness cards use `100`, forecast skill uses `50` | Population amendable sample horizon |
 | `charter.cards[].window.per` | `"role"`, `"assembly"`, or null | Required in JSON; omitted in TOML means null. Seed cost and well-formedness use `"role"`; forecast skill uses `"assembly"` | Population amendable scope |
 | `charter.cards[].answers_for` | `producer`, `evaluator`, `meta`, `antagonist`, `all`, or any registered emitted kind | Required | Population amendable pricing responsibility |
-| Proposal `predicted_effect.card_id` | Current or proposed card id for amendments; current card id for connectors and retirements | Required; no default | Liability binds to a measurable card |
+| Proposal `predicted_effect.card_id` | Current or proposed card id for cards and lambda amendments; current card id for connectors and retirements | Required unless `observation` is given; no default | Liability binds to a measurable card |
+| Proposal `predicted_effect.observation` | `burn_per_window` or a population-registered observation id | Required for, and only for, a clock amendment (`tick_interval`) | Speed is cash burn (charter audit M6): the promise is graded on the observation over one closed window, its region the observation's declared range |
 | Proposal `predicted_effect.direction` | `increase` or `decrease` | Required; no default | The promise graded against the baseline recorded at activation |
 | Proposal `predicted_effect.window` | Positive integer count of closed reserve windows after activation | Required; no default | Population-authored liability horizon |
 
@@ -505,6 +510,56 @@ scope measurements; private entity values never enter the public topology view.
 Previous-cost-median bounds use the same selector's per-response cost samples.
 New horizons may need to warm up when retained history is shorter than a newly
 adopted card. The buffers and their active measurements survive resume.
+
+## The standing committee, motions and norm editions
+
+Charter audit C1, C2, P3, P4, M4, M6, M7 (essay II.IV.a, II.IV.c).
+
+- **Motions.** An amendment carries exactly one change class: cards (`add`,
+  `replace`, `remove`), lambda (`{"lambda": {card_id: value}}` over cards the
+  current edition carries) or clock (`tick_interval`). A card entry carrying its
+  own `lambda`, or a motion carrying two classes, is refused before any trial
+  (`amendment.rejected`). A clock motion's `predicted_effect` names an
+  observation, `burn_per_window` or one the population registered, instead of a
+  card. Admission puts the motion on the agenda; nothing is seated.
+- **Governance boundaries.** A window boundary at which the governance cadence
+  is ready (`timing.min_ratio` times the measured slowest period since the last
+  boundary) is a governance boundary (`charter.boundary`); the next boundary is
+  anchored to it whether or not anything activates. At each one a new committee
+  is drawn (`charter.seat`, keyed by the boundary's ordinal): one seat per role
+  present among the eligible assemblies (the seed roles and any declared role),
+  preferring a learner type not yet seated, then each learner type present
+  (`exp3`, `blum_mansour`: an assembly's own registered learner, else the
+  learners of the routers that sample it), then uniformly. `charter.seat`
+  records the seats, the agenda, the deferred motions, each motion's voter count,
+  the quorum and `coverage` (roles and learner types present and covered). Below
+  `committee.quorum` eligible assemblies it records `charter.seat_deferred`
+  instead and every motion waits. Each seat votes on each agenda motion except
+  its own; passed motions then take effect at the same boundary, in proposal
+  order, each as its own edition (`charter.activate` names its `change`).
+- **Internal motions.** Retirements and connectors are voted when proposed, by a
+  committee drawn the same way (with `coverage` on `retirement.proposed` and
+  `connector.seated`), and never touch the governance cadence. A passed
+  retirement takes effect at the next window boundary.
+- **Norm editions.** `factorylab norm-edition --world W --ledger L --norms F
+  --sequence N --key-file K` writes `L.norms/N.json`: `format`
+  (`factorylab.norm-edition/1`), `world`, `manifest_sha256`, `sequence`, `norms`,
+  `signer`, and `signature`, an EIP-191 signature of the sha256 of the other five
+  fields' canonical JSON. Nothing else is accepted, so money, prices, cards and
+  kernel parameters are unreachable through it. At a governance boundary the
+  runtime reads sequence `applied + 1` through the recovery journal and verifies
+  it against `norm_house.signer`; a refusal is `norm_edition.refused`. A valid
+  edition first hears each seated delegate (`norm_edition.testimony`, recorded,
+  non-binding, its decision closed as `norm-testimony-unscored-v1`; with no
+  committee seated, `norm_edition.testimony_absent`), then takes effect as the
+  next edition (`charter.norm_edition`): the new norms, every card whose norm
+  survives, and a `charter.refused` for each card and each pending motion on a
+  removed norm.
+- **Saturation.** Each priced card's `windows_at_lambda_max` (observed windows
+  closed at `prices.lambda_max`) and `violation_windows` (the current run of
+  consecutive observed windows in violation) are in `world.card_prices`, the
+  public window item and every ballot's `inputs.agenda`. They kill nothing: the
+  kernel's three deaths are unchanged.
 
 ## Committee liability
 
@@ -1718,8 +1773,8 @@ supported scopes, or null. When the series holds `trial_windows` rows the
 trial is complete (`challenge.trial_complete`, status `due`) and no further
 window is measured.
 
-At the next activation boundary the completed trial goes to the existing
-committee ballot: the replace amendment is proposed under the challenge's own
+At the next window boundary the completed trial goes on the standing
+committee's agenda: the replace amendment is proposed under the challenge's own
 id with the observation bindings frozen at admission (so a definition that
 drifted during the trial refuses activation exactly as any amendment would,
 ledgered `challenge.refused`), its promise is the replacement holding inside
