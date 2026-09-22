@@ -137,13 +137,19 @@ class PriceController:
       the card violates, ``lambda -= decay`` once it stops.
     * ``pid`` (Stooke et al. 2020; essay II.II.b): ``lambda = Kp*e + I + D``, where
       ``I`` accumulates ``eta * e`` while the card violates and leaks ``decay`` per
-      window once it stops, and ``D = Kd * d(measurement)`` is taken on the
-      measurement, not the error, so a moved region cannot kick the price. ``D``
-      acts only while the card violates: a violation shrinking fast lowers the
-      price before it overshoots, one growing fast raises it sooner. ``I`` is held
-      in ``[0, lambda_max]`` and stops integrating while the output is saturated
-      high (anti-windup), so pressure built during a saturated stretch cannot keep
-      the price pinned after the violation ends.
+      window once it stops, and ``D = Kd * max(0, d(measurement))`` is taken on
+      the measurement, not the error, so a moved region cannot kick the price.
+      ``D`` acts only while the card violates, and only its positive part (Stooke
+      et al.'s own choice): a violation growing fast is priced before the integral
+      has had to wind up to meet it, which is how Kd damps the escalation before
+      it overshoots. A violation that is shrinking but still outside the region is
+      priced by ``P + I`` alone, never below its accumulated integral: the damping
+      the essay asks of Kd is on the price's climb, not a cancellation of it.
+      ``I`` is held in ``[0, lambda_max]`` and stops integrating only while the
+      output is already saturated high without it (``P + I >= lambda_max``) *and*
+      the violation is still growing (anti-windup). A sustained or shrinking
+      violation keeps accumulating pressure even while ``P`` alone would saturate,
+      so the price does not collapse to ``P`` the moment the violation eases.
 
     Either way the price is clipped to ``[0, lambda_max]``.
     """
@@ -412,12 +418,16 @@ class PriceController:
 
     def _pid(self, state: _CardState, value: float,
              violation: float) -> tuple[float, float, dict[str, float]]:
-        """Return the unclipped PID output, the next bounded integral and the three terms.
+        """Guarantees a violating card is never priced below its accumulated integral.
 
-        The derivative is the change in the measurement itself, signed so that a
-        move deeper into violation is positive, and taken only while the card
-        violates. The integral never leaves ``[0, lambda_max]`` and does not
-        accumulate while the previous-integral output already reaches ``lambda_max``.
+        Returns the unclipped PID output, the next bounded integral and the three
+        terms. The derivative is the change in the measurement itself, signed so
+        that a move deeper into violation is positive, taken only while the card
+        violates, and only its positive part: a card moving back toward its region
+        but still outside it keeps ``P + I``, so a shrinking violation can lower the
+        price only through ``P``, never to zero while it lasts. The integral never
+        leaves ``[0, lambda_max]`` and holds only while ``P`` plus the integral
+        already reaches ``lambda_max`` and the violation is still growing.
         """
         region = state.region
         derivative = 0.0
@@ -426,14 +436,23 @@ class PriceController:
                 sign = 1.0 if value > region.hi else -1.0
             else:
                 sign = 1.0 if region.kind == "max" else -1.0
-            derivative = self.__kd * sign * (value - state.previous_value) / region.scale
+            # Positive part only (Stooke et al. 2020): Kd answers a violation that is
+            # getting worse. A signed term would let a card still out of its region
+            # but improving fast cancel P and I and be priced at zero (essay II.II.b:
+            # Kd "dampen[s] price escalation", it does not waive the price).
+            derivative = max(0.0, self.__kd * sign * (value - state.previous_value)
+                             / region.scale)
         proportional = self.__kp * violation
         if violation <= 0:
             integral = max(0.0, state.integral - self.__decay)
-        elif proportional + state.integral + derivative < self.__lambda_max:
-            integral = min(self.__lambda_max, state.integral + self.__eta * violation)
+        elif (proportional + state.integral >= self.__lambda_max
+              and violation > state.previous_violation):
+            # Saturated high without any new integration and still climbing: hold,
+            # never wind up. A violation that is flat or easing keeps integrating
+            # even when P alone saturates, so I is there when P falls away.
+            integral = state.integral
         else:
-            integral = state.integral  # saturated high: hold, never wind up
+            integral = min(self.__lambda_max, state.integral + self.__eta * violation)
         return (proportional + integral + derivative, integral,
                 {"p": proportional, "i": integral, "d": derivative})
 
