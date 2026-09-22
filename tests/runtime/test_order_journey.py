@@ -6,8 +6,8 @@ never a second instruction, and an identical order the same seat already has
 resting is not placed twice.
 """
 
-import json
 import copy
+import json
 from decimal import Decimal
 
 from factorylab.kernel.events import EventKind
