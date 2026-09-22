@@ -946,9 +946,6 @@ class SchematicsMixin:
             "last_closed_window_values": dict(self.stats.last_window_values),
             "pathologies": dict(self.stats.pathologies),
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
-            # The shared directory is a public fact about the world, not about the
-            # seat: what a seat owns is in its own ``YOU`` directory slot.
-            "shared_directory": self._directory_changes(),
         }
 
     def _catalogue_view(self) -> dict[str, Any]:
@@ -1134,11 +1131,11 @@ class SchematicsMixin:
                 "basis": "the kernel records the tick index of a paid wake, not a wall clock"}
 
     def _seat_directory(self, seat: str) -> dict[str, Any]:
-        """The artifacts the seat may read, bounded and paged."""
-        count, artifacts = self._artifacts_visible_to(seat, DIRECTORY_PREVIEW)
+        """The artifacts the seat owns, bounded and paged; no other seat's rows."""
+        count, artifacts = self._artifacts_owned_by(seat, DIRECTORY_PREVIEW)
         return {
             "artifacts": {"count": count,
-                          "newest": [{k: row[k] for k in ("sha", "kind", "bytes", "owner")}
+                          "newest": [{k: row[k] for k in ("sha", "kind", "bytes")}
                                      for row in artifacts]},
             "paging": f"artifact.list returns {DIRECTORY_PAGE} rows a page",
         }
@@ -1502,29 +1499,13 @@ class SchematicsMixin:
                 "events_so_far": self.n}
 
     def _continuity_block(self) -> dict[str, Any]:
-        """What changed in shared memory, and how old the market data is.
+        """How old the market data is.
 
-        The seat's own working state and its unread outcomes are request inputs
-        (edition 3 C1), not world facts, and ``Request.prompt_text`` joins them to
-        this block; what a world can say for everyone is what the directory holds
-        and when each price was last seen.
+        The seat's own working state, its unread outcomes and its own artifact
+        directory are the seat's (edition 3 C1; information audit C4), not world
+        facts; what a world can say for everyone is when each price was last seen.
         """
-        return {
-            "shared_directory_changes": self._directory_changes(),
-            "market_data_as_of": self._market_data_as_of(),
-        }
-
-    def _directory_changes(self) -> dict[str, Any]:
-        """A bounded preview of the shared directory; the list tools page the rest."""
-        listing = self._artifact_listing()
-        return {
-            "artifacts": {"count": listing.count(),
-                          "newest": [{k: row[k] for k in
-                                      ("sha", "kind", "bytes", "owner", "public")}
-                                     for row in listing.newest(DIRECTORY_PREVIEW)]},
-            "paging": f"artifact.list returns {DIRECTORY_PAGE} rows a page with "
-                      "a cursor; it is an index, not contents",
-        }
+        return {"market_data_as_of": self._market_data_as_of()}
 
     def _market_data_as_of(self) -> dict[str, Any]:
         """Per traded coin: when its mid was last seen, and whether that is stale or missing.

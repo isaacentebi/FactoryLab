@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import bisect
 import hashlib
-import heapq
 import json
 import math
 from dataclasses import dataclass, replace
@@ -192,24 +191,21 @@ def _venue_aliases(call: dict) -> None:
         args["side"] = "buy" if args.pop("is_buy") else "sell"
 
 class ArtifactListing:
-    """The archive's directory rows in listing order, kept sorted as the archive changes.
+    """Each owner's directory rows in listing order, kept sorted as the archive changes.
 
     Listing order is newest reference first, then by hash, then by the order the
-    references were made: exactly the order a stable sort of ``store.entries()``
-    by ``(-created_ns, sha)`` produces. Each row is the dict the directory always
-    built for that reference. Rows are shared with the listing; the runtime hands
-    out copies.
+    references were made. Rows are indexed by owner only: a seat lists what it
+    owns and nothing else (essay II.I.b: "the local state of a given agent ...
+    should be absolutely private"). Rows are shared with the listing; the runtime
+    hands out copies.
     """
 
     def __init__(self, store: Any) -> None:
         self.store = store
         self.epoch: int | None = None
-        self.keys: list[tuple] = []                 # every row's sort key, sorted
         self.row: dict[tuple, dict[str, Any]] = {}  # sort key -> row
         self.by_sha: dict[str, list[tuple]] = {}
         self.by_owner: dict[str, list[tuple]] = {}  # each sorted
-        self.public: list[tuple] = []               # sorted
-        self.owner_public: dict[str, int] = {}      # rows both owned and published
 
     def sync(self) -> None:
         """Fold every change the store reports into the listing."""
@@ -228,100 +224,56 @@ class ArtifactListing:
             for key, row in self._rows_for_sha(sha):
                 self._insert(key, row)
 
-    def rows(self) -> list[dict[str, Any]]:
-        return [self.row[key] for key in self.keys]
-
     def rows_for(self, owner: str) -> list[dict[str, Any]]:
         return [self.row[key] for key in self.by_owner.get(owner, ())]
-
-    def count(self) -> int:
-        return len(self.keys)
-
-    def newest(self, limit: int) -> list[dict[str, Any]]:
-        return [self.row[key] for key in self.keys[:limit]]
-
-    def visible_to(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
-        """The count and newest rows a seat owns or that are published, in listing order."""
-        own = self.by_owner.get(seat, [])
-        count = len(own) + len(self.public) - self.owner_public.get(seat, 0)
-        newest: list[dict[str, Any]] = []
-        last = None
-        for key in heapq.merge(own, self.public):
-            if key == last:
-                continue
-            if len(newest) >= limit:
-                break
-            last = key
-            newest.append(self.row[key])
-        return count, newest
 
     @staticmethod
     def _key(row: dict[str, Any], position: int) -> tuple:
         return (-(row["updated_ns"] or 0), str(row["sha"]), position)
+
+    @staticmethod
+    def _row(sha: str, owner: str, kind: Any, size: int, ts: int) -> dict[str, Any]:
+        return {"sha": sha, "owner": owner, "bytes": size, "updated_ns": ts,
+                "title": str(sha)[:12], "type": kind, "kind": kind}
 
     def _rows_for_sha(self, sha: str):
         store = self.store
         record = store.index.get(sha)
         if record is None:
             return
-        kind = record.get("kind")
         references = store.references(sha, record)
         for position, (owner, reference) in enumerate(references.items()):
-            row = {"sha": sha, "owner": owner, "public": bool(reference.get("public")),
-                   "bytes": record["bytes"], "updated_ns": reference.get("ts", record["ts"])}
-            row["title"] = str(sha)[:12]
-            row["type"] = row["kind"] = kind
+            row = self._row(sha, owner, record.get("kind"), record["bytes"],
+                            reference.get("ts", record["ts"]))
             yield self._key(row, position), row
 
     def _rows_from_list(self, store: Any):  # pragma: no cover - a store from before C1
         kinds = {sha: record.get("kind") for sha, record in store.index.items()}
-        if hasattr(store, "entries"):
-            rows = [{"sha": sha, "owner": owner, "public": bool(public), "bytes": size,
-                     "updated_ns": ts} for sha, owner, public, size, ts in store.entries()]
-        else:
-            rows = [{"sha": row["sha"], "owner": row["owner"],
-                     "public": bool(row.get("public")), "bytes": row["bytes"],
-                     "updated_ns": row["ts"]} for row in store.list()]
-        for position, row in enumerate(rows):
-            row["title"] = str(row["sha"])[:12]
-            row["type"] = row["kind"] = kinds.get(row["sha"])
+        for position, row in enumerate(store.list()):
+            row = self._row(row["sha"], row["owner"], kinds.get(row["sha"]), row["bytes"],
+                            row["ts"])
             yield self._key(row, position), row
 
     def _rebuild(self, keyed) -> None:
-        self.keys, self.row, self.by_sha = [], {}, {}
-        self.by_owner, self.public, self.owner_public = {}, [], {}
+        self.row, self.by_sha, self.by_owner = {}, {}, {}
         for key, row in keyed:
             self.row[key] = row
-            self.keys.append(key)
             self.by_sha.setdefault(row["sha"], []).append(key)
             self.by_owner.setdefault(row["owner"], []).append(key)
-            if row["public"]:
-                self.public.append(key)
-                self.owner_public[row["owner"]] = self.owner_public.get(row["owner"], 0) + 1
-        self.keys.sort()
-        self.public.sort()
         for keys in self.by_owner.values():
             keys.sort()
 
     def _insert(self, key: tuple, row: dict[str, Any]) -> None:
         self.row[key] = row
-        bisect.insort(self.keys, key)
         self.by_sha.setdefault(row["sha"], []).append(key)
         bisect.insort(self.by_owner.setdefault(row["owner"], []), key)
-        if row["public"]:
-            bisect.insort(self.public, key)
-            self.owner_public[row["owner"]] = self.owner_public.get(row["owner"], 0) + 1
 
     def _remove(self, key: tuple) -> None:
         row = self.row.pop(key)
-        _discard_sorted(self.keys, key)
         owned = self.by_owner[row["owner"]]
         _discard_sorted(owned, key)
         if not owned:
             del self.by_owner[row["owner"]]
-        if row["public"]:
-            _discard_sorted(self.public, key)
-            self.owner_public[row["owner"]] -= 1
 
 
 def _discard_sorted(keys: list[tuple], key: tuple) -> None:
@@ -853,7 +805,7 @@ class ComputeMixin:
     DIRECTORY_PAGE = 50
 
     def _ensure_directory_tools(self) -> None:
-        """Expose the archive's index: sha, kind, bytes and when, never contents.
+        """Expose the caller's own archive index: sha, kind, bytes and when, never contents.
 
         ``artifact.get`` returns contents, at its own price.
         """
@@ -861,44 +813,27 @@ class ComputeMixin:
         self.tool_specs.setdefault("artifact.list", {
             "id": "artifact.list",
             "kind": "artifact",
-            "description": f"Index the artifact archive: up to {page} rows of sha, kind, "
-            "bytes, owner seat, when it was archived and whether it is public, newest "
-            "first, with a cursor for the next page. Optionally filtered by owner seat. "
-            "Free, like artifact.get.",
+            "description": f"Index your own archived artifacts: up to {page} rows of sha, "
+            "kind, bytes and when it was archived, newest first, with a cursor for the "
+            "next page. Free, like artifact.get.",
             "args_schema": {
                 "type": "object",
-                "properties": {"owner": {"type": "string", "maxLength": 64},
-                               "cursor": {"type": "string", "maxLength": 128}},
+                "properties": {"cursor": {"type": "string", "maxLength": 128}},
                 "additionalProperties": False,
                 # Every published tool carries examples its own schema accepts (B1).
-                "examples": [{}, {"owner": "seed-decider"}],
+                "examples": [{}, {"cursor": "0" * 64}],
             },
             "price_micro_per_call": 0,
         })
-
-    def _artifact_entries(self) -> list[dict[str, Any]]:
-        """Every archived artifact's index row, newest first.
-
-        The rows come from ``ArtifactStore.entries()`` — ``(sha, owner, public,
-        bytes, created_ns)`` — so a scoped read and a bounded listing agree on one
-        shape and one published flag; an older store with only ``list()`` still
-        indexes, with the same fields under their record names. The listing itself
-        is not scoped: C1 makes an artifact readable when it is published *or*
-        listed in the directory, and an index of hashes, sizes and owners is what
-        makes shared memory findable without disclosing a byte of any of it.
-
-        The rows are detached copies: a caller may change them freely.
-        """
-        return [dict(row) for row in self._artifact_listing().rows()]
 
     def _artifact_listing(self) -> ArtifactListing:
         """The directory's sorted view of the archive, brought up to date with it.
 
         One listing lives as long as its store; each call folds in only the hashes
         put or collected since the last one (``ArtifactStore.drain_changes``), so
-        a world block that lists the archive for every seat no longer re-reads
-        and re-sorts all of it once per seat. A store without change tracking is
-        listed from scratch on every call, as it always was.
+        a world block that lists each seat's own rows does not re-read and re-sort
+        the archive once per seat. A store without change tracking is listed from
+        scratch on every call, as it always was.
         """
         store = self.artifacts
         listing = self.__dict__.get("_artifact_listing_view")
@@ -909,35 +844,31 @@ class ComputeMixin:
         listing.sync()
         return listing
 
-    def _artifact_index(self, owner: str | None = None,
-                        cursor: str | None = None) -> list[dict[str, Any]]:
-        """The archive's rows, optionally one owner's; the full list for the world block."""
-        listing = self._artifact_listing()
-        rows = listing.rows() if owner is None else listing.rows_for(owner)
+    def _artifact_index(self, owner: str, cursor: str | None = None) -> list[dict[str, Any]]:
+        """One owner's rows, newest first, after ``cursor`` when one is named.
+
+        Guarantees no row another seat owns is returned: the index is keyed by
+        owner and there is no unscoped read (information audit C4).
+        """
+        rows = self._artifact_listing().rows_for(owner)
         if cursor:
             shas = [row["sha"] for row in rows]
             start = shas.index(cursor) + 1 if cursor in shas else len(rows)
             rows = rows[start:]
-        return [dict(row) for row in rows]
+        return [{k: v for k, v in row.items() if k != "owner"} for row in rows]
 
-    def _artifacts_visible_to(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
-        """How many rows ``seat`` owns or sees published, and the newest ``limit`` of them.
+    def _artifacts_owned_by(self, seat: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
+        """How many rows ``seat`` owns, and the newest ``limit`` of them."""
+        rows = self._artifact_index(seat)
+        return len(rows), rows[:limit]
 
-        Exactly ``[row for row in self._artifact_index() if row["owner"] == seat or
-        row["public"]]`` counted and truncated, without walking the whole archive.
+    def _artifact_page(self, owner: str, args: dict) -> dict[str, Any]:
+        """One ``artifact.list`` page of the caller's own rows, the total, and the cursor.
+
+        ``count`` is the caller's whole listing, not the remainder, so a reader
+        knows how much it has not seen; an unknown cursor ends the listing rather
+        than restarting it, so paging can never loop.
         """
-        count, rows = self._artifact_listing().visible_to(seat, limit)
-        return count, [dict(row) for row in rows]
-
-    def _artifact_page(self, args: dict) -> dict[str, Any]:
-        """One ``artifact.list`` page: rows, the total, and the cursor that continues it.
-
-        ``count`` is the whole listing under this filter, not the remainder, so a
-        reader knows how much it has not seen; an unknown cursor ends the listing
-        rather than restarting it, so paging can never loop.
-        """
-        owner = args.get("owner")
-        owner = owner if isinstance(owner, str) and owner else None
         cursor = args.get("cursor") if isinstance(args.get("cursor"), str) else None
         total = len(self._artifact_index(owner))
         remaining = self._artifact_index(owner, cursor)
@@ -1252,15 +1183,14 @@ class ComputeMixin:
 
             return websearch.run(self, action_id, handle, args)
         if tool_id == "artifact.list":
-            result = self._artifact_page(args)
+            result = self._artifact_page(action_id, args)
             self.ledger.append({"kind": "artifact.list", "handle": handle,
                                 "assembly_id": action_id, "rows": len(result["items"]),
-                                "count": result["count"], "owner": args.get("owner"),
-                                "ts": self.clock.now_ns})
+                                "count": result["count"], "ts": self.clock.now_ns})
             return result, 0
         if tool_id == "artifact.get":
             # Free by contract (C9) and scoped by contract (C1): a seat reads what it
-            # wrote, what was published, and a program's state within its own lineage.
+            # wrote and a program's state within its own lineage.
             # Every read is ledgered, refusals included.
             result = self.artifacts.read(args.get("sha"), reader=action_id,
                                          lineage_of=self.budget.lineage)

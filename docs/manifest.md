@@ -198,7 +198,7 @@ timestamp. The cadence threshold remains available under
 `amendment_eligibility` as `eligible_no_earlier_than`, explicitly an eligibility
 boundary rather than a scheduled charter change. `catalogue` carries version
 and changed entries only; `public_observations` carries the last closed window's
-values, pathologies, recent prints and the shared directory,
+values, pathologies and recent prints,
 and `unavailable_observations` — every source that could not be read, with the
 reason. No private state is in this block; a seat's own state appears exactly
 once, in `YOU`. Everything else the world publishes — `inputs.you`, the event,
@@ -1583,38 +1583,40 @@ bytes without a record; the bytes live beside the ledger under
 and an atomic replace), or in memory for a world without a ledger path. A put
 is idempotent by content, `get` verifies the hash it was asked for and refuses
 a tampered file, and retirement of an owner leaves its artifacts readable. The
-index (hash to owner, kind, size, time, published, references) is checkpointed;
+index (hash to owner, kind, size, time, references) is checkpointed;
 a checkpoint from before the archive restores it empty.
 
 **Ownership is a (sha, owner) reference** (edition 3, R3-F). One blob carries a
-reference per writer, each with its own kind, its own moment and its own
-published flag, so a second writer of identical bytes owns what it wrote and can
-read it rather than being told the first writer's bytes are private; putting an
-existing sha with `public: true` publishes the blob. The **first** reference
-stays the owner of record — `owner_for(sha)`, one payer of rent and one subject
-of retirement. `entries()` and therefore `artifact.list` return one row per
-reference, with that reference's owner and published flag.
+reference per writer, each with its own kind and its own moment, so a second
+writer of identical bytes owns what it wrote and can read it rather than being
+told the first writer's bytes are private. Nothing is published (ruling R11
+deleted the unused `public` flag). The **first** reference stays the owner of
+record — `owner_for(sha)`, one payer of rent and one subject of retirement.
+`entries()` returns one row per reference, with that reference's owner.
+`artifact.list {cursor?}` is free and returns only the caller's own rows (sha,
+kind, bytes, when), newest first, 50 a page with `next_cursor` and the caller's
+`count`; the seat's `YOU` `directory` previews the same rows. No list names
+another seat's artifacts (information audit C4).
 
 **Collection.** `ArtifactStore.collect()` is the one thing that deletes, and it
-can only reach blobs **no reference names and nothing published** — what a crash
+can only reach blobs **no reference names** — what a crash
 between the durable write and its ledger item leaves behind. Each removal is
 ledgered `artifact.collected {sha, ts}`. The runtime calls it at each
-reserve-window boundary (`continuity.charge_window`). An owned blob and a public
-blob are never candidates, so collection can never take a seat's working state,
-an inbox body, an archived rationale or anything the population published.
+reserve-window boundary (`continuity.charge_window`). An owned blob is never a
+candidate, so collection can never take a seat's working state, an inbox body or
+an archived rationale.
 
 `artifact.get {sha}` is a seed tool, version 1, priced at zero and available
 to every seat: it returns `sha`, `owner`, `kind` (the reader's own reference's
-kind when it has one), `public`, `bytes` and the content as
+kind when it has one), `bytes` and the content as
 `text` (or `base64` for bytes that are not UTF-8) up to 65,536 bytes, an
 `error` above that or for an unknown or malformed hash, and ledgers
 `artifact.get {sha, handle, assembly_id, found, ts}`. The read is **scoped**
-(edition 3, C1): a seat reads what it owns and anything put with `public: true`;
+(edition 3, C1): a seat reads what it owns;
 a program's `program.state` is readable within the program's own lineage
 (`BudgetBook.lineage`); anything else answers `{sha, error: "artifact_private"}`
 and nothing about the bytes, and the ledger row carries `reason`. `entries()`
-returns `(sha, owner, public, bytes, created_ns)` rows for the directory W4
-builds. There is no `artifact.put` tool: the writers are a private-state program
+returns `(sha, owner, bytes, created_ns)` rows. There is no `artifact.put` tool: the writers are a private-state program
 seat and a seat's own working state. `owner_for(sha)` names who pays rent.
 
 ### Continuity: working state and the outcome inbox

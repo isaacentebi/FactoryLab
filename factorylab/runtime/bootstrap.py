@@ -633,8 +633,8 @@ class BootstrapMixin:
         self.tool_specs["artifact.get"] = {
             "id": "artifact.get",
             "description": "Read an archived artifact by its sha256: your own working "
-            "state, an artifact you wrote, an artifact published with public: true, or "
-            "the private state of a program in your own lineage. Anything else is "
+            "state, an artifact you wrote, or the private state of a program in your "
+            "own lineage. Anything else is "
             "refused with artifact_private. The read is free and ledgered. Returns "
             "owner, kind, bytes and text (base64 for binary), up to 64 KiB.",
             "args_schema": {

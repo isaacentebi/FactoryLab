@@ -131,9 +131,6 @@ def test_late_public_history_is_exactly_addressable_while_current_facts_stay_inl
     assert after["public_observations"]["pathologies"] == (
         before["public_observations"]["pathologies"]
     )
-    assert after["public_observations"]["shared_directory"] == (
-        before["public_observations"]["shared_directory"]
-    )
     assert after["public_observations"]["recent_mids"] == {
         "BTC": [before["public_observations"]["recent_mids"]["BTC"][-1]]
     }
