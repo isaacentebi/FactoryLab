@@ -2233,7 +2233,7 @@ class ComputeMixin:
         else:
             if target in self.assemblies:
                 if self._may_write(handle):
-                    self._execute_outputs(ret)
+                    self._execute_outputs(ret, emitted)
                 self._apply_registrations(handle, ret)
             self.consequences.finish(handle, ret.cost)
             if ret.status == "ok":

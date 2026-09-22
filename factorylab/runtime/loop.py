@@ -917,7 +917,8 @@ class Runtime(
                                   definition_version="unselected-return-v1", sampling_ref=None)
                 return
             if self._may_write(handle):
-                self._execute_outputs(ret)
+                # Only a producer kind's answer is an order (primitive audit F7).
+                self._execute_outputs(ret, emitted)
             self._apply_registrations(handle, ret)
             self._apply_thinking(handle, sample.chosen, ret)
             self.handle_to_assembly[handle] = sample.chosen

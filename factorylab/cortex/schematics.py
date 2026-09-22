@@ -291,8 +291,17 @@ class SchematicsMixin:
 
 
     A_RETURN_MAY_INCLUDE: dict[str, str] = {
+        "kind_fields": (
+            "reserved_return_fields is the envelope every return may carry. Each seed kind "
+            "also owns fields of its own: ProducerReturn and Exposure own action, "
+            "rationale, coin, side and size (the answer order below); Verdict owns verdict "
+            "and payoff in [0, 1] and rationale; MetaVerdict owns conformity in [0, 1] and "
+            "rationale. A declared kind owns what its schema in event_schemas declares, "
+            "and a field another kind owns has no meaning in it"
+        ),
         "action": (
-            '"noop" | "hold" | "order"; an "order" return also carries "coin" (one of the '
+            'ProducerReturn and Exposure: "noop" | "hold" | "order"; an "order" return '
+            'also carries "coin" (one of the '
             'world\'s coins), "side" ("buy" | "sell") and "size" (base units as a decimal '
             'string, e.g. "0.005"), and is placed at market on return; limit, reduce-only, '
             '"market" defaults to "perp" or accepts "spot" with a configured BASE/USDC pair; '

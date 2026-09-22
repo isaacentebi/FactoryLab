@@ -28,10 +28,10 @@ from tests.conftest import make_runtime
 ORDER = {"action": "order", "coin": "BTC", "side": "buy", "size": "0.001"}
 
 
-def invoke(body, schema=None, *, validator=None):
+def invoke(body, schema=None, *, validator=None, emits=("ProducerReturn",)):
     wallet = Wallet(100000, Ledger())
     provider = FakeModel(default=json.dumps(body), fixed_input_tokens=1, fixed_output_tokens=1)
-    assembly = Assembly(AssemblySpec("a", 1, "v", max_tokens=16),
+    assembly = Assembly(AssemblySpec("a", 1, "v", max_tokens=16, emits=emits),
                         MeteredModel(provider, PriceTable({"v": TokenPrice(1, 1)}), Meter(wallet)),
                         validator=validator)
     req = Request("h", "test", {}, {}, schema or {}, 100, 100000, None, "JSON", "test", "h")
@@ -91,16 +91,18 @@ def test_a_reply_with_nothing_valid_in_it_is_still_malformed():
     assert invoke({"working_state": "x", "rationale": {}}).status == "malformed"
 
 
-@pytest.mark.parametrize("core", [
-    {"action": "order", "coin": "BTC", "side": "up", "size": "0.001"},
-    {"action": "order", "coin": "BTC", "side": "buy", "size": "-1"},
-    {"action": "order", "coin": "BTC", "side": "buy"},
-    {"action": ["order"]},
-    {"verdict": 2},
-    {"vote": "yes"},
+@pytest.mark.parametrize("core,emits", [
+    ({"action": "order", "coin": "BTC", "side": "up", "size": "0.001"}, ("ProducerReturn",)),
+    ({"action": "order", "coin": "BTC", "side": "buy", "size": "-1"}, ("ProducerReturn",)),
+    ({"action": "order", "coin": "BTC", "side": "buy"}, ("ProducerReturn",)),
+    ({"action": ["order"]}, ("ProducerReturn",)),
+    ({"action": "order", "coin": "BTC", "side": "up", "size": "0.001"}, ("Exposure",)),
+    # Primitive audit F7: a seed role's field is strict on the kind that owns it.
+    ({"verdict": 2}, ("Verdict",)),
+    ({"conformity": -1}, ("MetaVerdict",)),
 ])
-def test_the_answer_itself_is_still_validated_strictly(core):
-    ret = invoke({**core, "working_state": "fine", "rationale": "because"})
+def test_the_answer_itself_is_still_validated_strictly(core, emits):
+    ret = invoke({**core, "working_state": "fine", "rationale": "because"}, emits=emits)
     assert ret.status == "malformed" and not ret.dropped
 
 
@@ -142,14 +144,15 @@ def test_unfinished_task_fields_remain_strict_on_the_final_turn():
     assert ret.status == "malformed" and not ret.dropped and not ret.tool_calls
 
 
-@pytest.mark.parametrize("body", [
-    {"verdict": 2},
-    {"action": "order", "coin": "BTC", "side": "buy", "size": "not-a-number"},
+@pytest.mark.parametrize("body,emits", [
+    ({"verdict": 2}, ("Verdict",)),
+    ({"action": "order", "coin": "BTC", "side": "buy", "size": "not-a-number"},
+     ("ProducerReturn",)),
 ])
-def test_continuation_does_not_strip_invalid_core_answer_fields(body):
+def test_continuation_does_not_strip_invalid_core_answer_fields(body, emits):
     call = {"tool": "outcome.get", "args": {"outcome_id": "outcome:1"}}
 
-    ret = invoke({**body, "tool_calls": [call]})
+    ret = invoke({**body, "tool_calls": [call]}, emits=emits)
 
     assert ret.status == "malformed" and not ret.dropped and not ret.tool_calls
 

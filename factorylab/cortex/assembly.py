@@ -225,7 +225,8 @@ class Assembly:
         if parsed is not None:
             try:
                 parsed, dropped = validate_return_sections(
-                    parsed, req.outcome_schema, self.validator, req, rejected=rejected)
+                    parsed, req.outcome_schema, self.validator, req, rejected=rejected,
+                    kind=answer_kind(self.spec.emits, parsed, req))
             except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
                 validation_error = str(exc)[:200] or type(exc).__name__
                 parsed = None
@@ -498,7 +499,8 @@ class ProgramAssembly:
             else:
                 try:
                     parsed, dropped = validate_return_sections(
-                        parsed, req.outcome_schema, self.validator, req, rejected=rejected)
+                        parsed, req.outcome_schema, self.validator, req, rejected=rejected,
+                        kind=answer_kind(self.spec.emits, parsed, req))
                 except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
                     validation_error = str(exc)[:200] or type(exc).__name__
                     parsed = None
@@ -650,15 +652,21 @@ def validate_schema(value: Any, schema: dict, *, partial: bool = False) -> None:
 
 def reserved_return_fields(*, max_children: int | None = None,
                            max_tool_calls: int | None = None) -> dict:
-    """Publish the same reserved names and types enforced on every return."""
-    properties = {k: {"type": "string"} for k in
-                  ("action", "rationale", "reason", "status", "coin", "side", "emits",
-                   "about_handle")}
-    properties.update({k: {"type": "number", "minimum": 0, "maximum": 1}
-                       for k in ("verdict", "payoff", "conformity")})
+    """Publish the universal envelope: the reserved names and types every return may carry.
+
+    Guarantees the envelope is the protocol and nothing else (primitive audit F7;
+    essay II.I: "you can easily limit the types of patterns available ... by
+    overspecifying the primitive"): continuity, propensity, registrations,
+    requests, tool calls and forecasts, plus the refusal form (``status``,
+    ``reason``), the selected kind (``emits``) and the handle a return is about.
+    No venue's order semantics and no seed role's fields: those belong to the
+    kinds that own them (``kind_return_fields``), so a population kind may give
+    ``action`` or ``verdict`` its own meaning.
+    """
+    properties = {k: {"type": "string"} for k in ("reason", "status", "emits",
+                                                  "about_handle")}
     properties.update({
         **CONTINUITY_RETURN_FIELDS,  # working_state and ack_through (C1)
-        "vote": {"type": "boolean"},
         # The deciding agent's own distribution over its own actions.
         "propensity": {"type": "object"},
         "register": {"type": "array"},
@@ -685,6 +693,45 @@ def reserved_return_fields(*, max_children: int | None = None,
     return properties
 
 
+_UNIT = {"type": "number", "minimum": 0, "maximum": 1}
+#: The seed kinds whose answer may be a market order on this world's venue
+#: (``{"action": "order", "coin", "side", "size"}``). A return of any other kind
+#: never trades through its answer: it trades, if at all, through venue tools.
+ANSWER_ORDER_KINDS = frozenset({"ProducerReturn", "Exposure"})
+_ORDER_FIELDS = {"action": {"type": "string"}, "rationale": {"type": "string"},
+                 "coin": {"type": "string"}, "side": {"type": "string"}}
+#: The fields each seed kind owns, with their types (primitive audit F7): the
+#: producer kinds own the answer order, a Verdict its verdict and payoff, a
+#: MetaVerdict its conformity. A population kind owns what its schema declares.
+KIND_RETURN_FIELDS: dict[str, dict[str, dict]] = {
+    "ProducerReturn": _ORDER_FIELDS,
+    "Exposure": _ORDER_FIELDS,
+    "Verdict": {"verdict": _UNIT, "payoff": _UNIT, "rationale": {"type": "string"}},
+    "MetaVerdict": {"conformity": _UNIT, "rationale": {"type": "string"}},
+}
+
+
+def kind_return_fields(kind: str | None) -> dict:
+    """The reserved fields ``kind`` owns beside the universal envelope; {} for any other."""
+    return {name: dict(shape) for name, shape in KIND_RETURN_FIELDS.get(kind or "", {}).items()}
+
+
+def answer_kind(emits: Any, parsed: Any, req: Request | None = None) -> str | None:
+    """The kind a reply answers as: its selected ``emits``, else its contract's only kind.
+
+    Guarantees None for a policy ballot (it answers no contract) and for a
+    polymorphic contract whose reply selected none of its kinds, so no kind's
+    fields are imposed on a reply that did not choose that kind.
+    """
+    if req is not None and req.scoring_channel == "policy":
+        return None
+    kinds = tuple(emits or ())
+    chosen = parsed.get("emits") if isinstance(parsed, dict) else None
+    if isinstance(chosen, str) and chosen in kinds:
+        return chosen
+    return kinds[0] if len(kinds) == 1 else None
+
+
 class SectionError(ValueError):
     """One optional section of a return, or one item of a list section, is invalid.
 
@@ -706,8 +753,10 @@ class SectionError(ValueError):
 #: What a return may carry beside its answer. A section here (or one item of a
 #: list section) that does not validate is dropped with its reason and the answer
 #: stands. A continued turn may also discard malformed request-specific draft
-#: fields; final answers and core fields — the action and its order, verdict,
-#: payoff, conformity, vote, emits, about_handle and status — validate strictly.
+#: fields; final answers and core fields — the envelope's emits, about_handle and
+#: status, and the fields the answer's kind owns (a producer kind's action and
+#: order, a Verdict's verdict and payoff, a MetaVerdict's conformity) — validate
+#: strictly.
 OPTIONAL_SECTIONS = ("rationale", "working_state", "ack_through", "propensity",
                      "register", "tool_calls", "requests", "forecasts")
 _LIST_SECTIONS = frozenset({"register", "tool_calls", "requests", "forecasts"})
@@ -721,11 +770,13 @@ _FAULTS = (ValueError, TypeError, ArithmeticError, RecursionError, KeyError, Att
 
 def validate_return_sections(parsed: dict, schema: dict, validator=None, req=None,
                              *, rejected: list[dict[str, Any]] | None = None,
+                             kind: str | None = None,
                              ) -> tuple[dict, tuple[dict[str, Any], ...]]:
     """Return the reply with invalid optional sections dropped, and what was dropped.
 
     Guarantees the answer is validated exactly as strictly as a whole return was:
-    the pruned reply passes ``_validate_return`` and ``validator`` in full, or this
+    the pruned reply passes ``_validate_return`` (under ``kind``, the kind the
+    reply answers as; ``answer_kind``) and ``validator`` in full, or this
     raises and the return is malformed. Only a section named in
     ``OPTIONAL_SECTIONS``, or one item of a list section, may be dropped. On a
     continuation only, an invalid task-specific answer field may also be dropped:
@@ -756,11 +807,12 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
         dropped.append(entry)
 
     reserved = reserved_return_fields()
+    owned = kind_return_fields(kind)
     declared = schema.get("properties", {}) if isinstance(schema, dict) else {}
     for section in OPTIONAL_SECTIONS:
         if section not in parsed:
             continue
-        shapes = [s for s in (reserved.get(section), declared.get(section))
+        shapes = [s for s in (reserved.get(section), owned.get(section), declared.get(section))
                   if isinstance(s, dict)]
         value = parsed[section]
         if section not in _LIST_SECTIONS:
@@ -838,7 +890,7 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
         drop("status", f"unfinished continuation field: {parsed['status']!r}")
         del parsed["status"]
     if continuation and "emits" not in parsed:
-        protected = {*reserved, "size"}
+        protected = {*reserved, *owned, "size"}
         for section, shape in declared.items():
             if section not in parsed or section in protected or not isinstance(shape, dict):
                 continue
@@ -850,7 +902,7 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     # The answer, strictly; a validator names a fault that belongs to one section.
     for _ in range(1 + sum(len(v) for v in origin.values()) + len(OPTIONAL_SECTIONS)):
         try:
-            _validate_return(parsed, schema)
+            _validate_return(parsed, schema, kind)
             if validator is not None:
                 validator(parsed, req)
         except SectionError as exc:
@@ -906,15 +958,21 @@ _NOT_AN_ANSWER_ORDER = ("is_buy", "sz", "limit_px", "price", "tif", "reduce_only
                         "reduceOnly", "order_type", "orderType")
 
 
-def _validate_return(parsed: dict, schema: dict) -> None:
-    """Validate reply effects; each registration is admitted independently by the runtime."""
-    properties = reserved_return_fields()
-    validate_schema(parsed, {"type": "object", "properties": properties})
+def _validate_return(parsed: dict, schema: dict, kind: str | None = None) -> None:
+    """Validate reply effects; each registration is admitted independently by the runtime.
+
+    Guarantees the universal envelope on every reply, and the fields ``kind`` owns
+    (``kind_return_fields``) on a reply of that kind: the answer-order rules apply
+    to the producer kinds alone (``ANSWER_ORDER_KINDS``), so an ``action`` of
+    ``"order"`` in any other kind's reply is that kind's word, never a trade.
+    """
+    validate_schema(parsed, {"type": "object", "properties": reserved_return_fields()})
+    validate_schema(parsed, {"type": "object", "properties": kind_return_fields(kind)})
     # "order" is both an instruction and the name of a trade already made through a
     # tool. An answer carrying any order field is an instruction and validates
     # whole; one carrying none reports what the decision did (the runtime refuses
     # it to the seat if nothing was done), so a report is never a malformed return.
-    if parsed.get("action") == "order" and any(
+    if kind in ANSWER_ORDER_KINDS and parsed.get("action") == "order" and any(
             k in parsed for k in ("coin", "side", "size", *_NOT_AN_ANSWER_ORDER)):
         named = sorted(k for k in _NOT_AN_ANSWER_ORDER if k in parsed)
         if named:
