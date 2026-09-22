@@ -556,7 +556,16 @@ class ComputeMixin:
                     partial=bool(parsed.get("requests") or parsed.get("tool_calls")
                                  or parsed.get("status") == "cannot"),
                 )
-        for index, call in enumerate(parsed.get("tool_calls", [])):
+        from factorylab.runtime.propensity import EFFECT_TOOLS
+
+        calls = parsed.get("tool_calls", [])
+        # A batch that writes (the venue, the treasury, a message, a note) runs whole
+        # or not at all; a batch of reads loses only the read that cannot run.
+        writes = any(str(call.get("tool")) in EFFECT_TOOLS
+                     or str(call.get("tool")).startswith("treasury.")
+                     or call.get("tool") in ("address.send", "note.put")
+                     for call in calls if isinstance(call, dict))
+        for index, call in enumerate(calls):
             spec = self.tool_specs.get(call["tool"])
             if spec is None:
                 continue
@@ -569,7 +578,8 @@ class ComputeMixin:
                 else:
                     validate_schema(call["args"], spec["args_schema"])
             except (ValueError, TypeError, ArithmeticError, RecursionError) as exc:
-                raise SectionError("tool_calls", f"{call['tool']}: {exc}", index) from None
+                raise SectionError("tool_calls", f"{call['tool']}: {exc}", index,
+                                   atomic=writes) from None
         known = {p.id: p for p in SEED_VOCABULARY}
         for index, forecast in enumerate(parsed.get("forecasts", [])):
             if forecast["predicate"] not in known:
@@ -1615,7 +1625,11 @@ class ComputeMixin:
                              "reason": "remaining budget cannot cover a tool-result answer"},
                              0, "failed")
                 break
-            results = []
+            # A read dropped for bad arguments answers in its own slot, so the next
+            # round can correct it rather than the seat learning of it a wake later.
+            results = [{"tool_call_index": d["index"], "result": {"error": d["reason"]}}
+                       for d in ret.dropped
+                       if d.get("section") == "tool_calls" and "index" in d]
             tool_cost = 0
             learned = False  # a lookup this decision had not already been given
             acted = False  # a write or a child: this decision has taken its action

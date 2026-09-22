@@ -177,3 +177,30 @@ def test_judge_sees_the_work_and_its_acts_not_the_producers_world():
     assert "OPERATING ACCESS" in prompt  # its own tools remain
     assert '"executed_operations":[{' in prompt and '"status":"resting"' in prompt
     assert "since_you_last_woke" not in prompt
+
+
+def test_a_bad_read_drops_itself_and_answers_in_the_next_round():
+    """PR121 seq 4799: one read missing an argument voided a batch of good reads."""
+    provider = Scripted(
+        {"tool_calls": [{"tool": "venue.positions", "args": {}},
+                        {"tool": "venue.funding_history", "args": {"coin": "ETH"}}]},
+        {"action": "hold", "rationale": "positions read; will retry the history"},
+    )
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    _, event = _consequence_produce(runtime)
+    assert event.payload["status"] == "ok"
+    continuation = "\n".join(str(m.get("content", ""))
+                             for m in provider.requests[1].messages)
+    assert '"tool":"venue.positions"' in continuation
+    assert '"tool_call_index":1' in continuation and "missing argument n" in continuation
+
+
+def test_a_bad_item_in_a_batch_that_writes_still_voids_the_whole_batch():
+    bad_limit = {"tool": "venue.place_limit",
+                 "args": {"coin": "BTC", "is_buy": False, "size": "0.01", "limit_px": "150"}}
+    provider = Scripted({"action": "hold", "tool_calls": [
+        {"tool": "venue.positions", "args": {}}, bad_limit]})
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    handle, event = _consequence_produce(runtime)
+    assert _writes(runtime, handle) == [] and len(provider.requests) == 1
+    assert event.payload["status"] == "ok"  # the answer stands; the batch never ran

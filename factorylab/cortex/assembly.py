@@ -632,9 +632,13 @@ class SectionError(ValueError):
     raises is a fault in the answer itself and voids the return.
     """
 
-    def __init__(self, section: str, reason: str, index: int | None = None) -> None:
+    def __init__(self, section: str, reason: str, index: int | None = None, *,
+                 atomic: bool = True) -> None:
         super().__init__(reason)
         self.section, self.reason, self.index = section, reason, index
+        # False when the validator knows the batch writes nothing: a bad read then
+        # drops only itself, and the reads beside it still run.
+        self.atomic = atomic
 
 
 #: What a return may carry beside its answer. A section here (or one item of a
@@ -764,7 +768,7 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
             if exc.section not in OPTIONAL_SECTIONS or exc.section not in parsed:
                 raise ValueError(exc.reason) from None
             if (exc.index is None or exc.section not in origin
-                    or exc.section in _ATOMIC_SECTIONS):
+                    or (exc.section in _ATOMIC_SECTIONS and exc.atomic)):
                 where = "" if exc.index is None else f"item {exc.index}: "
                 drop(exc.section, where + exc.reason)
                 del parsed[exc.section]
