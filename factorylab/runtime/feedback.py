@@ -2126,10 +2126,21 @@ class FeedbackMixin:
         swap router's frozen p, else the logged draw). A drawn arm the learning
         router no longer holds trains nothing and is ledgered unlearned; a round a
         replaced router drew is ledgered ``router.carried``. Returns whether it trained.
+
+        A round drawn over a larger universe than the learning router's (N_old >
+        N_new) is stepped at the drawer's size, gamma/N_old rather than gamma/N_new
+        (the reward is scaled by N_new/N_old, which scales a swap router's every row
+        alike): its estimator is bounded by N_old/gamma, so at gamma/N_new one round
+        could move a log weight by N_old/N_new > 1 and swamp every round before it
+        (thrash, essay II.II.a). The rescale is ledgered ``router.step_rescaled``.
         """
         target = self._successor_state(drawer)
         prop = self.queue.get(handle).propensity
         logged = dict(zip(prop.action_ids, prop.probs, strict=True))
+        drawn, learning = len(drawer.universe), len(target.universe)
+        scored = fb.reward
+        if learning < drawn:
+            fb = BanditFeedback(fb.action, scored * learning / drawn, fb.propensity)
         reason = None
         if fb.action not in target.universe:
             reason = "the drawn arm is outside the learning router's universe"
@@ -2149,7 +2160,13 @@ class FeedbackMixin:
         if target is not drawer:
             self.ledger.append({"kind": "router.carried", "handle": handle,
                                 "from": drawer.learner.id, "to": target.learner.id,
-                                "action": fb.action, "reward": fb.reward,
+                                "action": fb.action, "reward": scored,
+                                "ts": self.clock.now_ns})
+        if learning < drawn:
+            self.ledger.append({"kind": "router.step_rescaled", "handle": handle,
+                                "learner_id": target.learner.id,
+                                "drawn_universe": drawn, "learning_universe": learning,
+                                "reward": scored, "stepped_as": fb.reward,
                                 "ts": self.clock.now_ns})
         return True
 

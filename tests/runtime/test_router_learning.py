@@ -460,3 +460,67 @@ def test_a_carried_round_rejects_an_arm_outside_the_universe_or_a_wrong_propensi
     assert learner.state() == before
     learner.update_carried(executed, executed, BanditFeedback("a", 1.0, 0.5))
     assert learner.state() != before
+
+
+# --- a round drawn over a larger universe moves a weight by at most one ----------------
+
+
+def test_a_shrunk_router_steps_a_carried_round_at_the_drawers_size_and_ledgers_it():
+    """Drawn at the floor of a five-arm router, X = 1/0.02 = 50; stepped at gamma/N_new =
+    0.05 by a two-arm successor, one round moved a log weight by 2.5. It is stepped at
+    the drawer's gamma/N_old now, at most one."""
+    rt = make_runtime()
+    old = rt.routers["ProducerReturn"][0]
+    arms = tuple(old.universe)
+    kept = arms[0]
+    floor = 0.1 / len(arms)  # gamma / N_old: the least the predecessor ever drew an arm
+    probs = tuple(floor if a == kept else (1 - floor) / (len(arms) - 1) for a in arms)
+    seed = next(s for s in range(100_000)
+                if random.Random(s).choices(arms, weights=probs, k=1)[0] == kept)
+    handle = rt.queue.open(
+        actor=old.learner.id, event_id="floor",
+        propensity=PropensityRecord(arms, probs, kept, seed, old.learner.id, "s"),
+        channel="test", deadline_ns=10**15, parent_handle=None, cost_ceiling=0)
+    rt._universe_for = lambda _kind, _ev=None: [kept, NOOP]
+    rt._open_epoch("ProducerReturn")
+    fresh = rt.routers["ProducerReturn"][0]
+    before = fresh.learner.state()["log_weights"]
+    rt.queue.settle(handle, channel="test", score=1.0, status=SettleStatus.SETTLED,
+                    definition_version="verdict-v1", sampling_ref=None)
+    rt._deliver_returns()
+    after = fresh.learner.state()["log_weights"]
+    assert (after[kept] - after[NOOP]) - (before[kept] - before[NOOP]) == pytest.approx(1.0)
+    items = rt.ledger._recovery_items()
+    assert any(i["kind"] == "router.step_rescaled" and i["handle"] == handle
+               and i["learner_id"] == fresh.learner.id and i["drawn_universe"] == 5
+               and i["learning_universe"] == 2 and i["stepped_as"] == pytest.approx(0.4)
+               for i in items)
+    assert any(i["kind"] == "router.carried" and i["handle"] == handle
+               and i["reward"] == 1.0 for i in items)
+
+
+def test_a_shrunk_swap_router_steps_every_row_at_the_drawers_size():
+    rt = _core_runtime()
+    old = rt.routers["ProducerReturn"][0]
+    handle, chosen = _live_draw(rt, old)
+    rt._universe_for = lambda _kind, _ev=None: [chosen, NOOP]
+    rt._open_epoch("ProducerReturn")
+    fresh = rt.routers["ProducerReturn"][0]
+    rows = [dict(b.state()["log_weights"]) for b in fresh.learner.inner.inner._bases]
+    rt.queue.settle(handle, channel="test", score=1.0, status=SettleStatus.SETTLED,
+                    definition_version="forecast-mean-v1", sampling_ref=None)
+    rt._deliver_returns()
+    for base, row in zip(fresh.learner.inner.inner._bases, rows, strict=True):
+        now = base.state()["log_weights"]
+        assert (now[chosen] - now[NOOP]) - (row[chosen] - row[NOOP]) <= 1.0
+    assert any(i["kind"] == "router.step_rescaled" and i["handle"] == handle
+               for i in rt.ledger._recovery_items())
+
+
+def test_a_round_learned_over_the_same_universe_is_not_rescaled():
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    arm = next(a for a in state.universe if a != NOOP)
+    _scored(rt, _drawn(rt, state, arm), 1.0, "verdict-v1")
+    rt._deliver_returns()
+    assert not any(i["kind"] == "router.step_rescaled" for i in rt.ledger._recovery_items())
