@@ -90,7 +90,7 @@ def _outcome_id(item: Any) -> Any:
 # consecutive calls to one assembly begin with byte-identical text and a provider's
 # automatic prefix cache (DeepSeek and OpenAI cache on an identical prefix, with no
 # cache_control marker) can hit. Everything not named here moves — the account,
-# the mids, the pots, the note counts, the pathologies, the reserve, the card prices,
+# the mids, the pots, the reserve, the card prices,
 # the scoring values the runtime's own adaptation changes, the governance queue,
 # the measured tick — and is rendered after the block, inside ``INPUTS`` with the
 # request itself. A key absent from this set is treated as moving, which costs
@@ -186,7 +186,7 @@ PREFIX_SOURCE_KEYS = PREFIX_INDEX_KEYS | PREFIX_CONSTANT_KEYS
 UPDATE_WORLD_KEY = "world_update"
 UPDATE_SOURCE_KEYS = frozenset({
     "charter", "charter_edition", "card_prices", "continuity", "governance",
-    "pathologies", "recent_mids",
+    "recent_mids",
 })
 
 # The world keys that are about the acting seat rather than about the world, and

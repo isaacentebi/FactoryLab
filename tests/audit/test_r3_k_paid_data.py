@@ -45,7 +45,8 @@ def paid_runtime(monkeypatch, transport=None):
         "preflight_path": "/data",
         "predicted_effect": {"card_id": "cost_per_return", "direction": "decrease", "window": 1},
     }]}, 0, "ok"))
-    assert rt.registry.available("connector"), rt.registration_feedback
+    assert rt.registry.available("connector"), [
+        i for i in rt.ledger._recovery_items() if i["kind"] == "registration.rejected"]
     assert len(transport.calls) == 1 and transport.calls[0][2] is None
     transport.calls.clear()
     rt.ledger.active = True

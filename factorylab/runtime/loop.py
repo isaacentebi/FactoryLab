@@ -856,16 +856,14 @@ class Runtime(
         return self.CHILD_SUBJECT_REFUSAL
 
     def _refuse_judgement(self, handle: str, reason: str, about: Any = None) -> None:
-        """A refused judgement is public evidence the population can read.
+        """A refused judgement is ledgered and its reason addressed to its author.
 
-        The paid return is discarded, so the reason reaches
-        ``registration_feedback`` the way a refused propensity does: a refusal
-        nobody can read is repeated.
+        The paid return is discarded, so the reason reaches the judge's own inbox
+        under its handle, the way a refused propensity does.
         """
         self.ledger.append({"kind": "return.refused", "handle": handle, "reason": reason,
                             **({"about_handle": about} if about is not None else {})})
-        self.registration_feedback.append({"kind": "judgement",
-                                               "reason": f"judgement: {reason}"})
+        self._refusal_to_owner(handle, "judgement_refused", reason)
 
     def _judged_event(self, ev: Event, handle: str, ret: Return,
                       *, seals_payoff: bool = False) -> Event | None:
@@ -885,15 +883,14 @@ class Runtime(
                 self._refuse_judgement(handle, "judgement needs an addressable return handle")
                 return None
             # A value that names no return is not a choice of target: the judgement
-            # stands about the return the router delivered, and the population is
-            # told why its about_handle went unread.
+            # stands about the return the router delivered, and its author is told
+            # why its about_handle went unread.
             reason = ("about_handle must be a return handle from the request; the "
                       "delivered subject was judged instead")
             self.ledger.append({"kind": "about_handle.ignored", "handle": handle,
                                 "about_handle": str(about)[:64], "subject": subject,
                                 "reason": reason, "ts": self.clock.now_ns})
-            self.registration_feedback.append({"kind": "judgement",
-                                               "reason": f"judgement: {reason}"})
+            self._refusal_to_owner(handle, "about_handle_ignored", reason)
             about = subject
         target = self.return_events.get(about)
         if target is None and about == subject:

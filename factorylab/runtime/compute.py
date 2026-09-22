@@ -1311,10 +1311,12 @@ class ComputeMixin:
                     "direction": direction,
                     "usd": str(usd),
                     "reason": str(args.get("reason", ""))[:500],
-                    "by": action_id,
                     "handle": handle,
                 }
-                self.ledger.append({"kind": "treasury.intent", **intent, "ts": self.clock.now_ns})
+                self.ledger.append({"kind": "treasury.intent", **intent, "by": action_id,
+                                    "ts": self.clock.now_ns})
+                # The event every subscriber reads carries the handle, not the author's
+                # seat (information audit C8; essay II.I.b, the author is private).
                 self._emit(EventKind.TRANSFER_INTENT, intent, source="kernel")
                 self.stats.transfer_intents += 1
                 return self.treasury.transfer(
@@ -1487,8 +1489,8 @@ class ComputeMixin:
         charter edition, cards and pending changes stay inline while its full
         text is addressable as canonical bytes. Public observation history moves
         only when there is prior midpoint history to remove; the latest exact row
-        for every market, freshness, closed-window values, pathologies and shared
-        directory remain inline. The returned request owns the same immutable
+        for every market, freshness and closed-window values
+        remain inline. The returned request owns the same immutable
         inputs for its first call and every continuation, while ``retrieved``
         survives for the whole invocation and nowhere else.
         """
@@ -1509,8 +1511,9 @@ class ComputeMixin:
         assembly = self.assemblies[action_id]
         retrieved: dict[str, bytes] = {}  # same-handle only; never checkpointed or published
         # Programs receive the request directly on jailed stdin and cannot use a
-        # model continuation's transient ``artifact.get`` map. Keep their inputs
-        # whole; only model assemblies receive same-handle snapshot references.
+        # model continuation's transient ``artifact.get`` map, so their inputs are
+        # not compacted; only model assemblies receive same-handle snapshot
+        # references. ``ProgramAssembly.build_stdin`` scopes the seats to their own.
         if isinstance(assembly, Assembly):
             req = self._compact_invocation_context(req, retrieved)
         prompt_cache = (_safe_prompt_cache_identity(assembly, req)
@@ -2032,6 +2035,22 @@ class ComputeMixin:
                 "note": "your own learner's current policy over the action set you registered; "
                         "declare a propensity on your return to train it"}
 
+    def _refusal_to_owner(self, handle: str, kind: str, reason: str, **extra: Any) -> None:
+        """Address one refusal to the inbox of the seat whose decision it was, and to no one else.
+
+        Guarantees the reason reaches only the decision's owner, under its handle,
+        through the stateful queue (essay II.I.b: reward "must find its way back to
+        the exact decision"); a refusal with no owner is ledgered undeliverable by
+        the inbox. Nothing is broadcast (information audit C5).
+        """
+        owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+        self.outcomes.append(owner, handle=handle,
+                             outcome={"kind": kind, "status": "rejected", "reason": reason,
+                                      **extra},
+                             delta_micro=0,
+                             evidence={"kind": kind, "handle": handle,
+                                       "ts": self.clock.now_ns})
+
     def _action_policy_input(self, assembly_id: str) -> dict[str, Any]:
         """``your_action_policy`` as a request input, or nothing when there is no learner.
 
@@ -2126,8 +2145,8 @@ class ComputeMixin:
             floored = len(record.action_ids) > 1
             self.ledger.append({"kind": "propensity.floored" if floored else "propensity.refused",
                                 "handle": req.handle, "reason": reason, "ts": self.clock.now_ns})
-            self.registration_feedback.append({"kind": "propensity",
-                                               "reason": f"propensity: {reason}"})
+            self._refusal_to_owner(req.handle, "propensity_floored" if floored
+                                   else "propensity_refused", reason)
         self._open_assembly_round(action_id, req.handle, record)
         return record
 

@@ -48,7 +48,8 @@ subject's router, even if the contract also includes a producing kind.
 
 Judging returns may include `about_handle`; omission selects the delivered
 subject. A value absent from the decision queue falls back to an addressable
-delivered subject with `about_handle.ignored` and `registration_feedback`.
+delivered subject with `about_handle.ignored`, and the reason reaches the judge's
+own outcome inbox.
 An existing but forbidden handle is refused, not replaced. A requested judge
 may address only its requesting decision or that decision's ancestors. The
 ancestor self-judgement check still refuses those subjects, so this restriction
@@ -56,7 +57,7 @@ does not grant permission to judge the requesting chain. A payoff judgement on
 a subject not chosen by the router also passes the hindsight check, including
 a parent-selected subject. A fixed consequence, expired backstop or judgement
 deadline beyond that backstop is refused. Judgement `return.refused` items
-deliver their reasons in `registration_feedback`.
+deliver their reasons to the judge's own outcome inbox.
 
 `tool.call.outcome` is `ok`, `failed` or `uncertain`. An unacknowledged venue
 write is `uncertain` and retains its client id for reconciliation. An
@@ -203,7 +204,7 @@ and `unavailable_observations` — every source that could not be read, with the
 reason. No private state is in this block; a seat's own state appears exactly
 once, in `YOU`. Everything else the world publishes — `inputs.you`, the event,
 the pots, the reserve remaining, `tick_intervals`,
-`registration_feedback`, `adaptive_scoring`, the tool, connector, work and
+`adaptive_scoring`, the tool, connector, work and
 observation catalogues, the mechanics and the scoring formulas — is rendered
 after those, inside `INPUTS`. A key of the world block is rendered in exactly
 one of those four places: the partition is `PREFIX_WORLD_KEY` with
@@ -435,7 +436,7 @@ A judging contract cannot be requested as a child. A requested judge may only
 address the chain that requested it, and nothing judges its own output or its
 ancestors', so the route could be bought, paid for and never executed. It is
 refused before a decision is opened or a call is made (`requests.refused`), with
-the reason in `return_feedback` and in the catalogue's addressing text. Judging
+the reason in the requester's outcome inbox and in the catalogue's addressing text. Judging
 work reaches a seat the three ways it always did: the router's sampling, the
 adversarial share and the cascade.
 
@@ -895,8 +896,8 @@ antagonist — the size band buckets the declared size in base units into `xs`,
 `verdict:<q>` and `conformity:<c>` rounded to one decimal for a judge, and
 `malformed` for a return that did not parse. A return that declares nothing, or
 declares something that is not a distribution or omits the action it took, is
-recorded degenerate — that action at 1.0 — and the reason reaches the population
-in `registration_feedback`.
+recorded degenerate — that action at 1.0 — and the reason reaches the declaring
+seat's own outcome inbox.
 
 Producing action labels include accepted or uncertain venue and treasury tool
 effects and successful child requests, followed by the final answer's action.
@@ -1211,7 +1212,7 @@ every surface carries ids and a normalised `YES`, `NO` or `outcome <n>`.
 A registration declares which one of the four reward shapes — `judged`,
 `forecast`, `conformity`, `exposure` — pays its emitted kind; the declaration
 defaults to `judged`, is fixed for the life of that kind, cannot redefine a seed
-kind's shape, and a conflicting redeclaration reaches `registration_feedback`.
+kind's shape, and a conflicting redeclaration is refused to the proposer's inbox.
 The declaration is `reward_shapes`, an object on the assembly proposal mapping
 each of its own `emits` kinds to a shape. A declaration naming a kind the
 proposal does not emit is refused. The seed shapes are `ProducerReturn`
@@ -1317,7 +1318,7 @@ refused. Admission costs one novelty trial, registers the contract
 payload `{"kind": "market", "coin", "market", "version"}`. `world.trading_markets`
 publishes the `perp` and `spot` lists the population may trade. Resume rebuilds
 the venue tools from the launch seed and replays every `market:` contract, so
-registered markets, inventory and lots survive a restart. An order refused before it reaches the venue is ledgered with its reason, `order.infeasible` when the venue's free collateral — equity less margin used, carried in the item as `venue_available_usd` — cannot carry the margin the order plus the resting book needs, and `order.refused` for every other pre-submission refusal, and the reason also reaches `registration_feedback`. Every counted fill writes one `fill.counted` item at the moment it is counted, with the order id, coin, market, size, price, notional, realised P&L, fee and window; the `event:Fill` the population is delivered is a separate item written on delivery. A live tick broadcasts one `MarketMid` per trading market and one `Funding` per trading perpetual, the manifest seed plus every registered market, never the venue's whole listing, so a registered market enters the broadcast from the next tick and resume restores the set; fills and settled funding payments are never filtered, because they carry cash.
+registered markets, inventory and lots survive a restart. An order refused before it reaches the venue is ledgered with its reason, `order.infeasible` when the venue's free collateral — equity less margin used, carried in the item as `venue_available_usd` — cannot carry the margin the order plus the resting book needs, and `order.refused` for every other pre-submission refusal, and the reason also reaches the ordering seat's outcome inbox. Every counted fill writes one `fill.counted` item at the moment it is counted, with the order id, coin, market, size, price, notional, realised P&L, fee and window; the `event:Fill` the population is delivered is a separate item written on delivery. A live tick broadcasts one `MarketMid` per trading market and one `Funding` per trading perpetual, the manifest seed plus every registered market, never the venue's whole listing, so a registered market enters the broadcast from the next tick and resume restores the set; fills and settled funding payments are never filtered, because they carry cash.
 
 A connector may pay for data through x402 with an exact per-call cap from the
 world's own wallet, journaled as one `io.call`/`io.result` pair and never
@@ -1504,8 +1505,9 @@ and is refused before the trial is spent on a host without the jail. The
 
 Each call runs the code once with one JSON object on stdin — `prompt` (the
 rendered request, exactly what a model would read, with `inputs.you` set to
-the seat's id), `description`, `inputs`, `outcome_schema` and `state` — and
-expects on stdout the same Return JSON a model would print, tool calls,
+the seat's id), `description`, `inputs` (whose world block's `seats` carries
+the program's own row only, the partition the prompt applies; information audit
+C3), `outcome_schema` and `state` — and expects on stdout the same Return JSON a model would print, tool calls,
 child requests and registrations included; it passes through the same output
 validator. The price is reserved and committed through the meter under the
 reason `model:program`, so every call is a wallet transaction and the novelty
@@ -1944,9 +1946,10 @@ before starting the CLI. It does not disable paid treasury routes or Venice; tha
 prerequisite was removed with the economic caps.
 Repetition requires a new preparation, not reuse of old client order IDs.
 
-The public world exposes actual proposal refusals in `registration_feedback` and
-judgement, propensity and order refusals in `return_feedback`. Existing checkpoint
-buffers remain readable; legacy prefix-only entries are classified on disclosure.
+Proposal, judgement, propensity, subscription, request and order refusals are
+ledgered and addressed to the owning seat's outcome inbox under the refused
+decision's handle, and to no other seat (information audit C5). The world block's
+`registration_feedback` and `return_feedback` broadcasts are deleted.
 
 ## Edition 3 R3-B: typed custody, and what may move the compute wallet
 

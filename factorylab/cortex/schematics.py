@@ -157,13 +157,6 @@ def _rail_for_model(model_id: Any) -> str:
     return "openrouter"
 
 
-def _is_registration_feedback(item: dict) -> bool:
-    """Old checkpoints and new typed refusals retain their actual operation category."""
-    if "kind" in item:
-        return item["kind"] == "registration.rejected"
-    return not str(item.get("reason", "")).startswith(("propensity:", "judgement:", "order:"))
-
-
 class SchematicsMixin:
     """Preserve runtime state and behavior for schematics operations."""
 
@@ -315,8 +308,8 @@ class SchematicsMixin:
             "about, exactly as it appears in the request (inputs.subject_handle when present, "
             "otherwise the delivered return); omit it to judge the delivered return. A value "
             "you cannot address here — prose, or a handle this judgement may not be about — "
-            "is not used: the delivered return is judged instead and the reason appears in "
-            "return_feedback"
+            "is not used: the delivered return is judged instead and the reason reaches "
+            "your outcome inbox"
         ),
         "propensity": (
             "optional on any return: your own distribution over the actions you were "
@@ -476,15 +469,10 @@ class SchematicsMixin:
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
                         "max_lifetime_windows": self.m.novelty.max_lifetime_windows},
-            "pathologies": dict(self.stats.pathologies),
             "novelty_reserve_remaining_usd": str(money_to_usd(self.reserve.remaining())),
             "addressing": _ADDRESSING,
             "governance": self.cadence.world_block(self.tick_clock),
             "tick_intervals": tick_intervals(self.tick_clock),
-            "registration_feedback": [dict(f) for f in self.registration_feedback
-                                      if _is_registration_feedback(f)],
-            "return_feedback": [dict(f) for f in self.registration_feedback
-                                if not _is_registration_feedback(f)],
             # Moving by construction: the sampling actuator and the immune controller
             # change these, so they are published here and never inside the prefix.
             "adaptive_scoring": self._adaptive_scoring_block(),
@@ -935,7 +923,13 @@ class SchematicsMixin:
         return out
 
     def _public_observations(self) -> dict[str, Any]:
-        """Aggregated facts of the last closed window: values, pathologies, prints.
+        """Aggregated facts of the last closed window: values and prints.
+
+        The immune organ's pathology labels are not here: they are the architect's
+        diagnosis of the population, published to observers and the wake through
+        the ``pathology.*`` ledger items, never to seats (information audit U4;
+        essay II.I.b, "overdisclosure hands a given agent signals that it will
+        either overfit to or game").
 
         What can be *registered* as an observation is a capability and stays in
         the capability disclosure (``world.observations``); what was actually
@@ -944,7 +938,6 @@ class SchematicsMixin:
         """
         return {
             "last_closed_window_values": dict(self.stats.last_window_values),
-            "pathologies": dict(self.stats.pathologies),
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
         }
 
@@ -1783,8 +1776,8 @@ class SchematicsMixin:
             "policy": self._mechanics_block()["committee"]["liability"],
             "novelty_reserve": (
                 "registrations draw on the novelty reserve at the trial amount; a refused "
-                "proposal returns its trial to the window and carries a reason in "
-                "registration_feedback; a registered assembly keeps protected compute until "
+                "proposal returns its trial to the window and its reason reaches the "
+                "proposer's outcome inbox; a registered assembly keeps protected compute until "
                 f"{self.m.novelty.trials} settled consequences have been delivered to it or "
                 f"{self.m.novelty.max_lifetime_windows} windows have passed since registration "
                 "(continuations and children do not count; a learning-death window grants one "

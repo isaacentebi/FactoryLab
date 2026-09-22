@@ -128,9 +128,9 @@ def test_late_public_history_is_exactly_addressable_while_current_facts_stay_inl
     assert after["public_observations"]["last_closed_window_values"] == (
         before["public_observations"]["last_closed_window_values"]
     )
-    assert after["public_observations"]["pathologies"] == (
-        before["public_observations"]["pathologies"]
-    )
+    # U4: pathology labels are for observers and the wake, never a seat's prompt.
+    assert "pathologies" not in before["public_observations"]
+    assert "pathologies" not in after["public_observations"]
     assert after["public_observations"]["recent_mids"] == {
         "BTC": [before["public_observations"]["recent_mids"]["BTC"][-1]]
     }

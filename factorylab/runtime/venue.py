@@ -242,17 +242,14 @@ class VenueMixin:
 
     def _refuse_order(self, handle: str, reason: str, *, kind: str = "order.refused",
                       **extra) -> dict:
-        """Publish one refusal that happened before any intent, and tell its author why.
+        """Ledger one refusal that happened before any intent, and tell its author why.
 
-        A refusal the population cannot read is a refusal it will repeat: the
-        reason goes to the diary as ``kind`` and to ``registration_feedback``,
-        the same surface a refused proposal uses, so the next return sees it in
-        its own world block. Returns the rejection the caller hands back.
+        The reason goes to the diary as ``kind`` and to the author's own inbox
+        under the order's handle, and to no other seat. Returns the rejection the
+        caller hands back.
         """
         self.ledger.append({"kind": kind, "handle": handle, "reason": reason,
                             **extra, "ts": self.clock.now_ns})
-        self.registration_feedback.append({"kind": kind,
-                                           "reason": f"order: {reason}"})
         owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
         if owner is not None:
             self.outcomes.append(owner, handle=handle,

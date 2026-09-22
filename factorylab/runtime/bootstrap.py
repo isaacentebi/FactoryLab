@@ -773,7 +773,6 @@ class BootstrapMixin:
         self.emitted = 0
         self.insolvency_count = 0
         self.dormancy: dict[str, Any] | None = None  # C2: set while paid cognition is paused
-        self.registration_feedback: deque[dict[str, Any]] = deque(maxlen=8)
         self._compute_routed = False
         self._compute_unaffordable = False
         self.world_consumed = 0
