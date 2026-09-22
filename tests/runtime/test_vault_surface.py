@@ -201,6 +201,9 @@ def test_a_deposit_leaves_perps_collateral_and_order_collateral_sees_it():
     ("venue.vault_deposit", {"usd": "9500"}, "insufficient collateral"),
     ("venue.vault_withdraw", {"usd": "1001"}, "exceeds this account's equity"),
     ("venue.vault_deposit", {"vault": "0x" + "1" * 40, "usd": "1"}, "vault record unavailable"),
+    # Codex review of #124: a seventh decimal was truncated on the wire and rounded in
+    # the books, so the venue row never matched its intent.
+    ("venue.vault_deposit", {"usd": "1.0000009"}, "finer than one micro-USD"),
 ])
 def test_a_refused_vault_write_is_explained_and_never_submitted(tool, args, why):
     rt = _runtime()
@@ -513,3 +516,29 @@ def test_a_deposit_and_an_order_that_each_fit_alone_are_refused_together():
     # Each fits alone: 9000 of perps collateral is free after the vault's creation.
     alone = _decision(rt)
     assert rt._order_collateral(alone, "BTC", Decimal(40), True) is None
+
+
+def test_a_commission_indexed_late_in_the_newest_millisecond_is_still_booked_once():
+    """Codex review of #124: a cursor advanced past the newest row's millisecond lost
+    a commission the venue indexed after the poll, at that same millisecond."""
+    rt = _runtime()
+    _create(rt)
+    at = rt.vault_ledger_cursor_ns + 5_000_000
+    rows = rt.exchange._vault_rows
+    rows.append({"ts_ns": at, "hash": "0x" + "a1" * 32, "type": "vaultLeaderCommission",
+                 "vault": None, "user": OUTSIDE, "usd": Decimal(2)})
+    rt._collect_income()
+    rows.append({"ts_ns": at, "hash": "0x" + "a2" * 32, "type": "vaultLeaderCommission",
+                 "vault": None, "user": OUTSIDE, "usd": Decimal(3)})
+    rt._collect_income()
+    rt._collect_income()
+    assert rt.treasury.income["earned_micro"] == 5_000_000
+    assert sorted(i["micro"] for i in _items(rt, "income.earned")) == [2_000_000, 3_000_000]
+
+
+def test_a_vault_amount_finer_than_a_micro_usd_is_refused_by_the_venue_adapter_too():
+    from factorylab.world.vaults import exact_micro
+
+    assert exact_micro("1.000001") == 1_000_001 and exact_micro("1.0000009") is None
+    ex = _exchange()
+    assert "finer" in ex.vault_transfer("0x" + "2" * 40, True, Decimal("1.0000009"))["error"]

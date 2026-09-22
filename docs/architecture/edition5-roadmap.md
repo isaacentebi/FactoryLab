@@ -20,7 +20,7 @@ was not failing to learn; it had no channel to learn through.
 | The world fills the payoff table (II.I.a) | holds unpriceable | a hold names its declined trade (`counterfactual`); the market prices it, net of fees, ex ante — never the best trade in hindsight, which would teach a population to trade noise; a bare hold is exactly neutral (0.5) |
 | Judges look at the work like a machine (II.I.b, Yan) | judges shown the whole world, 48k chars | request, answer, executed operations, propensity; −42% |
 | The signal grading an evaluator sits outside its loop (II.III) | judges graded by metas only | a verdict on a hold is Brier-scored against the market's price of it |
-| Learning death prevented as a fact about the world (II.II.b) | seats declared "order: 0.1" and never ordered | `exploration_share`: the kernel draws the action class; a complied draw records the kernel's own distribution as the propensity |
+| Learning death prevented as a fact about the world (II.II.b) | seats declared "order: 0.1" and never ordered | ~~`exploration_share`: the kernel draws the action class~~ — **withdrawn**: it had the kernel choose the seat's action, which is Class 1 input (rulings R5). The niche is compute and write access for unhistoried actions, rebuilt in wave 5 |
 | A reciprocal flow of capital (II.IV) | converted profit released a hold, minted no authority | confirmed conversion is spending authority (financing, never income), the seat's own profit first |
 | Each tier graded on its own scoring (II.III) | metas' scores paid to other judges' unread verdicts | a meta's grade covers only its own judge's verdicts |
 | Rich, self-describing requests (II.I.b) | "order" meant instruction and report; answers traded twice | a decision acts once; reports never execute; identical resting orders refused |
@@ -71,7 +71,7 @@ govern 5, investigate 3 beside 95 holds), where before it only held and deferred
 ```
 uv run python scripts/fastloop.py score <events.json>                         # any diary
 uv run python scripts/fastloop.py run --provider scripted --ticks 40 --seeds 1,2,3,4
-uv run python scripts/fastloop.py run --provider live --ticks 30 --seeds 1,2,3,4 --exploration 0.2
+uv run python scripts/fastloop.py run --provider live --ticks 30 --seeds 1,2,3,4
 ```
 
 Scripted: free, two seconds, every institution exercised. Live: real models on the

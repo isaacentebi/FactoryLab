@@ -120,8 +120,6 @@ class BootstrapMixin:
         self.events_budget = events
         self.seed = manifest.seed if seed is None else seed
         self.rng = random.Random(self.seed)
-        # Exploration draws awaiting the propensity record of their decision (C-X).
-        self.exploration_draws: dict[str, dict] = {}
         self.cascade: dict[int, CascadeGate] = {}
         self.cascade_windows: dict[str, list[str]] = {}  # representative -> other handles
         self.clock = SimClock(0) if _journal is None else _journal.clock
@@ -457,6 +455,7 @@ class BootstrapMixin:
         self.vault_intents: dict[str, dict] = {}
         self.vault_book: dict[str, dict] = {}
         self.vault_ledger_cursor_ns = self.clock.now_ns
+        self.vault_ledger_seen: list[str] = []  # row hashes read at the cursor's millisecond
         # Decision handle -> why a venue write it attempted was refused, read once
         # by that decision's own answer: a refused write is not an answer's licence.
         self.venue_attempts: dict[str, str] = {}
