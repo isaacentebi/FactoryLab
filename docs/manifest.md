@@ -1111,6 +1111,54 @@ round, the same one a successful `connector.fetch` permits: ordinary population,
 artifact and outcome tools, then a final model answer, so a seat can search and act within
 one wake. A search that returned no results buys no extra round.
 
+## Event markets: `[polymarket]`
+
+`[polymarket]` is off by default, and a manifest without it, or with `enabled = false`,
+hashes exactly as it did before the block existed. No world under `worlds/` enables it. The
+keys, all fixed for the world's life:
+
+| key | default | meaning |
+|---|---|---|
+| `enabled` | `false` | publish the Polymarket tools and open the `polymarket` custody pot |
+| `venue` | `"fake"` | `fake`: the seeded simulated venue (`world/polymarket.py`, `FakePolymarket`) for reads and writes. `live`: the public Gamma and CLOB read APIs only; no write tool and no pot are registered, because live order signing on Polygon is not built |
+| `read_price_usd` | `"0.001"` | the flat price of each read tool |
+| `collateral_usd` | `"0"` | the simulated pot's opening USDC; refused with `venue = "live"` |
+| `max_order_usd` | `"10"` | the most one order's notional (`price x size`) may be |
+| `max_open_usd` | `"100"` | the most the pot may have committed: tokens held at cost plus resting buys |
+| `max_orders_per_window` | `20` | orders placed per reserve window |
+| `seed` | `0` | the simulated venue's seed |
+
+Tools: `polymarket.search {query, limit?}`, `polymarket.market {market_id}` and
+`polymarket.book {token_id, depth?}` are reads priced at `read_price_usd`. Their answers
+carry text third parties wrote (questions, rules, slugs, resolution sources), so they are
+outside text exactly as a `connector.fetch` body is: prose of at least
+`MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population, note,
+artifact and outcome tools only, so market text cannot reach a write in the same wake. With
+the simulated venue, `polymarket.positions {}` reads the pot (free), and
+`polymarket.place_limit {token_id, side, size, price}` and `polymarket.cancel {order_id}`
+write (free). The writes are consequence writes: only a producing decision with an open
+consequence account may make them, each has a client id (`<handle>:<slot>`) and a durable
+`polymarket.intent` before submission, a repeat reconciles and never resubmits, an
+unanswered intent is polled at most `UNCERTAIN_ORDER_POLLS` times and then released as
+unknown, and a batch that writes is weighed whole with the venue's writes.
+
+Custody: collateral is the `polymarket` pot, its own account in `custody_view`, in
+`world.pots` (its USDC counts in `total_micro`; tokens are listed by count, never priced) and
+in a kill's wind-down (resting orders cancelled, tokens sold at the bid above the kill's dust
+bound, the rest named as exposure). An order is weighed against that pot alone, never the
+Hyperliquid accounts or the reserve. A fill's realised P&L and fee are ledgered as
+`venue.settled` with `custody = "polymarket"`.
+
+Settlement: a fill opens an `event` lot in the consequence book. An event lot is never
+marked and a return with a Polymarket order still resting is held, so the backstop does not
+fix either outcome: the decision's consequence is owed by its market's resolution. At
+resolution every lot on the token is closed at the payout (1, 0, or 0.5 on a 50-50),
+ledgered as `consequence.resolution` with one `resolution` execution receipt per decision it
+settled, and the return's outcome is then fixed from realised money, unmarked. Under
+`producer_feedback = "realized"` a grounded contract whose decision holds such a position
+has its observation horizon follow the position (`consequence.awaiting_resolution`, once),
+so the final judge is commissioned on evidence that includes the resolution.
+
 ## New kinds of work: reward shapes and predicates
 
 A registration declares which one of the four reward shapes — `judged`,

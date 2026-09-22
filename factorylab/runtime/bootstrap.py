@@ -323,7 +323,13 @@ class BootstrapMixin:
                 forward_wait_windows=manifest.treasury.forward_wait_windows,
                 clock_ns=self.clock,
             )
-        self.wallet.bind_pots(self.treasury.pots)
+        if manifest.polymarket.enabled:
+            from factorylab.runtime.polymarket import pots_view
+
+            # The polymarket pot sits beside the treasury's pots, never inside them.
+            self.wallet.bind_pots(lambda: pots_view(self))
+        else:
+            self.wallet.bind_pots(self.treasury.pots)
         self.treasury.rail = JournalProxy(
             self.treasury.rail, self.ledger, "treasury.rail", deterministic=not self.live
         )
@@ -667,6 +673,11 @@ class BootstrapMixin:
         # without an example fails at launch rather than reaching the population.
         for tool_id, spec in self.tool_specs.items():
             spec["args_schema"]["examples"] = examples[tool_id]
+        from factorylab.runtime.polymarket import install as install_polymarket
+
+        # [polymarket] enabled: event-market tools with their own examples, and the
+        # simulated venue or the public read client behind them. Absent otherwise.
+        install_polymarket(self)
         self.tool_runner = JournalProxy(ToolRunner(), self.ledger, "sandbox")
         available = self.tool_runner.available
         self.ledger.append({"kind": "sandbox.availability", "available": available})

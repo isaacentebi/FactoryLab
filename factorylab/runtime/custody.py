@@ -174,6 +174,13 @@ def custody_view(rt: Any) -> dict[str, Any]:
         "base_reserve": reserve,
         "pending_conversions": _pending(treasury, pots_ns),
     }
+    from factorylab.runtime.polymarket import custody as polymarket_custody
+
+    polymarket = polymarket_custody(rt)
+    if polymarket is not None:
+        # The Polygon collateral pot of a world that enables event markets. It is
+        # its own custodian and backs only its own orders (runtime/polymarket.py).
+        view["polymarket"] = polymarket
     view["authority"] = {
         # Not an asset: the constitutional ceiling the assets above back.
         "kind": "authority", "unlocked_micro": rt.wallet.unlocked,

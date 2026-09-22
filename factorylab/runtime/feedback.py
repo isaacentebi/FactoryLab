@@ -1608,6 +1608,14 @@ class FeedbackMixin:
             if handle in self.grounded_closed:
                 self.grounded_pending.pop(handle, None)
                 continue
+            if not contract.final_requested and getattr(self, "polymarket", None) is not None:
+                from factorylab.runtime import polymarket
+
+                # An event market position is observed at its resolution, not at a
+                # fixed tick: the horizon follows it rather than guessing it.
+                if polymarket.awaiting_resolution(self, handle):
+                    contract = polymarket.defer_grounded(self, contract)
+                    self.grounded_pending[handle] = contract
             if self.ticks_consumed >= contract.close_tick:
                 self._grounded_unknown(contract, UNKNOWN_REASON)
                 continue

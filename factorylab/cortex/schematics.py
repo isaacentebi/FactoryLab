@@ -1080,6 +1080,8 @@ class SchematicsMixin:
             **{name: custody.get(name, {"status": "unavailable",
                                         "reason": "no custody view for this account"})
                for name in self.VENUE_CUSTODY},
+            # Present only in a world that enables Polymarket event markets.
+            **({"polymarket": custody["polymarket"]} if "polymarket" in custody else {}),
             # The venue's own running totals, beside the accounts they moved.
             "to_date": {
                 "realized_pnl_usd": str(money_to_usd(self.realized_to_date)),

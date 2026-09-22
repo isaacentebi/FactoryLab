@@ -119,6 +119,8 @@ class VenueMixin:
                                    launch_nonce=getattr(self, "launch_nonce", None))
             elif owed:
                 report["error"] = "world has no exchange"
+            if owed and getattr(getattr(self, "polymarket", None), "writes", False):
+                self._wind_down_polymarket(report)
         except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
             report["error"] = type(exc).__name__
         finally:
@@ -462,14 +464,34 @@ class VenueMixin:
         if observe_positions:
             self._observe_positions()
 
+    def _wind_down_polymarket(self, report: dict) -> None:
+        """Wind the polymarket pot down beside the venue, and let its exposure count.
+
+        A kill owes every custody its wind-down; a Polymarket position the book
+        would not take is exposure the dead world still holds, so the report's
+        ``exposure_state`` is the worse of the two venues'.
+        """
+        from factorylab.runtime import winddown
+        from factorylab.runtime.polymarket import wind_down as polymarket_wind_down
+
+        pm = polymarket_wind_down(self)
+        report["polymarket"] = pm
+        rank = (winddown.FLAT, winddown.DUST, winddown.PENDING, winddown.UNKNOWN)
+        states = [report.get("exposure_state", winddown.UNKNOWN), pm["exposure_state"]]
+        report["exposure_state"] = max(
+            states, key=lambda state: rank.index(state) if state in rank else len(rank))
+
     def tool_writes(self, handle: str) -> list[dict]:
         """The venue writes this decision made through tools, in submission order.
 
         Guarantees only intents durably written under this handle's tool slots
         are returned; the answer's own market order (client id == handle) is not.
+        A Polymarket write is one of them: a decision acts once, on any venue.
         """
+        polymarket = getattr(self, "polymarket", None)
         return [intent for client_id, intent in self.order_intents.items()
-                if intent["handle"] == handle and client_id != handle]
+                if intent["handle"] == handle and client_id != handle] + (
+            polymarket.writes_of(handle) if polymarket is not None else [])
 
     def executed_operations(self, handle: str) -> list[dict]:
         """What this decision executed at the venue, as its evaluators may see it.
