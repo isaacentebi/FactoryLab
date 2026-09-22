@@ -691,6 +691,9 @@ class BootstrapMixin:
             lambda_max=pr.lambda_max,
             min_window_events=pr.min_window_events,
             timing=self.timing,
+            controller=pr.controller,
+            kp=pr.kp,
+            kd=pr.kd,
         )
         self.regions: dict[str, CardRegion] = {}  # cards of the current edition with a region
         self.priced: set[str] = set()  # card ids currently registered with the controller

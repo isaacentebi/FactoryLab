@@ -1,0 +1,163 @@
+"""The charter's price law is a bounded PID, and stable failure is priced by its duration.
+
+Essay II.II.b: lambda is set by a PID controller — Kp raises the penalty in
+proportion to the violation, Ki stores sustained violation, Kd reacts to how fast
+the violation changes to damp escalation before it overshoots — and in stable
+failure one should "price the duration of failure, ratcheting up penalties".
+"""
+
+from dataclasses import replace
+
+import pytest
+
+from factorylab.charter.controller import CardRegion, PriceController
+from factorylab.kernel.ledger import Ledger
+
+
+def _pid(ledger=None, **changes):
+    params = dict(eta=0.5, decay=0.1, lambda_max=1.0, min_window_events=1,
+                  controller="pid", kp=0.5, kd=0.0)
+    params.update(changes)
+    prices = PriceController(ledger or Ledger(), **params)
+    prices.register(CardRegion("c", "max", None, 1.0, 1.0))
+    return prices
+
+
+def _updates(ledger):
+    return [item for item in ledger._recovery_items() if item["kind"] == "price.update"]
+
+
+def test_proportional_term_is_proportional_to_the_current_violation():
+    """With no integral gain to speak of, the price is Kp times this window's violation."""
+    one, two = _pid(eta=1e-9, lambda_max=10.0), _pid(eta=1e-9, lambda_max=10.0)
+    one.observe("c", 1.5, 0)  # violation 0.5
+    two.observe("c", 2.0, 0)  # violation 1.0
+    assert one.price("c") == pytest.approx(0.25)
+    assert two.price("c") == pytest.approx(0.5)
+    assert two.price("c") == pytest.approx(2 * one.price("c"))
+
+
+def test_integral_term_accumulates_sustained_violation_and_leaks_once_compliant():
+    ledger = Ledger()
+    prices = _pid(ledger, kp=0.0, lambda_max=10.0)
+    for event in range(3):
+        prices.observe("c", 1.4, event)  # violation 0.4 each window
+    assert prices.price("c") == pytest.approx(3 * 0.5 * 0.4)
+    prices.observe("c", 0.5, 3)  # compliant: only the integral remains, leaking decay
+    assert prices.price("c") == pytest.approx(0.6 - 0.1)
+    assert [row["i"] for row in _updates(ledger)] == pytest.approx([0.2, 0.4, 0.6, 0.5])
+    assert all(row["controller"] == "pid" for row in _updates(ledger))
+
+
+def test_derivative_damps_a_fast_recovery_and_speeds_a_fast_escalation():
+    """Kd lowers the price while the violation shrinks fast, and raises it while it grows."""
+    damped, undamped = _pid(kd=0.5, lambda_max=10.0), _pid(kd=0.0, lambda_max=10.0)
+    for prices in (damped, undamped):
+        prices.observe("c", 3.0, 0)  # violation 2
+        prices.observe("c", 1.5, 1)  # violation 0.5: recovering fast
+    assert damped.price("c") < undamped.price("c")
+    assert undamped.price("c") - damped.price("c") == pytest.approx(0.5 * 1.5)
+
+    rising, flat = _pid(kd=0.5, lambda_max=10.0), _pid(kd=0.0, lambda_max=10.0)
+    for prices in (rising, flat):
+        prices.observe("c", 1.5, 0)
+        prices.observe("c", 3.0, 1)  # escalating fast
+    assert rising.price("c") > flat.price("c")
+
+
+def test_derivative_is_on_the_measurement_so_a_moved_region_cannot_kick_the_price():
+    """Re-deriving a card's bound changes its violation, never its rate of change."""
+    moved, still = _pid(kd=1.0, lambda_max=10.0), _pid(kd=1.0, lambda_max=10.0)
+    for prices in (moved, still):
+        prices.observe("c", 2.0, 0)
+    moved.update_region(CardRegion("c", "max", None, 0.5, 1.0))  # the bound tightened
+    moved.observe("c", 2.0, 1)
+    still.observe("c", 2.0, 1)
+    rows = {id(p): p.snapshot()["cards"]["c"] for p in (moved, still)}
+    assert rows[id(moved)]["lambda"] > rows[id(still)]["lambda"]  # more violation: P and I
+    # The measurement did not move, so neither derivative contributed.
+    assert moved.price("c") - still.price("c") == pytest.approx(0.5 * 0.5 + 0.5 * 0.5)
+
+
+def test_price_and_integral_stay_bounded_and_the_integral_never_winds_up():
+    ledger = Ledger()
+    prices = _pid(ledger, kp=0.5, kd=0.25, lambda_max=1.0)
+    for event in range(20):
+        prices.observe("c", 100.0, event)  # enormous, sustained violation
+        card = prices.snapshot()["cards"]["c"]
+        assert 0.0 <= card["lambda"] <= 1.0
+        assert 0.0 <= card["integral"] <= 1.0
+    assert prices.snapshot()["cards"]["c"]["saturations"] > 0
+    # Anti-windup: pressure held at the bound unwinds by decay at once, not after
+    # paying back twenty windows of integrated excess.
+    prices.observe("c", 0.0, 20)
+    assert prices.price("c") == pytest.approx(prices.snapshot()["cards"]["c"]["integral"])
+    assert prices.price("c") <= 1.0 - 0.1 + 1e-12
+    assert all(row["lambda_after"] <= 1.0 for row in _updates(ledger))
+
+
+def test_adopted_price_seeds_the_integral_without_a_jump():
+    prices = _pid(kp=0.0)
+    prices.set_price("c", 0.4, amendment_id="manifest")
+    prices.observe("c", 0.5, 0)  # compliant: the adopted price leaks, it is not reset
+    assert prices.price("c") == pytest.approx(0.3)
+
+
+def test_default_law_is_the_integrator_every_earlier_world_ran():
+    """No manifest key: the shipped integral law, ledger entries unchanged in shape."""
+    ledger = Ledger()
+    prices = PriceController(ledger, eta=0.5, decay=0.25, lambda_max=2.0, min_window_events=1,
+                             kappa=0.0)
+    prices.register(CardRegion("c", "max", None, 10.0, 2.0))
+    for event, value in enumerate([12, 12, 12, 10, -100]):
+        prices.observe("c", value, event)
+    assert [row["lambda_after"] for row in _updates(ledger)] == [0.5, 1.0, 1.5, 1.25, 1.0]
+    assert all("controller" not in row and "damping" in row for row in _updates(ledger))
+
+
+@pytest.mark.parametrize("changes", [
+    {"controller": "bang-bang"}, {"controller": None}, {"kp": -0.1}, {"kd": -1},
+    {"kp": float("nan")}, {"kd": float("inf")}, {"kp": True},
+])
+def test_invalid_price_law_is_refused(changes):
+    with pytest.raises(ValueError):
+        _pid(**changes)
+
+
+def test_manifest_refuses_gains_without_the_pid_and_hashes_defaults_as_before():
+    from factorylab.runtime.worlds import load_manifest
+
+    seed = load_manifest("scripted")
+    explicit = replace(seed, prices=replace(seed.prices, controller="integral", kp=0.0, kd=0.0))
+    assert explicit.canonical_json() == seed.canonical_json()
+    pid = replace(seed, prices=replace(seed.prices, controller="pid", kp=0.5))
+    pid.validate()
+    assert pid.canonical_json() != seed.canonical_json()
+    for prices in (replace(seed.prices, kp=0.5), replace(seed.prices, controller="p"),
+                   replace(seed.prices, controller="pid", kd=-1.0)):
+        with pytest.raises(ValueError):
+            replace(seed, prices=prices).validate()
+
+
+def test_stable_failure_ratchets_price_up_with_its_duration_and_stays_bounded():
+    ledger = Ledger()
+    prices = _pid(ledger, lambda_max=1.0)
+    prices.set_price("c", 0.1, amendment_id="start")
+    seen = []
+    for window in range(1, 4):
+        prices.ratchet("c", window=window, step=0.05)
+        seen.append(prices.price("c"))
+    # Durations 1, 2, 3 add 0.05, 0.10, 0.15: the longer the failure, the steeper.
+    assert seen == pytest.approx([0.15, 0.25, 0.40])
+    rows = [i for i in ledger._recovery_items() if i["kind"] == "immune.price_ratchet"]
+    assert [r["duration"] for r in rows] == [1, 2, 3]
+    assert all(r["lambda_after"] > r["lambda_before"] for r in rows)
+    for window in range(4, 20):
+        prices.ratchet("c", window=window, step=0.05)
+    assert prices.price("c") == 1.0 and prices.snapshot()["cards"]["c"]["integral"] == 1.0
+    prices.end_failure("c", window=20)
+    assert prices.snapshot()["cards"]["c"]["failing_windows"] == 0
+    prices.ratchet("c", window=21, step=0.05)  # a new attractor starts from one window
+    assert ledger._recovery_items()[-1]["duration"] == 1
+    with pytest.raises(ValueError):
+        prices.ratchet("c", window=22, step=0.0)

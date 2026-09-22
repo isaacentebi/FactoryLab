@@ -61,6 +61,9 @@ class MeasureWindow:
     # amendment cannot remove or restate a card out of what this window already attributed.
     closed_cards: tuple[MetricCard, ...] = ()
     closed_prices: dict[str, float] = field(default_factory=dict)
+    # Each measured card's per-scope values at the close (scope -> value), for a card
+    # whose window is per assembly or per role: who a violation is attributable to.
+    closed_scopes: dict[str, dict[str, float]] = field(default_factory=dict)
     mids: list[dict] = field(default_factory=list)
     funding: list[dict] = field(default_factory=list)
     wallet_balance_micro: list[list[int]] = field(default_factory=list)
@@ -74,6 +77,16 @@ class MeasureWindow:
     # spent without a return to carry it, so it enters the cost mass of a
     # per-return observation and never that observation's denominator.
     storage_cost_micro: int = 0
+
+
+#: The definition of a censored settlement that carries a price: its decision left
+#: an accepted commitment avoidably unresolved, and its ``score`` is the penalty the
+#: charter charged it, never an observed score.
+UNRESOLVED_PRICED = "forecast-unresolved-priced-v1"
+
+# Observations whose shares already come from each decision's own contribution.
+_EXACT_SHARES = frozenset({"cost_per_return", "cost_per_attempt", "well_formed_rate",
+                           "tool_calls", "turnover"})
 
 
 class PricingMixin:
@@ -408,6 +421,8 @@ class PricingMixin:
         # A decision settling late is priced on the window it worked in.
         self.window.closed_values = dict(card_values)
         self.window.closed_regions = dict(self.regions)
+        self.window.closed_scopes = {cid: dict(self.card_samples.scopes.get(cid) or {})
+                                     for cid in card_values}
         self.window.closed_shares = [
             {"card_id": card.id, "shares": self._cost_shares(card)}
             for card in self.charter.cards
@@ -499,16 +514,64 @@ class PricingMixin:
                 continue
             amount = violation(region, values[card.id])
             weight = price * amount
+            owner = None
             share = 1.0 if handle is None else self._decision_share(
                 window, handle, observation.id, card.answers_for, region, values[card.id]
             )
             if handle is not None and observation.id == "cost_per_return":
                 share = self._cost_share(card, window, handle, share)
-            terms.append({"card_id": card.id, "observation": observation.id,
-                          "window": window.index, "violation": amount,
-                          "lambda": price, "weight": weight,
-                          "share": share})
+            elif handle is not None and amount > 0 and observation.id not in _EXACT_SHARES:
+                scopes = (self.card_samples.scopes if window.closed_values is None
+                          else window.closed_scopes).get(card.id) or {}
+                attributed = self._attributed_share(window, handle, card, region, scopes)
+                if attributed is not None:
+                    share, owner = attributed
+            term = {"card_id": card.id, "observation": observation.id,
+                    "window": window.index, "violation": amount,
+                    "lambda": price, "weight": weight,
+                    "share": share}
+            if owner is not None:
+                term["owner"] = owner
+            terms.append(term)
         return terms
+
+    def _scope_of(self, window, handle: str, per: str) -> str | None:
+        """The scope a decision is measured in for a per-assembly or per-role card."""
+        if per == "assembly":
+            return self.handle_to_assembly.get(handle)
+        sample = window.decisions.get(handle)
+        return sample["role"] if sample is not None else self._decision_role(handle)
+
+    def _attributed_share(self, window, handle: str, card, region,
+                          scopes: dict[str, float]) -> tuple[float, str | None] | None:
+        """Route a scoped card's violation onto the scopes whose own samples violate it.
+
+        A card measured per assembly (or per role) is the mean of its scopes, so
+        its violation is attributable: each violating scope owns the part of it
+        its own distance outside the region contributes, and a scope inside the
+        region owns none. A decision carries its scope's part divided among that
+        scope's decisions that responded in the window, never below
+        ``prices.min_blame_share`` of the part. Returns ``(share, owner scope)``,
+        with share ``0.0`` for a decision whose scope is compliant, or None when
+        the card is not scoped or no scope violates, so the caller keeps the
+        generic floor-split for a violation with no attributable owner.
+        """
+        per = card.window.per
+        if per not in ("assembly", "role") or not scopes:
+            return None
+        excess = {scope: violation(region, value) for scope, value in scopes.items()}
+        total = sum(excess.values())
+        if total <= 0:
+            return None
+        own = self._scope_of(window, handle, per)
+        if not excess.get(own):
+            return 0.0, own
+        peers = {h for h, d in window.decisions.items()
+                 if (d["invocations"] or d["ok"] or not d["cost"])
+                 and self._scope_of(window, h, per) == own}
+        peers.add(handle)
+        part = excess[own] / total
+        return part * max(self.m.prices.min_blame_share, 1 / len(peers)), own
 
     def _cost_share(self, card, window, handle: str, contributed: float) -> float:
         """A closed window owns the shares it froze; a live one re-reads its sample now.
@@ -632,33 +695,52 @@ class PricingMixin:
         definition_version: str,
         sampling_ref: str | None,
         cards: str,
+        unresolved: tuple[str, ...] = (),
     ) -> None:
-        """Settle a judged score less the card penalty, clipped to [0, 1]; both are ledgered."""
+        """Settle a judged score less the card penalty, clipped to [0, 1]; both are ledgered.
+
+        The penalty is subtracted, as the essay's Lagrangian prescribes (reward less
+        lambda times cost), and the result is clipped at zero because a settled
+        score is a unit-interval reward: a penalty larger than the raw score takes
+        the whole reward and no more. ``prices.penalty_cap`` < 1 already bounds it.
+
+        A decision whose own commitments were left avoidably unresolved
+        (``unresolved`` names them) has no observed score, so it settles censored,
+        never as a zero; its penalty is carried on that censored settlement under
+        ``UNRESOLVED_PRICED`` and subtracted from the neutral estimate its learners
+        are credited instead of a score (``_learn_router_return``).
+        """
         if handle not in self.price_origins:
             self._contribution(handle, cards)
         penalty = self._penalty_for(cards, handle)
-        effective = min(1.0, max(0.0, score - penalty))
+        if unresolved:
+            status, effective = SettleStatus.CENSORED, None
+            definition_version, settled_score = UNRESOLVED_PRICED, penalty
+        else:
+            effective = min(1.0, max(0.0, score - penalty))
+            status, settled_score = SettleStatus.SETTLED, effective
         self.queue.settle(
             handle,
             channel=channel,
-            score=effective,
-            status=SettleStatus.SETTLED,
+            score=settled_score,
+            status=status,
             definition_version=definition_version,
             sampling_ref=sampling_ref,
         )
         self.window.outcomes += 1
-        self.ledger.append(
-            {
-                "kind": "price.penalty",
-                "handle": handle,
-                "channel": channel,
-                "raw": score,
-                "penalty": penalty,
-                "effective": effective,
-                "penalty_cap": self.m.prices.penalty_cap,
-                "terms": self._penalty_terms(cards, handle),
-                "ts": self.clock.now_ns,
-            }
-        )
+        entry = {
+            "kind": "price.penalty",
+            "handle": handle,
+            "channel": channel,
+            "raw": None if unresolved else score,
+            "penalty": penalty,
+            "effective": effective,
+            "penalty_cap": self.m.prices.penalty_cap,
+            "terms": self._penalty_terms(cards, handle),
+            "ts": self.clock.now_ns,
+        }
+        if unresolved:
+            entry["unresolved"] = list(unresolved)
+        self.ledger.append(entry)
         if penalty > 0:
             self.stats.penalized_settlements += 1

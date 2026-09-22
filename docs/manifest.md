@@ -678,22 +678,31 @@ parameters; the observer never substitutes a second set of thresholds.
 | `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a judgement waits for its judge (a verdict for a producer return, a meta verdict for a verdict) before it is censored. |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
 | `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation; absent from the manifest hash at its default. |
+| `prices.controller` | `integral` or `pid` | `integral` | Yes: the price law. `integral` is the shipped integrator (`lambda += eta*v` less the one-sided `kappa` damping while violating, `-= decay` once compliant). `pid` is `lambda = kp*v + I + D`: `I` accumulates `eta*v` while violating and leaks `decay` once compliant, held in `[0, lambda_max]` and not integrated while the output is saturated (anti-windup); `D = kd * d(measurement)/scale`, on the measurement rather than the error, signed toward violation and applied only while violating. Absent from the manifest hash at its default. |
+| `prices.kp` | finite nonnegative number | `0.0` | Yes: PID proportional gain; nonzero only with `controller = "pid"`. Absent from the hash at its default. |
+| `prices.kd` | finite nonnegative number | `0.0` | Yes: PID derivative gain; nonzero only with `controller = "pid"`. Absent from the hash at its default. |
 | `immune.k` | integer, at least 2 | `3` | Yes: consecutive windows or changes required for diagnosis. |
 | `immune.bins` | integer, exactly 3 | `3` | Yes: inside, up to one scale unit outside, more than one unit outside. |
 | `immune.registration_bins` | increasing nonnegative numeric array | `[0, 2]` | Yes: zero, 1–2, 3+ registrations. Values equal to a cut enter the lower bin. |
 | `immune.revision_bins` | increasing nonnegative numeric array | `[0]` | Yes: zero versus positive revision. |
 | `immune.tv_threshold` | finite number in (0, 1] | `0.2` | Yes: behavioral version boundaries, not the thrash predicate. |
 | `immune.gap_threshold` | finite number in (0, 1] | `0.8` | Yes: the operator's `durable` readout, not an additional pathology gate. |
-| `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment. |
+| `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment, and the stable-failure price ratchet's step per window of duration. |
 | `immune.gamma_max` | finite number in (0, 1] | `0.5` | Yes: exploration-gain ceiling. |
 | `immune.decay_step` | finite number in (0, 1] | `0.1` | Yes: extra price decay for the window following thrash. |
 
 These launch settings are immutable parameters of an experiment. Effective
 prices, gain, diagnoses and the currently negotiated tick interval remain runtime
-state. Relief halves the effective lambda on violated cards for one window; it
-preserves the controller's accumulated price and previous violation. That state
-resumes with the controller. Repeated failure can renew relief, while underlying
-pressure continues to ratchet.
+state. Stable failure is priced by its duration (essay II.II.b): the n-th
+consecutive diagnosed window adds `n * immune.gain_step` to each violated card's
+price and accumulated pressure, bounded by `prices.lambda_max`
+(`immune.price_ratchet`), and the count restarts once the card leaves the
+attractor (`immune.price_ratchet_ended`). The exploration gain raised for stable
+failure steps back toward each router's seed gamma once a window diagnoses no
+pathology (`immune.gain` with pathology `cleared`); a learning-dead window holds
+it. That state resumes with the controller. (Worlds before this change halved the
+violated cards' effective price for one window instead; `immune.price_relief`
+entries in their diaries record that.)
 
 ## Timing interpretation
 
@@ -788,7 +797,19 @@ across many decisions cannot dilute what each one carries of a violation below
 the floor. The generic share is `max(min_blame_share, 1/n)`, so two decisions
 still carry a half each; the floor bites only once `n` exceeds its reciprocal.
 Attributable observations (cost, well-formedness, tool attempts, turnover) keep
-their exact shares. The final score is `clip(raw_score - penalty, 0, 1)`.
+their exact shares. A card measured per assembly or per role is attributable to
+its scopes: each scope whose own value lies outside the region owns
+`v_scope / sum(v_scope)` of the violation (a compliant scope owns none), and a
+decision carries its scope's part times `max(min_blame_share, 1/n_scope)` over
+that scope's decisions that responded in the window; the term records the
+`owner` scope. The generic split applies only when no scope violates. Closed
+windows freeze the per-scope values as `closed_scopes`. The final score is
+`clip(raw_score - penalty, 0, 1)`: the penalty is subtracted (the essay's
+Lagrangian), and the clip at zero only keeps a settled reward in the unit interval.
+A forecast-shaped decision whose accepted commitment came due avoidably unresolved
+(censored with no documented exclusion) still settles censored, never as a zero,
+but under `forecast-unresolved-priced-v1` carrying its penalty as the score; its
+router and assembly learners are credited their neutral estimate less that price.
 
 Closed windows retain their observations, regions, contributions, and the cards
 and prices of the edition in force at the close, for delayed settlements. A

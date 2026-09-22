@@ -70,7 +70,8 @@ def test_controller_ledger_first_bounds_history_and_removal(monkeypatch):
     assert entries[0] == {"kind": "price.proposed", "card_id": "card",
                           "amendment_id": "adopted", "lambda_before": 0.5, "lambda_after": 0.8}
     assert controller.snapshot()["cards"]["card"] == {
-        **before["cards"]["card"], "lambda": 0.8, "effective_lambda": 0.8,
+        # An adopted price becomes the card's accumulated pressure (bumpless for the PID).
+        **before["cards"]["card"], "lambda": 0.8, "effective_lambda": 0.8, "integral": 0.8,
     }
     assert timing.closure_count("price:card") == 1
     for value in (True, -1, 2, float("nan")):

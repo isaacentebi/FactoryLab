@@ -27,6 +27,7 @@ from factorylab.runtime.grounded import (
     parse_finding,
     public_evidence,
 )
+from factorylab.runtime.pricing import UNRESOLVED_PRICED
 from factorylab.runtime.routing import _KeyedLearner
 from factorylab.runtime.shared import (
     CH_CONFORMITY,
@@ -52,6 +53,21 @@ from factorylab.settlement.vocabulary import (
     RETURN_PAID_OFF,
     UNMEASURED_DEFINITION,
 )
+
+
+def _priced(neutral: float | None, lr: LearningReturn | None) -> float | None:
+    """The neutral credit of an unscored decision, less the price its settlement carries.
+
+    Only a censored settlement under ``UNRESOLVED_PRICED`` carries one (its score is
+    the penalty for a commitment its owner left avoidably unresolved); every other
+    unscored decision keeps its neutral credit unchanged. The result stays in [0, 1],
+    and no neutral estimate (nothing observed yet) stays None.
+    """
+    if (neutral is None or lr is None or lr.status is not SettleStatus.CENSORED
+            or lr.definition_version != UNRESOLVED_PRICED):
+        return neutral
+    return min(1.0, max(0.0, neutral - float(lr.score)))
+
 
 # A verdict is a prediction that the judged return will not be blamed by the charter. Its
 # commitment waits in ``pending`` under the judge's payoff-forecast handle until the
@@ -436,7 +452,17 @@ class FeedbackMixin:
                 continue
             if self.queue.get(handle).status is SettleStatus.PENDING:
                 results = [self.queue.history(f)[-1] for f in forecasts]
-                if not results or any(r.status is not SettleStatus.SETTLED for r in results):
+                unresolved = tuple(entry.get("unresolved", ()))
+                if unresolved:
+                    # The seat left a commitment it accepted avoidably unresolved: the
+                    # decision still has no observed score, but it is not a free
+                    # censored neutral either. The charter prices it for its owner.
+                    self._settle_priced(
+                        handle, channel=CH_CONSEQUENCE, score=0.0,
+                        definition_version="forecast-mean-v1", sampling_ref=None,
+                        cards=measured_role(self.return_kinds[handle]),
+                        unresolved=unresolved)
+                elif not results or any(r.status is not SettleStatus.SETTLED for r in results):
                     self.queue.settle(handle, channel=CH_CONSEQUENCE, score=0.0,
                                       status=SettleStatus.CENSORED,
                                       definition_version="forecast-mean-v1", sampling_ref=None)
@@ -1124,6 +1150,13 @@ class FeedbackMixin:
             if parent in self.forecast_returns and result.brier is not None:
                 self.forecast_returns[parent]["results"][result.handle] = (
                     result.brier, result.baseline_brier)
+            elif (parent in self.forecast_returns and result.status is SettleStatus.CENSORED
+                  and result.excluded is None):
+                # An accepted commitment that came due unresolved without a documented
+                # exclusion: exactly what ``avoidably_unresolved_share`` counts against
+                # its owner, so its owner's decision is priced for it.
+                self.forecast_returns[parent].setdefault("unresolved", []).append(
+                    result.handle)
         self._settle_forecast_returns()
         # Which payoff forecasts this pass settled, so a verdict whose window closes
         # unread in the same pass waits for its payoff fact below.
@@ -1832,9 +1865,10 @@ class FeedbackMixin:
             reward = (min(1.0, max(0.0, float(first.score)))
                       if first is not None and first.status is SettleStatus.SETTLED
                       else None)
-            self._close_assembly_round(handle, reward)
+            self._close_assembly_round(handle, reward, priced=first)
 
-    def _close_assembly_round(self, handle: str, reward: float | None) -> None:
+    def _close_assembly_round(self, handle: str, reward: float | None,
+                              priced: LearningReturn | None = None) -> None:
         """Train an assembly's own learner from the reward that settled its decision.
 
         The reward is the same thin score the router receives; what differs is the
@@ -1854,7 +1888,7 @@ class FeedbackMixin:
         declared = self.queue.declared_propensity(handle)
         imputed = reward is None
         if declared is not None and reward is None:
-            reward = learner.observed.neutral(declared.chosen)
+            reward = _priced(learner.observed.neutral(declared.chosen), priced)
         if reward is None or declared is None:
             try:
                 learner.discard_for(handle)
@@ -1929,7 +1963,7 @@ class FeedbackMixin:
         elif lr.definition_version == f"{GROUNDED_DEFINITION}-unknown":
             reward = None
         else:
-            reward = state.observed.neutral(prop.chosen)
+            reward = _priced(state.observed.neutral(prop.chosen), lr)
         if reward is None:
             if key is not None:
                 state.learner.inner.discard_for(key)
