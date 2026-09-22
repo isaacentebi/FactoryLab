@@ -60,7 +60,7 @@ class PolicyProvider(ScriptedProvider):
 
     It is not a model of behaviour. It exists so every institution a paid run
     reaches — tool rounds, a limit order reported as ``order``, a repeated order,
-    provisional and grounded judgments, metas — is reached for free, and so the
+    verdicts scored against the world, metas — is reached for free, and so the
     prompts the real seats would be sent are rendered and measured.
     """
 
@@ -86,7 +86,7 @@ class PolicyProvider(ScriptedProvider):
         text = "\n".join(str(m.get("content", "")) for m in req.messages)
         inputs = _inputs_from_prompt(text)
         desc = _description_from_prompt(text)
-        if desc.startswith("Evaluate") or "realized_consequence" in inputs:
+        if desc.startswith(("Give verdict", "Evaluate")):
             reply = self._judge(inputs)
         elif desc.startswith("Assess"):
             reply = {"conformity": 0.8, "rationale": "scripted meta"}
@@ -127,23 +127,11 @@ class PolicyProvider(ScriptedProvider):
 
     @staticmethod
     def _judge(inputs: dict[str, Any]) -> dict[str, Any]:
-        grounded = inputs.get("realized_consequence")
-        if isinstance(grounded, dict):
-            refs = [row.get("ref") for row in grounded.get("evidence", [])
-                    if isinstance(row, dict) and str(row.get("ref", "")).startswith(
-                        ("execution:", "ExecutionReceipt"))]
-            finding = ({"status": "supported", "score": 0.6, "evidence": refs[:1],
-                        "reason": "an attributable execution receipt"} if refs else
-                       {"status": "unknown", "evidence": [],
-                        "reason": "no attributable evidence"})
-            return {"verdict": 0.5, "rationale": "scripted final",
-                    "realized_consequence": finding}
-        # One seed-vocabulary claim per provisional verdict, as the paid judges seal
-        # (PR121: 141 in 240 ticks). A holding population's payoff forecasts are all
-        # refused as hindsight, so without it no forecast ever comes due, and a
-        # forecast-windowed card (edition 5's censorship-bound) is never measured
-        # or priced on the free tier.
-        return {"verdict": 0.6, "payoff": 0.3, "rationale": "scripted provisional",
+        # One seed-vocabulary claim per verdict, as the paid judges seal (PR121: 141 in
+        # 240 ticks), so a forecast-windowed card (edition 5's censorship-bound) is
+        # measured and priced on the free tier. The verdict itself is the prediction
+        # the world scores (ruling R1).
+        return {"verdict": 0.6, "rationale": "scripted verdict",
                 "forecasts": [{"predicate": "wallet_up", "q": 0.4,
                                "params": {"horizon_events": 10}}]}
 
@@ -193,13 +181,8 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         ret = e.get("return") or {}
         if role.get(ret.get("handle")) == "producer" and ret.get("channel") == "verdict":
-            version = str(ret.get("definition_version"))
-            label = ("provisional" if version.endswith("-provisional") else
-                     "unknown" if version.endswith("-unknown") else version)
-            producer_settle[f"{ret.get('status')}:{label}"] += 1
+            producer_settle[f"{ret.get('status')}:{ret.get('definition_version')}"] += 1
     kinds = collections.Counter(e.get("kind") for e in events)
-    findings = collections.Counter(e.get("status") for e in events
-                                   if e.get("kind") == "consequence.finding")
     intents = collections.Counter(e.get("operation") for e in events
                                   if e.get("kind") == "order.intent")
     opportunity = [e for e in events if e.get("kind") == "consequence.opportunity"]
@@ -221,22 +204,94 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
         "producer_actions": dict(actions.most_common()),
         "producer_settlements": dict(producer_settle.most_common()),
         "learning_signal_rate": round(scored / total, 3) if total else None,
-        "grounded_findings": dict(findings),
-        "opportunity_cost": {
-            "priced": len(opportunity),
-            "mean_score": (round(statistics.fmean(e["score"] for e in opportunity), 3)
-                           if opportunity else None),
-            "named_declined": sum(1 for e in opportunity if e.get("declined")),
-            "named_regret_rate": (
-                round(sum(Decimal(e["regret_bps"]) > 0 for e in opportunity
-                          if e.get("declined")) / named, 3)
-                if (named := sum(1 for e in opportunity if e.get("declined"))) else None),
-        },
-        "judge_unmeasured": kinds.get("evaluation.unmeasured", 0),
+        # The measured y of holds that named a declined trade (ruling R2): its mean is
+        # what a hold earns its judges' predictions against.
+        "opportunity_cost": {"priced": len(opportunity),
+                             "y_sum": sum(e["score"] for e in opportunity),
+                             "mean_y": (round(statistics.fmean(e["score"] for e in opportunity),
+                                              3) if opportunity else None)},
+        "reward_chain": reward_chain(events),
         "orders": {"intents": dict(intents),
                    "reported_not_placed": kinds.get("order.reported", 0),
                    "refused": kinds.get("order.refused", 0),
                    "infeasible": kinds.get("order.infeasible", 0)},
+    }
+
+
+def reward_chain(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """How far the reward chain of ruling R1 reached, from the diary alone.
+
+    A judge decision is an invocation in the ``evaluator`` role. It received a
+    consequence score when a ``verdict.consequence`` (or, on diaries written
+    before wave 2, a ``verdict.opportunity``) names it, and a meta grade when a
+    tier above read it: an ``evaluator.meta_grade`` entry, or on older diaries a
+    conformity settlement a meta's handle signed. The NOOP share is, per router,
+    the fraction of its own draws that woke nobody.
+    """
+    judges = {e.get("handle") for e in events
+              if e.get("kind") == "invocation" and e.get("role") == "evaluator"}
+    metas = {e.get("handle") for e in events
+             if e.get("kind") == "invocation" and e.get("role") == "meta"}
+    # A settlement carried a real signal when it is a score the tier above or the world
+    # gave: the reward chain's own definition, or on older diaries a meta's signed
+    # conformity or a meta's consequence. Censored, declined and kernel-zero ones did not.
+    signalled = set()
+    for e in events:
+        ret = e.get("return") or {}
+        version = ret.get("definition_version")
+        if e.get("kind") == "decision.settle" and ret.get("status") == "settled" and (
+                version in ("evaluation-v1", "meta-consequence-v1")
+                or version == "conformity-v1" and ret.get("sampling_ref")):
+            signalled.add(ret.get("handle"))
+    # The mean reward of first-tier judge decisions by which signal they settled on.
+    by_source: dict[str, list[float]] = {"meta_only": [], "world_only": [], "both": []}
+    for e in events:
+        if e.get("kind") != "evaluator.settled" or e.get("tier") != 1 or e.get("reward") is None:
+            continue
+        source = ("both" if e.get("grade") is not None and e.get("consequence") is not None
+                  else "meta_only" if e.get("grade") is not None else "world_only")
+        by_source[source].append(e["reward"])
+    consequence = {e.get("judge_handle") if e.get("kind") == "verdict.opportunity"
+                   else e.get("handle") for e in events
+                   if e.get("kind") in ("verdict.consequence", "verdict.opportunity")}
+    graded = {e.get("handle") for e in events if e.get("kind") == "evaluator.meta_grade"}
+    for e in events:
+        ret = e.get("return") or {}
+        if (e.get("kind") == "decision.settle" and ret.get("status") == "settled"
+                and ret.get("definition_version") == "conformity-v1"
+                and ret.get("sampling_ref")):
+            graded.add(ret.get("handle"))
+    exposures = [e for e in events if e.get("kind") == "exposure.settled"]
+    draws: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    for e in events:
+        if e.get("kind") != "decision.open" or e.get("parent_handle") is not None:
+            continue
+        prop = e.get("propensity") or {}
+        actor = str(e.get("actor", ""))
+        if not actor.startswith("router:"):
+            continue
+        draws[actor]["draws"] += 1
+        draws[actor]["noop"] += int(prop.get("chosen") == "NOOP")
+    n = len(judges)
+    evaluators = judges | metas
+    return {
+        "judge_decisions": n,
+        "judge_and_meta_decisions": len(evaluators),
+        "judge_signalled": len(evaluators & signalled),
+        "judge_learning_signal_rate": (round(len(evaluators & signalled) / len(evaluators), 3)
+                                       if evaluators else None),
+        "judge_reward_by_source": {
+            source: {"n": len(v), "sum": round(sum(v), 6),
+                     "mean": round(statistics.fmean(v), 3) if v else None}
+            for source, v in by_source.items()},
+        "judge_consequence_share": (round(len(judges & consequence) / n, 3) if n else None),
+        "judge_meta_grade_share": round(len(judges & graded) / n, 3) if n else None,
+        "meta_consequence_events": sum(1 for e in events
+                                       if e.get("kind") == "meta.consequence"),
+        "exposures_settled": len(exposures),
+        "exposures_nonzero": sum(1 for e in exposures if (e.get("score") or 0) > 0),
+        "noop_share_by_router": {actor: round(c["noop"] / c["draws"], 3)
+                                 for actor, c in sorted(draws.items()) if c["draws"]},
     }
 
 
@@ -331,24 +386,41 @@ def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
     for card in cards:
         add(total, {k: card.get(k) for k in (
             "ticks", "calls", "invocations", "malformed_reasons", "producer_actions",
-            "producer_settlements", "grounded_findings", "judge_unmeasured", "orders",
-            "opportunity_cost")
+            "producer_settlements", "orders", "opportunity_cost")
             if card.get(k) is not None})
     # Averages and rates are recomputed from the seeds, never summed.
-    priced = [c.get("opportunity_cost") or {} for c in cards]
-    n = sum(p.get("priced") or 0 for p in priced)
-    named = sum(p.get("named_declined") or 0 for p in priced)
+    holds = total.get("opportunity_cost", {})
     total["opportunity_cost"] = {
-        "priced": n, "named_declined": named,
-        "mean_score": (round(sum((p.get("mean_score") or 0) * (p.get("priced") or 0)
-                                 for p in priced) / n, 3) if n else None),
-        "named_regret_rate": (round(sum((p.get("named_regret_rate") or 0)
-                                        * (p.get("named_declined") or 0)
-                                        for p in priced) / named, 3) if named else None)}
+        "priced": holds.get("priced", 0),
+        "mean_y": (round(holds["y_sum"] / holds["priced"], 3)
+                   if holds.get("priced") else None)}
     settled = total.get("producer_settlements", {})
     scored = sum(v for k, v in settled.items() if k.startswith("settled:"))
     total["learning_signal_rate"] = (round(scored / sum(settled.values()), 3)
                                      if settled else None)
+    chains = [c["reward_chain"] for c in cards if c.get("reward_chain")]
+    judges = sum(r["judge_decisions"] for r in chains)
+    evaluators = sum(r.get("judge_and_meta_decisions", 0) for r in chains)
+    sources = {}
+    for source in ("meta_only", "world_only", "both"):
+        rows = [r["judge_reward_by_source"][source] for r in chains
+                if r.get("judge_reward_by_source")]
+        count = sum(row["n"] for row in rows)
+        sources[source] = {"n": count, "mean": (round(sum(row["sum"] for row in rows) / count,
+                                                      3) if count else None)}
+    total["reward_chain"] = {
+        "judge_decisions": judges,
+        "judge_learning_signal_rate": (
+            round(sum(r.get("judge_signalled", 0) for r in chains) / evaluators, 3)
+            if evaluators else None),
+        "judge_reward_by_source": sources,
+        **{share: (round(sum((r[share] or 0) * r["judge_decisions"] for r in chains)
+                         / judges, 3) if judges else None)
+           for share in ("judge_consequence_share", "judge_meta_grade_share")},
+        **{count: sum(r[count] for r in chains)
+           for count in ("meta_consequence_events", "exposures_settled", "exposures_nonzero")},
+        "noop_share_by_router_by_seed": [r["noop_share_by_router"] for r in chains],
+    }
     total["billed_usd"] = str(sum(Decimal(c.get("billed_usd", "0")) for c in cards))
     total["wall_seconds"] = max((c.get("wall_seconds", 0) for c in cards), default=0)
     total["prompt_bytes_median"] = {

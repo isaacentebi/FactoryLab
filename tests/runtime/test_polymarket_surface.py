@@ -36,12 +36,9 @@ def still_fake(**changes):
                              **changes})
 
 
-def world(*, provider=None, exchange=None, fake=None, realized=False, kill=False, **spec):
+def world(*, provider=None, exchange=None, fake=None, kill=False, **spec):
     manifest = load_manifest("scripted")
     manifest = replace(manifest, polymarket=PolymarketSpec(enabled=True, **spec))
-    if realized:
-        manifest = replace(manifest, evaluation=replace(manifest.evaluation,
-                                                        producer_feedback="realized"))
     if kill:
         manifest = replace(manifest, kill=KillSpec(wind_down=True))
     rt = _consequence_runtime(provider=provider, exchange=exchange, manifest=manifest)
@@ -353,26 +350,20 @@ def advance(rt, ticks):
         rt.clock.now_ns += 10**9
         polymarket.tick(rt)
         rt._settle_due_forecasts()
-        rt._settle_due_grounded()
 
 
 def test_a_never_resolving_market_is_scored_at_its_midpoint_within_the_normal_horizon():
     """The reviewer's probe: YES in a market that never resolves, for 500 ticks."""
-    rt = world(realized=True)
+    rt = world()
     handle = collateral_decision(rt)
     assert buy(rt, handle)["status"] == "filled"  # 10 YES at the 0.41 ask
     rt.consequences.finish(handle, 1_000)
-    contract = _contract(rt, handle)
-    rt.grounded_pending[handle] = contract
     advance(rt, rt.ev.consequence_backstop_ticks + 1)
     payoff = rt.consequences.payoff(handle)
     # The market's price settled it early: 10 x (0.40 mid - 0.41) = -0.10, marked.
     assert (payoff.net_micro, payoff.marked) == (-100_000, True)
-    advance(rt, max(0, contract.close_tick - rt.ticks_consumed) + 1)
-    assert handle in rt.grounded_closed  # judged or fallen back, never pending
-    assert rt.grounded_pending == {}
     advance(rt, 500 - rt.ticks_consumed)
-    assert rt.grounded_pending == {} and rt.consequences.payoff(handle) == payoff
+    assert rt.consequences.payoff(handle) == payoff
 
 
 def test_a_later_resolution_books_late_to_the_pot_and_never_rescores():
@@ -470,13 +461,6 @@ def test_a_batch_reserves_the_fees_of_its_earlier_legs():
     ret = Return(handle, {"action": "order"}, 0, "ok", tool_calls=(leg, other))
     weighed = rt._weigh_venue_batch("seed-decider", handle, ret, 0)
     assert all(call.get("invalid") for call in weighed.tool_calls)
-
-
-def _contract(rt, handle):
-    from factorylab.runtime.grounded import freeze_contract
-
-    return replace(freeze_contract(rt, handle, "seed-decider", {"action": "order"}),
-                   event_cursor=0, receipt_cursor=0)
 
 
 def test_the_surface_survives_a_checkpoint():

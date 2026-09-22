@@ -314,9 +314,6 @@ class OutcomeInbox:
             "rationale": outputs.get("rationale") or outputs.get("action"),
             "payoff": outputs.get("payoff"),
             "forecasts": forecasts if isinstance(forecasts, list) else [],
-            # A judge's fidelity objection (C3) rides on its return; the settler
-            # reads it back from here when the verdict's consequence settles.
-            "fidelity_objection": outputs.get("fidelity_objection"),
         }
         self.archived_said.pop(handle, None)
         self._evict_said()
@@ -367,13 +364,6 @@ class OutcomeInbox:
             return json.loads(self.artifacts.get(sha).decode("utf-8"))
         except Exception as exc:
             raise RuntimeError("an archived rationale is unavailable") from exc
-
-    def entry_for(self, handle: str) -> dict[str, Any]:
-        """The ``{"handle", "outputs"}`` view of one retained return, for the settler."""
-        record = self._said(handle)
-        outputs = {k: record[k] for k in ("rationale", "payoff", "forecasts",
-                                          "fidelity_objection") if k in record}
-        return {"handle": handle, "outputs": outputs}
 
     def seat_of(self, handle: str) -> str | None:
         """The seat that made a decision, as the inbox recorded it."""

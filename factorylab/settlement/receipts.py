@@ -1,10 +1,10 @@
 """Four settlement objects, each independently addressable and each ledgered.
 
 GPT-6 Pro's third reading, §6.A: "Separate execution receipts, learning receipts,
-commitments and adjudications as independently addressable objects." Edition 3
+commitments ... as independently addressable objects." Edition 3
 had one undifferentiated notion of "an outcome", so a fill, a score, a promise
 and a contested interpretation all reached a seat as the same kind of news and
-one of them could stand in for another. They are four different things:
+one of them could stand in for another. They are different things:
 
 * An **execution receipt** is a fact about the world: a fill, a refusal, a
   charge, a transfer, a program result, a failed delivery. It is not an
@@ -17,10 +17,11 @@ one of them could stand in for another. They are four different things:
 * A **commitment** is a promise: what was promised, which principal is
   responsible, by when, the rule by which it will be observed, and the
   conditions under which it is unobservable through nobody's fault.
-* An **adjudication** is a contestable interpretation: a value, the measurement
-  said to be favourable, the evidence, the finding, and the adjudicator who made
-  it. It settles nothing by itself; what it produces is a learning receipt for
-  the objector and, when upheld, a proposal the population votes on.
+
+The fourth object the reading named, an adjudication of a fidelity objection,
+was a designed procedure no passage of Chapter II calls for (evaluations U1): the
+answer to overfitting is realized consequence and adversarial populations
+(II.III.b), not an adjudication protocol. It is deleted.
 
 Ids are content addresses over the object's own fields, so the same fact
 recorded twice is the same receipt and never two. ``ReceiptBook`` is the ledger
@@ -35,7 +36,7 @@ from __future__ import annotations
 import hashlib
 from bisect import bisect_left
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field
 
 from factorylab.kernel.ledger import Ledger, canonical
 
@@ -174,72 +175,13 @@ class Commitment(_Receipt):
         object.__setattr__(self, "unobservable_when", tuple(str(c) for c in conditions or ()))
 
 
-@dataclass(frozen=True)
-class Adjudication(_Receipt):
-    """A contestable interpretation: value, measurement, evidence, finding, adjudicator.
-
-    ``adjudicator`` is ``None`` while the adjudication is open — it has been
-    queued for someone who did not write the verdict and does not own the
-    measurement, and nobody has answered yet. ``upheld`` is ``None`` for the
-    same reason: an unanswered objection is an open claim, never a finding.
-    """
-
-    PREFIX = "adjud"
-
-    value: str
-    measurement: str
-    evidence: str
-    objector: str  # the seat whose return carried the objection
-    objection_handle: str  # its judging decision
-    about_handle: str  # the return that decision judged
-    uncertainty: float
-    adjudicator: str | None = None
-    upheld: bool | None = None
-    finding: str | None = None
-    excluded: tuple[str, ...] = ()  # who may not adjudicate it, and why it was queued
-
-    def __post_init__(self) -> None:
-        for name in ("value", "measurement", "evidence", "objector", "objection_handle",
-                     "about_handle"):
-            object.__setattr__(self, name, _require_text(getattr(self, name), name))
-        u = self.uncertainty
-        if type(u) not in (int, float) or isinstance(u, bool) or not 0 <= u <= 1:
-            raise ValueError("adjudication uncertainty must be in [0, 1]")
-        object.__setattr__(self, "uncertainty", float(u))
-        object.__setattr__(self, "excluded", tuple(str(e) for e in self.excluded or ()))
-
-    @property
-    def id(self) -> str:
-        """The claim's identity is the claim, not its resolution.
-
-        An adjudication answered later is the same adjudication: its id is taken
-        over the objection's own fields, so the open claim and the resolved one
-        are one object with one address.
-        """
-        claim = {name: getattr(self, name) for name in
-                 ("value", "measurement", "evidence", "objector", "objection_handle",
-                  "about_handle", "uncertainty")}
-        return receipt_id(self.PREFIX, claim)
-
-    @property
-    def confidence(self) -> float:
-        """The probability the objector attached to its own claim."""
-        return 1.0 - self.uncertainty
-
-    def resolved(self, *, adjudicator: str, upheld: bool, finding: str) -> Adjudication:
-        """The same claim with an independent finding on it."""
-        return replace(self, adjudicator=_require_text(adjudicator, "adjudicator"),
-                       upheld=bool(upheld), finding=_require_text(finding, "finding"))
-
-
-#: The four kinds, named once, in the order §6.A names them. A tuple rather than
+#: The kinds, named once, in the order §6.A names them. A tuple rather than
 #: a table: ``settlement`` holds no mutable module state
 #: (``tests/settlement/test_settlement_boundaries.py``).
 RECEIPT_TYPES = (
     ("execution", ExecutionReceipt),
     ("learning", LearningReceipt),
     ("commitment", Commitment),
-    ("adjudication", Adjudication),
 )
 
 
@@ -256,9 +198,7 @@ class ReceiptBook:
 
     Recording the same object twice is the same row and the same id: the id is a
     content address, so idempotence is a property of the object rather than of
-    the caller's care. An adjudication is the one object that changes — from an
-    open claim to a resolved one — and it keeps its id when it does, so the
-    finding lands on the claim rather than beside it.
+    the caller's care.
     """
 
     def __init__(self, ledger: Ledger) -> None:
@@ -354,7 +294,6 @@ def learning_receipt(book: ReceiptBook | None, **kwargs) -> str | None:
 __all__ = (
     "EXECUTION_KINDS",
     "RECEIPT_TYPES",
-    "Adjudication",
     "Commitment",
     "ExecutionReceipt",
     "LearningReceipt",

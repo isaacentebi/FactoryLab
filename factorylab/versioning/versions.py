@@ -191,6 +191,9 @@ def frontier_evidence(tail: list[dict]) -> dict:
     the paid-off rate or of realized P&L; an unmeasured series never improves).
     ``holding``: every card in every tail window is measured and inside its
     region, which a charter with no measured card cannot show.
+    ``uninvoked_routers`` (present when every tail window recorded the routers'
+    frontier invocation): the routers that woke their seats only by exploration in
+    every tail window, the frontier "no longer being invoked" (essay II.II.a).
 
     ``lost_access`` is the causal half the diagnosis is actually about: which of
     the affordable seat, the route to registration and the route to revision the
@@ -201,6 +204,15 @@ def frontier_evidence(tail: list[dict]) -> dict:
     """
     paid_off = slope([w["profile"].get("paid_off") for w in tail])
     realized = slope([w["profile"].get("realized_pnl") for w in tail])
+    invocation = {}
+    if tail and all("frontier_invocation" in w for w in tail):
+        # The routers' own frontier signal (ruling R9): a router whose every draw in
+        # every tail window left its seats to exploration alone. Recorded as evidence
+        # for the flag; wave 5 rebuilds the immune organ's predicate around it
+        # (versioning P1) and this is the hook it reads.
+        invocation["uninvoked_routers"] = sorted(
+            set.intersection(*({row["router"] for row in w["frontier_invocation"]
+                                if row["uninvoked"]} for w in tail)))
     return {
         "quiet": bool(tail) and all(
             w["profile"].get("registrations") == 0 and w["profile"].get("revision") == 0
@@ -211,6 +223,7 @@ def frontier_evidence(tail: list[dict]) -> dict:
         "holding": bool(tail) and all(_holds(w) for w in tail),
         "paid_off_slope": paid_off, "realized_pnl_slope": realized,
         "lost_access": lost_access(tail),
+        **invocation,
     }
 
 

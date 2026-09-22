@@ -1,14 +1,12 @@
-"""Ledger-first integration of pure lot accounting and kernel verdict commitments."""
+"""Ledger-first integration of pure lot accounting: every return's consequence account."""
 
 from collections import Counter
 from dataclasses import asdict
 
 from factorylab.kernel.ledger import Ledger
-from factorylab.kernel.queue import DecisionQueue
-from factorylab.settlement.forecast import Forecast, ForecastBook, open_forecast_decision
 from factorylab.settlement.lots import LotTable, Payoff
 from factorylab.settlement.receipts import ExecutionReceipt, ReceiptBook
-from factorylab.settlement.vocabulary import RETURN_PAID_OFF, _require_event_index
+from factorylab.settlement.vocabulary import _require_event_index
 
 
 class ReturnConsequences:
@@ -324,121 +322,18 @@ class ReturnConsequences:
         self.table = table
         return fixed
 
+    def mark(self, handle: str, event: int) -> Payoff | None:
+        """This return's outcome marked to the mids now, without fixing it (``LotTable.mark``).
+
+        None while an order write is unanswered: which lots are whose is unknown.
+        """
+        if self.pending_orders:
+            return None
+        return self.table.mark(handle, event, self.mids, censored=self._unknown_portions())
+
     def payoff(self, handle: str) -> Payoff | None:
         """Return the fixed economic outcome, or None while a known return remains open."""
         return self.table.account(handle).payoff
-
-    def seal_verdict(
-        self,
-        book: ForecastBook,
-        queue: DecisionQueue,
-        *,
-        evaluator_handle: str,
-        evaluator_id: str,
-        about: str,
-        payoff: float,
-        event: int,
-        now_ns: int,
-        tick_ns: int,
-    ) -> Forecast | None:
-        """Bind q to the judge's raw payoff probability on a separate original-judge decision.
-
-        None when the forecast would not precede the outcome (``hindsight``)."""
-        return self._seal_payoff(
-            book, queue, forecaster_id=evaluator_id, event_id=f"verdict-{evaluator_handle}",
-            parent_handle=evaluator_handle, about=about, q=payoff, event=event,
-            now_ns=now_ns, tick_ns=tick_ns,
-        )
-
-    def seal_self_forecast(
-        self,
-        book: ForecastBook,
-        queue: DecisionQueue,
-        *,
-        handle: str,
-        assembly_id: str,
-        payoff: float,
-        event: int,
-        now_ns: int,
-        tick_ns: int,
-    ) -> Forecast | None:
-        """Bind q to a return's own payoff probability, scored like a judge's on the same y.
-
-        None when the forecast would not precede the outcome (``hindsight``)."""
-        return self._seal_payoff(
-            book, queue, forecaster_id=assembly_id, event_id=f"self-{handle}",
-            parent_handle=handle, about=handle, q=payoff, event=event,
-            now_ns=now_ns, tick_ns=tick_ns,
-        )
-
-    def hindsight(self, about: str) -> str | None:
-        """Why a payoff forecast on this return would not precede its outcome, or None.
-
-        A forecast is a claim about something not yet determined. A return whose
-        outcome is fixed has been answered; a finished return (its cost is final,
-        so it will take no further action) that holds no lot, no unfilled order and
-        no unanswered intent has nothing left that could move it, so its outcome
-        was determined when it finished. Either way a forecast of it would be
-        scored on an answer, not a forecast.
-        """
-        account = self.table.account(about)
-        if account.payoff is not None:
-            return "the return's outcome is already fixed"
-        if account.cost_micro is None:
-            return None
-        exposed = (any(lot.handle == about for lot in self.table.lots)
-                   or any(o.handle == about and o.remaining for o in self.table.orders)
-                   or any(item["handle"] == about for item in self.pending_orders.values())
-                   or about in self._unresolved_handles())
-        if not exposed:
-            return ("the return's outcome was determined at sealing: it is finished and "
-                    "holds no position, order or unanswered intent")
-        return None
-
-    def _seal_payoff(
-        self, book, queue, *, forecaster_id, event_id, parent_handle, about, q, event, now_ns,
-        tick_ns,
-    ) -> Forecast | None:
-        """Seal a payoff forecast, or refuse one whose outcome it could not precede.
-
-        A refusal is ledgered as ``forecast.refused`` with its reason and returns
-        None: no decision is opened and nothing is ever scored for it.
-        """
-        account = self.table.account(about)
-        if account.voided:
-            raise ValueError("a voided return carries no payoff forecast")
-        reason = self.hindsight(about)
-        if reason is not None:
-            self.ledger.append({"kind": "forecast.refused", "forecaster": forecaster_id,
-                                "event_id": event_id, "about_handle": about, "q": q,
-                                "event": event, "reason": reason})
-            return None
-        # The backstop's remaining horizon, in the clock the backstop counts.
-        now = self._tick(event)
-        opened = account.opened_at_tick if account.opened_at_tick is not None else now
-        horizon = max(1, opened + self.backstop - now)
-        handle = open_forecast_decision(
-            queue,
-            evaluator_id=forecaster_id,
-            event_id=event_id,
-            q=q,
-            deadline_ns=now_ns + (horizon + 2) * tick_ns * 4,
-            parent_handle=parent_handle,
-            now_event=event,
-            horizon=horizon,
-        )
-        return book.seal(
-            Forecast(
-                handle,
-                forecaster_id,
-                about,
-                RETURN_PAID_OFF.id,
-                {"horizon_events": horizon},
-                q,
-                event,
-                event + horizon,
-            )
-        )
 
     def counts(self) -> dict[str, int]:
         """Count returns once, independent of how many evaluators judged each return."""

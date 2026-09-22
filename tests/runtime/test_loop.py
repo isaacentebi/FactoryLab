@@ -59,31 +59,8 @@ def test_determinism_same_seed_same_summary() -> None:
 
 
 class RecursiveMetaProvider(ScriptedProvider):
-    """A scripted provider whose producers commit to something.
-
-    Restated for R3-D: a bare ``{"action": "hold"}`` commits to nothing a judge
-    can measure, so under the evaluation commission every judgement of one
-    settles unmeasured (GPT-6 third reading §6.B) and this world stops producing
-    the verdicts these cascade tests are about. The producers here make the same
-    quiet decision and state one thing with it — the cadence they are willing to
-    pay to wake at — which is a resource decision like any other.
-    """
-
-    def _produce(self, desc, inputs):
-        reply = super()._produce(desc, inputs)
-        reply.setdefault("subscribe", {"cadence_floor": 1})
-        return reply
-
-    """Restated for R3-D: these producers commit to something.
-
-    A bare ``{"action": "hold"}`` commits to nothing a judge can measure, so
-    under the evaluation commission every judgement of one settles unmeasured
-    (GPT-6 third reading §6.B) and this world stops producing the verdicts these
-    cascade tests are about. The producers make the same quiet decision and
-    state one thing with it — the cadence they are willing to pay to wake at,
-    which is the default and changes nothing else — so there is a commitment to
-    judge them against.
-    """
+    """A scripted provider whose producers hold at the default cadence and register a
+    recursive meta seat on their eighth call, so a tier judges the metas."""
 
     recursive_ids = ("recursive-meta",)
 
@@ -180,23 +157,20 @@ def test_cascade_release_is_ledger_first_and_fast_fallback_keeps_timeout(monkeyp
     runtime.pending[handles[2]].opened_at_tick = runtime.ticks_consumed
     released = runtime._cascade_arrival(events[2])
     assert released.id == events[2].id
-    # Nothing settles at release: the window's siblings wait for the meta's score.
+    # Nothing settles at release, and an evaluator decision is not a stale producer
+    # judgement: it closes on its own two signals (ruling R1).
     assert all(runtime.queue.get(h).status is SettleStatus.PENDING for h in handles)
-    assert runtime.cascade_windows[handles[2]] == handles[:2]
     runtime._censor_stale_judgements()
-    assert runtime.queue.history(handles[0])[0].status is SettleStatus.CENSORED
-    assert handles[1] in runtime.pending and handles[2] in runtime.pending
+    assert all(h in runtime.pending for h in handles)
 
 
-def test_meta_score_settles_the_representative_and_siblings_at_the_sibling_share():
+def test_a_meta_grades_the_representative_and_the_unread_siblings_borrow_nothing():
+    """Evaluations U2: the sibling share is deleted. A meta reads the window's
+    representative and grades it; the window's other verdicts were not read and
+    settle on their own signals, here none, so censored."""
     runtime = _recursive_runtime(events=0)
     runtime.m = replace(runtime.m, timing=replace(runtime.m.timing, jitter_fraction=0))
     handles = [_pending_meta(runtime) for _ in range(3)]
-    # Restated for R3-D: a tier's separation is a duration, not an arrival count
-    # (GPT-6 third reading §6.C), so the three arrivals are spread across the
-    # window the manifest precommits instead of sharing one timestamp. Everything
-    # the test is about — the representative, the siblings, the ledger order — is
-    # unchanged.
     step = runtime.m.timing.min_ratio * runtime.tick_clock.interval_ns // 2
     events = [
         Event(
@@ -220,13 +194,17 @@ def test_meta_score_settles_the_representative_and_siblings_at_the_sibling_share
         "runtime",
     )
     runtime._deliver_meta_verdict(judged)
-    for h in handles:
-        assert runtime.queue.get(h).status is SettleStatus.SETTLED
+    assert runtime.pending[handles[2]].grades == [0.25]
+    assert runtime.pending[handles[0]].grades == runtime.pending[handles[1]].grades == []
+    runtime.ticks_consumed = (runtime.ev.consequence_backstop_ticks
+                              + runtime.ev.verdict_timeout_ticks + 1)
+    runtime._settle_evaluations()
+    (read,) = runtime.queue.history(handles[2])
+    assert read.status is SettleStatus.SETTLED and read.score == 0.25
+    for h in handles[:2]:
+        (unread,) = runtime.queue.history(h)
+        assert unread.status is SettleStatus.CENSORED
         assert h not in runtime.pending
-    assert runtime.queue.history(handles[2])[0].score == 0.25
-    share = runtime.ev.sibling_share
-    assert [runtime.queue.history(h)[0].score for h in handles[:2]] == [0.25 * share] * 2
-    assert handles[2] not in runtime.cascade_windows
 
 
 def _pending_meta(runtime):
@@ -239,7 +217,9 @@ def _pending_meta(runtime):
         cost_ceiling=0,
         propensity=PropensityRecord(("meta",), (1.0,), "meta", 0, "test-router", "state"),
     )
-    runtime.pending[handle] = PendingJudgement(handle, "conformity", 0, tier=2)
+    runtime.pending[handle] = PendingJudgement(handle, "conformity", 0, tier=2,
+                                               opened_at_tick=0, about="lower", q=0.5,
+                                               evaluator_id="meta")
     return handle
 
 
@@ -306,6 +286,8 @@ def _consequence_judge(runtime, event, judge):
         SimpleNamespace(chosen=judge),
         runtime.queue.get(handle).deadline_ns,
     )
+    # The end of the event's routing: the judged return settles on its verdicts (R1).
+    runtime._settle_arrived_verdicts()
     runtime._settle_due_forecasts()
     return handle
 
@@ -641,23 +623,3 @@ def test_position_peak_is_ledger_first_and_survives_flat_account(monkeypatch):
     assert rt.window.max_position_notional_micro == 6_000_000
 
 
-def test_a_meta_score_never_settles_another_judges_unread_verdict():
-    """Architect review #4: siblings borrow a grade only from their own judge's read verdict."""
-    runtime = _recursive_runtime(events=0)
-    runtime.m = replace(runtime.m, timing=replace(runtime.m.timing, jitter_fraction=0))
-    handles = [_pending_meta(runtime) for _ in range(3)]
-    for h, judge in zip(handles, ("judge-a", "judge-b", "judge-a"), strict=True):
-        runtime.handle_to_assembly[h] = judge
-    step = runtime.m.timing.min_ratio * runtime.tick_clock.interval_ns // 2
-    events = [Event(f"meta-{i}", EventKind.META_VERDICT, i * step,
-                    {"by": h, "about": "lower", "tier": 2, "score": i / 2}, "runtime")
-              for i, h in enumerate(handles)]
-    for event in events[:2]:
-        runtime._cascade_arrival(event)
-    assert runtime._cascade_arrival(events[2]) is not None
-    runtime._deliver_meta_verdict(Event(
-        "meta-top", EventKind.META_VERDICT, 0,
-        {"by": "judge-3", "about": handles[2], "tier": 3, "score": 0.25}, "runtime"))
-    assert runtime.queue.history(handles[0])[0].score == 0.25 * runtime.ev.sibling_share
-    assert runtime.queue.get(handles[1]).status is SettleStatus.PENDING  # judge-b unread
-    assert handles[1] in runtime.pending

@@ -1,7 +1,6 @@
 import pytest
 
 from factorylab.kernel.events import Bus
-from factorylab.kernel.queue import PropensityRecord
 from factorylab.kernel.termination import Termination
 from factorylab.settlement import SEED_VOCABULARY, Observer, WindowFacts
 from factorylab.settlement.consequence import ReturnConsequences
@@ -19,75 +18,7 @@ def test_kernel_predicate_is_not_proposable_or_observable_from_population_facts(
         )
 
 
-def test_kernel_forecast_settles_immediately_and_cannot_be_censored_by_window_observer(
-    ledger,
-    queue,
-    book,
-    standing,
-    settler,
-    baseline,
-    seal_forecast,
-):
-    consequences = ReturnConsequences(ledger, 200)
-    consequences.start("producer-1", 0)
-    consequences.finish("producer-1", 5)
-    consequences.resolve(0)
-    forecast = seal_forecast(predicate_id=RETURN_PAID_OFF.id, q=1.0)
-    assert (
-        settler.settle_due(1000, lambda _: pytest.fail("kernel facts reached public observer"))
-        == []
-    )
-    (result,) = settler.settle_consequences(consequences.payoff)
-    assert result.handle == forecast.handle and result.y == 0 and result.brier == 0
-    assert result.baseline_brier == 0.75
-    assert standing.skill(forecast.evaluator_id) < 0
-    assert baseline.baseline_q(RETURN_PAID_OFF.id) == 0
-    assert settler.settle_consequences(consequences.payoff) == []
-    assert len(queue.history(forecast.handle)) == 1 and book.outstanding() == 0
-
-
-def test_verdict_commitment_uses_raw_q_original_evaluator_and_return_backstop(
-    ledger,
-    queue,
-    book,
-):
-    parent = queue.open(
-        actor="router",
-        event_id="event",
-        channel="conformity",
-        deadline_ns=200,
-        propensity=PropensityRecord(("judge",), (1.0,), "judge", 0, "router", "state"),
-        parent_handle=None,
-        cost_ceiling=0,
-    )
-    consequences = ReturnConsequences(ledger, 200)
-    consequences.start("producer", 5)
-    forecast = consequences.seal_verdict(
-        book,
-        queue,
-        evaluator_handle=parent,
-        evaluator_id="judge",
-        about="producer",
-        payoff=0.876,
-        event=10,
-        now_ns=100,
-        tick_ns=1,
-    )
-    assert forecast.q == 0.876 and forecast.due_at_event == 205 and forecast.seal
-    decision = queue.get(forecast.handle)
-    assert decision.actor == "judge" and decision.channel == "consequence"
-    assert decision.parent_handle == parent
-
-
-def test_backstop_outcome_and_forecast_evidence_are_ledger_first_and_marked(
-    ledger,
-    queue,
-    book,
-    clock,
-    standing,
-    settler,
-    seal_forecast,
-):
+def test_backstop_outcome_is_ledger_first_and_marked(ledger, clock):
     consequences = ReturnConsequences(ledger, 2)
     consequences.start("producer-1", 0)
     consequences.order_result(
@@ -110,21 +41,15 @@ def test_backstop_outcome_and_forecast_evidence_are_ledger_first_and_marked(
         0,
     )
     consequences.finish("producer-1", 5)
-    forecast = seal_forecast(predicate_id=RETURN_PAID_OFF.id)
     consequences.observe("MarketMid", {"coin": "BTC", "mid": "90"}, 2)
-    consequences.resolve(2)
-    (result,) = settler.settle_consequences(consequences.payoff)
-    assert result.marked and result.y == 0
+    (payoff,) = consequences.resolve(2)
+    assert payoff.marked and payoff.y == 0 and payoff.net_micro == -11_000_000
     marker = ledger.append({"kind": "test.marker"})
     Termination(ledger=ledger, bus=Bus(ledger), clock_ns=clock).kill("test")
     items = [ledger.decrypt_item(i) for i in range(marker)]
     outcome = next(i for i in items if i["kind"] == "consequence.outcome")
-    evidence = next(i for i in items if i["kind"] == "forecast.consequence")
-    settlement = next(i for i in items if i["kind"] == "decision.settle")
-    assert outcome["marked"] and evidence["marked"]
-    assert evidence["handle"] == forecast.handle
-    assert evidence["about_handle"] == "producer-1" and evidence["net_micro"] == -11_000_000
-    assert outcome["seq"] < evidence["seq"] < settlement["seq"]
+    assert outcome["marked"] and outcome["handle"] == "producer-1"
+    assert outcome["net_micro"] == -11_000_000
     assert ledger.verify()
 
 
@@ -175,39 +100,6 @@ def test_failed_ledger_write_leaves_accounting_unchanged(operation, ledger, monk
     with pytest.raises(OSError, match="write failed"):
         actions[operation]()
     assert consequences.table == before
-
-
-def test_failed_consequence_score_delivery_does_not_train_baseline_or_standing(
-    ledger,
-    queue,
-    standing,
-    baseline,
-    book,
-    settler,
-    seal_forecast,
-    monkeypatch,
-):
-    consequences = ReturnConsequences(ledger, 2)
-    consequences.start("producer-1", 0)
-    consequences.finish("producer-1", 5)
-    consequences.resolve(0)
-    forecast = seal_forecast(predicate_id=RETURN_PAID_OFF.id)
-    append = ledger.append
-
-    def failing_append(item):
-        if item["kind"] == "decision.settle":
-            raise OSError("write failed")
-        return append(item)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(ledger, "append", failing_append)
-        with pytest.raises(OSError):
-            settler.settle_consequences(consequences.payoff)
-    assert standing.snapshot() == {}
-    assert baseline.baseline_q(RETURN_PAID_OFF.id) == 0.5
-    assert queue.history(forecast.handle) == ()
-    assert len(settler.settle_consequences(consequences.payoff)) == 1
-    assert book.outstanding() == 0
 
 
 def test_fill_cursor_keeps_partial_and_identical_fills_and_deduplicates_polls(ledger):
@@ -301,55 +193,11 @@ def test_fill_cursor_filters_history_keeps_launch_peers_and_failed_poll_boundary
     assert [p["order_id"] for _, p in cursor.poll(exchange)] == ["late-peer"]
 
 
-def test_one_return_is_one_observation_however_many_forecasts_share_it(
-    book,
-    settler,
-    baseline,
-    seal_forecast,
-):
-    """Codex finding: the snapshot scored every forecast about one return against the same
-    pre-outcome base rate, but each forecast still recorded the outcome. A return carrying
-    an antagonist's self-forecast and a judge's forecast entered the prevalence rate twice,
-    so one paid-off return and one that did not read 2/3 instead of 1/2."""
-    from factorylab.settlement.lots import Payoff
-
-    payoffs = {"producer-1": Payoff("producer-1", 1, 10, 1, 0),
-               "producer-2": Payoff("producer-2", 0, 0, 1, 0)}
-    for about, evaluator, q in (("producer-1", "antagonist-a", 0.9),
-                                ("producer-1", "judge-a", 0.8),
-                                ("producer-2", "judge-a", 0.2)):
-        seal_forecast(predicate_id=RETURN_PAID_OFF.id, about_handle=about,
-                      evaluator_id=evaluator, q=q)
-    results = settler.settle_consequences(payoffs.get)
-    assert [r.y for r in results] == [1, 1, 0]
-    assert [r.baseline_brier for r in results] == [0.75, 0.75, 0.75]
-    assert baseline.baseline_q(RETURN_PAID_OFF.id) == 0.5
-    # A judge sealed on the same return later settles against the same snapshot and does
-    # not count that outcome a second time.
-    seal_forecast(predicate_id=RETURN_PAID_OFF.id, about_handle="producer-1",
-                  evaluator_id="judge-b", q=0.7)
-    (late,) = settler.settle_consequences(payoffs.get)
-    assert late.y == 1 and late.baseline_brier == 0.75
-    assert baseline.baseline_q(RETURN_PAID_OFF.id) == 0.5
-    assert book.outstanding() == 0
-    # Which outcomes are already counted survives a checkpoint with the snapshots.
-    from factorylab.runtime.resume import _COMPONENT_FIELDS
-
-    saved = {name: (prefix, fields) for name, prefix, fields in _COMPONENT_FIELDS}
-    assert saved["settler"][0] == "_Settler__"
-    assert {"snapshots", "recorded"} <= set(saved["settler"][1])
-
-
-def test_a_released_unresolved_order_censors_its_return_and_frees_every_later_one(
-    ledger, queue, book, standing, baseline, settler, seal_forecast,
-):
+def test_a_released_unresolved_order_censors_its_return_and_frees_every_later_one(ledger):
     """R4-C. The venue lost one order and never reported it. The return that sent it
-    has no fill status, so it has no payoff: its consequence settles censored with the
-    reason documented, it is an excluded sample rather than a silent zero, it trains no
-    standing and enters no base rate -- and the hold it was keeping on every later
-    return's outcome is gone."""
-    from factorylab.settlement.vocabulary import RETURN_PAID_OFF
-
+    has no fill status, so it has no payoff: its outcome is censored with the reason
+    documented (and a verdict on it has no measured outcome to be scored against) --
+    and the hold it was keeping on every later return's outcome is gone."""
     consequences = ReturnConsequences(ledger, 200)
     for handle in ("producer-1", "producer-2"):
         consequences.start(handle, 0)
@@ -366,16 +214,3 @@ def test_a_released_unresolved_order_censors_its_return_and_frees_every_later_on
     censored = next(p for p in fixed if p.handle == "producer-1")
     assert censored.censored == "external_unobservable" and not censored.marked
     assert consequences.resolve(3) == []  # and nothing is resolved twice
-
-    forecast = seal_forecast(predicate_id=RETURN_PAID_OFF.id, q=1.0)
-    (result,) = settler.settle_consequences(consequences.payoff)
-    assert result.handle == forecast.handle and result.about_handle == "producer-1"
-    assert result.y is None and result.brier is None and result.baseline_brier is None
-    assert str(result.status) == str(queue.get(forecast.handle).status) == "censored"
-    assert result.excluded == "external_unobservable"
-    assert settler.excluded(forecast.handle) == "external_unobservable"
-    # Nothing was scored, so nothing moved: no standing, no base rate, no rescoring.
-    assert standing.skill(forecast.evaluator_id) == 0
-    assert baseline.baseline_q(RETURN_PAID_OFF.id) == 0.5
-    assert settler.settle_consequences(consequences.payoff) == []
-    assert book.outstanding() == 0

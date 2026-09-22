@@ -9,22 +9,21 @@ from types import MappingProxyType
 from typing import Any
 
 from factorylab.cortex.assembly import PROGRAM_MODEL_ID
-from factorylab.cortex.registration import reward_contracts
+from factorylab.cortex.registration import measured_role, reward_contracts
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord, SettleStatus
 from factorylab.kernel.registry import Contract
 from factorylab.learners.base import NEUTRAL_REWARD, ObservedRewards
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
-from factorylab.runtime.grounded import GROUNDED_DEFINITION, OPPORTUNITY_DEFINITION
 from factorylab.runtime.shared import (
+    CH_CONFORMITY,
     CH_CONSEQUENCE,
+    CH_EXPOSURE,
     CH_FAST,
     CH_VERDICT,
-    DEF_CONFORMITY,
+    DEF_EVALUATION,
     DEF_EXPOSURE,
-    DEF_FAST,
-    DEF_META_CONSEQUENCE,
     DEF_VERDICT,
     NOOP,
     assembly_rewards,
@@ -154,13 +153,11 @@ class ContractQueue:
 #: inapplicable, unmeasured, declined, timed-out and uninformative rounds carry no
 #: score and are imputed. A definition not listed is worth ``NEUTRAL_REWARD``.
 ZERO_CONSEQUENCE: Mapping[str, float] = MappingProxyType({
-    # Producer scores on the midpoint scale, where 0.5 is a return that moved nothing.
-    DEF_VERDICT: 0.5,  # a judge's opinion of a producer return
-    GROUNDED_DEFINITION: 0.5,  # realized consequence: contrary 0, supported (0, 1]
-    f"{GROUNDED_DEFINITION}-provisional": 0.5,  # the fast opinion standing in for it
-    OPPORTUNITY_DEFINITION: 0.5,  # a hold with no named counterfactual settles at 0.5
-    # A meta's probability that a verdict was right: an uninformed meta says 0.5.
-    DEF_CONFORMITY: 0.5,
+    # Producer scores on the midpoint scale: the mean verdict of an uninformed judge.
+    DEF_VERDICT: 0.5,
+    # An evaluator decision's two signals are both centred at 0.5: an uninformed tier
+    # grade, and a prediction no better than the base rate (``consequence_score``).
+    DEF_EVALUATION: 0.5,
     # 1 when a ballot matched the promise the world kept: a coin-flip ballot expects 0.5.
     "policy-promise-brier-v2": 0.5,
     # Brier scores, 1 - (q - y)^2: the uninformed forecaster (q = 0.5) earns 0.75
@@ -168,12 +165,9 @@ ZERO_CONSEQUENCE: Mapping[str, float] = MappingProxyType({
     # but it prices a judge's standing question by question, not a router's round.
     "brier-v1": 0.75,
     "forecast-mean-v1": 0.75,  # the mean brier-v1 of a forecast return's predictions
-    DEF_META_CONSEQUENCE: 0.75,  # a top meta's conformity, Brier against the consequence
-    DEF_FAST: 0.75,  # the fast channel's malformed zero, on the meta-consequence scale
-    # Detection: 1 when an antagonist exposed a failure, 0 when it exposed nothing. A
-    # useless antagonist ties an abstention and routing holds it at the adversarial
-    # cap: the minority is a constraint on routing (II.III.b), not a seat to starve.
-    DEF_EXPOSURE: 0.0,
+    # 1 - the judges' consequence score on the antagonist's return: an antagonist
+    # whose return they predicted exactly as well as the base rate earns 0.5.
+    DEF_EXPOSURE: 0.5,
 })
 
 
@@ -213,7 +207,7 @@ class RouterState:
     # rewards are on, and so what an abstention is worth to it (``neutral``).
     definitions: dict[str, int] = field(default_factory=dict)
     # This window's NOOP watch, {"window", "draws", "min_p"}; empty before a draw.
-    # Observation only: nothing in routing or learning reads it.
+    # The immune organ reads it as its frontier-invocation evidence; no draw reads it.
     watch: dict = field(default_factory=dict)
 
     def neutral(self) -> float:
@@ -472,16 +466,11 @@ class RoutingMixin:
         lid = state.learner.id
         if self.queue.outstanding(lid) or (
             len(self.queue.returns_for(lid)) > self.delivered_seen.get(lid, 0)
-        ) or self._router_owns_grounded_pending(lid) or self._router_owed_abstention(lid):
+        ) or self._router_owed_abstention(lid):
             self.ledger.append({"kind": "router.retained", "learner_id": lid})
             self.retired_routers[lid] = state
         else:
             self.queue.retire_actor(lid)
-
-    def _router_owns_grounded_pending(self, learner_id: str) -> bool:
-        """Keep a router addressable until every grounded decision it sampled is final."""
-        pending = getattr(self, "grounded_pending", {})
-        return any(self.queue.get(handle).actor == learner_id for handle in pending)
 
     def _fresh_router_id(self, base: str) -> str:
         """Fresh learners never receive an active or retired learner's delayed returns."""
@@ -691,36 +680,10 @@ class RoutingMixin:
             if ev is None:
                 return
         states = list(self.routers.get(kind, []))
-        if self._is_final_grounded_commission(ev) and states:
-            # A grounded consequence is one commission, so additive routers do
-            # not multiply its paid final answer. Router registration order is
-            # checkpointed and deterministic; the selected router still samples
-            # an evaluator (or NOOP) and records that draw's full propensity.
-            selected = states[0]
-            self.ledger.append({
-                "kind": "consequence.final_router",
-                "event_id": ev.id,
-                "policy": "first-active-router-v1",
-                "router": selected.learner.id,
-                "eligible_routers": [state.learner.id for state in states],
-                "ts": self.clock.now_ns,
-            })
-            states = [selected]
         for state in states:
             if self.wallet.dead:
                 break
             self._route_with(state, ev)
-
-    @staticmethod
-    def _is_final_grounded_commission(ev: Event) -> bool:
-        """True only for the frozen-contract request, not its recursive verdict."""
-        inputs = ev.payload.get("inputs")
-        return (
-            ev.payload.get("grounded_consequence") is True
-            and isinstance(ev.payload.get("contract"), Mapping)
-            and isinstance(inputs, Mapping)
-            and inputs.get("kind") == "RealizedConsequence"
-        )
 
     def _addressed_seat(self, ev: Event) -> str | None:
         """The one seat an event is addressed to, or None when the draw is open.
@@ -823,9 +786,10 @@ class RoutingMixin:
         deadline = (
             self.clock.now_ns + (self.ev.verdict_timeout_ticks + 2) * self.tick_clock.interval_ns
         )
-        if set(channels.values()) & {CH_FAST, CH_CONSEQUENCE}:
-            # A top meta is graded against the judged verdict's eventual consequence, so
-            # its decision lives as long as the return's backstop, like a forecast.
+        if set(channels.values()) & {CH_FAST, CH_CONFORMITY, CH_EXPOSURE, CH_CONSEQUENCE}:
+            # An evaluator decision is graded against its judged decision's measured
+            # outcome and an exposure against its judges' (ruling R1), so each lives as
+            # long as the return's backstop, like a forecast.
             deadline = self.clock.now_ns + (
                 (self.ev.consequence_backstop_ticks + 2) * self.tick_clock.interval_ns * 4
             )
@@ -847,6 +811,13 @@ class RoutingMixin:
         )
         if isinstance(state.learner, _KeyedLearner):
             self.snapshot_keys[handle] = key
+        if sample.chosen == NOOP:
+            # Ruling R9: waking nobody is a real choice and a decision in this window
+            # like any other, so it is priced on the charter cards of the roles it would
+            # have filled, as a woken decision is (``_priced_abstention``).
+            roles = self._abstention_roles(sample)
+            row = self._contribution(handle, max(sorted(roles), key=roles.get))
+            row["menu_roles"] = roles
         self._watch_abstention(state, sample)
         self.stats.decisions += 1
         if self.stats.sample_propensity is None and sample.chosen != NOOP:
@@ -864,12 +835,32 @@ class RoutingMixin:
             book.woke(sample.chosen, now=self.tick_index)
         self._assembly_step(ev, handle, sample, deadline)
 
-    def _watch_abstention(self, state: RouterState, sample: Sample) -> None:
-        """Watch this draw's NOOP probability for the window's learning-death entry.
+    def _abstention_roles(self, sample: Sample) -> dict[str, float]:
+        """The roles an abstention stood in for: the draw's own odds over the woken arms.
 
-        Guarantees observation only: the draw is made and nothing here is read by
-        routing, learning or the manifest. A draw without NOOP on its menu is not
-        watched; a draw in a new window closes the last window's watch first.
+        Guarantees weights over measured roles that sum to 1: each seat on the menu
+        contributes its drawn probability, renormalised over the seats, to the role its
+        contract is measured in (equal weights if the draw gave the seats no mass). A
+        menu of one role is that role alone; a judge router whose menu also holds a
+        producing seat stood in for both, in the proportion it would have woken them.
+        """
+        mass: dict[str, float] = {}
+        seats = [(a, p) for a, p in zip(sample.action_ids, sample.probs, strict=True)
+                 if a != NOOP and a in self.assemblies]
+        total = sum(p for _a, p in seats)
+        for action, p in seats:
+            role = measured_role(self.assemblies[action].spec.emits)
+            mass[role] = mass.get(role, 0.0) + (p / total if total > 0 else 1 / len(seats))
+        return mass or {"producer": 1.0}
+
+    def _watch_abstention(self, state: RouterState, sample: Sample) -> None:
+        """Watch this draw's NOOP probability: the router's frontier-invocation evidence.
+
+        Guarantees the draw is made and nothing here changes it. A draw without NOOP
+        on its menu is not watched; a draw in a new window starts a new watch. The
+        immune organ reads the watches of the window it closes as the frontier signal
+        of its one learning-death diagnosis (``frontier_invocation``; ruling R9,
+        versioning U1, time T16).
         """
         if NOOP not in sample.action_ids:
             return
@@ -882,25 +873,30 @@ class RoutingMixin:
         state.watch["min_p"] = min(state.watch["min_p"], p)
 
     def _close_abstention_watch(self, state: RouterState) -> None:
-        """Close a watch whose window has ended, ledgering it if NOOP held that window.
+        """Drop a watch whose window has ended; the immune organ read it at the close."""
+        if state.watch and state.watch["window"] != self.window.index:
+            state.watch = {}
 
-        Guarantees one ``router.learning_death`` entry per router and window in which
-        every draw gave NOOP at least ``learning_death_floor(seed_gamma)``: its seats
-        were woken only by exploration all window, the frontier "no longer being
-        invoked" (essay II.II.a). It is evidence for a reader; nothing reads it back,
-        and it is apart from the immune organ's ``pathology.learning_death`` flag.
+    def frontier_invocation(self) -> list[dict[str, Any]]:
+        """Each live router's invocation of its seats in the window now closing.
+
+        Guarantees one row per router that drew with NOOP on its menu in this
+        window: its draws, its lowest NOOP probability, and ``uninvoked`` when every
+        draw gave NOOP at least ``learning_death_floor(seed_gamma)``, so its seats were
+        woken only by exploration all window, the frontier "no longer being invoked"
+        (essay II.II.a). It is evidence inside the immune organ's learning-death
+        diagnosis, not a second definition of it.
         """
-        watch = state.watch
-        if not watch or watch["window"] == self.window.index:
-            return
-        state.watch = {}
-        floor = learning_death_floor(state.seed_gamma)
-        if watch["min_p"] >= floor:
-            self.ledger.append({"kind": "router.learning_death",
-                                "learner_id": state.learner.id, "event_kind": state.kind,
-                                "window": watch["window"], "draws": watch["draws"],
-                                "min_p_noop": watch["min_p"], "floor": floor,
-                                "neutral": state.neutral(), "ts": self.clock.now_ns})
+        rows = []
+        for state in self._all_router_states():
+            watch = state.watch
+            if not watch or watch["window"] != self.window.index:
+                continue
+            floor = learning_death_floor(state.seed_gamma)
+            rows.append({"router": state.learner.id, "event_kind": state.kind,
+                         "draws": watch["draws"], "min_p_noop": watch["min_p"],
+                         "floor": floor, "uninvoked": watch["min_p"] >= floor})
+        return sorted(rows, key=lambda row: row["router"])
 
     @staticmethod
     def _propensity(sample: Sample) -> PropensityRecord:

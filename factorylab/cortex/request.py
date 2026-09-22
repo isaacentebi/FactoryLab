@@ -231,11 +231,9 @@ WORLD_UPDATE_HEADER = "WORLD UPDATE\n"
 #: schema it is about: the tool-round protocol and the refusal form, and nothing
 #: else (smuggling audit D1, primitive audit F4; essay II.I.a, robust simplicity).
 #: The pause, monetary-unit, forecast and execution-claim paragraphs of GPT-6's §8
-#: were coaching no code read; a forecast's shape is its own schema's. The
-#: fidelity-objection shape is not repeated here either: it is published once, in
-#: the evaluator answer schema (``settlement.fidelity.objection_schema``), which is
-#: where ``Settler.record_objection`` parses it. If that pipeline is deleted, its
-#: schema goes with it and this text is unaffected.
+#: were coaching no code read; a forecast's shape is its own schema's. The fidelity
+#: objection and its adjudication were deleted (evaluations U1), so there is no
+#: objection shape to state here or anywhere else.
 OUTCOME_CONTRACT = """OUTCOME CONTRACT
 
 Return the public result required by this request's schema. Optional private

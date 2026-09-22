@@ -1265,11 +1265,10 @@ class GovernanceMixin:
                     for r in self.consequences.table.returns
                     if r.payoff is not None and r.payoff.censored is None
                     and self.queue.get(r.handle).channel in ("verdict", "exposure")}
-        from factorylab.runtime.shared import DEF_CONFORMITY, DEF_META_CONSEQUENCE
+        from factorylab.runtime.shared import DEF_EVALUATION
 
         for decision in self.queue.state()["decisions"].values():
-            if any(r.status is SettleStatus.SETTLED and r.definition_version in (
-                    DEF_META_CONSEQUENCE, DEF_CONFORMITY)
+            if any(r.status is SettleStatus.SETTLED and r.definition_version == DEF_EVALUATION
                    for r in self.queue.history(decision.handle)):
                 evidence.add((decision.handle, self.handle_to_assembly.get(decision.handle)))
             if decision.channel == "consequence" and decision.status is SettleStatus.SETTLED:

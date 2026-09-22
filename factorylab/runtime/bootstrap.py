@@ -27,7 +27,6 @@ from factorylab.kernel.termination import Termination
 from factorylab.kernel.wallet import ReleaseSchedule, Wallet
 from factorylab.runtime import release, witness
 from factorylab.runtime.cadence import GovernanceCadence
-from factorylab.runtime.cards import forecast_weight
 from factorylab.runtime.cascade import CascadeGate
 from factorylab.runtime.compute import ContractConsequences
 from factorylab.runtime.feedback import PendingJudgement
@@ -119,7 +118,6 @@ class BootstrapMixin:
         self.seed = manifest.seed if seed is None else seed
         self.rng = random.Random(self.seed)
         self.cascade: dict[int, CascadeGate] = {}
-        self.cascade_windows: dict[str, list[str]] = {}  # representative -> other handles
         self.clock = SimClock(0) if _journal is None else _journal.clock
         if self.live and _journal is None:
             self.clock.now_ns = (
@@ -272,14 +270,11 @@ class BootstrapMixin:
         self.baseline = PrevalenceBaseline()
         self.standing = ConsequenceStanding(self.ev.min_coverage)
         self.observer = Observer()
-        # Edition 3 (C3): the charter's cards, not the settler, say what a judge's
-        # forecasts are worth. A claim about a return in a scope no card answers
-        # for carries no weight; with no scoped card every claim counts equally.
-        self.settler = Settler(
-            self.book, self.queue, self.standing, self.baseline, self.observer,
-            weight_for=lambda forecast: forecast_weight(
-                self.charter, self.return_kinds.get(forecast.about_handle)),
-        )
+        # Every settled claim counts once: the outside signal "sits outside the
+        # factory's input entirely" (essay II.III.b), so no charter card weights it
+        # (ruling R1 deleted ``settlement.weights``).
+        self.settler = Settler(self.book, self.queue, self.standing, self.baseline,
+                               self.observer)
         self.consequences = ContractConsequences(
             self.ledger, self.ev.consequence_backstop_ticks, self)
         self.consequence_fills = FillCursor(self.ledger, start_ns=self.clock.now_ns)
@@ -421,13 +416,24 @@ class BootstrapMixin:
         self.retired_routers: dict[str, RouterState] = {}
         for kind in self._routable_kinds():
             self._build_router(kind, self._seed_learner_kind(kind), router_gamma)
-        self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened event
-        # antagonist handle -> which of the two exposure facts have arrived
-        self.exposure_evidence: dict[str, dict[str, bool]] = {}
-        # judge handle -> top-meta (handle, conformity) pairs awaiting the judge's payoff
-        self.pending_meta: dict[str, list[tuple[str, float]]] = {}
-        # judge handle -> (verdict beat baseline, event, forecast handle), pruned by backstop
-        self.verdict_outcomes: dict[str, tuple[int, int, str]] = {}
+        self.pending_exposure: dict[str, int] = {}  # antagonist decision handle -> opened tick
+        # The reward chain (ruling R1). Antagonist handle -> the consequence scores of
+        # the judges scored on its return, until its exposure settles.
+        self.exposure_scores: dict[str, list[float]] = {}
+        # Judged return -> [[judge handle, verdict], ...] that arrived while this event
+        # was routed; settled on their mean once routing is done.
+        self.arrived_verdicts: dict[str, list[list]] = {}
+        # Decision handle -> (its consequence score or None, the tick it closed): what a
+        # meta that graded it predicted, kept for one that grades it later.
+        self.consequence_scores: dict[str, tuple[float | None, int]] = {}
+        # Judged return -> its measurement once final, so every verdict about it is
+        # scored against one fact; and the mids a declined trade is priced from.
+        self.world_outcomes: dict[str, dict[str, Any]] = {}
+        # Anticipatory settlement: each judged return's mark once taken, and the judge
+        # decisions rewarded on it whose final measurement is still owed to standing.
+        self.marked_outcomes: dict[str, dict[str, Any]] = {}
+        self.late_verdicts: dict[str, dict[str, Any]] = {}
+        self.reference_mids: dict[str, dict[str, Any]] = {}
         self.consequence_mix: float = self.ev.consequence_share  # live sampling actuator
         self.sampling_history: list[dict[str, Any]] = []
         # learning-death grant: the window it is live for and the assemblies that spent it
@@ -738,15 +744,6 @@ class BootstrapMixin:
 
         # loop state
         self.pending: dict[str, PendingJudgement] = {}
-        self._grounded_pending = {}
-        self._grounded_closed = set()
-        # A verdict commitment is closed out once and never re-opened. The judge's
-        # payoff forecast stays pending in the book after an unread close, so
-        # without these the per-event commitment pass would re-create the same
-        # commitment and close it unread again on every event. They are snapshot
-        # state (``resume._RUNTIME_FIELDS``): a restored runtime re-emits nothing.
-        self.verdicts_closed_out: set[str] = set()
-        self.verdicts_graded: set[str] = set()
         self.balance_at: list[int] = [self.wallet.balance]  # index = event number
         self.events_log: list[dict[str, Any]] = [{"kind": "Launch", "payload": {}}]
         self.reserve_window_start: int | None = None

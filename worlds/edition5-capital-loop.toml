@@ -338,14 +338,13 @@ min_coverage = 0.5
 trial_amount_usd = "0.05"
 forecast_horizon_events = 10
 adversarial_share = 0.15
-sibling_share = 0.5
 sampling_step = 0.1
 sampling_cap = 0.7
 
-producer_feedback = "realized"
-# The retentive core: judge routing is a no-swap-regret (Blum-Mansour) learner, while
-# producer routing stays mean-based EXP3 at the frontier (essay II.a).
-no_swap_regret_kinds = ["ProducerReturn"]
+# Ruling R10: the judge tier is mostly mean-based ("a significantly higher population of
+# mean-based no-regret judges than ... swap-based judges", II.III), so no router here is
+# seeded as a no-swap-regret core. The core beside a producer frontier is wave 5's.
+no_swap_regret_kinds = []
 [tools]
 population_tool_micro_per_call = 50
 max_leverage = 3

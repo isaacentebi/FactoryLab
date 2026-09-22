@@ -283,7 +283,6 @@ min_coverage = 0.5
 trial_amount_usd = "0.05"
 forecast_horizon_events = 10
 adversarial_share = 0.15
-sibling_share = 0.5
 sampling_step = 0.1
 sampling_cap = 0.7
 

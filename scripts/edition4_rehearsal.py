@@ -21,7 +21,6 @@ import hashlib
 import json
 import os
 import time
-from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from fractions import Fraction
@@ -45,7 +44,6 @@ DEFAULT_DURATION_NS = 30 * 60 * 1_000_000_000
 SHORT_TICK_NS = 10 * 1_000_000_000
 ALLOWED_PREPAID = frozenset(("openrouter", "venice"))
 FACTOR_PROMPTS = frozenset(("reference", "compact"))
-FACTOR_FEEDBACK = frozenset(("verdict", "realized"))
 FACTOR_REASONING = frozenset(("preserve", "off", "on"))
 
 
@@ -458,7 +456,6 @@ def effective_manifest(
     base: WorldManifest,
     *,
     prompt_mode: str | None = None,
-    producer_feedback: str | None = None,
     reasoning: str = "preserve",
     native_completions: bool = False,
     capital_loop: bool = False,
@@ -481,8 +478,6 @@ def effective_manifest(
         raise RehearsalRefused("unsupported_or_x402_model_rail")
     if prompt_mode is not None and prompt_mode not in FACTOR_PROMPTS:
         raise ValueError("prompt_mode must be reference or compact")
-    if producer_feedback is not None and producer_feedback not in FACTOR_FEEDBACK:
-        raise ValueError("producer_feedback must be verdict or realized")
     if reasoning not in FACTOR_REASONING:
         raise ValueError("reasoning must be preserve, off, or on")
     if type(native_completions) is not bool:
@@ -511,43 +506,12 @@ def effective_manifest(
         exchange=exchange,
         treasury=treasury,
         prompt=base.prompt if prompt_mode is None else PromptSpec(mode=prompt_mode),
-        evaluation=(base.evaluation if producer_feedback is None else
-                    replace(base.evaluation, producer_feedback=producer_feedback)),
         models=models,
         assemblies=(tuple(replace(a, max_tokens=None) for a in base.assemblies)
                     if native_completions else base.assemblies),
     )
     manifest.validate()
     return manifest
-
-
-def _grounded_coverage(items: list[dict[str, Any]], runtime: Any) -> dict[str, int]:
-    """Count final grounded findings without treating unknown or malformed work as samples."""
-    findings = [row for row in items if row.get("kind") == "consequence.finding"]
-    valid = [
-        row for row in findings
-        if row.get("status") in ("supported", "contrary")
-        and isinstance(row.get("evidence"), list) and bool(row["evidence"])
-    ]
-    statuses = Counter(str(row.get("status")) for row in valid)
-    unknown_handles = {
-        str(row.get("handle")) for row in findings if row.get("status") == "unknown"
-    }
-    censored = {
-        str(row.get("handle")) for row in items
-        if row.get("kind") == "consequence.unknown"
-        and str(row.get("handle")) not in unknown_handles
-    }
-    pending = getattr(runtime, "grounded_pending", {})
-    return {
-        "assessed": len(valid),
-        "supported": statuses["supported"],
-        "contrary": statuses["contrary"],
-        "unknown": len(unknown_handles),
-        "censored": len(censored),
-        "outstanding": len(pending) if isinstance(pending, dict) else 0,
-        "malformed_or_uncited_excluded": len(findings) - len(valid) - len(unknown_handles),
-    }
 
 
 def _ratio(numerator: int, denominator: int) -> str | None:
@@ -564,16 +528,11 @@ def _behavioral_screen(
     *,
     planned_ticks: int,
     minimum_ticks: int,
-    minimum_grounded_samples: int,
-    minimum_contrary_samples: int,
 ) -> dict[str, Any]:
-    """Report whether the preregistered tick and grounded-evidence screen was delivered."""
+    """Report whether the preregistered tick screen was delivered."""
     delivered = int(getattr(runtime, "ticks_consumed", 0))
-    grounded = _grounded_coverage(items, runtime)
     criteria = {
         "delivered_ticks": delivered >= minimum_ticks,
-        "assessed_grounded_samples": grounded["assessed"] >= minimum_grounded_samples,
-        "contrary_grounded_samples": grounded["contrary"] >= minimum_contrary_samples,
         "authoritative_bills": admission.uncertain_bills == 0 and admission.overruns == 0,
     }
     decisions = int(summary.get("stats", {}).get("decisions") or 0)
@@ -593,23 +552,14 @@ def _behavioral_screen(
         "declared_before_run": {
             "planned_tick_ceiling": planned_ticks,
             "minimum_delivered_ticks": minimum_ticks,
-            "minimum_assessed_grounded_samples": minimum_grounded_samples,
-            "minimum_contrary_grounded_samples": minimum_contrary_samples,
         },
         "horizons_ticks": {
-            "grounded_due": manifest.evaluation.grounded_horizon_ticks,
-            "grounded_close_from_open": (
-                manifest.evaluation.grounded_horizon_ticks
-                + max(manifest.evaluation.grounded_horizon_ticks + 1,
-                      manifest.evaluation.verdict_timeout_ticks)
-            ),
             "consequence_backstop": backstop,
             "governance_activation_floor": backstop * manifest.timing.min_ratio,
             "observe_backstop_then_governance_floor": backstop * (manifest.timing.min_ratio + 1),
         },
         "delivered": {
             "ticks": delivered,
-            "grounded": grounded,
             "outstanding_decisions": int(summary.get("outstanding_decisions") or 0),
             "calls": admission.attempted,
             "decisions": decisions,
@@ -755,11 +705,8 @@ def run_rehearsal(
     now_ns: Callable[[], int] = time.time_ns,
     observe: bool = False,
     prompt_mode: str | None = None,
-    producer_feedback: str | None = None,
     reasoning: str = "preserve",
     minimum_ticks: int | None = None,
-    minimum_grounded_samples: int | None = None,
-    minimum_contrary_samples: int | None = None,
     capital_loop: bool = False,
     previous_runs: tuple = (),
     capital_loop_transport: Callable | None = None,
@@ -782,10 +729,6 @@ def run_rehearsal(
         raise ValueError("observe must be boolean and requires an output directory")
     if minimum_ticks is not None and (type(minimum_ticks) is not int or minimum_ticks <= 0):
         raise ValueError("minimum_ticks must be a positive integer")
-    for name, value in (("minimum_grounded_samples", minimum_grounded_samples),
-                        ("minimum_contrary_samples", minimum_contrary_samples)):
-        if value is not None and (type(value) is not int or value < 0):
-            raise ValueError(f"{name} must be a nonnegative integer")
     output_dir = None
     report_path = None
     if out is not None:
@@ -798,7 +741,6 @@ def run_rehearsal(
         manifest = effective_manifest(
             base,
             prompt_mode=prompt_mode,
-            producer_feedback=producer_feedback,
             reasoning=reasoning,
             native_completions=True,
             capital_loop=capital_loop,
@@ -834,26 +776,6 @@ def run_rehearsal(
     minimum_ticks = minimum_ticks or manifest.evaluation.consequence_backstop_ticks
     if minimum_ticks > planned_ticks:
         raise ValueError("minimum_ticks exceeds the rehearsal's planned tick ceiling")
-    if manifest.evaluation.producer_feedback == "realized":
-        minimum_grounded_samples = (
-            10 if minimum_grounded_samples is None else minimum_grounded_samples
-        )
-        minimum_contrary_samples = (
-            1 if minimum_contrary_samples is None else minimum_contrary_samples
-        )
-        if minimum_grounded_samples < 10 or minimum_contrary_samples < 1:
-            raise ValueError(
-                "realized feedback requires at least 10 assessed and 1 contrary sample"
-            )
-    else:
-        minimum_grounded_samples = (
-            0 if minimum_grounded_samples is None else minimum_grounded_samples
-        )
-        minimum_contrary_samples = (
-            0 if minimum_contrary_samples is None else minimum_contrary_samples
-        )
-        if minimum_grounded_samples or minimum_contrary_samples:
-            raise ValueError("grounded sample targets require realized producer feedback")
     before_reasoning = {model.id: dict(model.reasoning) for model in base.models}
     after_reasoning = {model.id: dict(model.reasoning) for model in manifest.models}
     roster_changed = roster_hash(base) != roster_hash(manifest)
@@ -887,10 +809,8 @@ def run_rehearsal(
             "fixed_at_launch": True,
             "completion_allowance": "provider",
             "prompt_mode": manifest.prompt.mode,
-            "producer_feedback": manifest.evaluation.producer_feedback,
             "requested": {
                 "prompt_mode": prompt_mode or "preserve",
-                "producer_feedback": producer_feedback or "preserve",
                 "reasoning": reasoning,
             },
             "reasoning": {
@@ -916,8 +836,6 @@ def run_rehearsal(
             "max_calls": max_calls,
             "planned_tick_ceiling": planned_ticks,
             "minimum_delivered_ticks": minimum_ticks,
-            "minimum_assessed_grounded_samples": minimum_grounded_samples,
-            "minimum_contrary_grounded_samples": minimum_contrary_samples,
             "no_live_parameter_changes": True,
             "no_horizon_extension": True,
         },
@@ -1021,8 +939,6 @@ def run_rehearsal(
             admission,
             planned_ticks=planned_ticks,
             minimum_ticks=minimum_ticks,
-            minimum_grounded_samples=minimum_grounded_samples,
-            minimum_contrary_samples=minimum_contrary_samples,
         )
         if output_dir is not None:
             selected = [item for item in items if item.get("kind") != "snapshot"]
@@ -1052,12 +968,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cap-usd", default="5")
     parser.add_argument("--max-calls", type=int, default=2_000)
     parser.add_argument("--prompt", choices=sorted(FACTOR_PROMPTS))
-    parser.add_argument("--producer-feedback", choices=sorted(FACTOR_FEEDBACK),
-                        default=None)
     parser.add_argument("--reasoning", choices=sorted(FACTOR_REASONING), default="preserve")
     parser.add_argument("--minimum-ticks", type=int)
-    parser.add_argument("--minimum-grounded-samples", type=int)
-    parser.add_argument("--minimum-contrary-samples", type=int)
     parser.add_argument("--source-root", type=Path, default=None)
     parser.add_argument("--observe", action="store_true",
                         help="write an opt-in rehearsal dashboard at completed ticks")
@@ -1076,11 +988,8 @@ def main(argv: list[str] | None = None) -> int:
                            cap_micro=usd_to_micro(args.cap_usd, rounding="floor"),
                            max_calls=args.max_calls, source_root=args.source_root,
                            observe=args.observe, prompt_mode=args.prompt,
-                           producer_feedback=args.producer_feedback,
                            reasoning=args.reasoning,
                            minimum_ticks=args.minimum_ticks,
-                           minimum_grounded_samples=args.minimum_grounded_samples,
-                           minimum_contrary_samples=args.minimum_contrary_samples,
                            capital_loop=args.capital_loop,
                            previous_runs=tuple(args.previous_run))
     print(json.dumps({"status": report["status"], "out": str(args.out),

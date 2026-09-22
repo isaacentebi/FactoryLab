@@ -42,14 +42,17 @@ def test_censored_decisions_do_not_qualify_a_committee_seat():
     assert SEAT not in rt._committee_eligible()
 
 
-def test_a_meta_closed_unmeasured_ends_no_novelty_trial():
-    """An unmeasured commission is an answer with no fact in it: no trial is spent."""
+def test_a_meta_whose_graded_decision_has_no_world_outcome_ends_no_novelty_trial():
+    """A meta's second signal is the consequence of the decision it graded (ruling R1).
+    With none, the meta settles censored: an answer with no fact in it spends no trial."""
     rt = make_runtime()
     prop = PropensityRecord(("meta-a",), (1.0,), "meta-a", 0, "router:Verdict", "probe")
     handle = rt.queue.open(actor="router:Verdict", event_id="probe-meta", propensity=prop,
                            channel="fast", deadline_ns=10**18, parent_handle=None,
                            cost_ceiling=0)
     rt.handle_to_assembly[handle] = "meta-a"
-    rt._settle_meta_unmeasured(handle, "no fact")
-    assert str(rt.queue.get(handle).status) == "inapplicable"
+    rt._open_evaluation(handle, about="judge-decision", q=0.7, evaluator_id="meta-a", tier=2)
+    rt._close_consequence("judge-decision", None)
+    rt._settle_evaluations()
+    assert str(rt.queue.get(handle).status) == "censored"
     assert rt.stats.consequences_by_assembly.get("meta-a", 0) == 0

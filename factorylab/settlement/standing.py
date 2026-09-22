@@ -1,14 +1,8 @@
 """Consequence weights reflect forecast and verdict skill subject to an observed-coverage cap."""
 
 from dataclasses import dataclass
-from math import isfinite
 
 from factorylab.settlement.scoring import _require_id, _require_probability
-
-
-def _require_weight(value: float) -> None:
-    if type(value) not in (int, float) or not isfinite(value) or value < 0:
-        raise ValueError("weight must be finite and nonnegative")
 
 
 @dataclass
@@ -18,11 +12,6 @@ class _Standing:
     sum_baseline_brier: float = 0.0
     settled: int = 0
     requested: int = 0
-    # The charter's weight on the scored commitments, accumulated with them: the
-    # sums above are weighted, so the mean is taken over this and not over `n`.
-    # A standing restored from before edition 3 has no weight and falls back to
-    # `n`, which is exactly what equal weights would have accumulated.
-    weight_sum: float = 0.0
     # Verdicts scored against the charter's realised blame on the returns they endorsed.
     verdict_n: int = 0
     sum_verdict_brier: float = 0.0
@@ -33,13 +22,11 @@ class ConsequenceStanding:
     """Each evaluator's consequence weight is bounded and insufficient coverage limits gains.
 
     Two kinds of score train it, each against its own matched baseline: a
-    settled forecast against what the world did, and the verdict against the
-    charter's realised blame on the judged return. Every registered predicate a
-    judge forecast trains it, weighted by what the charter's cards say the
-    population is holding anyone accountable for (``settlement.weights``); no
-    single predicate is privileged, so removing a card removes its effect here
-    entirely. Coverage counts settled forecasts against forecasts requested, so
-    a judge still cannot earn coverage by issuing verdicts.
+    settled forecast against what the world did, and a verdict against the
+    measured outcome of the decision it judged (ruling R1). Every settled claim
+    counts once; no charter card weights the outside signal (essay II.III.b).
+    Coverage counts settled forecasts against forecasts requested, so a judge
+    still cannot earn coverage by issuing verdicts.
     """
 
     def __init__(self, min_coverage: float) -> None:
@@ -47,24 +34,15 @@ class ConsequenceStanding:
         self.__min_coverage = min_coverage
         self.__evaluators: dict[str, _Standing] = {}
 
-    def record(self, evaluator_id: str, brier: float, baseline_brier: float,
-               weight: float = 1.0) -> None:
-        """Add one observed forecast score pair, at the charter's weight for that claim.
-
-        A claim the charter gives no weight still counts as coverage — it
-        settled, and the judge answered for it — and contributes nothing to
-        skill, so the cards decide what a judge is graded on and nothing else
-        does.
-        """
+    def record(self, evaluator_id: str, brier: float, baseline_brier: float) -> None:
+        """Add one observed forecast score pair; it counts as coverage and as skill."""
         _require_id(evaluator_id)
         _require_probability(brier, "brier")
         _require_probability(baseline_brier, "baseline_brier")
-        _require_weight(weight)
         standing = self.__evaluators.setdefault(evaluator_id, _Standing())
         standing.n += 1
-        standing.weight_sum += weight
-        standing.sum_brier += weight * brier
-        standing.sum_baseline_brier += weight * baseline_brier
+        standing.sum_brier += brier
+        standing.sum_baseline_brier += baseline_brier
         standing.settled += 1
 
     def record_verdict(self, evaluator_id: str, brier: float, baseline_brier: float) -> None:
@@ -86,12 +64,12 @@ class ConsequenceStanding:
 
     def skill(self, evaluator_id: str) -> float:
         """Return mean Brier minus matched baseline mean over forecast and verdict scores
-        pooled at the charter's weights, or zero without weighted scores."""
+        pooled together, or zero without scores."""
         _require_id(evaluator_id)
         standing = self.__evaluators.get(evaluator_id)
         if standing is None:
             return 0.0
-        count = self.__weight(standing) + standing.verdict_n
+        count = standing.n + standing.verdict_n
         if not count:
             return 0.0
         scored = standing.sum_brier + standing.sum_verdict_brier
@@ -99,15 +77,12 @@ class ConsequenceStanding:
         return scored / count - baseline / count
 
     def payoff_skill(self, evaluator_id: str) -> float:
-        """Return the settled-forecast part of skill alone, or zero without weighted scores."""
+        """Return the settled-forecast part of skill alone, or zero without scores."""
         _require_id(evaluator_id)
         standing = self.__evaluators.get(evaluator_id)
         if standing is None or not standing.n:
             return 0.0
-        weight = self.__weight(standing)
-        if not weight:
-            return 0.0
-        return standing.sum_brier / weight - standing.sum_baseline_brier / weight
+        return (standing.sum_brier - standing.sum_baseline_brier) / standing.n
 
     def verdict_skill(self, evaluator_id: str) -> float:
         """Return the verdict part of skill alone, or zero without settled verdicts."""
@@ -133,22 +108,14 @@ class ConsequenceStanding:
             return min(0.5, weight)
         return weight
 
-    @staticmethod
-    def __weight(standing: _Standing) -> float:
-        """The weight the scored forecasts carry, `n` for a standing saved before weights."""
-        return standing.weight_sum if standing.weight_sum else float(standing.n)
-
     def snapshot(self) -> dict:
         """Return detached JSON-ready counts, score means, skills, coverage and weights by id."""
         return {
             evaluator_id: {
                 **vars(standing),
-                "mean_brier": (standing.sum_brier / self.__weight(standing)
-                               if standing.n and self.__weight(standing) else 0.0),
+                "mean_brier": standing.sum_brier / standing.n if standing.n else 0.0,
                 "mean_baseline_brier": (
-                    standing.sum_baseline_brier / self.__weight(standing)
-                    if standing.n and self.__weight(standing) else 0.0
-                ),
+                    standing.sum_baseline_brier / standing.n if standing.n else 0.0),
                 "mean_verdict_brier": (
                     standing.sum_verdict_brier / standing.verdict_n if standing.verdict_n
                     else 0.0

@@ -101,12 +101,10 @@ def test_launch_factors_are_explicit_and_reasoning_changes_roster_with_provenanc
     factored = rehearsal.effective_manifest(
         original,
         prompt_mode="compact",
-        producer_feedback="realized",
         reasoning="off",
     )
 
     assert factored.prompt.mode == "compact"
-    assert factored.evaluation.producer_feedback == "realized"
     assert all(dict(model.reasoning) == {"enabled": False} for model in factored.models)
     assert factored.charter.norms == original.charter.norms
     assert factored.assemblies == original.assemblies
@@ -129,13 +127,11 @@ def test_omitted_factors_preserve_the_supplied_manifest_values():
     supplied = replace(
         original,
         prompt=replace(original.prompt, mode="compact"),
-        evaluation=replace(original.evaluation, producer_feedback="realized"),
     )
 
     effective = rehearsal.effective_manifest(supplied)
 
     assert effective.prompt == supplied.prompt
-    assert effective.evaluation.producer_feedback == "realized"
 
 
 def test_dangerous_or_unsupported_worlds_are_refused_before_runtime():
@@ -314,7 +310,6 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
             assert kwargs["clock_source"].base.deadline_ns == 3_601_000_000_000
             self.ledger = FakeLedger()
             self.ticks_consumed = 1
-            self.grounded_pending = {"pending": object()}
             self.exchange = FakeExchange(
                 seed=1, coins=("BTC", "ETH"), spot_pairs=(), start_cash_usd="120"
             )
@@ -366,15 +361,6 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
     )
     assert report["behavioral_screen"]["status"] == "inconclusive"
     assert report["behavioral_screen"]["criteria_met"]["delivered_ticks"] is False
-    assert report["behavioral_screen"]["delivered"]["grounded"] == {
-        "assessed": 1,
-        "supported": 1,
-        "contrary": 0,
-        "unknown": 0,
-        "censored": 1,
-        "outstanding": 1,
-        "malformed_or_uncited_excluded": 1,
-    }
     critical = report["behavioral_screen"]["critical_path_io"]
     assert critical["provider_complete_calls"] == 2
     assert critical["exchange_account_calls"] == 4
@@ -398,8 +384,6 @@ def test_runner_report_records_effective_manifest_and_uses_denied_market(monkeyp
         "max_calls": 2,
         "planned_tick_ceiling": 60,
         "minimum_delivered_ticks": 60,
-        "minimum_assessed_grounded_samples": 0,
-        "minimum_contrary_grounded_samples": 0,
         "no_live_parameter_changes": True,
         "no_horizon_extension": True,
     }
@@ -422,21 +406,15 @@ def test_cli_passes_frozen_factors_and_reports_an_incomplete_screen(monkeypatch,
         "--duration", "60m",
         "--ticks", "60",
         "--prompt", "compact",
-        "--producer-feedback", "realized",
         "--reasoning", "on",
         "--minimum-ticks", "60",
-        "--minimum-grounded-samples", "12",
-        "--minimum-contrary-samples", "2",
     ])
 
     assert code == 0
     assert seen["prompt_mode"] == "compact"
-    assert seen["producer_feedback"] == "realized"
     assert seen["reasoning"] == "on"
     assert seen["target_ticks"] == 60
     assert seen["minimum_ticks"] == 60
-    assert seen["minimum_grounded_samples"] == 12
-    assert seen["minimum_contrary_samples"] == 2
     assert json.loads(capsys.readouterr().out)["behavioral_screen"]["status"] == "inconclusive"
 
 

@@ -103,11 +103,8 @@ def test_an_unscored_arm_without_its_own_record_is_neutral_not_its_siblings_mean
 # Every score definition a router's seat round can settle with a score, and what a seat
 # that delivered nothing scores on it.
 _ZERO = {
-    "verdict-v1": 0.5, "realized-consequence-v2": 0.5,
-    "realized-consequence-v2-provisional": 0.5, "opportunity-cost-v1": 0.5,
-    "conformity-v1": 0.5, "policy-promise-brier-v2": 0.5,
-    "brier-v1": 0.75, "forecast-mean-v1": 0.75, "meta-consequence-v1": 0.75,
-    "fast-v1": 0.75, "exposure-v1": 0.0,
+    "verdict-v1": 0.5, "evaluation-v1": 0.5, "policy-promise-brier-v2": 0.5,
+    "brier-v1": 0.75, "forecast-mean-v1": 0.75, "exposure-v1": 0.5,
 }
 
 
@@ -118,8 +115,7 @@ def test_each_score_definition_has_its_own_zero_consequence(definition):
     assert zero_consequence(definition) == ZERO_CONSEQUENCE[definition] == _ZERO[definition]
 
 
-@pytest.mark.parametrize("definition", ["brier-v1", "forecast-mean-v1",
-                                        "meta-consequence-v1", "fast-v1"])
+@pytest.mark.parametrize("definition", ["brier-v1", "forecast-mean-v1"])
 def test_a_brier_scale_prices_nothing_at_the_coin_flip_forecasters_score(definition):
     """A coin-flip forecast scores 0.75 whatever happens: on a Brier router NOOP at 0.5
     lost to a seat that knew nothing, a dead arm the router paid to avoid every time."""
@@ -130,12 +126,10 @@ def test_a_brier_scale_prices_nothing_at_the_coin_flip_forecasters_score(definit
 
 
 def test_the_table_names_every_scored_definition_the_runtime_settles_with():
-    from factorylab.runtime import grounded, shared
+    from factorylab.runtime import shared
     from factorylab.runtime.routing import ZERO_CONSEQUENCE
 
-    scored = {shared.DEF_VERDICT, shared.DEF_CONFORMITY, shared.DEF_FAST,
-              shared.DEF_EXPOSURE, shared.DEF_META_CONSEQUENCE,
-              grounded.GROUNDED_DEFINITION, grounded.OPPORTUNITY_DEFINITION}
+    scored = {shared.DEF_VERDICT, shared.DEF_EVALUATION, shared.DEF_EXPOSURE}
     assert scored <= set(ZERO_CONSEQUENCE) and set(ZERO_CONSEQUENCE) == set(_ZERO)
 
 
@@ -176,7 +170,7 @@ def test_a_mixed_router_prices_nothing_at_its_own_mix_of_scales():
     for definition in ("forecast-mean-v1", "forecast-mean-v1", "verdict-v1", "exposure-v1"):
         _scored(rt, _drawn(rt, state, arm), 0.6, definition)
     rt._deliver_returns()
-    assert state.neutral() == pytest.approx((0.75 * 2 + 0.5 + 0.0) / 4)
+    assert state.neutral() == pytest.approx((0.75 * 2 + 0.5 + 0.5) / 4)
 
 
 def test_an_unscored_seat_without_a_record_is_imputed_the_routers_zero():
@@ -373,9 +367,17 @@ def test_the_core_key_must_be_a_list():
     assert manifest_from_dict  # the parser this helper serves
 
 
-def test_the_rehearsal_world_puts_judge_routing_in_the_core():
-    world = load_manifest("edition5-testnet-rehearsal")
-    assert world.evaluation.no_swap_regret_kinds == ("ProducerReturn",)
+@pytest.mark.parametrize("name", ["edition5-testnet-rehearsal", "edition5-capital-loop"])
+def test_the_judge_tier_is_mean_based_in_the_edition5_worlds(name):
+    """Ruling R10: II.III asks for "a significantly higher population of mean-based
+    no-regret judges than ... swap-based judges", so judge routing is EXP3."""
+    world = load_manifest(name)
+    assert "ProducerReturn" not in world.evaluation.no_swap_regret_kinds
+    # The world runs on a live venue; its evaluation cast is seeded into the scripted one.
+    scripted = replace(load_manifest("scripted"), evaluation=world.evaluation)
+    rt = Runtime(scripted, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=0.1)
+    assert all(isinstance(state.learner, EXP3) for state in rt.routers["ProducerReturn"])
 
 
 # --- a replaced router hands its owed rounds to its successor ----------------------------
@@ -563,38 +565,50 @@ def _draw_at(state, p_noop):
                   state.learner.id, "h", ())
 
 
-def _deaths(rt):
-    return [i for i in rt.ledger._recovery_items() if i["kind"] == "router.learning_death"]
-
-
-def test_a_window_whose_every_draw_parked_at_noop_is_ledgered_once():
+def test_a_window_whose_every_draw_parked_at_noop_is_the_frontier_signal():
+    """Ruling R9 (versioning U1, time T16): the router's own watch is the frontier
+    signal of the one learning-death diagnosis; no separate ledger kind exists."""
     rt = make_runtime()
     state, lid = _router(rt)
     window = rt.window.index
     for p in (0.95, 0.92, 0.97):
         rt._watch_abstention(state, _draw_at(state, p))
     assert state.watch == {"window": window, "draws": 3, "min_p": 0.92}
-    assert not _deaths(rt)  # the window is still open
+    (row,) = [r for r in rt.frontier_invocation() if r["router"] == lid]
+    assert row["uninvoked"] and row["draws"] == 3 and row["min_p_noop"] == 0.92
+    assert row["floor"] == pytest.approx(0.9)
     rt.window.index += 1
     rt._deliver_returns()
-    deaths = _deaths(rt)
-    assert len(deaths) == 1 and deaths[0]["learner_id"] == lid
-    assert deaths[0]["window"] == window and deaths[0]["draws"] == 3
-    assert deaths[0]["min_p_noop"] == 0.92 and deaths[0]["floor"] == pytest.approx(0.9)
-    assert not state.watch
-    rt._deliver_returns()
-    assert len(_deaths(rt)) == 1
+    assert not state.watch  # a closed window's watch is dropped, nothing ledgered
+    assert not [i for i in rt.ledger._recovery_items() if i["kind"] == "router.learning_death"]
+    assert not [r for r in rt.frontier_invocation() if r["router"] == lid]
 
 
-def test_one_draw_that_woke_a_seat_in_earnest_keeps_the_window_alive():
+def test_one_draw_that_woke_a_seat_in_earnest_keeps_the_frontier_invoked():
     rt = make_runtime()
-    state, _lid = _router(rt)
+    state, lid = _router(rt)
     for p in (0.95, 0.5, 0.97):
         rt._watch_abstention(state, _draw_at(state, p))
+    (row,) = [r for r in rt.frontier_invocation() if r["router"] == lid]
+    assert not row["uninvoked"]
     rt.window.index += 1
-    rt._watch_abstention(state, _draw_at(state, 0.99))  # a new window's draw closes the last
-    assert not _deaths(rt)
+    rt._watch_abstention(state, _draw_at(state, 0.99))  # a new window's draw starts anew
     assert state.watch == {"window": rt.window.index, "draws": 1, "min_p": 0.99}
+
+
+def test_the_immune_window_records_which_routers_left_their_frontier_uninvoked():
+    from factorylab.versioning.versions import frontier_evidence
+
+    rows = [{"router": "router:A", "uninvoked": True}, {"router": "router:B",
+                                                         "uninvoked": False}]
+    window = {"profile": {"registrations": 0, "revision": 0}, "regions": {},
+              "frontier_invocation": rows}
+    evidence = frontier_evidence([window, window])
+    assert evidence["uninvoked_routers"] == ["router:A"]
+    # An older window without the signal leaves the evidence as it was.
+    assert "uninvoked_routers" not in frontier_evidence([{**window, "frontier_invocation": rows},
+                                                         {"profile": window["profile"],
+                                                          "regions": {}}])
 
 
 def test_the_watch_is_observation_only_and_survives_a_resume():

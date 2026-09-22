@@ -161,6 +161,10 @@ def close_window(rt, values: dict[str, float]) -> None:
     current = {
         "index": rt.window.index, "charter_edition": rt.charter.edition,
         "profile": profile,
+        # The frontier signal (ruling R9; versioning U1, time T16): which routers woke
+        # their seats only by exploration this window. It is evidence inside the one
+        # learning-death diagnosis below, never a flag of its own.
+        "frontier_invocation": rt.frontier_invocation(),
         "access": {name: why for name, (_present, why) in access.items() if why},
         "regions": {f"card:{cid}": asdict(region) for cid, region in regions.items()
                     },

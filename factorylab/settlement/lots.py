@@ -513,6 +513,37 @@ class LotTable:
                                               late_micro=0 if lots else micro)
         return self._accounts(updates)
 
+    def mark(self, handle: str, event: int, mids: Mapping[str, str], *,
+             censored: Mapping[str, str] | None = None) -> Payoff | None:
+        """The outcome this return would be fixed at now, without fixing it.
+
+        Guarantees the same arithmetic ``resolve`` fixes a marked outcome with (lots
+        marked to ``mids``, cost including carried liabilities, the paid-off rule),
+        and changes nothing. None for a return with no final cost, one whose lots
+        lack a mid, or one with an order nobody could observe. A return already
+        fixed returns its fixed outcome.
+        """
+        account = self.account(handle)
+        if account.payoff is not None:
+            return account.payoff
+        if account.voided or account.cost_micro is None or (censored or {}).get(handle):
+            return None
+        lots = [lot for lot in self.lots if lot.handle == handle]
+        if any(lot.coin not in mids for lot in lots):
+            return None
+        net = account.realized_micro
+        for lot in lots:
+            mid = exact(mids[lot.coin])
+            if mid <= 0:
+                return None
+            net += (mid - lot.px) * lot.size * (1 if lot.is_buy else -1) * 1_000_000 \
+                - lot.charges_micro
+        micro = net.numerator // net.denominator
+        cost = account.cost_micro + account.carried_micro
+        acted = account.opened_lots > 0 or account.closes > 0 or account.earnings > 0
+        return Payoff(handle, int(acted and micro + account.earned_micro > cost), micro, cost,
+                      event, bool(lots), account.liquidated, account.earned_micro)
+
     def _accounts(self, updates: dict[str, ReturnAccount]) -> "LotTable":
         if not updates:
             # Nothing changes: the table is immutable, so it is its own successor

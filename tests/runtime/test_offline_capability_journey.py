@@ -3,9 +3,10 @@
 The commissioned objective and actor selection are deterministic test scaffold.  Every
 response is nevertheless derived from the prompt the runtime rendered: schemas come from
 ``catalogue.search``, the correction comes from the owning seat's rejection receipt, the
-artifact is admitted through a producer return, and the final judge cites the execution
-receipt it was supplied.  This evidences interface composition, not autonomous purpose,
-usefulness, or real-model competence.
+artifact is admitted through a producer return, an independent caller executes it, and an
+ordinary judge's verdict on the maker's return becomes the maker's reward (ruling R1).
+This evidences interface composition, not autonomous purpose, usefulness, or real-model
+competence.
 """
 
 from __future__ import annotations
@@ -107,7 +108,7 @@ class JourneyProvider:
         return ModelResponse(request.model_id, json.dumps(reply), 10, 10, "stop")
 
     def _reply(self, description: str, inputs: dict[str, Any]) -> dict[str, Any]:
-        if description.startswith("Evaluate"):
+        if description.startswith("Give verdict"):
             return self._judge(inputs)
         if description.startswith("Independently discover"):
             return self._caller(inputs)
@@ -117,28 +118,6 @@ class JourneyProvider:
         rows = _tool_results(inputs)
         unread = inputs.get("unread_outcomes", {})
         items = unread.get("items", []) if isinstance(unread, dict) else []
-
-        grounded = next((item for item in items
-                         if item.get("kind") == "grounded_evaluation"), None)
-        if grounded is not None and not rows:
-            return {"tool_calls": [{"tool": "outcome.get",
-                                     "args": {"outcome_id": grounded["outcome_id"]}}]}
-        grounded_body = next(
-            (row.get("result", {}).get("outcome", {}) for row in rows
-             if row.get("tool") == "outcome.get"
-             and row.get("result", {}).get("outcome", {}).get("kind")
-             == "grounded_evaluation"),
-            None,
-        )
-        if grounded_body is not None:
-            return {
-                "action": "defer",
-                "rationale": (
-                    f"Read final {grounded_body['status']} finding from judge "
-                    f"{grounded_body['judge_handle']}; defer one tick before revising."
-                ),
-                "defer": 1,
-            }
 
         rejection = next((item for item in items if item.get("rejection_reason")), None)
         if rejection is not None and not rows:
@@ -221,26 +200,12 @@ class JourneyProvider:
 
     @staticmethod
     def _judge(inputs: dict[str, Any]) -> dict[str, Any]:
-        grounded = inputs.get("realized_consequence")
-        if grounded is None:
-            return {"verdict": 0.5, "rationale": "provisional opinion", "forecasts": []}
-        evidence = [
-            row for row in grounded["evidence"]
-            if row.get("kind") == "ExecutionReceipt:program_result"
-            and row.get("payload", {}).get("facts", {}).get("lineage_relation")
-            == "cross_lineage"
-        ]
-        assert evidence
-        return {
-            "verdict": 0.8,
-            "rationale": "The supplied receipt records independent execution.",
-            "realized_consequence": {
-                "status": "supported",
-                "score": 0.8,
-                "evidence": [row["ref"] for row in evidence],
-                "reason": "A cross-lineage participant executed the registered artifact.",
-            },
-        }
+        outputs = inputs.get("producer", {}).get("outputs", {})
+        registered = any(item.get("id") == ARTIFACT_ID
+                         for item in outputs.get("register", []) if isinstance(item, dict))
+        return {"verdict": 0.8 if registered else 0.5,
+                "rationale": "a registered verifier" if registered else "an ordinary return",
+                "forecasts": []}
 
 
 def _runtime(provider: JourneyProvider) -> Runtime:
@@ -248,12 +213,7 @@ def _runtime(provider: JourneyProvider) -> Runtime:
     manifest = replace(
         manifest,
         prompt=PromptSpec(mode="compact"),
-        evaluation=replace(
-            manifest.evaluation,
-            producer_feedback="realized",
-            grounded_horizon_ticks=2,
-            verdict_timeout_events=4,
-        ),
+        evaluation=replace(manifest.evaluation, verdict_timeout_events=4),
     )
     return Runtime(
         manifest,
@@ -382,13 +342,12 @@ def test_offline_prompt_contract_artifact_consequence_journey(monkeypatch):
                       == exact_error for row in _tool_results(turn["inputs"]))]
     assert fetched, "the provider must read the owned rejection body before correcting it"
 
-    maker, _ = _produce(runtime)
+    maker, made = _produce(runtime)
     assert ARTIFACT_ID in runtime.population_tools
     assert runtime.tool_owner[ARTIFACT_ID] == "seed-decider"
     accepted = [row for row in runtime.ledger._recovery_items()
                 if row["kind"] == "registry.register" and row.get("handle") == maker]
     assert accepted
-    assert maker in runtime.grounded_pending
 
     if not runtime.tool_jail_available:
         pytest.fail("the host cannot execute population code in an OS jail")
@@ -401,41 +360,12 @@ def test_offline_prompt_contract_artifact_consequence_journey(monkeypatch):
            and row["tool"] == ARTIFACT_ID]
     assert len(use) == 1 and use[0]["outcome"] == "ok"
 
-    contract = runtime.grounded_pending[maker]
-    _advance_ticks(runtime, contract.due_tick - runtime.ticks_consumed, monkeypatch)
-    commission = next(
-        event for event in reversed(runtime.internal)
-        if event.payload.get("grounded_consequence")
-        and event.payload.get("about_handle") == maker
-    )
-    evidence = commission.payload["evidence"]
-    execution = next(row for row in evidence
-                     if row["kind"] == "ExecutionReceipt:program_result")
-    facts = execution["payload"]["facts"]
-    assert facts["maker_handle"] == maker and facts["caller_handle"] == caller
-    assert facts["lineage_relation"] == "cross_lineage" and facts["status"] == "executed"
-
+    # Ruling R1: the maker learns from its judge's verdict on the return it made.
     judge = _decision(runtime, "eval-b", CH_CONFORMITY)
-    runtime._evaluator_step(
-        commission,
-        judge,
-        SimpleNamespace(chosen="eval-b"),
-        runtime.queue.get(judge).deadline_ns,
-    )
+    runtime._evaluator_step(made, judge, SimpleNamespace(chosen="eval-b"),
+                            runtime.queue.get(judge).deadline_ns)
+    runtime._settle_arrived_verdicts()  # the end of the event's routing
     settlement = runtime.queue.history(maker)[-1]
     assert settlement.status is SettleStatus.SETTLED
     assert settlement.score == pytest.approx(0.8) and settlement.sampling_ref == judge
-
-    after, _ = _produce(runtime)
-    after_return = next(row for row in runtime.ledger._recovery_items()
-                        if row["kind"] == "invocation" and row["handle"] == after)
-    outputs = json.loads(after_return["outputs"])
-    assert outputs["action"] == "defer"
-    assert "supported" in outputs["rationale"] and judge in outputs["rationale"]
-    final_inputs = [turn["inputs"] for turn in provider.turns
-                    if any(row.get("tool") == "outcome.get"
-                           and row.get("result", {}).get("outcome", {}).get("kind")
-                           == "grounded_evaluation"
-                           for row in _tool_results(turn["inputs"]))]
-    assert final_inputs
     assert runtime.exchange.fills(0) == []

@@ -1110,11 +1110,10 @@ def compare_rehearsals(
     """Reject unmatched screens rather than attribute their differences to a treatment."""
     paths = {
         "prompt": "prompt.mode",
-        "feedback": "evaluation.producer_feedback",
         "reasoning": "models.*.reasoning",
     }
     if not factors or any(factor not in paths for factor in factors):
-        raise ReportInputError("name at least one factor: prompt, feedback, reasoning")
+        raise ReportInputError("name at least one factor: prompt, reasoning")
 
     def flatten(value, prefix=""):
         if isinstance(value, Mapping):
@@ -1156,9 +1155,6 @@ def compare_rehearsals(
             problems.append(f"admission {key} missing or different")
     common_protocol = ("duration_ns", "planned_tick_ceiling", "minimum_delivered_ticks",
                        "no_live_parameter_changes", "no_horizon_extension")
-    if "feedback" not in factors:
-        common_protocol += ("minimum_assessed_grounded_samples",
-                            "minimum_contrary_grounded_samples")
     for key in common_protocol:
         left, right = (r.get("protocol", {}).get(key) for r in (control, treatment))
         if left is None or left != right:

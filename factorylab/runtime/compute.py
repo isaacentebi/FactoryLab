@@ -24,7 +24,6 @@ from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import PropensityRecord
 from factorylab.learners.router import Sample
 from factorylab.runtime.feedback import PendingJudgement
-from factorylab.runtime.grounded import freeze_contract
 from factorylab.runtime.reasons import Reason
 from factorylab.runtime.shared import CH_EXPOSURE, CH_VERDICT, _to_plain
 from factorylab.runtime.summary import _price_str
@@ -1333,45 +1332,7 @@ class ComputeMixin:
                 record_venue_facts(self.window, tool_id, args, metered.result, self.clock.now_ns)
             if hasattr(self.exchange, "drain_events"):
                 self._settle_exchange_effects(self.exchange.drain_events())
-        elif (spec["kind"] == "population"
-              and getattr(self.ev, "producer_feedback", "verdict") == "realized"):
-            self._record_tool_use(action_id, handle, tool_id, slot, metered.result, metered.cost)
         return metered.result, metered.cost
-
-    def _record_tool_use(self, caller: str, handle: str, tool_id: str, slot: str,
-                         result: Any, cost: int) -> None:
-        """Address actual paid tool execution to maker and caller without publishing their data.
-
-        A receipt establishes execution, version and provenance, never usefulness.
-        Arguments and output bodies stay private; hashes bind the observed result.
-        Same-lineage use remains explicitly distinguishable from independent use.
-        """
-        from factorylab.kernel.ledger import canonical
-        from factorylab.settlement.receipts import execution_receipt
-
-        tool = self.population_tools.get(tool_id)
-        if tool is None:
-            return
-        maker = self.tool_owner.get(tool_id)
-        caller_lineage = self.budget.lineage(caller)
-        maker_lineage = self.budget.lineage(maker) if maker is not None else None
-        relation = ("self" if caller == maker else "unknown" if maker is None
-                    else "same_lineage" if caller_lineage == maker_lineage else "cross_lineage")
-        facts = {
-            "tool": tool_id, "maker": maker, "caller": caller,
-            "maker_handle": tool.provenance, "caller_handle": handle, "slot": slot,
-            "lineage_relation": relation,
-            "version_sha256": hashlib.sha256(canonical({
-                "code": tool.code, "args_schema": tool.args_schema,
-                "timeout_s": tool.timeout_s})).hexdigest(),
-            "result_sha256": hashlib.sha256(canonical(result)).hexdigest(),
-            "status": "failed" if isinstance(result, dict) and result.get("error") else "executed",
-            "cost_micro": cost,
-        }
-        for subject in sorted({handle, tool.provenance} - {"", None}):
-            execution_receipt(self.consequences.receipts, kind="program_result",
-                              handle=subject, owner=maker if subject == tool.provenance else caller,
-                              at_event=self.n, facts=facts)
 
     def _invoke_compute(self, action_id: str, req: Request) -> Return:
         """Each model call is metered and counted; lifetime trials count settled consequences.
@@ -2216,14 +2177,6 @@ class ComputeMixin:
                             "outcome_schema": item.outcome_schema})
         self.stats.decisions += 1
         self.consequences.start(handle, self.n)
-        grounded_contract = None
-        if (
-            getattr(self.ev, "producer_feedback", "verdict") == "realized"
-            and CH_VERDICT in channels.values()
-            and target in self.assemblies
-            and target not in self.retired_assemblies
-        ):
-            grounded_contract = freeze_contract(self, handle, target, {})
         req = Request(handle, item.description, {**item.inputs, "world": self._world_block()},
                       {}, item.outcome_schema,
                       parent.deadline_ns, ceiling, parent.handle,
@@ -2258,28 +2211,11 @@ class ComputeMixin:
                     self._execute_outputs(ret)
                 self._apply_registrations(handle, ret)
             self.consequences.finish(handle, ret.cost)
+            if ret.status == "ok":
+                self._freeze_declined_trade(handle, ret.outputs)
             if emitted == "Exposure":
                 self.pending_exposure[handle] = self.ticks_consumed
-                payoff = ret.outputs.get("payoff") if ret.status == "ok" else None
-                if payoff is not None and self.consequences.seal_self_forecast(
-                        self.book, self.queue, handle=handle, assembly_id=target, payoff=payoff,
-                        event=self.n, now_ns=self.clock.now_ns,
-                        tick_ns=self.tick_clock.interval_ns) is not None:
-                    self.stats.forecasts_sealed += 1
             else:
-                if (grounded_contract is not None
-                        and self.queue.get(handle).channel == CH_VERDICT):
-                    self.grounded_pending[handle] = grounded_contract.with_outputs(
-                        public_return(ret.outputs), subject_kind=emitted)
-                    contract = self.grounded_pending[handle]
-                    self.ledger.append({
-                        "kind": "consequence.contract", "handle": handle,
-                        "opened_tick": contract.opened_tick, "due_tick": contract.due_tick,
-                        "close_tick": contract.close_tick,
-                        "charter_edition": contract.charter_edition,
-                        "predicate_versions": list(contract.predicate_versions),
-                        "ts": self.clock.now_ns,
-                    })
                 self.pending[handle] = PendingJudgement(handle, CH_VERDICT, self.n,
                                                         opened_at_tick=self.ticks_consumed)
             self.stats.producer_returns += 1
