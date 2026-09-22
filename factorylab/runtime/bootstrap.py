@@ -63,6 +63,12 @@ from factorylab.world.models import FakeModel, TokenPrice
 from factorylab.world.scripted import ScriptedProvider
 from factorylab.world.venue_tools import VenueTools
 
+#: Why a live hybrid Venice world will not start without the capital-loop opt-in.
+CAPITAL_LOOP_REFUSED = (
+    "this world spends real Base mainnet USDC on Venice (treasury.venice_network); start it "
+    "only with scripts/edition4_rehearsal.py --capital-loop "
+    "(docs/architecture/capital-loop-rehearsal.md)")
+
 
 class BootstrapMixin:
     """Preserve runtime state and behavior for bootstrap operations."""
@@ -83,13 +89,23 @@ class BootstrapMixin:
         clock_source: Any | None = None,
         reconcile_every: int = 10,
         kill_at_end: bool = False,
+        capital_loop: bool = False,
         _journal: RecoveryJournal | None = None,
         _lock: LedgerLock | None = None,
     ) -> None:
+        self.live = manifest.exchange.kind != "fake"
+        if (self.live and getattr(manifest.treasury, "venice_network", None) is not None
+                and capital_loop is not True):
+            # A manifest alone never switches on real-money mode: `factorylab run` or
+            # `resume` of a hybrid world would sign mainnet top-ups with no rehearsal
+            # guard around them. Only the capital-loop runner passes the opt-in, and it
+            # is not checkpointed, so a resume must be asked for it again.
+            from factorylab.world.evm import RailError
+
+            raise RailError(CAPITAL_LOOP_REFUSED)
         self._ledger_lock = _lock or LedgerLock(ledger_path)
         self.m = manifest
         self.kill_at_end = kill_at_end
-        self.live = manifest.exchange.kind != "fake"
         self.clock_source = clock_source
         self.tick_clock = (
             LiveClock(manifest.tick_interval_ns, events)
@@ -195,9 +211,12 @@ class BootstrapMixin:
 
         if self.live:
             if manifest.treasury.reserve_address is not None:
-                from factorylab.world.treasury_rails import LiveRail
+                from factorylab.world.treasury_rails import HybridRail, LiveRail
 
-                rail = LiveRail(self.exchange, manifest.treasury)
+                # A hybrid capital-loop rehearsal buys real Venice credit on Base mainnet
+                # and pays for it from the testnet pots through a shadow leg (II.IV).
+                hybrid = getattr(manifest.treasury, "venice_network", None) == "base-mainnet"
+                rail = (HybridRail if hybrid else LiveRail)(self.exchange, manifest.treasury)
                 # A Venice purchase is confirmed on the chain's debit; the diary's own
                 # metered spend since the purchase started is recorded beside the
                 # advisory balance so a lost acknowledgment stays explainable (C5).
@@ -310,6 +329,11 @@ class BootstrapMixin:
                 fee_micro=manifest.treasury.fake_fee_micro,
                 max_venice_per_window=manifest.treasury.max_venice_per_window,
                 clock_ns=self.clock,
+                venice_shadow_sink=getattr(manifest.treasury, "venice_shadow_sink", None),
+                max_venice_total_micro=getattr(manifest.treasury, "max_venice_total_micro",
+                                               None),
+                venice_reserve_floor_micro=getattr(manifest.treasury,
+                                                   "venice_reserve_floor_micro", None),
             )
         else:
             self.treasury = Treasury(
@@ -322,6 +346,8 @@ class BootstrapMixin:
                 max_forward_fees_per_window=manifest.treasury.max_forward_fees_per_window,
                 forward_wait_windows=manifest.treasury.forward_wait_windows,
                 clock_ns=self.clock,
+                max_venice_total_micro=getattr(manifest.treasury, "max_venice_total_micro",
+                                               None),
             )
         if manifest.polymarket.enabled:
             from factorylab.runtime.polymarket import pots_view
@@ -546,6 +572,12 @@ class BootstrapMixin:
             "price_micro_per_call": 0,
             "kind": "treasury",
         }
+        if getattr(manifest.treasury, "venice_network", None) == "base-mainnet":
+            # The population is told where a conversion is paid from in this world: the
+            # description is the only place a seat learns which pot its profit leaves.
+            self.tool_specs["treasury.transfer"]["description"] += (
+                " In this world to_venice pays its $5 from the venue's perps withdrawable "
+                "(no reserve USDC is needed) and buys real Venice credit.")
         self.tool_specs["catalogue.search"] = {
             "id": "catalogue.search",
             "description": "Find tools, complete proposal shapes and model offers by substring. "

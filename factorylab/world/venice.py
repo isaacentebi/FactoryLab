@@ -27,26 +27,43 @@ def _positive_int(value: Any) -> int | None:
     return value if type(value) is int and value > 0 else None
 
 
-def prepare_top_up(client: X402Client, *, now_s: int, nonce: bytes) -> dict:
-    """Fix a $5 quote and unsigned authorization before the treasury reserves and journals it."""
+def _pinned(pay_to: str | None, payee: Any) -> None:
+    """Refuse a quote or authorization naming any payee but the pinned one, when pinned."""
+    from factorylab.world.x402 import X402Error
+
+    if pay_to is not None and str(payee).lower() != pay_to.lower():
+        raise X402Error("Venice quote payee differs from treasury.venice_pay_to")
+
+
+def prepare_top_up(client: X402Client, *, now_s: int, nonce: bytes,
+                   pay_to: str | None = None) -> dict:
+    """Fix a $5 quote and unsigned authorization before the treasury reserves and journals it.
+
+    ``pay_to`` pins the payee: a quote paying anyone else is refused before an
+    authorization is even built (the hybrid rail's ``treasury.venice_pay_to``).
+    """
     from factorylab.world.x402 import TOP_UP_MICRO, authorization_typed_data, parse_quote
 
     if client.usdc_balance() < TOP_UP_MICRO:
         raise ValueError("insufficient Base USDC for a $5 Venice top-up")
     credit = client.venice_balance()
     quote = parse_quote(client._request("POST", "/x402/top-up", {}), amount_micro=TOP_UP_MICRO)
+    _pinned(pay_to, quote.accepted["payTo"])
     typed = authorization_typed_data(quote.accepted, client.address, now=now_s, nonce=nonce)
     return {"accepted": quote.accepted, "resource": quote.resource, "extensions": quote.extensions,
             "created_s": now_s, "authorization": typed["message"], "credit_before_micro": credit}
 
 
-def top_up(client: X402Client, reference: dict) -> dict:
+def top_up(client: X402Client, reference: dict, *, pay_to: str | None = None) -> dict:
     """The existing x402 transport signs and submits only the journal's exact authorization.
 
     The CLI client's one-shot method generates a new nonce per call. Treasury retries
     instead reconstruct this fixed nonce and expiry, so an ambiguous reply cannot
     authorize another $5. References contain no signature or private signing material.
+    With ``pay_to`` pinned, a reference paying anyone else is refused before signing.
     """
+    _pinned(pay_to, reference["accepted"].get("payTo"))
+    _pinned(pay_to, reference["authorization"].get("to"))
     from eth_account.messages import encode_typed_data
 
     from factorylab.world.x402 import (

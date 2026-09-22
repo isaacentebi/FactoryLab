@@ -86,6 +86,49 @@ MESSAGE_RECEIVED = "MessageReceived(address,uint32,bytes32,bytes32,uint32,bytes)
 FORWARD_SCAN_PAGES = 40
 
 
+AUTHORIZATION_USED = "AuthorizationUsed(address,bytes32)"
+#: How far short of "tranche less metered spend" a hybrid top-up's observed Venice credit
+#: may fall before financing is held. The comparison is between three imperfect reads:
+#: the diary's metered spend is an estimate (a table price when Venice reports no cost),
+#: ``venice_balance`` rounds down to the micro, and Venice seats keep spending the credit
+#: through the 15-20 minutes Base finality takes. $0.25 is 5% of the tranche: it absorbs
+#: all three, and a real missing credit (the whole $5, or most of it) still exceeds it.
+CREDIT_TOLERANCE_MICRO = 250_000
+
+
+def authorization_status(base: EVM, authorizer: str, reference: dict) -> dict:
+    """Read, keylessly, whether one Venice top-up authorization can still settle.
+
+    Guarantees ``expired`` only when three independent reads agree: a FINALIZED Base
+    block is past ``validBefore`` (EIP-3009 executes only while a block's timestamp is
+    before it, and Base timestamps only grow, so nothing later can use it); the USDC
+    contract's ``authorizationState(authorizer, nonce)`` at that same block is false;
+    and the ``AuthorizationUsed`` log scan from the reference's ``start_block`` covered
+    every block up to that one and found nothing. The contract read is the check a
+    lagging RPC cannot fake by returning ``[]`` for logs. The runtime clock is never
+    consulted and no grace is needed: finality lag delays the answer, never flips it.
+    Every read is ``eth_getBlockByNumber``, ``eth_call`` or ``eth_getLogs``: nothing
+    here signs, so an operator's script may call it with ``EVM(BASE, None)``.
+    """
+    auth = reference["authorization"]
+    nonce = auth["nonce"]
+    final = base.call("eth_getBlockByNumber", ["finalized", False])
+    number, timestamp = int(final["number"], 16), int(final["timestamp"], 16)
+    data = calldata("authorizationState(address,bytes32)", ["address", "bytes32"],
+                    [address(authorizer), bytes.fromhex(nonce.removeprefix("0x"))])
+    state = base.call("eth_call", [{"to": address(base.chain.usdc), "data": data}, hex(number)])
+    used = int(state, 16) != 0
+    topics = [event_topic(AUTHORIZATION_USED), "0x" + word_address(authorizer).hex(), nonce]
+    logs, scanned_to = base.scan(base.chain.usdc, topics, int(reference["start_block"]))
+    valid_before = int(auth["validBefore"])
+    return {"nonce": nonce, "valid_before": valid_before, "finalized_block": number,
+            "finalized_timestamp": timestamp, "authorization_used": used,
+            "debits": [log.get("transactionHash") for log in logs], "scanned_to": scanned_to,
+            "live": timestamp <= valid_before and not used and not logs,
+            "expired": (timestamp > valid_before and not used and not logs
+                        and scanned_to >= number)}
+
+
 def hype_text(wei: int) -> str:
     amount = Decimal(wei) / Decimal(10**18)
     whole = amount == amount.to_integral()
@@ -96,6 +139,9 @@ class LiveRail(ClassTransferRail):
     """Only pinned, receipt-confirmed native USDC transfers advance the treasury's opaque plan."""
 
     name = "hypercore-hyperevm-base-cctp-v2"
+    #: A real top-up is submitted once, then only observed (X402Client.top_up's rule for
+    #: an unknown outcome): never resent by the retry loop, never replayed on resume.
+    poll_only_steps = ("venice_top_up",)
 
     def __init__(self, exchange: Any, spec: Any, *, transport: Transport = http_request):
         from hyperliquid.utils.constants import MAINNET_API_URL, TESTNET_API_URL
@@ -696,10 +742,6 @@ class LiveRail(ClassTransferRail):
         if response.get("status") != "ok":
             raise RailError("venue rejected withdrawal")
 
-    #: A Venice authorization cannot be used after its ``validBefore``; a use mined just
-    #: before it is finalized on Base within minutes. Past this grace with no receipt,
-    #: it never executed and never will.
-    VENICE_EXPIRY_GRACE_S = 3_600
     #: Hyperliquid accepts an action only while its nonce is within about two days of
     #: the venue's clock. A withdrawal whose nonce is older than this and that no
     #: ledger update shows can never execute.
@@ -711,15 +753,16 @@ class LiveRail(ClassTransferRail):
         Only steps whose principal has not left are answered: the Venice top-up's
         EIP-3009 authorization and the venue withdrawal's signed action. The
         treasury abandons such a step only after a clean poll found no evidence.
+        A top-up is judged on finalized Base alone (``_authorization_expired``), never
+        on ``now_ns``: a runtime clock ahead of the chain, or a virtual one, used to
+        abandon a real authorization that could still settle.
         """
         reference = state.get("reference") or {}
         if step == "venice_top_up":
-            valid_before = (reference.get("authorization") or {}).get("validBefore")
-            if valid_before is None:
+            try:
+                return self._authorization_expired(state)
+            except Exception:  # noqa: BLE001 - an unreadable chain proves nothing expired
                 return None
-            if now_ns // 1_000_000_000 > int(valid_before) + self.VENICE_EXPIRY_GRACE_S:
-                return "Venice authorization expired unused"
-            return None
         if step == "withdraw_burn":
             nonce = reference.get("nonce", state.get("nonce"))
             if nonce is None:
@@ -727,6 +770,21 @@ class LiveRail(ClassTransferRail):
             if now_ns // 1_000_000 > int(nonce) + self.WITHDRAWAL_NONCE_WINDOW_MS:
                 return "withdrawal nonce expired unexecuted"
         return None
+
+    def _authorization_expired(self, state: dict) -> str | None:
+        """Guarantees a top-up authorization is abandoned only when it can never settle.
+
+        See ``authorization_status``: dead exactly when finalized Base is past its
+        ``validBefore``, the USDC contract says its nonce is unused at that block, and
+        the log scan covered every block up to it without an ``AuthorizationUsed``.
+        """
+        reference = state.get("reference") or {}
+        if ((reference.get("authorization") or {}).get("validBefore") is None
+                or reference.get("start_block") is None):
+            return None
+        status = authorization_status(self._venice_base(), self.reserve_address, reference)
+        return "Venice authorization expired unused on finalized Base" if status[
+            "expired"] else None
 
     def replace(self, step: str, reference: dict, gas_spent: dict) -> dict:
         """A repriced replacement for a stuck EVM step at its original nonce."""
@@ -741,6 +799,10 @@ class LiveRail(ClassTransferRail):
             - gas_micro(reference["gas_ceiling_wei"], reference["gas_usd"])
             + gas_micro(replaced["gas_ceiling_wei"], reference["gas_usd"]))
         return replaced
+
+    def _venice_base(self) -> EVM:
+        """The chain a Venice top-up debits: this rail's own Base, mainnet by construction."""
+        return self.base
 
     def _venice_client(self):
         """Use the existing reserve signer and x402 client on the committed Base mainnet rail."""
@@ -770,23 +832,24 @@ class LiveRail(ClassTransferRail):
         """
         ref = state["reference"]
         auth = ref["authorization"]
+        base = self._venice_base()
         topics = [event_topic("AuthorizationUsed(address,bytes32)"),
                   "0x" + word_address(self.reserve_address).hex(), auth["nonce"]]
-        for log in self.base.logs(self.base.chain.usdc, topics, ref["start_block"]):
-            if (log.get("removed") or log["address"].lower() != self.base.chain.usdc.lower()
+        for log in base.logs(base.chain.usdc, topics, ref["start_block"]):
+            if (log.get("removed") or log["address"].lower() != base.chain.usdc.lower()
                     or [t.lower() for t in log["topics"]] != [t.lower() for t in topics]):
                 continue
-            receipt = self.base.proof(log["transactionHash"])
+            receipt = base.proof(log["transactionHash"])
             if receipt is None or int(receipt["status"], 16) != 1:
                 continue
             if not any(
-                event.get("address", "").lower() == self.base.chain.usdc.lower()
+                event.get("address", "").lower() == base.chain.usdc.lower()
                 and [t.lower() for t in event.get("topics", [])] == [t.lower() for t in topics]
                 for event in receipt.get("logs", [])
             ):
                 continue
-            if not self.base.transferred(receipt, self.base.chain.usdc, self.reserve_address,
-                                         auth["to"], state["amount_micro"]):
+            if not base.transferred(receipt, base.chain.usdc, self.reserve_address,
+                                    auth["to"], state["amount_micro"]):
                 continue
             submission = (state.get("route_data") or {}).get("submission") or {}
             observed, balance_source = submission.get("credit_after_micro"), "acknowledgment"
@@ -1086,3 +1149,318 @@ class LiveRail(ClassTransferRail):
         if len(matched) > 1:
             raise RailError("ambiguous HyperCore perps credit")
         return (credited, matched[0]) if matched else None
+
+
+class HybridRail(LiveRail):
+    """Guarantees a testnet world buys real Venice credit only when its own pots pay for it.
+
+    The hybrid capital-loop rehearsal (docs/architecture/capital-loop-rehearsal.md):
+    trading, the reserve and every other route stay on testnet exactly as ``LiveRail``
+    runs them, while ``to_venice`` spends real USDC from the same reserve address on
+    Base mainnet. The essay's requirement (II.IV, "a continuous, reciprocal flow of
+    capital is an objective requirement") is that profit can become thinking money; a
+    rehearsal of that flow is only honest if the profit spent is the profit observed.
+    So each conversion has two legs and confirms only when both have:
+
+    1. ``shadow_send``: a Hyperliquid testnet ``usdSend`` of exactly the tranche from the
+       venue's main account to ``treasury.venice_shadow_sink``, signed like the class
+       transfer (EIP-712 user-signed action, persisted millisecond nonce) and confirmed
+       by the venue's own ledger row for that nonce, sink and amount.
+    2. ``venice_top_up``: the fixed $5 x402 top-up from the Base mainnet reserve,
+       proven by the canonical ``AuthorizationUsed`` debit of the tranche exactly as
+       ``LiveRail._venice_receipt`` proves it, but read on Base mainnet.
+
+    The shadow leg goes first. It is testnet money, and a failure there spends nothing
+    real: the top-up's authorization is not even prepared until the shadow leg's
+    receipt is ledgered. The reverse order would leave real mainnet USDC spent against
+    a testnet leg that might never pay, which is the one discrepancy this rail exists to
+    prevent. Once the shadow leg paid it is never sent again (the plan has moved past
+    it), and the top-up is submitted once and only observed afterwards
+    (``poll_only_steps``); a fresh authorization is prepared only when the previous one
+    provably can no longer execute.
+    """
+
+    name = "hypercore-testnet-venice-base-mainnet-hybrid"
+
+    def __init__(self, exchange: Any, spec: Any, *, transport: Transport = http_request):
+        from factorylab.world.x402 import X402Client
+
+        super().__init__(exchange, spec, transport=transport)
+        if not self.testnet:
+            raise RailError("the hybrid Venice rail rehearses on a testnet venue only")
+        if spec.venice_network != "base-mainnet":
+            raise RailError("the hybrid Venice rail requires treasury.venice_network")
+        self.sink = address(spec.venice_shadow_sink)
+        if self.sink.lower() in (self.venue_address.lower(), self.reserve_address.lower()):
+            raise RailError("the shadow sink must be outside every observed pot")
+        if self.venue_address.lower() == self.reserve_address.lower():
+            # One key for both would make the venue's testnet account and the real
+            # reserve one identity: a shadow send and a top-up could not be told apart.
+            raise RailError("the venue and the reserve must be different accounts")
+        if spec.venice_pay_to is None or spec.max_venice_total_micro is None or (
+                spec.venice_reserve_floor_micro is None):
+            raise RailError("the hybrid Venice rail requires its payee, total and floor")
+        self.pay_to = address(spec.venice_pay_to)
+        self.reserve_floor_micro = spec.venice_reserve_floor_micro
+        # Read-only on mainnet: no gas budget, so this EVM can never sign a transaction.
+        self.venice_base = EVM(BASE, self.base.account, transport=transport, gas_budget_wei=0)
+        # The x402 client is built once, here, while the reserve key is in the
+        # environment, so a runner may clear that variable before the world starts.
+        self._x402 = X402Client(transport=transport)
+        if self._x402.address.lower() != self.reserve_address.lower():
+            raise RailError("Venice payer differs from the reserve")
+
+    @staticmethod
+    def now_s() -> int:
+        """Wall-clock seconds for an authorization's validity window (journaled with it)."""
+        from time import time_ns
+
+        return time_ns() // 1_000_000_000
+
+    def _venice_base(self) -> EVM:
+        return self.venice_base
+
+    def _venice_client(self):
+        return self._x402
+
+    def balances(self) -> dict:
+        """The testnet pots, plus the real Venice credit and the real reserve beside them."""
+        result = super().balances()
+        try:
+            result["venice"] = self._x402.venice_balance()
+        except Exception:  # noqa: BLE001 - an unread balance is unknown, never zero
+            result["venice"] = None
+        try:
+            result["venice_reserve"] = self.venice_base.balance(self.venice_base.chain.usdc)
+        except Exception:  # noqa: BLE001
+            result["venice_reserve"] = None
+        return result
+
+    def plan(self, direction: str) -> tuple[str, ...]:
+        if direction == "to_venice":
+            return ("shadow_send", "venice_top_up")
+        return super().plan(direction)
+
+    def preflight(self, direction: str, amount: int, gas_spent: dict) -> None:
+        if direction != "to_venice":
+            return super().preflight(direction, amount, gas_spent)
+        from factorylab.world.x402 import TOP_UP_MICRO
+
+        if amount != TOP_UP_MICRO:
+            raise RailError("to_venice requires the fixed $5 tranche")
+        if os.environ.get("VENICE_API_KEY"):
+            raise RailError("Venice top-ups credit the reserve wallet, not an API-key account")
+        info = self.exchange._info
+        if info.post("/info", {"type": "userRole", "user": self.venue_address}).get(
+                "role") != "user":
+            raise RailError("shadow sends require a main wallet, not an agent/API key")
+        # usdSend to an address the venue has never seen charges an activation fee, which
+        # would make the shadow leg cost more than the tranche: refuse before signing.
+        if info.post("/info", {"type": "userRole", "user": self.sink}).get("role") in (
+                None, "missing"):
+            raise RailError("the shadow sink is not an existing Hyperliquid testnet account")
+        state = info.user_state(self.venue_address)
+        if amount > int(Decimal(state["withdrawable"]) * 1_000_000):
+            raise RailError("amount exceeds available venue pot")
+        self._above_floor(amount)
+
+    def _above_floor(self, amount: int) -> None:
+        """The real reserve covers the tranche and keeps the manifest's floor after it.
+
+        The floor is read on chain, so it bounds total real spend across runs: a fresh
+        world with a fresh counter still cannot take the reserve below it.
+        """
+        from factorylab.world.treasury import RESERVE_FLOOR
+
+        self.venice_base.check_chain()
+        balance = self.venice_base.balance(self.venice_base.chain.usdc)
+        if balance < amount:
+            raise RailError("amount exceeds available mainnet reserve")
+        if balance - amount < self.reserve_floor_micro:
+            raise RailError(RESERVE_FLOOR)
+
+    def _shadow_action(self, amount: int, nonce: int) -> dict:
+        return {"type": "usdSend", "destination": self.sink,
+                "amount": str(Decimal(amount) / 1_000_000), "time": nonce}
+
+    def prepare(self, step: str, state: dict, gas_spent: dict) -> dict:
+        if step == "shadow_send":
+            amount = state["amount_micro"]
+            return {"network": self.exchange.name, "sender": self.venue_address,
+                    "destination": self.sink, "nonce": state["nonce"], "amount_micro": amount,
+                    "action": self._shadow_action(amount, state["nonce"]),
+                    "fee_ceiling_micro": 0}
+        if step == "venice_top_up":
+            from factorylab.world.venice import prepare_top_up
+            from factorylab.world.x402 import X402Error
+
+            self._above_floor(state["amount_micro"])
+            # The validity window starts now, not at submission: a top-up re-prepared
+            # after an expired authorization must not be born expired.
+            try:
+                prepared = prepare_top_up(self._x402, now_s=self.now_s(), nonce=os.urandom(32),
+                                          pay_to=self.pay_to)
+            except X402Error as exc:
+                raise RailError(str(exc)) from None  # x402 messages are local, never bodies
+            return {**prepared, "network": "eip155:8453",
+                    "start_block": self.venice_base.block(), "fee_ceiling_micro": 0}
+        return super().prepare(step, state, gas_spent)
+
+    def send(self, step: str, reference: dict) -> dict | None:
+        if step == "venice_top_up":
+            from factorylab.world.venice import top_up
+
+            # Signed only for the pinned payee, whatever the journal's reference says.
+            return top_up(self._x402, reference, pay_to=self.pay_to)
+        if step != "shadow_send":
+            return super().send(step, reference)
+        from hyperliquid.utils.signing import sign_usd_transfer_action
+
+        if (reference["sender"] != self.venue_address or reference["destination"] != self.sink
+                or reference["network"] != self.exchange.name):
+            raise RailError("shadow send identity mismatch")
+        action = self._shadow_action(reference["amount_micro"], reference["nonce"])
+        if action != reference["action"]:
+            raise RailError("shadow send reference was modified")
+        signed = deepcopy(action)  # the SDK adds the chain fields to what it signs
+        signature = sign_usd_transfer_action(self._sdk.wallet, signed, not self.testnet)
+        try:
+            response = self._sdk._post_action(signed, signature, reference["nonce"])
+        except Exception:
+            raise Pending("shadow send outcome unknown; reconcile the existing nonce") from None
+        if response.get("status") != "ok":
+            raise RailError("venue rejected withdrawal")
+        return None
+
+    def poll(self, step: str, state: dict) -> dict | None:
+        if step == "shadow_send":
+            return self._shadow_receipt(state)
+        if step == "venice_top_up":
+            return self._top_up_receipt(state)
+        return super().poll(step, state)
+
+    @staticmethod
+    def _authorizations(state: dict) -> list[dict]:
+        """The current authorization and every one it superseded, newest first."""
+        superseded = (state.get("route_data") or {}).get("superseded_references") or ()
+        return [ref for ref in (state.get("reference"), *reversed(superseded)) if ref]
+
+    def _top_up_receipt(self, state: dict) -> dict | None:
+        """Confirm a debit of any of this conversion's authorizations, and its credit.
+
+        Every authorization the transfer ever had is polled, the superseded ones too,
+        so a debit that lands late is still found and booked (and nothing new is signed
+        after it). Financing is booked on the proven canonical debit, exactly as the
+        ordinary rail books it, and the credit reads are recorded beside it as evidence
+        (``credit_shortfall_micro``). The credit only vetoes: the step is held, with the
+        numbers carried in its public stall and the principal kept, only when every
+        read is known and the credit rose by less than the tranche less the diary's
+        metered Venice spend since the authorization less ``CREDIT_TOLERANCE_MICRO``.
+        A held step is never re-authorized (a pending step is not tested for expiry).
+        """
+        from factorylab.world.treasury import CREDIT_SHORT
+
+        amount = state["amount_micro"]
+        for ref in self._authorizations(state):
+            outcome = self._venice_receipt({**state, "reference": ref})
+            if outcome is None:
+                continue
+            try:
+                observed = self._x402.venice_balance()
+            except Exception:  # noqa: BLE001 - unread is unknown: the debit still decides
+                observed = None
+            before = ref.get("credit_before_micro")
+            metered = None
+            if self.metered_usage_since is not None:
+                try:
+                    metered = self.metered_usage_since(int(ref.get("created_s") or 0)
+                                                       * 1_000_000_000)
+                except Exception:  # noqa: BLE001
+                    metered = None
+            known = all(type(v) is int for v in (observed, before, metered))
+            shortfall = max(0, amount - metered - (observed - before)) if known else None
+            evidence = {**outcome["evidence"], "credit_before_micro": before,
+                        "observed_micro": observed, "credit_after_micro": observed,
+                        "balance_source": "balance_read", "metered_usage_since_micro": metered,
+                        "credit_shortfall_micro": shortfall,
+                        "credit_tolerance_micro": CREDIT_TOLERANCE_MICRO}
+            if known and shortfall > CREDIT_TOLERANCE_MICRO:
+                raise Pending(CREDIT_SHORT, carry={
+                    "tx_hash": evidence.get("tx_hash"), "nonce": evidence.get("nonce"),
+                    "credit_before_micro": before, "observed_micro": observed,
+                    "metered_usage_since_micro": metered, "required_micro": amount,
+                    "shortfall_micro": shortfall, "tolerance_micro": CREDIT_TOLERANCE_MICRO})
+            return {**outcome, "evidence": evidence}
+        return None
+
+    def _shadow_receipt(self, state: dict) -> dict | None:
+        """Confirm the venue's one ledger row sending the tranche from the venue to the sink.
+
+        Hyperliquid has reported a ``usdSend`` both as ``internalTransfer`` (``usdc``)
+        and as a ``send`` of USDC between perps dexes (``amount``, ``nonce``); either
+        shape is accepted with the same identity: sender, sink, exact amount and a
+        hashed row executed after the signed nonce and inside the venue's nonce window,
+        after which the signed action can never execute. A row that names its nonce must
+        name ours. A row that names none is matched on sender, sink and exact amount alone,
+        even when it executes late: that is safe because the treasury runs one transfer at
+        a time and frees the slot only once a shadow send confirmed, was refused outright,
+        or outlived its nonce window, so no other conversion's send to the sink can land
+        after this nonce. The one thing that can is an operator sending exactly the tranche
+        to the sink by hand, which the runbook forbids. Two candidates confirm nothing, and
+        a fee stalls the transfer publicly instead of booking money the tranche never had.
+        """
+        ref, amount = state["reference"], state["amount_micro"]
+        start = ref["nonce"]
+        rows = self.exchange._info.user_non_funding_ledger_updates(self.venue_address, start)
+        matches = []
+        for row in rows:
+            delta, executed = row.get("delta", {}), row.get("time")
+            if (not row.get("hash") or type(executed) is not int or executed < start
+                    or executed > start + self.WITHDRAWAL_NONCE_WINDOW_MS):
+                continue
+            if delta.get("type") == "internalTransfer":
+                text = delta.get("usdc")
+            elif (delta.get("type") == "send" and delta.get("token") == "USDC"
+                  and delta.get("sourceDex", "") == "" and delta.get("destinationDex", "") == ""):
+                text = delta.get("amount")
+            else:
+                continue
+            if (str(delta.get("user", "")).lower() != self.venue_address.lower()
+                    or str(delta.get("destination", "")).lower() != self.sink.lower()):
+                continue
+            if "nonce" in delta and delta["nonce"] != start:
+                continue
+            try:
+                if Decimal(str(text)) * 1_000_000 != amount:
+                    continue
+            except ArithmeticError:
+                continue
+            matches.append(row)
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise RailError("ambiguous shadow send debit")
+        row = matches[0]
+        try:
+            fee = Decimal(str(row["delta"].get("fee", "0")))
+        except ArithmeticError:
+            fee = None
+        if fee != 0:
+            raise RailError("shadow send charged a fee; the conversion needs an operator")
+        evidence = {"network": ref["network"], "venue_ledger_hash": row["hash"],
+                    "nonce": start, "sink": self.sink, "shadow_micro": amount,
+                    "proof": "venue ledger row of the signed usdSend to the shadow sink"}
+        return {"confirmed": True, "received_micro": amount, "fee_micro": 0,
+                "principal_moved": True, "evidence": evidence,
+                "route_data": {"shadow": {"sink": self.sink, "micro": amount,
+                                          "venue_ledger_hash": row["hash"]}}}
+
+    def expired(self, step: str, state: dict, now_ns: int) -> str | None:
+        if step == "shadow_send":
+            nonce = (state.get("reference") or {}).get("nonce", state.get("nonce"))
+            if nonce is not None and now_ns // 1_000_000 > int(nonce) + (
+                    self.WITHDRAWAL_NONCE_WINDOW_MS):
+                return "shadow send nonce expired unexecuted"
+            return None
+        # The top-up (on finalized Base) and the CCTP steps are LiveRail's own rules.
+        return super().expired(step, state, now_ns)

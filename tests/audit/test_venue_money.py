@@ -836,7 +836,10 @@ class TestFix12NoTransferBlocksForever:
         rail = LiveRail.__new__(LiveRail)
         top_up = {"reference": {"authorization": {"validBefore": 1_000}}, "nonce": 0}
         assert rail.expired("venice_top_up", top_up, 1_000 * 10**9) is None
-        assert rail.expired("venice_top_up", top_up, (1_000 + 7_200) * 10**9)
+        # A top-up is judged on finalized Base, never on the runtime clock: however far
+        # past validBefore the clock runs, an unread chain proves nothing expired. The
+        # chain proof itself is tests/world/test_venice_hybrid.py's reviewer probe.
+        assert rail.expired("venice_top_up", top_up, (1_000 + 7_200) * 10**9) is None
         day_ms = 86_400_000
         withdraw = {"reference": {"nonce": 10 * day_ms}, "nonce": 10 * day_ms}
         assert rail.expired("withdraw_burn", withdraw, 11 * day_ms * 10**6) is None
