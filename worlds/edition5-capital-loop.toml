@@ -412,6 +412,19 @@ venice_network = "base-mainnet"
 venice_shadow_sink = "0x000000000000000000000000000000000000dEaD"
 # At most two conversions ($10 of real mainnet USDC) per reserve window.
 max_venice_per_window = "10"
+# The absolute bound: at most $10 of real mainnet USDC is ever AUTHORIZED for Venice by
+# this world, re-authorizations after an expired top-up included.
+max_venice_total_usd = "10"
+# PLACEHOLDER -- THE OPERATOR MUST SET THIS BEFORE A LIVE RUN (the rehearsal runner
+# refuses a zero floor). No top-up is prepared if it would leave the Base mainnet
+# reserve below this balance, which no fresh run can reset: set it to the reserve's
+# current USDC minus what this rehearsal may spend in total.
+venice_reserve_floor_usd = "0"
+# The only payee a Venice top-up quote may name. Recorded from Venice's live unpaid 402
+# quote on 11 September 2026 (docs/research/venice.md, "x402 flow"); the operator should
+# re-read it with the unpaid quote in docs/architecture/capital-loop-rehearsal.md. A
+# quote naming anyone else is refused before anything is signed.
+venice_pay_to = "0x2670b922ef37c7df47158725c0cc407b5382293f"
 [venue]
 # The risk-bearing trading principal this world may use, stated as a gate rather than
 # as a balance. GPT-6 Pro's third reading, §11: the first launch gate is met either by

@@ -204,6 +204,11 @@ class WebSpec:
             raise ValueError("web.max_call_usd must leave room above the flat call price")
 
 
+#: The hybrid capital-loop keys: each absent from the canonical hash when unset.
+HYBRID_VENICE_KEYS = ("venice_network", "venice_shadow_sink", "max_venice_total_micro",
+                      "venice_reserve_floor_micro", "venice_pay_to")
+
+
 @dataclass(frozen=True)
 class TreasurySpec:
     """Compute insolvency and the public discovery index are fixed at launch."""
@@ -236,6 +241,13 @@ class TreasurySpec:
     # (the default) keep the rail's own network and hash as before the keys existed.
     venice_network: str | None = None
     venice_shadow_sink: str | None = None
+    # Required with ``venice_network``: the most real USDC the world may ever authorize
+    # for Venice (re-authorizations included), the Base mainnet reserve balance below
+    # which no top-up is prepared (a bound a fresh run cannot reset), and the only payee
+    # a Venice quote may name. Absent, each leaves the manifest hash unchanged.
+    max_venice_total_micro: int | None = None
+    venice_reserve_floor_micro: int | None = None
+    venice_pay_to: str | None = None
 
 
 @dataclass(frozen=True)
@@ -526,7 +538,7 @@ class WorldManifest:
                 payload["treasury"].pop(key)
         # A world that buys no Venice credit across networks hashes as it did before the
         # hybrid rehearsal existed: an added key may not rename a world that predates it.
-        for key in ("venice_network", "venice_shadow_sink"):
+        for key in HYBRID_VENICE_KEYS:
             if payload["treasury"].get(key) is None:
                 payload["treasury"].pop(key, None)
         # Edition 2 keys keep the identity of every manifest that predates them: a world
@@ -705,10 +717,15 @@ class WorldManifest:
         """
         import re
 
-        network, sink = self.treasury.venice_network, self.treasury.venice_shadow_sink
+        t = self.treasury
+        network, sink = t.venice_network, t.venice_shadow_sink
+        bounds = {"venice_shadow_sink": sink, "max_venice_total_usd": t.max_venice_total_micro,
+                  "venice_reserve_floor_usd": t.venice_reserve_floor_micro,
+                  "venice_pay_to": t.venice_pay_to}
         if network is None:
-            if sink is not None:
-                raise ValueError("treasury.venice_shadow_sink requires treasury.venice_network")
+            for name, value in bounds.items():
+                if value is not None:
+                    raise ValueError(f"treasury.{name} requires treasury.venice_network")
             return
         if network != "base-mainnet":
             raise ValueError("treasury.venice_network must be base-mainnet when set")
@@ -717,9 +734,24 @@ class WorldManifest:
                              "venue converts through its own reserve")
         if sink is None:
             raise ValueError("treasury.venice_network requires treasury.venice_shadow_sink")
-        if (not isinstance(sink, str) or not re.fullmatch(r"0x[0-9a-fA-F]{40}", sink)
-                or int(sink, 16) == 0):
-            raise ValueError("treasury.venice_shadow_sink must be a nonzero EVM address")
+        for name in ("venice_shadow_sink", "venice_pay_to"):
+            value = bounds[name]
+            if value is None:
+                raise ValueError(f"treasury.venice_network requires treasury.{name}")
+            if (not isinstance(value, str) or not re.fullmatch(r"0x[0-9a-fA-F]{40}", value)
+                    or int(value, 16) == 0):
+                raise ValueError(f"treasury.{name} must be a nonzero EVM address")
+        # Real money needs an absolute bound, not only a per-window rate: recoverable
+        # strands and re-authorizations used to reach the reserve outside the window cap.
+        total, floor = t.max_venice_total_micro, t.venice_reserve_floor_micro
+        if total is None:
+            raise ValueError("treasury.venice_network requires treasury.max_venice_total_usd")
+        if type(total) is not int or total <= 0:
+            raise ValueError("treasury.max_venice_total_usd must be positive integer money")
+        if floor is None:
+            raise ValueError("treasury.venice_network requires treasury.venice_reserve_floor_usd")
+        if type(floor) is not int or floor < 0:
+            raise ValueError("treasury.venice_reserve_floor_usd must be nonnegative money")
 
     def _nameable_kinds(self) -> set[str]:
         """Every event kind a router of this world can be seeded for, known at genesis.
@@ -1247,6 +1279,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             forward_wait_windows=(d.get("treasury") or {}).get("forward_wait_windows", 2),
             venice_network=(d.get("treasury") or {}).get("venice_network"),
             venice_shadow_sink=(d.get("treasury") or {}).get("venice_shadow_sink"),
+            max_venice_total_micro=_optional_usd(d, "max_venice_total_usd"),
+            venice_reserve_floor_micro=_optional_usd(d, "venice_reserve_floor_usd"),
+            venice_pay_to=(d.get("treasury") or {}).get("venice_pay_to"),
         ),
         clock=ClockSpec(duration_ns(clock.get("min_tick", default_min_tick))),
         tick_interval_ns=duration_ns(d.get("tick_interval", "10s")),
@@ -1258,6 +1293,16 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     )
     m.validate()
     return m
+
+
+def _optional_usd(d: dict, key: str) -> int | None:
+    """An optional exact-USD treasury key as integer micro-USD, or ``None`` when absent."""
+    value = (d.get("treasury") or {}).get(key)
+    if value is None:
+        return None
+    if type(value) not in (str, int):
+        raise ValueError(f"treasury.{key} must be exact USD text or integer")
+    return usd_to_micro(value, rounding="exact")
 
 
 def _manifest_kill(raw: Any) -> KillSpec:
