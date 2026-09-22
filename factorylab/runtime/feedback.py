@@ -478,6 +478,7 @@ class FeedbackMixin:
         )
         del self.pending[about]
         self.stats.conformities += 1
+        judge = self.handle_to_assembly.get(about)
         for sibling in self.cascade_windows.pop(about, []):
             sib = self.pending.get(sibling)
             if (
@@ -485,6 +486,14 @@ class FeedbackMixin:
                 or self._tick_age(sib) > self.ev.verdict_timeout_ticks
                 or self.queue.get(sibling).status is not SettleStatus.PENDING
             ):
+                continue
+            author = self.handle_to_assembly.get(sibling)
+            if judge is not None and author is not None and author != judge:
+                # The meta read one judge's verdict. Another judge's verdict in the same
+                # window was never read and borrows no grade (architect review #4): it
+                # stays pending and times out censored, unscored rather than misscored.
+                self.ledger.append({"kind": "cascade.sibling_unread", "handle": sibling,
+                                    "representative": about, "ts": self.clock.now_ns})
                 continue
             # A sibling was never read by the meta: it settles at a declared share of the
             # representative's score, so attribution stays with the verdict that was judged.

@@ -639,3 +639,25 @@ def test_position_peak_is_ledger_first_and_survives_flat_account(monkeypatch):
     positions.clear()
     rt._observe_positions()
     assert rt.window.max_position_notional_micro == 6_000_000
+
+
+def test_a_meta_score_never_settles_another_judges_unread_verdict():
+    """Architect review #4: siblings borrow a grade only from their own judge's read verdict."""
+    runtime = _recursive_runtime(events=0)
+    runtime.m = replace(runtime.m, timing=replace(runtime.m.timing, jitter_fraction=0))
+    handles = [_pending_meta(runtime) for _ in range(3)]
+    for h, judge in zip(handles, ("judge-a", "judge-b", "judge-a"), strict=True):
+        runtime.handle_to_assembly[h] = judge
+    step = runtime.m.timing.min_ratio * runtime.tick_clock.interval_ns // 2
+    events = [Event(f"meta-{i}", EventKind.META_VERDICT, i * step,
+                    {"by": h, "about": "lower", "tier": 2, "score": i / 2}, "runtime")
+              for i, h in enumerate(handles)]
+    for event in events[:2]:
+        runtime._cascade_arrival(event)
+    assert runtime._cascade_arrival(events[2]) is not None
+    runtime._deliver_meta_verdict(Event(
+        "meta-top", EventKind.META_VERDICT, 0,
+        {"by": "judge-3", "about": handles[2], "tier": 3, "score": 0.25}, "runtime"))
+    assert runtime.queue.history(handles[0])[0].score == 0.25 * runtime.ev.sibling_share
+    assert runtime.queue.get(handles[1]).status is SettleStatus.PENDING  # judge-b unread
+    assert handles[1] in runtime.pending
