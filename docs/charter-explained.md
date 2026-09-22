@@ -124,7 +124,9 @@ that keeps being violated rises. When the immune organ diagnoses stable failure,
 card's price is ratcheted up further by how many windows the factory has sat in that failing
 attractor. A card measured per assembly, like `censorship-bound`, charges its violation to the
 seats whose own samples violate it, in proportion to their distance outside the region, and not
-to the seats that kept their commitments. Closed windows
+to the seats that kept their commitments. A violating seat that made no decision priced on
+that window has nobody to carry its part; the close ledgers it as `price.unattributed` (card,
+seat, window, lambda) so the unpaid price is visible, and charges nothing. Closed windows
 retain the cards and prices of the edition in force at the close, so a late settlement is priced
 by the edition that measured it.
 

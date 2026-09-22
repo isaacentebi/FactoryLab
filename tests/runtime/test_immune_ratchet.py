@@ -9,6 +9,8 @@ back down unless thrash was diagnosed.
 
 from dataclasses import replace
 
+import pytest
+
 from factorylab.charter.windows import MetricWindow
 from factorylab.runtime.immune import gamma
 from factorylab.runtime.loop import Runtime
@@ -74,3 +76,24 @@ def test_leaving_the_attractor_ends_the_ratchet_and_unwinds_exploration():
     assert [gamma(r.learner) for r in rt._all_router_states()] == seeds
     cleared = [i for i in _items(rt, "immune.gain") if i["pathology"] == "cleared"]
     assert cleared and all(max(i["gamma_after"]) < max(i["gamma_before"]) for i in cleared)
+
+
+def test_price_step_sets_the_ratchet_apart_from_the_gain_step_and_hashes_absent():
+    seed = load_manifest("scripted")
+    explicit = replace(seed, immune=replace(seed.immune, price_step=None))
+    assert explicit.canonical_json() == seed.canonical_json()
+    assert "price_step" not in seed.canonical_json()
+    stepped = replace(seed, immune=replace(seed.immune, price_step=0.2))
+    stepped.validate()
+    assert stepped.canonical_json() != seed.canonical_json()
+    for bad in (0.0, -0.1, float("nan"), seed.prices.lambda_max * 2, True):
+        with pytest.raises(ValueError):
+            replace(seed, immune=replace(seed.immune, price_step=bad)).validate()
+
+    rt = _runtime(lambda_max=10.0)
+    rt.m = replace(rt.m, immune=replace(rt.m.immune, price_step=0.2))
+    for _ in range(6):
+        _close(rt, 0.2)
+    ratchets = _items(rt, "immune.price_ratchet")
+    assert ratchets and [r["step"] for r in ratchets] == pytest.approx(
+        [0.2 * r["duration"] for r in ratchets])

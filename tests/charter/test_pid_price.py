@@ -49,20 +49,56 @@ def test_integral_term_accumulates_sustained_violation_and_leaks_once_compliant(
     assert all(row["controller"] == "pid" for row in _updates(ledger))
 
 
-def test_derivative_damps_a_fast_recovery_and_speeds_a_fast_escalation():
-    """Kd lowers the price while the violation shrinks fast, and raises it while it grows."""
-    damped, undamped = _pid(kd=0.5, lambda_max=10.0), _pid(kd=0.0, lambda_max=10.0)
-    for prices in (damped, undamped):
-        prices.observe("c", 3.0, 0)  # violation 2
-        prices.observe("c", 1.5, 1)  # violation 0.5: recovering fast
-    assert damped.price("c") < undamped.price("c")
-    assert undamped.price("c") - damped.price("c") == pytest.approx(0.5 * 1.5)
-
+def test_derivative_speeds_a_fast_escalation_and_never_discounts_a_recovery():
+    """Kd raises the price while the violation grows; a shrinking one keeps P + I."""
     rising, flat = _pid(kd=0.5, lambda_max=10.0), _pid(kd=0.0, lambda_max=10.0)
     for prices in (rising, flat):
         prices.observe("c", 1.5, 0)
         prices.observe("c", 3.0, 1)  # escalating fast
     assert rising.price("c") > flat.price("c")
+    assert rising.price("c") - flat.price("c") == pytest.approx(0.5 * 1.5)
+
+    damped, undamped = _pid(kd=0.5, lambda_max=10.0), _pid(kd=0.0, lambda_max=10.0)
+    for prices in (damped, undamped):
+        prices.observe("c", 3.0, 0)  # violation 2
+        prices.observe("c", 1.5, 1)  # violation 0.5: recovering fast, still violating
+    # Only the positive part of the derivative acts (Stooke et al. 2020).
+    assert damped.price("c") == pytest.approx(undamped.price("c"))
+
+
+def test_a_shrinking_violation_is_never_priced_at_zero_while_it_lasts():
+    """The review's rehearsal numbers: kp 0.5, eta 0.5, kd 0.25, region "at most 0.30".
+
+    Value 1.0 saturates the price at 1.0; the next window's 0.35 is still out of the
+    region. A signed derivative gave P=0.083, I=0.083, D=-0.542 and so lambda=0: the
+    card was free while still violating. With the positive part only it pays P + I.
+    """
+    ledger = Ledger()
+    prices = PriceController(ledger, eta=0.5, decay=0.1, lambda_max=1.0, min_window_events=1,
+                             controller="pid", kp=0.5, kd=0.25)
+    prices.register(CardRegion("c", "max", None, 0.30, 0.30))
+    prices.observe("c", 1.0, 0)
+    assert prices.price("c") == pytest.approx(1.0)
+    prices.observe("c", 0.35, 1)
+    row = _updates(ledger)[-1]
+    assert row["violation"] == pytest.approx(0.05 / 0.30)
+    assert row["p"] == pytest.approx(0.5 * 0.05 / 0.30)
+    assert row["i"] == pytest.approx(0.5 * 0.05 / 0.30)
+    assert row["d"] == 0.0  # the signed term would have been 0.25 * -0.65 / 0.30 = -0.542
+    assert prices.price("c") == pytest.approx(row["p"] + row["i"])
+    assert prices.price("c") >= row["i"] > 0
+
+
+def test_integral_builds_while_p_alone_saturates_unless_the_violation_is_growing():
+    """Anti-windup holds I only when P + I already saturates and the violation grows."""
+    ledger = Ledger()
+    prices = _pid(ledger, kp=0.5, eta=0.5, lambda_max=1.0)
+    prices.observe("c", 4.0, 0)  # violation 3, P = 1.5 >= 1: saturated and growing: hold
+    prices.observe("c", 4.0, 1)  # the same violation, not growing: I integrates anyway
+    prices.observe("c", 5.0, 2)  # growing again, P + I saturates: hold
+    assert [row["i"] for row in _updates(ledger)] == pytest.approx([0.0, 1.0, 1.0])
+    prices.observe("c", 1.2, 3)  # violation 0.2: P falls to 0.1, the built pressure remains
+    assert prices.price("c") == pytest.approx(1.0)
 
 
 def test_derivative_is_on_the_measurement_so_a_moved_region_cannot_kick_the_price():
