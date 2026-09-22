@@ -191,10 +191,11 @@ def close_window(rt, values: dict[str, float]) -> None:
         # of the failing attractor has its price ratcheted up by how long the factory
         # has sat there, never relieved: the gain to leave the attractor must grow.
         known = set(rt.controller.card_ids())
+        step = spec.gain_step if spec.price_step is None else spec.price_step
         for cid in diagnosed["violated_cards"]:
             card_id = cid.removeprefix("card:")
             if card_id in known:
-                rt.controller.ratchet(card_id, window=current["index"], step=spec.gain_step)
+                rt.controller.ratchet(card_id, window=current["index"], step=step)
                 ratcheted.add(card_id)
     elif not flags["learning_death"]:
         # The attractor is left: the exploration the organ added unwinds toward seed.

@@ -687,14 +687,16 @@ parameters; the observer never substitutes a second set of thresholds.
 | `immune.revision_bins` | increasing nonnegative numeric array | `[0]` | Yes: zero versus positive revision. |
 | `immune.tv_threshold` | finite number in (0, 1] | `0.2` | Yes: behavioral version boundaries, not the thrash predicate. |
 | `immune.gap_threshold` | finite number in (0, 1] | `0.8` | Yes: the operator's `durable` readout, not an additional pathology gate. |
-| `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment, and the stable-failure price ratchet's step per window of duration. |
+| `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment, and the stable-failure price ratchet's step per window of duration unless `immune.price_step` is set. |
+| `immune.price_step` | absent, or a finite number in (0, `prices.lambda_max`] | absent (`gain_step`) | Yes: the stable-failure price ratchet's lambda step per window of duration, set apart from the exploration-gain step. Absent from the hash while absent. |
 | `immune.gamma_max` | finite number in (0, 1] | `0.5` | Yes: exploration-gain ceiling. |
 | `immune.decay_step` | finite number in (0, 1] | `0.1` | Yes: extra price decay for the window following thrash. |
 
 These launch settings are immutable parameters of an experiment. Effective
 prices, gain, diagnoses and the currently negotiated tick interval remain runtime
 state. Stable failure is priced by its duration (essay II.II.b): the n-th
-consecutive diagnosed window adds `n * immune.gain_step` to each violated card's
+consecutive diagnosed window adds `n * immune.price_step` (`immune.gain_step` when
+absent) to each violated card's
 price and accumulated pressure, bounded by `prices.lambda_max`
 (`immune.price_ratchet`), and the count restarts once the card leaves the
 attractor (`immune.price_ratchet_ended`). The exploration gain raised for stable

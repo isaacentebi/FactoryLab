@@ -340,6 +340,10 @@ class ImmuneSpec:
     gain_step: float = 0.05
     gamma_max: float = 0.5
     decay_step: float = 0.1
+    # The stable-failure price ratchet's lambda step per window of duration. None
+    # keeps the step every earlier world ran, ``gain_step``: an exploration-gain
+    # step and a price step are different units, so a world may set them apart.
+    price_step: float | None = None
     registration_bins: tuple[float, ...] = (0.0, 2.0)
     revision_bins: tuple[float, ...] = (0.0,)
 
@@ -571,6 +575,10 @@ class WorldManifest:
         for key, default in (("controller", "integral"), ("kp", 0.0), ("kd", 0.0)):
             if payload["prices"].get(key) == default:
                 payload["prices"].pop(key)
+        # A world that names no separate ratchet step prices stable failure by
+        # gain_step, as before the key existed, and hashes as it did then.
+        if payload["immune"].get("price_step") is None:
+            payload["immune"].pop("price_step", None)
         # A world that precommits no collateral headroom hashes as it did before
         # the key existed: an added key may not rename a world that predates it.
         if payload["exchange"].get("collateral_headroom_usd") == "0":
@@ -764,6 +772,10 @@ class WorldManifest:
             value = getattr(self.immune, name)
             if type(value) not in (int, float) or not isfinite(value) or not 0 < value <= 1:
                 raise ValueError(f"immune.{name} must be finite and in (0, 1]")
+        step = self.immune.price_step
+        if step is not None and (type(step) not in (int, float) or not isfinite(step)
+                                 or not 0 < step <= self.prices.lambda_max):
+            raise ValueError("immune.price_step must be finite and in (0, prices.lambda_max]")
         if self.immune.bins != 3:
             raise ValueError("immune.bins must be 3 for fixed region-relative cells")
         for name in ("registration_bins", "revision_bins"):
