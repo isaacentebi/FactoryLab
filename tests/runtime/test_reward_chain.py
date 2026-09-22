@@ -614,3 +614,63 @@ def test_a_judge_may_choose_an_older_open_return_until_its_horizon():
     (refused,) = _rows(rt, "return.refused", handle=late)
     assert "before its consequence horizon" in refused["reason"]
     assert rt.queue.history(late)[0].status is SettleStatus.CENSORED
+
+
+# --- no judgement at any tier is scored on a consequence already known ------------------
+
+
+def _closed_judge(rt):
+    """A judge decision whose consequence the world has already scored."""
+    _mids(rt, BTC="100")
+    _producer, event = _consequence_produce(rt)
+    judge = _judge(rt, event, "eval-a")
+    rt._settle_arrived_verdicts()
+    _advance(rt, rt.ev.consequence_horizon_ticks - 1)
+    _mids(rt, BTC="101")
+    _advance(rt, 2)
+    assert judge in rt.consequence_scores and rt.consequence_scores[judge][0] is not None
+    return judge, event
+
+
+def test_a_meta_redirected_to_a_judge_whose_consequence_is_known_is_refused():
+    """Codex re-review of #128: a meta's about_handle skipped the hindsight check, and
+    a meta that chose a closed judge was scored at once against the known value."""
+    rt = _runtime(counterfactual={"coin": "BTC", "side": "buy"}, verdicts=(0.9, 0.5))
+    closed, event = _closed_judge(rt)
+    fresh = _judge(rt, event, "eval-b")
+    meta = _consequence_decision(rt, "meta-a", CH_FAST)
+    rt._meta_step(rt.return_events[fresh], meta, SimpleNamespace(chosen="meta-a"),
+                  rt.queue.get(meta).deadline_ns,
+                  returned=Return(meta, {"conformity": 0.1, "about_handle": closed}, 0, "ok"))
+    (refused,) = _rows(rt, "return.refused", handle=meta)
+    assert "consequence is still open" in refused["reason"]
+    assert rt.queue.history(meta)[0].status is SettleStatus.CENSORED
+    assert not _rows(rt, "meta.consequence", handle=meta)
+
+
+def test_a_meta_delivered_a_judge_whose_consequence_is_known_is_never_world_scored():
+    rt = _runtime(counterfactual={"coin": "BTC", "side": "buy"}, verdicts=(0.9,))
+    closed, _event = _closed_judge(rt)
+    meta = _meta(rt, closed)
+    assert rt.pending[meta].consequence_closed and rt.pending[meta].consequence is None
+    assert _rows(rt, "evaluation.hindsight", handle=meta)
+    _advance(rt, rt.ev.verdict_timeout_ticks + 1)
+    assert not _rows(rt, "meta.consequence", handle=meta)
+    assert rt.queue.history(meta)[0].status is SettleStatus.CENSORED
+
+
+def test_a_judge_delivered_a_return_whose_payoff_is_fixed_is_never_world_scored():
+    rt = _runtime(verdicts=(0.2,))
+    producer, event = _unsettled_produce(rt)
+    for order, is_buy, px in (("o-1", True, "100"), ("o-2", False, "90")):
+        rt.consequences.order_result(producer, {"order_id": order, "status": "filled",
+                                                "filled_size": "1"}, {"size": "1"}, rt.n)
+        rt.consequences.observe("Fill", {"order_id": order, "coin": "BTC", "is_buy": is_buy,
+                                         "size": "1", "px": px, "fee_usd": "0",
+                                         "realized_usd": "0"}, rt.n)
+    _advance(rt, 1)
+    assert rt.consequences.payoff(producer) is not None  # fixed before the judge read it
+    judge = _judge(rt, event)
+    assert _rows(rt, "evaluation.hindsight", handle=judge)
+    _advance(rt, 1)
+    assert not _rows(rt, "verdict.consequence", handle=judge)

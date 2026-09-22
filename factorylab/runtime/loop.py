@@ -1275,7 +1275,9 @@ class Runtime(
             # Malformed or refused: charged, censored, never a kernel zero (evaluations S2).
             self._censor_judgement(handle, f"{ret.status}: no conformity in [0, 1]")
             return
-        target = self._judged_event(ev, handle, ret)
+        # A meta's grade is a prediction of its target's consequence score, so a target
+        # it chose must still be open, exactly as a judge's must (``_hindsight_reason``).
+        target = self._judged_event(ev, handle, ret, predicts=True)
         if target is None:
             self._censor_judgement(handle, "the judgement's target was refused")
             return

@@ -899,17 +899,43 @@ class FeedbackMixin:
         """Open one evaluator decision's wait on its two signals (ruling R1).
 
         A decision on the fast channel has no tier above it, so its grade window is
-        closed from the start and it settles on the world's grade alone. A meta whose
-        judged decision already has its consequence is scored at once.
+        closed from the start and it settles on the world's grade alone. Every path
+        that opens an evaluation comes here, so this is where hindsight is refused at
+        every tier: a judgement made when its target's consequence was already known
+        (``_consequence_known``) is a reading of the answer, not a prediction, and the
+        world never scores it (its consequence closes empty at once; the tier above
+        may still grade it). A chosen target that is already known is refused earlier,
+        by ``_hindsight_reason``; this also covers the delivered subject.
         """
         channel = self.queue.get(handle).channel
         rec = PendingJudgement(handle, channel, self.n, tier, opened_at_tick=self.ticks_consumed,
                                about=about, q=float(q), evaluator_id=evaluator_id,
                                grade_closed=channel == CH_FAST)
         self.pending[handle] = rec
-        if tier > 1 and about in self.consequence_scores:
-            self._score_meta(rec, self.consequence_scores[about][0])
+        if self._consequence_known(about, tier):
+            self.ledger.append({"kind": "evaluation.hindsight", "handle": handle,
+                                "about_handle": about, "tier": tier,
+                                "ts": self.clock.now_ns})
+            self._close_consequence(handle, None, rec)
         return rec
+
+    def _consequence_known(self, about: str, tier: int) -> bool:
+        """Whether the world had already answered what a judgement of ``about`` predicts.
+
+        Guarantees True for a judgement of an evaluator decision (tier above one) whose
+        consequence score is closed, and for a first-tier judgement of a return that
+        acted and whose payoff is fixed, or whose mark or final price was taken.
+        """
+        if tier > 1:
+            return about in self.consequence_scores
+        if about in self.marked_outcomes or (
+                self.world_outcomes.get(about, {}).get("state") == "measured"):
+            return True
+        try:
+            account = self.consequences.table.account(about)
+        except KeyError:
+            return False
+        return account.payoff is not None and self._acted(about)
 
     def _acted(self, handle: str) -> bool:
         """Whether a decision executed anything at the venue or earned anything.
