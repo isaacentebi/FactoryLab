@@ -36,7 +36,7 @@ def _runtime(card):
     seed = load_manifest("scripted")
     manifest = replace(seed, charter=replace(seed.charter, cards=(card,)))
     rt = Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
-                 ledger_path=None, drip=False, router_gamma=0.1)
+                 ledger_path=None, router_gamma=0.1)
     rt._derive_regions()
     rt.controller.set_price(card.id, 0.8, amendment_id="test")
     return rt

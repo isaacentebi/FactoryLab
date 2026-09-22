@@ -457,15 +457,12 @@ class PricingMixin:
         # boundary: the cards it measured and the prices its close left them holding. A verdict
         # or a late settlement from this window is attributed by this edition, never by the one
         # that replaced it (docs/manifest.md, observation units and attribution). It is frozen
-        # before the immune organ runs: a relief it issues is for the next window, and must
-        # not halve the prices of the window whose failure it diagnosed.
+        # before the immune organ runs: a ratchet it issues prices the next window, never
+        # the window whose failure it diagnosed.
         self.window.closed_cards = tuple(c for c in self.charter.cards if c.id in card_values)
         self.window.closed_prices = {c.id: self.controller.price(c.id)
                                      for c in self.window.closed_cards}
         self._ledger_unattributed()
-        # A relief lasts exactly the window it was issued for: that window's frozen prices
-        # carry it, and it ends here, after them and before any new diagnosis.
-        self.controller.expire_relief(window=w.index)
         close_window(self, values)
         self._prune_price_evidence()
 

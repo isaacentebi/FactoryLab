@@ -5,7 +5,7 @@ from factorylab.runtime.worlds import load_manifest
 
 def runtime():
     return Runtime(load_manifest('scripted'), events=40, seed=1,
-                   initial_balance_micro=None, ledger_path=None, drip=False, router_gamma=.1)
+                   initial_balance_micro=None, ledger_path=None, router_gamma=.1)
 
 
 def test_spot_runtime_journal_settlement_and_snapshot():

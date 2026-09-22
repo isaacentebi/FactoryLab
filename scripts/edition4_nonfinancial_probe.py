@@ -179,7 +179,6 @@ def build_runtime(seed: int = 1) -> Runtime:
         seed=seed,
         initial_balance_micro=None,
         ledger_path=None,
-        drip=False,
         router_gamma=0.2,
         provider=ScriptedProvider(),
         exchange=FakeExchange(),

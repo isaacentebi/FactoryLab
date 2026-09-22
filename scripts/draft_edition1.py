@@ -680,7 +680,7 @@ def main(argv: list[str] | None = None) -> int:
     # Public facts, launch-shaped: the runtime's own world block over a fake venue.
     rt = Runtime(
         manifest, events=1, seed=None, initial_balance_micro=None, ledger_path=None,
-        drip=False, router_gamma=0.1, provider=ScriptedProvider(),
+        router_gamma=0.1, provider=ScriptedProvider(),
         exchange=FakeExchange(
             seed=manifest.exchange.seed, coins=manifest.exchange.coins,
             start_cash_usd=manifest.exchange.start_cash_usd,

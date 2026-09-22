@@ -52,8 +52,7 @@ def test_replay_of_an_interrupted_event_does_not_charge_undispatched_model_calls
     never contacted; the journal knows this ("never dispatched") yet metering books the full
     ceiling as an uncertain bill. Real money is not owed to anyone."""
     base = load_manifest("scripted")
-    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)),
-                drip=None)
+    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)))
     path = str(tmp_path / "w.jsonl")
     clock = ClockSource(1_000_000_000, 1_000_000_000, 8)
     run_world(m, events=8, seed=1, ledger_path=path, provider=RecordedProvider(),

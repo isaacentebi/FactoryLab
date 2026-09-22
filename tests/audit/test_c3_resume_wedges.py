@@ -20,7 +20,7 @@ from factorylab.runtime.worlds import load_manifest
 
 def _runtime(path, events):
     return Runtime(load_manifest("scripted"), events=events, seed=1, initial_balance_micro=None,
-                   ledger_path=str(path), drip=True, router_gamma=.1)
+                   ledger_path=str(path), router_gamma=.1)
 
 
 @pytest.mark.parametrize("name", ["sandbox.run", "observation.run"])

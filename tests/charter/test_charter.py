@@ -1,7 +1,8 @@
 import pytest
 
-from factorylab.charter.charter import Charter, MetricCard, seed_charter
+from factorylab.charter.charter import Charter, MetricCard
 from factorylab.charter.windows import MetricWindow
+from tests.seed_charter import seed_charter
 
 
 def test_seed_charter_renders_norms_and_cards() -> None:

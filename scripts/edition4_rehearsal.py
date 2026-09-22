@@ -963,7 +963,7 @@ def run_rehearsal(
             runtime = Runtime(
                 manifest, events=events, seed=manifest.seed, initial_balance_micro=None,
                 ledger_path=None if output_dir is None else str(output_dir / "ledger.jsonl"),
-                drip=False, router_gamma=0.1, provider=guarded, market=DeniedMarket(),
+                router_gamma=0.1, provider=guarded, market=DeniedMarket(),
                 exchange=exchange, clock_source=clock_source,
                 kill_at_end=True, capital_loop=capital_loop,
             )

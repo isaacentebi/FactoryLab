@@ -1564,12 +1564,16 @@ class SchematicsMixin:
                         "trials": nov.trials,
                         "max_lifetime_windows": nov.max_lifetime_windows},
             "controller": {
-                "eta": pr.eta, "kappa": pr.kappa, "decay": pr.decay,
+                "law": "pid",
+                "eta": pr.eta, "kp": pr.kp, "kd": pr.kd, "decay": pr.decay,
                 "lambda_max": pr.lambda_max, "min_window_events": pr.min_window_events,
                 "penalty_cap": getattr(pr, "penalty_cap", None),
                 "recurrence": "v = distance outside the inclusive region / scale; "
-                "if v > 0: lambda' = clip(lambda + eta*v - kappa*max(0, v_previous-v), "
-                "0, lambda_max); otherwise lambda' = max(0, lambda-decay)",
+                "if v > 0: I' = clip(I + eta*v, 0, lambda_max), except I' = I while "
+                "kp*v + I >= lambda_max and v > v_previous; otherwise I' = max(0, I-decay). "
+                "D = kd*max(0, the measurement's move deeper outside the region since the "
+                "previous window)/scale while v > 0, else 0. "
+                "lambda' = clip(kp*v + I' + D, 0, lambda_max)",
             },
             "cascade": {"min_ratio": self.m.timing.min_ratio,
                         "jitter_fraction": self.m.timing.jitter_fraction},

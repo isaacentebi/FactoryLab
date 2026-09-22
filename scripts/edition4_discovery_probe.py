@@ -335,7 +335,7 @@ def _probe_runtime(manifest: Any, provider: Any, refusals: list[dict],
     """One fresh world on a fake exchange, with every rail this probe denies removed."""
     runtime = Runtime(
         manifest, events=0, seed=manifest.seed, initial_balance_micro=None,
-        ledger_path=None, drip=False, router_gamma=0.1, provider=provider,
+        ledger_path=None, router_gamma=0.1, provider=provider,
         market=DeniedMarket(), exchange=FakeExchange(coins=manifest.exchange.coins),
     )
     runtime.clock.now_ns = FIXED_NOW_NS

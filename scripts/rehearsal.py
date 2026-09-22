@@ -43,7 +43,7 @@ def preflight(world: Path, charter_path: Path) -> dict:
     # (charter.ratified_sha256, charter.roster_sha256); the vote is on the cards.
     loaded = {k: v for k, v in (raw.get("charter") or {}).items()
               if k not in ("ratified_sha256", "roster_sha256")}
-    if not manifest.charter_explicit or loaded != charter:
+    if loaded != charter:
         raise ValueError("rehearsal did not load the exact voted charter")
     if manifest.exchange.kind != "hyperliquid" or manifest.exchange.mainnet:
         raise ValueError("live rehearsal requires Hyperliquid testnet")
@@ -136,7 +136,7 @@ def main(argv=None) -> int:
     with marker.open("x") as stream:
         stream.write(str(args.out.resolve()) + "\n")
     code = run_command(["uv", "run", "factorylab", "run", "--world", str(args.world),
-                        "--duration", "10m", "--kill-at-end", "--no-drip"], args.out)
+                        "--duration", "10m", "--kill-at-end"], args.out)
     (args.out / "preflight.json").write_text(json.dumps(evidence, indent=2) + "\n")
     return code
 

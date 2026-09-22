@@ -9,7 +9,6 @@ from factorylab.world.models import (
     ModelResponse,
     PriceTable,
     TokenPrice,
-    anthropic_first_party_prices,
 )
 
 
@@ -66,10 +65,10 @@ def test_token_price_exact_integer_math() -> None:
         p.cost(-1, 0)
 
 
-def test_first_party_table_and_unpriced_lookup_fails() -> None:
-    t = anthropic_first_party_prices()
-    assert t.cost("claude-opus-5", 1000, 100) == 1000 * 5 + 100 * 25
-    assert t.cost("claude-haiku-4-5", 1000, 100) == 1000 * 1 + 100 * 5
+def test_a_registered_price_costs_and_an_unpriced_lookup_fails() -> None:
+    t = PriceTable()
+    t.register("m", TokenPrice.from_per_mtok("5", "25"))
+    assert t.cost("m", 1000, 100) == 1000 * 5 + 100 * 25
     with pytest.raises(KeyError):
         t.price("gpt-6-astra")
 

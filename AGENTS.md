@@ -106,8 +106,8 @@ architecture.
 
 - Python 3.13. `uv` manages the environment: `uv sync`, `uv run pytest`,
   `uv run ruff check .`. Do not add tooling.
-- Allowed third-party packages: `hyperliquid-python-sdk`, `anthropic`,
-  `cryptography`, `pytest`, `ruff`. Anything else needs a written reason.
+- Allowed third-party packages: `hyperliquid-python-sdk`, `cryptography`,
+  `pytest`, `ruff`. Anything else needs a written reason.
 - Money is integer micro-USD. Never a float.
 - No global mutable state. No background threads.
 - `factorylab.kernel` imports nothing from `cortex`, `world`, or `runtime`.

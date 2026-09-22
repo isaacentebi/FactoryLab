@@ -33,7 +33,7 @@ def run_once(events: int, seed: int, world: str = "scripted",
     """Run one world and return its wall time, item count and digests."""
     manifest = load_manifest(world)
     rt = Runtime(manifest, events=events, seed=seed, initial_balance_micro=None,
-                 ledger_path=None, drip=True, router_gamma=0.1)
+                 ledger_path=None, router_gamma=0.1)
     items = hashlib.sha256()
     count = 0
     append = rt.ledger.append

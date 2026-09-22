@@ -289,8 +289,8 @@ def run(provider_kind: str, ticks: int, world: Path, out: Path, cap_usd: str,
     try:
         runtime = Runtime(manifest, events=ticks, seed=manifest.seed,
                           initial_balance_micro=None,
-                          ledger_path=str(target / "ledger.jsonl"), drip=False,
-                          router_gamma=0.1, provider=provider, kill_at_end=True)
+                          ledger_path=str(target / "ledger.jsonl"), router_gamma=0.1,
+                          provider=provider, kill_at_end=True)
         if vault_depositor_usd:
             runtime.exchange.vault_depositor_usd = Decimal(vault_depositor_usd)
             runtime.exchange.vault_depositor_steps = 10

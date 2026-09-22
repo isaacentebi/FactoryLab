@@ -19,7 +19,7 @@ def runtime(**changes):
                                                for c in seed.charter.cards))
     manifest = replace(seed, charter=charter, **changes)
     return Runtime(manifest, events=1, seed=1, initial_balance_micro=None,
-                   ledger_path=None, drip=False, router_gamma=0.1)
+                   ledger_path=None, router_gamma=0.1)
 
 
 def decision(rt, assembly, *, settled=False):

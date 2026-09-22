@@ -237,7 +237,7 @@ def test_scripted_realized_world_closes_contracts_through_real_dispatch():
     )
     rt = Runtime(
         manifest, events=25, seed=4, initial_balance_micro=100_000_000,
-        ledger_path=None, drip=False, router_gamma=0.1,
+        ledger_path=None, router_gamma=0.1,
         provider=_FullRunProvider(), exchange=FakeExchange(), kill_at_end=True,
     )
     rt.run()

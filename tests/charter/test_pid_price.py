@@ -16,7 +16,7 @@ from factorylab.kernel.ledger import Ledger
 
 def _pid(ledger=None, **changes):
     params = dict(eta=0.5, decay=0.1, lambda_max=1.0, min_window_events=1,
-                  controller="pid", kp=0.5, kd=0.0)
+                  kp=0.5, kd=0.0)
     params.update(changes)
     prices = PriceController(ledger or Ledger(), **params)
     prices.register(CardRegion("c", "max", None, 1.0, 1.0))
@@ -46,7 +46,6 @@ def test_integral_term_accumulates_sustained_violation_and_leaks_once_compliant(
     prices.observe("c", 0.5, 3)  # compliant: only the integral remains, leaking decay
     assert prices.price("c") == pytest.approx(0.6 - 0.1)
     assert [row["i"] for row in _updates(ledger)] == pytest.approx([0.2, 0.4, 0.6, 0.5])
-    assert all(row["controller"] == "pid" for row in _updates(ledger))
 
 
 def test_derivative_speeds_a_fast_escalation_and_never_discounts_a_recovery():
@@ -75,7 +74,7 @@ def test_a_shrinking_violation_is_never_priced_at_zero_while_it_lasts():
     """
     ledger = Ledger()
     prices = PriceController(ledger, eta=0.5, decay=0.1, lambda_max=1.0, min_window_events=1,
-                             controller="pid", kp=0.5, kd=0.25)
+                             kp=0.5, kd=0.25)
     prices.register(CardRegion("c", "max", None, 0.30, 0.30))
     prices.observe("c", 1.0, 0)
     assert prices.price("c") == pytest.approx(1.0)
@@ -139,40 +138,43 @@ def test_adopted_price_seeds_the_integral_without_a_jump():
     assert prices.price("c") == pytest.approx(0.3)
 
 
-def test_default_law_is_the_integrator_every_earlier_world_ran():
-    """No manifest key: the shipped integral law, ledger entries unchanged in shape."""
+def test_no_gains_leave_the_integral_alone_and_the_ledger_carries_every_term():
+    """No gains stated: the PID with Kp = Kd = 0, which is the integral alone."""
     ledger = Ledger()
-    prices = PriceController(ledger, eta=0.5, decay=0.25, lambda_max=2.0, min_window_events=1,
-                             kappa=0.0)
+    prices = PriceController(ledger, eta=0.5, decay=0.25, lambda_max=2.0, min_window_events=1)
     prices.register(CardRegion("c", "max", None, 10.0, 2.0))
     for event, value in enumerate([12, 12, 12, 10, -100]):
         prices.observe("c", value, event)
     assert [row["lambda_after"] for row in _updates(ledger)] == [0.5, 1.0, 1.5, 1.25, 1.0]
-    assert all("controller" not in row and "damping" in row for row in _updates(ledger))
+    assert all(row["p"] == row["d"] == 0.0 for row in _updates(ledger))
+    assert all("damping" not in row for row in _updates(ledger))
 
 
 @pytest.mark.parametrize("changes", [
-    {"controller": "bang-bang"}, {"controller": None}, {"kp": -0.1}, {"kd": -1},
-    {"kp": float("nan")}, {"kd": float("inf")}, {"kp": True},
+    {"kp": -0.1}, {"kd": -1}, {"kp": float("nan")}, {"kd": float("inf")}, {"kp": True},
+    {"controller": "pid"}, {"kappa": 0.5},
 ])
 def test_invalid_price_law_is_refused(changes):
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, TypeError)):
         _pid(**changes)
 
 
-def test_manifest_refuses_gains_without_the_pid_and_hashes_defaults_as_before():
-    from factorylab.runtime.worlds import load_manifest
+def test_manifest_names_no_law_and_refuses_the_removed_keys():
+    """Charter audit U3: one law, so neither ``controller`` nor ``kappa`` is a key."""
+    import tomllib
+
+    from factorylab.runtime.worlds import WORLDS_DIR, load_manifest, manifest_from_dict
 
     seed = load_manifest("scripted")
-    explicit = replace(seed, prices=replace(seed.prices, controller="integral", kp=0.0, kd=0.0))
-    assert explicit.canonical_json() == seed.canonical_json()
-    pid = replace(seed, prices=replace(seed.prices, controller="pid", kp=0.5))
+    pid = replace(seed, prices=replace(seed.prices, kp=0.5))
     pid.validate()
     assert pid.canonical_json() != seed.canonical_json()
-    for prices in (replace(seed.prices, kp=0.5), replace(seed.prices, controller="p"),
-                   replace(seed.prices, controller="pid", kd=-1.0)):
-        with pytest.raises(ValueError):
-            replace(seed, prices=prices).validate()
+    with pytest.raises(ValueError):
+        replace(seed, prices=replace(seed.prices, kd=-1.0)).validate()
+    raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())
+    for key, value in (("controller", "pid"), ("kappa", 0.5)):
+        with pytest.raises(ValueError, match=f"prices.{key} was removed"):
+            manifest_from_dict({**raw, "prices": {**raw["prices"], key: value}})
 
 
 def test_stable_failure_ratchets_price_up_with_its_duration_and_stays_bounded():

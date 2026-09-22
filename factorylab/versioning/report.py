@@ -37,8 +37,7 @@ def manifest_parameters(items: list[dict]) -> dict:
 
 
 def summary(
-    items: list[dict], *, window_items: int = 200,
-    bins: int | None = None, k: int | None = None,
+    items: list[dict], *, window_items: int = 200, k: int | None = None,
     tv_threshold: float | None = None, gap_threshold: float | None = None,
     registration_bins: tuple[float, ...] | None = None,
     revision_bins: tuple[float, ...] | None = None,
@@ -50,22 +49,20 @@ def summary(
     numeric defaults from the world whose ledger it describes.
     """
     items = ordered(items)
-    supplied = dict(bins=bins, k=k, tv_threshold=tv_threshold, gap_threshold=gap_threshold,
+    supplied = dict(k=k, tv_threshold=tv_threshold, gap_threshold=gap_threshold,
                     registration_bins=registration_bins, revision_bins=revision_bins)
     committed = manifest_parameters(items) if any(v is None for v in supplied.values()) else {}
     params = {name: committed[name] if value is None else value for name, value in supplied.items()}
-    bins, k = params["bins"], params["k"]
+    k = params["k"]
     tv_threshold, gap_threshold = params["tv_threshold"], params["gap_threshold"]
     registration_bins = tuple(params["registration_bins"])
     revision_bins = tuple(params["revision_bins"])
-    for name, value in (("window_items", window_items), ("bins", bins), ("k", k)):
+    for name, value in (("window_items", window_items), ("k", k)):
         if type(value) is not int or value < 1:
             raise ValueError(f"{name} must be a positive integer")
     for name, value in (("tv_threshold", tv_threshold), ("gap_threshold", gap_threshold)):
         if type(value) not in (int, float) or not isfinite(value) or not 0 <= value <= 1:
             raise ValueError(f"{name} must be finite and in [0, 1]")
-    if bins != 3:
-        raise ValueError("bins must be 3 for fixed region-relative cells")
     for name, cuts in (("registration_bins", registration_bins), ("revision_bins", revision_bins)):
         if (not cuts or any(type(v) not in (int, float) or not isfinite(v) or v < 0 for v in cuts)
                 or any(a >= b for a, b in zip(cuts, cuts[1:], strict=False))):
@@ -85,7 +82,6 @@ def summary(
     return {
         "params": {
             "window_items": window_items,
-            "bins": bins,
             "k": k,
             "tv_threshold": tv_threshold,
             "gap_threshold": gap_threshold,

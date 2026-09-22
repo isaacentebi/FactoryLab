@@ -46,8 +46,8 @@ def world(path, events, *, initial=None, endowment=None, provider=None):
     # The manifest's own adapters (the deterministic venue, the scripted provider), so a
     # world on disk resumes under the same adapter names resume_runtime constructs.
     return Runtime(manifest, events=events, seed=1, initial_balance_micro=initial,
-                   ledger_path=None if path is None else str(path), drip=False,
-                   router_gamma=.1, provider=provider)
+                   ledger_path=None if path is None else str(path), router_gamma=.1,
+                   provider=provider)
 
 
 def diary(path):

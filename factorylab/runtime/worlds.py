@@ -1,6 +1,6 @@
 """World manifests.
 
-A manifest is the architect's whole first move: initial balance, drip,
+A manifest is the architect's whole first move: initial balance,
 venue, priced model tiers, seed assemblies, novelty share, timing ratios,
 termination conditions and the seed. It is loaded from TOML, validated, and
 hashed into the ledger's genesis entry so a world can prove which manifest
@@ -19,7 +19,7 @@ from math import isfinite
 from pathlib import Path
 from typing import Any
 
-from factorylab.charter.charter import Charter, MetricCard, Norm, seed_charter
+from factorylab.charter.charter import Charter, MetricCard, Norm
 from factorylab.charter.provenance import (
     PROVENANCE_FIELDS,
     charter_content,
@@ -37,14 +37,6 @@ NS_PER_SECOND = 1_000_000_000
 NS_PER_HOUR = 3_600 * NS_PER_SECOND
 NS_PER_DAY = 24 * NS_PER_HOUR
 WORLDS_DIR = Path(__file__).resolve().parents[2] / "worlds"
-
-
-@dataclass(frozen=True)
-class DripSpec:
-    amount_micro: int
-    period_ns: int
-    start_ns: int
-    end_ns: int
 
 
 @dataclass(frozen=True)
@@ -66,27 +58,20 @@ class ExchangeSpec:
     start_cash_usd: str = "100"
     shocks: tuple[Shock, ...] = ()
     client_namespace: str | None = None
-    # Free collateral this world precommits to leaving unused at the venue, on top
-    # of the margin an order needs. A buffer declared before the orders exist, so
-    # it cannot be reasoned away by the order that wants it. Zero by default: a
-    # world that wants a cushion says so.
-    collateral_headroom_usd: str = "0"
     # DEPRECATED and inert (architect decision D1: a principal cap is a Class-2
-    # imposition). Still read, validated and hashed exactly as declared, so the
-    # manifests that carry it load and keep their historical manifest hashes; nothing
-    # enforces it. The venue's own account is the only limit on the principal used.
-    # Dropped from the canonical JSON at its ``None`` default, as it always was.
+    # imposition). Still read, validated and hashed as declared; nothing enforces it.
+    # The venue's own account is the only limit on the principal used.
     principal_usd: str | None = None
     # Whether the venue's vaults are a surface of this world (``[venue] vault_tools``):
     # the vault reads and writes are published, and a vault's equity is a custody pot.
-    # Off by default, and dropped from the canonical JSON when off.
+    # Off by default.
     vault_tools: bool = False
 
 
 @dataclass(frozen=True)
 class ModelTier:
     id: str
-    provider: str  # "fake" | "openrouter" | "anthropic"
+    provider: str  # "fake" | "openrouter" | "venice" | "x402"
     input_usd_per_mtok: str
     output_usd_per_mtok: str
     reasoning: tuple[tuple[str, Any], ...] = ()  # OpenRouter `reasoning` object, e.g. effort=low
@@ -141,7 +126,7 @@ class AssemblySeed:
 class ToolsSpec:
     population_tool_micro_per_call: int = 50
     # DEPRECATED and inert (architect decision D1): leverage is whatever the venue
-    # allows. Kept only because every manifest hash was computed with it.
+    # allows. Still read, validated and hashed; nothing enforces it.
     max_leverage: int = 3
     max_routers_per_kind: int = 3
     max_depth: int = 4
@@ -185,7 +170,7 @@ class WebSpec:
 
     ``search_model`` names a model on the menu; the tool calls its ``:online``
     route. With no model named there is no ``[web]`` block and no ``web.search``
-    tool: a world that predates this keeps its manifest identity exactly.
+    tool.
     """
 
     search_model: str | None = None
@@ -203,7 +188,7 @@ class WebSpec:
             raise ValueError("web.max_call_usd must leave room above the flat call price")
 
 
-#: The hybrid capital-loop keys: each absent from the canonical hash when unset.
+#: The hybrid capital-loop keys: unset (``None``) in every world but the capital loop.
 HYBRID_VENICE_KEYS = ("venice_network", "venice_shadow_sink", "max_venice_total_micro",
                       "venice_reserve_floor_micro", "venice_pay_to")
 
@@ -212,9 +197,8 @@ HYBRID_VENICE_KEYS = ("venice_network", "venice_shadow_sink", "max_venice_total_
 class PolymarketSpec:
     """``[polymarket]``: Polymarket event markets as a surface, off unless enabled.
 
-    ``enabled = false`` registers no tool, opens no custody pot and hashes the
-    manifest exactly as it did before the block existed, whatever else the
-    disabled block names. ``venue`` names what the
+    ``enabled = false`` registers no tool and opens no custody pot, whatever else
+    the disabled block names. ``venue`` names what the
     tools reach: ``fake`` is the seeded simulated venue for reads and writes;
     ``live`` is the public read API only, and no write tool is registered, because
     live order signing on Polygon is not built (``world/polymarket.py``,
@@ -276,13 +260,13 @@ class TreasurySpec:
     # "base-mainnet" buys real Venice credit from the Base mainnet reserve while the
     # venue stays on testnet, and a shadow leg sends the same $5 of testnet USDC from
     # the venue to ``venice_shadow_sink`` so the observed pots pay for it. Both absent
-    # (the default) keep the rail's own network and hash as before the keys existed.
+    # (the default) keep the rail's own network.
     venice_network: str | None = None
     venice_shadow_sink: str | None = None
     # Required with ``venice_network``: the most real USDC the world may ever authorize
     # for Venice (re-authorizations included), the Base mainnet reserve balance below
     # which no top-up is prepared (a bound a fresh run cannot reset), and the only payee
-    # a Venice quote may name. Absent, each leaves the manifest hash unchanged.
+    # a Venice quote may name.
     max_venice_total_micro: int | None = None
     venice_reserve_floor_micro: int | None = None
     venice_pay_to: str | None = None
@@ -296,18 +280,15 @@ class PricesSpec:
     decay: float = 0.1
     lambda_max: float = 1.0
     min_window_events: int = 1
-    kappa: float = 0.5
     penalty_cap: float = 0.5
     # Floor on a decision's share of a generic (non-attributable) violation, so
     # splitting participation across many decisions cannot dilute it away.
     min_blame_share: float = 0.1
     # The flat price of one program seat call (C8), reserved and committed like a model call.
     program_micro_per_call: int = 50
-    #: The price law (``charter.controller.PriceController``): ``integral`` is the
-    #: shipped integrator every earlier world ran; ``pid`` adds the proportional
-    #: gain ``kp`` and the derivative-on-measurement gain ``kd`` to the integral
-    #: gain ``eta`` (essay II.II.b). All three keys are hash-neutral at their defaults.
-    controller: str = "integral"
+    #: The one price law is the PID (``charter.controller.PriceController``, essay
+    #: II.II.b): ``kp`` is the proportional gain and ``kd`` the derivative-on-measurement
+    #: gain beside the integral gain ``eta``. At zero the law is the integral alone.
     kp: float = 0.0
     kd: float = 0.0
 
@@ -383,19 +364,22 @@ class CommitteeSpec:
 
 @dataclass(frozen=True)
 class ImmuneSpec:
-    """Detection horizons and bounded interventions are immutable launch casts."""
+    """Detection horizons and bounded interventions are immutable launch casts.
 
+    The profile's cells are the three region-relative bins (inside, up to one scale
+    unit outside, beyond), fixed in the kernel rather than cast (versioning U5).
+    """
+
+    #: The stable-failure price ratchet's lambda step per window of duration (essay
+    #: II.II.b). Required: a lambda step and the exploration-gain step are different
+    #: units, so neither stands in for the other (versioning S3).
+    price_step: float
     k: int = 3
-    bins: int = 3
     tv_threshold: float = 0.2
     gap_threshold: float = 0.8
     gain_step: float = 0.05
     gamma_max: float = 0.5
     decay_step: float = 0.1
-    # The stable-failure price ratchet's lambda step per window of duration. None
-    # keeps the step every earlier world ran, ``gain_step``: an exploration-gain
-    # step and a price step are different units, so a world may set them apart.
-    price_step: float | None = None
     registration_bins: tuple[float, ...] = (0.0, 2.0)
     revision_bins: tuple[float, ...] = (0.0,)
 
@@ -416,7 +400,6 @@ class TimingSpec:
 @dataclass(frozen=True)
 class TerminationSpec:
     balance_floor_micro: int = 0
-    max_events: int | None = None
 
 
 @dataclass(frozen=True)
@@ -457,7 +440,7 @@ class PromptSpec:
     the same block the validators read.
 
     The default is ``reference``: a manifest that does not name a mode gets the
-    prompt it always got, and hashes as it always did.
+    prompt it always got.
     """
 
     mode: str = "reference"
@@ -479,13 +462,15 @@ class WorldManifest:
     name: str
     seed: int
     initial_balance_micro: int
-    drip: DripSpec | None
     exchange: ExchangeSpec
     models: tuple[ModelTier, ...]
     assemblies: tuple[AssemblySeed, ...]
     novelty: NoveltySpec
     timing: TimingSpec
     termination: TerminationSpec
+    # Every world writes its own charter (charter audit S3): the kernel has no default.
+    charter: Charter
+    immune: ImmuneSpec
     evaluation: EvaluationSpec = EvaluationSpec()
     tools: ToolsSpec = ToolsSpec()
     connectors: ConnectorsSpec = ConnectorsSpec()
@@ -496,7 +481,6 @@ class WorldManifest:
     treasury: TreasurySpec = TreasurySpec()
     clock: ClockSpec = ClockSpec()
     committee: CommitteeSpec = CommitteeSpec()
-    immune: ImmuneSpec = ImmuneSpec()
     endowment: EndowmentSpec = EndowmentSpec()
     kill: KillSpec = KillSpec()
     providers: ProvidersSpec = ProvidersSpec()
@@ -504,9 +488,7 @@ class WorldManifest:
     tick_interval_ns: int = 10 * NS_PER_SECOND
     extra: dict[str, Any] = field(default_factory=dict)
 
-    charter: Charter = field(default_factory=seed_charter)
     charter_prices: tuple[tuple[str, float], ...] = ()
-    charter_explicit: bool = False
     # Admission provenance for a funded launch: the digest the ratification exported,
     # the roster it was surveyed against, and the digest of the cards actually loaded.
     charter_ratified_sha256: str | None = None
@@ -550,105 +532,21 @@ class WorldManifest:
         return {m.id: dict(m.extra_body) for m in self.models if m.extra_body}
 
     def canonical_json(self) -> str:
+        """Guarantees the manifest hashes every key the world runs under, at any value.
+
+        R8 and versioning S1: no key is dropped at its default so that an older world
+        keeps its hash. A kernel change that adds a key renames every world, because a
+        world whose physics changed is a new world that starts again from v0. Only
+        admission provenance is left out: the ratification digests and the digest of
+        the loaded cards say how identical cards were admitted, not what world they make.
+        """
         payload = asdict(self)
-        # Admission provenance does not change the world defined by identical cards.
-        payload.pop("charter_explicit")
-        # Preserve historical manifest identities for models without an extra body.
-        for model in payload["models"]:
-            if not model.get("extra_body"):
-                model.pop("extra_body", None)
         for name in ("charter_ratified_sha256", "charter_roster_sha256",
                      "charter_content_sha256"):
             payload.pop(name)
-        # Preserve historical manifest identities when the opt-in namespace is absent.
-        if payload["exchange"]["client_namespace"] is None:
-            payload["exchange"].pop("client_namespace")
-        # Preserve historical manifest identities while the gas-route keys keep their defaults.
-        for key, default in (("cctp_forwarding", "on_empty_gas"),
-                             ("max_forward_fee_micro", 300_000),
-                             ("max_forward_fees_per_window", 1_000_000),
-                             ("forward_wait_windows", 2)):
-            if payload["treasury"].get(key) == default:
-                payload["treasury"].pop(key)
-        # A world that buys no Venice credit across networks hashes as it did before the
-        # hybrid rehearsal existed: an added key may not rename a world that predates it.
-        for key in HYBRID_VENICE_KEYS:
-            if payload["treasury"].get(key) is None:
-                payload["treasury"].pop(key, None)
-        # Edition 2 keys keep the identity of every manifest that predates them: a world
-        # without locked backing, or at the default byte-day rent, hashes as it always did.
-        if payload["endowment"] == asdict(EndowmentSpec()):
-            payload.pop("endowment")
-        # Edition 3's keys are hash-neutral at their defaults, so every world that predates
-        # the kill contract, the provider inventories and the per-seat fields keeps both its
-        # manifest identity and the roster hash its charter was ratified against.
-        if payload["kill"] == asdict(KillSpec()):
-            payload.pop("kill")
-        if payload["providers"] == asdict(ProvidersSpec()):
-            payload.pop("providers")
-        # A world that names no prompt mode hashes exactly as it did before the key
-        # existed: an added key may not rename a world that predates it, and every
-        # roster digest a charter was ratified against stays what it was.
-        if payload["prompt"] == asdict(PromptSpec()):
-            payload.pop("prompt")
-        # And for the feedback line: a world settling producers on judge opinion is
-        # the world every manifest already described.
-        if payload["evaluation"].get("producer_feedback") == "verdict":
-            payload["evaluation"].pop("producer_feedback")
-        if payload["evaluation"].get("grounded_horizon_ticks") == 10:
-            payload["evaluation"].pop("grounded_horizon_ticks")
-        # A world that seeds no swap-regret core hashes as it did before the key existed,
-        # and one that does names the same core whatever order it listed the kinds in.
-        if not payload["evaluation"].get("no_swap_regret_kinds"):
-            payload["evaluation"].pop("no_swap_regret_kinds", None)
-        else:
-            payload["evaluation"]["no_swap_regret_kinds"] = sorted(
-                payload["evaluation"]["no_swap_regret_kinds"])
-        # An absent [web] block registers no search tool, so a world without one hashes
-        # exactly as it did before web search existed.
-        if payload["web"] == asdict(WebSpec()):
-            payload.pop("web")
-        # Likewise [polymarket]: a world that does not enable event markets hashes
-        # exactly as it did before the surface existed, whatever caps a disabled
-        # block names, since a disabled block registers nothing they could limit.
-        if not payload["polymarket"]["enabled"]:
-            payload.pop("polymarket")
-        for assembly in payload["assemblies"]:
-            if assembly.get("cadence_floor") == 1:
-                assembly.pop("cadence_floor", None)
-            if not assembly.get("initial_state"):
-                assembly.pop("initial_state", None)
-            if assembly.get("system_prompt") is None:
-                assembly.pop("system_prompt", None)
-        # Preserve historical manifest identities while the blame floor keeps its default.
-        if payload["prices"].get("min_blame_share") == 0.1:
-            payload["prices"].pop("min_blame_share")
-        # Preserve historical manifest identities while promise grading keeps its resolution.
-        if payload["committee"].get("promise_resolution") == 0.01:
-            payload["committee"].pop("promise_resolution")
-        # Preserve historical manifest identities while the program call price is its default.
-        if payload["prices"].get("program_micro_per_call") == 50:
-            payload["prices"].pop("program_micro_per_call")
-        # A world that names no price law runs the integrator and hashes as it did
-        # before the PID existed: an added key may not rename a world that predates it.
-        for key, default in (("controller", "integral"), ("kp", 0.0), ("kd", 0.0)):
-            if payload["prices"].get(key) == default:
-                payload["prices"].pop(key)
-        # A world that names no separate ratchet step prices stable failure by
-        # gain_step, as before the key existed, and hashes as it did then.
-        if payload["immune"].get("price_step") is None:
-            payload["immune"].pop("price_step", None)
-        # A world that precommits no collateral headroom hashes as it did before
-        # the key existed: an added key may not rename a world that predates it.
-        if payload["exchange"].get("collateral_headroom_usd") == "0":
-            payload["exchange"].pop("collateral_headroom_usd")
-        # A world that declares no trading principal hashes as it did before the key
-        # existed: an added key may not rename a world that predates it.
-        if payload["exchange"].get("principal_usd") is None:
-            payload["exchange"].pop("principal_usd", None)
-        # A world without the vault surface hashes as it did before the key existed.
-        if payload["exchange"].get("vault_tools") is False:
-            payload["exchange"].pop("vault_tools")
+        # A set, not a sequence: the same core whatever order the manifest listed it in.
+        payload["evaluation"]["no_swap_regret_kinds"] = sorted(
+            payload["evaluation"]["no_swap_regret_kinds"])
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     def manifest_hash(self) -> str:
@@ -818,11 +716,6 @@ class WorldManifest:
         if namespace is not None and (not isinstance(namespace, str) or len(namespace) != 32
                                       or any(c not in "0123456789abcdef" for c in namespace)):
             raise ValueError("exchange.client_namespace must be 32 lowercase hex characters")
-        if (self.exchange.kind == "hyperliquid" and self.exchange.mainnet
-                and self.charter_explicit is not True):
-            # Real money launches on the population's charter, never the seed cards.
-            # Testnet rehearsals may run on the seed charter before edition 1 is drafted.
-            raise ValueError("live_exchange_requires_explicit_charter: mainnet needs [charter]")
         if self.initial_balance_micro < 0:
             raise ValueError("initial balance must be non-negative")
         share = self.endowment.base_share
@@ -893,7 +786,7 @@ class WorldManifest:
             ("tools.max_depth", self.tools.max_depth, 0),
             ("tools.max_children", self.tools.max_children, 0),
             ("tools.max_tool_calls", self.tools.max_tool_calls, 0),
-            ("immune.k", self.immune.k, 2), ("immune.bins", self.immune.bins, 2),
+            ("immune.k", self.immune.k, 2),
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
@@ -902,11 +795,9 @@ class WorldManifest:
             if type(value) not in (int, float) or not isfinite(value) or not 0 < value <= 1:
                 raise ValueError(f"immune.{name} must be finite and in (0, 1]")
         step = self.immune.price_step
-        if step is not None and (type(step) not in (int, float) or not isfinite(step)
-                                 or not 0 < step <= self.prices.lambda_max):
+        if (type(step) not in (int, float) or not isfinite(step)
+                or not 0 < step <= self.prices.lambda_max):
             raise ValueError("immune.price_step must be finite and in (0, prices.lambda_max]")
-        if self.immune.bins != 3:
-            raise ValueError("immune.bins must be 3 for fixed region-relative cells")
         for name in ("registration_bins", "revision_bins"):
             cuts = getattr(self.immune, name)
             if (not isinstance(cuts, (tuple, list)) or not cuts
@@ -959,8 +850,6 @@ class WorldManifest:
         for sh in self.exchange.shocks:
             if sh.step < 1 or Decimal(sh.multiplier) <= 0:
                 raise ValueError("shock step must be >= 1 and multiplier positive")
-        if self.drip is not None and (self.drip.period_ns <= 0 or self.drip.amount_micro < 0):
-            raise ValueError("drip period must be positive and amount non-negative")
         self._validate_endowment()
         from factorylab.charter.book import validate_observation_bindings
 
@@ -987,21 +876,15 @@ class WorldManifest:
         if (type(p.penalty_cap) not in (int, float) or not isfinite(p.penalty_cap)
                 or not 0 < p.penalty_cap < 1):
             raise ValueError("prices.penalty_cap must be finite and in (0, 1)")
-        if type(p.kappa) not in (int, float) or not isfinite(p.kappa) or p.kappa < 0:
-            raise ValueError("prices.kappa must be finite and nonnegative")
         if (type(p.min_blame_share) not in (int, float) or not isfinite(p.min_blame_share)
                 or not 0 <= p.min_blame_share <= 1):
             raise ValueError("prices.min_blame_share must be finite and in [0, 1]")
         if min(p.eta, p.decay, p.lambda_max) <= 0 or p.min_window_events < 1:
             raise ValueError("prices: eta, decay, lambda_max > 0 and min_window_events >= 1")
-        if p.controller not in ("integral", "pid"):
-            raise ValueError("prices.controller must be integral or pid")
         for name in ("kp", "kd"):
             value = getattr(p, name)
             if type(value) not in (int, float) or not isfinite(value) or value < 0:
                 raise ValueError(f"prices.{name} must be finite and nonnegative")
-        if p.controller == "integral" and (p.kp or p.kd):
-            raise ValueError("prices.kp and prices.kd need prices.controller = \"pid\"")
 
 
 def duration_ns(value: Any) -> int:
@@ -1064,6 +947,18 @@ def _manifest_charter(raw: Any) -> tuple[Charter, tuple[tuple[str, float], ...]]
     return Charter(1, tuple(norms), tuple(cards)), tuple(prices)
 
 
+def _manifest_immune(raw: Any) -> ImmuneSpec:
+    """The immune casts, with the ratchet's lambda step stated and no bin count."""
+    if not isinstance(raw, dict):
+        raise ValueError("immune must be a table")
+    if "bins" in raw:
+        raise ValueError("immune.bins was removed: the three region-relative bins are fixed")
+    if "price_step" not in raw:
+        raise ValueError("immune.price_step is required: the stable-failure ratchet's "
+                         "lambda step per window")
+    return ImmuneSpec(**raw)
+
+
 def _committee(raw: dict) -> CommitteeSpec:
     spec = CommitteeSpec(**raw)
     resolution = spec.promise_resolution
@@ -1109,35 +1004,27 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
     forward_cap = (d.get("treasury") or {}).get("max_forward_fees_per_window", "1")
     if type(forward_cap) not in (str, int):
         raise ValueError("treasury.max_forward_fees_per_window must be exact USD text or integer")
-    charter, charter_prices = (
-        _manifest_charter(d["charter"]) if "charter" in d else (seed_charter(), ())
-    )
+    if "charter" not in d:
+        # Charter audit S3: the charter is the world's authored input, never a default
+        # the kernel supplies.
+        raise ValueError("a world needs a [charter] table")
+    charter, charter_prices = _manifest_charter(d["charter"])
     # The cards as written, digested exactly as the ratification export digested them.
     charter_content_sha256 = (charter_digest(charter_content(d["charter"]))
                               if isinstance(d.get("charter"), dict) else None)
     clock = d.get("clock", {})
     if set(clock) - {"min_tick"}:
         raise ValueError("clock accepts only min_tick; max_tick is derived")
-    drip = None
-    if "drip" in d:
-        dd = d["drip"]
-        drip = DripSpec(
-            amount_micro=usd_to_micro(dd["amount_usd"], rounding="exact"),
-            period_ns=duration_ns(dd["period"]),
-            start_ns=duration_ns(dd.get("start", 0)),
-            end_ns=duration_ns(dd["end"]),
-        )
+    # Smuggling D-6: keys no world set and nothing enforced. A manifest naming one
+    # would describe physics the kernel does not run, so it is refused, not ignored.
+    for section, key in (("drip", None), ("termination", "max_events"),
+                         ("venue", "collateral_headroom_usd")):
+        if section in d if key is None else key in (d.get(section) or {}):
+            name = section if key is None else f"{section}.{key}"
+            raise ValueError(f"{name} was removed: no world set it and nothing enforced it")
     ex = d.get("exchange", {})
     venue = d.get("venue", {})
     spot_pairs = venue.get("spot_pairs", [])
-    headroom = str(venue.get("collateral_headroom_usd", "0"))
-    try:
-        if Decimal(headroom) < 0 or not Decimal(headroom).is_finite():
-            raise ValueError
-    except (ArithmeticError, ValueError):
-        raise ValueError(
-            "venue.collateral_headroom_usd must be a nonnegative exact decimal string"
-        ) from None
     principal = venue.get("principal_usd")
     if principal is not None:
         principal = str(principal)
@@ -1164,7 +1051,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         spot_pairs=tuple(spot_pairs),
         seed=int(ex.get("seed", d.get("seed", 0))),
         start_cash_usd=str(ex.get("start_cash_usd", "100")),
-        collateral_headroom_usd=headroom,
         principal_usd=principal,
         vault_tools=vault_tools,
         shocks=tuple(
@@ -1221,16 +1107,19 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         no_swap_regret_kinds=_manifest_kinds(ev.get("no_swap_regret_kinds", [])),
     )
     pr = d.get("prices") or {}
+    for key in ("kappa", "controller"):
+        if key in pr:
+            # Charter audit U3: the PID is the only price law, so there is no law to
+            # name and no integrator damping; a manifest that says so would lie.
+            raise ValueError(f"prices.{key} was removed: the PID is the only price law")
     prices = PricesSpec(
         eta=float(pr.get("eta", 0.5)),
-        kappa=pr.get("kappa", 0.5),
         decay=float(pr.get("decay", 0.1)),
         lambda_max=float(pr.get("lambda_max", 1.0)),
         min_window_events=int(pr.get("min_window_events", 1)),
         penalty_cap=pr.get("penalty_cap", 0.5),
         min_blame_share=pr.get("min_blame_share", 0.1),
         program_micro_per_call=int(pr.get("program_micro_per_call", 50)),
-        controller=pr.get("controller", "integral"),
         kp=pr.get("kp", 0.0),
         kd=pr.get("kd", 0.0),
     )
@@ -1246,14 +1135,13 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         name=d["name"],
         seed=int(d.get("seed", 0)),
         initial_balance_micro=usd_to_micro(d["initial_balance_usd"], rounding="exact"),
-        drip=drip,
         exchange=exchange,
         models=models,
         assemblies=assemblies,
         novelty=NoveltySpec(nov.get("share", 0.1), duration_ns(nov.get("window", "1d")),
                             nov.get("trials", 3), nov.get("max_lifetime_windows", 6)),
         committee=_committee(d.get("committee", {})),
-        immune=ImmuneSpec(**d.get("immune", {})),
+        immune=_manifest_immune(d.get("immune", {})),
         timing=TimingSpec(
             int(tim.get("min_ratio", 3)), float(tim.get("jitter_fraction", 0.2)),
             tim.get("cadence_sample", 200),
@@ -1261,11 +1149,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         ),
         termination=TerminationSpec(
             usd_to_micro(term.get("balance_floor_usd", 0), rounding="exact"),
-            term.get("max_events"),
         ),
         charter=charter,
         charter_prices=charter_prices,
-        charter_explicit="charter" in d,
         charter_ratified_sha256=(d.get("charter") or {}).get("ratified_sha256"),
         charter_roster_sha256=(d.get("charter") or {}).get("roster_sha256"),
         charter_content_sha256=charter_content_sha256,

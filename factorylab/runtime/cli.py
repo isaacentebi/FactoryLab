@@ -414,7 +414,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
         seed=args.seed,
         initial_balance_micro=args.initial_balance,
         ledger_path=args.ledger,
-        drip=not args.no_drip,
         kill_at_end=args.kill_at_end,
         clock_source=clock_source,
     )
@@ -847,7 +846,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="starting wallet balance in micro-USD, overriding the manifest")
     r.add_argument("--ledger", default=None,
                    help="ledger file path; its .key is written beside it. In-memory if omitted")
-    r.add_argument("--no-drip", action="store_true", help="launch without the manifest's drip")
     r.add_argument("--duration", default=None,
                    help="wall-clock length like 30m; overrides --events. A live world stops "
                         "at the first tick after the deadline, never later than the ticks "

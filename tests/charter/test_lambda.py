@@ -4,17 +4,16 @@ from dataclasses import replace
 import pytest
 
 from factorylab.charter.amendment import Amendment
-from factorylab.charter.charter import seed_charter
 from factorylab.charter.controller import CardRegion, PriceController
 from factorylab.kernel.ledger import Ledger
-from factorylab.kernel.timing import TimingRegistry
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
+from tests.seed_charter import seed_charter
 
 
 def runtime():
     return Runtime(load_manifest("scripted"), events=1, seed=1, initial_balance_micro=None,
-                   ledger_path=None, drip=True, router_gamma=0.1)
+                   ledger_path=None, router_gamma=0.1)
 
 
 def amendment(**changes):
@@ -50,9 +49,8 @@ def activate_after_backstop(rt):
 
 def test_controller_ledger_first_bounds_history_and_removal(monkeypatch):
     ledger = Ledger()
-    timing = TimingRegistry()
     controller = PriceController(ledger, eta=0.5, decay=0.1, lambda_max=1,
-                                 min_window_events=3, timing=timing)
+                                 min_window_events=3)
     controller.register(CardRegion("card", "max", None, 1, 1))
     controller.observe("card", 2, 1)
     before = controller.snapshot()
@@ -71,9 +69,8 @@ def test_controller_ledger_first_bounds_history_and_removal(monkeypatch):
                           "amendment_id": "adopted", "lambda_before": 0.5, "lambda_after": 0.8}
     assert controller.snapshot()["cards"]["card"] == {
         # An adopted price becomes the card's accumulated pressure (bumpless for the PID).
-        **before["cards"]["card"], "lambda": 0.8, "effective_lambda": 0.8, "integral": 0.8,
+        **before["cards"]["card"], "lambda": 0.8, "integral": 0.8,
     }
-    assert timing.closure_count("price:card") == 1
     for value in (True, -1, 2, float("nan")):
         with pytest.raises(ValueError):
             controller.set_price("card", value, amendment_id="invalid")

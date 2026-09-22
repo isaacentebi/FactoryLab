@@ -64,7 +64,7 @@ def web_runtime(*, provider=None, max_call_micro=50_000, balance=100_000_000):
     manifest = load_manifest("scripted")
     manifest = replace(manifest, web=WebSpec("fake-haiku", CALL_PRICE, max_call_micro))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=balance,
-                   ledger_path=None, drip=False, router_gamma=.1, exchange=FakeExchange(),
+                   ledger_path=None, router_gamma=.1, exchange=FakeExchange(),
                    provider=provider if provider is not None else SearchProvider())
 
 

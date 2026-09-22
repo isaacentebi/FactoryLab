@@ -124,18 +124,18 @@ settings".
 | Key | Type | Default / seed | Hard cast? |
 | --- | --- | --- | --- |
 | `treasury.max_venice_per_window` | Exact USD decimal string or integer, nonnegative | `"10"` (10,000,000 micro-USD) | Configured resource bound, fixed for a run; not amendable through metric cards |
-| `treasury.cctp_forwarding` | `"never"`, `"on_empty_gas"` or `"always"` | `"on_empty_gas"` | Configured route rule, fixed for a run; absent or default keys leave the manifest hash unchanged |
+| `treasury.cctp_forwarding` | `"never"`, `"on_empty_gas"` or `"always"` | `"on_empty_gas"` | Configured route rule, fixed for a run |
 | `treasury.max_forward_fee_usd` | Exact USD decimal string, nonnegative | `"0.30"` ($0.10 of headroom over the $0.20 quoted on both networks) | Hard bound on the on-chain forwarding fee quote per exit; a higher quote refuses before signing |
 | `treasury.max_forward_fees_per_window` | Exact USD decimal string or integer, nonnegative | `"1"` | Per-reserve-window cap on forwarding fees quoted for submitted exits; a failed exit still counts |
-| `treasury.forward_wait_windows` | Positive integer | `2` | Reserve windows a forwarded mint may stay unobserved before the exit strands recoverably; absent or default keys leave the manifest hash unchanged |
-| `treasury.venice_network` | Absent, or `"base-mainnet"` | Absent | Hybrid capital-loop rehearsal: `to_venice` buys real Venice credit from the Base mainnet reserve and pays for it in the testnet pots with a shadow send (docs/architecture/capital-loop-rehearsal.md). Refused on a mainnet venue and without `venice_shadow_sink`; absent, it leaves the manifest hash unchanged |
-| `treasury.venice_shadow_sink` | Nonzero EVM address, only with `venice_network` | Absent | Where the shadow leg's testnet USDC goes; must be an existing Hyperliquid testnet account outside every observed pot; absent, it leaves the manifest hash unchanged |
-| `treasury.max_venice_total_usd` | Exact USD, positive; required with `venice_network`, refused without it | Absent | Absolute bound on real USDC ever authorized for Venice in the world, re-authorizations included; the counter is checkpointed; absent, it leaves the manifest hash unchanged |
-| `treasury.venice_reserve_floor_usd` | Exact USD, nonnegative; required with `venice_network`, refused without it | Absent | No top-up is prepared if the Base mainnet reserve would fall below it (read on chain, so a fresh run cannot reset it); the capital-loop runner reads the reserve keylessly at launch and refuses unless reserve − floor ≤ `max_venice_total_usd`; absent, it leaves the manifest hash unchanged |
-| `treasury.venice_pay_to` | Nonzero EVM address; required with `venice_network`, refused without it | Absent | The only payee a Venice top-up quote may name; a quote or journaled authorization paying anyone else is refused before signing; absent, it leaves the manifest hash unchanged |
+| `treasury.forward_wait_windows` | Positive integer | `2` | Reserve windows a forwarded mint may stay unobserved before the exit strands recoverably |
+| `treasury.venice_network` | Absent, or `"base-mainnet"` | Absent | Hybrid capital-loop rehearsal: `to_venice` buys real Venice credit from the Base mainnet reserve and pays for it in the testnet pots with a shadow send (docs/architecture/capital-loop-rehearsal.md). Refused on a mainnet venue and without `venice_shadow_sink` |
+| `treasury.venice_shadow_sink` | Nonzero EVM address, only with `venice_network` | Absent | Where the shadow leg's testnet USDC goes; must be an existing Hyperliquid testnet account outside every observed pot |
+| `treasury.max_venice_total_usd` | Exact USD, positive; required with `venice_network`, refused without it | Absent | Absolute bound on real USDC ever authorized for Venice in the world, re-authorizations included; the counter is checkpointed |
+| `treasury.venice_reserve_floor_usd` | Exact USD, nonnegative; required with `venice_network`, refused without it | Absent | No top-up is prepared if the Base mainnet reserve would fall below it (read on chain, so a fresh run cannot reset it); the capital-loop runner reads the reserve keylessly at launch and refuses unless reserve − floor ≤ `max_venice_total_usd` |
+| `treasury.venice_pay_to` | Nonzero EVM address; required with `venice_network`, refused without it | Absent | The only payee a Venice top-up quote may name; a quote or journaled authorization paying anyone else is refused before signing |
 | `committee.seats` | Integer, at least 3 so the existing three core roles can be covered | `5` | Configured resource bound, fixed for a run |
-| `committee.promise_resolution` | Finite positive number | `0.01` | Fraction of the frozen region's scale a promised move must clear to count; absent or default, it leaves the manifest hash unchanged |
-| `charter.norms` | Nonempty array of names, or of `{ id, definition }` tables | Required for explicit charters; edition 3 carries definitions, editions before it carry bare names | Read-only for the edition. A bare name loads with an empty definition, so a charter surveyed before definitions existed keeps its content digest; `Charter.render` prints each definition under its norm |
+| `committee.promise_resolution` | Finite positive number | `0.01` | Fraction of the frozen region's scale a promised move must clear to count |
+| `charter.norms` | Nonempty array of names, or of `{ id, definition }` tables | Required; edition 3 carries definitions, editions before it carry bare names | Read-only for the edition. A bare name loads with an empty definition, so a charter surveyed before definitions existed keeps its content digest; `Charter.render` prints each definition under its norm |
 | `charter.cards[].window.kind` | `"returns"`, `"forecasts"`, or `"windows"` | Required for explicit cards | Executable selector type; its value is population amendable |
 | `charter.cards[].window.n` | Positive integer, never a boolean or float | Required; seed cost and well-formedness cards use `100`, forecast skill uses `50` | Population amendable sample horizon |
 | `charter.cards[].window.per` | `"role"`, `"assembly"`, or null | Required in JSON; omitted in TOML means null. Seed cost and well-formedness use `"role"`; forecast skill uses `"assembly"` | Population amendable scope |
@@ -635,14 +635,14 @@ The draft survey accepts any number of cards returned within the existing model
 output budget, with no card-count cap. It withholds existing cards from both
 proposals and ballots, preflights each candidate through the pricing measurement,
 includes `answers_for` and typed windows in the exported TOML, and records the
-surveyed roster hash. `worlds/edition1-example.toml` is only a schema migration of
+surveyed roster hash. `worlds/history/edition1-example.toml` is only a schema migration of
 the historical example. The experimenter must re-draft edition 1 with the actual
 launch roster before launch; the drafting script does not ratify a new edition
 or run the paid survey.
 
-A mainnet Hyperliquid manifest requires an explicit `[charter]`; testnet may
-use the seed charter. `charter_explicit` records admission provenance and is
-excluded from the canonical manifest hash.
+Every manifest requires a `[charter]` table (charter audit S3): the kernel has
+no default charter. The four-norm, three-card seed charter that used to be that
+default is written into the worlds that ran on it.
 
 A mainnet manifest is also refused at load unless `exchange.client_namespace` is
 set and its `[charter]` carries `ratified_sha256` and `roster_sha256`, the values
@@ -650,8 +650,7 @@ set and its `[charter]` carries `ratified_sha256` and `roster_sha256`, the value
 `roster_sha256` comments: the loaded cards must hash to the first and
 the manifest's own assemblies and models to the second, so a funded launch cannot
 run an edited charter or a different roster. Both fields are admission provenance
-and, like `charter_explicit`, are excluded from the canonical manifest hash;
-testnet manifests omit them.
+and are excluded from the canonical manifest hash; testnet manifests omit them.
 
 Testnet `treasury.reserve_address` is the public checksummed address
 `0x1228e5620944a79D268Afc7522E00891526EdEBb`, not a placeholder.
@@ -671,6 +670,10 @@ billing-uncertain and commits the reserved ceiling. `io.result` retains
 ## Timing, pricing and immune settings
 
 The canonical manifest is recorded with its hash in the ledger's `Launch` event.
+It hashes every key at every value, defaults included (R8, versioning S1): no key is
+dropped so that an older world keeps its hash. A kernel change that adds a key
+therefore names a new world, which starts again from v0. Only admission provenance
+(the ratification digests and the loaded cards' digest) is left out.
 `factorylab versions` verifies that record against genesis and uses its immune
 settings. A historical diary without those settings needs explicit analysis
 parameters; the observer never substitutes a second set of thresholds.
@@ -683,34 +686,31 @@ parameters; the observer never substitutes a second set of thresholds.
 | `evaluation.consequence_backstop_events` (or `consequence_backstop_ticks`) | positive integer, in world ticks | `200`; scripted worlds `20`; testnet `60` | Yes: consequence horizon and conservative governance period floor. |
 | `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a judgement waits for its judge (a verdict for a producer return, a meta verdict for a verdict) before it is censored. |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
-| `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation; absent from the manifest hash at its default. |
-| `prices.controller` | `integral` or `pid` | `integral` | Yes: the price law. `integral` is the shipped integrator (`lambda += eta*v` less the one-sided `kappa` damping while violating, `-= decay` once compliant). `pid` is `lambda = kp*v + I + D`: `I` accumulates `eta*v` while violating and leaks `decay` once compliant, held in `[0, lambda_max]` and not integrated only while `P + I` already reaches `lambda_max` and the violation is growing (anti-windup); `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. Absent from the manifest hash at its default. |
-| `prices.kp` | finite nonnegative number | `0.0` | Yes: PID proportional gain; nonzero only with `controller = "pid"`. Absent from the hash at its default. |
-| `prices.kd` | finite nonnegative number | `0.0` | Yes: PID derivative gain; nonzero only with `controller = "pid"`. Absent from the hash at its default. |
+| `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation. |
+| `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating and leaks `decay` once compliant, held in `[0, lambda_max]` and not integrated only while `P + I` already reaches `lambda_max` and the violation is growing (anti-windup); `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |
+| `prices.kd` | finite nonnegative number | `0.0` | Yes: the PID's derivative-on-measurement gain. |
 | `immune.k` | integer, at least 2 | `3` | Yes: consecutive windows or changes required for diagnosis. |
-| `immune.bins` | integer, exactly 3 | `3` | Yes: inside, up to one scale unit outside, more than one unit outside. |
 | `immune.registration_bins` | increasing nonnegative numeric array | `[0, 2]` | Yes: zero, 1–2, 3+ registrations. Values equal to a cut enter the lower bin. |
 | `immune.revision_bins` | increasing nonnegative numeric array | `[0]` | Yes: zero versus positive revision. |
 | `immune.tv_threshold` | finite number in (0, 1] | `0.2` | Yes: behavioral version boundaries, not the thrash predicate. |
 | `immune.gap_threshold` | finite number in (0, 1] | `0.8` | Yes: the operator's `durable` readout, not an additional pathology gate. |
-| `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment, and the stable-failure price ratchet's step per window of duration unless `immune.price_step` is set. |
-| `immune.price_step` | absent, or a finite number in (0, `prices.lambda_max`] | absent (`gain_step`) | Yes: the stable-failure price ratchet's lambda step per window of duration, set apart from the exploration-gain step. Absent from the hash while absent. |
+| `immune.gain_step` | finite number in (0, 1] | `0.05` | Yes: exploration-gain adjustment. |
+| `immune.price_step` | finite number in (0, `prices.lambda_max`] | Required | Yes: the stable-failure price ratchet's lambda step per window of duration. A lambda step and an exploration-gain step are different units, so `gain_step` never stands in (versioning S3). The profile's three region-relative bins (inside, up to one scale unit outside, beyond) are fixed in the kernel; `immune.bins` is refused (versioning U5). |
 | `immune.gamma_max` | finite number in (0, 1] | `0.5` | Yes: exploration-gain ceiling. |
 | `immune.decay_step` | finite number in (0, 1] | `0.1` | Yes: extra price decay for the window following thrash. |
 
 These launch settings are immutable parameters of an experiment. Effective
 prices, gain, diagnoses and the currently negotiated tick interval remain runtime
 state. Stable failure is priced by its duration (essay II.II.b): the n-th
-consecutive diagnosed window adds `n * immune.price_step` (`immune.gain_step` when
-absent) to each violated card's
+consecutive diagnosed window adds `n * immune.price_step` to each violated card's
 price and accumulated pressure, bounded by `prices.lambda_max`
 (`immune.price_ratchet`), and the count restarts once the card leaves the
 attractor (`immune.price_ratchet_ended`). The exploration gain raised for stable
 failure steps back toward each router's seed gamma once a window diagnoses no
 pathology (`immune.gain` with pathology `cleared`); a learning-dead window holds
-it. That state resumes with the controller. (Worlds before this change halved the
-violated cards' effective price for one window instead; `immune.price_relief`
-entries in their diaries record that.)
+it. That state resumes with the controller. (Older worlds halved the violated
+cards' effective price for one window instead; `immune.price_relief` entries in
+their diaries record that. The relief is deleted, charter audit U2.)
 
 ## Timing interpretation
 
@@ -999,8 +999,7 @@ USDC through the same intent, submission and receipt journal. Venue pots show
 
 ## Vaults
 
-`venue.vault_tools` is a boolean, default `false`, fixed at launch, and dropped
-from the canonical JSON when false (so no existing world's hash changes). When
+`venue.vault_tools` is a boolean, default `false`, fixed at launch. When
 true the world publishes the venue's vaults as a surface: `venue.vault_details`
 (priced like the other public venue reads) and `venue.vault_positions` (free),
 and the consequence writes `venue.vault_create`, `venue.vault_deposit` and
@@ -1126,8 +1125,7 @@ Scripted manifests use an offline fake transport; live manifests use bounded HTT
 keys: `search_model`, a model on the menu whose `:online` route the provider searches with
 (OpenRouter's web plugin, Venice's `enable_web_search`); `call_price_micro`, the tool's own
 flat price; and `max_call_usd`, the ceiling on one whole search. With no `[web]` block no
-tool is registered and the manifest hashes exactly as it did before web search existed, so
-edition 2 is untouched. A search is one model call on that route under a fixed system
+tool is registered. A search is one model call on that route under a fixed system
 prompt asking for a JSON list of `{title, url, snippet, published?}` and nothing else; the
 seat is charged the flat price plus the metered cost of that call, held against its
 entitlement before the call and refused before any call when the ceiling exceeds
@@ -1154,10 +1152,9 @@ one wake. A search that returned no results buys no extra round.
 
 ## Event markets: `[polymarket]`
 
-`[polymarket]` is off by default. A manifest without it, or with `enabled = false` and any
-other keys at all, hashes exactly as it did before the block existed: a disabled block
-registers nothing its keys could limit, so it is dropped from the canonical JSON whole. No
-world under `worlds/` enables it. The
+`[polymarket]` is off by default. A disabled block registers nothing, but its keys are
+still part of the manifest and are hashed like any other. No world under `worlds/`
+enables it. The
 keys, all fixed for the world's life:
 
 | key | default | meaning |
@@ -1408,8 +1405,7 @@ fact; none is new money. Everything below is what the code on `main` does.
 | `endowment.locked_micro` | nonnegative integer micro-USD, at most `initial_balance_micro` | `0` | Yes: backing booked in the balance at launch that nobody can spend until released. |
 | `endowment.releases` | array of tables `{at = "7d", amount_micro = N}`, ascending `at`, positive amounts summing exactly to `locked_micro` | `[]` | Yes: the tranches, as durations after the ledgered `Launch`, never absolute times. |
 
-An absent or default `[endowment]` leaves the manifest hash unchanged. The
-wallet is built with the locked amount and a `ReleaseSchedule`; `sum(releases)
+The wallet is built with the locked amount and a `ReleaseSchedule`; `sum(releases)
 == locked_micro` is validated at load and again at construction. `wallet.locked`
 is the backing not yet released and `wallet.unlocked` is `balance - locked`;
 `available` and `unhistoried_available` are taken from the unlocked part, so
@@ -1423,8 +1419,7 @@ event calls `wallet.release_due(now_ns)` before anything else spends: each
 tranche whose `launch_ns + at` has passed moves from locked to unlocked once,
 in order, ledgered as `release` with `tranche`, `amount`, `due_ns`,
 `locked_after` and `balance_after`. The balance does not change; only its
-classification does. `drip` is unrelated to releases and a final ledger
-releases nothing. `next_release_ns` is the absolute time of the next unreleased
+classification does. A final ledger releases nothing. `next_release_ns` is the absolute time of the next unreleased
 tranche, or null. The locked amount, the schedule, the anchor and the count of
 released tranches are checkpointed and checked on restore: a checkpoint whose
 locked backing disagrees with its released tranches is refused. The wake's
@@ -1468,7 +1463,7 @@ the same money, and leaving resets the insolvency count.
 While dormant the event is not routed: no seat is woken for it, so no model or
 program call, no return, no registration and no tool call comes of it, and the
 compute-insolvency streak is not advanced. Everything mandatory continues on
-every event: drips and due releases, reserve-window management (windows still
+every event: due releases, reserve-window management (windows still
 close, cards are still measured and priced, storage rent still accrues and is
 collected, and an activation boundary still falls due), the treasury's window
 cap and its tick, order reconciliation, fills and settled funding from the
@@ -1490,7 +1485,7 @@ checkpointed. The wake shows `liveness.status` as `alive`, `dormant` or
 
 | Key | Type | Default | Hard cast? |
 | --- | --- | --- | --- |
-| `prices.program_micro_per_call` | nonnegative integer micro-USD | `50` | Yes: the flat price of one program-seat call. Absent or default, it leaves the manifest hash unchanged. |
+| `prices.program_micro_per_call` | nonnegative integer micro-USD | `50` | Yes: the flat price of one program-seat call. |
 
 An assembly proposal whose `model_id` is `program` registers a seat whose
 executor is population Python in the tool jail rather than a model
@@ -1818,12 +1813,14 @@ executes it (cold audit F1, contract C4). `factorylab/runtime/release.py`
 computes once per process
 
 ```
-release_digest = sha256(git_head + sha256(uv.lock) + tree_hash(factorylab/))
+release_digest = sha256(sha256(uv.lock) + tree_hash(factorylab/))
 ```
 
 where the tree hash covers every regular file under the package by relative
 path and content, byte-compiled caches excluded, so an uncommitted edit is a
-different release exactly as a new commit is; the head comes from git, else
+different release exactly as a new commit is. The git head is not an input
+(versioning S2): a commit that changes no executable byte is the same release.
+It is recorded beside the digest as forensic metadata; it comes from git, else
 from the `RELEASE` record `deploy/install.sh` wrote, and `release_info()`
 says which (`git`, `release_file`, `none`). The digest is drawn at
 construction and carried in the `Launch` event's payload and in every
@@ -1927,8 +1924,7 @@ does not silently roll back to the shorter file.
 `exchange.client_namespace` is an optional 32-character lowercase hexadecimal string,
 fixed for a world's life. When supplied, Hyperliquid client order IDs hash the namespace
 and decision identity together. Independent preparations use fresh UUID namespaces;
-resume retains the original namespace. Absence preserves legacy client IDs and canonical
-manifest hashes. Never change it on a living or resumable world.
+resume retains the original namespace. Absence preserves legacy client IDs. Never change it on a living or resumable world.
 
 Because decision handles restart at `decision-1` on a fresh ledger, the namespace alone
 cannot separate two runs of one manifest: each launch also draws a `launch_nonce`,
@@ -2068,18 +2064,14 @@ prices; an account fallback to the last complete snapshot is returned with
 the watchers, a window's opening equity and the wind-down's final reconciliation
 (`unknown`, never `flat`) all refuse it.
 
-`[venue] collateral_headroom_usd` is an exact nonnegative decimal string,
-default `"0"`: free collateral the world precommits to leaving unused, declared
-before the orders that would want it. It is not `[kill] dust_micro`, which is a
-different setting for a different thing. At its default the key is dropped from
-the canonical manifest JSON, so no world that predates it changes hash.
+`[drip]`, `[termination] max_events` and `[venue] collateral_headroom_usd` are
+removed (smuggling D-6): no world set them and nothing enforced them. A manifest
+that names one is refused.
 
 `[venue] principal_usd` and `[tools] max_leverage` are **deprecated and inert**
 (architect decision D1: a cap on the principal or the leverage the population may use
 is an objective supplied from outside, a Class-2 imposition). Both keys are still
-read and validated, and both still enter the canonical manifest JSON exactly as
-before, so every manifest that declares them loads and keeps its historical hash;
-nothing enforces either. `_collateral_view` is the venue's own view, unchanged, and
+read, validated and hashed; nothing enforces either. `_collateral_view` is the venue's own view, unchanged, and
 `venue.set_leverage` takes any positive integer and lets the venue accept or refuse
 it. The first launch gate is met by holding only the proposed principal at the venue.
 
@@ -2101,8 +2093,9 @@ inbox item carries them.
 
 ## Edition 4 factors: prompt, feedback
 
-Two keys turn on one edition 4 change each. Neither changes a roster digest: a
-charter ratified on a roster is still ratified on it when a factor is switched on.
+Two keys turn on one edition 4 change each. Like every key they are hashed at any
+value, defaults included (R8). Neither changes a roster digest: a charter
+ratified on a roster is still ratified on it when a factor is switched on.
 The third edition 4 factor, `[tools] address_enabled` (direct messages between
 seats through `address.send`), is deleted by ruling R11: Chapter II §I.b prescribes
 two channels, rich requests and thin rewards, and no third one between seats. A
@@ -2187,7 +2180,7 @@ beside the frontier's mean-based learners. `["ProducerReturn"]` puts judge routi
 the core. Each name must be an event kind the world can route at genesis (a world
 kind, a built-in return, or a kind a manifest seat accepts or emits); a misspelt one is
 refused. The list is a set: it is kept sorted, so its order never changes the hash.
-An empty list is hash-neutral: the manifest keeps its identity. Every router
+Every router
 credits an abstention (NOOP) its zero-consequence reward, deferred by the mean delay its
 seat rounds take to be learned: what a woken seat that delivered nothing scores on the
 scales its learned seat rounds settled under, weighted by how many settled under each

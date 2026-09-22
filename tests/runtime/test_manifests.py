@@ -13,12 +13,16 @@ def test_testnet_manifest_is_not_mainnet() -> None:
 
 
 def _base() -> dict:
+    from tests.seed_charter import seed_charter_table
+
     return {
         "name": "x",
         "initial_balance_usd": "10",
         "models": [{"id": "m", "input_usd_per_mtok": "1", "output_usd_per_mtok": "5"}],
         "assemblies": [{"id": "a", "model_id": "m"}],
         "novelty": {"share": 0.1, "window": "1h"},
+        "charter": seed_charter_table(),
+        "immune": {"price_step": 0.05},
     }
 
 
@@ -79,14 +83,14 @@ def test_prices_section_defaults_and_validation() -> None:
             manifest_from_dict(d)
 
 
-def test_grounded_horizon_default_keeps_legacy_identity_and_nondefault_changes_it():
+def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
+    """R8 / versioning S1: no key leaves the hash at its default, so the pinned identity
+    of the scripted world moved when the shims went; it is a new v0."""
     scripted = load_manifest("scripted")
     assert scripted.evaluation.grounded_horizon_ticks == 10
-    assert "grounded_horizon_ticks" not in scripted.canonical_json()
-    # R8/R11: the notebook's [notes] table left the manifest and [storage] entered
-    # it, so this identity changed with the physics it names.
+    assert '"grounded_horizon_ticks":10' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "2f61a08bdffaa4288a993ad72e0a1135c1842f6e4a3f7b83944c2d9e9fd940c5"
+        "de2de140a637cb9e7275eebccea678d174b264e6bff18a5ed661247ccc590c1c"
     )
 
     implicit = manifest_from_dict(_base())
@@ -130,14 +134,6 @@ def test_clock_bounds_seed_validation_and_hash():
         manifest_from_dict(d)
 
 
-@pytest.mark.parametrize("value", [-1, True, "0.5", float("nan"), float("inf")])
-def test_invalid_kappa_is_rejected(value):
-    raw = _base()
-    raw["prices"] = {"kappa": value}
-    with pytest.raises(ValueError, match="kappa"):
-        manifest_from_dict(raw)
-
-
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "200", None])
 def test_invalid_cadence_sample_is_rejected(value):
     raw = _base()
@@ -149,7 +145,7 @@ def test_invalid_cadence_sample_is_rejected(value):
 def _with_charter():
     from dataclasses import asdict
 
-    from factorylab.charter.charter import seed_charter
+    from tests.seed_charter import seed_charter
 
     raw = _base()
     raw["charter"] = asdict(seed_charter())
@@ -214,7 +210,8 @@ def test_manifest_card_rejects_unknown_role(value):
     ("evaluation", "adversarial_share", 1.5), ("evaluation", "sibling_share", -0.1),
     ("evaluation", "sampling_step", 2), ("evaluation", "sampling_cap", 0.2),
     ("committee", "min_settled", False), ("immune", "k", 1), ("immune", "k", 3.0),
-    ("immune", "bins", 1), ("immune", "tv_threshold", -1),
+    ("immune", "price_step", 0), ("immune", "price_step", 2.0),
+    ("immune", "tv_threshold", -1),
     ("immune", "gamma_max", 1.1), ("immune", "gap_threshold", float("nan")),
     ("immune", "gain_step", True), ("immune", "decay_step", 0),
 ])
@@ -259,3 +256,36 @@ def test_provider_native_completion_mode_preserves_explicit_historical_allowance
     assert manifest_from_dict(d).assemblies[0].max_tokens is None
     d["assemblies"][0]["max_tokens"] = 4096
     assert manifest_from_dict(d).assemblies[0].max_tokens == 4096
+
+
+def test_a_world_without_a_charter_is_refused():
+    """Charter audit S3: the kernel supplies no default charter."""
+    raw = _base()
+    del raw["charter"]
+    with pytest.raises(ValueError, match=r"\[charter\]"):
+        manifest_from_dict(raw)
+
+
+def test_the_ratchet_step_is_stated_and_the_bin_count_is_not_a_key():
+    """Versioning S3 and U5: price_step is required, and immune.bins is refused."""
+    raw = _base()
+    del raw["immune"]["price_step"]
+    with pytest.raises(ValueError, match="immune.price_step is required"):
+        manifest_from_dict(raw)
+    raw = _base()
+    raw["immune"]["bins"] = 3
+    with pytest.raises(ValueError, match="immune.bins was removed"):
+        manifest_from_dict(raw)
+
+
+@pytest.mark.parametrize("section,table", [
+    ("drip", {"amount_usd": "1", "period": "1d", "end": "7d"}),
+    ("termination", {"max_events": 100}),
+    ("venue", {"collateral_headroom_usd": "0"}),
+])
+def test_keys_no_world_set_are_refused_not_ignored(section, table):
+    """Smuggling D-6: a manifest naming a removed key would describe unrun physics."""
+    raw = _base()
+    raw[section] = table
+    with pytest.raises(ValueError, match="was removed"):
+        manifest_from_dict(raw)

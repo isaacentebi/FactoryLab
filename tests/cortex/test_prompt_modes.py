@@ -42,7 +42,7 @@ def runtime(mode="reference", *, max_tool_calls=None):
     if max_tool_calls is not None:
         manifest = replace(manifest, tools=replace(manifest.tools, max_tool_calls=max_tool_calls))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
-                   drip=False, router_gamma=0.1, provider=ScriptedProvider(),
+                   router_gamma=0.1, provider=ScriptedProvider(),
                    exchange=FakeExchange(coins=manifest.exchange.coins))
 
 
@@ -72,25 +72,26 @@ def test_reference_is_the_default_and_renders_what_it_always_rendered(modes):
         assert f'"{section}"' in prefix
 
 
-def test_an_unnamed_mode_leaves_the_manifest_hash_alone():
-    raw = {"name": "scripted", "seed": 1, "initial_balance_usd": "10",
-           "exchange": {"kind": "fake"}}
+def test_the_prompt_mode_is_hashed_named_or_not():
+    """R8: the default mode is part of the identity too, not dropped to keep an old hash."""
     base = load_manifest("worlds/scripted.toml")
     assert base.manifest_hash() == replace(
         base, prompt=PromptSpec(mode="reference")).manifest_hash()
-    assert "prompt" not in base.canonical_json()
+    assert '"prompt":{"mode":"reference"}' in base.canonical_json()
     # R11: there is no addressing capability for a manifest to name.
     assert "address_enabled" not in base.canonical_json()
     assert not hasattr(base.tools, "address_enabled")
-    # A named mode is part of the world it defines, so it does change the identity.
+    # A different mode is a different world.
     assert base.manifest_hash() != replace(base, prompt=PromptSpec(mode="compact")).manifest_hash()
-    assert raw  # the loader is exercised through load_manifest above
 
 
 def test_a_refused_mode_or_key_is_refused_at_load():
+    from tests.seed_charter import seed_charter_table
+
     def load(table):
         manifest_from_dict({"name": "w", "seed": 1, "initial_balance_usd": "1",
-                            "exchange": {"kind": "fake"}, **table})
+                            "exchange": {"kind": "fake"}, "charter": seed_charter_table(),
+                            "immune": {"price_step": 0.05}, **table})
 
     with pytest.raises(ValueError, match="prompt.mode"):
         load({"prompt": {"mode": "short"}})

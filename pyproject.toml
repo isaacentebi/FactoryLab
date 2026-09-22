@@ -5,7 +5,6 @@ description = "A bounded experimental world informed by The Superdark Factory: o
 requires-python = ">=3.13"
 dependencies = [
     "hyperliquid-python-sdk>=0.24.0",
-    "anthropic>=0.80.0",
     "cryptography>=43.0",
 ]
 

@@ -40,7 +40,6 @@ class RunStats:
     forecasts_sealed: int = 0
     forecasts_settled: int = 0
     timeouts: int = 0
-    upward_releases: int = 0
     reserve_windows: int = 0
     exclusions: int = 0
     registrations_accepted: int = 0
@@ -183,7 +182,6 @@ class SummaryMixin:
             "world": self.m.name,
             "manifest_hash": self.m.manifest_hash(),
             "seed": self.seed,
-            "drip": self.use_drip,
             "terminated": self.termination.final,
             "termination_reason": self.termination.reason,
             "seal_key_released": self.ledger.seal_key_released(),

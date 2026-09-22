@@ -29,10 +29,13 @@ def test_working_state_rent_is_charged_by_byte_time_once():
 
 
 def _world(**tables):
-    return {"name": "x", "initial_balance_usd": "10",
+    from tests.seed_charter import seed_charter_table
+
+    return {"name": "x", "initial_balance_usd": "10", "charter": seed_charter_table(),
             "models": [{"id": "m", "input_usd_per_mtok": "1", "output_usd_per_mtok": "5"}],
             "assemblies": [{"id": "a", "model_id": "m"}],
-            "novelty": {"share": 0.1, "window": "1h"}, **tables}
+            "novelty": {"share": 0.1, "window": "1h"}, "immune": {"price_step": 0.05},
+            **tables}
 
 
 def test_storage_rate_is_read_from_storage_and_from_the_old_notes_key():

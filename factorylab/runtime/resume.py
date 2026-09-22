@@ -74,7 +74,6 @@ def _record_types() -> dict[str, type]:
     from factorylab.kernel.events import Event, EventKind
     from factorylab.kernel.queue import Decision, LearningReturn, PropensityRecord, SettleStatus
     from factorylab.kernel.registry import Contract, PriceSpec, ResourceBounds
-    from factorylab.kernel.timing import DistributionSummary
     from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Reservation
     from factorylab.runtime.cascade import CascadeGate
     from factorylab.runtime.feedback import PendingJudgement
@@ -116,7 +115,7 @@ def _record_types() -> dict[str, type]:
         AssemblySpec, WorkAssemblySpec, ProgramAssemblySpec, Predicate, PredicateForecast,
         PopulationTool, Event, PopulationEvent, EventKind, Decision,
         LearningReturn, PropensityRecord,
-        SettleStatus, Contract, PriceSpec, ResourceBounds, DistributionSummary, DripSchedule,
+        SettleStatus, Contract, PriceSpec, ResourceBounds, DripSchedule,
         ReleaseSchedule,
         Reservation, Retirement, CascadeGate, MeasureWindow, PendingJudgement, RunStats, Forecast,
         GroundedContract,
@@ -229,7 +228,17 @@ def decode(value: Any) -> Any:
         raise ResumeError("unknown checkpoint record type")
     if "$enum" in value:
         return cls(value["value"])
-    return cls(**{k: decode(v) for k, v in value["fields"].items()})
+    retired = _RETIRED_FIELDS.get(kind, ())
+    return cls(**{k: decode(v) for k, v in value["fields"].items() if k not in retired})
+
+
+# Fields of deleted mechanisms that older checkpoints still carry: read and ignored.
+# ``relief_window``: the halved-price relief (charter audit U2), replaced by the ratchet.
+# ``upward_releases``: the unread UpwardBuffer (time audit T9).
+_RETIRED_FIELDS = {
+    "_CardState": frozenset({"relief_window"}),
+    "RunStats": frozenset({"upward_releases"}),
+}
 
 
 class RecoveryJournal:
@@ -536,9 +545,9 @@ _RUNTIME_FIELDS = (
     "funding_to_date", "spot_inventory", "handle_to_assembly", "tool_specs",
     "population_tools",
     "tool_owner", "pending_votes", "regions", "priced", "rolling", "unparsed_logged", "window",
-    "pending", "balance_at", "events_log", "last_closure_ns", "reserve_window_start", "internal",
+    "pending", "balance_at", "events_log", "reserve_window_start", "internal",
     "n", "emitted", "insolvency_count", "_compute_routed", "_compute_unaffordable",
-    "world_consumed", "ticks_consumed", "drips_consumed", "started", "catalogue",
+    "world_consumed", "ticks_consumed", "started", "catalogue",
     "catalogue_completion_limits", "sellers",
     "tool_jail_available", "vote_handles", "voted_amendments",
     "order_intents", "market_index", "unresolved_x402",
@@ -656,7 +665,9 @@ _UNORDERED_STATE = {
     "OutcomeInbox.delivered_through": "per-seat delivery cursor, read by seat",
     "OutcomeInbox.delivered_sparse": "out-of-order delivered ids, read by seat",
 }
-_KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve", "timing", "buffer")
+# An older checkpoint's ``timing`` and ``buffer`` entries (the deleted TimingRegistry
+# and UpwardBuffer, time audit T9) are not read.
+_KERNEL_FIELDS = ("wallet", "queue", "registry", "reserve")
 _COMPONENT_FIELDS = (
     ("book", "_ForecastBook__", ("forecasts", "settled", "requested")),
     ("baseline", "_PrevalenceBaseline__", ("counts",)),
@@ -671,8 +682,7 @@ _COMPONENT_FIELDS = (
         "bindings",
     )),
     ("controller", "_PriceController__", (
-        "eta", "kappa", "decay", "lambda_max", "min_window_events", "cards",
-        "controller", "kp", "kd",
+        "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
     )),
     ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events",
                           # R4-C: a released hold's exposure, and the censored
@@ -747,7 +757,7 @@ def runtime_state(rt) -> Checkpoint:
         "format": 1, "manifest_hash": rt.m.manifest_hash(),
         "config": {
             "events": rt.events_budget, "seed": rt.seed, "initial_balance_micro": rt.initial,
-            "drip": rt.use_drip, "router_gamma": rt.router_gamma, "kill_at_end": rt.kill_at_end,
+            "router_gamma": rt.router_gamma, "kill_at_end": rt.kill_at_end,
         },
         "adapters": {name: {"name": getattr(getattr(rt, name).target, "name", name),
                             "deterministic": getattr(rt, name).deterministic,
@@ -906,7 +916,7 @@ def restore_runtime(rt, state: dict) -> None:
         _resolve(rt, path).restore(saved)
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
-            if (name == "controller" and field in ("kappa", "controller", "kp", "kd")
+            if (name == "controller" and field in ("kp", "kd")
                     and field not in components[name]):
                 # Older checkpoints inherited these immutable parameters from the same manifest.
                 continue
@@ -1127,7 +1137,9 @@ def _resume_runtime(manifest, ledger_path, *, provider, market, exchange, clock_
         raise
     journal = RecoveryJournal(ledger, clock)
     journal.bootstrap = True
-    rt = Runtime(manifest, **state["config"], ledger_path=None, provider=provider, market=market,
+    # An older checkpoint's ``drip`` launch flag is read past: [drip] is gone (D-6).
+    config = {k: v for k, v in state["config"].items() if k != "drip"}
+    rt = Runtime(manifest, **config, ledger_path=None, provider=provider, market=market,
                  exchange=exchange, clock_source=clock_source, _journal=journal, _lock=lock)
     # The journal carries no path; the archive's bytes live beside the ledger (C9).
     from factorylab.kernel.artifacts import artifact_root

@@ -43,7 +43,6 @@ def make_runtime(manifest, path, **kwargs):
         seed=1,
         initial_balance_micro=None,
         ledger_path=str(path),
-        drip=True,
         router_gamma=0.1,
         **kwargs,
     )
@@ -67,7 +66,7 @@ from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
 
 rt = Runtime(load_manifest('scripted'), events=140, seed=1, initial_balance_micro=None,
-             ledger_path=sys.argv[1], drip=True, router_gamma=.1)
+             ledger_path=sys.argv[1], router_gamma=.1)
 original = rt._process_event
 def interrupt(event):
     result = original(event)
@@ -146,7 +145,7 @@ sys.path.insert(0, 'tests/runtime')
 from test_resume import ClockAmendmentProvider, clock_manifest
 from factorylab.runtime.loop import Runtime
 rt = Runtime(clock_manifest(), events=140, seed=1, initial_balance_micro=None,
-             ledger_path=sys.argv[1], drip=True, router_gamma=.1,
+             ledger_path=sys.argv[1], router_gamma=.1,
              provider=ClockAmendmentProvider())
 snapshot = rt._snapshot
 def interrupt_snapshot(boundary):
@@ -332,7 +331,7 @@ class RecordedProvider:
 
 def test_unacknowledged_live_model_call_books_uncertainty_without_resubmission(tmp_path):
     base = load_manifest("scripted")
-    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid"), drip=None)
+    m = replace(base, exchange=replace(base.exchange, kind="hyperliquid"))
     path = tmp_path / "unacknowledged.jsonl"
     provider, venue = RecordedProvider(), CountingVenue()
     run_world(
@@ -371,7 +370,7 @@ def test_unacknowledged_live_model_call_books_uncertainty_without_resubmission(t
 def test_live_resume_reconciles_open_position_and_times_out_outage_deadlines(tmp_path):
     base = load_manifest("scripted")
     m = replace(
-        base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",)), drip=None
+        base, exchange=replace(base.exchange, kind="hyperliquid", coins=("BTC",))
     )
     venue = CountingVenue()
     venue.place(Order("BTC", True, Decimal("0.0001")))
@@ -549,7 +548,7 @@ def test_resume_books_the_entire_venue_fill_batch_once(tmp_path, cut, recover_ca
                 "coin": "BTC", "paid_usd": "0.000005",
             })]
 
-    m = replace(load_manifest("scripted"), initial_balance_micro=10, drip=None)
+    m = replace(load_manifest("scripted"), initial_balance_micro=10)
 
     def world(path):
         rt = make_runtime(m, path, exchange=BatchVenue())
@@ -657,7 +656,7 @@ def test_fake_treasury_trading_shock_replays_fee_unfunded_cut(tmp_path, monkeypa
     m = replace(base, treasury=replace(base.treasury, fake_fee_micro=1_000_000))
     path = tmp_path / 'treasury-shock.jsonl'
     rt = Runtime(m, events=1, seed=1, initial_balance_micro=6_400_000,
-                 ledger_path=str(path), drip=False, router_gamma=.1)
+                 ledger_path=str(path), router_gamma=.1)
     poll = FakeRail.poll
 
     def cheaper_receipt(rail, step, state):
@@ -715,7 +714,7 @@ def test_hybrid_conversion_killed_between_its_legs_resumes_without_a_second_spen
     m.validate()
     path = tmp_path / 'hybrid-cut.jsonl'
     rt = Runtime(m, events=4, seed=1, initial_balance_micro=None, ledger_path=str(path),
-                 drip=False, router_gamma=.1)
+                 router_gamma=.1)
     assert rt.treasury.rail.name == 'scripted-hybrid'
     cash = rt.exchange._cash
     mainnet = rt.treasury.rail.hybrid_books['mainnet_reserve']
@@ -809,8 +808,7 @@ def test_live_order_process_cut_after_acceptance_recovers_original_handle(tmp_pa
             return result
 
     base = load_manifest('scripted')
-    m = replace(base, exchange=replace(base.exchange, kind='hyperliquid', coins=('BTC',)),
-                drip=None)
+    m = replace(base, exchange=replace(base.exchange, kind='hyperliquid', coins=('BTC',)))
     venue = Venue()
     args = {'coin': 'BTC'}
     if operation == 'cancel':

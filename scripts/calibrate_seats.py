@@ -239,8 +239,8 @@ def calibration_manifest(manifest: WorldManifest) -> WorldManifest:
 
 def build_runtime(manifest: WorldManifest, provider: Any, *, seed: int) -> Runtime:
     return Runtime(calibration_manifest(manifest), events=1, seed=seed,
-                   initial_balance_micro=None, ledger_path=None, drip=False,
-                   router_gamma=0.1, provider=provider)
+                   initial_balance_micro=None, ledger_path=None, router_gamma=0.1,
+                   provider=provider)
 
 
 def _seed_spec(rt: Runtime, role: str) -> AssemblySpec | None:

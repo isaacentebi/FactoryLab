@@ -53,7 +53,7 @@ def test_mainnet_requires_a_client_namespace():
 
 def test_the_ratified_charter_and_its_roster_admit_the_funded_manifest():
     manifest = manifest_from_dict(_funded())
-    assert manifest.exchange.mainnet is True and manifest.charter_explicit is True
+    assert manifest.exchange.mainnet is True
     assert len(manifest.charter.cards) == len(_ratified()[0]["cards"])
 
 

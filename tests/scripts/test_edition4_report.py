@@ -533,7 +533,6 @@ def test_offline_runtime_export_uses_invocation_rows_once():
         seed=1,
         initial_balance_micro=None,
         ledger_path=None,
-        drip=False,
         router_gamma=0.1,
         provider=ScriptedProvider(),
     )

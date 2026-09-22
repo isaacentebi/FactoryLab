@@ -311,7 +311,9 @@ def test_investigation_paid_mode_requires_an_existing_freeze(tmp_path, monkeypat
 
     code = investigation.main([
         "--source-root", str(Path.cwd()),
-        "--world", "work/coverage-60-r2/world.toml",
+        # Any world the kernel loads: the refusal precedes every model call. An untracked
+        # run copy under work/ is history, and history need not load (R8).
+        "--world", "worlds/edition3-rehearsal-5.toml",
         "--out", str(tmp_path / "arm"),
         "--paid",
     ])

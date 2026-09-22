@@ -132,13 +132,13 @@ def test_the_surface_exists_only_where_the_manifest_opts_in_and_states_no_strate
     assert rt.treasury.vault_custody
 
 
-def test_the_manifest_key_is_hash_neutral_off_and_names_a_new_world_on():
+def test_the_manifest_key_is_hashed_off_and_names_a_new_world_on():
     import tomllib
 
     from factorylab.runtime.worlds import WORLDS_DIR, manifest_from_dict
 
     off, on = _manifest(False), _manifest(True)
-    assert "vault_tools" not in off.canonical_json()
+    assert '"vault_tools":false' in off.canonical_json()
     assert off.manifest_hash() == load_manifest("scripted").manifest_hash()
     assert on.manifest_hash() != off.manifest_hash()
     raw = tomllib.loads((WORLDS_DIR / "scripted.toml").read_text())

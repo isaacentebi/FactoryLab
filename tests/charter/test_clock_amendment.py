@@ -9,7 +9,7 @@ from factorylab.runtime.worlds import load_manifest
 
 def runtime():
     return Runtime(load_manifest("scripted"), events=1, seed=1, initial_balance_micro=None,
-                   ledger_path=None, drip=True, router_gamma=0.1)
+                   ledger_path=None, router_gamma=0.1)
 
 
 @pytest.mark.parametrize("value", ["0.5s", "41s", "bad", "", None, True, 10, "0.0000000001s"])

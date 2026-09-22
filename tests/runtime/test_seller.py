@@ -65,7 +65,7 @@ def runtime_with_reserve():
     manifest = load_manifest("scripted")
     manifest = replace(manifest, treasury=replace(manifest.treasury, reserve_address=RESERVE))
     return Runtime(manifest, events=0, seed=1, initial_balance_micro=100_000_000,
-                   ledger_path=None, drip=False, router_gamma=.1, exchange=FakeExchange(),
+                   ledger_path=None, router_gamma=.1, exchange=FakeExchange(),
                    provider=ScriptedProvider())
 
 

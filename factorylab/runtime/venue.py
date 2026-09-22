@@ -986,10 +986,8 @@ class VenueMixin:
         for this instrument, and when it was observed.
 
         The check is then exactly the reviewer's: incremental margin, plus holds
-        not already reflected in margin used, plus the manifest's precommitted
-        headroom (``[venue] collateral_headroom_usd``; the kill section's
-        ``dust_micro`` is a different thing and is not it), against eligible
-        equity minus margin used.
+        not already reflected in margin used, plus what earlier writes of the same
+        batch already take, against eligible equity minus margin used.
 
         Spot and perps are checked separately and against their own balances: a
         spot buy needs the USDC to pay for it, a spot sell needs the base coin to
@@ -1011,8 +1009,7 @@ class VenueMixin:
             mark = max(mids[coin], price or mids[coin])
             # What earlier writes of the same batch already take from this pool is
             # not free for this one: it rides as headroom (``venue_batch_refusal``).
-            headroom = Decimal(str(getattr(self.m.exchange, "collateral_headroom_usd", "0")))
-            headroom += committed
+            headroom = committed
             stale = self._collateral_stale(view)
             if stale is not None:
                 reason = stale

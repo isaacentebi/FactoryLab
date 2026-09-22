@@ -104,7 +104,7 @@ def test_a1_polymorphic_decision_replays_after_its_durable_binding_before_mutati
 
     def runtime(path=None):
         return Runtime(manifest, events=2, seed=1, initial_balance_micro=None,
-                       ledger_path=path, drip=True, router_gamma=.1, provider=provider())
+                       ledger_path=path, router_gamma=.1, provider=provider())
 
     class ProcessDeath(BaseException):
         pass

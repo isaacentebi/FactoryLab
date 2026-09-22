@@ -24,8 +24,7 @@ from factorylab.kernel.queue import DecisionQueue
 from factorylab.kernel.registry import Contract, PriceSpec, Registry, ResourceBounds
 from factorylab.kernel.reserve import NoveltyReserve
 from factorylab.kernel.termination import Termination
-from factorylab.kernel.timing import TimingRegistry, UpwardBuffer
-from factorylab.kernel.wallet import DripSchedule, ReleaseSchedule, Wallet
+from factorylab.kernel.wallet import ReleaseSchedule, Wallet
 from factorylab.runtime import release, witness
 from factorylab.runtime.cadence import GovernanceCadence
 from factorylab.runtime.cards import forecast_weight
@@ -81,7 +80,6 @@ class BootstrapMixin:
         seed: int | None,
         initial_balance_micro: int | None,
         ledger_path: str | None,
-        drip: bool,
         router_gamma: float,
         provider: Any | None = None,
         market: X402Provider | None = None,
@@ -241,17 +239,12 @@ class BootstrapMixin:
                     key_path=(ledger_path + ".key") if ledger_path else None,
                 )
             self.ledger = RecoveryJournal(ledger, self.clock)
-        self.use_drip = drip and manifest.drip is not None
-        schedule = None
-        if self.use_drip and manifest.drip is not None:
-            d = manifest.drip
-            schedule = DripSchedule(d.amount_micro, d.period_ns, d.start_ns, d.end_ns)
         # Locked backing and its release schedule come from the manifest; the offsets
         # are anchored to the ledgered Launch timestamp when the world launches.
         endowment = manifest.endowment
         releases = (ReleaseSchedule(tuple(endowment.releases))
                     if endowment.locked_micro else None)
-        self.wallet = Wallet(self.initial, self.ledger, schedule, clock_ns=self.clock,
+        self.wallet = Wallet(self.initial, self.ledger, None, clock_ns=self.clock,
                              balance_floor_micro=manifest.termination.balance_floor_micro,
                              reported_cost_multiple=manifest.treasury.reported_cost_multiple,
                              locked_micro=endowment.locked_micro, release_schedule=releases)
@@ -272,12 +265,6 @@ class BootstrapMixin:
             sample=manifest.timing.cadence_sample,
             min_ratio=manifest.timing.min_ratio,
             backstop=self.ev.consequence_backstop_ticks,
-        )
-        self.timing = TimingRegistry()
-        self.timing.register_loop("leaf", [])
-        self.timing.register_loop("governance", ["leaf"])
-        self.buffer = UpwardBuffer(
-            self.timing, "governance", min_ratio=manifest.timing.min_ratio, seed=self.seed
         )
 
         # settlement
@@ -732,12 +719,9 @@ class BootstrapMixin:
         self.controller = ImmunePriceController(
             self.ledger,
             eta=pr.eta,
-            kappa=pr.kappa,
             decay=pr.decay,
             lambda_max=pr.lambda_max,
             min_window_events=pr.min_window_events,
-            timing=self.timing,
-            controller=pr.controller,
             kp=pr.kp,
             kd=pr.kd,
         )
@@ -765,7 +749,6 @@ class BootstrapMixin:
         self.verdicts_graded: set[str] = set()
         self.balance_at: list[int] = [self.wallet.balance]  # index = event number
         self.events_log: list[dict[str, Any]] = [{"kind": "Launch", "payload": {}}]
-        self.last_closure_ns = -1
         self.reserve_window_start: int | None = None
         self.internal: deque[Event] = deque()
         self.n = 0
@@ -780,7 +763,6 @@ class BootstrapMixin:
         # consequence line reports provider cost and venue delta separately rather
         # than one net (edition 3, C5).
         self.venue_deltas: dict[str, dict[str, int]] = {}
-        self.drips_consumed = 0
         # The venue reads prompts are built from, each held for the tick that read it:
         # the listing (#89), the mid prices and the account state. Not resumable
         # state: a resumed runtime reads afresh and records that read.

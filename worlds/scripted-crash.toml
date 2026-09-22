@@ -121,7 +121,6 @@ min_ratio = 3
 jitter_fraction = 0.2
 
 [prices]
-kappa = 0.5
 eta = 0.5
 decay = 0.1
 lambda_max = 1.0
@@ -135,9 +134,53 @@ min_settled = 5
 
 [immune]
 k = 3
-bins = 3
+# The stable-failure ratchet's lambda step per window of duration: the value the
+# ratchet borrowed from gain_step until the two units were set apart.
+price_step = 0.05
 tv_threshold = 0.2
 gap_threshold = 0.8
 gain_step = 0.05
 gamma_max = 0.5
 decay_step = 0.1
+
+[charter]
+# The seed charter: four norms, three cards, edition 1. Until charter audit S3 it
+# lived in code (charter.seed_charter) and reached every world that named none; a
+# world's charter is now always written in the world itself.
+edition = 1
+norms = [
+  "truthful commitments",
+  "care with scarce resources",
+  "useful inquiry",
+  "the capacity to revise inadequate practices",
+]
+
+[[charter.cards]]
+id = "cost_per_return"
+norm = "care with scarce resources"
+description = "Wallet cost of producing one well-formed return."
+units = "micro-USD per return"
+window = { kind = "returns", n = 100, per = "role" }
+acceptable_region = "below the median of the previous window"
+observation = "cost_per_return"
+answers_for = "producer"
+
+[[charter.cards]]
+id = "well_formed_rate"
+norm = "truthful commitments"
+description = "Share of returns that satisfy their declared outcome schema."
+units = "fraction"
+window = { kind = "returns", n = 100, per = "role" }
+acceptable_region = "at least 0.9"
+observation = "well_formed_rate"
+answers_for = "all"
+
+[[charter.cards]]
+id = "forecast_skill"
+norm = "useful inquiry"
+description = "Mean Brier score of settled forecasts minus the prevalence baseline."
+units = "score difference in [-1, 1]"
+window = { kind = "forecasts", n = 50, per = "assembly" }
+acceptable_region = "above zero"
+observation = "forecast_skill"
+answers_for = "evaluator"
