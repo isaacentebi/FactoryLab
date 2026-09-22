@@ -730,6 +730,26 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
             faults.extend((index, f"more than {min(limits)} {section}")
                           for index in where[min(limits):])
             kept, where = kept[:min(limits)], where[:min(limits)]
+        if faults and section == "tool_calls" and validator is not None:
+            # Each refused call keeps its slot, marked, and is answered there with its
+            # reason; the runtime validator voids the whole batch if it writes, so a
+            # write never runs beside a refused call and a read-only turn survives.
+            reasons: dict[int, str] = {}
+            for index, reason in sorted(faults):
+                reasons.setdefault(index, reason)
+            rebuilt = []
+            for index, item in enumerate(value):
+                if index not in reasons:
+                    rebuilt.append(item)
+                    continue
+                base = item if isinstance(item, dict) else {}
+                rebuilt.append({
+                    "tool": base.get("tool") if isinstance(base.get("tool"), str) else "",
+                    "args": base.get("args") if isinstance(base.get("args"), dict) else {},
+                    "invalid": reasons[index][:200]})
+                drop(section, reasons[index], index)
+            parsed[section], origin[section] = rebuilt, list(range(len(rebuilt)))
+            continue
         if faults and section in _ATOMIC_SECTIONS:
             index, reason = min(faults)
             drop(section, f"item {index}: {reason}")
@@ -748,6 +768,13 @@ def validate_return_sections(parsed: dict, schema: dict, validator=None, req=Non
     # fields and order size still validate atomically, and an explicit ``emits``
     # keeps its declared event body atomic rather than laundering it as a draft.
     continuation = bool(parsed.get("tool_calls") or parsed.get("requests"))
+    status_shape = declared.get("status") if isinstance(declared, dict) else None
+    if (continuation and "status" in parsed and parsed["status"] != "cannot"
+            and isinstance(status_shape, dict) and "enum" in status_shape
+            and parsed["status"] not in status_shape["enum"]):
+        # "pending" beside tool calls is a draft of an answer not yet given.
+        drop("status", f"unfinished continuation field: {parsed['status']!r}")
+        del parsed["status"]
     if continuation and "emits" not in parsed:
         protected = {*reserved, "size"}
         for section, shape in declared.items():

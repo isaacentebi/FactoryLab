@@ -30,7 +30,9 @@ def test_invalid_read_is_answered_in_its_slot_without_dispatch(monkeypatch):
 
 
 @pytest.mark.parametrize("calls,reason", [
-    ([{"tool": "outcome.get", "args": {"outcome_id": "outcome:1"}}] * 5,
+    # Over the limit in a batch that writes: whole or not at all. (A read-only
+    # batch over the limit is answered in its slots instead.)
+    ([{"tool": "venue.cancel", "args": {"coin": "BTC", "order_id": "1"}}] * 5,
      "more than 4 tool_calls"),
 ])
 def test_invalid_tool_only_reply_reaches_own_inbox_without_dispatch(monkeypatch, calls, reason):

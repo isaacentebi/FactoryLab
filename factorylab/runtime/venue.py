@@ -564,7 +564,14 @@ class VenueMixin:
                 client_id=ret.handle,
                 market=out.get("market", "perp"),
             )
-        except (KeyError, ValueError, ArithmeticError) as exc:
+        except KeyError:
+            self._refuse_order(
+                ret.handle, 'nothing was submitted: action "order" named no coin, side and '
+                "size, and this decision placed nothing through a venue tool. A market "
+                'order is the answer {"action": "order", "coin", "side", "size"}; a limit '
+                "order is the tool venue.place_limit {coin, side, size, price}")
+            return
+        except (ValueError, ArithmeticError) as exc:
             self._refuse_order(ret.handle,
                                f"order output is not a readable order: {type(exc).__name__}")
             return

@@ -522,12 +522,33 @@ class ComputeMixin:
         )
         from factorylab.world.venue_tools import _validate
 
+        live = {**parsed}
+        if isinstance(parsed.get("tool_calls"), list):
+            # A call refused in validation is answered in its slot, never dispatched;
+            # it does not count against the turn's limit.
+            live["tool_calls"] = [c for c in parsed["tool_calls"]
+                                  if not (isinstance(c, dict) and c.get("invalid"))]
+        from factorylab.runtime.propensity import EFFECT_TOOLS
+
+        calls = parsed.get("tool_calls", [])
+        # A batch that writes (the venue, the treasury, a message, a note) runs whole
+        # or not at all; a batch of reads loses only the read that cannot run.
+        writes = any(str(call.get("tool")) in EFFECT_TOOLS
+                     or str(call.get("tool")).startswith("treasury.")
+                     or call.get("tool") in ("address.send", "note.put")
+                     for call in calls if isinstance(call, dict))
         for section, limit in (("requests", self.m.tools.max_children),
                                ("tool_calls", self.m.tools.max_tool_calls)):
-            items = parsed.get(section)
+            items = live.get(section)
             if isinstance(items, list) and len(items) > limit:
+                if section == "tool_calls" and not writes:
+                    # The first live call past the limit is refused in its own slot.
+                    over = [i for i, c in enumerate(calls)
+                            if not (isinstance(c, dict) and c.get("invalid"))][limit]
+                    raise SectionError(section, f"more than {limit} {section} in one turn; "
+                                       "call it again next round", over, atomic=False)
                 raise SectionError(section, f"more than {limit} {section}", limit)
-        validate_schema(parsed, {"type": "object", "properties": reserved_return_fields(
+        validate_schema(live, {"type": "object", "properties": reserved_return_fields(
             max_children=self.m.tools.max_children, max_tool_calls=self.m.tools.max_tool_calls)})
         binding = self.return_bindings.get(req.handle)
         if binding is not None:
@@ -556,15 +577,11 @@ class ComputeMixin:
                     partial=bool(parsed.get("requests") or parsed.get("tool_calls")
                                  or parsed.get("status") == "cannot"),
                 )
-        from factorylab.runtime.propensity import EFFECT_TOOLS
-
-        calls = parsed.get("tool_calls", [])
-        # A batch that writes (the venue, the treasury, a message, a note) runs whole
-        # or not at all; a batch of reads loses only the read that cannot run.
-        writes = any(str(call.get("tool")) in EFFECT_TOOLS
-                     or str(call.get("tool")).startswith("treasury.")
-                     or call.get("tool") in ("address.send", "note.put")
-                     for call in calls if isinstance(call, dict))
+        refused = next((i for i, c in enumerate(calls)
+                        if isinstance(c, dict) and c.get("invalid")), None)
+        if writes and refused is not None:
+            raise SectionError("tool_calls", "a batch that writes cannot run beside a "
+                               f"refused call: {calls[refused]['invalid']}", refused)
         for index, call in enumerate(calls):
             spec = self.tool_specs.get(call["tool"])
             if spec is None or call.get("invalid"):

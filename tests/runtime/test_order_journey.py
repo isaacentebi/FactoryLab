@@ -220,3 +220,43 @@ def test_a_bad_item_in_a_batch_that_writes_still_voids_the_whole_batch():
     handle, event = _consequence_produce(runtime)
     assert _writes(runtime, handle) == [] and len(provider.requests) == 1
     assert event.payload["status"] == "ok"  # the answer stands; the batch never ran
+
+
+def test_reads_over_the_turn_limit_are_answered_in_their_slots():
+    """Live harness: five outcome.get calls against a four-call limit voided the turn."""
+    reads = [{"tool": "venue.positions", "args": {}}] * 5
+    provider = Scripted({"tool_calls": reads}, {"action": "hold", "rationale": "read"})
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    limit = runtime.m.tools.max_tool_calls
+    provider.replies[0] = {"tool_calls": [{"tool": "venue.positions", "args": {}}] * (limit + 1)}
+    _, event = _consequence_produce(runtime)
+    assert event.payload["status"] == "ok" and len(provider.requests) == 2
+    second = "\n".join(str(m.get("content", "")) for m in provider.requests[1].messages)
+    assert f"more than {limit} tool_calls" in second
+
+
+def test_a_writing_batch_never_runs_beside_a_refused_call():
+    calls = [LIMIT, ""]  # a write beside a malformed item
+    provider = Scripted({"action": "hold", "tool_calls": calls})
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    handle, event = _consequence_produce(runtime)
+    assert _writes(runtime, handle) == [] and len(provider.requests) == 1
+
+
+def test_a_draft_status_beside_tool_calls_does_not_void_the_turn():
+    provider = Scripted(
+        {"status": "pending", "tool_calls": [{"tool": "venue.positions", "args": {}}]},
+        {"action": "hold", "rationale": "done"})
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    _, event = _consequence_produce(runtime)
+    assert event.payload["status"] == "ok" and len(provider.requests) == 2
+
+
+def test_an_order_described_only_in_prose_is_refused_with_how_to_place_it():
+    provider = Scripted({"action": "order", "rationale": "I submit one tiny limit buy"})
+    runtime = _consequence_runtime(provider=provider, exchange=_exchange())
+    handle, _ = _consequence_produce(runtime)
+    refusal = next(i for i in _consequence_diary(runtime)
+                   if i["kind"] == "order.refused" and i["handle"] == handle)
+    assert "nothing was submitted" in refusal["reason"]
+    assert "venue.place_limit" in refusal["reason"]
