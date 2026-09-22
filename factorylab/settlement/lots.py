@@ -11,11 +11,14 @@ closing fee. A handle closing its own lot receives the whole profit once.
 Only a decision with an open account can own an order or a lot.
 
 An ``event`` lot is an outcome token of a binary event market (Polymarket). It
-is held long only, it is never marked, and its consequence is fixed by the
-market's resolution (``redeem``), never guessed from a price at the backstop.
+is held long only and is marked like a spot lot, at the market's own midpoint:
+the price is the market's anticipatory settlement of the belief (essay II.IV.b),
+so the decision is scored at the backstop rather than waiting on a resolution
+that may come after its learner has moved on. The resolution itself closes the
+lot later (``redeem``) and its money reaches the owner as a late realization.
 """
 
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from fractions import Fraction
@@ -445,7 +448,7 @@ class LotTable:
 
     def resolve(self, event: int, backstop: int, mids: Mapping[str, str], *,
                 censored: Mapping[str, str] | None = None,
-                tick: int | None = None, held: Collection[str] = ()) -> "LotTable":
+                tick: int | None = None) -> "LotTable":
         """Fix ready outcomes once; marks require a valid mid for every remaining coin.
 
         The backstop counts from the return's opening, including any time awaiting
@@ -460,12 +463,6 @@ class LotTable:
         like any other, and its outcome carries the money its observed orders
         produced; only the answer to whether it paid off is unknown, because the
         unobserved order could have changed it, so the outcome is censored.
-
-        ``held`` names returns whose consequence is owed by a future resolution
-        (an event market order still resting): they are skipped whatever their
-        age. A return holding an event lot is skipped the same way without being
-        named, because an outcome token has no mark: its value is known only when
-        its market resolves, and the backstop does not turn that into a guess.
         """
         _require_event_index(event, "event")
         _require_event_index(backstop, "backstop", positive=True)
@@ -473,11 +470,7 @@ class LotTable:
         for account in self.returns:
             if account.voided or account.cost_micro is None or account.payoff is not None:
                 continue
-            if account.handle in held:
-                continue
             lots = [lot for lot in self.lots if lot.handle == account.handle]
-            if any(lot.market == "event" for lot in lots):
-                continue
             waiting = any(o.handle == account.handle and o.remaining for o in self.orders)
             age = (tick - account.opened_at_tick
                    if tick is not None and account.opened_at_tick is not None

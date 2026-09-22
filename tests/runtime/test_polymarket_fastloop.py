@@ -4,8 +4,8 @@ The world is ``fixtures/polymarket-fastloop.toml``: the rehearsal's launch ident
 plus ``[polymarket] enabled = true`` on the simulated venue. A scripted population
 places a Polymarket order, reads market text, and holds; the seeded market
 resolves inside the run. What must come out is the whole path: durable intents,
-fills in the polymarket pot, a resolution that realises the position into the
-consequence book with a receipt, and a kill that winds the pot down.
+fills in the polymarket pot, positions scored at the market's midpoint by the
+backstop, and a later resolution booked late with a receipt.
 """
 
 import json
@@ -41,7 +41,7 @@ class EventMarketPolicy(fastloop.PolicyProvider):
 @pytest.mark.gate
 def test_scripted_fastloop_run_settles_an_event_market_position(tmp_path, monkeypatch):
     monkeypatch.setattr(fastloop, "PolicyProvider", EventMarketPolicy)
-    card = fastloop.run("scripted", 30, WORLD, tmp_path, cap_usd="2", seed=1)
+    card = fastloop.run("scripted", 120, WORLD, tmp_path, cap_usd="2", seed=1)
     assert card["status"] == "completed", card.get("error")
     events = json.loads(Path(card["out"], "events.json").read_text())
     kinds = [e.get("kind") for e in events]
@@ -56,11 +56,12 @@ def test_scripted_fastloop_run_settles_an_event_market_position(tmp_path, monkey
     # No decision traded on the text it read in the same wake.
     assert not any(e.get("kind") == "polymarket.intent" and e.get("handle") in {
         r.get("handle") for r in events if r.get("kind") == "polymarket.read"} for e in events)
-    # Each decision that held the token is told what the resolution realised for it,
-    # and a grounded contract waited for that rather than closing on a guess.
+    # Each decision that held the token is told what the resolution realised for it.
     assert {r["receipt"]["handle"] for r in receipts} == {
         e["handle"] for e in events if e.get("kind") == "polymarket.intent"}
-    assert "consequence.awaiting_resolution" in kinds
+    # The market's price marked the positions first; the resolution then booked late.
+    assert "consequence.late" in kinds and "polymarket.drift" not in kinds
+    assert card["learning_signal_rate"] > 0
     # After the market closed, new orders on it are refused before any intent.
     assert any(e.get("kind") == "polymarket.refused"
                and e.get("reason") == "market is not accepting orders" for e in events)

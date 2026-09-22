@@ -28,16 +28,32 @@ What the kernel enforces, and where:
 * **Custody is separate.** Collateral is the ``polymarket`` pot. Its own balance
   and holds are the only collateral an order is weighed against; it never
   borrows the Hyperliquid accounts or the Base reserve.
-* **A position is settled by its resolution.** Fills enter the consequence book
-  as ``event`` lots (``settlement/lots.py``); an outcome token is never marked,
-  so the decision that holds one keeps an open consequence until the market
-  resolves, and the resolution is what closes it (``LotTable.redeem``).
+* **The market's price settles early; its resolution settles late.** Fills enter
+  the consequence book as ``event`` lots (``settlement/lots.py``), marked each
+  tick at the CLOB midpoint. At the consequence backstop a held position is
+  scored at that mark, exactly as an open spot lot is: the price is the
+  market's anticipatory settlement of the belief, the cure the essay names for
+  learning death (II.IV.b: "the compensation period of any exploratory learner
+  must be shorter than the lifetime of the things it is being compensated for
+  discovering"). The resolution closes the lot later (``LotTable.redeem``) and
+  its money reaches the owner through ``_settle_late``; the score is never
+  revised. A token with no midpoint is not marked, and its decision falls back
+  on its provisional verdict like any other unobserved consequence.
+* **Claims stay in their custody.** What a Polymarket position realises is a
+  claim on the polymarket pot (``claim_share``), never on the venue, and
+  financing converts only venue claims, so a profit made on Polygon is never
+  withdrawn from Hyperliquid money. The pot reconciles against its own books
+  every tick (``reconcile``).
+* **Third-party labels are not ours to repeat.** Outcome names are written by
+  market creators. Every surface outside the jailed reads (the pot, custody, the
+  pots, receipts, outcomes, the ledger) carries token and market ids and a
+  normalised outcome (``YES``, ``NO`` or ``outcome <n>``), never the label.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
 from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 from typing import Any
 
 from factorylab.kernel.money import usd_to_micro
@@ -148,18 +164,31 @@ class PolymarketSurface:
         self.intents: dict[str, dict[str, Any]] = {}
         self.order_ids: dict[str, str] = {}  # order id -> client id
         self.window_orders: tuple[int, int] = (0, 0)
+        # The pot's own claim book, apart from the venue's (BudgetBook.claim_venue):
+        # exact realised P&L per decision, what of it has been claimed, the claims
+        # per seat, and what the pot settled, in micro and exactly.
+        self.realized: dict[str, Fraction] = {}
+        self.claimed: dict[str, int] = {}
+        self.claims: dict[str, int] = {}
+        self.booked = 0
+        self.settled = Decimal(0)
+        self.opening: Decimal | None = None
+
+    FIELDS = ("intents", "order_ids", "realized", "claimed", "claims", "booked", "settled",
+              "opening")
 
     def state(self) -> dict[str, Any]:
-        """Intents, order ownership, the window count and a simulated venue's own state."""
+        """Intents, order ownership, the claim book, the window count and the venue's state."""
         target = self.venue.target
-        return {"intents": self.intents, "order_ids": self.order_ids,
+        return {**{name: getattr(self, name) for name in self.FIELDS},
                 "window_orders": list(self.window_orders),
                 "venue": dict(vars(target)) if self.venue.deterministic else None}
 
     def restore(self, saved: dict[str, Any]) -> None:
         """Rebind saved state to this process's adapter."""
-        self.intents = dict(saved.get("intents") or {})
-        self.order_ids = dict(saved.get("order_ids") or {})
+        for name in self.FIELDS:
+            if name in saved:
+                setattr(self, name, saved[name])
         self.window_orders = tuple(saved.get("window_orders") or (0, 0))
         if saved.get("venue") is not None and self.venue.deterministic:
             self.venue.target.__dict__.clear()
@@ -244,7 +273,7 @@ def execute(rt: Any, action_id: str, handle: str, tool_id: str, args: dict,
     if tool_id in WRITES:
         return _write(rt, surface, action_id, handle, tool_id, args, slot)
     if tool_id == ACCOUNT:
-        return {**account_view(surface.account()), "as_of_ns": rt.clock.now_ns}
+        return {**account_view(sanitized(surface.account())), "as_of_ns": rt.clock.now_ns}
     try:
         if tool_id == "polymarket.search":
             limit = args.get("limit", 5)
@@ -293,6 +322,26 @@ def check_args(schema: dict, args: Any) -> str | None:
     return None
 
 
+def outcome_label(index: int, name: Any) -> str:
+    """A normalised outcome name: ``YES``, ``NO`` or ``outcome <n>``, never third-party text."""
+    text = str(name or "").strip().lower()
+    if text in ("yes", "no"):
+        return text.upper()
+    return f"outcome {int(index)}"
+
+
+def sanitized(account: dict | None) -> dict | None:
+    """A pot read with every third-party label replaced by its normalised outcome."""
+    if account is None:
+        return None
+    positions = []
+    for position in account["positions"]:
+        row = {k: v for k, v in position.items() if k != "outcome_name"}
+        row["outcome"] = outcome_label(position["outcome_index"], position.get("outcome_name"))
+        positions.append(row)
+    return {**account, "positions": positions}
+
+
 def account_view(account: dict | None) -> dict[str, Any]:
     """What the pot tool publishes; an unreadable pot says so and states no amount."""
     if account is None:
@@ -319,6 +368,13 @@ def _open_exposure(account: dict) -> Decimal:
     return held + resting
 
 
+def taker_fee(market: dict, size: Decimal, price: Decimal) -> Decimal:
+    """The most a buy can pay in fees: the taker fee at the market's own rate."""
+    fees = market.get("fees") or {}
+    rate = _decimal(fees.get("rate")) if fees.get("enabled") else Decimal(0)
+    return size * (rate or Decimal(0)) * price * (1 - price)
+
+
 def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
             tool_id: str, args: dict, *, committed: Decimal = Decimal(0),
             window_count: int | None = None) -> str | None:
@@ -328,7 +384,8 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
     needs its notional and the taker fee it could pay in the pot's available
     USDC (less ``committed``, what earlier writes of the same batch need); a sell
     needs the tokens. It also enforces the manifest's caps (one order's notional,
-    the pot's open exposure, orders a window) and refuses an exact repeat of a
+    the pot's open exposure, orders a window), the market's own tick and minimum
+    order size, and refuses an exact repeat of a
     resting order the same seat already has. An unreadable pot refuses new risk
     and never a cancellation.
     """
@@ -354,13 +411,17 @@ def refusal(rt: Any, surface: PolymarketSurface, seat: str | None, handle: str,
         account = surface.account()
     except Exception as exc:  # noqa: BLE001 - unknown collateral blocks new risk
         return f"polymarket pot unavailable: {type(exc).__name__}"
+    tick, minimum = _decimal(market.get("tick_size")), _decimal(market.get("min_order_size"))
+    if tick is not None and tick > 0 and price % tick:
+        return f"price is not on the market's {tick} tick"
+    if minimum is not None and size < minimum:
+        return f"size is below the market's minimum order of {minimum} tokens"
     notional = size * price
     if usd_to_micro(notional, rounding="ceil") > spec.max_order_micro:
         return "order notional exceeds [polymarket] max_order_usd"
     buy = args["side"] == "buy"
     if buy:
-        rate = Decimal(market["fees"]["rate"] or 0) if market["fees"]["enabled"] else Decimal(0)
-        fee = size * rate * price * (1 - price)
+        fee = taker_fee(market, size, price)
         if usd_to_micro(_open_exposure(account) + committed + notional,
                         rounding="ceil") > spec.max_open_micro:
             return "open exposure would exceed [polymarket] max_open_usd"
@@ -393,7 +454,8 @@ def batch_refusal(rt: Any, seat: str, handle: str,
 
     Guarantees a batch is weighed whole before any of it is submitted, and more
     strictly than one write alone: the collateral and exposure earlier buys in the
-    batch would need is counted against the later ones, and the window cap counts
+    batch would need, their fees included, is counted against the later ones, and
+    the window cap counts
     the batch's own orders, so no leg is submitted that the pot could not carry
     beside the others.
     """
@@ -417,7 +479,9 @@ def batch_refusal(rt: Any, seat: str, handle: str,
         if tool_id == "polymarket.place_limit":
             count += 1
             if args.get("side") == "buy":
-                committed += Decimal(str(args["size"])) * Decimal(str(args["price"]))
+                size, price = Decimal(str(args["size"])), Decimal(str(args["price"]))
+                market = surface.venue.target.market_of_token(args["token_id"]) or {}
+                committed += size * price + taker_fee(market, size, price)
     return None
 
 
@@ -544,6 +608,59 @@ def tick(rt: Any) -> None:
             continue
         _recover(rt, surface, client_id)
     settle(rt, surface.venue.advance(rt.clock.now_ns))
+    mark(rt)
+    reconcile(rt)
+
+
+def mark(rt: Any) -> None:
+    """Give the consequence book this tick's midpoint of every token a lot holds.
+
+    Guarantees a mark is the market's own price strictly between 0 and 1. A token
+    whose midpoint is unavailable loses its mark rather than keeping a stale one,
+    so its lot is not marked and its decision falls back as any unobserved
+    consequence does.
+    """
+    surface = rt.polymarket
+    for coin in sorted({lot.coin for lot in rt.consequences.table.lots
+                        if lot.market == "event"}):
+        try:
+            mid = _decimal(surface.venue.midpoint(coin.removeprefix("PM:")))
+        except Exception:  # noqa: BLE001 - an unread price is an absent price
+            mid = None
+        if mid is not None and 0 < mid < 1:
+            rt.consequences.observe("MarketMid", {"coin": coin, "mid": str(mid)}, rt.n)
+        elif rt.consequences.mids.pop(coin, None) is not None:
+            rt.ledger.append({"kind": "polymarket.mark_unavailable", "coin": coin,
+                              "ts": rt.clock.now_ns})
+
+
+def reconcile(rt: Any) -> dict[str, Any] | None:
+    """Check the pot against its own books: opening + settled == USDC + tokens at cost.
+
+    Every fill and resolution the pot settled is ledgered exactly; the venue's
+    account is the other side. Guarantees a disagreement larger than one
+    micro-USD is ledgered as ``polymarket.drift``, as the treasury reconciler
+    ledgers ``reconcile.drift``; the first observation is ledgered as the baseline.
+    """
+    surface = rt.polymarket
+    try:
+        account = surface.account()
+    except Exception as exc:  # noqa: BLE001 - an unreadable pot is not reconciled
+        rt.ledger.append({"kind": "polymarket.reconcile_unavailable",
+                          "reason": type(exc).__name__, "ts": rt.clock.now_ns})
+        return None
+    held = Decimal(account["usdc"]) + sum(
+        (Decimal(p["size"]) * Decimal(p["avg_px"]) for p in account["positions"]), Decimal(0))
+    if surface.opening is None:
+        surface.opening = held - surface.settled
+        rt.ledger.append({"kind": "polymarket.opening", "usdc": str(surface.opening),
+                          "ts": rt.clock.now_ns})
+    drift = held - (surface.opening + surface.settled)
+    result = {"opening": str(surface.opening), "settled": str(surface.settled),
+              "held_at_cost": str(held), "drift": str(drift)}
+    if abs(drift) > Decimal("0.000001"):
+        rt.ledger.append({"kind": "polymarket.drift", **result, "ts": rt.clock.now_ns})
+    return result
 
 
 def settle(rt: Any, events: list[dict[str, Any]]) -> None:
@@ -577,12 +694,12 @@ def _settle_fill(rt: Any, event: dict) -> None:
                "liquidation": False, "market": "event", "inventory_size": event["size"]}
     rt.ledger.append({"kind": "polymarket.fill", **payload, "market_id": event["market_id"],
                       "ts": rt.clock.now_ns})
+    rt.polymarket.settled += Decimal(event["realized_usd"]) - Decimal(event["fee_usd"])
     delta = (usd_to_micro(event["realized_usd"], rounding="nearest")
              - usd_to_micro(event["fee_usd"], rounding="nearest"))
-    if delta:
-        rt._settle_venue([(delta, f"fill:{order_id}", "exchange_pnl", CUSTODY, order_id)])
-    rt.consequences.observe("Fill", payload, rt.n)
     owner_handle = rt._order_owner(order_id)
+    _book_pot(rt, delta, f"fill:{order_id}", "exchange_pnl", owner_handle)
+    rt.consequences.observe("Fill", payload, rt.n)
     _tell(rt, owner_handle, {"kind": "polymarket_fill", "order_id": order_id,
                              "token_id": event["token_id"], "market_id": event["market_id"],
                              "side": "buy" if event["is_buy"] else "sell",
@@ -593,31 +710,77 @@ def _settle_fill(rt: Any, event: dict) -> None:
 def _settle_resolution(rt: Any, event: dict) -> None:
     token = event["token_id"]
     facts = {"market_id": event["market_id"], "condition_id": event.get("condition_id"),
-             "token_id": token, "outcome": event.get("outcome"),
+             "token_id": token,
+             "outcome": outcome_label(event["outcome_index"], event.get("outcome_name")),
              "resolved_at_ns": event.get("ts_ns")}
     rt.ledger.append({"kind": "polymarket.resolution", **facts, "payout": event["payout"],
                       "size": event["size"], "ts": rt.clock.now_ns})
     holders = sorted({lot.handle for lot in rt.consequences.table.lots
                       if lot.coin == coin_of(token) and lot.market == "event"
                       and lot.handle is not None})
+    before = {r.handle: r.realized_micro for r in rt.consequences.table.returns}
     realized = rt.consequences.redeem(coin_of(token), event["payout"], rt.n, facts)
+    credit_realized(rt, {r.handle: r.realized_micro - before.get(r.handle, 0)
+                         for r in rt.consequences.table.returns
+                         if r.realized_micro != before.get(r.handle, 0)})
     # The venue's own realised figure for the redemption, booked once in the pot it
     # landed in. Its owner is the one decision that held the token, when only one
     # did; several holders share one unattributed row, and each is told its own
     # FIFO share through the consequence book instead.
-    amount = usd_to_micro(event["realized_usd"], rounding="nearest")
-    owner = holders[0] if len(holders) == 1 else None
-    if amount:
-        rt.budget.book_venue(amount, f"resolution:{token}")
-        rt.ledger.append({"kind": "venue.settled", "custody": CUSTODY, "amount": amount,
-                          "reference": f"resolution:{token}", "reason": "resolution",
-                          "handle": owner, "event": rt.n, "ts": rt.clock.now_ns})
-        if owner is not None:
-            by_custody = rt.venue_deltas.setdefault(owner, {})
-            by_custody[CUSTODY] = by_custody.get(CUSTODY, 0) + amount
+    rt.polymarket.settled += Decimal(event["realized_usd"])
+    _book_pot(rt, usd_to_micro(event["realized_usd"], rounding="nearest"),
+              f"resolution:{token}", "resolution", holders[0] if len(holders) == 1 else None)
     for handle, micro in realized.items():
         _tell(rt, handle, {"kind": "polymarket_resolution", **facts,
                            "payout": event["payout"], "realized_micro": micro})
+
+
+def _book_pot(rt: Any, amount: int, reference: str, reason: str,
+              handle: str | None) -> None:
+    """Book P&L the pot settled on the pot's own books, never on the venue's.
+
+    ``BudgetBook.book_venue`` is what venue claims are backed by and what
+    financing converts; the polymarket pot has no conversion route, so its
+    settlements are ledgered as ``venue.settled`` with ``custody = "polymarket"``
+    and summed here, beside that book and never inside it.
+    """
+    if not amount:
+        return
+    rt.polymarket.booked += amount
+    rt.ledger.append({"kind": "venue.settled", "custody": CUSTODY, "amount": amount,
+                      "reference": reference, "reason": reason, "handle": handle,
+                      "event": rt.n, "ts": rt.clock.now_ns})
+    if handle is not None:
+        by_custody = rt.venue_deltas.setdefault(handle, {})
+        by_custody[CUSTODY] = by_custody.get(CUSTODY, 0) + amount
+
+
+def credit_realized(rt: Any, deltas: dict[str, Fraction]) -> None:
+    """Record, exactly, what event fills and resolutions realised for each decision."""
+    surface = rt.polymarket
+    for handle, delta in deltas.items():
+        surface.realized[handle] = surface.realized.get(handle, Fraction(0)) + delta
+
+
+def claim_share(rt: Any, owner: str, handle: str, micro: int, reason: str) -> int:
+    """Claim a booking's Polymarket share on the pot; return the share claimed.
+
+    Guarantees the share is what the decision's event positions realised and has
+    not yet been claimed, bounded by the booking itself (it never exceeds the
+    booking or runs against its sign), and that it lands in the pot's own claim
+    book, where financing cannot reach it.
+    """
+    surface = rt.polymarket
+    exact = surface.realized.get(handle, Fraction(0))
+    owed = exact.numerator // exact.denominator - surface.claimed.get(handle, 0)
+    share = max(min(owed, max(0, micro)), min(0, micro))
+    if share:
+        surface.claimed[handle] = surface.claimed.get(handle, 0) + share
+        surface.claims[owner] = surface.claims.get(owner, 0) + share
+        rt.ledger.append({"kind": "polymarket.claim", "assembly_id": owner, "handle": handle,
+                          "amount": share, "reason": reason,
+                          "claim_after": surface.claims[owner], "ts": rt.clock.now_ns})
+    return share
 
 
 def _tell(rt: Any, handle: str | None, outcome: dict[str, Any]) -> None:
@@ -633,52 +796,6 @@ def _tell(rt: Any, handle: str | None, outcome: dict[str, Any]) -> None:
 
 # --- what the rest of the runtime reads -----------------------------------------------------
 
-def held(rt: Any) -> tuple[str, ...]:
-    """Decisions whose consequence waits on a Polymarket order still resting.
-
-    A decision holding an outcome token is held by the lot book itself (an event
-    lot is never marked); this names the ones whose order has not filled yet, so
-    the backstop does not fix a no-fill outcome for an order that may still trade.
-    """
-    surface = getattr(rt, "polymarket", None)
-    if surface is None:
-        return ()
-    return tuple(sorted({order.handle for order in rt.consequences.table.orders
-                         if order.remaining and order.order_id in surface.order_ids}))
-
-
-def awaiting_resolution(rt: Any, handle: str) -> bool:
-    """Whether a decision's consequence is owed by an event market that has not resolved."""
-    if getattr(rt, "polymarket", None) is None:
-        return False
-    table = rt.consequences.table
-    return (any(lot.handle == handle and lot.market == "event" for lot in table.lots)
-            or handle in held(rt))
-
-
-def defer_grounded(rt: Any, contract: Any) -> Any:
-    """Move a grounded contract's horizon to follow an unresolved event position.
-
-    Guarantees the contract's interpretation (criteria, norms, predicates, the
-    producer's outputs) is untouched; only its observation horizon moves, by a
-    rule fixed before the decision was made: a position in an event market is
-    observed when its market resolves, and not before. The final judge is
-    therefore commissioned on evidence that includes the resolution, and never
-    on a guess of it at a fixed tick (essay II.IV.b: anticipatory settlement is
-    the futarchic answer to learning death, so the settlement must be the
-    market's own).
-    """
-    now = rt.ticks_consumed
-    if contract.due_tick > now:
-        return contract
-    span = contract.close_tick - contract.due_tick
-    if contract.due_tick == contract.opened_tick + rt.ev.grounded_horizon_ticks:
-        rt.ledger.append({"kind": "consequence.awaiting_resolution",
-                          "handle": contract.handle, "custody": CUSTODY,
-                          "due_tick": contract.due_tick, "ts": rt.clock.now_ns})
-    return replace(contract, due_tick=now + 1, close_tick=now + 1 + span)
-
-
 def custody(rt: Any) -> dict[str, Any] | None:
     """The ``polymarket`` custody account, or None in a world without one."""
     from factorylab.runtime.custody import observed, unavailable
@@ -687,7 +804,7 @@ def custody(rt: Any) -> dict[str, Any] | None:
     if surface is None or not surface.writes:
         return None
     try:
-        account = surface.account()
+        account = sanitized(surface.account())
     except Exception as exc:  # noqa: BLE001 - an unreadable pot is unavailable, not zero
         return unavailable(f"polymarket pot read failed: {type(exc).__name__}")
     return observed(account["observed_at_ns"], network="polygon",
@@ -699,41 +816,50 @@ def custody(rt: Any) -> dict[str, Any] | None:
 def pots_view(rt: Any) -> dict[str, Any]:
     """The treasury's pots with the ``polymarket`` pot beside them, counted in the total.
 
-    Outcome tokens are listed at their count and not at a price: until a market
-    resolves nobody knows what a token is worth, so only the pot's USDC enters
-    ``total_micro``.
+    The pot is its USDC plus its tokens at cost, so a buy moves value from one to
+    the other and the total does not dip; the tokens are also listed by count and
+    cost. The pot's claims are shown beside it, apart from the venue's.
     """
     pots = rt.treasury.pots()
     account = custody(rt)
     if account is None:
         return pots
-    usdc = (usd_to_micro(account["usdc"], rounding="floor")
-            if account["status"] == "observed" else None)
-    pots["polymarket"] = usdc
-    pots["polymarket_tokens"] = [] if usdc is None else [
-        {"token_id": p["token_id"], "size": p["size"]} for p in account["positions"]]
-    if usdc is None:
+    observed = account["status"] == "observed"
+    tokens = [] if not observed else [
+        {"token_id": p["token_id"], "market_id": p["market_id"], "outcome": p["outcome"],
+         "size": p["size"],
+         "cost_micro": usd_to_micro(Decimal(p["size"]) * Decimal(p["avg_px"]),
+                                    rounding="floor")}
+        for p in account["positions"]]
+    usdc = usd_to_micro(account["usdc"], rounding="floor") if observed else None
+    value = None if usdc is None else usdc + sum(t["cost_micro"] for t in tokens)
+    pots["polymarket"] = value
+    pots["polymarket_usdc"] = usdc
+    pots["polymarket_tokens"] = tokens
+    pots["polymarket_claims"] = dict(sorted(rt.polymarket.claims.items()))
+    if value is None:
         pots["complete"], pots["total_micro"] = False, None
     elif pots.get("complete"):
-        pots["total_micro"] += usdc
+        pots["total_micro"] += value
     return pots
 
 
 def wind_down(rt: Any) -> dict[str, Any]:
-    """Cancel every resting order and sell every token worth more than dust at the bid.
+    """Cancel every resting order; leave every held token to resolve into the pot.
 
-    Guarantees nothing here raises into a kill, every operation is ledgered
-    before and after it is attempted, and the report states what is still held.
-    A token the book will not buy above the kill's dust bound is left and named:
-    it will still resolve into the pot, but no decision is alive to answer for it.
+    Guarantees nothing here raises into a kill, every cancellation is ledgered
+    before and after it is attempted, and the report names every token still
+    held. A held outcome token is fully paid for: it cannot be liquidated, pays no
+    funding and redeems into the pot at resolution, so selling it into a thin book
+    at the kill would only destroy value and leave an order resting after death.
+    It is residual exposure, reported as ``wind_down_pending``, never as flat.
     """
-    from factorylab.runtime.winddown import DUST, FLAT, PENDING, UNKNOWN
+    from factorylab.runtime.winddown import FLAT, PENDING, UNKNOWN
 
     surface = rt.polymarket
-    report: dict[str, Any] = {"cancelled": 0, "sold": 0, "left": [], "dust": []}
+    report: dict[str, Any] = {"cancelled": 0, "residual": []}
     try:
-        account = surface.account()
-        for order in account["open_orders"]:
+        for order in surface.account()["open_orders"]:
             client_id = f"kill:{order['order_id']}"
             rt.ledger.append({"kind": "polymarket.wind_down", "op": "cancel",
                               "client_id": client_id, "order_id": order["order_id"]})
@@ -741,33 +867,15 @@ def wind_down(rt: Any) -> dict[str, Any]:
             rt.ledger.append({"kind": "polymarket.wind_down_result", "client_id": client_id,
                               "result": result})
             report["cancelled"] += result.get("status") == "cancelled"
-        for position in surface.account()["positions"]:
-            book = surface.venue.order_book(position["token_id"], 1)
-            size = Decimal(position["available"])
-            bid = Decimal(book["bids"][0]["price"]) if book["bids"] else None
-            if bid is not None and usd_to_micro(bid * size,
-                                                rounding="floor") <= rt.m.kill.dust_micro:
-                report["dust"].append({"token_id": position["token_id"], "size": str(size)})
-                continue
-            if bid is None:
-                report["left"].append({"token_id": position["token_id"], "size": str(size)})
-                continue
-            client_id = f"kill:sell:{position['token_id']}"
-            rt.ledger.append({"kind": "polymarket.wind_down", "op": "sell",
-                              "client_id": client_id, "token_id": position["token_id"],
-                              "size": str(size), "price": str(bid)})
-            result = surface.venue.place(client_id=client_id, token_id=position["token_id"],
-                                         is_buy=False, size=size, price=bid)
-            rt.ledger.append({"kind": "polymarket.wind_down_result", "client_id": client_id,
-                              "result": result})
-            if result.get("status") == "filled":
-                report["sold"] += 1
-            else:
-                report["left"].append({"token_id": position["token_id"], "size": str(size)})
-        still = surface.account()
-        report["exposure_state"] = (PENDING if still["open_orders"] or report["left"] else
-                                    DUST if report["dust"] else FLAT)
+        still = sanitized(surface.account())
+        report["residual"] = [{key: p[key] for key in ("token_id", "market_id", "outcome",
+                                                       "size", "avg_px")}
+                              for p in still["positions"]]
+        report["open_orders"] = len(still["open_orders"])
+        report["exposure_state"] = (PENDING if still["positions"] or still["open_orders"]
+                                    else FLAT)
     except Exception as exc:  # noqa: BLE001 - nothing may raise into a kill
         report["error"] = type(exc).__name__
         report["exposure_state"] = UNKNOWN
+    rt.ledger.append({"kind": "polymarket.wind_down_report", **report})
     return report

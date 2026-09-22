@@ -1,4 +1,4 @@
-"""Event-market lots: held long, never marked, closed only by their market's resolution."""
+"""Event-market lots: held long, marked at the market's midpoint, redeemed at resolution."""
 
 from fractions import Fraction
 
@@ -29,15 +29,23 @@ def test_an_event_fill_opens_a_long_lot_and_cannot_sell_what_is_not_held():
                    market="event", liquidation=True)
 
 
-def test_an_event_lot_is_never_marked_whatever_the_backstop_or_the_mid_says():
-    table = holding().resolve(10_000, 1, {COIN: "0.99"}, tick=10_000)
-    assert table.account("h").payoff is None
+def test_an_event_lot_is_marked_at_the_backstop_like_a_spot_lot():
+    table = holding()
+    # Before the backstop it waits; without a mid it waits (and its judge falls back).
+    assert table.resolve(5, 10, {COIN: "0.55"}, tick=5).account("h").payoff is None
+    assert table.resolve(50, 10, {}, tick=50).account("h").payoff is None
+    payoff = table.resolve(50, 10, {COIN: "0.55"}, tick=50).account("h").payoff
+    assert (payoff.net_micro, payoff.marked, payoff.y) == (1_500_000, True, 1)
 
 
-def test_a_held_return_stays_open_even_with_nothing_filled():
-    table = LotTable().start("h", 0, 0).order("o1", "h", "10").finish("h", 0)
-    assert table.resolve(100, 1, {}, tick=100, held=("h",)).account("h").payoff is None
-    assert table.resolve(100, 1, {}, tick=100).account("h").payoff is not None
+def test_a_resolution_after_the_mark_is_booked_late_and_never_rescored():
+    table = holding().resolve(50, 10, {COIN: "0.55"}, tick=50)
+    marked = table.account("h").payoff
+    table, _ = table.redeem(COIN, "0")
+    table, late = table.late_realizations()
+    assert late == {"h": -4_000_000}
+    assert table.account("h").payoff == marked
+    assert table.late_realizations()[1] == {}
 
 
 @pytest.mark.parametrize(("payout", "net"), [("1", 6_000_000 - 20_000),

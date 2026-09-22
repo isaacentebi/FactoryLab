@@ -142,7 +142,7 @@ def parse_market(raw: Any) -> dict[str, Any] | None:
     for index, (name, token) in enumerate(zip(names, tokens, strict=True)):
         price = _decimal(prices[index]) if index < len(prices) else None
         outcomes.append({"outcome": _text(name, 80) or f"outcome {index}",
-                         "token_id": str(token),
+                         "outcome_index": index, "token_id": str(token),
                          "price": None if price is None else str(price)})
 
     def number(key: str) -> str | None:
@@ -351,7 +351,7 @@ class PolymarketReader:
 DEFAULT_FAKE_MARKETS = (
     {"market_id": "fake-1", "question":
          "Will simulated event A occur by its scripted resolution time?",
-     "outcomes": ("Yes", "No"), "mid": "0.40", "fee_rate": "0", "resolves_after_s": 120},
+     "outcomes": ("Yes", "No"), "mid": "0.40", "fee_rate": "0", "resolves_after_s": 900},
     {"market_id": "fake-2", "question":
          "Will simulated event B occur by its scripted resolution time?",
      "outcomes": ("Yes", "No"), "mid": "0.70", "fee_rate": "0.05",
@@ -443,9 +443,10 @@ class FakePolymarket:
             "market_id": market["market_id"], "condition_id": market["condition_id"],
             "slug": market["market_id"], "question": market["question"],
             "end_date": None, "resolution_source": "scripted",
-            "outcomes": [{"outcome": name, "token_id": token, "price": str(price)}
-                         for name, token, price in zip(market["outcomes"], market["tokens"],
-                                                       prices, strict=True)],
+            "outcomes": [{"outcome": name, "outcome_index": index, "token_id": token,
+                          "price": str(price)}
+                         for index, (name, token, price) in enumerate(zip(
+                             market["outcomes"], market["tokens"], prices, strict=True))],
             "active": not market["closed"], "closed": market["closed"],
             "accepting_orders": not market["closed"], "order_book": True,
             "tick_size": str(self.tick), "min_order_size": str(self.min_order_size),
@@ -535,7 +536,10 @@ class FakePolymarket:
             "usdc": str(self._cash), "usdc_available": str(self._cash - held_usdc),
             "positions": [
                 {"token_id": token, "market_id": self._tokens[token][0],
-                 "outcome": self._markets[self._tokens[token][0]]["outcomes"][
+                 "outcome_index": self._tokens[token][1],
+                 # The market creator's label, for the runtime to normalise; it is
+                 # third-party text and never published as it is.
+                 "outcome_name": self._markets[self._tokens[token][0]]["outcomes"][
                      self._tokens[token][1]],
                  "size": str(p["size"]), "avg_px": str(p["avg_px"]),
                  "available": str(p["size"] - held_tokens.get(token, Decimal(0)))}
@@ -724,7 +728,8 @@ class FakePolymarket:
             self._events.append({
                 "kind": "resolution", "market_id": market["market_id"],
                 "condition_id": market["condition_id"], "token_id": token,
-                "outcome": market["outcomes"][side], "payout": str(payout),
+                "outcome_index": side, "outcome_name": market["outcomes"][side],
+                "payout": str(payout),
                 "size": str(size), "realized_usd": str(realized), "ts_ns": self._now_ns})
 
 

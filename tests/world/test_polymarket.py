@@ -70,7 +70,8 @@ def test_market_detail_carries_contract_fields_fees_and_bounded_rules_text():
     assert market["market_id"] == "2589812"
     assert market["condition_id"].startswith("0xdf9bf27e")
     assert market["end_date"] == "2026-10-29T03:59:00Z"
-    assert market["outcomes"][0] == {"outcome": "Yes", "token_id": FED_YES, "price": "0.455"}
+    assert market["outcomes"][0] == {"outcome": "Yes", "outcome_index": 0,
+                                     "token_id": FED_YES, "price": "0.455"}
     assert market["best_bid"] == "0.45" and market["best_ask"] == "0.46"
     # The fee is the market's feeSchedule (CLOB V2), not the legacy base fee.
     assert market["fees"] == {"enabled": True, "rate": "0.05", "exponent": "1",

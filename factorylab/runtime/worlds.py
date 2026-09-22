@@ -209,7 +209,8 @@ class PolymarketSpec:
     """``[polymarket]``: Polymarket event markets as a surface, off unless enabled.
 
     ``enabled = false`` registers no tool, opens no custody pot and hashes the
-    manifest exactly as it did before the block existed. ``venue`` names what the
+    manifest exactly as it did before the block existed, whatever else the
+    disabled block names. ``venue`` names what the
     tools reach: ``fake`` is the seeded simulated venue for reads and writes;
     ``live`` is the public read API only, and no write tool is registered, because
     live order signing on Polygon is not built (``world/polymarket.py``,
@@ -596,8 +597,9 @@ class WorldManifest:
         if payload["web"] == asdict(WebSpec()):
             payload.pop("web")
         # Likewise [polymarket]: a world that does not enable event markets hashes
-        # exactly as it did before the surface existed.
-        if payload["polymarket"] == asdict(PolymarketSpec()):
+        # exactly as it did before the surface existed, whatever caps a disabled
+        # block names, since a disabled block registers nothing they could limit.
+        if not payload["polymarket"]["enabled"]:
             payload.pop("polymarket")
         for assembly in payload["assemblies"]:
             if assembly.get("cadence_floor") == 1:

@@ -1113,8 +1113,10 @@ one wake. A search that returned no results buys no extra round.
 
 ## Event markets: `[polymarket]`
 
-`[polymarket]` is off by default, and a manifest without it, or with `enabled = false`,
-hashes exactly as it did before the block existed. No world under `worlds/` enables it. The
+`[polymarket]` is off by default. A manifest without it, or with `enabled = false` and any
+other keys at all, hashes exactly as it did before the block existed: a disabled block
+registers nothing its keys could limit, so it is dropped from the canonical JSON whole. No
+world under `worlds/` enables it. The
 keys, all fixed for the world's life:
 
 | key | default | meaning |
@@ -1142,22 +1144,27 @@ consequence account may make them, each has a client id (`<handle>:<slot>`) and 
 unanswered intent is polled at most `UNCERTAIN_ORDER_POLLS` times and then released as
 unknown, and a batch that writes is weighed whole with the venue's writes.
 
-Custody: collateral is the `polymarket` pot, its own account in `custody_view`, in
-`world.pots` (its USDC counts in `total_micro`; tokens are listed by count, never priced) and
-in a kill's wind-down (resting orders cancelled, tokens sold at the bid above the kill's dust
-bound, the rest named as exposure). An order is weighed against that pot alone, never the
-Hyperliquid accounts or the reserve. A fill's realised P&L and fee are ledgered as
-`venue.settled` with `custody = "polymarket"`.
+Custody: collateral is the `polymarket` pot, its own account in `custody_view` and in
+`world.pots` (valued at USDC plus tokens at cost, so a buy does not move the total; tokens
+listed by count and cost). An order is weighed against that pot alone, with the market's own
+tick and minimum size, and never against the Hyperliquid accounts or the reserve. What the pot
+settles is ledgered as `venue.settled` with `custody = "polymarket"` and summed on the pot's
+own books, never in `BudgetBook.book_venue`; what a decision's event positions realise is its
+owner's claim on the pot (`polymarket.claim`), never a venue claim, so `_classify_financing`
+cannot convert a Polymarket profit out of Hyperliquid money. Every tick the pot reconciles
+`opening + settled == USDC + tokens at cost` and ledgers `polymarket.drift` beyond one
+micro-USD. A kill cancels resting orders only: held tokens are paid for, cannot be liquidated
+and resolve into the pot, so they are reported as residual exposure (`wind_down_pending`).
 
-Settlement: a fill opens an `event` lot in the consequence book. An event lot is never
-marked and a return with a Polymarket order still resting is held, so the backstop does not
-fix either outcome: the decision's consequence is owed by its market's resolution. At
-resolution every lot on the token is closed at the payout (1, 0, or 0.5 on a 50-50),
-ledgered as `consequence.resolution` with one `resolution` execution receipt per decision it
-settled, and the return's outcome is then fixed from realised money, unmarked. Under
-`producer_feedback = "realized"` a grounded contract whose decision holds such a position
-has its observation horizon follow the position (`consequence.awaiting_resolution`, once),
-so the final judge is commissioned on evidence that includes the resolution.
+Settlement: a fill opens an `event` lot, marked every tick at the CLOB midpoint. At the
+consequence backstop a held lot is marked there like a spot lot, so the decision is scored on
+the normal horizon at the market's price: the market's anticipatory settlement (essay
+II.IV.b). The resolution later closes every lot on the token at its payout (1, 0, or 0.5 on a
+50-50), ledgered as `consequence.resolution` with one `resolution` execution receipt per
+decision, and its money reaches the owner through `_settle_late` without rescoring. A token
+with no midpoint loses its mark (`polymarket.mark_unavailable`) and its decision falls back as
+any unobserved consequence does. Outcome labels are third-party text: outside the jailed reads
+every surface carries ids and a normalised `YES`, `NO` or `outcome <n>`.
 
 ## New kinds of work: reward shapes and predicates
 

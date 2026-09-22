@@ -308,20 +308,15 @@ class ReturnConsequences:
                 "realized_micro": realized[handle]})
         return realized
 
-    def resolve(self, event: int, held: tuple[str, ...] = ()) -> list[Payoff]:
-        """Persist all newly fixed outcomes before publishing the successor accounting state.
-
-        ``held`` names returns whose outcome waits on an event market's resolution
-        (``LotTable.resolve``); they stay open whatever the backstop says.
-        """
+    def resolve(self, event: int) -> list[Payoff]:
+        """Persist all newly fixed outcomes before publishing the successor accounting state."""
         # An outcome censored for documented unobservability was fixed the moment
         # its hold was released; it is handed over here with everything else.
         fixed, self.censored_payoffs = self.censored_payoffs, []
         if self.pending_orders:
             return fixed  # Unknown inventory ownership cannot manufacture a no-fill outcome.
         table = self.table.resolve(event, self.backstop, self.mids,
-                                   censored=self._unknown_portions(), tick=self._tick(event),
-                                   held=held)
+                                   censored=self._unknown_portions(), tick=self._tick(event))
         for before, after in zip(self.table.returns, table.returns, strict=True):
             if before.payoff is None and after.payoff is not None:
                 self.ledger.append({"kind": "consequence.outcome", **asdict(after.payoff)})

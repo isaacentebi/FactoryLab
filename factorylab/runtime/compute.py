@@ -384,12 +384,21 @@ class ContractConsequences(ReturnConsequences):
         """The runtime's world ticks consumed: the unit the backstop counts (defect 1)."""
         return self.runtime.ticks_consumed
 
-    def resolve(self, event, held=()):
-        from factorylab.runtime.polymarket import held as event_orders
+    def observe(self, kind, payload, event):
+        if kind != "Fill" or payload.get("market") != "event":
+            return super().observe(kind, payload, event)
+        from factorylab.runtime.polymarket import credit_realized
 
-        # A decision with a Polymarket order still resting owes its consequence to
-        # that market, not to the backstop (runtime/polymarket.py).
-        resolved = super().resolve(event, held=tuple(held) or event_orders(self.runtime))
+        # What an event fill realises is the polymarket pot's, kept apart from the
+        # venue's (runtime/polymarket.py); a deferred fill replays through here too.
+        before = {r.handle: r.realized_micro for r in self.table.returns}
+        super().observe(kind, payload, event)
+        credit_realized(self.runtime, {
+            r.handle: r.realized_micro - before.get(r.handle, 0)
+            for r in self.table.returns if r.realized_micro != before.get(r.handle, 0)})
+
+    def resolve(self, event):
+        resolved = super().resolve(event)
         return [payoff for payoff in resolved
                 if self.runtime.queue.get(payoff.handle).channel in (CH_VERDICT, "exposure")]
 
