@@ -2078,6 +2078,16 @@ a judge or trying the other routers. This single-router rule applies only to the
 final commission, not the subsequent recursive evaluation of its finding. Historical
 contracts lacking the emitted-kind field retain the old `ProducerReturn` fallback.
 
+`[evaluation] no_swap_regret_kinds` is a list of event kind names, default `[]`, fixed
+for the world's life. Every router the runtime seeds for a named kind (at genesis, or
+when the kind first gains an acceptor) is a no-swap-regret learner, Blum-Mansour over
+one EXP3 row per arm, instead of mean-based EXP3: the retentive core the essay places
+beside the frontier's mean-based learners. `["ProducerReturn"]` puts judge routing in
+the core. An empty list is hash-neutral: the manifest keeps its identity. Every router
+credits an abstention (NOOP) the neutral reward 0.5, deferred by the mean delay its
+seat rounds take to be learned; an unscored seat round with no record of its own is
+credited 0.5 too. A replaced router's settled rounds train the router that replaced it.
+
 `grounded_horizon_ticks` is an exact positive integer, default `10`. It controls when
 the first final consequence-grounded commission becomes due and is independent of
 `forecast_horizon_events`, which continues to govern ordinary forecasts. Closure is

@@ -21,7 +21,9 @@ def test_both_live_fill_cursors_and_launch_snapshot_start_at_launch():
     assert snapshot["state"]["clock_ns"] == 12345
 
 
-def test_replacement_router_does_not_train_on_a_retired_learner_return():
+def test_a_retired_learner_return_trains_its_replacement_not_itself():
+    """A reward settled after its router was replaced trains the live replacement once;
+    the retired copy, which never samples again, is left exactly as it was."""
     rt = make_runtime()
     old = rt.routers["Tick"][0]
     action = next(a for a in old.universe if a != "NOOP")
@@ -31,11 +33,17 @@ def test_replacement_router_does_not_train_on_a_retired_learner_return():
         channel="test", deadline_ns=100, parent_handle=None, cost_ceiling=0,
     )
     fresh = rt._build_router("Tick", "exp3", .1)
-    before = fresh.learner.state()
+    old_before = old.learner.state()
     rt.queue.settle(handle, channel="test", score=1.0, status=SettleStatus.SETTLED,
                     definition_version="1", sampling_ref=None)
     rt._deliver_returns()
-    assert before == fresh.learner.state()
+    after = fresh.learner.state()["log_weights"]
+    assert after[action] > max(w for a, w in after.items() if a != action)
+    assert old.learner.state() == old_before
+    assert any(i["kind"] == "router.carried" and i["handle"] == handle
+               and i["to"] == fresh.learner.id for i in rt.ledger._recovery_items())
+    rt._deliver_returns()
+    assert fresh.learner.state()["log_weights"] == after  # once, not per delivery
     assert old.learner.id != fresh.learner.id
     assert rt.queue.history(handle)[0].score == 1.0
     again = rt._build_router("Tick", "exp3", .1)

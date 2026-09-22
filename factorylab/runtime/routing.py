@@ -14,7 +14,6 @@ from factorylab.kernel.registry import Contract
 from factorylab.learners.base import ObservedRewards
 from factorylab.learners.exp3 import EXP3
 from factorylab.learners.router import Router, Sample
-from factorylab.runtime.immune import gamma
 from factorylab.runtime.shared import (
     CH_CONSEQUENCE,
     CH_FAST,
@@ -149,10 +148,16 @@ class RouterState:
     # The rewards this router's own draws observed, per arm: what a censored draw
     # is credited instead of a zero (defect 2).
     observed: ObservedRewards = field(default_factory=ObservedRewards)
+    # The live router that replaced this one: a retired router's settled rounds
+    # train its successor, so no reward is spent on a copy that never samples again.
+    successor: str | None = None
+    # [total ns, rounds]: how long this router's learned seat rounds took to be
+    # learned, the delay an abstention's credit is deferred by.
+    latency: list[int] = field(default_factory=lambda: [0, 0])
 
     def state(self) -> dict:
-        """Retain the exact learner, public universe order and comparator epoch."""
-        return {
+        """Retain the exact learner, public universe order, comparator epoch and successor."""
+        saved = {
             "kind": self.kind,
             "universe": list(self.universe),
             "router": self.router.state(),
@@ -160,6 +165,11 @@ class RouterState:
             "seed_gamma": self.seed_gamma,
             "observed": self.observed.state(),
         }
+        if self.successor is not None:
+            saved["successor"] = self.successor
+        if self.latency[1]:
+            saved["latency"] = list(self.latency)
+        return saved
 
     @classmethod
     def restore(cls, state: dict) -> RouterState:
@@ -175,7 +185,8 @@ class RouterState:
         universe = list(state["universe"])
         router = Router(learner, lambda _k: [a for a in universe if a != NOOP])
         return cls(state["kind"], universe, learner, router, state["epoch"],
-                   state.get("seed_gamma", 0.1), ObservedRewards(state.get("observed")))
+                   state.get("seed_gamma", 0.1), ObservedRewards(state.get("observed")),
+                   state.get("successor"), list(state.get("latency", [0, 0])))
 
 
 class _KeyedLearner:
@@ -307,6 +318,31 @@ class RoutingMixin:
     def _all_router_states(self) -> list[RouterState]:
         return [st for states in self.routers.values() for st in states]
 
+    def _seed_learner_kind(self, kind: str) -> str:
+        """The algorithm a router the runtime seeds itself for ``kind`` runs.
+
+        Guarantees a no-swap-regret (Blum-Mansour) router exactly for the event kinds
+        the manifest names in ``[evaluation] no_swap_regret_kinds`` (the retentive
+        core, essay II.a) and mean-based EXP3 for every other kind (the frontier).
+        """
+        return ("blum_mansour" if kind in self.m.evaluation.no_swap_regret_kinds
+                else "exp3")
+
+    def _hand_over(self, retired: RouterState, successor: str) -> None:
+        """Point ``retired`` and every router that handed over to it at ``successor``."""
+        old = retired.learner.id
+        retired.successor = successor
+        for state in self.retired_routers.values():
+            if state.successor == old:
+                state.successor = successor
+
+    def _successor_state(self, state: RouterState) -> RouterState:
+        """The live router that learns ``state``'s settled rounds; ``state`` if none is."""
+        if state.successor is None:
+            return state
+        return next((st for st in self._all_router_states()
+                     if st.learner.id == state.successor), state)
+
     def _make_learner(
         self, kind: str, learner_kind: str, gamma: float, universe: list[str], lid: str
     ):
@@ -332,10 +368,14 @@ class RoutingMixin:
         learner = self._make_learner(kind, learner_kind, gamma, universe, lid)
         router = Router(learner, lambda _k, u=universe: [x for x in u if x != NOOP])
         state = RouterState(kind, universe, learner, router, seed_gamma=gamma)
-        self.ledger.append({"kind": "router.created", "learner_id": lid, "event_kind": kind,
-                            "replaces": [st.learner.id for st in existing] if replace else []})
+        created = {"kind": "router.created", "learner_id": lid, "event_kind": kind,
+                   "replaces": [st.learner.id for st in existing] if replace else []}
+        if learner_kind != "exp3":
+            created["learner"] = learner_kind
+        self.ledger.append(created)
         if replace:
             for retired in existing:
+                self._hand_over(retired, lid)
                 self._retain_router(retired)
             self.routers[kind] = [state]
         else:
@@ -350,7 +390,7 @@ class RoutingMixin:
         lid = state.learner.id
         if self.queue.outstanding(lid) or (
             len(self.queue.returns_for(lid)) > self.delivered_seen.get(lid, 0)
-        ) or self._router_owns_grounded_pending(lid):
+        ) or self._router_owns_grounded_pending(lid) or self._router_owed_abstention(lid):
             self.ledger.append({"kind": "router.retained", "learner_id": lid})
             self.retired_routers[lid] = state
         else:
@@ -785,7 +825,7 @@ class RoutingMixin:
         entry = {"kind": "epoch", "event_kind": kind, "universe": universe, "ts": self.clock.now_ns}
         states = self.routers.get(kind)
         if not states:
-            self._build_router(kind, "exp3", self.router_gamma)
+            self._build_router(kind, self._seed_learner_kind(kind), self.router_gamma)
             self.ledger.append({**entry, "carried": False})
             self.stats.epochs += 1
             return
@@ -801,7 +841,10 @@ class RoutingMixin:
                 )
                 state.epoch += 1
                 self.ledger.append({**entry, "carried": True, "router": state.learner.id})
-            else:  # A shrinking universe gets a new identity; old decisions train the old one.
+            else:
+                # A shrinking universe (or any swap router's) gets a new identity that
+                # keeps the weights learned so far; the old identity stays addressable
+                # for its in-flight decisions, whose settled rounds train the new one.
                 lid = self._fresh_router_id(state.learner.id)
                 if isinstance(state.learner, EXP3):
                     saved = state.learner.state()
@@ -816,9 +859,12 @@ class RoutingMixin:
                         a: retained.get(a, mean) for a in universe})
                     fresh = EXP3.restore(saved)
                 else:
-                    fresh = self._make_learner(
-                        kind, "blum_mansour", gamma(state.learner), universe, lid)
+                    from factorylab.learners.delayed import SnapshotLearner
+
+                    swap = state.learner.inner.inner.reshaped(universe, id=lid)
+                    fresh = _KeyedLearner(SnapshotLearner(swap, id=lid))
                 self.ledger.append({**entry, "carried": False, "router": lid})
+                self._hand_over(state, lid)
                 self._retain_router(state)
                 self.delivered_seen[lid] = 0
                 states[i] = RouterState(
@@ -830,6 +876,7 @@ class RoutingMixin:
                     state.seed_gamma,
                     # The new identity learns on the same arms' evidence it inherits.
                     ObservedRewards(state.observed.state()),
+                    latency=list(state.latency),
                 )
             self.stats.epochs += 1
 

@@ -514,7 +514,8 @@ class JournalProxy:
 # Explicit schemas keep SDK clients, keys, bound callbacks and dependencies out of snapshots.
 _RUNTIME_FIELDS = (
     "rng", "cascade", "cascade_windows", "stats", "charter", "pending_exposure",
-    "delivered_seen", "snapshot_keys", "recent_mids", "realized_to_date", "fees_to_date",
+    "delivered_seen", "snapshot_keys", "noop_credits", "recent_mids", "realized_to_date",
+    "fees_to_date",
     "funding_to_date", "spot_inventory", "handle_to_assembly", "tool_specs",
     "population_tools",
     "tool_owner", "pending_votes", "regions", "priced", "rolling", "unparsed_logged", "window",
