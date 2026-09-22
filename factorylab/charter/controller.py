@@ -284,14 +284,22 @@ class PriceController:
             return 0.0
         return violation(region, value)
 
-    def observe(self, card_id: str, value: float, window_end_event: int) -> None:
+    def observe(self, card_id: str, value: float, window_end_event: int, *,
+                holdout: float = 0.0) -> None:
         """Ledger each accepted update or skipped window before any state/clock changes.
 
         Nonnegative event indices double as logical nanosecond timestamps for
         this loop, not wall time. Accepted indices strictly increase per card.
         Saturation means the requested price was outside the bounds; max_step
         measures the largest absolute change after clipping.
+
+        ``holdout`` is the violation the card's failed holdouts add
+        (``charter.holdout_violation``); the card is priced on the larger of it
+        and its region violation.
         """
+        holdout = _number(holdout, "holdout")
+        if holdout < 0:
+            raise ValueError("holdout violation must be nonnegative")
         state = self.__cards[card_id]
         value = _number(value, "value")
         if type(window_end_event) is not int or window_end_event < 0:
@@ -310,7 +318,7 @@ class PriceController:
                 }
             )
             return
-        violation = self.violation(card_id, value)
+        violation = max(self.violation(card_id, value), holdout)
         requested, integral, terms = self._pid(state, value, violation)
         price = min(self.__lambda_max, max(0.0, requested))
         saturated = requested < 0 or requested > self.__lambda_max
@@ -338,6 +346,7 @@ class PriceController:
             "saturated": saturated,
             "window_end_event": window_end_event,
             **terms,
+            **({"holdout": holdout} if holdout else {}),
         }
         self.__ledger.append(entry)
         self.__cards[card_id] = updated

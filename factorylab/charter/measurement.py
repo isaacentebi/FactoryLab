@@ -21,7 +21,7 @@ COST_OBSERVATIONS = frozenset({"cost_per_return", "cost_per_attempt"})
 # The runtime keeps per-decision attribution on the same window object;
 # measurement never observes it.
 ATTRIBUTION_FIELDS = ("decisions", "closed_values", "closed_regions", "closed_cards",
-                      "closed_prices", "closed_scopes", "series_discarded")
+                      "closed_prices", "closed_scopes", "closed_holdouts", "series_discarded")
 FORECAST_OBSERVATIONS = frozenset({
     "forecast_skill", "verdict_mean", "verdict_std", "consequence_paid_off_rate", "censored_share",
     "avoidably_unresolved_share",
@@ -182,6 +182,8 @@ class CardSamples:
     values: dict[str, float] = field(default_factory=dict)
     scopes: dict[str, dict[str, float]] = field(default_factory=dict)
     medians: dict[str, float] = field(default_factory=dict)
+    # The violation each card's failed holdouts added at the last close (M3).
+    holdouts: dict[str, float] = field(default_factory=dict)
 
     def returned(self, *, handle: str, assembly: str, role: str, window: int, ret) -> None:
         """One completed invocation, including its continuation costs, is one return sample."""

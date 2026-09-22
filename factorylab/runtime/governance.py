@@ -548,6 +548,12 @@ class GovernanceMixin:
                              "observation": challenge[side].observation,
                              "value": fmean(scopes.values()) if scopes else None,
                              "scopes": scopes}
+            if challenge.get("holdout") and self.card_samples.windows:
+                # A holdout trial also resolves the appended predicate on the window.
+                row["holdout"] = {"predicate": challenge["holdout"],
+                                  "held": self._resolve_holdout(
+                                      challenge["holdout"],
+                                      window_facts(self.card_samples.windows[-1]))}
             self.ledger.append({"kind": "challenge.window", "challenge_id": challenge["id"],
                                 **row, "ts": self.clock.now_ns})
             challenge["series"].append(row)
@@ -709,6 +715,7 @@ class GovernanceMixin:
         evidence = str(challenge.get("evidence") or "")
         return {
             "id": challenge["id"],
+            **({"holdout": challenge["holdout"]} if challenge.get("holdout") else {}),
             "card_id": challenge["card_id"],
             "evidence": evidence[:BALLOT_EVIDENCE_CHARS],
             "evidence_truncated": len(evidence) > BALLOT_EVIDENCE_CHARS,
@@ -719,7 +726,9 @@ class GovernanceMixin:
             "windows_shown": len(rows),
             "series": [{"window": row.get("window"),
                         "incumbent": side(row, "incumbent"),
-                        "replacement": side(row, "replacement")} for row in rows],
+                        "replacement": side(row, "replacement"),
+                        **({"holdout": row["holdout"]} if "holdout" in row else {})}
+                       for row in rows],
         }
 
     def _register(self, handle: str, prop: Any, *,
@@ -1112,6 +1121,9 @@ class GovernanceMixin:
         )
         from factorylab.charter.charter import MetricCard, stated_region
 
+        if "holdout" in item:
+            self._propose_holdout(handle, item)
+            return
         present = {"cards": any(item.get(key) for key in ("add", "replace", "remove")),
                    "lambda": "lambda" in item, "clock": "tick_interval" in item}
         classes = [name for name in CHANGE_CLASSES if present[name]]
@@ -1232,6 +1244,106 @@ class GovernanceMixin:
         self.charter_book.propose(am, self.observations)
         self.stats.amendments_proposed += 1
         self.window.amendments_proposed += 1
+
+    def _propose_holdout(self, handle: str, item: dict[str, Any]) -> None:
+        """Admit a holdout motion to a trial; its ballot waits for the trial to end.
+
+        Essay II.IV.a: the factory's evaluatory layer may "continuously add
+        holdout test criteria to a given charter (based on adversarially induced
+        conditions or just real production traffic)". A holdout motion is the
+        ordinary amendment path's replace of one card with one registered
+        predicate, frozen at its current version, appended to the card's
+        holdouts. Only an evaluator or antagonist seat proposes one (charter audit
+        M3). Like a metric challenge it buys a side-by-side trial with one novelty
+        trial: for ``trial_windows`` closed windows the card is measured and the
+        predicate resolved on each, and the motion then joins the next
+        committee's agenda under its own id and its own predicted effect.
+        """
+        from factorylab.charter.charter import HOLDOUT_RE
+        from factorylab.cortex.registration import (
+            MAX_CHALLENGE_TRIAL_WINDOWS,
+            MAX_EVIDENCE_CHARS,
+            measured_role,
+        )
+
+        motion_id = str(item.get("id", ""))
+        spec = item.get("holdout")
+        others = sorted({"add", "replace", "remove", "lambda", "tick_interval"} & set(item))
+        if others:
+            self._refuse_amendment(item, "a holdout motion carries its holdout alone; this "
+                                   f"one also carries {', '.join(others)}")
+        if not isinstance(spec, dict) or set(spec) != {"card_id", "predicate", "evidence",
+                                                       "trial_windows"}:
+            self._refuse_amendment(item, "holdout needs exactly card_id, predicate, evidence "
+                                   "and trial_windows")
+        proposer = self._proposer_assembly(handle)
+        emits = self.assemblies[proposer].spec.emits if proposer in self.assemblies else ()
+        if measured_role(emits) not in ("evaluator", "antagonist"):
+            self._refuse_amendment(item, "a holdout motion is proposed by an evaluator or "
+                                   "antagonist seat")
+        card = next((c for c in self.charter.cards if c.id == spec["card_id"]), None)
+        if card is None:
+            self._refuse_amendment(item, "holdout.card_id must name a current card")
+        predicate = (self.predicates.get(spec["predicate"])
+                     if isinstance(spec["predicate"], str) and spec["predicate"] else None)
+        if predicate is None or predicate.code is None:
+            self._refuse_amendment(item, "holdout.predicate must name a registered predicate; "
+                                   "a seed predicate resolves over a forecast's horizon, not "
+                                   "a closed window")
+        entry = f"{predicate.id}@{predicate.version}"
+        if HOLDOUT_RE.fullmatch(entry) is None:
+            self._refuse_amendment(item, "holdout.predicate is not a predicate id")
+        if predicate.id in {h.split("@")[0] for h in card.holdout}:
+            self._refuse_amendment(item, "the card already holds this predicate")
+        windows = spec["trial_windows"]
+        if type(windows) is not int or not 1 <= windows <= MAX_CHALLENGE_TRIAL_WINDOWS:
+            self._refuse_amendment(item, "holdout.trial_windows must be an integer in "
+                                   f"[1, {MAX_CHALLENGE_TRIAL_WINDOWS}]")
+        evidence = spec["evidence"]
+        if not isinstance(evidence, str) or not evidence.strip() or (
+                len(evidence) > MAX_EVIDENCE_CHARS):
+            self._refuse_amendment(item, "holdout.evidence must be a nonempty string of at "
+                                   f"most {MAX_EVIDENCE_CHARS} chars")
+        try:
+            effect = PredictedEffect.parse(item.get("predicted_effect"))
+        except ValueError as exc:
+            self._refuse_amendment(item, str(exc))
+        if effect.card_id != card.id:
+            self._refuse_amendment(item, "a holdout motion's predicted_effect names its card")
+        if any(ch["card_id"] == card.id for ch in self._live_challenges().values()):
+            self._refuse_amendment(item, "card is already under challenge or holdout trial")
+        closed = self.card_samples.windows[-1] if self.card_samples.windows else None
+        if closed is None or self._resolve_holdout(entry, window_facts(closed)) is None:
+            self._refuse_amendment(item, "holdout preflight: the predicate does not resolve on "
+                                   "the last closed window")
+        # The motion's id is checked like any amendment's before the trial is paid.
+        Amendment(id=motion_id, proposer_handle=handle, edition_base=self.charter.edition,
+                  add=(), replace=(card,), remove=(), predicted_effect=effect)
+        if motion_id in self.challenges or any(
+                am.id == motion_id for am in self.charter_book.pending()):
+            self._refuse_amendment(item, "amendment id already proposed")
+        replacement = MetricCard(card.id, card.norm, card.description, card.units, card.window,
+                                 card.region, card.observation, card.answers_for,
+                                 holdout=(*card.holdout, entry))
+        contract = Contract(
+            id=f"holdout:{motion_id}", version=1, kind="tool", description="holdout motion",
+            input_schema={"type": "object"}, output_schema={"type": "object"},
+            price=PriceSpec({}), permissions=frozenset(), resource_bounds=ResourceBounds())
+        self._register_proposal(contract, handle, reason="trial:holdout")
+        observation = self.observations.get(card.observation)
+        definitions = ({observation.id: deepcopy(self.registered_observations[observation.id])}
+                       if observation is not None and observation.registered else {})
+        record = {
+            "id": motion_id, "handle": handle, "card_id": card.id,
+            "evidence": evidence, "incumbent": card, "replacement": replacement,
+            "holdout": entry, "trial_windows": windows, "start_window": self.window.index,
+            "observations": definitions, "series": [], "status": "trial",
+            "amendment_id": None, "predicted_effect": effect,
+        }
+        self.ledger.append({"kind": "holdout.proposed",
+                            **{k: v for k, v in record.items() if k != "series"},
+                            "edition": self.charter.edition, "ts": self.clock.now_ns})
+        self.challenges[motion_id] = record
 
     def _proposer_assembly(self, handle: str) -> str | None:
         """The assembly a proposing decision belongs to, when the queue knows it."""
@@ -1515,6 +1627,10 @@ class GovernanceMixin:
                 handle,
                 ("Vote on a connector registration." if connector is not None else
                  "Vote on retiring the named assembly version." if retiring else
+                 "Vote on appending a holdout to a charter card: inputs.challenge carries "
+                 "the proposer's evidence, the card's measured series and the holdout's "
+                 "result per trial window."
+                 if challenge_inputs and challenge_inputs.get("holdout") else
                  "Vote on an amendment to the charter's metric cards proposed by a metric "
                  "challenge: inputs.challenge carries the challenger's evidence and both "
                  "measured series, incumbent and replacement per trial window."
