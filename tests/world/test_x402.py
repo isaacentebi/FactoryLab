@@ -491,11 +491,11 @@ def test_payment_header_survives_decimal_extensions(quote):
 
 
 @pytest.mark.parametrize("method,path,expected", [
-    ("POST", "/api/v1/chat/completions", None),
+    ("POST", "/api/v1/chat/completions", 900),
     ("GET", "/api/v1/models", 180),
     ("POST", "/settle", 180),
 ])
-def test_completion_processing_has_no_client_deadline(monkeypatch, method, path, expected):
+def test_completion_processing_has_a_long_finite_deadline(monkeypatch, method, path, expected):
     def open_request(self, req, timeout):
         assert timeout == expected
         return WireResponse(b'{}')

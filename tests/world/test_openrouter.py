@@ -9,6 +9,7 @@ import pytest
 from factorylab.world.metering import BillingUncertain, Meter, MeteredModel
 from factorylab.world.models import ModelRequest, ModelResponse, PriceTable, TokenPrice
 from factorylab.world.openrouter import OpenRouterError, OpenRouterProvider
+from factorylab.world.x402 import MODEL_COMPLETION_TIMEOUT_S
 
 
 @pytest.fixture
@@ -205,7 +206,7 @@ def test_default_transport_disables_redirects(monkeypatch, req):
         return original_build_opener(*handlers)
 
     def fake_open(self, wire_req, timeout):
-        assert timeout is None  # Model processing has no client thinking deadline.
+        assert timeout == MODEL_COMPLETION_TIMEOUT_S  # finite: a stalled socket ends
         handler, = handlers_seen
         assert handler.redirect_request(wire_req, None, 302, "", {}, "https://other.test") is None
         raise error.HTTPError(wire_req.full_url, 302, "redirect", {}, BytesIO(b"redirect"))

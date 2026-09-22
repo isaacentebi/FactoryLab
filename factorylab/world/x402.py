@@ -28,6 +28,13 @@ from factorylab.kernel.money import nonnegative_usd_micro
 #: a transport timeout is billed as uncertain at the ceiling, so it must be rarer than
 #: a slow reply. The ten-minute tick absorbs it.
 MODEL_HTTP_TIMEOUT_S = 180
+#: A completion's own ceiling. Native completion allowances (#121) let a reply think
+#: for minutes, so it is far longer than a read's -- but it is finite: with no deadline
+#: one stalled connection held an edition 5 world for over half an hour, and a factory
+#: nobody watches cannot wait on a socket forever. It is an idle-socket deadline,
+#: longer than a ten-minute tick; a reply that exceeds it is billed uncertain at the
+#: request's ceiling, never dropped.
+MODEL_COMPLETION_TIMEOUT_S = 900
 
 BASE_RPC = "https://mainnet.base.org"
 VENICE_URL = "https://api.venice.ai/api/v1"
@@ -74,7 +81,7 @@ def http_request(method: str, url: str, payload: dict | None, headers: dict) -> 
         completion = method == "POST" and parse.urlsplit(url).path.rstrip("/").endswith(
             "/chat/completions")
         response = request.build_opener(_NoRedirect()).open(
-            req, timeout=None if completion else MODEL_HTTP_TIMEOUT_S)
+            req, timeout=MODEL_COMPLETION_TIMEOUT_S if completion else MODEL_HTTP_TIMEOUT_S)
     except error.HTTPError as exc:
         response = exc
     with response:
