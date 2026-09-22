@@ -435,7 +435,7 @@ class RecoveryJournal:
 
 
 def _read_only(name: str) -> bool:
-    if name in ("sandbox.run", "observation.run", "predicate.run", "note.read"):
+    if name in ("sandbox.run", "observation.run", "predicate.run"):
         return True
     if name == "treasury.provider_pots" or (
         name.startswith("treasury.rail.")
@@ -564,7 +564,6 @@ _RUNTIME_FIELDS = (
     "facilitator_url",
     "registered_predicates", "kind_reward_shapes", "forecast_returns",
     "connector_calls", "connector_calls_day",
-    "notes",
     # The pause between releases: None while awake, else the entry record (C2).
     "dormancy",
     # C10: each seat's last rendered call ceiling and the world size it was priced at.

@@ -202,7 +202,7 @@ values, pathologies, recent prints and the shared directory,
 and `unavailable_observations` — every source that could not be read, with the
 reason. No private state is in this block; a seat's own state appears exactly
 once, in `YOU`. Everything else the world publishes — `inputs.you`, the event,
-the pots, note counts, the reserve remaining, `tick_intervals`,
+the pots, the reserve remaining, `tick_intervals`,
 `registration_feedback`, `adaptive_scoring`, the tool, connector, work and
 observation catalogues, the mechanics and the scoring formulas — is rendered
 after those, inside `INPUTS`. A key of the world block is rendered in exactly
@@ -1099,8 +1099,8 @@ Paths may include a query but cannot change origin. HTTP status is returned
 as evidence rather than treated as a fetch error.
 Responses decode as UTF-8 with replacement and arrive in `seen_tool_results`
 (and the existing `tool_results`) on the caller's continuation. A successful
-fetch permits one additional tool round consisting of ordinary population tools
-and the note tools, then a final model answer. The jail is unchanged.
+fetch permits one additional tool round consisting of ordinary population,
+artifact and outcome tools, then a final model answer. The jail is unchanged.
 
 `MIN_PROTECTED_BODY_CHARS` is `32`, fixed in `runtime/compute.py`.
 Bodies at least that long and copies in parser arguments/model journal
@@ -1147,7 +1147,7 @@ fetched body is: verbatim and JSON-escaped copies are redacted from the public l
 surfaces and a final output carrying one is refused. Urls and shorter strings are
 repeatable facts and stay readable, and the protection is transient — it lasts the
 invocation, like a fetch's. A successful `web.search` also permits one additional tool
-round, the same one a successful `connector.fetch` permits: ordinary population, note,
+round, the same one a successful `connector.fetch` permits: ordinary population,
 artifact and outcome tools, then a final model answer, so a seat can search and act within
 one wake. A search that returned no results buys no extra round.
 
@@ -1174,7 +1174,7 @@ Tools: `polymarket.search {query, limit?}`, `polymarket.market {market_id}` and
 `polymarket.book {token_id, depth?}` are reads priced at `read_price_usd`. Their answers
 carry text third parties wrote (questions, rules, slugs, resolution sources), so they are
 outside text exactly as a `connector.fetch` body is: prose of at least
-`MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population, note,
+`MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population,
 artifact and outcome tools only, so market text cannot reach a write in the same wake. With
 the simulated venue, `polymarket.positions {}` reads the pot (free), and
 `polymarket.place_limit {token_id, side, size, price}` and `polymarket.cancel {order_id}`
@@ -1276,7 +1276,7 @@ censored. `world.work.predicates` publishes each predicate's id, description,
 parameter names, `horizon_param`, `version` and `provenance`, and `predicate`
 is one of the kinds the `register` field accepts.
 
-## Seeing the world: markets, paid sources and notes
+## Seeing the world: markets, paid sources and storage
 
 A connector proposal may carry a `preflight_path` within its own origin, and
 admission judges whether the origin answered within the manifest's bounds rather
@@ -1330,53 +1330,29 @@ paid read is the journal call `connector.paid_fetch`, and the ledger retains
 HTTP 402 with no data cost. `world.connectors` publishes `optional_fields`,
 the `payment` note, and each registered connector's `pay` and `max_call_micro`.
 
-`note.put`, `note.get` and `note.list` are a public key-value notebook bounded in
-UTF-8 bytes and charged rent by byte-time; unaffordable rent retains the text, an
-overwrite cannot escape the debt, reads are journaled and priced, and the wake
-publishes counts only. `[notes]` is a hard cast with exactly these keys.
+`[storage]` is a hard cast with exactly one key. The public notebook
+(`note.put`, `note.get`, `note.list` and `[notes]`) is deleted by ruling R11:
+Chapter II §I.b prescribes two channels, rich requests and thin rewards, and a
+population-wide blackboard is neither. What survives is its storage rent, which a
+seat's working state pays.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `max_keys` | `128` | Positive integer count of retained keys. |
-| `max_bytes` | `262144` | Positive integer total of key and text bytes. |
-| `byte_window_micro` | `1` | Positive integer micro-USD charged as the flat price of one `note.put` or `note.get` call. It prices neither storage nor bytes moved; the name is kept so old manifests still load. |
-| `micro_per_byte_day` | `"0.04"` | Exact positive decimal text (or integer) micro-USD per retained byte per day: the storage rent (edition 2, contract C3). At its default the whole 256 KiB cap costs 10,485 micro-USD, about a cent, a day. Absent or default, it leaves the manifest hash unchanged. |
+| `micro_per_byte_day` | `"0.04"` | Exact positive decimal text (or integer) micro-USD per retained byte per day: the storage rent (edition 2, contract C3). |
 
-A key is 1–128 printable UTF-8 bytes. An entry's size is its key bytes plus its
-text bytes, and a call's price is the flat `byte_window_micro` plus any rent the
-entry still owes. Edition 3 (contract C4) removed the per-byte transfer toll:
-charging a micro-USD for every byte moved made a 4 KiB read cost about $0.0041
-before the model had consumed one character of it — more than a cheap model call
-— for a resource the factory does not actually pay for, which made remembering
-dearer than producing another unsupported paragraph. Byte-time rent is
-unchanged: storage is a real resource, and a note nobody will pay to keep should
-go. `note.list` is free, like `artifact.get`, and returns up to 50 rows of key,
-title, type, bytes, version, owner seat, the window last written and `public`
-(always true for the notebook), newest first, with `next_cursor` for the next
-page and `count` for the whole index; it carries no text, so a reader need not
-already know a key. `artifact.list` is its counterpart over the archive, with
-`sha` in place of the key and an optional `owner` filter. A call above the
-caller's available compute or its
-request ceiling is refused before any debit or overwrite. `note.get` on an
-unknown key is an error. Rent is `bytes × elapsed_ns × rate`, accrued from the
-moment a key is written (an overwrite inherits the open interval, so rewriting
-forgives nothing) and collected at each reserve-window boundary for the time
-elapsed since the last boundary, not per window counted: the rate is an exact
-ratio of micro-USD per byte-nanosecond, and whatever fraction of a micro-USD an
-interval leaves over is carried on the entry (`rent_carry`), so collecting
-hourly charges exactly what collecting daily charges and a two-minute window
-cannot round a small note up to a micro-USD (the reviewer's rent trap). The
-boundary writes `note.rent` when the holding decision's compute affords it,
-`note.rent_due` when it does not, in which case the text stays and the debt is
-owed on the next read or overwrite. The ledger items `note.put` and `note.get`
-carry the key, handle, assembly id, cost, window, version and byte count, and
-`note.put` also carries the text. The `note.read` journal call is replayable
-read-only work. `world.notes` publishes the key and byte counts, the bounds and
-the pricing rule; the wake's `notes` section publishes counts only; the
-notebook, its accrual marks and its carried remainders survive resume.
+A world file that still carries `[notes]` loads only if that table names nothing
+but `micro_per_byte_day`, which is then read as `[storage] micro_per_byte_day`;
+any notebook key (`max_keys`, `max_bytes`, `byte_window_micro`) is refused, and so
+is naming both tables. No world under `worlds/` carries `[notes]`. Rent is
+`bytes × elapsed_ns × rate`, accrued from the moment a head is written (a rewrite
+inherits the open interval, so rewriting forgives nothing) and collected at each
+reserve-window boundary for the time elapsed since the last boundary: the rate is
+an exact ratio of micro-USD per byte-nanosecond, and whatever fraction of a
+micro-USD an interval leaves over is carried on the head (`rent_carry`), so
+collecting hourly charges exactly what collecting daily charges.
 
 Retained storage is an explicit, resumable liability of the decision that holds
-the note, not only a wallet debit. Every paid charge is added to that
+the state, not only a wallet debit. Every paid charge is added to that
 decision's cost contribution for the window the charge landed in and enters
 that window's measured rows — a producer's charge its cost statistics too, as
 cost the window spent and never as a return it received — as a cost of the same
@@ -1386,9 +1362,8 @@ and while the decision's own consequence outcome is still open it is also
 carried into that outcome's cost, so a return cannot resolve
 `return_paid_off = 1` on a margin its storage has already consumed. An outcome
 is fixed once and never reopened, so rent falling due afterwards stays with the
-note's current owner decision as a cost contribution alone, and the note is
-kept rather than released: public text other decisions may already have read is
-not deleted because one account closed. The carried amount is
+head's owner decision as a cost contribution alone, and the state is kept rather
+than released. The carried amount is
 `ReturnAccount.carried_micro`, resumes with the consequence table, and appears
 as `consequence.carried`; the matching `price.contribution` item carries
 `storage` and `carried`.
@@ -1493,7 +1468,7 @@ While dormant the event is not routed: no seat is woken for it, so no model or
 program call, no return, no registration and no tool call comes of it, and the
 compute-insolvency streak is not advanced. Everything mandatory continues on
 every event: drips and due releases, reserve-window management (windows still
-close, cards are still measured and priced, note rent still accrues and is
+close, cards are still measured and priced, storage rent still accrues and is
 collected, and an activation boundary still falls due), the treasury's window
 cap and its tick, order reconciliation, fills and settled funding from the
 venue, x402 reconciliation, the reconciler's snapshot, settlement of due
@@ -1656,9 +1631,9 @@ allowance is 8,192 bytes (accepted, and the rent is what it is); above 65,536
 the field is refused, the head is unchanged and `state.refused {assembly_id,
 handle, reason}` is ledgered. A manifest may seed a head with an assembly's
 `initial_state`; without one the head is None. Rent is byte-time at
-`notes.micro_per_byte_day` collected at each reserve-window boundary through the
-seat's own meter (`state.rent`, or `state.rent_due` when unaffordable), on the
-same accrual arithmetic the notebook uses; there is no transfer toll.
+`storage.micro_per_byte_day` collected at each reserve-window boundary through the
+seat's own meter (`state.rent`, or `state.rent_due` when unaffordable); there is no
+transfer toll.
 
 `OutcomeInbox` addresses every settled consequence to the seat that decided it:
 `{handle, said: {rationale, payoff, forecasts}, outcome, observed_at_ns,
@@ -2157,8 +2132,7 @@ Continuation pricing reserves another call before extending reads, and unknown
 prices do not extend them. Actual metering remains authoritative. Older tool results
 have exact invocation-local `artifact.get` references that expire when the decision
 returns; they create no permanent archive entries. The current round's results are
-included once. External text retains its restricted continuation and cannot write
-a notebook in that continuation. Public `world.read` is available in both prompt
+included once. External text retains its restricted continuation. Public `world.read` is available in both prompt
 modes, including grounded commissions that omit the full reference manual.
 
 

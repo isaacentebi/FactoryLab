@@ -436,7 +436,7 @@ class ComputeMixin:
 
     def _world_chars(self, world: Any) -> int:
         """The rendered size of a request's world block, the part of every prompt that
-        grows with the factory (registrations, notes, artifacts, charter).
+        grows with the factory (registrations, artifacts, charter).
 
         Compact worlds are measured through the same pure projection an invocation
         receives. Routing therefore prices growth in inline context, not history
@@ -563,11 +563,10 @@ class ComputeMixin:
         from factorylab.runtime.propensity import EFFECT_TOOLS
 
         calls = parsed.get("tool_calls", [])
-        # A batch that writes (the venue, the treasury, a note) runs whole
+        # A batch that writes (the venue, the treasury) runs whole
         # or not at all; a batch of reads loses only the read that cannot run.
         writes = any(str(call.get("tool")) in EFFECT_TOOLS
                      or str(call.get("tool")).startswith("treasury.")
-                     or call.get("tool") == "note.put"
                      or call.get("tool") in self.CONSEQUENCE_WRITES
                      for call in calls if isinstance(call, dict))
         for section, limit in (("requests", self.m.tools.max_children),
@@ -854,19 +853,11 @@ class ComputeMixin:
     DIRECTORY_PAGE = 50
 
     def _ensure_directory_tools(self) -> None:
-        """Expose the shared directory: an index of the notebook and of the archive.
+        """Expose the archive's index: sha, kind, bytes and when, never contents.
 
-        Public storage without a discovery surface is a poor shared memory. Both
-        tools are indexes — key or sha, title, type, bytes, owner seat, when it
-        was updated, whether it is public — so a reader need not already know a
-        key or a hash to find what the population has written down. Neither
-        returns contents: ``note.get`` and ``artifact.get`` do that, at their own
-        prices.
+        ``artifact.get`` returns contents, at its own price.
         """
-        from factorylab.runtime.notes import list_spec
-
         page = self.DIRECTORY_PAGE
-        self.tool_specs.setdefault("note.list", list_spec())
         self.tool_specs.setdefault("artifact.list", {
             "id": "artifact.list",
             "kind": "artifact",
@@ -1072,10 +1063,6 @@ class ComputeMixin:
                 # The flat price is not what a search costs: the metered completion
                 # rides with it, and the manifest's ceiling is what must fit.
                 price = self.m.web.max_call_micro
-            if tool in ("note.put", "note.get"):
-                from factorylab.runtime.notes import prepare
-
-                _, price = prepare(self.notes, self.m.notes, tool, call["args"], self.window.index)
         except (KeyError, ValueError):
             pass  # The normal dispatcher supplies the shape or identity refusal.
         return price
@@ -1108,7 +1095,7 @@ class ComputeMixin:
     #: Tool kinds a round earned by text from outside may still run. Fetched or
     #: searched bytes cannot reach the venue, the treasury or a transport inside
     #: the same wake that read them.
-    PARSE_KINDS = frozenset({"population", "note", "artifact", "outcome"})
+    PARSE_KINDS = frozenset({"population", "artifact", "outcome"})
 
     #: Tool kinds that answer with state and change none. Reading one can be worth
     #: another round, because what it returned arrives after the answer that asked
@@ -1118,22 +1105,17 @@ class ComputeMixin:
         "connector", "web", "polymarket",
     })
 
-    #: The reads inside a kind that also writes.
-    READ_ONLY_TOOLS = frozenset({"note.get", "note.list"})
-
     def _read_only_call(self, tool_id: str) -> bool:
         """Whether this tool answers with state without changing any.
 
         Guarantees the answer is False for anything this runtime does not know to
-        be a read: a write, a transport, a notebook entry, population code and any
+        be a read: a write, a transport, population code and any
         tool the population registers later. Retrieval is extended by reads and
         ended by everything else, so a new capability cannot become a way to buy
         more rounds of acting.
         """
         if tool_id in self.CONSEQUENCE_WRITES:
             return False
-        if tool_id in self.READ_ONLY_TOOLS:
-            return True
         return self.tool_specs.get(tool_id, {}).get("kind") in self.READ_ONLY_KINDS
 
     def _call_reserve(self, assembly: Any, req: Request) -> int | None:
@@ -1269,17 +1251,6 @@ class ComputeMixin:
             from factorylab.runtime import websearch
 
             return websearch.run(self, action_id, handle, args)
-        if tool_id == "note.list":
-            # An index of public keys, free like artifact.get: a directory nobody
-            # can afford to read is not a directory. It is ledgered like any call.
-            from factorylab.runtime.notes import index
-
-            cursor = args.get("cursor")
-            result = index(self.notes, cursor if isinstance(cursor, str) else None)
-            self.ledger.append({"kind": "note.list", "handle": handle,
-                                "assembly_id": action_id, "rows": len(result["items"]),
-                                "count": result["count"], "ts": self.clock.now_ns})
-            return result, 0
         if tool_id == "artifact.list":
             result = self._artifact_page(args)
             self.ledger.append({"kind": "artifact.list", "handle": handle,
@@ -1287,10 +1258,6 @@ class ComputeMixin:
                                 "count": result["count"], "owner": args.get("owner"),
                                 "ts": self.clock.now_ns})
             return result, 0
-        if tool_id in ("note.put", "note.get"):
-            from factorylab.runtime.notes import run
-
-            return run(self, action_id, handle, tool_id, args)
         if tool_id == "artifact.get":
             # Free by contract (C9) and scoped by contract (C1): a seat reads what it
             # wrote, what was published, and a program's state within its own lineage.
@@ -1764,7 +1731,7 @@ class ComputeMixin:
                 answered.add(signature)
                 if dispatched and not read_only:
                     # Anything that is not a known read ends the retrieval, whether or
-                    # not it names an action: a notebook entry, population
+                    # not it names an action: population
                     # code and an unrecognised tool all stop the wake at one round of
                     # doing, so nothing executed here can be executed again below.
                     acted = True
@@ -1923,8 +1890,7 @@ class ComputeMixin:
             # outside text, so a seat that looked a capability up may call the
             # capability it looked up, which is the whole point of looking.
             if (granted and ret.tool_calls and outside_text
-                    and any(c["tool"] == "note.put" or
-                            self.tool_specs.get(c["tool"], {}).get("kind") not in self.PARSE_KINDS
+                    and any(self.tool_specs.get(c["tool"], {}).get("kind") not in self.PARSE_KINDS
                             for c in ret.tool_calls)):
                 granted = False
             if ret.tool_calls and not granted:

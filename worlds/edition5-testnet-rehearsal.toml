@@ -293,11 +293,6 @@ max_lifetime_windows = 6
 share = 0.1
 window = "1m"
 
-# C3 of edition 2: storage rent by byte-time, at the loader default, stated so the choice
-# is visible. The C4 notebook transfer toll is gone; this rent stays.
-[notes]
-micro_per_byte_day = "0.04"
-
 [timing]
 cadence_sample = 200
 min_ratio = 3

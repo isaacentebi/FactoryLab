@@ -489,7 +489,6 @@ class BootstrapMixin:
                 self.ledger.append({"kind": "spot.inventory", "coin": coin,
                                     "size": size, "entry_px": px, "source": "launch"})
                 self.spot_inventory[coin] = (Decimal(size), Decimal(px))
-        self.notes: dict[str, dict] = {}
         # The artifact archive (C9): records in the ledger, bytes beside it by hash.
         from factorylab.kernel.artifacts import ArtifactStore, artifact_root
 
@@ -627,15 +626,10 @@ class BootstrapMixin:
                                   for amount in ("5", 5)],
             "catalogue.search": [{"substring": "flash", "limit": 20}],
             "market.discover": [{"query": "inference", "limit": 20}],
-            "note.put": [{"key": "shared-plan", "text": "What the last window showed."}],
-            "note.get": [{"key": "shared-plan"}],
             "artifact.get": [{"sha": "0" * 64}],
             "outcome.get": [{"outcome_id": "outcome:1"}, {"handle": "decision-1"}],
             **vault_examples,
         }
-        from factorylab.runtime.notes import specs as note_specs
-
-        self.tool_specs.update(note_specs(manifest.notes))
         self.tool_specs["artifact.get"] = {
             "id": "artifact.get",
             "description": "Read an archived artifact by its sha256: your own working "

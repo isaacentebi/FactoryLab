@@ -46,18 +46,67 @@ the settler still read it back. A decision with open consequences is never
 evictable (R3-F; GPT-6 third reading §3, "MAX_SAID can evict decision-linked
 material before a delayed consequence").
 
-Rent is by byte-time at the world's ``notes.micro_per_byte_day`` rate (C3),
+Rent is by byte-time at the world's ``storage.micro_per_byte_day`` rate (C3),
 accrued on the head's bytes from the moment it is written and collected at each
-reserve-window boundary through the same metered path a note's rent takes.
-There is no transfer toll: rendering a seat its own state costs the tokens it
-costs and nothing else.
+reserve-window boundary through the seat's own metered path. The arithmetic is
+exact: whatever fraction of a micro-USD a window leaves over is carried on the
+head, so collecting often can never round it up and collecting rarely can never
+round it down. There is no transfer toll: rendering a seat its own state costs
+the tokens it costs and nothing else.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 from typing import Any
+
+NS_PER_DAY = 24 * 3_600 * 1_000_000_000
+#: 8 KiB at 0.04 micro-USD per byte-day is about 328 micro-USD a day.
+DEFAULT_MICRO_PER_BYTE_DAY = "0.04"
+
+
+@dataclass(frozen=True)
+class StorageSpec:
+    """The world's byte-day storage rent, fixed at launch (``[storage]``).
+
+    Guarantees the rate is a positive, exact decimal. Storage is a real resource,
+    so a seat's retained working state (essay II.I.a, "memory that persists across
+    rounds") pays for the bytes it holds and the time it holds them.
+    """
+
+    micro_per_byte_day: str = DEFAULT_MICRO_PER_BYTE_DAY
+
+    def __post_init__(self):
+        rate = self.micro_per_byte_day
+        if type(rate) not in (str, int):
+            raise ValueError("storage.micro_per_byte_day must be exact decimal text or an integer")
+        try:
+            value = Decimal(rate)
+        except InvalidOperation:
+            raise ValueError("storage.micro_per_byte_day must be exact decimal text") from None
+        if not value.is_finite() or value <= 0:
+            raise ValueError("storage.micro_per_byte_day must be a positive finite rate")
+        object.__setattr__(self, "micro_per_byte_day", format(value.normalize(), "f"))
+
+    def rate(self) -> tuple[int, int]:
+        """Return the rent rate as an exact ratio of micro-USD per byte-nanosecond."""
+        per_ns = Fraction(Decimal(self.micro_per_byte_day)) / NS_PER_DAY
+        return per_ns.numerator, per_ns.denominator
+
+
+def accrue(entry: dict, now_ns: int, storage: StorageSpec) -> tuple[int, int]:
+    """Return (micro-USD newly due, remainder to carry) for the interval since the last accrual."""
+    since = entry.get("rent_ns")
+    if since is None:
+        return 0, entry.get("rent_carry", 0)
+    numerator, denominator = storage.rate()
+    byte_ns = entry.get("rent_byte_ns", 0) + entry["bytes"] * max(0, now_ns - since)
+    owed = byte_ns * numerator + entry.get("rent_carry", 0)
+    return divmod(owed, denominator)
 
 #: The allowance a seat is told about. Above it the state is accepted anyway.
 SOFT_STATE_BYTES = 8_192
@@ -620,14 +669,12 @@ class OutcomeInbox:
 def charge_window(rt) -> None:
     """Every head pays the rent its bytes accrued since the last boundary (C3).
 
-    The same arithmetic and the same metered path the notebook's rent takes:
-    exact byte-nanoseconds at ``notes.micro_per_byte_day``, the remainder carried
+    Exact byte-nanoseconds at ``storage.micro_per_byte_day``, the remainder carried
     on the head so collecting often can never round up and collecting rarely can
     never round down. An unaffordable boundary forgives nothing — the accrued
     interval closes and its amount stays due on the head — and a paid charge is a
     scored liability of the decision that wrote the state, not merely a debit.
     """
-    from factorylab.runtime.notes import accrue
     from factorylab.world.metering import Infeasible
 
     now_ns = rt.clock.now_ns
@@ -639,7 +686,7 @@ def charge_window(rt) -> None:
     if collect is not None:
         collect()
     for seat, head in rt.working_state.heads.items():
-        micro, carry = accrue(head, now_ns, rt.m.notes)
+        micro, carry = accrue(head, now_ns, rt.m.storage)
         price = head.get("rent_due", 0) + micro
         head["rent_ns"], head["rent_carry"] = now_ns, carry
         head["rent_byte_ns"] = 0

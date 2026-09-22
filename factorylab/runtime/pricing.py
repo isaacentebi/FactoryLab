@@ -147,7 +147,7 @@ class PricingMixin:
     def _charge_storage(self, handle: str, cost_micro: int) -> None:
         """Bind a metered retained-storage charge to a decision that can be scored for it.
 
-        Retained public storage is an explicit liability of the decision that
+        Retained storage is an explicit liability of the decision that
         holds it. Every charge enters that decision's cost contribution for the
         window it landed in and the measured rows the charter's cost cards and
         their penalty shares are read from, so both see it where it was spent. A
@@ -239,10 +239,8 @@ class PricingMixin:
             self._issue_novelty_grant()
             self.window = MeasureWindow(self.stats.reserve_windows, self._equity_micro())
             from factorylab.runtime.continuity import charge_window as charge_state_window
-            from factorylab.runtime.notes import charge_window
 
-            charge_window(self)
-            charge_state_window(self)  # a seat's working state pays the same byte-time rent
+            charge_state_window(self)  # a seat's working state pays byte-time rent
             self.price_windows[self.window.index] = self.window
             self._observe_positions()
             self._activate_charter_if_due()

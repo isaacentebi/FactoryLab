@@ -34,7 +34,7 @@ MIN_BURN_OBSERVATION_NS = 6 * NS_PER_HOUR
 #: Spend is accumulated in half-day buckets and at most two are kept per seat, so
 #: the reported window is between twelve and twenty-four hours of real spending.
 SPEND_BUCKET_NS = 12 * NS_PER_HOUR
-#: What ``note.list`` and ``artifact.list`` return in one page, before a cursor.
+#: What ``artifact.list`` returns in one page, before a cursor.
 DIRECTORY_PAGE = 50
 #: What the world block's own directory preview carries; the tools page the rest.
 DIRECTORY_PREVIEW = 10
@@ -405,7 +405,6 @@ class SchematicsMixin:
         """Facts about the world any assembly may see. No rules, no goals, no private state."""
         self._ensure_connector_tool()
         from factorylab.runtime.custody import custody_view
-        from factorylab.runtime.notes import counts
         try:
             acct = self._tick_account()
             account = {
@@ -473,15 +472,6 @@ class SchematicsMixin:
             "recent_mids": {c: list(v) for c, v in self.recent_mids.items()},
             "account": account,
             "venue": self._traded_instruments(),
-            "notes": {**counts(self.notes), "max_keys": self.m.notes.max_keys,
-                      "max_bytes": self.m.notes.max_bytes,
-                      "micro_per_byte_day": self.m.notes.micro_per_byte_day,
-                      "pricing": "Reading and writing the notebook is free of any per-byte "
-                      "transfer charge; retained text pays storage rent of "
-                      "micro_per_byte_day per byte by elapsed time, collected at each window "
-                      "boundary. Unpaid storage rent is due before a read or overwrite; text "
-                      "is retained. note.list indexes the keys.",
-                      "call_price_micro": self.m.notes.byte_window_micro},
             "tools": self._published_tool_specs(),
             "reserve": {"protected": self.reserve.remaining(), "units": "micro-USD",
                         "trials": self.m.novelty.trials,
@@ -578,7 +568,7 @@ class SchematicsMixin:
                            "the flat call price is additional. Omit pay for free sources.",
                            "result": "UTF-8 text in seen_tool_results[].result.body",
                            "tool_rounds": 2,
-                           "continuation_tool_kinds": ["population", "note", "artifact"],
+                           "continuation_tool_kinds": ["population", "artifact"],
                            "encoding": "UTF-8 with replacement", "redirects": "refused",
                            "oversize": "refused", "credentials": False},
             "population_tools": {
@@ -1144,16 +1134,13 @@ class SchematicsMixin:
                 "basis": "the kernel records the tick index of a paid wake, not a wall clock"}
 
     def _seat_directory(self, seat: str) -> dict[str, Any]:
-        """The seat's own note index and the artifacts it may read, bounded and paged."""
-        notes = sorted(key for key, entry in self.notes.items()
-                       if entry.get("owner") == seat)
+        """The artifacts the seat may read, bounded and paged."""
         count, artifacts = self._artifacts_visible_to(seat, DIRECTORY_PREVIEW)
         return {
-            "notes": {"count": len(notes), "keys": notes[:DIRECTORY_PREVIEW]},
             "artifacts": {"count": count,
                           "newest": [{k: row[k] for k in ("sha", "kind", "bytes", "owner")}
                                      for row in artifacts]},
-            "paging": f"note.list and artifact.list return {DIRECTORY_PAGE} rows a page",
+            "paging": f"artifact.list returns {DIRECTORY_PAGE} rows a page",
         }
 
     def _charter_text(self) -> str:
@@ -1529,20 +1516,14 @@ class SchematicsMixin:
 
     def _directory_changes(self) -> dict[str, Any]:
         """A bounded preview of the shared directory; the list tools page the rest."""
-        notes = sorted(
-            ({"key": key, "bytes": entry["bytes"], "version": entry["version"],
-              "owner": entry.get("owner"), "updated_window": entry.get("window")}
-             for key, entry in self.notes.items()),
-            key=lambda row: (-(row["updated_window"] or 0), row["key"]))
         listing = self._artifact_listing()
         return {
-            "notes": {"count": len(notes), "newest": notes[:DIRECTORY_PREVIEW]},
             "artifacts": {"count": listing.count(),
                           "newest": [{k: row[k] for k in
                                       ("sha", "kind", "bytes", "owner", "public")}
                                      for row in listing.newest(DIRECTORY_PREVIEW)]},
-            "paging": f"note.list and artifact.list return {DIRECTORY_PAGE} rows a page with "
-                      "a cursor; both are indexes, not contents",
+            "paging": f"artifact.list returns {DIRECTORY_PAGE} rows a page with "
+                      "a cursor; it is an index, not contents",
         }
 
     def _market_data_as_of(self) -> dict[str, Any]:
