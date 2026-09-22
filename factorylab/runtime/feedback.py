@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation
 from statistics import fmean
 from typing import Any
 
@@ -13,10 +14,15 @@ from factorylab.kernel.wallet import Infeasible
 from factorylab.learners.base import BanditFeedback
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_window_ns
 from factorylab.runtime.grounded import (
+    DEFAULT_TAKER_FEE_BPS,
     GROUNDED_DEFINITION,
+    INACTION_ACTIONS,
+    OPPORTUNITY_DEFINITION,
     UNKNOWN_REASON,
     GroundedContract,
+    latest_mids,
     observed_evidence_refs,
+    opportunity_cost,
     parse_finding,
     public_evidence,
 )
@@ -1527,6 +1533,8 @@ class FeedbackMixin:
                 continue
             if self.ticks_consumed < contract.due_tick or contract.final_requested:
                 continue
+            if self._settle_opportunity_cost(contract):
+                continue
             evidence = public_evidence(self, contract)
             # What the evidence set is, and when it was taken. Frozen here, at
             # assembly, and carried unchanged in the emitted event: a judge that
@@ -1573,6 +1581,51 @@ class FeedbackMixin:
                 "evidence": evidence,
                 "evidence_snapshot": evidence_snapshot,
             })
+
+    def _settle_opportunity_cost(self, contract: GroundedContract) -> bool:
+        """Settle a decision that traded nothing on the trade it passed up; True if settled.
+
+        Guarantees only an inaction answer with no venue operation, and a contract
+        that froze its reference mids, is priced here; every other decision keeps
+        its grounded-judge path. The score is the world's (``opportunity_cost``),
+        not an opinion, so no final judge is commissioned or paid for it, and the
+        producer is told what it passed up in its own inbox.
+        """
+        outputs = contract.producer_outputs if isinstance(contract.producer_outputs, dict) else {}
+        action = str(outputs.get("action", "")).strip().lower()
+        if action not in INACTION_ACTIONS or not contract.reference_mids:
+            return False
+        if self.executed_operations(contract.handle):
+            return False
+        fee = getattr(self.exchange, "fee_bps", None)
+        try:
+            fee_bps = Decimal(str(fee)) if fee is not None else DEFAULT_TAKER_FEE_BPS
+        except (InvalidOperation, ValueError):
+            fee_bps = DEFAULT_TAKER_FEE_BPS
+        priced = opportunity_cost(contract.reference_mids, latest_mids(self), 2 * fee_bps)
+        if priced is None:
+            return False
+        handle = contract.handle
+        self.ledger.append({"kind": "consequence.opportunity", "handle": handle,
+                            "horizon_ticks": contract.due_tick - contract.opened_tick,
+                            **priced, "ts": self.clock.now_ns})
+        if self.queue.get(handle).status in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
+            self._settle_priced(handle, channel=CH_VERDICT, score=priced["score"],
+                                definition_version=OPPORTUNITY_DEFINITION,
+                                sampling_ref=None, cards="producer")
+            self.stats.verdicts += 1
+        owner = self.handle_to_assembly.get(handle) or self.outcomes.seat_of(handle)
+        if owner is not None:
+            self.outcomes.append(owner, handle=handle, evidence=f"opportunity:{handle}",
+                                 outcome={"kind": "opportunity_cost", "phase": "final",
+                                          "score": priced["score"],
+                                          "best_declined": priced["best_declined"],
+                                          "regret_bps": priced["regret_bps"],
+                                          "round_trip_fee_bps": priced["round_trip_fee_bps"]})
+        self.pending.pop(handle, None)
+        self.grounded_pending.pop(handle, None)
+        self.grounded_closed.add(handle)
+        return True
 
     def _complete_grounded_evaluation(
         self, judge_handle: str, evaluator_id: str, about: str | None, ret: Any,

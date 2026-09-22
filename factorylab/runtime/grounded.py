@@ -5,11 +5,19 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, replace
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from factorylab.kernel.ledger import canonical
 
 GROUNDED_DEFINITION = "realized-consequence-v2"
+#: A decision that traded nothing is priced by the world, not by an opinion: the
+#: best trade it passed up, marked to market at the horizon, net of a round trip.
+OPPORTUNITY_DEFINITION = "opportunity-cost-v1"
+#: Answers that decide not to act on the venue now.
+INACTION_ACTIONS = ("", "hold", "noop", "none", "wait", "pause", "defer")
+#: A venue whose fee is not published is priced at Hyperliquid's base taker tier.
+DEFAULT_TAKER_FEE_BPS = Decimal("4.5")
 UNKNOWN_REASON = "the frozen consequence horizon produced no assessable public evidence"
 
 
@@ -56,6 +64,9 @@ class GroundedContract:
     # paid only by consequences that rarely arrive stops exploring (essay II.IV.b).
     provisional_score: float | None = None
     provisional_judge: str | None = None
+    # The mid of every coin when the decision was frozen, as (coin, decimal string).
+    # Empty on historical contracts, which then keep their grounded-judge path.
+    reference_mids: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.handle or not self.producer_id:
@@ -73,6 +84,8 @@ class GroundedContract:
         object.__setattr__(self, "forecasts", tuple(_plain(v) for v in self.forecasts))
         object.__setattr__(self, "final_evaluators", tuple(self.final_evaluators))
         object.__setattr__(self, "norms", tuple(_plain(v) for v in self.norms))
+        object.__setattr__(self, "reference_mids",
+                           tuple((str(c), str(m)) for c, m in self.reference_mids))
 
     def with_initial(
         self, *, judge_handle: str, evaluator_id: str, forecast_handles: Iterable[str],
@@ -139,6 +152,7 @@ def freeze_contract(
         event_cursor=len(runtime.events_log),
         receipt_cursor=runtime.consequences.receipts.execution_count(),
         norms=norms,
+        reference_mids=latest_mids(runtime),
     )
 
 
@@ -254,3 +268,56 @@ def parse_finding(
     if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 < score <= 1:
         raise ValueError("supported consequence score must be in (0, 1]")
     return status, float(score), refs, reason.strip()
+
+
+def latest_mids(runtime: Any) -> tuple[tuple[str, str], ...]:
+    """The last broadcast mid of every coin, from the world's own tick record.
+
+    Guarantees no venue read: the mids are the ones already delivered as
+    ``MarketMid`` events, so freezing and pricing a contract cost no I/O and
+    replay identically.
+    """
+    rows = getattr(runtime, "recent_mids", {}) or {}
+    return tuple(sorted((str(coin), str(dq[-1]["mid"])) for coin, dq in rows.items() if dq))
+
+
+def opportunity_cost(open_mids: Iterable[tuple[str, str]],
+                     due_mids: Iterable[tuple[str, str]],
+                     round_trip_bps: Decimal) -> dict[str, Any] | None:
+    """Price the road not taken: the best long or short the decision passed up.
+
+    Guarantees the score is ``cost / (cost + regret)`` in (0, 1], where ``regret``
+    is how far the largest move of any coin over the horizon exceeded a round
+    trip's fees, in basis points of notional. Holding scores 1 exactly when no
+    trade in either direction would have paid its fees; sitting through a move
+    worth taking scores 0.5 when the missed profit equalled the fees, and falls
+    toward zero as it grows. Returns None when no coin has both prices.
+    """
+    opened = dict(open_mids)
+    due = dict(due_mids)
+    moves = []
+    for coin in sorted(set(opened) & set(due)):
+        try:
+            before, after = Decimal(opened[coin]), Decimal(due[coin])
+        except (InvalidOperation, ValueError):
+            continue
+        if before <= 0 or after <= 0:
+            continue
+        move = (after - before) / before * Decimal(10_000)
+        moves.append({"coin": coin, "open_mid": str(before), "due_mid": str(after),
+                      "move_bps": str(move.quantize(Decimal("0.01")))})
+    if not moves:
+        return None
+    best = max(moves, key=lambda row: abs(Decimal(row["move_bps"])))
+    gross = abs(Decimal(best["move_bps"]))
+    cost = max(Decimal(round_trip_bps), Decimal(1))
+    regret = max(Decimal(0), gross - cost)
+    return {
+        "moves": moves,
+        "best_declined": {"coin": best["coin"],
+                          "side": "buy" if Decimal(best["move_bps"]) > 0 else "sell",
+                          "gross_bps": str(gross)},
+        "round_trip_fee_bps": str(cost),
+        "regret_bps": str(regret.quantize(Decimal("0.01"))),
+        "score": round(float(cost / (cost + regret)), 4),
+    }

@@ -185,6 +185,7 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                                    if e.get("kind") == "consequence.finding")
     intents = collections.Counter(e.get("operation") for e in events
                                   if e.get("kind") == "order.intent")
+    opportunity = [e for e in events if e.get("kind") == "consequence.opportunity"]
     scored = sum(v for k, v in producer_settle.items() if k.startswith("settled:"))
     total = sum(producer_settle.values())
     return {
@@ -204,6 +205,13 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
         "producer_settlements": dict(producer_settle.most_common()),
         "learning_signal_rate": round(scored / total, 3) if total else None,
         "grounded_findings": dict(findings),
+        "opportunity_cost": {
+            "priced": len(opportunity),
+            "mean_score": (round(statistics.fmean(e["score"] for e in opportunity), 3)
+                           if opportunity else None),
+            "regret_rate": (round(sum(Decimal(e["regret_bps"]) > 0 for e in opportunity)
+                                  / len(opportunity), 3) if opportunity else None),
+        },
         "judge_unmeasured": kinds.get("evaluation.unmeasured", 0),
         "orders": {"intents": dict(intents),
                    "duplicates_refused": kinds.get("order.duplicate", 0),
