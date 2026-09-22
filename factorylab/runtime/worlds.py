@@ -27,7 +27,7 @@ from factorylab.charter.provenance import (
 )
 from factorylab.kernel.money import usd_to_micro
 from factorylab.runtime.cards import parses
-from factorylab.runtime.notes import NotesSpec
+from factorylab.runtime.continuity import StorageSpec
 from factorylab.runtime.observations import observation_for
 from factorylab.world.connector import DEFAULT_DENYLIST, validate_denylist
 from factorylab.world.market import DISCOVERY_URL
@@ -132,11 +132,6 @@ class ToolsSpec:
     max_depth: int = 4
     max_children: int = 3
     max_tool_calls: int = 4
-    #: Whether this world publishes the voluntary addressing capability. It is off
-    #: by default, so address is a factor a run turns on rather than something that
-    #: arrives with a code change, and a world that predates the key is unchanged.
-    #: It gates a capability; it schedules nothing and wakes nobody.
-    address_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -481,7 +476,7 @@ class WorldManifest:
     connectors: ConnectorsSpec = ConnectorsSpec()
     web: WebSpec = WebSpec()
     polymarket: PolymarketSpec = PolymarketSpec()
-    notes: NotesSpec = NotesSpec()
+    storage: StorageSpec = StorageSpec()
     prices: PricesSpec = PricesSpec()
     treasury: TreasurySpec = TreasurySpec()
     clock: ClockSpec = ClockSpec()
@@ -974,14 +969,7 @@ def _committee(raw: dict) -> CommitteeSpec:
 
 
 def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
-    note = d.get("notes", {})
-    if not isinstance(note, dict) or set(note) - {
-        "max_keys", "max_bytes", "byte_window_micro", "micro_per_byte_day"
-    }:
-        raise ValueError("unknown notes manifest key")
-    # ``byte_window_micro`` stays readable and maps to the per-byte call price; storage
-    # rent is ``micro_per_byte_day`` (C3), at its default unless the manifest names one.
-    notes = NotesSpec(**note)
+    storage = _manifest_storage(d.get("storage"), d.get("notes"))
     endowment = _manifest_endowment(d.get("endowment"))
     conn = d.get("connectors", {})
     if not isinstance(conn, dict) or set(conn) - {
@@ -1171,7 +1159,7 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         connectors=connectors,
         web=web,
         polymarket=_manifest_polymarket(d.get("polymarket")),
-        notes=notes,
+        storage=storage,
         tools=ToolsSpec(
             int((d.get("tools") or {}).get("population_tool_micro_per_call", 50)),
             int((d.get("tools") or {}).get("max_leverage", 3)),
@@ -1179,7 +1167,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             (d.get("tools") or {}).get("max_depth", 4),
             (d.get("tools") or {}).get("max_children", 3),
             (d.get("tools") or {}).get("max_tool_calls", 4),
-            _manifest_address_enabled((d.get("tools") or {}).get("address_enabled", False)),
         ),
         prices=prices,
         treasury=TreasurySpec(
@@ -1283,11 +1270,25 @@ def _manifest_producer_feedback(raw: Any) -> str:
     return raw
 
 
-def _manifest_address_enabled(raw: Any) -> bool:
-    """``[tools] address_enabled``: exactly a boolean, never a truthy string or 1."""
-    if type(raw) is not bool:
-        raise ValueError("tools.address_enabled must be true or false")
-    return raw
+def _manifest_storage(raw: Any, legacy: Any) -> StorageSpec:
+    """``[storage] micro_per_byte_day``: the byte-day rent retained working state pays.
+
+    Guarantees the public notebook's keys are refused (R11 deleted it). ``[notes]``
+    is read only for the one key that priced storage, ``micro_per_byte_day``,
+    because world files kept outside ``worlds/`` still carry it; naming both tables
+    is refused rather than resolved.
+    """
+    if legacy is not None:
+        if raw is not None:
+            raise ValueError("name the storage rent in [storage] only, not also in [notes]")
+        if not isinstance(legacy, dict) or set(legacy) - {"micro_per_byte_day"}:
+            raise ValueError("the public notebook was removed (ruling R11): [notes] may name "
+                             "only micro_per_byte_day, which is read as [storage]")
+        raw = legacy
+    raw = {} if raw is None else raw
+    if not isinstance(raw, dict) or set(raw) - {"micro_per_byte_day"}:
+        raise ValueError("storage accepts only micro_per_byte_day")
+    return StorageSpec(**raw)
 
 
 def _manifest_polymarket(raw: Any) -> PolymarketSpec:

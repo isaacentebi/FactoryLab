@@ -681,21 +681,6 @@ class FeedbackMixin:
             **public,
         )
 
-    def _standing_for(self, evaluator_id: str) -> dict[str, Any] | None:
-        """A judge's own consequence standing: skill against the prevalence baseline, sample
-        size, selection weight. Its own running score, private to it."""
-        st = self.standing.snapshot().get(evaluator_id)
-        if not st or not (st.get("n") or st.get("verdict_n")):
-            return None
-        return {
-            "skill_vs_baseline": round(float(st["skill"]), 4),
-            "payoff_skill": round(float(st["payoff_skill"]), 4),
-            "verdict_skill": round(float(st["verdict_skill"]), 4),
-            "settled_forecasts": st["n"],
-            "settled_verdicts": st["verdict_n"],
-            "selection_weight": round(float(st["weight"]), 4),
-        }
-
     def _deliver_verdict_to_inbox(self, about: str, score: Any, *, judge_handle: str) -> None:
         """A verdict on a seat's return reaches that seat, whenever it lands (C1).
 

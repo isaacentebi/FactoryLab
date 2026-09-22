@@ -48,7 +48,8 @@ subject's router, even if the contract also includes a producing kind.
 
 Judging returns may include `about_handle`; omission selects the delivered
 subject. A value absent from the decision queue falls back to an addressable
-delivered subject with `about_handle.ignored` and `registration_feedback`.
+delivered subject with `about_handle.ignored`, and the reason reaches the judge's
+own outcome inbox.
 An existing but forbidden handle is refused, not replaced. A requested judge
 may address only its requesting decision or that decision's ancestors. The
 ancestor self-judgement check still refuses those subjects, so this restriction
@@ -56,7 +57,7 @@ does not grant permission to judge the requesting chain. A payoff judgement on
 a subject not chosen by the router also passes the hindsight check, including
 a parent-selected subject. A fixed consequence, expired backstop or judgement
 deadline beyond that backstop is refused. Judgement `return.refused` items
-deliver their reasons in `registration_feedback`.
+deliver their reasons to the judge's own outcome inbox.
 
 `tool.call.outcome` is `ok`, `failed` or `uncertain`. An unacknowledged venue
 write is `uncertain` and retains its client id for reconciliation. An
@@ -198,12 +199,12 @@ timestamp. The cadence threshold remains available under
 `amendment_eligibility` as `eligible_no_earlier_than`, explicitly an eligibility
 boundary rather than a scheduled charter change. `catalogue` carries version
 and changed entries only; `public_observations` carries the last closed window's
-values, pathologies, recent prints and the shared directory,
+values, pathologies and recent prints,
 and `unavailable_observations` — every source that could not be read, with the
 reason. No private state is in this block; a seat's own state appears exactly
 once, in `YOU`. Everything else the world publishes — `inputs.you`, the event,
-the pots, note counts, the reserve remaining, `tick_intervals`,
-`registration_feedback`, `adaptive_scoring`, the tool, connector, work and
+the pots, the reserve remaining, `tick_intervals`,
+`adaptive_scoring`, the tool, connector, work and
 observation catalogues, the mechanics and the scoring formulas — is rendered
 after those, inside `INPUTS`. A key of the world block is rendered in exactly
 one of those four places: the partition is `PREFIX_WORLD_KEY` with
@@ -435,7 +436,7 @@ A judging contract cannot be requested as a child. A requested judge may only
 address the chain that requested it, and nothing judges its own output or its
 ancestors', so the route could be bought, paid for and never executed. It is
 refused before a decision is opened or a call is made (`requests.refused`), with
-the reason in `return_feedback` and in the catalogue's addressing text. Judging
+the reason in the requester's outcome inbox and in the catalogue's addressing text. Judging
 work reaches a seat the three ways it always did: the router's sampling, the
 adversarial share and the cascade.
 
@@ -895,8 +896,8 @@ antagonist — the size band buckets the declared size in base units into `xs`,
 `verdict:<q>` and `conformity:<c>` rounded to one decimal for a judge, and
 `malformed` for a return that did not parse. A return that declares nothing, or
 declares something that is not a distribution or omits the action it took, is
-recorded degenerate — that action at 1.0 — and the reason reaches the population
-in `registration_feedback`.
+recorded degenerate — that action at 1.0 — and the reason reaches the declaring
+seat's own outcome inbox.
 
 Producing action labels include accepted or uncertain venue and treasury tool
 effects and successful child requests, followed by the final answer's action.
@@ -1098,8 +1099,8 @@ Paths may include a query but cannot change origin. HTTP status is returned
 as evidence rather than treated as a fetch error.
 Responses decode as UTF-8 with replacement and arrive in `seen_tool_results`
 (and the existing `tool_results`) on the caller's continuation. A successful
-fetch permits one additional tool round consisting of ordinary population tools
-and the note tools, then a final model answer. The jail is unchanged.
+fetch permits one additional tool round consisting of ordinary population,
+artifact and outcome tools, then a final model answer. The jail is unchanged.
 
 `MIN_PROTECTED_BODY_CHARS` is `32`, fixed in `runtime/compute.py`.
 Bodies at least that long and copies in parser arguments/model journal
@@ -1145,7 +1146,7 @@ fetched body is: verbatim and JSON-escaped copies are redacted from the public l
 surfaces and a final output carrying one is refused. Urls and shorter strings are
 repeatable facts and stay readable, and the protection is transient — it lasts the
 invocation, like a fetch's. A successful `web.search` also permits one additional tool
-round, the same one a successful `connector.fetch` permits: ordinary population, note,
+round, the same one a successful `connector.fetch` permits: ordinary population,
 artifact and outcome tools, then a final model answer, so a seat can search and act within
 one wake. A search that returned no results buys no extra round.
 
@@ -1171,7 +1172,7 @@ Tools: `polymarket.search {query, limit?}`, `polymarket.market {market_id}` and
 `polymarket.book {token_id, depth?}` are reads priced at `read_price_usd`. Their answers
 carry text third parties wrote (questions, rules, slugs, resolution sources), so they are
 outside text exactly as a `connector.fetch` body is: prose of at least
-`MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population, note,
+`MIN_PROTECTED_BODY_CHARS` is protected, and a round that read them runs population,
 artifact and outcome tools only, so market text cannot reach a write in the same wake. With
 the simulated venue, `polymarket.positions {}` reads the pot (free), and
 `polymarket.place_limit {token_id, side, size, price}` and `polymarket.cancel {order_id}`
@@ -1208,7 +1209,7 @@ every surface carries ids and a normalised `YES`, `NO` or `outcome <n>`.
 A registration declares which one of the four reward shapes — `judged`,
 `forecast`, `conformity`, `exposure` — pays its emitted kind; the declaration
 defaults to `judged`, is fixed for the life of that kind, cannot redefine a seed
-kind's shape, and a conflicting redeclaration reaches `registration_feedback`.
+kind's shape, and a conflicting redeclaration is refused to the proposer's inbox.
 The declaration is `reward_shapes`, an object on the assembly proposal mapping
 each of its own `emits` kinds to a shape. A declaration naming a kind the
 proposal does not emit is refused. The seed shapes are `ProducerReturn`
@@ -1273,7 +1274,7 @@ censored. `world.work.predicates` publishes each predicate's id, description,
 parameter names, `horizon_param`, `version` and `provenance`, and `predicate`
 is one of the kinds the `register` field accepts.
 
-## Seeing the world: markets, paid sources and notes
+## Seeing the world: markets, paid sources and storage
 
 A connector proposal may carry a `preflight_path` within its own origin, and
 admission judges whether the origin answered within the manifest's bounds rather
@@ -1314,7 +1315,7 @@ refused. Admission costs one novelty trial, registers the contract
 payload `{"kind": "market", "coin", "market", "version"}`. `world.trading_markets`
 publishes the `perp` and `spot` lists the population may trade. Resume rebuilds
 the venue tools from the launch seed and replays every `market:` contract, so
-registered markets, inventory and lots survive a restart. An order refused before it reaches the venue is ledgered with its reason, `order.infeasible` when the venue's free collateral — equity less margin used, carried in the item as `venue_available_usd` — cannot carry the margin the order plus the resting book needs, and `order.refused` for every other pre-submission refusal, and the reason also reaches `registration_feedback`. Every counted fill writes one `fill.counted` item at the moment it is counted, with the order id, coin, market, size, price, notional, realised P&L, fee and window; the `event:Fill` the population is delivered is a separate item written on delivery. A live tick broadcasts one `MarketMid` per trading market and one `Funding` per trading perpetual, the manifest seed plus every registered market, never the venue's whole listing, so a registered market enters the broadcast from the next tick and resume restores the set; fills and settled funding payments are never filtered, because they carry cash.
+registered markets, inventory and lots survive a restart. An order refused before it reaches the venue is ledgered with its reason, `order.infeasible` when the venue's free collateral — equity less margin used, carried in the item as `venue_available_usd` — cannot carry the margin the order plus the resting book needs, and `order.refused` for every other pre-submission refusal, and the reason also reaches the ordering seat's outcome inbox. Every counted fill writes one `fill.counted` item at the moment it is counted, with the order id, coin, market, size, price, notional, realised P&L, fee and window; the `event:Fill` the population is delivered is a separate item written on delivery. A live tick broadcasts one `MarketMid` per trading market and one `Funding` per trading perpetual, the manifest seed plus every registered market, never the venue's whole listing, so a registered market enters the broadcast from the next tick and resume restores the set; fills and settled funding payments are never filtered, because they carry cash.
 
 A connector may pay for data through x402 with an exact per-call cap from the
 world's own wallet, journaled as one `io.call`/`io.result` pair and never
@@ -1327,53 +1328,29 @@ paid read is the journal call `connector.paid_fetch`, and the ledger retains
 HTTP 402 with no data cost. `world.connectors` publishes `optional_fields`,
 the `payment` note, and each registered connector's `pay` and `max_call_micro`.
 
-`note.put`, `note.get` and `note.list` are a public key-value notebook bounded in
-UTF-8 bytes and charged rent by byte-time; unaffordable rent retains the text, an
-overwrite cannot escape the debt, reads are journaled and priced, and the wake
-publishes counts only. `[notes]` is a hard cast with exactly these keys.
+`[storage]` is a hard cast with exactly one key. The public notebook
+(`note.put`, `note.get`, `note.list` and `[notes]`) is deleted by ruling R11:
+Chapter II §I.b prescribes two channels, rich requests and thin rewards, and a
+population-wide blackboard is neither. What survives is its storage rent, which a
+seat's working state pays.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `max_keys` | `128` | Positive integer count of retained keys. |
-| `max_bytes` | `262144` | Positive integer total of key and text bytes. |
-| `byte_window_micro` | `1` | Positive integer micro-USD charged as the flat price of one `note.put` or `note.get` call. It prices neither storage nor bytes moved; the name is kept so old manifests still load. |
-| `micro_per_byte_day` | `"0.04"` | Exact positive decimal text (or integer) micro-USD per retained byte per day: the storage rent (edition 2, contract C3). At its default the whole 256 KiB cap costs 10,485 micro-USD, about a cent, a day. |
+| `micro_per_byte_day` | `"0.04"` | Exact positive decimal text (or integer) micro-USD per retained byte per day: the storage rent (edition 2, contract C3). |
 
-A key is 1–128 printable UTF-8 bytes. An entry's size is its key bytes plus its
-text bytes, and a call's price is the flat `byte_window_micro` plus any rent the
-entry still owes. Edition 3 (contract C4) removed the per-byte transfer toll:
-charging a micro-USD for every byte moved made a 4 KiB read cost about $0.0041
-before the model had consumed one character of it — more than a cheap model call
-— for a resource the factory does not actually pay for, which made remembering
-dearer than producing another unsupported paragraph. Byte-time rent is
-unchanged: storage is a real resource, and a note nobody will pay to keep should
-go. `note.list` is free, like `artifact.get`, and returns up to 50 rows of key,
-title, type, bytes, version, owner seat, the window last written and `public`
-(always true for the notebook), newest first, with `next_cursor` for the next
-page and `count` for the whole index; it carries no text, so a reader need not
-already know a key. `artifact.list` is its counterpart over the archive, with
-`sha` in place of the key and an optional `owner` filter. A call above the
-caller's available compute or its
-request ceiling is refused before any debit or overwrite. `note.get` on an
-unknown key is an error. Rent is `bytes × elapsed_ns × rate`, accrued from the
-moment a key is written (an overwrite inherits the open interval, so rewriting
-forgives nothing) and collected at each reserve-window boundary for the time
-elapsed since the last boundary, not per window counted: the rate is an exact
-ratio of micro-USD per byte-nanosecond, and whatever fraction of a micro-USD an
-interval leaves over is carried on the entry (`rent_carry`), so collecting
-hourly charges exactly what collecting daily charges and a two-minute window
-cannot round a small note up to a micro-USD (the reviewer's rent trap). The
-boundary writes `note.rent` when the holding decision's compute affords it,
-`note.rent_due` when it does not, in which case the text stays and the debt is
-owed on the next read or overwrite. The ledger items `note.put` and `note.get`
-carry the key, handle, assembly id, cost, window, version and byte count, and
-`note.put` also carries the text. The `note.read` journal call is replayable
-read-only work. `world.notes` publishes the key and byte counts, the bounds and
-the pricing rule; the wake's `notes` section publishes counts only; the
-notebook, its accrual marks and its carried remainders survive resume.
+A world file that still carries `[notes]` loads only if that table names nothing
+but `micro_per_byte_day`, which is then read as `[storage] micro_per_byte_day`;
+any notebook key (`max_keys`, `max_bytes`, `byte_window_micro`) is refused, and so
+is naming both tables. No world under `worlds/` carries `[notes]`. Rent is
+`bytes × elapsed_ns × rate`, accrued from the moment a head is written (a rewrite
+inherits the open interval, so rewriting forgives nothing) and collected at each
+reserve-window boundary for the time elapsed since the last boundary: the rate is
+an exact ratio of micro-USD per byte-nanosecond, and whatever fraction of a
+micro-USD an interval leaves over is carried on the head (`rent_carry`), so
+collecting hourly charges exactly what collecting daily charges.
 
 Retained storage is an explicit, resumable liability of the decision that holds
-the note, not only a wallet debit. Every paid charge is added to that
+the state, not only a wallet debit. Every paid charge is added to that
 decision's cost contribution for the window the charge landed in and enters
 that window's measured rows — a producer's charge its cost statistics too, as
 cost the window spent and never as a return it received — as a cost of the same
@@ -1383,9 +1360,8 @@ and while the decision's own consequence outcome is still open it is also
 carried into that outcome's cost, so a return cannot resolve
 `return_paid_off = 1` on a margin its storage has already consumed. An outcome
 is fixed once and never reopened, so rent falling due afterwards stays with the
-note's current owner decision as a cost contribution alone, and the note is
-kept rather than released: public text other decisions may already have read is
-not deleted because one account closed. The carried amount is
+head's owner decision as a cost contribution alone, and the state is kept rather
+than released. The carried amount is
 `ReturnAccount.carried_micro`, resumes with the consequence table, and appears
 as `consequence.carried`; the matching `price.contribution` item carries
 `storage` and `carried`.
@@ -1488,7 +1464,7 @@ While dormant the event is not routed: no seat is woken for it, so no model or
 program call, no return, no registration and no tool call comes of it, and the
 compute-insolvency streak is not advanced. Everything mandatory continues on
 every event: due releases, reserve-window management (windows still
-close, cards are still measured and priced, note rent still accrues and is
+close, cards are still measured and priced, storage rent still accrues and is
 collected, and an activation boundary still falls due), the treasury's window
 cap and its tick, order reconciliation, fills and settled funding from the
 venue, x402 reconciliation, the reconciler's snapshot, settlement of due
@@ -1524,8 +1500,9 @@ and is refused before the trial is spent on a host without the jail. The
 
 Each call runs the code once with one JSON object on stdin — `prompt` (the
 rendered request, exactly what a model would read, with `inputs.you` set to
-the seat's id), `description`, `inputs`, `outcome_schema` and `state` — and
-expects on stdout the same Return JSON a model would print, tool calls,
+the seat's id), `description`, `inputs` (whose world block's `seats` carries
+the program's own row only, the partition the prompt applies; information audit
+C3), `outcome_schema` and `state` — and expects on stdout the same Return JSON a model would print, tool calls,
 child requests and registrations included; it passes through the same output
 validator. The price is reserved and committed through the meter under the
 reason `model:program`, so every call is a wallet transaction and the novelty
@@ -1603,38 +1580,40 @@ bytes without a record; the bytes live beside the ledger under
 and an atomic replace), or in memory for a world without a ledger path. A put
 is idempotent by content, `get` verifies the hash it was asked for and refuses
 a tampered file, and retirement of an owner leaves its artifacts readable. The
-index (hash to owner, kind, size, time, published, references) is checkpointed;
+index (hash to owner, kind, size, time, references) is checkpointed;
 a checkpoint from before the archive restores it empty.
 
 **Ownership is a (sha, owner) reference** (edition 3, R3-F). One blob carries a
-reference per writer, each with its own kind, its own moment and its own
-published flag, so a second writer of identical bytes owns what it wrote and can
-read it rather than being told the first writer's bytes are private; putting an
-existing sha with `public: true` publishes the blob. The **first** reference
-stays the owner of record — `owner_for(sha)`, one payer of rent and one subject
-of retirement. `entries()` and therefore `artifact.list` return one row per
-reference, with that reference's owner and published flag.
+reference per writer, each with its own kind and its own moment, so a second
+writer of identical bytes owns what it wrote and can read it rather than being
+told the first writer's bytes are private. Nothing is published (ruling R11
+deleted the unused `public` flag). The **first** reference stays the owner of
+record — `owner_for(sha)`, one payer of rent and one subject of retirement.
+`entries()` returns one row per reference, with that reference's owner.
+`artifact.list {cursor?}` is free and returns only the caller's own rows (sha,
+kind, bytes, when), newest first, 50 a page with `next_cursor` and the caller's
+`count`; the seat's `YOU` `directory` previews the same rows. No list names
+another seat's artifacts (information audit C4).
 
 **Collection.** `ArtifactStore.collect()` is the one thing that deletes, and it
-can only reach blobs **no reference names and nothing published** — what a crash
+can only reach blobs **no reference names** — what a crash
 between the durable write and its ledger item leaves behind. Each removal is
 ledgered `artifact.collected {sha, ts}`. The runtime calls it at each
-reserve-window boundary (`continuity.charge_window`). An owned blob and a public
-blob are never candidates, so collection can never take a seat's working state,
-an inbox body, an archived rationale or anything the population published.
+reserve-window boundary (`continuity.charge_window`). An owned blob is never a
+candidate, so collection can never take a seat's working state, an inbox body or
+an archived rationale.
 
 `artifact.get {sha}` is a seed tool, version 1, priced at zero and available
 to every seat: it returns `sha`, `owner`, `kind` (the reader's own reference's
-kind when it has one), `public`, `bytes` and the content as
+kind when it has one), `bytes` and the content as
 `text` (or `base64` for bytes that are not UTF-8) up to 65,536 bytes, an
 `error` above that or for an unknown or malformed hash, and ledgers
 `artifact.get {sha, handle, assembly_id, found, ts}`. The read is **scoped**
-(edition 3, C1): a seat reads what it owns and anything put with `public: true`;
+(edition 3, C1): a seat reads what it owns;
 a program's `program.state` is readable within the program's own lineage
 (`BudgetBook.lineage`); anything else answers `{sha, error: "artifact_private"}`
 and nothing about the bytes, and the ledger row carries `reason`. `entries()`
-returns `(sha, owner, public, bytes, created_ns)` rows for the directory W4
-builds. There is no `artifact.put` tool: the writers are a private-state program
+returns `(sha, owner, bytes, created_ns)` rows. There is no `artifact.put` tool: the writers are a private-state program
 seat and a seat's own working state. `owner_for(sha)` names who pays rent.
 
 ### Continuity: working state and the outcome inbox
@@ -1651,9 +1630,9 @@ allowance is 8,192 bytes (accepted, and the rent is what it is); above 65,536
 the field is refused, the head is unchanged and `state.refused {assembly_id,
 handle, reason}` is ledgered. A manifest may seed a head with an assembly's
 `initial_state`; without one the head is None. Rent is byte-time at
-`notes.micro_per_byte_day` collected at each reserve-window boundary through the
-seat's own meter (`state.rent`, or `state.rent_due` when unaffordable), on the
-same accrual arithmetic the notebook uses; there is no transfer toll.
+`storage.micro_per_byte_day` collected at each reserve-window boundary through the
+seat's own meter (`state.rent`, or `state.rent_due` when unaffordable); there is no
+transfer toll.
 
 `OutcomeInbox` addresses every settled consequence to the seat that decided it:
 `{handle, said: {rationale, payoff, forecasts}, outcome, observed_at_ns,
@@ -1963,9 +1942,10 @@ before starting the CLI. It does not disable paid treasury routes or Venice; tha
 prerequisite was removed with the economic caps.
 Repetition requires a new preparation, not reuse of old client order IDs.
 
-The public world exposes actual proposal refusals in `registration_feedback` and
-judgement, propensity and order refusals in `return_feedback`. Existing checkpoint
-buffers remain readable; legacy prefix-only entries are classified on disclosure.
+Proposal, judgement, propensity, subscription, request and order refusals are
+ledgered and addressed to the owning seat's outcome inbox under the refused
+decision's handle, and to no other seat (information audit C5). The world block's
+`registration_feedback` and `return_feedback` broadcasts are deleted.
 
 ## Edition 3 R3-B: typed custody, and what may move the compute wallet
 
@@ -2111,11 +2091,16 @@ rejection is the answer.
 `commitment_settled`, alongside the entitlement movement `net_micro`. The
 inbox item carries them.
 
-## Edition 4 factors: prompt, address, feedback
+## Edition 4 factors: prompt, feedback
 
-Three keys turn on one edition 4 change each. Like every key they are hashed at any
-value, defaults included (R8). None of them changes a roster digest: a charter
+Two keys turn on one edition 4 change each. Like every key they are hashed at any
+value, defaults included (R8). Neither changes a roster digest: a charter
 ratified on a roster is still ratified on it when a factor is switched on.
+The third edition 4 factor, `[tools] address_enabled` (direct messages between
+seats through `address.send`), is deleted by ruling R11: Chapter II §I.b prescribes
+two channels, rich requests and thin rewards, and no third one between seats. A
+world file that still names the key loads with it ignored, like any other unknown
+`[tools]` key; no world under `worlds/` names it.
 
 `[prompt] mode` is `"reference"` (the default) or `"compact"`. Under `reference` a
 request carries the whole institutional world inside the cached prefix, which is
@@ -2139,27 +2124,27 @@ mutable memory, inbox text, population tool descriptions, current charter or cur
 world observations as judging evidence. Discovery remains available; only the
 commission's preserved evidence can support its finding.
 
+Every judge, first tier, meta and ballot, reads the same machine view (Chapter II
+§I.b; information audit C1, C2, C7, P5, P8): its own operating access
+(`actor_context`: the capability index without population prose, its own seat row,
+the clock and provider inventory), never the world block. The judged return's
+`description` is the event it answered, with no role clause. Its outputs lose
+`payoff` (an author's sealed forecast) and `propensity`, which the request's
+PROPENSITY block renders once. No judge-facing projection carries `producer_id`,
+`initial_evaluators`, `final_evaluators` or `excluded_evaluators`; they stay on the
+ledger and on the event, where routing reads them. A judge is not shown its own
+consequence standing, and `your_action_policy` is absent when a seat has no
+registered learner.
+
 A decision may buy up to five tool rounds, bounded by its existing money and model
 call ceilings. Known reads can extend retrieval; a write or child call ends it.
 Continuation pricing reserves another call before extending reads, and unknown
 prices do not extend them. Actual metering remains authoritative. Older tool results
 have exact invocation-local `artifact.get` references that expire when the decision
 returns; they create no permanent archive entries. The current round's results are
-included once. External text retains its restricted continuation and cannot write
-a notebook in that continuation. Public `world.read` is available in both prompt
+included once. External text retains its restricted continuation. Public `world.read` is available in both prompt
 modes, including grounded commissions that omit the full reference manual.
 
-
-`[tools] address_enabled` is exactly `true` or `false`, default `false` (a truthy
-string or `1` is refused). It gates whether the world publishes the voluntary
-addressing capability. It schedules nothing and wakes nobody. When a return records
-a call to `address.send`, the projection that crosses a contract boundary
-(`public_return`, `public_tool_calls`) keeps the capability, the recipient, the
-price and the size of what was said, and drops the body under any of the names
-`text`, `body`, `message`, `content` or `payload`, at whatever nesting the return
-wrote it. A judge prices an act it can see the shape of; it does not read the
-message. The sender keeps its own copy in its working state, which no projection
-touches.
 
 `[evaluation] producer_feedback` is `"verdict"` (the default) or `"realized"`. Under
 `verdict` a producer decision settles on the judge opinion it drew, which is the

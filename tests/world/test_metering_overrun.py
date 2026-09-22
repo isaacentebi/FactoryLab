@@ -105,6 +105,11 @@ def test_fatal_vote_overrun_cannot_invoke_another_seat(monkeypatch):
     monkeypatch.setattr(rt.provider.target, "complete", provider)
     monkeypatch.setattr(rt.charter_book, "vote", lambda *_: None)
     monkeypatch.setattr(rt.charter_book, "tally", lambda *_: "failed")
+    # The reported bill must fall inside the wallet's reported-cost multiple of the
+    # ballot's call ceiling, so it is booked as an overrun rather than disputed. A
+    # ballot no longer carries the world block (C7), so the prompt that sizes the
+    # ceiling is padded to the size it used to have.
+    monkeypatch.setattr(rt, "_charter_text", lambda: "x" * 60_000)
     # Stake the whole fixture wallet so prompt-size changes do not turn this
     # overrun test into an unrelated unaffordable-ballot test. The reported bill
     # still exceeds the entire wallet, so a second call must never be admitted.

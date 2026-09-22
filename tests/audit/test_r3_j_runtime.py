@@ -20,7 +20,8 @@ def register_work(rt, *, name="weather-desk", kind="WeatherForecast", shape="for
                         emits=[kind], accepts=list(accepts),
                         schemas={kind: {"type": "object"}}, reward_shapes={kind: shape})
     rt._apply_registrations(origin, Return(origin, {"register": [proposal]}, 0, "ok"))
-    assert name in rt.assemblies, rt.registration_feedback
+    assert name in rt.assemblies, [
+        i for i in rt.ledger._recovery_items() if i["kind"] == "registration.rejected"]
 
 
 def test_forecast_reward_waits_for_all_predictions_and_is_not_credited_twice(monkeypatch):

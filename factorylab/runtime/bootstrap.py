@@ -475,7 +475,6 @@ class BootstrapMixin:
                 self.ledger.append({"kind": "spot.inventory", "coin": coin,
                                     "size": size, "entry_px": px, "source": "launch"})
                 self.spot_inventory[coin] = (Decimal(size), Decimal(px))
-        self.notes: dict[str, dict] = {}
         # The artifact archive (C9): records in the ledger, bytes beside it by hash.
         from factorylab.kernel.artifacts import ArtifactStore, artifact_root
 
@@ -613,20 +612,15 @@ class BootstrapMixin:
                                   for amount in ("5", 5)],
             "catalogue.search": [{"substring": "flash", "limit": 20}],
             "market.discover": [{"query": "inference", "limit": 20}],
-            "note.put": [{"key": "shared-plan", "text": "What the last window showed."}],
-            "note.get": [{"key": "shared-plan"}],
             "artifact.get": [{"sha": "0" * 64}],
             "outcome.get": [{"outcome_id": "outcome:1"}, {"handle": "decision-1"}],
             **vault_examples,
         }
-        from factorylab.runtime.notes import specs as note_specs
-
-        self.tool_specs.update(note_specs(manifest.notes))
         self.tool_specs["artifact.get"] = {
             "id": "artifact.get",
             "description": "Read an archived artifact by its sha256: your own working "
-            "state, an artifact you wrote, an artifact published with public: true, or "
-            "the private state of a program in your own lineage. Anything else is "
+            "state, an artifact you wrote, or the private state of a program in your "
+            "own lineage. Anything else is "
             "refused with artifact_private. The read is free and ledgered. Returns "
             "owner, kind, bytes and text (base64 for binary), up to 64 KiB.",
             "args_schema": {
@@ -661,7 +655,7 @@ class BootstrapMixin:
         }
         self.tool_specs["outcome.list"] = {
             "id": "outcome.list",
-            "description": "Page your own outcome and message index without acknowledging "
+            "description": "Page your own outcome index without acknowledging "
             "items. Read any indexed body with outcome.get using its exact outcome_id.",
             "args_schema": {
                 "type": "object",
@@ -691,16 +685,6 @@ class BootstrapMixin:
             "price_micro_per_call": 0, "kind": "institution",
         }
         examples["world.read"] = [{"section": "composition"}]
-        if getattr(manifest.tools, "address_enabled", False):
-            from factorylab.runtime.address import specs as address_specs
-
-            # The transport is priced like every other population tool this world
-            # publishes, so addressing is a call a seat pays for out of its own
-            # entitlement rather than a free channel that rewards volume.
-            self.tool_specs.update(
-                address_specs(manifest.tools.population_tool_micro_per_call))
-            examples["address.send"] = [{"recipient": "another-live-participant",
-                                        "text": "Your funding series is the one I lack."}]
         # Every published tool carries examples its own schema accepts (B1). Stamping
         # after the whole seed set is assembled keeps that total: a seed tool added
         # without an example fails at launch rather than reaching the population.
@@ -771,7 +755,6 @@ class BootstrapMixin:
         self.emitted = 0
         self.insolvency_count = 0
         self.dormancy: dict[str, Any] | None = None  # C2: set while paid cognition is paused
-        self.registration_feedback: deque[dict[str, Any]] = deque(maxlen=8)
         self._compute_routed = False
         self._compute_unaffordable = False
         self.world_consumed = 0

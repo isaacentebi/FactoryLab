@@ -293,11 +293,6 @@ max_lifetime_windows = 6
 share = 0.1
 window = "1m"
 
-# C3 of edition 2: storage rent by byte-time, at the loader default, stated so the choice
-# is visible. The C4 notebook transfer toll is gone; this rent stays.
-[notes]
-micro_per_byte_day = "0.04"
-
 [timing]
 cadence_sample = 200
 min_ratio = 3
@@ -327,7 +322,6 @@ no_swap_regret_kinds = ["ProducerReturn"]
 population_tool_micro_per_call = 50
 max_leverage = 3
 
-address_enabled = true
 [prices]
 # The PID price law (essay II.II.b): eta is the integral gain, kp raises the price in
 # proportion to the window's violation, kd raises it sooner while the measurement moves

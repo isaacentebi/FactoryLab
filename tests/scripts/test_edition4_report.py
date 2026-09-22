@@ -2,13 +2,11 @@
 
 import json
 from copy import deepcopy
-from dataclasses import replace
 
 import pytest
 
 from factorylab.runtime.loop import Runtime
 from factorylab.runtime.worlds import load_manifest
-from factorylab.world.exchange import FakeExchange
 from factorylab.world.scripted import ScriptedProvider
 from scripts.edition4_report import (
     ReportInputError,
@@ -389,69 +387,6 @@ def test_invocation_cost_is_authoritative_and_tool_rows_are_not_double_counted()
     assert report["costs"]["unknown_bill_count"] == 1
 
 
-def test_actual_address_rows_count_replays_as_attempts_but_not_new_delivery():
-    report = build_report(
-        [
-            {"kind": "address.delivered", "handle": "m1", "message_id": "msg-1"},
-            {"kind": "address.replayed", "handle": "m1", "message_id": "msg-1"},
-            {"kind": "address.refused", "handle": "m2", "reason": "unknown recipient"},
-        ]
-    )
-
-    assert report["messages"]["attempted"] == 3
-    assert report["messages"]["delivered"] == 1
-    assert report["messages"]["replayed"] == 1
-    assert report["messages"]["refused"] == 1
-    assert report["messages"]["unknown_delivery"] == 0
-
-
-def test_address_zero_is_labeled_from_configuration_not_inferred_as_non_use():
-    unknown = build_report([])
-    disabled = build_report(
-        [], configuration={"source": "runtime_manifest", "address_enabled": False}
-    )
-    enabled = build_report(
-        [], configuration={"source": "runtime_manifest", "address_enabled": True}
-    )
-
-    assert unknown["messages"]["capability_status"] == "unknown_metadata"
-    assert disabled["messages"]["capability_status"] == "disabled"
-    assert enabled["messages"]["capability_status"] == "enabled_but_unused"
-    assert "supplied/recent evidence window" in enabled["messages"]["capability_label"]
-    assert "zero is not non-use" in unknown["messages"]["capability_label"]
-
-
-def test_offline_runtime_address_export_reaches_the_dashboard():
-    manifest = load_manifest("worlds/scripted.toml")
-    manifest = replace(manifest, tools=replace(manifest.tools, address_enabled=True))
-    runtime = Runtime(
-        manifest,
-        events=0,
-        seed=1,
-        initial_balance_micro=None,
-        ledger_path=None,
-        router_gamma=0.1,
-        provider=ScriptedProvider(),
-        exchange=FakeExchange(coins=manifest.exchange.coins),
-    )
-    sender, recipient = list(runtime.assemblies)[:2]
-    args = {"tool": "address.send", "args": {"recipient": recipient, "text": "x"}}
-    runtime._run_tool(sender, "decision-1", args, slot="tool:0")
-    runtime._run_tool(sender, "decision-1", args, slot="tool:0")
-    runtime._run_tool(
-        sender, "decision-2",
-        {"tool": "address.send", "args": {"recipient": "missing", "text": "x"}},
-        slot="tool:0",
-    )
-    events = [row for row in runtime.ledger._recovery_items() if row["kind"].startswith("address.")]
-    report = build_report(events)
-
-    assert report["messages"]["attempted"] == 3
-    assert report["messages"]["delivered"] == 1
-    assert report["messages"]["replayed"] == 1
-    assert report["messages"]["refused"] == 1
-
-
 def test_execution_receipts_are_deduplicated_by_program_use_facts_without_bodies():
     facts = {
         "tool": "made-here",
@@ -692,8 +627,7 @@ def test_explicit_evidence_and_external_income_are_linked_without_claiming_causa
     )
 
     assert report["costs"]["basis"] == "root_decision_trees"
-    assert report["messages"]["attempted"] == 1
-    assert report["messages"]["delivered"] == 1
+    assert "messages" not in report
     assert report["reusable_calls"]["cross_lineage_refs"] == ["cross-1"]
     assert report["income"]["external_confirmed_refs"] == ["customer-1"]
     assert report["five_questions"]["subsequent_consumption"]["status"] == "evidence"
@@ -703,7 +637,8 @@ def test_explicit_evidence_and_external_income_are_linked_without_claiming_causa
 
 def test_html_escapes_refs_and_has_no_operator_controls():
     report = build_report(
-        [{"kind": "message", "id": '<script>alert("x")</script>', "status": "unknown"}]
+        [{"kind": "income", "id": '<script>alert("x")</script>', "source": "external",
+          "amount_micro": 5, "confirmed": True, "status": "settled"}]
     )
     rendered = render_html(report)
 
@@ -754,9 +689,9 @@ def test_comparison_requires_matching_physics_and_known_bills():
     result = compare_rehearsals(control, treatment, factors=["feedback"])
     assert result["status"] == "screen_complete"
     assert result["manifest_difference_paths"] == ["evaluation.producer_feedback"]
-    result = compare_rehearsals(control, treatment, factors=["feedback", "address"])
+    result = compare_rehearsals(control, treatment, factors=["feedback", "prompt"])
     assert result["status"] == "unmatched"
-    assert "declared factor address did not change" in result["problems"]
+    assert "declared factor prompt did not change" in result["problems"]
     treatment["world"]["manifest"]["charter"]["norms"] = ["profit"]
     result = compare_rehearsals(control, treatment, factors=["feedback"])
     assert result["status"] == "unmatched"

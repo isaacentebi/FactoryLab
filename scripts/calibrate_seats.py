@@ -397,7 +397,7 @@ def build_scenarios(rt: Runtime, candidate: str, seats: dict[str, str], *, sampl
         "kind": "Tick", "payload": _tick_payload(rt, sample + 1), "world": world,
         "your_state": rt.working_state.render(producer),
         "unread_outcomes": rt.outcomes.unread(producer),
-        "your_action_policy": rt._action_policy(producer),
+        **rt._action_policy_input(producer),
     }
     produce_schema = {"type": "object", "properties": {
         "action": {"type": "string"}, "propensity": {"type": "object"},
@@ -420,8 +420,7 @@ def build_scenarios(rt: Runtime, candidate: str, seats: dict[str, str], *, sampl
         "world": world,
         "your_state": rt.working_state.render(judge),
         "unread_outcomes": rt.outcomes.unread(judge),
-        "your_consequence_standing": rt._standing_for(judge),
-        "your_action_policy": rt._action_policy(judge),
+        **rt._action_policy_input(judge),
     }
     verdict_req = rt._request(handle, _judge_description(rt), judge_inputs, _judge_schema(rt),
                               DEADLINE_NS, CH_CONFORMITY, propensity=subject["propensity"])
@@ -435,7 +434,7 @@ def build_scenarios(rt: Runtime, candidate: str, seats: dict[str, str], *, sampl
                "propensity": {"over": {"0.6": 0.5, "0.3": 0.3, "0.9": 0.2}, "chosen": "0.6"}}
     meta_inputs = {"verdict": verdict, "producer_outputs": subject["outputs"],
                    "charter": rt._charter_text(), "world": world,
-                   "your_action_policy": rt._action_policy(meta)}
+                   **rt._action_policy_input(meta)}
     meta_schema = {"type": "object", "properties": {
         "conformity": {"type": "number"}, "rationale": {"type": "string"},
         "propensity": {"type": "object"}, "register": rt._register_schema(),

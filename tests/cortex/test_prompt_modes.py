@@ -78,6 +78,9 @@ def test_the_prompt_mode_is_hashed_named_or_not():
     assert base.manifest_hash() == replace(
         base, prompt=PromptSpec(mode="reference")).manifest_hash()
     assert '"prompt":{"mode":"reference"}' in base.canonical_json()
+    # R11: there is no addressing capability for a manifest to name.
+    assert "address_enabled" not in base.canonical_json()
+    assert not hasattr(base.tools, "address_enabled")
     # A different mode is a different world.
     assert base.manifest_hash() != replace(base, prompt=PromptSpec(mode="compact")).manifest_hash()
 
@@ -94,8 +97,6 @@ def test_a_refused_mode_or_key_is_refused_at_load():
         load({"prompt": {"mode": "short"}})
     with pytest.raises(ValueError, match="prompt accepts only mode"):
         load({"prompt": {"mode": "compact", "max_bytes": 8000}})
-    with pytest.raises(ValueError, match="address_enabled"):
-        load({"tools": {"address_enabled": "true"}})
 
 
 def test_compact_keeps_the_norms_the_prices_and_everything_a_return_is_judged_by(modes):

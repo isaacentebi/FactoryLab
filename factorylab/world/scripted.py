@@ -468,7 +468,6 @@ def _with_seat_block(text: str, inputs: dict[str, Any]) -> dict[str, Any]:
                          "governance": charter.get("pending_changes")}
             public = update.get("public_observations")
             if isinstance(public, dict):
-                world = {**world, "pathologies": public.get("pathologies"),
-                         "recent_mids": public.get("recent_mids")}
+                world = {**world, "recent_mids": public.get("recent_mids")}
             inputs["world"] = world
     return inputs

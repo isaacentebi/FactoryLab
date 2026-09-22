@@ -206,12 +206,6 @@ share = 0.1
 # (docs/audits/v4/gpt6-triage.md) is 720 windows a day, $47 a day at 64 KiB of notes.
 window = "1h"
 
-# Contract C3: storage rent by byte-time. "0.04" is the loader default (runtime/notes.py),
-# stated here so the choice is visible: the whole 256 KiB cap costs 10,485 micro-USD, about a
-# cent, a day. At the default the key leaves the manifest hash unchanged.
-[notes]
-micro_per_byte_day = "0.04"
-
 [timing]
 cadence_sample = 200
 min_ratio = 3

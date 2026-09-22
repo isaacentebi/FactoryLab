@@ -97,7 +97,7 @@ _MEANINGFUL_EXACT = frozenset(
     }
 )
 _MEANINGFUL_PREFIXES = (
-    "provider.", "model.", "address.", "forecast.", "learning.", "income.", "revenue.",
+    "provider.", "model.", "forecast.", "learning.", "income.", "revenue.",
     "wallet.",
 )
 
@@ -381,7 +381,6 @@ def _runtime_configuration(runtime: Any) -> dict[str, Any]:
     total = activation + backstop
     return {
         "source": "runtime_manifest",
-        "address_enabled": manifest.tools.address_enabled,
         "governance_runway": {
             "basis": "manifest lower bound plus delivered tick interval evidence",
             "first_activation_lower_bound_ticks": activation,
@@ -446,18 +445,11 @@ def render_observer_html(report: Mapping[str, Any]) -> str:
         f"<p>Status counts: {status_text}</p>"
     )
     configuration = report.get("configuration", {})
-    messages = report.get("messages", {})
     runway = (
         configuration.get("governance_runway", {})
         if isinstance(configuration, Mapping)
         else {}
     )
-    if isinstance(messages, Mapping):
-        summary += (
-            "<p>Addressing: "
-            + html.escape(str(messages.get("capability_label", "metadata unavailable")))
-            + "</p>"
-        )
     if isinstance(runway, Mapping) and runway:
         summary += (
             "<p>Governance lower bound: "

@@ -127,11 +127,10 @@ class GovernanceMixin:
         return None
 
     def _refuse_commissioned_judge(self, parent, item, target: str, reason: str) -> tuple:
-        """Refuse the request in public, before a decision is opened or a call is made."""
+        """Refuse the request before a decision is opened or a call is made."""
         self.ledger.append({"kind": "requests.refused", "handle": parent.handle,
                             "target": target, "reason": reason, "ts": self.clock.now_ns})
-        self.registration_feedback.append({"kind": "judgement",
-                                           "reason": f"judgement: {reason}"})
+        self._refusal_to_owner(parent.handle, "request_refused", reason)
         return {"tool": f"assembly:{target}", "args": item.inputs,
                 "result": {"error": reason}}, 0
 
@@ -208,15 +207,15 @@ class GovernanceMixin:
                 self._reject_registration(handle, f"{type(exc).__name__}: {exc}"[:300], index)
 
     def _reject_registration(self, handle: str, reason: str, index: int | None) -> None:
-        """Ledger a refused proposal and keep the reason public: a proposer that cannot see
-        why it was refused re-proposes the same thing (run 6, eleven times)."""
+        """Ledger a refused proposal and address the reason to its proposer's inbox."""
         self.stats.registrations_rejected += 1
         item = {"kind": "registration.rejected", "handle": handle, "reason": reason}
         if index is not None:
             item["index"] = index
         self.ledger.append({**item, "ts": self.clock.now_ns})
         self.window.registration_rejections += 1
-        self.registration_feedback.append({k: v for k, v in item.items() if k != "handle"})
+        self._refusal_to_owner(handle, "registration_rejected", reason,
+                               **({"index": index} if index is not None else {}))
 
     def _kind_rewards(self) -> dict[str, str]:
         """Kind meanings outlive the assemblies that first declared them."""
@@ -1334,7 +1333,11 @@ class GovernanceMixin:
             if connector is not None:
                 inputs = {"connector": {**asdict(connector),
                                         "predicted_effect": asdict(am.predicted_effect)},
-                          "world": self._world_block(), "charter": self._charter_text()}
+                          # A ballot reads the motion like a machine (C7): its own
+                          # operating access, not the whole world block.
+                          "actor_context": self._operating_context(assembly_id,
+                                                                   self._world_block()),
+                          "charter": self._charter_text()}
             else:
                 inputs = {
                     ("retirement" if retiring else "amendment"): ({
@@ -1357,7 +1360,8 @@ class GovernanceMixin:
                     }),
                     **({"challenge": challenge_inputs} if challenge_inputs else {}),
                     "charter": self._charter_text(),
-                    "world": self._world_block(),
+                    "actor_context": self._operating_context(assembly_id,
+                                                             self._world_block()),
                     "your_policy_returns": [asdict(lr) for lr in self.queue.returns_for(lid)
                                             if lr.channel == "policy"],
                 }

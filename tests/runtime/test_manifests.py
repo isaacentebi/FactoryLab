@@ -90,7 +90,7 @@ def test_a_manifest_hashes_what_it_says_and_a_default_is_no_exception():
     assert scripted.evaluation.grounded_horizon_ticks == 10
     assert '"grounded_horizon_ticks":10' in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "f5170eb03bf0b628a8afd30385812233fcbea37be27202c7ae093a1e909994ad"
+        "de2de140a637cb9e7275eebccea678d174b264e6bff18a5ed661247ccc590c1c"
     )
 
     implicit = manifest_from_dict(_base())

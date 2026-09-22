@@ -459,7 +459,6 @@ def effective_manifest(
     *,
     prompt_mode: str | None = None,
     producer_feedback: str | None = None,
-    address_enabled: bool | None = None,
     reasoning: str = "preserve",
     native_completions: bool = False,
     capital_loop: bool = False,
@@ -484,8 +483,6 @@ def effective_manifest(
         raise ValueError("prompt_mode must be reference or compact")
     if producer_feedback is not None and producer_feedback not in FACTOR_FEEDBACK:
         raise ValueError("producer_feedback must be verdict or realized")
-    if address_enabled is not None and type(address_enabled) is not bool:
-        raise ValueError("address_enabled must be boolean")
     if reasoning not in FACTOR_REASONING:
         raise ValueError("reasoning must be preserve, off, or on")
     if type(native_completions) is not bool:
@@ -516,8 +513,6 @@ def effective_manifest(
         prompt=base.prompt if prompt_mode is None else PromptSpec(mode=prompt_mode),
         evaluation=(base.evaluation if producer_feedback is None else
                     replace(base.evaluation, producer_feedback=producer_feedback)),
-        tools=(base.tools if address_enabled is None else
-               replace(base.tools, address_enabled=address_enabled)),
         models=models,
         assemblies=(tuple(replace(a, max_tokens=None) for a in base.assemblies)
                     if native_completions else base.assemblies),
@@ -761,7 +756,6 @@ def run_rehearsal(
     observe: bool = False,
     prompt_mode: str | None = None,
     producer_feedback: str | None = None,
-    address_enabled: bool | None = None,
     reasoning: str = "preserve",
     minimum_ticks: int | None = None,
     minimum_grounded_samples: int | None = None,
@@ -805,7 +799,6 @@ def run_rehearsal(
             base,
             prompt_mode=prompt_mode,
             producer_feedback=producer_feedback,
-            address_enabled=address_enabled,
             reasoning=reasoning,
             native_completions=True,
             capital_loop=capital_loop,
@@ -895,13 +888,9 @@ def run_rehearsal(
             "completion_allowance": "provider",
             "prompt_mode": manifest.prompt.mode,
             "producer_feedback": manifest.evaluation.producer_feedback,
-            "address_enabled": manifest.tools.address_enabled,
             "requested": {
                 "prompt_mode": prompt_mode or "preserve",
                 "producer_feedback": producer_feedback or "preserve",
-                "address_enabled": (
-                    "preserve" if address_enabled is None else address_enabled
-                ),
                 "reasoning": reasoning,
             },
             "reasoning": {
@@ -1065,8 +1054,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prompt", choices=sorted(FACTOR_PROMPTS))
     parser.add_argument("--producer-feedback", choices=sorted(FACTOR_FEEDBACK),
                         default=None)
-    parser.add_argument("--address-enabled", action=argparse.BooleanOptionalAction,
-                        default=None)
     parser.add_argument("--reasoning", choices=sorted(FACTOR_REASONING), default="preserve")
     parser.add_argument("--minimum-ticks", type=int)
     parser.add_argument("--minimum-grounded-samples", type=int)
@@ -1090,7 +1077,7 @@ def main(argv: list[str] | None = None) -> int:
                            max_calls=args.max_calls, source_root=args.source_root,
                            observe=args.observe, prompt_mode=args.prompt,
                            producer_feedback=args.producer_feedback,
-                           address_enabled=args.address_enabled, reasoning=args.reasoning,
+                           reasoning=args.reasoning,
                            minimum_ticks=args.minimum_ticks,
                            minimum_grounded_samples=args.minimum_grounded_samples,
                            minimum_contrary_samples=args.minimum_contrary_samples,
