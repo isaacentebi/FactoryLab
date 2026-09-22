@@ -367,9 +367,17 @@ def test_the_core_key_must_be_a_list():
     assert manifest_from_dict  # the parser this helper serves
 
 
-def test_the_rehearsal_world_puts_judge_routing_in_the_core():
-    world = load_manifest("edition5-testnet-rehearsal")
-    assert world.evaluation.no_swap_regret_kinds == ("ProducerReturn",)
+@pytest.mark.parametrize("name", ["edition5-testnet-rehearsal", "edition5-capital-loop"])
+def test_the_judge_tier_is_mean_based_in_the_edition5_worlds(name):
+    """Ruling R10: II.III asks for "a significantly higher population of mean-based
+    no-regret judges than ... swap-based judges", so judge routing is EXP3."""
+    world = load_manifest(name)
+    assert "ProducerReturn" not in world.evaluation.no_swap_regret_kinds
+    # The world runs on a live venue; its evaluation cast is seeded into the scripted one.
+    scripted = replace(load_manifest("scripted"), evaluation=world.evaluation)
+    rt = Runtime(scripted, events=0, seed=1, initial_balance_micro=None, ledger_path=None,
+                 router_gamma=0.1)
+    assert all(isinstance(state.learner, EXP3) for state in rt.routers["ProducerReturn"])
 
 
 # --- a replaced router hands its owed rounds to its successor ----------------------------
