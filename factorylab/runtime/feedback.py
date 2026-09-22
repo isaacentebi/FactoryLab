@@ -444,14 +444,23 @@ class FeedbackMixin:
         return opened
 
     def _settle_forecast_returns(self) -> None:
-        """A forecast-shaped invocation earns the mean of all its resolved predictions once."""
+        """Guarantees a forecast-shaped invocation settles once, on all its resolved predictions.
+
+        It earns their mean, or settles censored (priced when it left one of them
+        avoidably unresolved). A decision that timed out first settles too: its
+        deadline is wall time while its forecasts' horizons count events, so an
+        outage or a stalled loop can expire it before they come due, and the queue
+        keeps a late settlement's right for exactly that. Its learners were credited
+        once, neutrally, at the cutoff and are not trained again; the late
+        settlement is what puts the charter's price on the decision's record.
+        """
         from factorylab.cortex.registration import measured_role
 
         for handle, entry in list(self.forecast_returns.items()):
             forecasts = entry["handles"]
             if any(self.queue.get(f).status is SettleStatus.PENDING for f in forecasts):
                 continue
-            if self.queue.get(handle).status is SettleStatus.PENDING:
+            if self.queue.get(handle).status in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
                 results = [self.queue.history(f)[-1] for f in forecasts]
                 unresolved = tuple(entry.get("unresolved", ()))
                 if unresolved:

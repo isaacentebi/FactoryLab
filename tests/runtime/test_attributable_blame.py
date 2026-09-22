@@ -174,3 +174,29 @@ def test_a_violating_seat_with_no_decision_in_the_window_is_ledgered_unattribute
     assert row["violation"] == pytest.approx(7 / 3) and row["part"] == pytest.approx(7 / 9)
     # Evidence only: the seat that did respond still carries exactly its own part.
     assert rt._penalty_terms("all", carried[0])[0]["share"] == pytest.approx(2 / 9 / 2)
+
+
+def test_a_timed_out_forecast_return_still_carries_its_unresolved_price(monkeypatch):
+    """A wall-clock cutoff before the horizon (an outage) does not make the price free.
+
+    The invocation's deadline is wall time; its forecasts' horizons count events. A
+    loop that stalls past the deadline expires the decision before its forecasts
+    come due, and it still settles late, priced, on its own record.
+    """
+    rt, handles = _closed(_card(), monkeypatch)
+    parent = handles[GUILTY][1]
+    child = rt.queue.open(
+        actor=GUILTY, event_id="forecast", channel="consequence", deadline_ns=10**19,
+        parent_handle=parent, cost_ceiling=0,
+        propensity=PropensityRecord((GUILTY,), (1.0,), GUILTY, 0, GUILTY, "test"))
+    assert parent in rt.queue.expire(10**18)  # the cutoff passes; the horizon has not
+    assert rt.queue.get(parent).status is SettleStatus.TIMED_OUT
+    rt.queue.settle(child, channel="consequence", score=0.0, status=SettleStatus.CENSORED,
+                    definition_version="brier-v1", sampling_ref=None)
+    rt.return_kinds[parent] = "Verdict"
+    rt.forecast_returns[parent] = {"handles": [child], "results": {}, "unresolved": [child]}
+    rt._settle_forecast_returns()
+    history = rt.queue.history(parent)
+    assert history[0].status is SettleStatus.TIMED_OUT
+    assert history[-1].definition_version == UNRESOLVED_PRICED and history[-1].score > 0
+    assert parent not in rt.forecast_returns
