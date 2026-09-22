@@ -134,10 +134,16 @@ def test_clipping_counts_only_attempts_beyond_bounds_and_tracks_actual_steps(led
         # The integral held while P alone saturated a growing violation; no stable
         # failure ratcheted it.
         "integral": 2.0, "failing_windows": 0,
+        # Charter audit M7: four windows closed at lambda_max; the violation that
+        # ended at event 2 reset the run, and the current one has lasted two windows.
+        "windows_at_lambda_max": 4, "violation_windows": 2,
     }
     entries = evidence(ledger)
     assert [item["lambda_after"] for item in entries] == [2, 2, 0, 0, 0, 2, 2]
     assert [item["saturated"] for item in entries] == [False] * 5 + [True, True]
+    assert prices.saturation("cost") == {"windows_at_lambda_max": 4, "violation_windows": 2}
+    assert prices.saturation("unregistered") == {"windows_at_lambda_max": 0,
+                                                 "violation_windows": 0}
     assert entries[5]["violation"] == 45.0  # Unclipped observation retained.
 
 

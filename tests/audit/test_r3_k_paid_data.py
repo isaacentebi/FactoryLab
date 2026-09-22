@@ -37,7 +37,7 @@ def paid_runtime(monkeypatch, transport=None):
     rt.market.target = X402Provider(private_key=TEST_KEY, transport=transport.seller)
     rt.connector_proxy = ConnectorProxy(rt.m.connectors, transport)
     monkeypatch.setattr(rt, "_committee_eligible", lambda: {
-        "eval-a": "evaluator", "meta-a": "meta"})
+        "eval-a": "evaluator", "meta-a": "meta", "antagonist-a": "antagonist"})
     handle = decision(rt)
     rt._apply_registrations(handle, Return(handle, {"register": [{
         "kind": "connector", "id": "source", "description": "Paid data",

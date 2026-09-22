@@ -919,6 +919,7 @@ def validate_proposal(proposal: dict) -> None:
 
         validate_schema(proposal, {"properties": {
             "predicted_effect": effect_schema(),
+            "lambda": {"type": "object"},
             "add": {"type": "array", "items": {"type": "object"}},
             "replace": {"type": "array", "items": {"type": "object"}},
             "remove": {"type": "array", "items": {"type": "string"}}}})

@@ -5,7 +5,14 @@ import pytest
 
 from factorylab.charter.amendment import Amendment
 from factorylab.charter.book import CharterBook
-from factorylab.charter.committee import Ballot, Committee, Seat, draw
+from factorylab.charter.committee import (
+    Ballot,
+    Committee,
+    Seat,
+    StandingCommittee,
+    coverage,
+    draw,
+)
 from factorylab.kernel.events import Bus
 from factorylab.kernel.ledger import Ledger
 from factorylab.kernel.termination import Termination
@@ -42,15 +49,24 @@ def book(ledger) -> CharterBook:
     return CharterBook(ledger, seed_charter())
 
 
-def seated(book: CharterBook, size: int = 5, **changes) -> Committee:
+def seated(book: CharterBook, size: int = 5, **changes) -> StandingCommittee:
+    """Propose one motion and seat the next boundary's committee, whose agenda it is."""
     amendment = candidate(**changes)
     book.propose(amendment)
-    return book.seat(amendment.id, eligible(size), random.Random(7))
+    boundary = len(book.sittings()) + book.deferrals() + 1
+    committee = book.seat(boundary, eligible(size), random.Random(7), quorum=1)
+    assert committee.agenda == (amendment.id,)
+    return committee
 
 
-def approve(book: CharterBook, committee: Committee) -> None:
+def motion(committee: StandingCommittee) -> str:
+    return committee.agenda[0]
+
+
+def approve(book: CharterBook, committee: StandingCommittee) -> None:
     for seat in committee.seats[: len(committee.seats) // 2 + 1]:
-        book.vote(committee, seat.alias, True, "Expected improvement is credible.")
+        book.vote(committee, motion(committee), seat.alias, True,
+                  "Expected improvement is credible.")
 
 
 def evidence(ledger: Ledger) -> list[dict]:
@@ -123,33 +139,34 @@ def test_committee_and_ballot_are_frozen_and_validate_uniqueness():
         replace(committee, round=True)
 
 
+
 @pytest.mark.parametrize("first_abstains", [False, True])
 def test_an_alias_can_cast_only_one_ballot(book, first_abstains):
     committee = seated(book)
     alias = committee.seats[0].alias
     if first_abstains:
-        book.abstain(committee, alias)
+        book.abstain(committee, motion(committee), alias)
     else:
-        book.vote(committee, alias, True, "reason")
+        book.vote(committee, motion(committee), alias, True, "reason")
     with pytest.raises(ValueError, match="already cast"):
-        book.vote(committee, alias, False, "changed mind")
+        book.vote(committee, motion(committee), alias, False, "changed mind")
     with pytest.raises(ValueError, match="already cast"):
-        book.abstain(committee, alias)
+        book.abstain(committee, motion(committee), alias)
 
 
 def test_unknown_alias_and_forged_or_foreign_committee_rejected(book):
     committee = seated(book)
     with pytest.raises(ValueError, match="unknown seat alias"):
-        book.vote(committee, "seat-99", True, "reason")
+        book.vote(committee, motion(committee), "seat-99", True, "reason")
     with pytest.raises(ValueError, match="unknown seat alias"):
-        book.abstain(committee, "seat-99")
+        book.abstain(committee, motion(committee), "seat-99")
     other = CharterBook(Ledger(), seed_charter())
     for invalid in (replace(committee, round=10), replace(committee), seated(other)):
         with pytest.raises(ValueError, match="not issued"):
-            book.vote(invalid, "seat-1", True, "reason")
+            book.vote(invalid, motion(committee), "seat-1", True, "reason")
         with pytest.raises(ValueError, match="not issued"):
-            book.tally(invalid)
-    assert book.tally(committee) is None
+            book.tally(invalid, motion(committee))
+    assert book.tally(committee, motion(committee)) is None
 
 
 @pytest.mark.parametrize(
@@ -184,17 +201,16 @@ def test_unknown_alias_and_forged_or_foreign_committee_rejected(book):
         (2, "YY", "passed"),
         (1, "Y", "passed"),
         (1, "A", "failed"),
-        (0, "", "failed"),
     ],
 )
 def test_majority_thresholds_ties_and_abstention_arithmetic(book, size, votes, outcome):
     committee = seated(book, size)
     for seat, vote in zip(committee.seats, votes, strict=False):
         if vote == "A":
-            book.abstain(committee, seat.alias)
+            book.abstain(committee, motion(committee), seat.alias)
         else:
-            book.vote(committee, seat.alias, vote == "Y", "reason")
-    assert book.tally(committee) == outcome
+            book.vote(committee, motion(committee), seat.alias, vote == "Y", "reason")
+    assert book.tally(committee, motion(committee)) == outcome
 
 
 def test_activation_waits_for_boundary_and_preserves_all_editions(book, ledger):
@@ -207,7 +223,8 @@ def test_activation_waits_for_boundary_and_preserves_all_editions(book, ledger):
     second = seated(book, id="better-forecasts", replace=(second_card,))
     approve(book, second)  # Approval order does not supersede proposal order.
     approve(book, first)
-    book.abstain(first, "seat-4")  # Remaining votes can still be recorded after a majority.
+    # Remaining votes can still be recorded after a majority.
+    book.abstain(first, motion(first), "seat-4")
     assert book.current() == original
     assert len(book.pending()) == 2
     edition2 = book.activate_due(100)
@@ -217,7 +234,7 @@ def test_activation_waits_for_boundary_and_preserves_all_editions(book, ledger):
     ]
     assert edition2.cards[0] == candidate().replace[0]
     assert edition2.cards[-1] == added
-    assert [amendment.id for amendment in book.pending()] == [second.amendment_id]
+    assert [amendment.id for amendment in book.pending()] == [motion(second)]
     with pytest.raises(ValueError, match="edition_base"):
         book.propose(candidate(id="stale-proposal"))
     edition3 = book.activate_due(200)
@@ -235,11 +252,12 @@ def test_activation_waits_for_boundary_and_preserves_all_editions(book, ledger):
         with pytest.raises(FrozenInstanceError):
             edition.edition = 99
     with pytest.raises(ValueError, match="already activated"):
-        book.vote(first, "seat-5", True, "too late")
+        book.vote(first, motion(first), "seat-5", True, "too late")
     activations = [item for item in evidence(ledger) if item["kind"] == "charter.activate"]
     assert [(item["amendment_id"], item["edition"], item["ts"]) for item in activations] == [
-        (first.amendment_id, 2, 100), (second.amendment_id, 3, 200)
+        (motion(first), 2, 100), (motion(second), 3, 200)
     ]
+    assert all(item["change"] == ["cards"] for item in activations)
 
 
 def test_same_base_conflicts_use_later_approved_patch_in_proposal_order(book):
@@ -260,9 +278,9 @@ def test_same_base_conflicts_use_later_approved_patch_in_proposal_order(book):
 
 def test_ledger_votes_use_only_aliases_and_seat_entry_seals_mapping(book, ledger):
     committee = seated(book)
-    book.vote(committee, "seat-1", True, "a reason")
-    book.vote(committee, "seat-2", False, "another reason")
-    book.abstain(committee, "seat-3")
+    book.vote(committee, motion(committee), "seat-1", True, "a reason")
+    book.vote(committee, motion(committee), "seat-2", False, "another reason")
+    book.abstain(committee, motion(committee), "seat-3")
     with pytest.raises(PermissionError):
         ledger.decrypt_item(0)
     items = evidence(ledger)
@@ -276,6 +294,7 @@ def test_ledger_votes_use_only_aliases_and_seat_entry_seals_mapping(book, ledger
         {"alias": seat.alias, "assembly_id": seat.assembly_id, "role": seat.role}
         for seat in committee.seats
     ]
+    assert seating["agenda"] == [motion(committee)] and seating["boundary"] == 1
     assert [(item["alias"], item["vote"], item["reason"]) for item in votes] == [
         ("seat-1", True, "a reason"),
         ("seat-2", False, "another reason"),
@@ -287,7 +306,7 @@ def test_ledger_votes_use_only_aliases_and_seat_entry_seals_mapping(book, ledger
             "ts", "seq", "prev_hash", "hash",
         }
         assert item["kind"] == "charter.vote"
-        assert item["amendment_id"] == committee.amendment_id
+        assert item["amendment_id"] == motion(committee)
         assert item["round"] == committee.round
         assert all(seat.assembly_id not in str(item) for seat in committee.seats)
 
@@ -306,14 +325,15 @@ def test_rejected_ledger_writes_cannot_change_book_state(book, ledger, monkeypat
     book.propose(candidate())
     monkeypatch.setattr(ledger, "append", reject)
     with pytest.raises(RuntimeError, match="ledger unavailable"):
-        book.seat("better-cost", eligible(), random.Random(0))
+        book.seat(1, eligible(), random.Random(0))
+    assert book.sittings() == () and book.agenda() == [candidate()]
     monkeypatch.setattr(ledger, "append", append)
-    committee = book.seat("better-cost", eligible(), random.Random(0))
+    committee = book.seat(1, eligible(), random.Random(0))
     assert committee.round == 1
     monkeypatch.setattr(ledger, "append", reject)
     with pytest.raises(RuntimeError, match="ledger unavailable"):
-        book.vote(committee, "seat-1", True, "reason")
-    assert book.tally(committee) is None
+        book.vote(committee, motion(committee), "seat-1", True, "reason")
+    assert book.tally(committee, motion(committee)) is None
     monkeypatch.setattr(ledger, "append", append)
     approve(book, committee)
     monkeypatch.setattr(ledger, "append", reject)
@@ -323,3 +343,126 @@ def test_rejected_ledger_writes_cannot_change_book_state(book, ledger, monkeypat
     assert book.pending() == [candidate()]
     monkeypatch.setattr(ledger, "append", append)
     assert book.activate_due(200).edition == 2
+
+
+# --- charter audit C1, C2: the standing committee -----------------------------------
+
+
+def test_one_committee_per_boundary_votes_every_waiting_motion(book, ledger):
+    """C1: motions wait for the boundary; its one committee has all of them on its agenda."""
+    book.propose(candidate())
+    card = replace(seed_charter().cards[1], acceptable_region="above 0.8")
+    book.propose(candidate(id="second-motion", replace=(card,),
+                           predicted_effect={"card_id": "well_formed_rate",
+                                             "direction": "increase", "window": 1}))
+    assert [am.id for am in book.agenda()] == ["better-cost", "second-motion"]
+    committee = book.seat(1, eligible(), random.Random(1))
+    assert committee.agenda == ("better-cost", "second-motion")
+    assert book.agenda() == []
+    with pytest.raises(ValueError, match="already has a committee"):
+        book.seat(1, eligible(), random.Random(1))
+    # A motion arriving after the boundary waits for the next committee, a new draw.
+    book.propose(candidate(id="late-motion"))
+    later = book.seat(2, eligible(10), random.Random(2))
+    assert later.agenda == ("late-motion",) and later.round == 2
+    assert {s.assembly_id for s in later.seats} != {s.assembly_id for s in committee.seats}
+
+
+def test_below_quorum_no_rump_is_seated_and_the_motion_waits(book, ledger):
+    """C2: with fewer eligible assemblies than quorum the boundary is deferred and ledgered."""
+    book.propose(candidate())
+    assert book.seat(1, eligible(2), random.Random(0), quorum=3) is None
+    assert book.sittings() == () and book.deferrals() == 1
+    assert [am.id for am in book.agenda()] == ["better-cost"]
+    committee = book.seat(2, eligible(3), random.Random(0), quorum=3)
+    assert committee.agenda == ("better-cost",)
+    deferred = next(i for i in evidence(ledger) if i["kind"] == "charter.seat_deferred")
+    assert deferred["boundary"] == 1 and deferred["eligible"] == 2 and deferred["quorum"] == 3
+    assert deferred["agenda"] == ["better-cost"]
+
+
+def test_the_proposer_does_not_vote_and_a_motion_short_of_quorum_waits(book):
+    """The proposer is excluded per motion; three seats less one proposer is below quorum 3."""
+    book.propose(candidate())
+    pool = eligible(3)
+    committee = book.seat(1, pool, random.Random(0), quorum=3,
+                          recusals={"better-cost": frozenset({"assembly-0"})})
+    assert committee.agenda == () and committee.deferred == ("better-cost",)
+    assert [am.id for am in book.agenda()] == ["better-cost"]
+    committee = book.seat(2, eligible(5), random.Random(0), quorum=3,
+                          recusals={"better-cost": frozenset({"assembly-0"})})
+    voters = book.voters(committee, "better-cost")
+    assert len(voters) == 4
+    proposer = next(s.alias for s in committee.seats if s.assembly_id == "assembly-0")
+    assert proposer not in voters
+    with pytest.raises(ValueError, match="unknown seat alias"):
+        book.vote(committee, "better-cost", proposer, True, "my own motion")
+    for alias in voters[:3]:
+        book.vote(committee, "better-cost", alias, True, "yes")
+    assert book.tally(committee, "better-cost") == "passed"
+
+
+def test_stratified_draw_covers_every_role_and_learner_type():
+    """C2: every role in ROLES, a declared role, and both learner types, as far as seats allow."""
+    pool = {**{f"p{i}": "producer" for i in range(12)}, "e1": "evaluator", "e2": "evaluator",
+            "m1": "meta", "a1": "antagonist", "w1": "watcher"}
+    learners = {a: frozenset({"exp3"}) for a in pool}
+    learners["p7"] = frozenset({"blum_mansour"})
+    for seed in range(40):
+        seats = draw(pool, random.Random(seed), 6, learners=learners)
+        roles = {seat.role for seat in seats}
+        assert roles == {"producer", "evaluator", "meta", "antagonist", "watcher"}
+        # The one no-swap-regret learner is a producer, and a producer seat prefers it.
+        assert "p7" in {seat.assembly_id for seat in seats}
+        report = coverage(pool, seats, learners)
+        assert report["roles"]["covered"] == report["roles"]["present"] == [
+            "producer", "evaluator", "meta", "antagonist", "watcher"]
+        assert report["learners"]["covered"] == ["blum_mansour", "exp3"]
+
+
+def test_stratified_draw_covers_a_learner_type_outside_the_role_picks():
+    pool = {"p1": "producer", "p2": "producer", "e1": "evaluator", "e2": "evaluator"}
+    learners = {"p1": frozenset({"exp3"}), "p2": frozenset({"exp3"}),
+                "e1": frozenset({"exp3"}), "e2": frozenset({"blum_mansour"})}
+    for seed in range(30):
+        seats = draw(pool, random.Random(seed), 3, learners=learners)
+        types = {k for s in seats for k in learners[s.assembly_id]}
+        assert types == {"exp3", "blum_mansour"}
+        assert {s.role for s in seats} == {"producer", "evaluator"}
+
+
+def test_more_roles_than_seats_covers_a_uniform_sample_of_roles():
+    pool = {"p": "producer", "e": "evaluator", "m": "meta", "a": "antagonist",
+            "x": "producer"}
+    seen = set()
+    for seed in range(60):
+        seats = draw(pool, random.Random(seed), 3)
+        roles = [s.role for s in seats]
+        assert len(set(roles)) == 3  # three seats, three distinct roles
+        seen.add(frozenset(roles))
+    assert len(seen) > 1  # no role is structurally first
+
+
+def test_seat_entry_reports_stratum_coverage(book, ledger):
+    book.propose(candidate())
+    pool = {"p1": "producer", "p2": "producer", "e1": "evaluator", "m1": "meta"}
+    learners = {"p1": frozenset({"exp3"}), "p2": frozenset({"exp3"}),
+                "e1": frozenset({"blum_mansour"}), "m1": frozenset({"exp3"})}
+    book.seat(1, pool, random.Random(3), size=3, learners=learners)
+    seating = next(i for i in evidence(ledger) if i["kind"] == "charter.seat")
+    assert seating["coverage"]["roles"] == {"present": ["producer", "evaluator", "meta"],
+                                            "covered": ["producer", "evaluator", "meta"]}
+    assert seating["coverage"]["learners"] == {"present": ["blum_mansour", "exp3"],
+                                               "covered": ["blum_mansour", "exp3"]}
+    assert seating["quorum"] == 3 and seating["voters"] == {"better-cost": 3}
+
+
+def test_standing_committee_is_frozen_and_validated():
+    seats = (Seat("seat-1", "a", "producer"), Seat("seat-2", "b", "meta"))
+    committee = StandingCommittee(1, 1, seats, ("m",))
+    with pytest.raises(FrozenInstanceError):
+        committee.round = 2
+    with pytest.raises(ValueError, match="aliases"):
+        StandingCommittee(1, 1, (seats[0], Seat("seat-1", "c", "meta")))
+    with pytest.raises(ValueError, match="boundary"):
+        StandingCommittee(-1, 1, seats)

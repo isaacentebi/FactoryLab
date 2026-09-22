@@ -50,17 +50,32 @@ def proposed_tick_interval(value: object, min_ns: int, max_ns: int | float) -> i
     return int(amount)
 
 
+#: The seed observation a clock motion's prediction may name: compute spent per window.
+BURN_OBSERVATION = "burn_per_window"
+#: The three change classes a motion may carry, one per motion (charter audit P3).
+CHANGE_CLASSES = ("cards", "lambda", "clock")
+
+
 @dataclass(frozen=True)
 class PredictedEffect:
-    """A policy forecast binds a named card, strict direction and post-activation window count."""
+    """A policy forecast binds one target, a strict direction and a post-activation window count.
 
-    card_id: str
+    The target is a card (``card_id``) or, for a clock motion, an observation
+    (``observation``): exactly one of the two.
+    """
+
+    card_id: str | None
     direction: str
     window: int
+    observation: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.card_id, str) or not self.card_id.strip():
-            raise ValueError("predicted_effect.card_id is required")
+        if (self.card_id is None) == (self.observation is None):
+            raise ValueError("predicted_effect names exactly one of card_id or observation")
+        target = self.card_id if self.observation is None else self.observation
+        name = "card_id" if self.observation is None else "observation"
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError(f"predicted_effect.{name} is required")
         if self.direction not in ("increase", "decrease"):
             raise ValueError("predicted_effect.direction must be increase or decrease")
         if type(self.window) is not int or self.window < 1:
@@ -71,26 +86,40 @@ class PredictedEffect:
         """Reject unfalsifiable prose without inventing a direction or evaluation horizon."""
         if isinstance(value, cls):
             return value
-        if not isinstance(value, dict) or set(value) != {"card_id", "direction", "window"}:
-            raise ValueError("predicted_effect needs card_id, direction and window")
-        return cls(**value)
+        if isinstance(value, dict):
+            present = {k: v for k, v in value.items() if v is not None}
+            if set(present) in ({"card_id", "direction", "window"},
+                                {"observation", "direction", "window"}):
+                return cls(**{"card_id": None, **present})
+        raise ValueError("predicted_effect needs card_id (or observation), direction and window")
+
+    def as_dict(self) -> dict:
+        """The wire form: the one target it names, the direction and the window."""
+        target = ({"card_id": self.card_id} if self.observation is None
+                  else {"observation": self.observation})
+        return {**target, "direction": self.direction, "window": self.window}
 
 
 def effect_schema() -> dict:
     """The accepted prediction schema names no preferred direction or horizon."""
     return {"type": "object", "properties": {
         "card_id": {"type": "string"},
+        "observation": {"type": "string"},
         "direction": {"enum": ["increase", "decrease"]},
         "window": {"type": "integer", "minimum": 1},
-    }, "required": ["card_id", "direction", "window"], "additionalProperties": False}
+    }, "required": ["direction", "window"], "additionalProperties": False}
 
 
 @dataclass(frozen=True)
 class Amendment:
-    """A candidate's typed card changes and predicted effect cannot change after creation.
+    """A candidate's one change and its own predicted effect cannot change after creation.
 
-    Norm membership and card existence are checked against the current charter
-    by ``CharterBook.propose``. There is no operation for editing norms.
+    A motion carries exactly one change class (charter audit P3): cards (add,
+    replace, remove), lambda (prices for current cards) or clock
+    (``tick_interval``), and a clock motion predicts its effect on an
+    observation, since speed is cash burn (essay II.IV). Norm membership and
+    card existence are checked against the current charter by
+    ``CharterBook.propose``. There is no operation for editing norms.
     """
 
     id: str
@@ -138,9 +167,23 @@ class Amendment:
             (card_id, proposed_price(value, float("inf")))
             for card_id, value in self.proposed_prices
         )
-        eligible = {card.id for card in (*self.add, *self.replace)}
-        if any(card_id not in eligible for card_id, _ in prices):
-            raise ValueError("lambda may only accompany an added or replaced card")
+        if any(not isinstance(card_id, str) or not card_id.strip() for card_id, _ in prices):
+            raise ValueError("lambda names a card id")
         if len({card_id for card_id, _ in prices}) != len(prices):
             raise ValueError("a card may have only one proposed lambda")
         object.__setattr__(self, "proposed_prices", prices)
+        classes = self.change_classes()
+        if len(classes) > 1:
+            raise ValueError("a motion carries one change class (cards, lambda or clock); "
+                             f"this one carries {' and '.join(classes)}")
+        if "clock" in classes and self.predicted_effect.observation is None:
+            raise ValueError("a clock motion predicts its effect on an observation")
+        if "clock" not in classes and self.predicted_effect.observation is not None:
+            raise ValueError("a cards or lambda motion predicts its effect on a card")
+
+    def change_classes(self) -> tuple[str, ...]:
+        """The change classes this motion carries, in ``CHANGE_CLASSES`` order."""
+        present = {"cards": bool(self.add or self.replace or self.remove),
+                   "lambda": bool(self.proposed_prices),
+                   "clock": self.tick_interval is not None}
+        return tuple(name for name in CHANGE_CLASSES if present[name])
