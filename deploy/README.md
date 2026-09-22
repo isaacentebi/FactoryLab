@@ -243,7 +243,7 @@ A diary binds its manifest and its venue account; edition 2 also binds the
 release that executes them (cold audit F1). At every start the runtime computes
 
 ```
-release_digest = sha256(git_head + sha256(uv.lock) + tree_hash(factorylab/))
+release_digest = sha256(sha256(uv.lock) + tree_hash(factorylab/))
 ```
 
 in `factorylab/runtime/release.py`, ledgers it in the `Launch` event and in every
@@ -254,7 +254,9 @@ digests). The tree hash covers the package as it is on disk, so an uncommitted
 edit is a different release exactly as a new commit is. There is no override:
 a changed release is a new world.
 
-The head comes from git when the checkout has it. The provisioner also runs
+The git head is not part of the digest (versioning S2): a commit that changes no
+executable byte is the same release. It is recorded beside the digest as forensic
+metadata. The head comes from git when the checkout has it. The provisioner also runs
 `deploy/install.sh`, which records the identity in `repo/RELEASE`; a host without
 git reads the head from there, and `release_info()["git_head_source"]` says which
 was used (`git`, `release_file`, or `none`). Print it on the host:
