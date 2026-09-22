@@ -72,7 +72,7 @@ def test_the_published_scoring_is_the_chain_the_kernel_runs():
     for false_physics in ("mandatory payoff", "sibling", "payoff forecast",
                           "halves effective lambda", "settles 0"):
         assert false_physics not in published
-    assert "clip(0.5 + brier - base, 0, 1)" in scoring["verdict_is_a_prediction"]
+    assert "0.5 + 0.5 * (brier - base)" in scoring["verdict_is_a_prediction"]
     assert "payoff" not in rt.A_RETURN_MAY_INCLUDE
     assert "measured outcome" in rt.A_RETURN_MAY_INCLUDE["verdict"]
 

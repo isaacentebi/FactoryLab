@@ -79,13 +79,17 @@ _CARDS_FOR_CHANNEL = {CH_VERDICT: "producer", CH_CONFORMITY: "evaluator",
 def consequence_score(brier: float, baseline_brier: float) -> float:
     """The world's grade of one prediction, centred on its base rate, in [0, 1].
 
-    Guarantees ``clip(0.5 + brier - baseline_brier, 0, 1)``, where both Brier
-    scores are higher-is-better (``settle.normative_brier``): a prediction that
-    only repeats the base rate earns 0.5, one the world proved righter than the
-    base rate earns more, and one it proved wronger earns less (ruling R1: a judge
-    the world proved wrong earns less).
+    Guarantees ``0.5 + 0.5 * (brier - baseline_brier)``, where both Brier scores
+    are higher-is-better (``settle.normative_brier``) and so in [0, 1]: the result
+    is in [0, 1] with no clipping. It is an affine transform of the Brier score with
+    a constant the prediction cannot move, so it is a proper scoring rule: the
+    expected score is maximised by reporting one's true probability, whatever the
+    base rate (a clip would reward shading a report toward it). A prediction that
+    only repeats the base rate earns 0.5, one the world proved righter earns more,
+    and one it proved wronger less (ruling R1: a judge the world proved wrong earns
+    less).
     """
-    return min(1.0, max(0.0, 0.5 + brier - baseline_brier))
+    return 0.5 + 0.5 * (brier - baseline_brier)
 
 
 def evaluation_reward(grade: float | None, consequence: float | None) -> float | None:

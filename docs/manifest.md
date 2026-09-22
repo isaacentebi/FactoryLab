@@ -353,7 +353,8 @@ done, so every judge a draw woke on a return counts and none alone
 the kernel scores the verdict `q` against a measured outcome `y`:
 `brier = 1 - (q - y)^2`, `base = 1 - (b - y)^2` with `b` the base rate of that
 kind of outcome before this return's own entered it (once per return, however
-many judges read it), and `consequence score = clip(0.5 + brier - base, 0, 1)`
+many judges read it), and `consequence score = 0.5 + 0.5 * (brier - base)`, which
+stays in [0, 1] and is a proper scoring rule (an affine map of Brier)
 (`verdict.consequence`). A judge the world proved wrong earns less than one it
 proved right, and one that only repeats the base rate earns 0.5. `y` is:
 

@@ -1692,7 +1692,7 @@ class SchematicsMixin:
                 "y = f / (f + max(0, m - f)); any "
                 "other return has no y. brier = 1 - (q - y)^2; base = 1 - (b - y)^2, b the "
                 "base rate of that kind of y before this return's entered it; consequence "
-                "score = clip(0.5 + brier - base, 0, 1)"
+                "score = 0.5 + 0.5 * (brier - base), a proper score in [0, 1]"
             ),
             "evaluator_return": (
                 "a judge's decision settles on the conformity channel on two signals: g, the "
@@ -1704,7 +1704,7 @@ class SchematicsMixin:
             ),
             "meta_return": (
                 "a meta's conformity k is also a prediction of the consequence score s of the "
-                "decision it graded: c = clip(0.5 + (1 - (k - s)^2) - (1 - (b - s)^2), 0, 1), "
+                "decision it graded: c = 0.5 + 0.5 * ((1 - (k - s)^2) - (1 - (b - s)^2)), "
                 "b the base rate of those scores; no s, no c. A meta settles like a judge on "
                 "the grade from a tier above, when one exists, and on c; a top-tier meta on "
                 "c alone"

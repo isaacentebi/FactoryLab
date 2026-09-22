@@ -108,6 +108,24 @@ def test_a_judge_the_world_proved_wrong_earns_less_than_one_it_proved_right():
     parrot = consequence_score(1 - (base - y) ** 2, 1 - (base - y) ** 2)
     assert wrong < parrot == 0.5 < right
     assert 0.0 <= wrong and right <= 1.0
+    # The extremes stay in the unit interval without a clip.
+    assert consequence_score(0.0, 1.0) == 0.0 and consequence_score(1.0, 0.0) == 1.0
+
+
+@pytest.mark.parametrize("base,p", [(0.1, 0.8), (0.5, 0.5), (0.9, 0.2), (0.3, 0.3),
+                                    (0.05, 0.95), (0.7, 0.0)])
+def test_the_consequence_score_is_proper_whatever_the_base_rate(base, p):
+    """Architect's ruling on the #128 review: the clipped score was not proper (with
+    base 0.1 and truth 0.8 the best report was 0.444). The expected score, for a
+    binary outcome that is true with probability p, is maximised at q = p."""
+    def expected(q):
+        return sum(weight * consequence_score(1 - (q - y) ** 2, 1 - (base - y) ** 2)
+                   for y, weight in ((1, p), (0, 1 - p)))
+
+    grid = [i / 1000 for i in range(1001)]
+    best = max(grid, key=expected)
+    assert best == pytest.approx(p, abs=1e-3)
+    assert all(expected(p) >= expected(q) - 1e-12 for q in grid)
 
 
 def test_both_signals_count_equally_and_a_missing_one_is_never_imputed():
