@@ -1,9 +1,17 @@
 """The executed-order journey of PR121 (decisions 264, 273 and 304), offline.
 
 A producer that trades through a venue tool and then reports the trade in its
-final answer must keep its effects and its claim: the report is evaluable, it is
-never a second instruction, and an identical order the same seat already has
-resting is not placed twice.
+final answer must keep its effects and its claim: the report is evaluable and it
+is never a second instruction.
+
+Chapter II rulings, R6. What is kernel physics stays pinned here: a client id is
+idempotent (a retry reconciles and never submits twice), a decision acts once (an
+answer never executes in place of a write the same decision had refused or
+dropped, nor beside one it made), and a batch of writes is weighed whole (one
+refused leg holds back every leg; the same order twice in one batch is one
+decision acting twice). What was an architect guardrail is gone: an order
+identical to one an earlier decision left resting is placed, because the venue
+allows it and fees price it.
 """
 
 import copy
@@ -104,42 +112,40 @@ def test_order_answer_missing_fields_without_a_write_is_refused_not_malformed():
     assert any(i["kind"] == "order.refused" and i["handle"] == handle for i in items)
 
 
-def test_identical_order_already_resting_for_the_same_seat_is_refused():
-    """Decision 273: the same seat re-placed the same resting limit order."""
-    runtime = _consequence_runtime(exchange=_exchange())
+def test_a_later_decisions_identical_order_is_placed_beside_the_resting_one():
+    """R6: the cross-decision duplicate refusal was a guardrail; the venue allows it."""
+    exchange = _exchange()
+    runtime = _consequence_runtime(exchange=exchange)
     first = _consequence_decision(runtime, "seed-decider", "verdict")
     runtime.consequences.start(first, 0)
     runtime.handle_to_assembly[first] = "seed-decider"
-    result, _ = runtime._run_tool("seed-decider", first, LIMIT, slot="tool:0")
-    assert result["status"] == "resting"
+    one, _ = runtime._run_tool("seed-decider", first, LIMIT, slot="tool:0")
+    assert one["status"] == "resting"
     second = _consequence_decision(runtime, "seed-decider", "verdict")
     runtime.consequences.start(second, 1)
-    result, _ = runtime._run_tool("seed-decider", second, LIMIT, slot="tool:0")
-    assert result["status"] == "rejected"
-    assert "already resting" in result["error"] and result["error"].count("order") >= 1
-    # A different size is a different order, and another seat is another owner.
-    bigger = {**LIMIT, "args": {**LIMIT["args"], "size": "0.02"}}
-    result, _ = runtime._run_tool("seed-decider", second, bigger, slot="tool:1")
-    assert result["status"] == "resting"
-    other = _consequence_decision(runtime, "seed-observer", "verdict")
-    runtime.consequences.start(other, 2)
-    result, _ = runtime._run_tool("seed-observer", other, LIMIT, slot="tool:0")
-    assert result["status"] == "resting"
+    runtime.handle_to_assembly[second] = "seed-decider"
+    two, _ = runtime._run_tool("seed-decider", second, LIMIT, slot="tool:0")
+    assert two["status"] == "resting" and two["order_id"] != one["order_id"]
+    assert len(exchange.open_orders()) == 2
+    assert second not in runtime.venue_attempts  # nothing was refused, so the answer may act
+    assert "order.duplicate" not in _kinds(runtime, second)
 
 
-def test_duplicate_guard_releases_once_the_resting_order_is_cancelled():
-    runtime = _consequence_runtime(exchange=_exchange())
-    first = _consequence_decision(runtime, "seed-decider", "verdict")
-    runtime.consequences.start(first, 0)
-    result, _ = runtime._run_tool("seed-decider", first, LIMIT, slot="tool:0")
-    order_id = result["order_id"]
-    cancel = {"tool": "venue.cancel", "args": {"coin": "BTC", "order_id": order_id}}
-    assert runtime._run_tool("seed-decider", first, cancel, slot="tool:1")[0][
-        "status"] == "cancelled"
-    second = _consequence_decision(runtime, "seed-decider", "verdict")
-    runtime.consequences.start(second, 1)
-    assert runtime._run_tool("seed-decider", second, LIMIT, slot="tool:0")[0][
-        "status"] == "resting"
+def test_a_retried_client_id_reconciles_and_never_places_twice():
+    """Kernel physics: a write's identity is its decision and slot, and it is idempotent."""
+    exchange = _exchange()
+    runtime = _consequence_runtime(exchange=exchange)
+    handle = _consequence_decision(runtime, "seed-decider", "verdict")
+    runtime.consequences.start(handle, 0)
+    first, _ = runtime._run_tool("seed-decider", handle, LIMIT, slot="tool:0")
+    again, _ = runtime._run_tool("seed-decider", handle, copy.deepcopy(LIMIT), slot="tool:0")
+    assert again["order_id"] == first["order_id"]
+    assert len(exchange.open_orders()) == 1 and len(_writes(runtime, handle)) == 1
+    # The same identity cannot be rebound to a different write.
+    other = {**LIMIT, "args": {**LIMIT["args"], "size": "0.02"}}
+    refused, _ = runtime._run_tool("seed-decider", handle, other, slot="tool:0")
+    assert "client id already binds another intent" in refused["error"]
+    assert len(exchange.open_orders()) == 1
 
 
 def test_continuation_turn_labelled_order_still_dispatches_its_cancel():
@@ -303,21 +309,27 @@ def test_a_refused_writing_batch_does_not_trade_through_the_answer():
     assert _writes(runtime, handle) == []
 
 
-def test_a_duplicate_refused_as_a_tool_is_not_placed_through_the_answer():
-    """Cold review: a refused duplicate limit came back as a market sell."""
-    provider = Scripted({"action": "investigate", "tool_calls": [LIMIT]},
-                        {"action": "hold"},
-                        {"action": "investigate", "tool_calls": [copy.deepcopy(LIMIT)]},
+#: An order no collateral in this world can carry: the venue check refuses it.
+OVERSIZED = {"tool": "venue.place_limit",
+             "args": {"coin": "BTC", "side": "sell", "size": "100000", "price": "150"}}
+
+
+def test_a_write_refused_as_a_tool_is_not_placed_through_the_answer():
+    """A decision acts once: a refused limit may not come back as a market sell."""
+    provider = Scripted({"action": "investigate", "tool_calls": [OVERSIZED]},
                         {"action": "order", "coin": "BTC", "side": "sell", "size": "0.01"})
     runtime = _consequence_runtime(provider=provider, exchange=_exchange())
-    _consequence_produce(runtime)
-    second, _ = _consequence_produce(runtime)
-    assert _writes(runtime, second) == []
-    kinds = _kinds(runtime, second)
-    assert "order.duplicate" in kinds and "order.refused" in kinds
+    handle, _ = _consequence_produce(runtime)
+    assert _writes(runtime, handle) == []
+    refusal = [i for i in _consequence_diary(runtime)
+               if i["kind"] == "order.refused" and i.get("handle") == handle]
+    assert refusal and "nothing was submitted" in refusal[-1]["reason"]
+    assert "collateral" in refusal[-1]["reason"]
+    assert "not execute in the write's place" in refusal[-1]["reason"]
 
 
-def test_a_repeat_of_a_resting_order_through_the_answer_is_a_duplicate():
+def test_a_later_answer_repeating_a_resting_order_is_executed():
+    """R6: a later decision's order is its own act, even when it repeats a resting one."""
     resting = {"tool": "venue.place_limit",
                "args": {"coin": "BTC", "side": "sell", "size": "0.01", "price": "150"}}
     provider = Scripted({"action": "investigate", "tool_calls": [resting]},
@@ -326,22 +338,22 @@ def test_a_repeat_of_a_resting_order_through_the_answer_is_a_duplicate():
     runtime = _consequence_runtime(provider=provider, exchange=_exchange())
     _consequence_produce(runtime)
     second, _ = _consequence_produce(runtime)
-    assert _writes(runtime, second) == []
-    assert "order.duplicate" in _kinds(runtime, second)
+    assert [(w["operation"], w["result"]["status"]) for w in _writes(runtime, second)] == [
+        ("venue.place_market", "filled")]
+    assert "order.duplicate" not in _kinds(runtime, second)
 
 
 def test_a_hedge_whose_second_leg_would_be_refused_places_neither_leg():
-    """Cold review: the ETH leg filled alone beside a refused duplicate."""
+    """Cold review: the ETH leg filled alone beside a refused leg."""
     leg = {"tool": "venue.place_market", "args": {"coin": "ETH", "side": "buy", "size": "0.5"}}
-    provider = Scripted({"action": "investigate", "tool_calls": [LIMIT]},
-                        {"action": "hold"},
-                        {"action": "investigate", "tool_calls": [leg, copy.deepcopy(LIMIT)]},
-                        {"action": "hold"})
+    provider = Scripted({"action": "investigate", "tool_calls": [leg, OVERSIZED]},
+                        {"action": "order", "coin": "ETH", "side": "buy", "size": "0.5"})
     runtime = _consequence_runtime(provider=provider, exchange=_exchange())
-    _consequence_produce(runtime)
-    second, _ = _consequence_produce(runtime)
-    assert _writes(runtime, second) == []
-    assert "order.batch_refused" in _kinds(runtime, second)
+    handle, _ = _consequence_produce(runtime)
+    assert _writes(runtime, handle) == []  # neither leg, and not the answer either
+    refused = [i for i in _consequence_diary(runtime)
+               if i["kind"] == "order.batch_refused" and i.get("handle") == handle]
+    assert refused and "collateral" in refused[0]["reason"]
 
 
 def test_one_order_written_twice_in_one_batch_places_nothing():

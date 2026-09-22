@@ -253,7 +253,7 @@ def test_a_compact_request_drops_the_manual_and_keeps_the_request(modes):
     assert lean_inputs == rich_inputs
     limit = compact.m.tools.max_tool_calls
     instruction = (
-        f"This response may contain at most {limit} tool_calls; prioritize the reads you need."
+        f"This response may contain at most {limit} tool_calls."
     )
     assert instruction in dict(rich.sections())["outcome_schema"]
     assert instruction in dict(lean.sections())["outcome_schema"]

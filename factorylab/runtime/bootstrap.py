@@ -609,9 +609,9 @@ class BootstrapMixin:
             "venue.cancel": [{"coin": coin, "order_id": "1"}],
             "venue.close": [{"coin": coin}, {"coin": coin, "size": None}],
             "venue.set_leverage": [{"coin": coin, "leverage": 1}],
-            "treasury.transfer": [{"direction": direction, "usd": amount}
-                                  for direction in ("to_reserve", "to_venice")
-                                  for amount in ("5", 5)],
+            # One example per direction, none favoured (smuggling audit D5).
+            "treasury.transfer": [{"direction": direction, "usd": "5"} for direction in (
+                "to_reserve", "to_venue", "to_venice", "spot_to_perps", "perps_to_spot")],
             "catalogue.search": [{"substring": "flash", "limit": 20}],
             "market.discover": [{"query": "inference", "limit": 20}],
             "artifact.get": [{"sha": "0" * 64}],

@@ -54,15 +54,17 @@ ACCOUNTING_FACTS: tuple[str, ...] = (
 )
 
 #: GPT-6's third reading, §8 (``docs/audits/v6/gpt6-third/prompts.md``): the wrapper
-#: the five fixed norms are read inside. Verbatim, in two halves, because the norms
+#: the five fixed norms are read inside, in two halves, because the norms
 #: themselves come from the charter object between them — so a ratified edition
 #: renders its own definitions and this text never becomes a second, staler copy
-#: of the charter a population actually voted.
+#: of the charter a population actually voted. For the same reason it no longer
+#: restates the fidelity norm (smuggling audit D2); what stays is measurement
+#: physics and the standing of retrieved text.
 WORLD_CONTRACT_OPENING = """WORLD CONTRACT
 
 The five fixed norms below are values. Live charter cards are provisional
-measurements of those values. A favorable measurement does not prove that its
-value was served. No eligible observation means unmeasured, not zero failure.
+measurements of those values. No eligible observation means unmeasured, not zero
+failure.
 """
 
 WORLD_CONTRACT_CLOSING = """
@@ -314,8 +316,7 @@ class SchematicsMixin:
             "action includes what the return executed through venue and treasury tools "
             "and the children it requested). The action taken needs at least "
             f"{MIN_DECLARED_MASS} mass or is floored to it before it weights a reward. It "
-            "travels forward on the request about this return, so the judges of this "
-            "return read it"
+            "travels forward on the request about this return"
         ),
         "register": "a list of up to three proposals, including amendments, shaped like "
         "proposal_shapes; router add=false replaces, add=true adds a router. Learners: exp3 or "
@@ -331,9 +332,7 @@ class SchematicsMixin:
         "prices.program_micro_per_call. With state_policy private the object it prints under "
         "state is archived as an artifact it owns and handed back on its next call; the "
         "artifact's sha is in the diary and artifact.get reads it, free, for any seat in the "
-        "program's own lineage; other readers are refused artifact_private. Machinery "
-        "you have learned belongs in a program seat, where it costs a flat call and cannot "
-        "drift. An observation "
+        "program's own lineage; other readers are refused artifact_private. An observation "
         "registers a measurement: its code runs in the tool jail over a closed window's "
         "public facts and is admitted only if it produces a finite number on the last "
         "closed window; a card may then name it, and re-registering the same id supersedes "

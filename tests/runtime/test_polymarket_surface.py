@@ -276,13 +276,15 @@ def test_window_cap_unlisted_tokens_and_foreign_cancels_are_refused():
     assert "placed by this world" in foreign["error"]
 
 
-def test_an_identical_resting_order_from_the_same_seat_is_refused():
+def test_a_later_decisions_identical_resting_order_is_placed():
+    """R6: the venue allows a repeat and fees price it; the kernel does not refuse it."""
     rt = world()
     first = collateral_decision(rt)
-    assert buy(rt, first, price="0.30")["status"] == "resting"
+    one = buy(rt, first, price="0.30")
+    assert one["status"] == "resting"
     second = collateral_decision(rt)
-    repeat = buy(rt, second, price="0.30")
-    assert "already resting" in repeat["error"]
+    two = buy(rt, second, price="0.30")
+    assert two["status"] == "resting" and two["order_id"] != one["order_id"]
 
 
 def test_a_judge_cannot_trade_event_markets():

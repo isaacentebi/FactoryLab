@@ -150,26 +150,6 @@ def _transient_snapshot(section: str, value: Any,
     }
 
 
-def _publishable(policy: dict[str, float]) -> dict[str, float]:
-    """Return a readable copy of a distribution that is still a distribution.
-
-    Guarantees the result sums to one within ``PROPENSITY_TOLERANCE``, so an
-    agent that copies a published policy verbatim into its return declares
-    something the same validator accepts. Rounding alone does not: three equal
-    thirds rounded independently sum to 0.999999.
-    """
-    rounded = {action: round(p, 6) for action, p in policy.items()}
-    if not rounded:
-        return rounded
-    top = max(rounded, key=lambda action: (rounded[action], action))
-    adjusted = round(rounded[top] + (1.0 - math.fsum(rounded.values())), 6)
-    if not 0.0 <= adjusted <= 1.0:
-        return dict(policy)  # full precision rather than a rounding that left the simplex
-    rounded[top] = adjusted
-    return rounded
-
-
-
 #: Hyperliquid's own SDK names for the venue arguments this world publishes. Models
 #: trained on that SDK write them (PR121 seqs 282 and 7343; edition 5 testnet), and
 #: each voided a whole batch. They name the same quantities, so they are translated
@@ -1254,11 +1234,6 @@ class ComputeMixin:
                 from factorylab.world.venue_tools import _validate
 
                 _validate(args, spec["args_schema"])
-                duplicate = self.duplicate_resting_order(
-                    action_id, handle, f"{handle}:{slot}", tool_id, args)
-                if duplicate:
-                    self.venue_attempts[handle] = duplicate
-                    return self._refuse_order(handle, duplicate, kind="order.duplicate")
                 if tool_id in ("venue.place_market", "venue.place_limit"):
                     reason = self._order_collateral(
                         handle, str(args.get("coin")), Decimal(str(args.get("size"))),
@@ -1974,13 +1949,12 @@ class ComputeMixin:
         """One durable learning identity per assembly, distinct from any router's."""
         return f"assembly:{assembly_id}"
 
-    def _action_policy(self, assembly_id: str) -> dict[str, Any] | None:
-        """An assembly's own learner's current recommendation, private to that assembly.
+    def _learner_policy(self, assembly_id: str) -> dict[str, float] | None:
+        """An assembly's own learner's current policy, read from a detached copy.
 
-        Local state stays local (essay II.I.b): this is the one learner whose rounds
-        this assembly's own decisions opened, so it is its own running score and
-        nobody else's. It is read from a detached copy, so disclosing it can never
-        disturb a round that is waiting for its reward.
+        Guarantees nothing it returns can disturb a round that is waiting for its
+        reward, and ``None`` when the assembly has no learner or its state cannot be
+        read.
         """
         from factorylab.learners.base import restore_learner
 
@@ -1989,12 +1963,62 @@ class ComputeMixin:
             return None
         try:
             detached = restore_learner(learner.inner.state())
-            policy = detached.distribution(tuple(detached.actions))
+            return detached.distribution(tuple(detached.actions))
         except (ValueError, RuntimeError, TypeError, ArithmeticError):
             return None
-        return {"over": _publishable(policy),
-                "note": "your own learner's current policy over the action set you registered; "
-                        "declare a propensity on your return to train it"}
+
+    def _action_policy(self, assembly_id: str) -> dict[str, Any] | None:
+        """One draw from an assembly's own learner, private to that assembly.
+
+        Guarantees the seat is shown a sample and its probability, ``{recommended,
+        p}``, and never the distribution (Chapter II rulings R4, information audit
+        P3): a seat handed a distribution that then picks by judgement declares a
+        behaviour policy it did not follow. The draw comes from the runtime's own
+        reproducible stream. Local state stays local (essay II.I.b): this is the one
+        learner whose rounds this assembly's own decisions opened.
+        """
+        policy = self._learner_policy(assembly_id)
+        actions = tuple(a for a in (policy or {}) if policy[a] > 0)
+        if not actions:
+            return None
+        recommended = self.rng.choices(actions, weights=[policy[a] for a in actions], k=1)[0]
+        return {"recommended": recommended, "p": round(policy[recommended], 6),
+                "note": "drawn by the kernel from your registered learner's current policy; "
+                        "p is its probability there"}
+
+    def _followed_recommendation(self, action_id: str, req: Request, taken: tuple[str, ...],
+                                 state_hash: str) -> PropensityRecord | None:
+        """The learner's own record when the seat took the action its learner drew, or None.
+
+        Guarantees that a seat that did what its learner recommended is recorded at
+        the learner's probability, over the learner's whole policy, so the round it
+        opens is on-policy (R4: "if the seat obeys, record the learner's p"). The
+        policy must still be the one the draw was disclosed from; when it is not,
+        or the seat did something else, ``None``, and the seat's own declaration
+        stands.
+        """
+        shown = req.inputs.get("your_action_policy") if isinstance(req.inputs, dict) else None
+        if not isinstance(shown, dict) or shown.get("recommended") not in taken:
+            return None
+        recommended = shown["recommended"]
+        policy = self._learner_policy(action_id)
+        if policy is None or round(policy.get(recommended, 0.0), 6) != shown.get("p"):
+            self.ledger.append({"kind": "propensity.recommendation_stale",
+                                "handle": req.handle, "assembly_id": action_id,
+                                "recommended": recommended, "ts": self.clock.now_ns})
+            return None
+        actions = tuple(a for a in policy if policy[a] > 0)
+        total = math.fsum(policy[a] for a in actions)
+        try:
+            record = PropensityRecord(
+                actions, tuple(policy[a] / total for a in actions), recommended, 0,
+                self._assembly_learner_id(action_id), state_hash, source="declared")
+        except (ValueError, TypeError):
+            return None
+        self.ledger.append({"kind": "propensity.learner", "handle": req.handle,
+                            "assembly_id": action_id, "recommended": recommended,
+                            "p": policy[recommended], "ts": self.clock.now_ns})
+        return record
 
     def _refusal_to_owner(self, handle: str, kind: str, reason: str, **extra: Any) -> None:
         """Address one refusal to the inbox of the seat whose decision it was, and to no one else.
@@ -2054,12 +2078,17 @@ class ComputeMixin:
             hashlib.sha256(state_bytes(learner.state())).hexdigest()
             if learner is not None else "declared"
         )
-        declared = ret.outputs.get("propensity") if isinstance(ret.outputs, dict) else None
-        record, reason = declared_record(
-            label, declared,
-            learner_id=self._assembly_learner_id(action_id), state_hash=state_hash,
-            taken_class=taken_class,
-        )
+        # R4: a seat that took the action its learner drew is recorded at the
+        # learner's probability; otherwise its own declaration stands.
+        record, reason = self._followed_recommendation(
+            action_id, req, (label, taken_class), state_hash), None
+        if record is None:
+            declared = ret.outputs.get("propensity") if isinstance(ret.outputs, dict) else None
+            record, reason = declared_record(
+                label, declared,
+                learner_id=self._assembly_learner_id(action_id), state_hash=state_hash,
+                taken_class=taken_class,
+            )
         try:
             self.queue.record_propensity(req.handle, record)
         except (KeyError, ValueError):
