@@ -308,7 +308,6 @@ carry case of `scripts/calibrate_seats.py` exactly.
 |---|---|---|---|---|
 | `consequence_share` | float in [0, 1) | 0.3 | hard | Base weight of payoff standing in evaluator selection; the live actuator starts here. |
 | `adversarial_share` | float in [0, 1] | 0.15 | hard | Cap on the router's probability mass over antagonist assemblies (A5). The essay's "minority" is a constraint, not a prize. |
-| `sibling_share` | float in [0, 1] | 0.5 | hard | Share of the representative's meta score at which an unread cascade sibling settles (A14). |
 | `sampling_step` | float in [0, 1] | 0.1 | hard | Step by which the consequence mix rises per divergent window and steps back otherwise (A14, the live sampling-rate actuator). |
 | `sampling_cap` | float in [consequence_share, 1) | 0.7 | hard | Ceiling of the raised consequence mix (A14). |
 
@@ -322,12 +321,13 @@ carry case of `scripts/calibrate_seats.py` exactly.
 ### Ledger evidence these keys produce
 
 `route.excluded`, `tool.refused`, `consequence.refused` (A9); `exposure.settled` (A5);
-`cascade.sibling`, `meta.consequence`, `meta.awaiting_consequence`, `sampling.raise`,
-`sampling.lower` (A14); `novelty.release`, `novelty.grant`,
-`novelty.grant_consumed` (A13). Edition 3's third round adds
-`evaluation.unmeasured`, `verdict.unmeasured`,
-`verdict.committed_without_payoff`, `receipt.execution`, `receipt.learning`,
-and `receipt.commitment`.
+`meta.consequence`, `sampling.raise`, `sampling.lower` (A14); `novelty.release`,
+`novelty.grant`, `novelty.grant_consumed` (A13); `receipt.execution`,
+`receipt.learning` and `receipt.commitment`. The reward chain (ruling R1) adds
+`verdict.mean`, `verdict.consequence`, `consequence.opportunity`,
+`evaluator.meta_grade`, `evaluator.settled`, `evaluation.censored`,
+`evaluation.declined` and `router.abstention_priced`. `evaluation.sibling_share` is
+refused at load (evaluations U2).
 
 A closed lot's realised P&L is credited once (edition 2, cold audit F7). A
 handle that opens and closes its own lot receives the whole of it, net of its
@@ -339,55 +339,63 @@ full. A liquidation has no closer: the liquidated opener carries the whole P&L
 and the liquidation fee. `return_paid_off` reads the result credited to a
 return as opener or closer, so a trade cannot pay off twice.
 
-A verdict is also a prediction that the judged return will not be blamed by the
-charter. It is scored against the share of its window's blame the pricing pass
-attributed to that return, and the score joins payoff skill in the judge's
-standing (`verdict.consequence`). The outcome is fractional, `1 - share`, and
-the prevalence baseline the judge is scored against learns that same fraction
-(`record_fraction`, once per judged return however many judges it has), never a
-rounded `share == 0` (edition 2, cold audit F3): a judge that only repeats the
-constant share of blame every return carries shows no excess skill. Every
-verdict about one return is scored against the base rate as it stood before
-that return's outcome entered it. A window that has not closed by the
-consequence backstop, or whose attribution evidence was released before it could
-be read, judged nothing: there is no fact either way, so the commitment is closed
-out unscored (`verdict.unread`). It moves neither the judge's standing nor the
-base rate of unblamed returns. A missing fact is never performance.
+### The reward chain (ruling R1; Chapter II §III.b)
 
-### Evaluation is a commission (edition 3, third round)
+**Producers learn from verdicts.** A producer decision settles on the mean of the
+verdicts its judges gave while it waited, less its card penalty (`verdict-v1`).
+Verdicts are collected while an event is routed and settled when its routing is
+done, so every judge a draw woke on a return counts and none alone
+(`verdict.mean` names them when there is more than one).
 
-Every evaluator request carries a `commission`: the subject, the observation
-scope, the evidence horizon in events, and the budget in micro-USD. What comes
-back may be a verdict, or one of two other complete answers.
+**A verdict is also a prediction.** When the world resolves the judged return,
+the kernel scores the verdict `q` against a measured outcome `y`:
+`brier = 1 - (q - y)^2`, `base = 1 - (b - y)^2` with `b` the base rate of that
+kind of outcome before this return's own entered it (once per return, however
+many judges read it), and `consequence score = clip(0.5 + brier - base, 0, 1)`
+(`verdict.consequence`). A judge the world proved wrong earns less than one it
+proved right, and one that only repeats the base rate earns 0.5. `y` is:
 
-- **Unmeasured.** `{"status": "unmeasured", "reason": ...}` settles the
-  commission `INAPPLICABLE` under `unmeasured-v1` (`evaluation.unmeasured`). No
-  score, no price, no standing, no base rate: the work was done and the finding
-  is that there was nothing here this evidence could measure. It is not a low
-  score and not a censored decision somebody failed to answer.
-- **Declined.** `{"status": "cannot", "reason": ...}` settles under
-  `declined-v1`. The seat is charged the call it made and nothing else. There
-  is no activity quota and no profit quota anywhere in the runtime.
+- for a return that executed venue operations (or earned service income):
+  `return_paid_off`, 0 or 1, fixed when its lots close or marked at the
+  consequence backstop;
+- for a return that executed nothing and named a declined trade
+  (`counterfactual {coin, side}`): that trade's opportunity price at the
+  consequence backstop, from the mids the world had broadcast when the return
+  was made (ruling R2; `consequence.opportunity`);
+- for anything else (a bare hold): nothing. Only the tier above grades it.
 
-The runtime reaches `unmeasured` on its own in three places. A judged return
-that committed to nothing — no stated claim, counterfactual, observation rule,
-resource decision or accepted promise, in its return or in its inbox-visible
-commitments — cannot be judged against anything, so the commission concludes
-unmeasured rather than scoring how prudent the return looked. Unfamiliar work
-keeps its exploratory allowance: while a seat is inside the novelty share the
-population granted it, its returns stay evaluable whatever they say. A verdict
-whose normative window closed unread settles unmeasured instead of falling back
-to its payoff forecast, and every meta that conformed to it settles unmeasured
-with it rather than timing out at zero for a fact the runtime owed it and never
-delivered.
+The timing is the consequence backstop, never a charter price window
+(evaluations P7). The score also trains the judge's consequence standing.
 
-`payoff` is an optional field. A judge with nothing to say about the kernel's
-consequence predicate is not forced to invent a number for it and is not
-penalised for leaving it out; its verdict is still committed as a normative
-claim (`verdict.committed_without_payoff`) and decided by whatever facts the
-world produced about it — its normative outcome, its payoff forecast, or both.
-When neither exists there is nothing to be right about
-(`verdict.unmeasured`).
+**The judge's reward is both signals.** A judge's decision settles
+(`evaluation-v1`, `evaluator.settled`) on the equal mean of its grade from the
+tier above (the mean of the grades metas gave it within `verdict_timeout_ticks`,
+`evaluator.meta_grade`) and its consequence score, whichever exist, less its
+card penalty; with neither it settles censored (`evaluation-unscored-v1`).
+Neither channel is weighted by the charter. The argument is in
+`runtime/feedback.py: evaluation_reward`. The router that drew the judge learns
+the same reward, so a judge decision's deadline covers the return's backstop.
+
+**Metas are graded by the world too.** A meta's conformity `k` is a prediction of
+the consequence score `s` of the decision it graded, scored the same way against
+the base rate of those scores (`meta.consequence`); a meta of a verdict the world
+never resolved has none. A top-tier meta settles on that alone, a lower tier on it
+and the grade from the tier above. A meta reads the cascade window's
+representative; the window's other verdicts are not graded by it (the sibling
+share is deleted, evaluations U2).
+
+**The antagonist** earns `1 - consequence score`, averaged over the judges scored
+on its return (`exposure.settled`), and is censored when no judge's verdict on it
+was scored. There is no endorsement threshold (evaluations S4).
+
+**Form is not a grade.** A judgement with no verdict or conformity in [0, 1], a
+model refusal, or one whose target is refused settles censored
+(`judgement-censored-v1`, `evaluation.censored`) after its call is charged. A
+`about_handle` that names the judgement's own decision, or anything that is not a
+return handle from the request, is ignored and the delivered subject is judged
+(`about_handle.ignored`; evaluations P2). `{"status": "cannot"}` declines the
+commission (`declined-v1`); there is no kernel list of what may be judged and no
+`unmeasured` answer (evaluations S1).
 
 Easy questions do not pay. A forecast on a predicate whose prevalence baseline
 is at or above 0.95, or at or below 0.05, over at least 20 recorded
@@ -435,7 +443,7 @@ opens and never redrawn inside it (`cascade.arrival` carries `window_ns`,
 `opened_ns` and `elapsed_ns`). The window releases when its duration has
 elapsed and some of the evidence inside it has completed — for a verdict, that
 the return it judged has an outcome. Every arrival is named in the released
-report, so the sibling share still reaches it, and only completed evidence is
+report, only its representative is graded, and only completed evidence is
 averaged. Three judgements arriving in the same nanosecond are three arrivals
 in an empty window and trigger nothing. Execution facts and safety actions never
 enter the cascade and are never slowed by it.
@@ -1533,7 +1541,7 @@ from the cascade. A commission is declined the only way paid work can be — by
 answering `{"status": "cannot", "reason": ...}`. That costs the call and nothing
 beyond it, is **not** malformed (its propensity label is `declined`, an arm a
 learner can hold), is ledgered `commission.declined {assembly_id, handle,
-reason}`, and R3-D settles it `unmeasured`.
+reason}`, and it settles `declined-v1`.
 
 **The fold has three durable states, per seat.** *Offered*: world events folded
 in — first, last, high, low, the funding prints, the counts — and not yet
@@ -2109,8 +2117,7 @@ Every judge, first tier, meta and ballot, reads the same machine view (Chapter I
 (`actor_context`: the capability index without population prose, its own seat row,
 the clock and provider inventory), never the world block. The judged return's
 `description` is the event it answered, with no role clause. Its outputs lose
-`payoff` (an author's sealed forecast) and `propensity`, which the request's
-PROPENSITY block renders once. No event payload names its author. A judge is not shown its own
+`propensity`, which the request's PROPENSITY block renders once. No event payload names its author. A judge is not shown its own
 consequence standing, and `your_action_policy` is absent when a seat has no
 registered learner.
 
@@ -2132,25 +2139,31 @@ kernel-commissioned final judge, its rubric and its provisional fallback are del
 for the world's life. Every router the runtime seeds for a named kind (at genesis, or
 when the kind first gains an acceptor) is a no-swap-regret learner, Blum-Mansour over
 one EXP3 row per arm, instead of mean-based EXP3: the retentive core the essay places
-beside the frontier's mean-based learners. `["ProducerReturn"]` puts judge routing in
-the core. Each name must be an event kind the world can route at genesis (a world
+beside the frontier's mean-based learners. No shipped world names `ProducerReturn`:
+the judge tier is mostly mean-based (ruling R10, "a significantly higher population of
+mean-based no-regret judges"), and a core beside a producer frontier is wave 5's. Each
+name must be an event kind the world can route at genesis (a world
 kind, a built-in return, or a kind a manifest seat accepts or emits); a misspelt one is
 refused. The list is a set: it is kept sorted, so its order never changes the hash.
 Every router
 credits an abstention (NOOP) its zero-consequence reward, deferred by the mean delay its
 seat rounds take to be learned: what a woken seat that delivered nothing scores on the
 scales its learned seat rounds settled under, weighted by how many settled under each
-(`ZERO_CONSEQUENCE` in `factorylab/runtime/routing.py`). Producer outcomes
-(`verdict-v1`, `realized-consequence-v2`, `opportunity-cost-v1`), `conformity-v1` and
-`policy-promise-brier-v2` are worth 0.5; Brier scores (`brier-v1`, `forecast-mean-v1`,
-`meta-consequence-v1`, `fast-v1`) 0.75, the coin-flip forecaster's; `exposure-v1` 0,
-an antagonist that exposed nothing; any other definition, and a router that has learned
-no seat round yet, 0.5. An unscored seat round with no record of its own is credited
-the same value. A replaced router's settled rounds train the router that replaced it,
-stepped at the size of the universe they were drawn over when that was larger
-(`router.step_rescaled`). A router whose every draw in a measurement window gave NOOP
-at least `1 - gamma` is ledgered `router.learning_death` when the window closes; the
-entry is observation only and changes no draw.
+(`ZERO_CONSEQUENCE` in `factorylab/runtime/routing.py`), less the card penalty a
+decision of the role it would have filled bears in the window it was drawn in
+(`router.abstention_priced`; ruling R9): the abstention is recorded as a decision of
+that window and priced exactly as a woken decision is, so waking nobody never beats
+a woken seat merely because penalties touched only the decisions that acted.
+`verdict-v1`, `evaluation-v1`, `exposure-v1` and `policy-promise-brier-v2` are worth
+0.5; Brier scores (`brier-v1`, `forecast-mean-v1`) 0.75, the coin-flip forecaster's;
+any other definition, and a router that has learned no seat round yet, 0.5. An
+unscored seat round with no record of its own is credited the same value. A replaced
+router's settled rounds train the router that replaced it, stepped at the size of the
+universe they were drawn over when that was larger (`router.step_rescaled`). Each
+router's NOOP watch for a window (its draws and lowest NOOP probability) is the
+frontier signal inside the immune organ's one learning-death diagnosis: the immune
+window records `frontier_invocation`, and the diagnosis names the routers whose every
+draw in every tail window left their seats to exploration (`uninvoked_routers`).
 
 An unknown configuration value is refused at load. All factors are fixed at launch.
 
