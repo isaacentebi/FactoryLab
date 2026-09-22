@@ -115,6 +115,10 @@ class _CardState:
     # Consecutive windows the immune organ diagnosed this card violated inside a
     # stable-failure attractor; zero once the attractor is left.
     failing_windows: int = 0
+    # Charter audit M7: observed windows that closed with the card priced at
+    # lambda_max, and the current run of consecutive observed windows in violation.
+    windows_at_max: int = 0
+    violation_windows: int = 0
 
 
 class PriceController:
@@ -320,6 +324,8 @@ class PriceController:
             previous_violation=violation,
             integral=integral,
             previous_value=value,
+            windows_at_max=state.windows_at_max + int(price >= self.__lambda_max),
+            violation_windows=state.violation_windows + 1 if violation > 0 else 0,
         )
         entry = {
             "kind": "price.update",
@@ -376,6 +382,20 @@ class PriceController:
         return (proportional + integral + derivative, integral,
                 {"p": proportional, "i": integral, "d": derivative})
 
+    def saturation(self, card_id: str) -> dict[str, int]:
+        """Public per-card statistics: windows priced at lambda_max, and violation duration.
+
+        Charter audit M7 (essay II.IV: "if it cannot be satisfied beyond what is
+        priced as acceptable, then the factory needs to be scrapped"): the
+        evidence on which that threat could be invoked. Counted in observed
+        windows; an unregistered card has zeros. Nothing here kills anything.
+        """
+        state = self.__cards.get(card_id) if isinstance(card_id, str) else None
+        if state is None:
+            return {"windows_at_lambda_max": 0, "violation_windows": 0}
+        return {"windows_at_lambda_max": state.windows_at_max,
+                "violation_windows": state.violation_windows}
+
     def price(self, card_id: str) -> float:
         """Return the current price, or zero for any unregistered identifier."""
         state = self.__cards.get(card_id) if isinstance(card_id, str) else None
@@ -430,6 +450,8 @@ class PriceController:
                     "last_window_end_event": state.last_window_end_event,
                     "integral": state.integral,
                     "failing_windows": state.failing_windows,
+                    "windows_at_lambda_max": state.windows_at_max,
+                    "violation_windows": state.violation_windows,
                 }
                 for card_id, state in self.__cards.items()
             },

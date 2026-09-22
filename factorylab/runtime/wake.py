@@ -142,7 +142,10 @@ def public_window_item(rt, *, window: int, event: int) -> dict:
                        "answers_for": card.answers_for,
                        "lambda": rt.controller.price(card.id),
                        "region": (asdict(region)
-                                  if (region := rt.regions.get(card.id)) is not None else None)}
+                                  if (region := rt.regions.get(card.id)) is not None else None),
+                       # Charter audit M7: windows priced at lambda_max, and the
+                       # current run of windows in violation.
+                       **rt.controller.saturation(card.id)}
                       for card in rt.charter.cards],
         },
         "pots": {"venue": pots.get("venue"), "reserve": pots.get("reserve"),
