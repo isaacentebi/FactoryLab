@@ -2104,7 +2104,10 @@ for the world's life. Every router the runtime seeds for a named kind (at genesi
 when the kind first gains an acceptor) is a no-swap-regret learner, Blum-Mansour over
 one EXP3 row per arm, instead of mean-based EXP3: the retentive core the essay places
 beside the frontier's mean-based learners. `["ProducerReturn"]` puts judge routing in
-the core. An empty list is hash-neutral: the manifest keeps its identity. Every router
+the core. Each name must be an event kind the world can route at genesis (a world
+kind, a built-in return, or a kind a manifest seat accepts or emits); a misspelt one is
+refused. The list is a set: it is kept sorted, so its order never changes the hash.
+An empty list is hash-neutral: the manifest keeps its identity. Every router
 credits an abstention (NOOP) its zero-consequence reward, deferred by the mean delay its
 seat rounds take to be learned: what a woken seat that delivered nothing scores on the
 scales its learned seat rounds settled under, weighted by how many settled under each

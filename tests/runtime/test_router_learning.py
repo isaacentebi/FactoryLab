@@ -340,6 +340,31 @@ def test_the_core_key_rejects_a_malformed_list(bad):
         replace(base, evaluation=replace(base.evaluation, no_swap_regret_kinds=bad)).validate()
 
 
+@pytest.mark.parametrize("typo", [("ProducerRetrun",), ("ProducerReturn", "producerreturn")])
+def test_the_core_key_refuses_a_kind_the_world_cannot_route(typo):
+    """A misspelt kind seeded no router at all, leaving the core silently empty."""
+    base = load_manifest("scripted")
+    with pytest.raises(ValueError, match="no_swap_regret_kinds names no event kind"):
+        replace(base, evaluation=replace(base.evaluation, no_swap_regret_kinds=typo)).validate()
+
+
+def test_the_core_key_admits_every_kind_a_seat_accepts_or_emits():
+    base = load_manifest("scripted")
+    kinds = tuple(sorted({k for a in base.assemblies for k in (*a.accepts, *a.emits)}))
+    replace(base, evaluation=replace(base.evaluation, no_swap_regret_kinds=kinds)).validate()
+
+
+def test_the_core_key_is_a_set_its_order_never_renames_the_world():
+    from factorylab.runtime.worlds import _manifest_kinds
+
+    base = load_manifest("scripted")
+    one, two = ("ProducerReturn", "Verdict"), ("Verdict", "ProducerReturn")
+    worlds = [replace(base, evaluation=replace(base.evaluation, no_swap_regret_kinds=k))
+              for k in (one, two)]
+    assert worlds[0].manifest_hash() == worlds[1].manifest_hash()
+    assert _manifest_kinds(list(two)) == one
+
+
 def test_the_core_key_must_be_a_list():
     from factorylab.runtime.worlds import _manifest_kinds
 
