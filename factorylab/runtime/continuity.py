@@ -72,7 +72,7 @@ INLINE_STATE_BYTES = 4_096
 #: The largest page one list call will return, so a paged index cannot become a dump.
 MAX_LIST_LIMIT = 32
 #: Typed fields an index carries verbatim off an outcome, where the outcome has them.
-INDEX_FIELDS = ("kind", "status", "phase", "from", "subject", "score",
+INDEX_FIELDS = ("kind", "status", "phase", "subject", "score",
                 "rejection_reason", "rejected_section")
 #: An evidence pointer longer than this is named by its size instead of carried.
 MAX_INDEX_EVIDENCE = 128

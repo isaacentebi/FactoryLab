@@ -102,13 +102,11 @@ def test_launch_factors_are_explicit_and_reasoning_changes_roster_with_provenanc
         original,
         prompt_mode="compact",
         producer_feedback="realized",
-        address_enabled=True,
         reasoning="off",
     )
 
     assert factored.prompt.mode == "compact"
     assert factored.evaluation.producer_feedback == "realized"
-    assert factored.tools.address_enabled is True
     assert all(dict(model.reasoning) == {"enabled": False} for model in factored.models)
     assert factored.charter.norms == original.charter.norms
     assert factored.assemblies == original.assemblies
@@ -132,14 +130,12 @@ def test_omitted_factors_preserve_the_supplied_manifest_values():
         original,
         prompt=replace(original.prompt, mode="compact"),
         evaluation=replace(original.evaluation, producer_feedback="realized"),
-        tools=replace(original.tools, address_enabled=True),
     )
 
     effective = rehearsal.effective_manifest(supplied)
 
     assert effective.prompt == supplied.prompt
     assert effective.evaluation.producer_feedback == "realized"
-    assert effective.tools.address_enabled is True
 
 
 def test_dangerous_or_unsupported_worlds_are_refused_before_runtime():
@@ -427,7 +423,6 @@ def test_cli_passes_frozen_factors_and_reports_an_incomplete_screen(monkeypatch,
         "--ticks", "60",
         "--prompt", "compact",
         "--producer-feedback", "realized",
-        "--address-enabled",
         "--reasoning", "on",
         "--minimum-ticks", "60",
         "--minimum-grounded-samples", "12",
@@ -437,7 +432,6 @@ def test_cli_passes_frozen_factors_and_reports_an_incomplete_screen(monkeypatch,
     assert code == 0
     assert seen["prompt_mode"] == "compact"
     assert seen["producer_feedback"] == "realized"
-    assert seen["address_enabled"] is True
     assert seen["reasoning"] == "on"
     assert seen["target_ticks"] == 60
     assert seen["minimum_ticks"] == 60

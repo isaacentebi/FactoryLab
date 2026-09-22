@@ -356,7 +356,6 @@ no_swap_regret_kinds = ["ProducerReturn"]
 population_tool_micro_per_call = 50
 max_leverage = 3
 
-address_enabled = true
 [prices]
 # The PID price law (essay II.II.b): eta is the integral gain, kp raises the price in
 # proportion to the window's violation, kd raises it sooner while the measurement moves

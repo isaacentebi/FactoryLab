@@ -147,11 +147,6 @@ class ToolsSpec:
     max_depth: int = 4
     max_children: int = 3
     max_tool_calls: int = 4
-    #: Whether this world publishes the voluntary addressing capability. It is off
-    #: by default, so address is a factor a run turns on rather than something that
-    #: arrives with a code change, and a world that predates the key is unchanged.
-    #: It gates a capability; it schedules nothing and wakes nobody.
-    address_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -601,10 +596,6 @@ class WorldManifest:
         # roster digest a charter was ratified against stays what it was.
         if payload["prompt"] == asdict(PromptSpec()):
             payload.pop("prompt")
-        # Likewise for the addressing switch: a world that does not publish address
-        # hashes exactly as it did before the capability existed.
-        if payload["tools"].get("address_enabled") is False:
-            payload["tools"].pop("address_enabled")
         # And for the feedback line: a world settling producers on judge opinion is
         # the world every manifest already described.
         if payload["evaluation"].get("producer_feedback") == "verdict":
@@ -1309,7 +1300,6 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
             (d.get("tools") or {}).get("max_depth", 4),
             (d.get("tools") or {}).get("max_children", 3),
             (d.get("tools") or {}).get("max_tool_calls", 4),
-            _manifest_address_enabled((d.get("tools") or {}).get("address_enabled", False)),
         ),
         prices=prices,
         treasury=TreasurySpec(
@@ -1410,13 +1400,6 @@ def _manifest_producer_feedback(raw: Any) -> str:
     """``[evaluation] producer_feedback``: a judge opinion or an observed consequence."""
     if raw not in ("verdict", "realized"):
         raise ValueError("evaluation.producer_feedback must be verdict or realized")
-    return raw
-
-
-def _manifest_address_enabled(raw: Any) -> bool:
-    """``[tools] address_enabled``: exactly a boolean, never a truthy string or 1."""
-    if type(raw) is not bool:
-        raise ValueError("tools.address_enabled must be true or false")
     return raw
 
 

@@ -2119,12 +2119,15 @@ rejection is the answer.
 `commitment_settled`, alongside the entitlement movement `net_micro`. The
 inbox item carries them.
 
-## Edition 4 factors: prompt, address, feedback
+## Edition 4 factors: prompt, feedback
 
-Three keys turn on one edition 4 change each. All three are elided from the
-canonical manifest JSON at their defaults, so every manifest that predates them
-keeps its hash, and none of them changes a roster digest: a charter ratified on a
-roster is still ratified on it when a factor is switched on.
+Two keys turn on one edition 4 change each. Neither changes a roster digest: a
+charter ratified on a roster is still ratified on it when a factor is switched on.
+The third edition 4 factor, `[tools] address_enabled` (direct messages between
+seats through `address.send`), is deleted by ruling R11: Chapter II §I.b prescribes
+two channels, rich requests and thin rewards, and no third one between seats. A
+world file that still names the key loads with it ignored, like any other unknown
+`[tools]` key; no world under `worlds/` names it.
 
 `[prompt] mode` is `"reference"` (the default) or `"compact"`. Under `reference` a
 request carries the whole institutional world inside the cached prefix, which is
@@ -2158,17 +2161,6 @@ included once. External text retains its restricted continuation and cannot writ
 a notebook in that continuation. Public `world.read` is available in both prompt
 modes, including grounded commissions that omit the full reference manual.
 
-
-`[tools] address_enabled` is exactly `true` or `false`, default `false` (a truthy
-string or `1` is refused). It gates whether the world publishes the voluntary
-addressing capability. It schedules nothing and wakes nobody. When a return records
-a call to `address.send`, the projection that crosses a contract boundary
-(`public_return`, `public_tool_calls`) keeps the capability, the recipient, the
-price and the size of what was said, and drops the body under any of the names
-`text`, `body`, `message`, `content` or `payload`, at whatever nesting the return
-wrote it. A judge prices an act it can see the shape of; it does not read the
-message. The sender keeps its own copy in its working state, which no projection
-touches.
 
 `[evaluation] producer_feedback` is `"verdict"` (the default) or `"realized"`. Under
 `verdict` a producer decision settles on the judge opinion it drew, which is the

@@ -675,7 +675,7 @@ class BootstrapMixin:
         }
         self.tool_specs["outcome.list"] = {
             "id": "outcome.list",
-            "description": "Page your own outcome and message index without acknowledging "
+            "description": "Page your own outcome index without acknowledging "
             "items. Read any indexed body with outcome.get using its exact outcome_id.",
             "args_schema": {
                 "type": "object",
@@ -705,16 +705,6 @@ class BootstrapMixin:
             "price_micro_per_call": 0, "kind": "institution",
         }
         examples["world.read"] = [{"section": "composition"}]
-        if getattr(manifest.tools, "address_enabled", False):
-            from factorylab.runtime.address import specs as address_specs
-
-            # The transport is priced like every other population tool this world
-            # publishes, so addressing is a call a seat pays for out of its own
-            # entitlement rather than a free channel that rewards volume.
-            self.tool_specs.update(
-                address_specs(manifest.tools.population_tool_micro_per_call))
-            examples["address.send"] = [{"recipient": "another-live-participant",
-                                        "text": "Your funding series is the one I lack."}]
         # Every published tool carries examples its own schema accepts (B1). Stamping
         # after the whole seed set is assembled keeps that total: a seed tool added
         # without an example fails at launch rather than reaching the population.

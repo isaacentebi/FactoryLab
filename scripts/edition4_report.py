@@ -57,7 +57,7 @@ _STATUS_FAMILY_EXACT = frozenset(
     }
 )
 _STATUS_FAMILY_PREFIXES = (
-    "provider.", "model.", "io.", "address.", "order.", "decision.", "consequence.",
+    "provider.", "model.", "io.", "order.", "decision.", "consequence.",
     "receipt.", "forecast.", "learning.", "income.", "revenue.", "wallet.",
 )
 
@@ -467,59 +467,6 @@ def _internal_metered_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any
     }
 
 
-def _message_report(
-    rows: Iterable[Mapping[str, Any]], address_enabled: bool | None = None
-) -> dict[str, Any]:
-    messages = [
-        row for row in rows
-        if "message" in _kind(row)
-        or _kind(row) in {"address.delivered", "address.refused", "address.replayed"}
-    ]
-    delivered = [
-        row for row in messages
-        if _kind(row) == "address.delivered"
-        or ("message" in _kind(row) and _truth(row, "delivered") is True)
-        or ("message" in _kind(row) and _status(row) == "executed")
-    ]
-    replayed = [row for row in messages if _kind(row) == "address.replayed"]
-    refused = [row for row in messages if _kind(row) == "address.refused"]
-    explicit_unknown = [
-        row for row in messages
-        if _kind(row) not in {"address.delivered", "address.refused", "address.replayed"}
-        and _truth(row, "delivered") is None and _status(row) == "unknown"
-    ]
-    if address_enabled is False:
-        capability_status = "disabled"
-        capability_label = "address capability not published in this run"
-    elif address_enabled is True and not messages:
-        capability_status = "enabled_but_unused"
-        capability_label = (
-            "address capability published but no use observed in the supplied/recent "
-            "evidence window"
-        )
-    elif address_enabled is True:
-        capability_status = "enabled_and_used"
-        capability_label = "address capability published and use observed"
-    elif messages:
-        capability_status = "observed_use_metadata_unknown"
-        capability_label = "address use observed; configuration metadata unavailable"
-    else:
-        capability_status = "unknown_metadata"
-        capability_label = "address configuration metadata unavailable; zero is not non-use"
-    return {
-        "attempted": len(messages),
-        "delivered": len(delivered),
-        "replayed": len(replayed),
-        "refused": len(refused),
-        "unknown_delivery": len(messages) - len(delivered) - len(replayed) - len(refused),
-        "refs": [_ref(row) for row in messages if _ref(row) is not None],
-        "delivery_evidence_refs": [_ref(row) for row in delivered if _ref(row) is not None],
-        "explicit_unknown_refs": [_ref(row) for row in explicit_unknown if _ref(row) is not None],
-        "capability_status": capability_status,
-        "capability_label": capability_label,
-    }
-
-
 def _reusable_report(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     explicit = [
         row for row in rows
@@ -834,11 +781,6 @@ def build_report(
     """Aggregate exported facts into a static report without making causal claims."""
     rows = [row for row in rows if isinstance(row, Mapping)]
     configuration = dict(configuration) if isinstance(configuration, Mapping) else None
-    address_enabled = (
-        configuration.get("address_enabled")
-        if configuration is not None and type(configuration.get("address_enabled")) is bool
-        else None
-    )
     income = _income_report(rows)
     costs = _cost_report(rows)
     reusable = _reusable_report(rows)
@@ -854,11 +796,7 @@ def build_report(
             "explicit normalized status fields on supplied action/outcome rows; "
             "routine rows without status are excluded"
         ),
-        "configuration": configuration or {
-            "source": "unavailable",
-            "address_enabled": None,
-        },
-        "messages": _message_report(rows, address_enabled),
+        "configuration": configuration or {"source": "unavailable"},
         "reusable_calls": reusable,
         "assessment_changes": assessments,
         "forecast_learning": _forecast_learning(rows),
@@ -1173,11 +1111,10 @@ def compare_rehearsals(
     paths = {
         "prompt": "prompt.mode",
         "feedback": "evaluation.producer_feedback",
-        "address": "tools.address_enabled",
         "reasoning": "models.*.reasoning",
     }
     if not factors or any(factor not in paths for factor in factors):
-        raise ReportInputError("name at least one factor: prompt, feedback, address, reasoning")
+        raise ReportInputError("name at least one factor: prompt, feedback, reasoning")
 
     def flatten(value, prefix=""):
         if isinstance(value, Mapping):
@@ -1304,7 +1241,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="completed and terminated rehearsal report")
     parser.add_argument("--events", type=Path, help="events export for --postmortem-report")
     parser.add_argument("--factor", action="append",
-                        choices=("prompt", "feedback", "address", "reasoning"))
+                        choices=("prompt", "feedback", "reasoning"))
     args = parser.parse_args(argv)
     if args.postmortem_report or args.events:
         if args.input or args.control or args.treatment or args.factor or not (

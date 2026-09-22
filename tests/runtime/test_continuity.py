@@ -124,16 +124,14 @@ def test_unread_at_the_inline_bound_keeps_the_whole_oldest_window(inbox):
     assert "preview_semantics" not in shown
 
 
-def test_a_message_indexes_its_sender_and_subject_without_its_text(inbox):
+def test_an_index_carries_no_sender_field(inbox):
+    # R11: there are no messages between seats, so an index names no sender even
+    # when an outcome body carries a ``from`` key.
     inbox.append("bob", handle="h1", evidence="slot:0",
-                 outcome={"kind": "message", "from": "alice",
-                          "subject": "the lot table", "text": "CONFIDENTIAL BODY"})
+                 outcome={"kind": "finding", "from": "alice", "subject": "the lot table"})
     entry = inbox.unread("bob")["items"][0]
-    assert entry["kind"] == "message" and entry["from"] == "alice"
     assert entry["subject"] == "the lot table"
-    assert "CONFIDENTIAL BODY" not in json.dumps(entry)
-    # And the text is one exact read away.
-    assert inbox.get("bob", entry["outcome_id"])["outcome"]["text"] == "CONFIDENTIAL BODY"
+    assert "from" not in entry
 
 
 # ---- a typed field cannot become a body under another name -----------------------------

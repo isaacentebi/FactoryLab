@@ -72,15 +72,16 @@ def test_reference_is_the_default_and_renders_what_it_always_rendered(modes):
         assert f'"{section}"' in prefix
 
 
-def test_an_unnamed_mode_and_an_unpublished_address_leave_the_manifest_hash_alone():
+def test_an_unnamed_mode_leaves_the_manifest_hash_alone():
     raw = {"name": "scripted", "seed": 1, "initial_balance_usd": "10",
            "exchange": {"kind": "fake"}}
     base = load_manifest("worlds/scripted.toml")
     assert base.manifest_hash() == replace(
         base, prompt=PromptSpec(mode="reference")).manifest_hash()
     assert "prompt" not in base.canonical_json()
+    # R11: there is no addressing capability for a manifest to name.
     assert "address_enabled" not in base.canonical_json()
-    assert base.tools.address_enabled is False
+    assert not hasattr(base.tools, "address_enabled")
     # A named mode is part of the world it defines, so it does change the identity.
     assert base.manifest_hash() != replace(base, prompt=PromptSpec(mode="compact")).manifest_hash()
     assert raw  # the loader is exercised through load_manifest above
@@ -95,8 +96,6 @@ def test_a_refused_mode_or_key_is_refused_at_load():
         load({"prompt": {"mode": "short"}})
     with pytest.raises(ValueError, match="prompt accepts only mode"):
         load({"prompt": {"mode": "compact", "max_bytes": 8000}})
-    with pytest.raises(ValueError, match="address_enabled"):
-        load({"tools": {"address_enabled": "true"}})
 
 
 def test_compact_keeps_the_norms_the_prices_and_everything_a_return_is_judged_by(modes):

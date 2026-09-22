@@ -13,13 +13,11 @@ from typing import Any
 
 from factorylab.cortex.assembly import Assembly, AssemblySpec, ProgramAssembly
 from factorylab.cortex.request import (
-    ADDRESS_TOOL,
     ChildRequest,
     Request,
     Return,
     public_child_inputs,
     public_return,
-    public_tool_calls,
 )
 from factorylab.kernel.artifacts import PRIVATE_REFUSAL
 from factorylab.kernel.budget import SeatWallet
@@ -565,11 +563,11 @@ class ComputeMixin:
         from factorylab.runtime.propensity import EFFECT_TOOLS
 
         calls = parsed.get("tool_calls", [])
-        # A batch that writes (the venue, the treasury, a message, a note) runs whole
+        # A batch that writes (the venue, the treasury, a note) runs whole
         # or not at all; a batch of reads loses only the read that cannot run.
         writes = any(str(call.get("tool")) in EFFECT_TOOLS
                      or str(call.get("tool")).startswith("treasury.")
-                     or call.get("tool") in ("address.send", "note.put")
+                     or call.get("tool") == "note.put"
                      or call.get("tool") in self.CONSEQUENCE_WRITES
                      for call in calls if isinstance(call, dict))
         for section, limit in (("requests", self.m.tools.max_children),
@@ -1158,74 +1156,6 @@ class ComputeMixin:
         except Exception:
             return None
 
-    def _address_send(self, action_id: str, handle: str, args: dict, *,
-                      slot: Any, price: int) -> tuple[dict, int]:
-        """Deliver one addressed message: validated free, delivered once, paid once.
-
-        Guarantees a refused message costs nothing. Validation runs before the
-        seat's meter is touched, so a seat that names an unknown recipient, writes
-        too much text or addresses itself pays no transport for a message that was
-        never carried.
-
-        Guarantees a fresh delivery is paid exactly once, by the sender. The charge
-        is the transport price and it is settled around the one append that puts
-        the message in the recipient's inbox.
-
-        Guarantees a replay is free. The slot is this decision's own tool index, so
-        a return replayed after an interruption prepares the same message id, finds
-        the item already in the inbox, and pays nothing to learn that it arrived.
-
-        Guarantees the recipient is not charged and not woken. Nothing here opens a
-        decision, meters another seat or touches a router: the message waits in an
-        inbox the recipient reads when it next decides to.
-
-        Guarantees the sender's receipt carries no body. What comes back is that the
-        message was delivered, to whom, under which id and at what size -- the text
-        the sender wrote is already the sender's own, and the copy that matters now
-        belongs to the recipient.
-        """
-        from factorylab.runtime import address as addressing
-
-        def refused(reason: str, cost: int = 0) -> tuple[dict, int]:
-            self.ledger.append({"kind": "address.refused", "handle": handle,
-                                "assembly_id": action_id, "reason": reason[:200],
-                                "cost": cost, "ts": self.clock.now_ns})
-            return {"error": reason}, cost
-
-        try:
-            prepared = addressing.prepare(self, action_id, handle, args, slot)
-        except addressing.AddressRefused as exc:
-            return refused(str(exc))
-        receipt = {"status": "delivered", "message_id": prepared.message_id,
-                   "recipient": prepared.recipient,
-                   "text_bytes": len(prepared.text.encode("utf-8"))}
-        if prepared.replay:
-            self.ledger.append({"kind": "address.replayed", "handle": handle,
-                                "assembly_id": action_id, "recipient": prepared.recipient,
-                                "message_id": prepared.message_id, "ts": self.clock.now_ns})
-            return {**receipt, "replay": True}, 0
-        try:
-            metered = self._seat_meter(action_id).run(
-                handle=handle,
-                reason="tool:address.send",
-                ceiling=price,
-                execute=lambda: addressing.deliver(self, prepared),
-                cost_of=lambda _r: price,
-            )
-        except addressing.AddressRefused as exc:
-            # The recipient retired or filled up between validation and delivery.
-            # Nothing was appended, so nothing is owed.
-            return refused(str(exc))
-        except Exception as exc:  # reservation refused: the seat cannot afford transport
-            return refused(f"{type(exc).__name__}: {exc}"[:200])
-        record = metered.result if isinstance(metered.result, dict) else {}
-        self.ledger.append({"kind": "address.delivered", "handle": handle,
-                            "assembly_id": action_id, "recipient": prepared.recipient,
-                            "message_id": prepared.message_id,
-                            "text_bytes": receipt["text_bytes"],
-                            "item": record.get("seq"), "cost": metered.cost,
-                            "ts": self.clock.now_ns})
-        return {**receipt, "replay": False}, metered.cost
     WRITE_REFUSAL = ("venue and treasury writes require a producing return kind and an open "
                      "consequence account; judging decisions and their children cannot write")
 
@@ -1416,16 +1346,6 @@ class ComputeMixin:
             return {"error": self.WRITE_REFUSAL}, 0
         spec = self.tool_specs[tool_id]
         price = int(spec["price_micro_per_call"])
-
-        if spec["kind"] == "address":
-            from factorylab.cortex.assembly import validate_schema
-
-            try:
-                validate_schema(call.get("args"), spec["args_schema"])
-            except (ValueError, TypeError, RecursionError):
-                # Do not echo an invalid field name or value into the receipt.
-                return {"error": "invalid address arguments"}, 0
-            return self._address_send(action_id, handle, args, slot=slot, price=price)
 
         def execute() -> dict:
             if spec["kind"] == "institution":
@@ -1844,7 +1764,7 @@ class ComputeMixin:
                 answered.add(signature)
                 if dispatched and not read_only:
                     # Anything that is not a known read ends the retrieval, whether or
-                    # not it names an action: a notebook entry, a message, population
+                    # not it names an action: a notebook entry, population
                     # code and an unrecognised tool all stop the wake at one round of
                     # doing, so nothing executed here can be executed again below.
                     acted = True
@@ -1852,11 +1772,7 @@ class ComputeMixin:
                 if not ok:
                     self.stats.tool_call_failures += 1
                 # Parser arguments can contain a connector body. They are transient.
-                # An addressed body belongs to its recipient, and the wake page is
-                # built from these rows: what is logged is that the message went,
-                # to whom and how large it was, never what it said.
-                visible = (public_tool_calls([call])[0].get("args")
-                           if call.get("tool") == ADDRESS_TOOL else call.get("args"))
+                visible = call.get("args")
                 # A continuation's arguments are redacted once text from outside has
                 # entered this wake, because from then on an argument can carry
                 # fetched bytes. A retrieval that never left this world keeps its
