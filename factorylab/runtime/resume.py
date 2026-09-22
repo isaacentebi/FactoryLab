@@ -590,6 +590,9 @@ _RUNTIME_FIELDS = (
     "event_schemas",
     # Metric challenges: frozen incumbent and replacement cards, their trial series and status.
     "challenges",
+    # The charter's markets (charter audit M1): unsettled lambda posts and each seat's
+    # settled-post record. An older checkpoint has neither; both start empty.
+    "lambda_posts", "lambda_standing",
     "return_bindings",
     "return_events",
     # The population's registered measurements and its open assembly-learner rounds.

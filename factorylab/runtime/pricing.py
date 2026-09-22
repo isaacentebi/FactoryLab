@@ -458,7 +458,9 @@ class PricingMixin:
         observed = sorted(card_values)
         for card_id in observed:
             self.controller.observe(card_id, card_values[card_id], window_end_event=self.n,
-                                    holdout=holdouts.get(card_id, 0.0))
+                                    holdout=holdouts.get(card_id, 0.0),
+                                    anticipated=self._anticipated_violation(
+                                        card_id, card_values[card_id]))
         after = self.controller.snapshot()["cards"]
         for card_id in observed:
             if after[card_id]["updates"] > before[card_id]["updates"]:
@@ -482,6 +484,15 @@ class PricingMixin:
         self._ledger_unattributed()
         close_window(self, values)
         self._prune_price_evidence()
+
+    def _anticipated_violation(self, card_id: str, value: float) -> float | None:
+        """The market's expected change in a card's violation, or None without a market.
+
+        The charter's markets (``runtime.markets``) answer this from the
+        conditional forecasts on open motions; a runtime without them prices
+        backward only.
+        """
+        return None
 
     def _holdout_results(self, card_values: dict[str, float]) -> dict[str, dict]:
         """Each measured card's holdouts resolved on the window that just closed.

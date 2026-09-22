@@ -11,6 +11,7 @@ from factorylab.charter.amendment import Amendment, PredictedEffect
 from factorylab.charter.book import Refusal
 from factorylab.charter.charter import Charter, MetricCard
 from factorylab.charter.controller import promise_kept
+from factorylab.charter.market import MOTION_FORECAST_DEFINITION, brier
 from factorylab.charter.measurement import measure_card, preflight_measurement
 from factorylab.cortex.assembly import AssemblySpec
 from factorylab.cortex.registration import (
@@ -1152,6 +1153,16 @@ class GovernanceMixin:
             if not isinstance(raw, dict) or not raw:
                 self._refuse_amendment(item, "lambda must map current card ids to prices")
             for card_id, value in raw.items():
+                if value == "posted":
+                    # Charter audit M1: the committee adopts the factory's posted price,
+                    # read and frozen now, so the motion states the number it sets.
+                    posted = self._posted_lambda(str(card_id))
+                    if posted is None:
+                        self._refuse_amendment(item, f"no posted lambda for card {card_id}")
+                    self.ledger.append({"kind": "lambda_post.adopted", "motion": item.get("id"),
+                                        "card_id": str(card_id), **posted,
+                                        "ts": self.clock.now_ns})
+                    value = posted["lambda"]
                 try:
                     prices.append((str(card_id), proposed_price(value, self.m.prices.lambda_max)))
                 except ValueError as exc:
@@ -1705,8 +1716,14 @@ class GovernanceMixin:
             if not retiring:
                 self.cadence.approve(am.id)
                 self.stats.amendments_passed += 1
-        elif outcome == "failed":
+        elif outcome == "failed" and retiring:
             self._censor_ballots(am.id)
+        elif outcome == "failed":
+            # Charter audit P1: the rejected branch is observable. Its ballots and
+            # its reject-branch forecasts are graded against the unchanged charter.
+            self.ledger.append({"kind": "policy.rejected", "amendment_id": am.id,
+                                "window": self.window.index})
+            self._activate_policy_ballots(am.id, branch="reject")
 
     @staticmethod
     def _motion_description(am: Any) -> str:
@@ -1719,15 +1736,35 @@ class GovernanceMixin:
         return "Vote on an amendment to the charter's metric cards."
 
     def _card_statistics(self) -> list[dict]:
-        """Each priced card's lambda, windows priced at lambda_max and violation duration (M7)."""
+        """Each priced card's lambda, windows priced at lambda_max and violation duration (M7).
+
+        Beside the controller's lambda stands the price the factory posted
+        (charter audit M1), when any seat posted one.
+        """
         return [{"card_id": card_id, "lambda": self.controller.price(card_id),
+                 **({"posted": posted} if (posted := self._posted_lambda(card_id)) else {}),
                  **self.controller.saturation(card_id)}
                 for card_id in sorted(self.priced)]
 
+    def _posted_lambda(self, card_id: str) -> dict | None:
+        """The factory's posted price for a card; the charter's markets supply it."""
+        return None
+
+    def _motion_market(self, motion_id: str) -> dict | None:
+        """The conditional forecasts on one motion; the charter's markets supply them."""
+        return None
+
     def _agenda_block(self, committee) -> dict:
-        """The seated committee's agenda: its motions, the deferred ones and the card record."""
+        """The seated committee's agenda: its motions, the deferred ones and the card record.
+
+        ``markets`` carries each agenda motion's conditional forecasts on both
+        branches (charter audit M2), when there are any.
+        """
+        markets = {motion: market for motion in committee.agenda
+                   if (market := self._motion_market(motion))}
         return {"boundary": committee.boundary, "round": committee.round,
                 "motions": list(committee.agenda), "deferred": list(committee.deferred),
+                **({"markets": markets} if markets else {}),
                 "lambda_max": self.m.prices.lambda_max, "cards": self._card_statistics()}
 
     def _activate_passed(self) -> None:
@@ -1970,6 +2007,22 @@ class GovernanceMixin:
         if vote is None:
             self._settle_policy(handle, 0.0, SettleStatus.CENSORED)
             return
+        ballot = {
+            "handle": handle, "assembly": assembly, "amendment_id": proposal.id,
+            "vote": vote, **self._promise_frame(proposal),
+            "activation_window": None, "baseline": None,
+        }
+        self.ledger.append({"kind": "policy.promised", **ballot})
+        self.pending_votes.append(ballot)
+
+    def _promise_frame(self, proposal) -> dict:
+        """The frozen measurement a motion's promise is graded on, shared by every bet on it.
+
+        The card (or, for a clock motion, the burn observation's frame), the
+        observation's version and definition, and the region, frozen before the
+        branch is decided, so a later registration cannot rewrite what a ballot or
+        a conditional forecast was a bet on.
+        """
         effect = proposal.predicted_effect
         if effect.observation is not None:
             card = self._observation_card(effect.observation)
@@ -1981,16 +2034,10 @@ class GovernanceMixin:
         observation = self.observations.get(card.observation)
         definitions = ({observation.id: deepcopy(self.registered_observations[observation.id])}
                        if observation.registered else {})
-        ballot = {
-            "handle": handle, "assembly": assembly, "amendment_id": proposal.id,
-            "vote": vote, "prediction": proposal.predicted_effect, "card": card,
-            "observation_id": observation.id, "observation_version": observation.version,
-            "observations": definitions,
-            "region": region_for(card, rolling=self.rolling, observations=self.observations),
-            "activation_window": None, "baseline": None,
-        }
-        self.ledger.append({"kind": "policy.promised", **ballot})
-        self.pending_votes.append(ballot)
+        return {"prediction": proposal.predicted_effect, "card": card,
+                "observation_id": observation.id, "observation_version": observation.version,
+                "observations": definitions,
+                "region": region_for(card, rolling=self.rolling, observations=self.observations)}
 
     def _observation_card(self, observation_id: str) -> MetricCard:
         """The measurement a clock motion's promise is graded on: one whole window, unpriced.
@@ -2013,11 +2060,29 @@ class GovernanceMixin:
         return ObservationBook(vote["observations"], run=self.observation_runner.run,
                                reject=self._observation_out_of_range)
 
-    def _activate_policy_ballots(self, proposal_id: str) -> None:
-        """All proposal kinds start their promised horizon only when their change takes effect."""
+    def _activate_policy_ballots(self, proposal_id: str, branch: str = "enact") -> None:
+        """Every bet on a motion starts its horizon when the motion's branch is decided.
+
+        ``enact``: the change took effect, as it always was. ``reject``: a charter
+        motion failed its vote, and the unchanged charter is the realized branch
+        (charter audit P1; essay II.IV.a, "bet on beliefs"). Ballots follow the
+        branch taken. A conditional forecast on the branch not taken is void: its
+        decision closes censored and nothing grades it, as a conditional market
+        refunds the branch that did not happen. Either way the baseline is the
+        measurement at the decision and the horizon the motion's own window.
+        """
+        void = [v for v in self.pending_votes if v["amendment_id"] == proposal_id
+                and v.get("forecast") and v["branch"] != branch]
+        for vote in void:
+            self.ledger.append({"kind": "policy.void", "handle": vote["handle"],
+                                "amendment_id": proposal_id, "branch": vote["branch"],
+                                "decided": branch})
+            self._settle_policy(vote["handle"], 0.0, SettleStatus.CENSORED)
+        self.pending_votes[:] = [v for v in self.pending_votes if v not in void]
         for vote in self.pending_votes:
             if vote["amendment_id"] != proposal_id:
                 continue
+            vote["branch"] = branch
             observations = self._policy_observations(vote)
             values = measure_card(vote["card"], self.card_samples, observations)
             activated = {**vote, "baseline": fmean(values.values()) if values else None,
@@ -2027,10 +2092,26 @@ class GovernanceMixin:
             self.ledger.append({"kind": "policy.activated", **activated})
             vote.update(activated)
 
-    def _settle_policy(self, handle, score, status) -> None:
+    def _settle_policy(self, handle, score, status, *, definition: str | None = None) -> None:
         """Policy feedback reaches the original assembly's durable, private return channel."""
         self.queue.settle(handle, channel="policy", score=score, status=status,
-                          definition_version="policy-promise-brier-v2", sampling_ref=None)
+                          definition_version=definition or "policy-promise-brier-v2",
+                          sampling_ref=None)
+
+    @staticmethod
+    def _branch_probability(vote: dict, branch: str) -> float:
+        """The probability a bet gave that the motion's promise holds on the branch taken.
+
+        A conditional forecast states it. A yes vote says the motion makes the
+        promised difference: the promise holds if enacted (q = 1) and does not hold
+        on the unchanged charter (q = 0); a no vote says the opposite. So a ballot
+        is graded on whichever branch the committee took, and a no vote is liable
+        exactly as a yes vote is (charter audit P1).
+        """
+        if vote.get("forecast"):
+            return float(vote["q"])
+        yes = float(bool(vote["vote"]))
+        return yes if branch == "enact" else 1.0 - yes
 
     def _close_policy_window(self, index: int) -> None:
         """Each vote is graded once at its declared post-activation boundary, or censored."""
@@ -2055,16 +2136,22 @@ class GovernanceMixin:
             outcome = (promise_kept(effect.direction, baseline, value, region,
                                     resolution=resolution)
                        if status is SettleStatus.SETTLED else None)
-            score = float(vote["vote"] == outcome) if outcome is not None else 0.0
+            branch = vote.get("branch", "enact")
+            q = self._branch_probability(vote, branch)
+            score = brier(q, outcome) if outcome is not None else 0.0
             self.ledger.append({"kind": "policy.outcome", "handle": vote["handle"],
-                                "amendment_id": vote["amendment_id"], "baseline": baseline,
+                                "amendment_id": vote["amendment_id"], "branch": branch,
+                                "q": q, "forecast": bool(vote.get("forecast")),
+                                "baseline": baseline,
                                 "direction": effect.direction, "resolution": resolution,
                                 "region": asdict(region) if region is not None else None,
                                 "observation_id": vote["observation_id"],
                                 "observation_version": vote["observation_version"],
                                 "value": value, "window": index, "y": outcome,
                                 "score": score, "status": str(status)})
-            self._settle_policy(vote["handle"], score, status)
+            self._settle_policy(vote["handle"], score, status,
+                                definition=MOTION_FORECAST_DEFINITION if vote.get("forecast")
+                                else None)
         self.pending_votes[:] = remaining
         pending_handles = {self.queue.get(f.handle).parent_handle for f in self.book.pending()}
         self.card_samples.prune((*self.charter.cards, *(v["card"] for v in remaining),
