@@ -258,7 +258,12 @@ def simulation_manifest(world: Path, seed: int, exploration: float | None = None
     from dataclasses import replace
 
     base = load_manifest(world)
-    manifest = rehearsal.effective_manifest(base, native_completions=True)
+    # A hybrid capital-loop world keeps its Venice keys: on the fake venue they select
+    # the scripted two-leg rail, so both conversion legs are rehearsed for free.
+    hybrid = (base.treasury.venice_network == "base-mainnet"
+              and base.treasury.reserve_address is not None)
+    manifest = rehearsal.effective_manifest(base, native_completions=True,
+                                            capital_loop=hybrid)
     exchange = replace(manifest.exchange, kind="fake", mainnet=False, seed=seed,
                        spot_pairs=(), client_namespace=None)
     manifest = replace(manifest, exchange=exchange, seed=seed)

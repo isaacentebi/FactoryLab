@@ -6,6 +6,12 @@ admits a call only when its quote fits the independent cap and records the provi
 actual bill separately. Failed dispatches retain their full quote as liability while
 later work may continue; repeated failures and unauthoritative successful bills stop
 admission. A failed completion is never retried by this wrapper.
+
+The one exception is ``--capital-loop`` on a hybrid Venice world
+(worlds/edition5-capital-loop.toml): ``treasury.transfer to_venice`` stays open and
+spends REAL Base mainnet USDC for Venice credit, paid for in the testnet pots by a
+shadow send. Every other treasury route and every x402 purchase stays denied. The
+operator runbook is docs/architecture/capital-loop-rehearsal.md.
 """
 
 from __future__ import annotations
@@ -292,6 +298,51 @@ class DeniedTransferRail:
         return getattr(self.reader, name)
 
 
+class CapitalLoopRail:
+    """Guarantees a capital-loop rehearsal can convert to Venice and move nothing else.
+
+    The hybrid rail underneath can run every treasury route; this rehearsal admits only
+    ``to_venice`` (its shadow leg and its real top-up) and refuses the CCTP exits and
+    class moves before signing, as ``DeniedTransferRail`` refuses them all. Everything
+    else, including the rail's name, reads through to the hybrid rail.
+    """
+
+    ALLOWED = ("to_venice",)
+    STEPS = ("shadow_send", "venice_top_up")
+
+    def __init__(self, rail: Any):
+        self.rail = rail
+
+    def _admit(self, direction: str) -> None:
+        from factorylab.world.evm import RailError
+
+        if direction not in self.ALLOWED and direction not in self.STEPS:
+            raise RailError("treasury rail denied by rehearsal")
+
+    def plan(self, direction: str):
+        self._admit(direction)
+        return self.rail.plan(direction)
+
+    def preflight(self, direction: str, amount: int, gas_spent: dict):
+        self._admit(direction)
+        return self.rail.preflight(direction, amount, gas_spent)
+
+    def prepare(self, step: str, state: dict, gas_spent: dict):
+        self._admit(step)
+        return self.rail.prepare(step, state, gas_spent)
+
+    def send(self, step: str, reference: dict):
+        self._admit(step)
+        return self.rail.send(step, reference)
+
+    def poll(self, step: str, state: dict):
+        self._admit(step)
+        return self.rail.poll(step, state)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.rail, name)
+
+
 def venue_snapshot(exchange: Any) -> dict[str, Any]:
     """Read balances, positions and open orders without submitting a venue operation."""
     target = getattr(exchange, "target", exchange)
@@ -411,10 +462,21 @@ def effective_manifest(
     address_enabled: bool | None = None,
     reasoning: str = "preserve",
     native_completions: bool = False,
+    capital_loop: bool = False,
 ) -> WorldManifest:
-    """Freeze one factorized short-tick testnet identity before any paid work."""
+    """Freeze one factorized short-tick testnet identity before any paid work.
+
+    Guarantees the treasury is stripped to an unconfigured rail unless ``capital_loop``
+    is asked for, and then only for a world that declares the hybrid Venice mode with a
+    reserve: its treasury is kept whole so ``to_venice`` can spend real mainnet USDC.
+    """
     if base.exchange.kind != "hyperliquid" or base.exchange.mainnet:
         raise RehearsalRefused("testnet_hyperliquid_required")
+    if type(capital_loop) is not bool:
+        raise ValueError("capital_loop must be boolean")
+    if capital_loop and (base.treasury.venice_network != "base-mainnet"
+                         or base.treasury.reserve_address is None):
+        raise RehearsalRefused("capital_loop_requires_hybrid_venice_world")
     providers = {m.provider for m in base.models}
     if not providers <= ALLOWED_PREPAID:
         raise RehearsalRefused("unsupported_or_x402_model_rail")
@@ -436,7 +498,13 @@ def effective_manifest(
     # An absent reserve selects UnconfiguredRail. It refuses transfers and does not
     # construct a signer; the charter, seed roster, $300 endowment and venue cash stay.
     treasury = replace(base.treasury, reserve_address=None, cctp_forwarding="never",
-                       hyperevm_gas_budget_wei=0, base_gas_budget_wei=0)
+                       hyperevm_gas_budget_wei=0, base_gas_budget_wei=0,
+                       venice_network=None, venice_shadow_sink=None)
+    if capital_loop:
+        # The capital loop keeps its reserve and hybrid keys; the CCTP routes stay
+        # unfunded (no gas budgets) and CapitalLoopRail refuses them before signing.
+        treasury = replace(base.treasury, cctp_forwarding="never",
+                           hyperevm_gas_budget_wei=0, base_gas_budget_wei=0)
     manifest = replace(
         base,
         name=f"{base.name}-edition4-rehearsal",
@@ -592,8 +660,13 @@ def _venice_reserve_transport():
     return transport, client
 
 
-def build_prepaid_provider(manifest: WorldManifest) -> Any:
-    """Build prepaid providers, isolating Venice reserve authentication from runtime rails."""
+def build_prepaid_provider(manifest: WorldManifest, *, keep_reserve_env: bool = False) -> Any:
+    """Build prepaid providers, isolating Venice reserve authentication from runtime rails.
+
+    ``keep_reserve_env`` leaves the reserve key in the environment for the caller to
+    clear: a capital-loop rehearsal's hybrid rail captures its signer while the world is
+    constructed, and the runner clears the variable immediately afterwards.
+    """
     _load_dotenv()
     from factorylab.world.market import MultiProvider
     from factorylab.world.openrouter import OpenRouterProvider
@@ -630,12 +703,21 @@ def build_prepaid_provider(manifest: WorldManifest) -> Any:
             raise RehearsalRefused("venice_prepaid_credential_missing")
     # Runtime must never inherit the reserve private key. The captured transport can
     # authenticate Venice's prepaid completion/read routes but has no top-up route.
-    os.environ.pop("RESERVE_PRIVATE_KEY", None)
+    if not keep_reserve_env:
+        os.environ.pop("RESERVE_PRIVATE_KEY", None)
     if providers == {"openrouter"}:
         return openrouter
     if providers == {"venice"}:
         return venice
     return MultiProvider(openrouter, venice, DeniedMarket())
+
+
+def _denied_rails(capital_loop: bool) -> list[str]:
+    """The rails this rehearsal refuses before signing; a capital loop admits to_venice."""
+    denied = ["x402", "treasury.to_reserve", "treasury.to_venue", "treasury.to_venice"]
+    if capital_loop:
+        denied = [*denied[:-1], "treasury.spot_to_perps", "treasury.perps_to_spot"]
+    return denied
 
 
 def _safe_exception(exc: BaseException) -> dict[str, str]:
@@ -668,8 +750,14 @@ def run_rehearsal(
     minimum_ticks: int | None = None,
     minimum_grounded_samples: int | None = None,
     minimum_contrary_samples: int | None = None,
+    capital_loop: bool = False,
 ) -> dict[str, Any]:
-    """Run a fresh bounded testnet rehearsal and persist a sanitized evidence report."""
+    """Run a fresh bounded testnet rehearsal and persist a sanitized evidence report.
+
+    ``capital_loop`` runs a hybrid Venice world (docs/architecture/
+    capital-loop-rehearsal.md): ``to_venice`` stays open and spends real Base mainnet
+    USDC, every other treasury route and x402 purchase stays denied.
+    """
     if type(duration_ns) is not int or duration_ns <= 0:
         raise ValueError("duration_ns must be positive integer")
     if target_ticks is not None and (type(target_ticks) is not int or target_ticks <= 0):
@@ -702,13 +790,12 @@ def run_rehearsal(
             address_enabled=address_enabled,
             reasoning=reasoning,
             native_completions=True,
+            capital_loop=capital_loop,
         )
         source_path, frozen_hash = source_hash(Path(source_root) if source_root else None)
     except Exception as exc:
         report = {"status": "failed", "error": _safe_exception(exc),
-                  "cost": admission.report(), "denied_rails": [
-                      "x402", "treasury.to_reserve", "treasury.to_venue", "treasury.to_venice"
-                  ]}
+                  "cost": admission.report(), "denied_rails": _denied_rails(capital_loop)}
         if report_path is not None:
             report_path.write_text(json.dumps(report, indent=2, default=str) + "\n")
         return report
@@ -811,38 +898,58 @@ def run_rehearsal(
             "tick_interval_ns": {"from": base.tick_interval_ns, "to": manifest.tick_interval_ns},
             "exchange.client_namespace": {"from": base.exchange.client_namespace,
                                            "to": manifest.exchange.client_namespace},
-            "treasury.reserve_address": {"from": bool(base.treasury.reserve_address), "to": False},
+            "treasury.reserve_address": {"from": bool(base.treasury.reserve_address),
+                                         "to": bool(manifest.treasury.reserve_address)},
             "treasury.cctp_forwarding": {"from": base.treasury.cctp_forwarding, "to": "never"},
             "treasury.gas_budgets": {"from": {"hyperevm": base.treasury.hyperevm_gas_budget_wei,
                                                  "base": base.treasury.base_gas_budget_wei},
                                       "to": {"hyperevm": 0, "base": 0}},
         },
-        "denied_rails": ["x402", "treasury.to_reserve", "treasury.to_venue", "treasury.to_venice"],
+        "denied_rails": _denied_rails(capital_loop),
         "cost": admission.report(),
     }
+    if capital_loop:
+        report["capital_loop"] = {
+            "venice_network": manifest.treasury.venice_network,
+            "venice_shadow_sink": manifest.treasury.venice_shadow_sink,
+            "max_venice_per_window_micro": manifest.treasury.max_venice_per_window,
+            "reserve_address": manifest.treasury.reserve_address,
+        }
     runtime = None
     observer = None
     try:
-        if provider is None:
-            provider = build_prepaid_provider(manifest)
-        guarded = provider if isinstance(provider, PrepaidProvider) else PrepaidProvider(
-            provider, manifest, admission)
-        events = planned_ticks
-        if clock_source is None and manifest.exchange.kind != "fake":
-            clock_source = LiveClock(manifest.tick_interval_ns, events,
-                                     now_ns=now_ns, deadline_ns=now_ns() + duration_ns)
-        clock_source = AdmissionClock(clock_source, admission) if clock_source is not None else None
-        runtime = Runtime(
-            manifest, events=events, seed=manifest.seed, initial_balance_micro=None,
-            ledger_path=None if output_dir is None else str(output_dir / "ledger.jsonl"),
-            drip=False, router_gamma=0.1, provider=guarded, market=DeniedMarket(),
-            exchange=exchange, clock_source=clock_source,
-            kill_at_end=True,
-        )
-        # Bootstrap gives an unconfigured rail for a manifest without a reserve, but
-        # that rail still supports the venue's spot/perps class move. Replace its
-        # target before launch so every treasury direction is refused pre-signing.
-        runtime.treasury.rail.target = DeniedTransferRail(runtime.treasury.rail.target)
+        try:
+            if provider is None:
+                provider = build_prepaid_provider(manifest, keep_reserve_env=capital_loop)
+            guarded = provider if isinstance(provider, PrepaidProvider) else PrepaidProvider(
+                provider, manifest, admission)
+            events = planned_ticks
+            if clock_source is None and manifest.exchange.kind != "fake":
+                clock_source = LiveClock(manifest.tick_interval_ns, events,
+                                         now_ns=now_ns, deadline_ns=now_ns() + duration_ns)
+            clock_source = (AdmissionClock(clock_source, admission)
+                            if clock_source is not None else None)
+            runtime = Runtime(
+                manifest, events=events, seed=manifest.seed, initial_balance_micro=None,
+                ledger_path=None if output_dir is None else str(output_dir / "ledger.jsonl"),
+                drip=False, router_gamma=0.1, provider=guarded, market=DeniedMarket(),
+                exchange=exchange, clock_source=clock_source,
+                kill_at_end=True,
+            )
+        finally:
+            # The hybrid rail captured its signer during construction; the running
+            # world never inherits the reserve key, capital loop or not.
+            if capital_loop:
+                os.environ.pop("RESERVE_PRIVATE_KEY", None)
+        if capital_loop:
+            # Only the conversion is admitted; the CCTP exits and class moves are
+            # refused before signing, exactly as the denied rail refuses them.
+            runtime.treasury.rail.target = CapitalLoopRail(runtime.treasury.rail.target)
+        else:
+            # Bootstrap gives an unconfigured rail for a manifest without a reserve, but
+            # that rail still supports the venue's spot/perps class move. Replace its
+            # target before launch so every treasury direction is refused pre-signing.
+            runtime.treasury.rail.target = DeniedTransferRail(runtime.treasury.rail.target)
         if observe:
             from scripts import edition4_observer
 
@@ -925,6 +1032,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-root", type=Path, default=None)
     parser.add_argument("--observe", action="store_true",
                         help="write an opt-in rehearsal dashboard at completed ticks")
+    parser.add_argument("--capital-loop", action="store_true",
+                        help="hybrid Venice world only: admit to_venice, which spends REAL "
+                        "Base mainnet USDC (docs/architecture/capital-loop-rehearsal.md)")
     args = parser.parse_args(argv)
     from factorylab.runtime.worlds import duration_ns
 
@@ -937,7 +1047,8 @@ def main(argv: list[str] | None = None) -> int:
                            address_enabled=args.address_enabled, reasoning=args.reasoning,
                            minimum_ticks=args.minimum_ticks,
                            minimum_grounded_samples=args.minimum_grounded_samples,
-                           minimum_contrary_samples=args.minimum_contrary_samples)
+                           minimum_contrary_samples=args.minimum_contrary_samples,
+                           capital_loop=args.capital_loop)
     print(json.dumps({"status": report["status"], "out": str(args.out),
                       "cost": report["cost"],
                       "behavioral_screen": report.get("behavioral_screen")}, indent=2))
