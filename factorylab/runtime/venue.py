@@ -645,14 +645,18 @@ class VenueMixin:
         in one batch are one order written twice. ``writes`` is (slot, tool, args)
         in batch order. A hedge whose second leg would be refused therefore never
         leaves its first leg standing alone. Collateral is weighed per write against
-        the account as it is now, not as the earlier legs would leave it -- except
-        that money a vault write in the batch moves out of perps collateral is
-        counted against every later vault write in it.
+        the account as it is now, less what the batch's earlier writes take from the
+        same pool: the margin an earlier perp order needs and the USDC a vault write
+        moves out of perps are not free for a later perp order or vault write, and
+        an earlier spot buy's cost is not free for a later spot buy. Without that, a
+        deposit and an order that each fit alone passed together and left one leg
+        standing when the venue refused the other.
         """
         from factorylab.world.venue_tools import VAULT_WRITES
 
         placed: set[tuple] = set()
-        committed = Decimal(0)
+        committed = Decimal(0)  # taken from free perps collateral by earlier writes
+        spot_committed = Decimal(0)  # taken from spot USDC by earlier spot buys
         for index, (slot, tool, args) in enumerate(writes):
             client_id = f"{handle}:{slot}"
             if client_id in self.order_intents or client_id in getattr(
@@ -684,12 +688,40 @@ class VenueMixin:
                 price = Decimal(str(args["price"])) if "price" in args else None
             except ArithmeticError:
                 return index, "size or price is not a number"
-            reason = self._order_collateral(handle, str(args.get("coin")), size,
-                                            args.get("side") == "buy", price,
-                                            reduce_only=args.get("reduce_only") is True)
+            coin, is_buy = str(args.get("coin")), args.get("side") == "buy"
+            reduce_only = args.get("reduce_only") is True
+            reason = self._order_collateral(
+                handle, coin, size, is_buy, price, reduce_only=reduce_only,
+                committed=spot_committed if "/" in coin else committed)
             if reason:
                 return index, reason
+            if not reduce_only:
+                taken = self._order_requirement(coin, size, is_buy, price)
+                if "/" in coin:
+                    spot_committed += taken
+                else:
+                    committed += taken
         return None
+
+    def _order_requirement(self, coin: str, size: Decimal, is_buy: bool,
+                           price: Decimal | None = None) -> Decimal:
+        """What an accepted order takes from its pool's free balance, as the collateral
+        check weighs it: a perp order's initial margin at the venue's leverage, a spot
+        buy's cost. Zero where the venue has not said enough to know."""
+        try:
+            mids = self._tick_mids()
+            mark = max(mids[coin], price or mids[coin])
+            if "/" in coin:
+                return size * mark if is_buy else Decimal(0)
+            view = self._collateral_view(coin, "perp")
+            current = Decimal(str(view.get("position_size", 0)))
+            target = current + (size if is_buy else -size)
+            increase = max(Decimal(0), abs(target) - abs(current)) * mark
+            leverage = self._order_leverage(coin, view)
+        except (AttributeError, KeyError, ValueError, ArithmeticError, RuntimeError,
+                TypeError):
+            return Decimal(0)
+        return increase / leverage if leverage else Decimal(0)
 
     def _venue_write(self, handle: str, operation: str, args: dict, *, slot: str) -> dict:
         """Every venue write has a durable intent and a stable identity before submission."""
@@ -916,6 +948,7 @@ class VenueMixin:
     def _order_collateral(
         self, handle: str, coin: str, size: Decimal, is_buy: bool,
         price: Decimal | None = None, *, reduce_only: bool = False,
+        committed: Decimal = Decimal(0),
     ) -> str | None:
         """New exposure is collateralised by the pot the venue actually charges.
 
@@ -957,7 +990,10 @@ class VenueMixin:
             view = self._collateral_view(coin, "spot" if spot else "perp")
             mids = self._tick_mids()
             mark = max(mids[coin], price or mids[coin])
+            # What earlier writes of the same batch already take from this pool is
+            # not free for this one: it rides as headroom (``venue_batch_refusal``).
             headroom = Decimal(str(getattr(self.m.exchange, "collateral_headroom_usd", "0")))
+            headroom += committed
             stale = self._collateral_stale(view)
             if stale is not None:
                 reason = stale
