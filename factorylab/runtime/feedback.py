@@ -11,7 +11,7 @@ from typing import Any
 from factorylab.kernel.events import Event, EventKind
 from factorylab.kernel.queue import LearningReturn, SettleStatus
 from factorylab.kernel.wallet import Infeasible
-from factorylab.learners.base import NEUTRAL_REWARD, BanditFeedback
+from factorylab.learners.base import BanditFeedback
 from factorylab.runtime.cascade import CascadeGate, event_tier, release_window_ns
 from factorylab.runtime.grounded import (
     DEFAULT_TAKER_FEE_BPS,
@@ -1980,14 +1980,16 @@ class FeedbackMixin:
         without an observed score (censored, inapplicable) or reached its cutoff
         unscored (timed out) is not a zero: it is credited the router's neutral
         estimate for the arm drawn (``ObservedRewards.neutral``: that arm's own
-        observed mean, else zero consequence). A score that arrives after the
+        observed mean, else the router's zero consequence). A score that arrives after the
         cutoff still settles the decision for the kernel -- its money, its
         standing, its history -- but trains no learner a second time.
 
-        An abstention (NOOP) is credited ``NEUTRAL_REWARD`` exactly, whatever its
-        settlement: waking nobody has zero consequence, so it is never worth the
-        average the seats earned (the free-average defect), and a seat is woken
-        more often only by scoring above it. The credit is deferred to the delay
+        An abstention (NOOP) is credited the router's zero-consequence reward
+        (``RouterState.neutral``), whatever its settlement: waking nobody is worth
+        what a woken seat that delivered nothing scores on the scale the router's
+        seat rounds are settled on (0.5 for producer outcomes, 0.75 for Brier), so
+        it is never worth the average the seats earned (the free-average defect),
+        and a seat is woken more often only by scoring above it. The credit is deferred to the delay
         the router's seat rounds take to be learned (``_defer_abstention``): an
         abstention settles at once, and crediting it at once would put it a whole
         feedback delay ahead of every seat it competes with. A router that has
@@ -2015,42 +2017,70 @@ class FeedbackMixin:
         ):
             return  # learned once already, neutrally, at its cutoff
         if prop.chosen == NOOP:
+            if self._abstention_owed_or_credited(lr):
+                if key is not None:
+                    state.learner.inner.discard_for(key)
+                return
             if not keyed or key is not None:
                 self._defer_abstention(state, key, decision)
             return
         target = self._successor_state(state)
-        if lr.status is SettleStatus.SETTLED:
+        settled = lr.status is SettleStatus.SETTLED
+        if settled:
             reward = min(1.0, max(0.0, float(lr.score)))
-            target.observed.record(prop.chosen, reward)
         elif lr.definition_version == f"{GROUNDED_DEFINITION}-unknown":
             reward = None
         else:
             # The seat's own baseline on the live successor, less any charter price
             # its settlement carries (routers-learn + charter-price-bites).
-            reward = _priced(target.observed.neutral(prop.chosen), lr)
+            reward = _priced(target.observed.neutral(prop.chosen, target.neutral()), lr)
         if reward is None:
             if key is not None:
                 state.learner.inner.discard_for(key)
             return
+        if keyed and key is None:
+            return  # its frozen round is already spent: nothing trains, nothing is booked
         fb = BanditFeedback(prop.chosen, reward, prop.probs[prop.action_ids.index(prop.chosen)])
-        target.latency[0] += max(0, self.clock.now_ns - decision.opened_ns)
-        target.latency[1] += 1
         if target is not state:
-            if keyed and key is None:
-                return
             p, executed = state.learner.inner.take_for(key) if keyed else (None, None)
-            self._apply_router_round(state, lr.handle, p, executed, fb)
-            return
-        if keyed:
-            if key is not None:
-                state.learner.inner.update_for(key, fb)
+            learned = self._apply_router_round(state, lr.handle, p, executed, fb)
+        elif keyed:
+            state.learner.inner.update_for(key, fb)
+            learned = True
         elif set(prop.action_ids) <= set(state.universe):
             state.learner.update(fb)
+            learned = True
         else:
             self.ledger.append({"kind": "propensity.unlearned", "handle": lr.handle,
                                 "learner_id": state.learner.id,
                                 "reason": "the drawn arm is outside this router's universe",
                                 "ts": self.clock.now_ns})
+            learned = False
+        if not learned:
+            return
+        # Booked only for a round that trained the router: the seat's own baseline, the
+        # delay abstentions wait for and the scales they are priced on all describe
+        # rounds the router learned from, never one that trained nothing.
+        target.latency[0] += max(0, self.clock.now_ns - decision.opened_ns)
+        target.latency[1] += 1
+        if settled:
+            target.observed.record(prop.chosen, reward)
+            target.definitions[lr.definition_version] = (
+                target.definitions.get(lr.definition_version, 0) + 1)
+
+    def _abstention_owed_or_credited(self, lr: LearningReturn) -> bool:
+        """Whether this abstention is already owed, or was credited on an earlier return.
+
+        Guarantees a NOOP is credited once, on the first return its handle received:
+        the queue admits one final outcome after at most one timeout, so any later
+        return repeats a round already credited. A keyed router spends its snapshot
+        key on the first; this is the same guard for a plain EXP3 router.
+        """
+        if lr.handle in self.noop_credits:
+            return True
+        first = self.queue.history(lr.handle)[0]
+        return ((first.status, first.definition_version, first.score)
+                != (lr.status, lr.definition_version, lr.score))
 
     def _defer_abstention(self, state: Any, key: str | None, decision: Any) -> None:
         """Owe ``state`` one abstention credit, due when a seat round would be learned.
@@ -2079,9 +2109,17 @@ class FeedbackMixin:
             del self.noop_credits[handle]
             drawer = routers.get(credit["router"])
             if drawer is None:
+                # A drained router is kept while it is owed, so this should not happen;
+                # if it does, the dropped credit is on the record, not silent.
+                self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
+                                    "learner_id": credit["router"],
+                                    "reason": "the router owed this abstention is gone",
+                                    "ts": now})
                 continue
             prop = self.queue.get(handle).propensity
-            fb = BanditFeedback(NOOP, NEUTRAL_REWARD, prop.probs[prop.action_ids.index(NOOP)])
+            # Priced when due, on the scales of every seat round learned by then.
+            neutral = self._successor_state(drawer).neutral()
+            fb = BanditFeedback(NOOP, neutral, prop.probs[prop.action_ids.index(NOOP)])
             self._apply_router_round(drawer, handle, credit["p"], credit["executed"], fb)
 
     def _router_owed_abstention(self, learner_id: str) -> bool:
@@ -2089,18 +2127,29 @@ class FeedbackMixin:
         return any(c["router"] == learner_id for c in self.noop_credits.values())
 
     def _apply_router_round(self, drawer: Any, handle: str, p: dict | None,
-                            executed: dict | None, fb: BanditFeedback) -> None:
+                            executed: dict | None, fb: BanditFeedback) -> bool:
         """Train the live router that owns ``drawer``'s rounds once on this round.
 
         Guarantees the update uses the drawn arm's logged propensity: a swap router
         credits each row its share of the policy that owned the round (the drawing
         swap router's frozen p, else the logged draw). A drawn arm the learning
         router no longer holds trains nothing and is ledgered unlearned; a round a
-        replaced router drew is ledgered ``router.carried``.
+        replaced router drew is ledgered ``router.carried``. Returns whether it trained.
+
+        A round drawn over a larger universe than the learning router's (N_old >
+        N_new) is stepped at the drawer's size, gamma/N_old rather than gamma/N_new
+        (the reward is scaled by N_new/N_old, which scales a swap router's every row
+        alike): its estimator is bounded by N_old/gamma, so at gamma/N_new one round
+        could move a log weight by N_old/N_new > 1 and swamp every round before it
+        (thrash, essay II.II.a). The rescale is ledgered ``router.step_rescaled``.
         """
         target = self._successor_state(drawer)
         prop = self.queue.get(handle).propensity
         logged = dict(zip(prop.action_ids, prop.probs, strict=True))
+        drawn, learning = len(drawer.universe), len(target.universe)
+        scored = fb.reward
+        if learning < drawn:
+            fb = BanditFeedback(fb.action, scored * learning / drawn, fb.propensity)
         reason = None
         if fb.action not in target.universe:
             reason = "the drawn arm is outside the learning router's universe"
@@ -2116,12 +2165,19 @@ class FeedbackMixin:
             self.ledger.append({"kind": "propensity.unlearned", "handle": handle,
                                 "learner_id": target.learner.id, "reason": reason,
                                 "ts": self.clock.now_ns})
-            return
+            return False
         if target is not drawer:
             self.ledger.append({"kind": "router.carried", "handle": handle,
                                 "from": drawer.learner.id, "to": target.learner.id,
-                                "action": fb.action, "reward": fb.reward,
+                                "action": fb.action, "reward": scored,
                                 "ts": self.clock.now_ns})
+        if learning < drawn:
+            self.ledger.append({"kind": "router.step_rescaled", "handle": handle,
+                                "learner_id": target.learner.id,
+                                "drawn_universe": drawn, "learning_universe": learning,
+                                "reward": scored, "stepped_as": fb.reward,
+                                "ts": self.clock.now_ns})
+        return True
 
     def _deliver_returns(self) -> None:
         self._close_assembly_rounds()
@@ -2138,6 +2194,9 @@ class FeedbackMixin:
                 self._learn_router_return(state, lr)
             self.delivered_seen[lid] = total
         self._credit_abstentions()
+        for state in self._all_router_states():
+            # A router that stopped drawing still has its last window's watch closed.
+            self._close_abstention_watch(state)
         for state in list(self.retired_routers.values()):
             lid = state.learner.id
             if (

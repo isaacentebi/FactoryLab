@@ -545,9 +545,13 @@ class WorldManifest:
             payload["evaluation"].pop("grounded_horizon_ticks")
         if payload["evaluation"].get("exploration_share") == 0.0:
             payload["evaluation"].pop("exploration_share")
-        # A world that seeds no swap-regret core hashes as it did before the key existed.
+        # A world that seeds no swap-regret core hashes as it did before the key existed,
+        # and one that does names the same core whatever order it listed the kinds in.
         if not payload["evaluation"].get("no_swap_regret_kinds"):
             payload["evaluation"].pop("no_swap_regret_kinds", None)
+        else:
+            payload["evaluation"]["no_swap_regret_kinds"] = sorted(
+                payload["evaluation"]["no_swap_regret_kinds"])
         # An absent [web] block registers no search tool, so a world without one hashes
         # exactly as it did before web search existed.
         if payload["web"] == asdict(WebSpec()):
@@ -675,6 +679,19 @@ class WorldManifest:
         if sum(amount for _, amount in e.releases) != e.locked_micro:
             raise ValueError("endowment.releases must sum to endowment.locked_micro")
 
+    def _nameable_kinds(self) -> set[str]:
+        """Every event kind a router of this world can be seeded for, known at genesis.
+
+        Guarantees the world's own kinds, the built-in returns, and every kind a
+        manifest seat accepts or emits (an emitted kind gains a router the moment a
+        seat accepts it). A kind a population invents after launch is not in it.
+        """
+        from factorylab.cortex.registration import BUILTIN_RETURNS
+        from factorylab.kernel.events import EventKind
+
+        return ({str(k) for k in EventKind} | set(BUILTIN_RETURNS)
+                | {k for a in self.assemblies for k in (*a.accepts, *(a.emits or ()))})
+
     def validate(self) -> None:
         namespace = self.exchange.client_namespace
         if self.prompt.mode not in ("reference", "compact"):
@@ -687,6 +704,11 @@ class WorldManifest:
         if (not isinstance(core, tuple) or len(set(core)) != len(core)
                 or any(not isinstance(k, str) or not k for k in core)):
             raise ValueError("evaluation.no_swap_regret_kinds must be distinct event kind names")
+        unknown = sorted(set(core) - self._nameable_kinds())
+        if unknown:
+            # A misspelt kind would seed no router at all and leave the core silently empty.
+            raise ValueError("evaluation.no_swap_regret_kinds names no event kind this world "
+                             f"can route: {', '.join(unknown)}")
         if namespace is not None and (not isinstance(namespace, str) or len(namespace) != 32
                                       or any(c not in "0123456789abcdef" for c in namespace)):
             raise ValueError("exchange.client_namespace must be 32 lowercase hex characters")
@@ -1227,10 +1249,14 @@ def _manifest_providers(raw: Any) -> ProvidersSpec:
 
 
 def _manifest_kinds(raw: Any) -> tuple[str, ...]:
-    """``[evaluation] no_swap_regret_kinds``: a list of event kind names, kept in order."""
-    if not isinstance(raw, list | tuple):
+    """``[evaluation] no_swap_regret_kinds``: a list of event kind names, in canonical order.
+
+    The core is a set of kinds; sorting it here keeps two manifests that list the same
+    kinds in a different order one world, with one hash.
+    """
+    if not isinstance(raw, list | tuple) or any(not isinstance(k, str) for k in raw):
         raise ValueError("evaluation.no_swap_regret_kinds must be a list of event kind names")
-    return tuple(raw)
+    return tuple(sorted(raw))
 
 
 def _manifest_producer_feedback(raw: Any) -> str:

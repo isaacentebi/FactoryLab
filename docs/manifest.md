@@ -2106,10 +2106,24 @@ for the world's life. Every router the runtime seeds for a named kind (at genesi
 when the kind first gains an acceptor) is a no-swap-regret learner, Blum-Mansour over
 one EXP3 row per arm, instead of mean-based EXP3: the retentive core the essay places
 beside the frontier's mean-based learners. `["ProducerReturn"]` puts judge routing in
-the core. An empty list is hash-neutral: the manifest keeps its identity. Every router
-credits an abstention (NOOP) the neutral reward 0.5, deferred by the mean delay its
-seat rounds take to be learned; an unscored seat round with no record of its own is
-credited 0.5 too. A replaced router's settled rounds train the router that replaced it.
+the core. Each name must be an event kind the world can route at genesis (a world
+kind, a built-in return, or a kind a manifest seat accepts or emits); a misspelt one is
+refused. The list is a set: it is kept sorted, so its order never changes the hash.
+An empty list is hash-neutral: the manifest keeps its identity. Every router
+credits an abstention (NOOP) its zero-consequence reward, deferred by the mean delay its
+seat rounds take to be learned: what a woken seat that delivered nothing scores on the
+scales its learned seat rounds settled under, weighted by how many settled under each
+(`ZERO_CONSEQUENCE` in `factorylab/runtime/routing.py`). Producer outcomes
+(`verdict-v1`, `realized-consequence-v2`, `opportunity-cost-v1`), `conformity-v1` and
+`policy-promise-brier-v2` are worth 0.5; Brier scores (`brier-v1`, `forecast-mean-v1`,
+`meta-consequence-v1`, `fast-v1`) 0.75, the coin-flip forecaster's; `exposure-v1` 0,
+an antagonist that exposed nothing; any other definition, and a router that has learned
+no seat round yet, 0.5. An unscored seat round with no record of its own is credited
+the same value. A replaced router's settled rounds train the router that replaced it,
+stepped at the size of the universe they were drawn over when that was larger
+(`router.step_rescaled`). A router whose every draw in a measurement window gave NOOP
+at least `1 - gamma` is ledgered `router.learning_death` when the window closes; the
+entry is observation only and changes no draw.
 
 `grounded_horizon_ticks` is an exact positive integer, default `10`. It controls when
 the first final consequence-grounded commission becomes due and is independent of

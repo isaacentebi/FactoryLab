@@ -1,9 +1,10 @@
 """Routers learn from what waking a seat was worth (essay II.a, the frontier and the core).
 
-An abstention is worth zero consequence (0.5), never the average the seats earned, so a
-seat is woken more only by beating it. A manifest can seed its retentive core with a
-no-swap-regret (Blum-Mansour) router, and a router that is replaced hands every round it
-still owes a reward for to the router that replaced it.
+An abstention is worth zero consequence (what a seat that delivered nothing scores on the
+router's own scales: 0.5 for producer outcomes, 0.75 for Brier), never the average the
+seats earned, so a seat is woken more only by beating it. A manifest can seed its
+retentive core with a no-swap-regret (Blum-Mansour) router, and a router that is replaced
+hands every round it still owes a reward for to the router that replaced it.
 """
 
 import random
@@ -97,6 +98,175 @@ def test_an_unscored_arm_without_its_own_record_is_neutral_not_its_siblings_mean
     assert ObservedRewards().neutral("a") == NEUTRAL_REWARD
 
 
+# --- what nothing delivered is worth, per score definition ------------------------------
+
+# Every score definition a router's seat round can settle with a score, and what a seat
+# that delivered nothing scores on it.
+_ZERO = {
+    "verdict-v1": 0.5, "realized-consequence-v2": 0.5,
+    "realized-consequence-v2-provisional": 0.5, "opportunity-cost-v1": 0.5,
+    "conformity-v1": 0.5, "policy-promise-brier-v2": 0.5,
+    "brier-v1": 0.75, "forecast-mean-v1": 0.75, "meta-consequence-v1": 0.75,
+    "fast-v1": 0.75, "exposure-v1": 0.0,
+}
+
+
+@pytest.mark.parametrize("definition", sorted(_ZERO))
+def test_each_score_definition_has_its_own_zero_consequence(definition):
+    from factorylab.runtime.routing import ZERO_CONSEQUENCE, zero_consequence
+
+    assert zero_consequence(definition) == ZERO_CONSEQUENCE[definition] == _ZERO[definition]
+
+
+@pytest.mark.parametrize("definition", ["brier-v1", "forecast-mean-v1",
+                                        "meta-consequence-v1", "fast-v1"])
+def test_a_brier_scale_prices_nothing_at_the_coin_flip_forecasters_score(definition):
+    """A coin-flip forecast scores 0.75 whatever happens: on a Brier router NOOP at 0.5
+    lost to a seat that knew nothing, a dead arm the router paid to avoid every time."""
+    from factorylab.runtime.routing import zero_consequence
+    from factorylab.settlement.scoring import brier
+
+    assert zero_consequence(definition) == brier(0.5, 0) == brier(0.5, 1)
+
+
+def test_the_table_names_every_scored_definition_the_runtime_settles_with():
+    from factorylab.runtime import grounded, shared
+    from factorylab.runtime.routing import ZERO_CONSEQUENCE
+
+    scored = {shared.DEF_VERDICT, shared.DEF_CONFORMITY, shared.DEF_FAST,
+              shared.DEF_EXPOSURE, shared.DEF_META_CONSEQUENCE,
+              grounded.GROUNDED_DEFINITION, grounded.OPPORTUNITY_DEFINITION}
+    assert scored <= set(ZERO_CONSEQUENCE) and set(ZERO_CONSEQUENCE) == set(_ZERO)
+
+
+def test_an_unknown_definition_and_an_unlearned_router_are_worth_the_midpoint():
+    from factorylab.runtime.routing import zero_consequence
+
+    assert zero_consequence("test-v1") == NEUTRAL_REWARD
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    assert state.neutral() == NEUTRAL_REWARD
+
+
+def _scored(rt, handle, score, definition):
+    rt.queue.settle(handle, channel=rt.queue.get(handle).channel, score=score,
+                    status=SettleStatus.SETTLED, definition_version=definition,
+                    sampling_ref=None)
+
+
+def test_on_a_brier_router_a_know_nothing_seat_ties_an_abstention():
+    """Before: a coin-flip seat earned 0.75 and NOOP 0.5, so NOOP lost 0.25 a round to a
+    seat that knew nothing. NOOP is credited the Brier zero now, and the two tie."""
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    arm = next(a for a in state.universe if a != NOOP)
+    _scored(rt, _drawn(rt, state, arm), 0.75, "forecast-mean-v1")
+    rt._deliver_returns()
+    assert state.neutral() == 0.75 and state.definitions == {"forecast-mean-v1": 1}
+    _settle(rt, _drawn(rt, state, NOOP), SettleStatus.INAPPLICABLE)
+    rt._deliver_returns()
+    weights = _weights(state)
+    assert weights[NOOP] == pytest.approx(weights[arm])
+
+
+def test_a_mixed_router_prices_nothing_at_its_own_mix_of_scales():
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    arm = next(a for a in state.universe if a != NOOP)
+    for definition in ("forecast-mean-v1", "forecast-mean-v1", "verdict-v1", "exposure-v1"):
+        _scored(rt, _drawn(rt, state, arm), 0.6, definition)
+    rt._deliver_returns()
+    assert state.neutral() == pytest.approx((0.75 * 2 + 0.5 + 0.0) / 4)
+
+
+def test_an_unscored_seat_without_a_record_is_imputed_the_routers_zero():
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    a, b = [arm for arm in state.universe if arm != NOOP][:2]
+    _scored(rt, _drawn(rt, state, a), 0.75, "forecast-mean-v1")
+    _settle(rt, _drawn(rt, state, b), SettleStatus.CENSORED)
+    rt._deliver_returns()
+    weights = _weights(state)
+    assert weights[b] == pytest.approx(weights[a])  # both credited 0.75 at equal odds
+    assert b not in state.observed.state()
+
+
+def test_the_scales_a_router_learned_survive_a_resume_and_default_when_absent():
+    from factorylab.runtime.routing import RouterState
+
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    arm = next(a for a in state.universe if a != NOOP)
+    _scored(rt, _drawn(rt, state, arm), 0.9, "forecast-mean-v1")
+    rt._deliver_returns()
+    restored = make_runtime()
+    restore_runtime(restored, runtime_state(rt))
+    assert _router(restored)[0].definitions == {"forecast-mean-v1": 1}
+    old = state.state()
+    del old["definitions"]
+    assert RouterState.restore(old).definitions == {}
+    assert "definitions" not in _router(make_runtime())[0].state()
+
+
+def test_a_round_that_trains_nothing_books_no_delay_baseline_or_scale():
+    """A swap router's round whose frozen snapshot is gone trains nothing; it moved the
+    abstention due time and the seat baseline all the same before the fix."""
+    rt = _core_runtime()
+    state = rt.routers["ProducerReturn"][0]
+    arm = next(a for a in state.universe if a != NOOP)
+    handle = _drawn(rt, state, arm)  # no snapshot key: nothing to train
+    rt.clock.now_ns += 5_000_000_000
+    _scored(rt, handle, 0.9, "forecast-mean-v1")
+    before = state.learner.inner.inner.state()
+    rt._deliver_returns()
+    assert state.learner.inner.inner.state() == before
+    assert state.latency == [0, 0] and not state.observed.state() and not state.definitions
+
+
+def test_an_owed_abstention_whose_router_is_gone_is_ledgered_not_dropped():
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    handle = _drawn(rt, state, NOOP)
+    rt.noop_credits[handle] = {"router": "router:gone", "due_ns": 0, "p": None,
+                               "executed": None}
+    rt._credit_abstentions()
+    assert not rt.noop_credits
+    assert any(i["kind"] == "propensity.unlearned" and i["handle"] == handle
+               and i["learner_id"] == "router:gone"
+               for i in rt.ledger._recovery_items())
+
+
+def test_a_plain_router_credits_an_abstention_once_whatever_returns_repeat():
+    """A keyed router spends its snapshot on the first return; a plain EXP3 router had no
+    such guard, so a later return for the same NOOP (a timeout, then a final outcome the
+    cutoff rule does not cover) was credited again."""
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    lid = state.learner.id
+    arms = tuple(state.universe)
+    probs = tuple(1 / len(arms) for _ in arms)
+    probs = (*probs[:-1], 1 - sum(probs[:-1]))
+    seed = next(s for s in range(10_000)
+                if random.Random(s).choices(arms, weights=probs, k=1)[0] == NOOP)
+    handle = rt.queue.open(actor=lid, event_id="noop-twice",
+                           propensity=PropensityRecord(arms, probs, NOOP, seed, lid, "d"),
+                           channel="test", deadline_ns=rt.clock.now_ns + 1, parent_handle=None,
+                           cost_ceiling=0)
+    rt.clock.now_ns += 1
+    rt.queue.expire(rt.clock.now_ns)
+    rt._deliver_returns()
+    once = _weights(state)
+    assert once[NOOP] > min(once.values())  # credited at its deadline
+    rt.queue.settle(handle, channel="test", score=0.0, status=SettleStatus.INAPPLICABLE,
+                    definition_version="realized-consequence-v2-x", sampling_ref=None)
+    rt._deliver_returns()
+    assert _weights(state) == once
+    lr = rt.queue.returns_for(lid)[-1]
+    rt._learn_router_return(state, lr)  # the same return delivered twice
+    rt._credit_abstentions()
+    assert _weights(state) == once and not rt.noop_credits
+
+
 def _one_seat_router(rt, seat):
     rt._universe_for = lambda _kind, _ev=None: [seat, NOOP]
     return rt._build_router("ProducerReturn", "exp3", 0.1)
@@ -168,6 +338,31 @@ def test_the_core_key_rejects_a_malformed_list(bad):
     base = load_manifest("scripted")
     with pytest.raises(ValueError, match="no_swap_regret_kinds"):
         replace(base, evaluation=replace(base.evaluation, no_swap_regret_kinds=bad)).validate()
+
+
+@pytest.mark.parametrize("typo", [("ProducerRetrun",), ("ProducerReturn", "producerreturn")])
+def test_the_core_key_refuses_a_kind_the_world_cannot_route(typo):
+    """A misspelt kind seeded no router at all, leaving the core silently empty."""
+    base = load_manifest("scripted")
+    with pytest.raises(ValueError, match="no_swap_regret_kinds names no event kind"):
+        replace(base, evaluation=replace(base.evaluation, no_swap_regret_kinds=typo)).validate()
+
+
+def test_the_core_key_admits_every_kind_a_seat_accepts_or_emits():
+    base = load_manifest("scripted")
+    kinds = tuple(sorted({k for a in base.assemblies for k in (*a.accepts, *a.emits)}))
+    replace(base, evaluation=replace(base.evaluation, no_swap_regret_kinds=kinds)).validate()
+
+
+def test_the_core_key_is_a_set_its_order_never_renames_the_world():
+    from factorylab.runtime.worlds import _manifest_kinds
+
+    base = load_manifest("scripted")
+    one, two = ("ProducerReturn", "Verdict"), ("Verdict", "ProducerReturn")
+    worlds = [replace(base, evaluation=replace(base.evaluation, no_swap_regret_kinds=k))
+              for k in (one, two)]
+    assert worlds[0].manifest_hash() == worlds[1].manifest_hash()
+    assert _manifest_kinds(list(two)) == one
 
 
 def test_the_core_key_must_be_a_list():
@@ -290,3 +485,130 @@ def test_a_carried_round_rejects_an_arm_outside_the_universe_or_a_wrong_propensi
     assert learner.state() == before
     learner.update_carried(executed, executed, BanditFeedback("a", 1.0, 0.5))
     assert learner.state() != before
+
+
+# --- a round drawn over a larger universe moves a weight by at most one ----------------
+
+
+def test_a_shrunk_router_steps_a_carried_round_at_the_drawers_size_and_ledgers_it():
+    """Drawn at the floor of a five-arm router, X = 1/0.02 = 50; stepped at gamma/N_new =
+    0.05 by a two-arm successor, one round moved a log weight by 2.5. It is stepped at
+    the drawer's gamma/N_old now, at most one."""
+    rt = make_runtime()
+    old = rt.routers["ProducerReturn"][0]
+    arms = tuple(old.universe)
+    kept = arms[0]
+    floor = 0.1 / len(arms)  # gamma / N_old: the least the predecessor ever drew an arm
+    probs = tuple(floor if a == kept else (1 - floor) / (len(arms) - 1) for a in arms)
+    seed = next(s for s in range(100_000)
+                if random.Random(s).choices(arms, weights=probs, k=1)[0] == kept)
+    handle = rt.queue.open(
+        actor=old.learner.id, event_id="floor",
+        propensity=PropensityRecord(arms, probs, kept, seed, old.learner.id, "s"),
+        channel="test", deadline_ns=10**15, parent_handle=None, cost_ceiling=0)
+    rt._universe_for = lambda _kind, _ev=None: [kept, NOOP]
+    rt._open_epoch("ProducerReturn")
+    fresh = rt.routers["ProducerReturn"][0]
+    before = fresh.learner.state()["log_weights"]
+    rt.queue.settle(handle, channel="test", score=1.0, status=SettleStatus.SETTLED,
+                    definition_version="verdict-v1", sampling_ref=None)
+    rt._deliver_returns()
+    after = fresh.learner.state()["log_weights"]
+    assert (after[kept] - after[NOOP]) - (before[kept] - before[NOOP]) == pytest.approx(1.0)
+    items = rt.ledger._recovery_items()
+    assert any(i["kind"] == "router.step_rescaled" and i["handle"] == handle
+               and i["learner_id"] == fresh.learner.id and i["drawn_universe"] == 5
+               and i["learning_universe"] == 2 and i["stepped_as"] == pytest.approx(0.4)
+               for i in items)
+    assert any(i["kind"] == "router.carried" and i["handle"] == handle
+               and i["reward"] == 1.0 for i in items)
+
+
+def test_a_shrunk_swap_router_steps_every_row_at_the_drawers_size():
+    rt = _core_runtime()
+    old = rt.routers["ProducerReturn"][0]
+    handle, chosen = _live_draw(rt, old)
+    rt._universe_for = lambda _kind, _ev=None: [chosen, NOOP]
+    rt._open_epoch("ProducerReturn")
+    fresh = rt.routers["ProducerReturn"][0]
+    rows = [dict(b.state()["log_weights"]) for b in fresh.learner.inner.inner._bases]
+    rt.queue.settle(handle, channel="test", score=1.0, status=SettleStatus.SETTLED,
+                    definition_version="forecast-mean-v1", sampling_ref=None)
+    rt._deliver_returns()
+    for base, row in zip(fresh.learner.inner.inner._bases, rows, strict=True):
+        now = base.state()["log_weights"]
+        assert (now[chosen] - now[NOOP]) - (row[chosen] - row[NOOP]) <= 1.0
+    assert any(i["kind"] == "router.step_rescaled" and i["handle"] == handle
+               for i in rt.ledger._recovery_items())
+
+
+def test_a_round_learned_over_the_same_universe_is_not_rescaled():
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    arm = next(a for a in state.universe if a != NOOP)
+    _scored(rt, _drawn(rt, state, arm), 1.0, "verdict-v1")
+    rt._deliver_returns()
+    assert not any(i["kind"] == "router.step_rescaled" for i in rt.ledger._recovery_items())
+
+
+# --- learning death, observed ----------------------------------------------------------
+
+
+def _draw_at(state, p_noop):
+    from factorylab.learners.router import Sample
+
+    seats = [a for a in state.universe if a != NOOP]
+    rest = (1 - p_noop) / len(seats)
+    return Sample((*seats, NOOP), (*(rest for _ in seats), p_noop), NOOP, 1,
+                  state.learner.id, "h", ())
+
+
+def _deaths(rt):
+    return [i for i in rt.ledger._recovery_items() if i["kind"] == "router.learning_death"]
+
+
+def test_a_window_whose_every_draw_parked_at_noop_is_ledgered_once():
+    rt = make_runtime()
+    state, lid = _router(rt)
+    window = rt.window.index
+    for p in (0.95, 0.92, 0.97):
+        rt._watch_abstention(state, _draw_at(state, p))
+    assert state.watch == {"window": window, "draws": 3, "min_p": 0.92}
+    assert not _deaths(rt)  # the window is still open
+    rt.window.index += 1
+    rt._deliver_returns()
+    deaths = _deaths(rt)
+    assert len(deaths) == 1 and deaths[0]["learner_id"] == lid
+    assert deaths[0]["window"] == window and deaths[0]["draws"] == 3
+    assert deaths[0]["min_p_noop"] == 0.92 and deaths[0]["floor"] == pytest.approx(0.9)
+    assert not state.watch
+    rt._deliver_returns()
+    assert len(_deaths(rt)) == 1
+
+
+def test_one_draw_that_woke_a_seat_in_earnest_keeps_the_window_alive():
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    for p in (0.95, 0.5, 0.97):
+        rt._watch_abstention(state, _draw_at(state, p))
+    rt.window.index += 1
+    rt._watch_abstention(state, _draw_at(state, 0.99))  # a new window's draw closes the last
+    assert not _deaths(rt)
+    assert state.watch == {"window": rt.window.index, "draws": 1, "min_p": 0.99}
+
+
+def test_the_watch_is_observation_only_and_survives_a_resume():
+    from factorylab.runtime.routing import RouterState
+
+    rt = make_runtime()
+    state, _lid = _router(rt)
+    before = state.learner.state()
+    rt._watch_abstention(state, _draw_at(state, 0.95))
+    assert state.learner.state() == before and state.neutral() == NEUTRAL_REWARD
+    restored = make_runtime()
+    restore_runtime(restored, runtime_state(rt))
+    assert _router(restored)[0].watch == state.watch
+    old = state.state()
+    del old["watch"]
+    assert RouterState.restore(old).watch == {}
+    assert "watch" not in _router(make_runtime())[0].state()

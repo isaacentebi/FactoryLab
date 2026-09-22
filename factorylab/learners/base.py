@@ -34,10 +34,13 @@ class BanditFeedback:
 type Feedback = FullInfoFeedback | BanditFeedback
 
 
-#: The reward of zero consequence: what a round that changed nothing is worth. It is
-#: the same midpoint the world prices a bare hold at (opportunity-cost-v1 settles an
-#: inaction with no named counterfactual at 0.5), so a seat earns waking only by
-#: beating it on average, and an abstention is never worth more or less than that.
+#: The reward of zero consequence on the midpoint scales: what a round that changed
+#: nothing is worth where 0.5 is the score of no consequence (opportunity-cost-v1
+#: settles an inaction with no named counterfactual at 0.5), so a seat earns waking
+#: only by beating it on average. It is the fallback, not the rule: a score whose
+#: scale puts "nothing delivered" elsewhere (a coin-flip forecast earns 0.75 under
+#: Brier) is given its own value by the runtime's per-definition table
+#: (``factorylab.runtime.routing.ZERO_CONSEQUENCE``).
 NEUTRAL_REWARD = 0.5
 
 
@@ -49,7 +52,8 @@ class ObservedRewards:
     arm whose outcomes are censored more often falls behind an arm of the same
     worth whose outcomes are read. ``neutral`` is the learner's best estimate of
     an unobserved reward: the observed mean of the arm that was drawn, else
-    ``NEUTRAL_REWARD``. It is never zero, and it is never borrowed from other
+    ``default`` (``NEUTRAL_REWARD`` unless the caller knows the scale its rounds
+    are scored on). It is never borrowed from other
     arms: an arm with no evidence of its own is worth zero consequence, not the
     average its siblings earned, so an arm whose rounds are never scored cannot
     ride the others' record (the free-average defect). The imputed value is used
@@ -67,12 +71,12 @@ class ObservedRewards:
         total, count = self.sums.get(action, (0.0, 0))
         self.sums[action] = [total + reward, count + 1]
 
-    def neutral(self, action: str) -> float:
-        """The observed mean for ``action`` clamped to [0, 1], else ``NEUTRAL_REWARD``."""
+    def neutral(self, action: str, default: float = NEUTRAL_REWARD) -> float:
+        """The observed mean for ``action`` clamped to [0, 1], else ``default``."""
         total, count = self.sums.get(action, (0.0, 0))
         if count:
             return min(1.0, max(0.0, total / count))
-        return NEUTRAL_REWARD
+        return default
 
     def state(self) -> dict[str, list]:
         """Plain, JSON-serialisable sums: action -> [sum, count]."""
