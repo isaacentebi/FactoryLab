@@ -111,12 +111,16 @@ raise AssertionError('kill point was not reached')
 
 
 class ClockAmendmentProvider(ScriptedProvider):
+    """Beside the scripted card motion, a clock motion of its own (charter audit P3, M6)."""
+
     def complete(self, request):
         response = super().complete(request)
         body = json.loads(response.text)
-        for proposal in body.get("register", []):
-            if proposal.get("kind") == "amendment":
-                proposal["tick_interval"] = "2s"
+        if any(p.get("kind") == "amendment" for p in body.get("register", [])):
+            body["register"].append({
+                "kind": "amendment", "id": "clock-2s", "tick_interval": "2s",
+                "predicted_effect": {"observation": "burn_per_window",
+                                     "direction": "increase", "window": 1}})
         return replace(response, text=json.dumps(body))
 
 

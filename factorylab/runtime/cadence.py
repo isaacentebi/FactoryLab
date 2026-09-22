@@ -135,6 +135,27 @@ class GovernanceCadence:
         """Return the inclusive activation threshold, recomputed from current observations."""
         return self._last_activation_ns + self._min_ratio * self.slowest_period_ns(tick_interval_ns)
 
+    def boundary(self, boundary: int, *, window: int, now_ns: int,
+                 tick_interval_ns: int | TickClock) -> None:
+        """Record an open governance boundary and anchor the next one to it.
+
+        Essay II.IV.c: the governing loop revises its command set no faster than
+        ``min_ratio`` times the slowest loop it commands. A committee is seated
+        at every boundary (charter audit C1), whether or not anything activates,
+        so each boundary, not each activation, starts the next separation.
+        """
+        self._ledger.append({
+            "kind": "charter.boundary", "boundary": boundary, "window": window,
+            "boundary_ns": now_ns, "previous_ns": self._last_activation_ns,
+            "boundary_event": self._current_event,
+            "previous_event": self._last_activation_event,
+            "slowest_period_ns": self.slowest_period_ns(tick_interval_ns),
+            "slowest_period_events": self.slowest_period_events(),
+            "outstanding_forecasts": len(self._outstanding),
+        })
+        self._last_activation_ns = now_ns
+        self._last_activation_event = self._current_event
+
     def approve(self, amendment_id: str) -> None:
         """Keep approved candidates in approval order until their activation is recorded."""
         if amendment_id in self._waiting:

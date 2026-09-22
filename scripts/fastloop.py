@@ -92,6 +92,8 @@ class PolicyProvider(ScriptedProvider):
             reply = {"conformity": 0.8, "rationale": "scripted meta"}
         elif desc.startswith("Vote"):
             reply = {"vote": True, "reason": "scripted yes"}
+        elif desc.startswith("Testify"):
+            reply = {"assessment": "scripted testimony"}
         else:
             reply = self._decide(inputs)
         return ModelResponse(req.model_id, json.dumps(reply), len(text) // 4, 60, "stop",

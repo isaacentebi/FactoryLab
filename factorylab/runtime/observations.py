@@ -1,6 +1,6 @@
 """Supported observations; absent evidence never becomes a score.
 
-The twenty-four seed observations below are the factory's starting measurement
+The twenty-five seed observations below are the factory's starting measurement
 vocabulary. They are not the whole of it: the population may also register
 its own observation — a pure ``observe(facts) -> float`` over the public
 per-window facts, run in the tool jail — and a card may then name it. Seed and
@@ -303,6 +303,17 @@ CATALOGUE: tuple[Observation, ...] = (
         "count",
         lambda w: float(w.market_purchases),
         (0.0, 1.0),
+    ),
+    # Essay II.IV: "speed is categorically indistinguishable from a specific approach
+    # to cash burn" (charter audit M6). A clock motion predicts its effect on this, or
+    # on an observation the population registered.
+    Observation(
+        "burn_per_window",
+        "Compute spent in the window: every invocation's metered cost plus "
+        "retained-storage rent.",
+        "micro-USD per window",
+        lambda w: float(getattr(w, "compute_spend_micro", 0)),
+        (0.0, 1_000_000.0),
     ),
 )
 
