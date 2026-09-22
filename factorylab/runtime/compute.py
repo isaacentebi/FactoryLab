@@ -42,6 +42,7 @@ from factorylab.world.metering import (
     provider_namespace,
 )
 from factorylab.world.models import ModelRequest, ModelResponse, TokenPrice
+from factorylab.world.venue_tools import VAULT_READS, VAULT_WRITES
 
 # A fetched body at least this long is text and stays off every durable surface;
 # a shorter one (a price, "OK", a count) is a fact the population may repeat.
@@ -1070,6 +1071,9 @@ class ComputeMixin:
     CONSEQUENCE_WRITES = frozenset({
         "venue.place_market", "venue.place_limit", "venue.close", "venue.cancel",
         "venue.set_leverage", "treasury.transfer",
+        # The vault surface ([venue] vault_tools): money moving between perps
+        # collateral and a vault is a consequence exactly as an order is.
+        "venue.vault_create", "venue.vault_deposit", "venue.vault_withdraw",
     })
 
     #: The most continuation calls one decision can buy, whatever it retrieves.
@@ -1416,6 +1420,13 @@ class ComputeMixin:
                     if f"{handle}:{slot}" not in self.order_intents:
                         self.venue_attempts[handle] = str(result.get("error") or "refused")
                     return result
+                if tool_id in VAULT_WRITES:
+                    result = self._vault_write(handle, tool_id, args, slot=slot)
+                    if f"{handle}:{slot}" not in self.vault_intents:
+                        self.venue_attempts[handle] = str(result.get("error") or "refused")
+                    return result
+                if tool_id in VAULT_READS:
+                    return self._vault_read(tool_id, args)
                 return self.venue_tools.call(tool_id, args)
             if spec["kind"] == "catalogue":
                 needle = str(args["substring"])

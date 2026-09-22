@@ -467,8 +467,10 @@ class VenueMixin:
 
         Guarantees only intents durably written under this handle's tool slots
         are returned; the answer's own market order (client id == handle) is not.
+        A vault write is a venue write like an order and is returned beside them.
         """
-        return [intent for client_id, intent in self.order_intents.items()
+        return [intent for client_id, intent in (
+                    *self.order_intents.items(), *getattr(self, "vault_intents", {}).items())
                 if intent["handle"] == handle and client_id != handle]
 
     def executed_operations(self, handle: str) -> list[dict]:
@@ -643,15 +645,27 @@ class VenueMixin:
         in one batch are one order written twice. ``writes`` is (slot, tool, args)
         in batch order. A hedge whose second leg would be refused therefore never
         leaves its first leg standing alone. Collateral is weighed per write against
-        the account as it is now, not as the earlier legs would leave it.
+        the account as it is now, not as the earlier legs would leave it -- except
+        that money a vault write in the batch moves out of perps collateral is
+        counted against every later vault write in it.
         """
+        from factorylab.world.venue_tools import VAULT_WRITES
+
         placed: set[tuple] = set()
+        committed = Decimal(0)
         for index, (slot, tool, args) in enumerate(writes):
             client_id = f"{handle}:{slot}"
-            if client_id in self.order_intents:
+            if client_id in self.order_intents or client_id in getattr(
+                    self, "vault_intents", {}):
                 continue  # a retry reconciles; it is not a new write
             if self._class_transfer_pending() and tool != "venue.cancel":
                 return index, "class transfer awaiting receipt"
+            if tool in VAULT_WRITES:
+                reason, moved = self._vault_refusal(tool, args, committed=committed)
+                if reason:
+                    return index, reason
+                committed += moved
+                continue
             shortfall = self._spot_shortfall(tool, args)
             if shortfall:
                 return index, shortfall
@@ -896,6 +910,8 @@ class VenueMixin:
                 self._give_up_on_order(client_id)
                 continue
             self._recover_order(client_id)
+        if getattr(self, "vault_intents", None):
+            self._reconcile_vault_intents(final=final)
 
     def _order_collateral(
         self, handle: str, coin: str, size: Decimal, is_buy: bool,

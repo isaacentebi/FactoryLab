@@ -1109,10 +1109,18 @@ class FeedbackMixin:
         (retired, or seeded without one) leaves the receipt in the pool. The
         receipt is also the economic consequence of the return that registered
         the service, while that outcome is open.
+
+        Income from outside can arrive elsewhere: a vault leader's commission is paid
+        by the venue into the leader's own perps account. Such an item names its
+        ``custody`` and the ``seat`` it belongs to; the asset is already where the
+        venue put it, so no pot is told it arrived, and the wallet's authority rises
+        exactly as it does for a paid call. It is income, never financing (that is
+        principal converted) and never venue P&L (that is the factory's own trading).
         """
         program = item.get("program") or item.get("service")
         service = item.get("service")
-        owner = self.tool_owner.get(program)
+        custody = item.get("custody") or "base_reserve"
+        owner = item["seat"] if "seat" in item else self.tool_owner.get(program)
         micro = item.get("micro")
         if type(micro) is not int or micro <= 0:
             return
@@ -1127,10 +1135,10 @@ class FeedbackMixin:
         # chain to read it back from, so it is credited to its pot here; a live
         # rail reads the reserve's own balance and must not be told twice.
         receive = getattr(getattr(self.treasury, "rail", None), "receive_income", None)
-        if receive is not None:
+        if receive is not None and custody == "base_reserve":
             receive(micro)
         self.ledger.append({"kind": "income.custody", "service": service, "micro": micro,
-                            "tx": item.get("tx"), "custody": "base_reserve",
+                            "tx": item.get("tx"), "custody": custody,
                             "asset": item.get("asset") or "USDC",
                             "chain": item.get("chain") or "base"})
         if owner in self.assemblies:
@@ -1148,6 +1156,10 @@ class FeedbackMixin:
         # A spool row is a claim; only a confirmed chain read makes it income.
         for item in self.treasury.verify_receipts():
             self._book_income(item)
+        # A vault leader's commission, read from the venue's own ledger (II.IV).
+        collect = getattr(self, "_collect_vault_income", None)
+        if collect is not None:
+            collect()
         self._classify_financing()
 
     def _classify_financing(self) -> None:

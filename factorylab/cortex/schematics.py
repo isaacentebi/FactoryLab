@@ -1080,6 +1080,8 @@ class SchematicsMixin:
             **{name: custody.get(name, {"status": "unavailable",
                                         "reason": "no custody view for this account"})
                for name in self.VENUE_CUSTODY},
+            # Vault equity, only where the vault surface exists and the view has it.
+            **({"venue_vaults": custody["venue_vaults"]} if "venue_vaults" in custody else {}),
             # The venue's own running totals, beside the accounts they moved.
             "to_date": {
                 "realized_pnl_usd": str(money_to_usd(self.realized_to_date)),
