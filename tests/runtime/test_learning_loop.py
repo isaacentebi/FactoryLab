@@ -169,10 +169,22 @@ def test_the_world_grades_the_judge_who_praised_a_hold_it_then_punished():
     _mids(rt, BTC="103")  # 300 bp passed up: the prudent hold was expensive
     rt.ticks_consumed = contract.due_tick
     rt._settle_due_grounded()
-    standing = rt.standing.snapshot()["eval-a"]
-    assert standing  # graded
     graded = [i for i in rt.ledger._recovery_items() if i.get("kind") == "verdict.opportunity"]
-    assert len(graded) == 1 and graded[0]["brier"] > graded[0]["baseline_brier"]
+    assert len(graded) == 1 and graded[0]["brier"] < graded[0]["baseline_brier"]
+    assert rt.standing.verdict_skill("eval-a") < 0  # wrong about the world: loses standing
+
+
+def test_the_world_credits_the_judge_who_doubted_a_hold_it_then_punished():
+    """Cold audit: raw squared error ranked the wrong judge above the right one."""
+    rt = _runtime()
+    _mids(rt, BTC="100")
+    producer, contract = _frozen_hold(rt, counterfactual="buy:BTC")
+    rt.grounded_pending[producer] = contract.with_initial(
+        judge_handle="judge-1", evaluator_id="eval-b", forecast_handles=(), score=0.1)
+    _mids(rt, BTC="103")
+    rt.ticks_consumed = contract.due_tick
+    rt._settle_due_grounded()
+    assert rt.standing.verdict_skill("eval-b") > 0  # right about the world: gains standing
 
 
 def test_a_bare_hold_is_neutral_and_its_judge_is_not_graded_against_it():

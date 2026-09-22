@@ -49,7 +49,7 @@ from factorylab.settlement import (
     open_forecast_decision,
 )
 from factorylab.settlement.fidelity import challenge_proposal, choose_adjudicator
-from factorylab.settlement.settle import PredicateForecast
+from factorylab.settlement.settle import PredicateForecast, normative_brier
 from factorylab.settlement.vocabulary import (
     RETURN_PAID_OFF,
     UNMEASURED_DEFINITION,
@@ -1725,8 +1725,11 @@ class FeedbackMixin:
             # priced: graded from outside the loop it judged (essay II.III, fourth
             # principle), against an uninformed 0.5, so a judge that praises caution
             # the market punished loses standing and one that saw it gains.
+            # Standing scores are higher-is-better (settle.normative_brier: one minus
+            # the squared error), never the raw error: raw error ranked a judge the
+            # market proved wrong above one it proved right.
             world, said = float(priced["score"]), float(contract.provisional_score)
-            brier, baseline = (said - world) ** 2, (0.5 - world) ** 2
+            brier, baseline = normative_brier(said, world), normative_brier(0.5, world)
             self.standing.record_verdict(contract.initial_evaluator, brier, baseline)
             self.ledger.append({"kind": "verdict.opportunity", "handle": handle,
                                 "evaluator_id": contract.initial_evaluator,
