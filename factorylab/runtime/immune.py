@@ -40,6 +40,13 @@ def gamma(learner) -> float:
 
 
 def _gain(rt, kind: str, window: int) -> None:
+    """Move every router's exploration one ``gain_step``: up on stable failure, else down.
+
+    Up is bounded by ``gamma_max``; down (thrash, or ``cleared`` once no pathology
+    that the gain answers is diagnosed) never goes below the router's own seed
+    gamma, so a ratchet the organ raised unwinds after the attractor is left and a
+    router that was never raised is not touched. Each change is ledgered first.
+    """
     spec = rt.m.immune
     for router in rt._all_router_states():
         saved = router.state()
@@ -173,11 +180,26 @@ def close_window(rt, values: dict[str, float]) -> None:
     # window boundary and issues the one extra novelty trial per assembly.
     rt.stats.pathologies = flags
     # Oscillation has priority if coarse cells make the two signals overlap.
+    ratcheted: set[str] = set()
     if flags["thrash"]:
         _gain(rt, "thrash", current["index"])
         rt.controller.set_decay(rt.m.prices.decay + spec.decay_step,
                                 ledger=rt.ledger, window=current["index"] + 1)
     elif flags["stable_failure"]:
         _gain(rt, "stable_failure", current["index"])
+        # Essay II.II.b: stable failure is priced by its duration. Every violated card
+        # of the failing attractor has its price ratcheted up by how long the factory
+        # has sat there, never relieved: the gain to leave the attractor must grow.
+        known = set(rt.controller.card_ids())
         for cid in diagnosed["violated_cards"]:
-            rt.controller.relieve(cid.removeprefix("card:"), window=current["index"] + 1)
+            card_id = cid.removeprefix("card:")
+            if card_id in known:
+                rt.controller.ratchet(card_id, window=current["index"], step=spec.gain_step)
+                ratcheted.add(card_id)
+    elif not flags["learning_death"]:
+        # The attractor is left: the exploration the organ added unwinds toward seed.
+        # A learning-dead window holds it, since less exploration is the wrong answer.
+        _gain(rt, "cleared", current["index"])
+    for card_id in rt.controller.card_ids():
+        if card_id not in ratcheted:
+            rt.controller.end_failure(card_id, window=current["index"])

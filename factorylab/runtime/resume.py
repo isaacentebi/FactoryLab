@@ -653,6 +653,7 @@ _COMPONENT_FIELDS = (
     )),
     ("controller", "_PriceController__", (
         "eta", "kappa", "decay", "lambda_max", "min_window_events", "cards",
+        "controller", "kp", "kd",
     )),
     ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events",
                           # R4-C: a released hold's exposure, and the censored
@@ -882,8 +883,9 @@ def restore_runtime(rt, state: dict) -> None:
         _resolve(rt, path).restore(saved)
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
-            if name == "controller" and field == "kappa" and field not in components[name]:
-                # Older checkpoints inherited this immutable parameter from the same manifest.
+            if (name == "controller" and field in ("kappa", "controller", "kp", "kd")
+                    and field not in components[name]):
+                # Older checkpoints inherited these immutable parameters from the same manifest.
                 continue
             if name == "charter_book" and field == "bindings" and field not in components[name]:
                 # Older checkpoints predate the frozen observation version per proposal.

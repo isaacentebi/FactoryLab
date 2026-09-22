@@ -246,6 +246,13 @@ class PricesSpec:
     min_blame_share: float = 0.1
     # The flat price of one program seat call (C8), reserved and committed like a model call.
     program_micro_per_call: int = 50
+    #: The price law (``charter.controller.PriceController``): ``integral`` is the
+    #: shipped integrator every earlier world ran; ``pid`` adds the proportional
+    #: gain ``kp`` and the derivative-on-measurement gain ``kd`` to the integral
+    #: gain ``eta`` (essay II.II.b). All three keys are hash-neutral at their defaults.
+    controller: str = "integral"
+    kp: float = 0.0
+    kd: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -559,6 +566,11 @@ class WorldManifest:
         # Preserve historical manifest identities while the program call price is its default.
         if payload["prices"].get("program_micro_per_call") == 50:
             payload["prices"].pop("program_micro_per_call")
+        # A world that names no price law runs the integrator and hashes as it did
+        # before the PID existed: an added key may not rename a world that predates it.
+        for key, default in (("controller", "integral"), ("kp", 0.0), ("kd", 0.0)):
+            if payload["prices"].get(key) == default:
+                payload["prices"].pop(key)
         # A world that precommits no collateral headroom hashes as it did before
         # the key existed: an added key may not rename a world that predates it.
         if payload["exchange"].get("collateral_headroom_usd") == "0":
@@ -841,6 +853,14 @@ class WorldManifest:
             raise ValueError("prices.min_blame_share must be finite and in [0, 1]")
         if min(p.eta, p.decay, p.lambda_max) <= 0 or p.min_window_events < 1:
             raise ValueError("prices: eta, decay, lambda_max > 0 and min_window_events >= 1")
+        if p.controller not in ("integral", "pid"):
+            raise ValueError("prices.controller must be integral or pid")
+        for name in ("kp", "kd"):
+            value = getattr(p, name)
+            if type(value) not in (int, float) or not isfinite(value) or value < 0:
+                raise ValueError(f"prices.{name} must be finite and nonnegative")
+        if p.controller == "integral" and (p.kp or p.kd):
+            raise ValueError("prices.kp and prices.kd need prices.controller = \"pid\"")
 
 
 def duration_ns(value: Any) -> int:
@@ -1073,6 +1093,9 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         penalty_cap=pr.get("penalty_cap", 0.5),
         min_blame_share=pr.get("min_blame_share", 0.1),
         program_micro_per_call=int(pr.get("program_micro_per_call", 50)),
+        controller=pr.get("controller", "integral"),
+        kp=pr.get("kp", 0.0),
+        kd=pr.get("kd", 0.0),
     )
     # Scripted providers run in virtual time, including live-shaped test fixtures.
     default_min_tick = "1s" if all(m.provider == "fake" for m in models) else "10s"

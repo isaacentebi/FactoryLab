@@ -325,6 +325,12 @@ max_leverage = 3
 
 address_enabled = true
 [prices]
+# The PID price law (essay II.II.b): eta is the integral gain, kp raises the price in
+# proportion to the window's violation, kd damps it on the measurement's rate of
+# change. kappa is the integrator's damping and is unused under the PID.
+controller = "pid"
+kp = 0.5
+kd = 0.25
 kappa = 0.5
 eta = 0.5
 decay = 0.1

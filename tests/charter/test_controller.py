@@ -132,6 +132,8 @@ def test_clipping_counts_only_attempts_beyond_bounds_and_tracks_actual_steps(led
     assert prices.snapshot()["cards"]["cost"] == {
         "lambda": 2.0, "updates": 7, "saturations": 4, "max_step": 2.0,
         "last_window_end_event": 6, "effective_lambda": 2.0, "relief_window": None,
+        # The integrator's price is its accumulated pressure; no stable failure ratcheted it.
+        "integral": 2.0, "failing_windows": 0,
     }
     entries = evidence(ledger)
     assert [item["lambda_after"] for item in entries] == [2, 2, 1, 0, 0, 2, 2]

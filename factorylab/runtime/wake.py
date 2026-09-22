@@ -657,6 +657,11 @@ class _Observatory:
         self._respond(item.get("window"), {"response": "price_relief",
                                            "card_id": item.get("card_id")})
 
+    def _on_immune_price_ratchet(self, item: dict) -> None:
+        self._respond(item.get("window"), {"response": "price_ratchet",
+                                           "card_id": item.get("card_id"),
+                                           "duration": item.get("duration")})
+
     def _on_novelty_grant(self, item: dict) -> None:
         self._respond(item.get("window"), {"response": "novelty_grant"})
 
