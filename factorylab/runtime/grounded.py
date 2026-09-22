@@ -50,6 +50,12 @@ class GroundedContract:
     # Historical checkpoints omitted the frozen emitted kind; preserve their
     # final-commission fallback through the built-in producer-return route.
     subject_kind: str = "ProducerReturn"
+    # The first provisional verdict and its judge. When the world never speaks
+    # (an unknown finding, a malformed one, or the close horizon) the decision
+    # still learns from this fast opinion rather than being discarded: a learner
+    # paid only by consequences that rarely arrive stops exploring (essay II.IV.b).
+    provisional_score: float | None = None
+    provisional_judge: str | None = None
 
     def __post_init__(self) -> None:
         if not self.handle or not self.producer_id:
@@ -70,9 +76,12 @@ class GroundedContract:
 
     def with_initial(
         self, *, judge_handle: str, evaluator_id: str, forecast_handles: Iterable[str],
-        forecasts: Iterable[Mapping] = (),
+        forecasts: Iterable[Mapping] = (), score: float | None = None,
     ) -> GroundedContract:
-        """Attach the independently sampled first interpretation without changing its horizon."""
+        """Attach the independently sampled first interpretation without changing its horizon.
+
+        Guarantees the first numeric provisional verdict is kept and never replaced.
+        """
         evaluators = tuple(dict.fromkeys((*self.initial_evaluators, evaluator_id)))
         handles = tuple(dict.fromkeys((*self.forecast_handles, *forecast_handles)))
         claims = {str(v.get("handle")): dict(v) for v in self.forecasts}
@@ -84,6 +93,8 @@ class GroundedContract:
             initial_evaluators=evaluators,
             forecast_handles=handles,
             forecasts=tuple(claims.values()),
+            **({"provisional_score": float(score), "provisional_judge": judge_handle}
+               if score is not None and self.provisional_score is None else {}),
         )
 
     def requested(self) -> GroundedContract:

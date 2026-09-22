@@ -1494,13 +1494,22 @@ class FeedbackMixin:
         self.ledger.append({"kind": "consequence.unknown", "handle": handle,
                             "reason": reason, "ts": self.clock.now_ns})
         if self.queue.get(handle).status in (SettleStatus.PENDING, SettleStatus.TIMED_OUT):
-            self.queue.settle(handle, channel=CH_VERDICT, score=0.0,
-                              status=SettleStatus.CENSORED,
-                              definition_version=f"{GROUNDED_DEFINITION}-unknown",
-                              sampling_ref=None)
-            self.stats.censored += 1
-            self.window.outcomes += 1
-            self.window.censored += 1
+            if contract.provisional_score is not None:
+                # The world did not speak; the fast opinion stands so the decision
+                # still teaches its learner. It is labelled apart from a grounded score.
+                self._settle_priced(
+                    handle, channel=CH_VERDICT, score=contract.provisional_score,
+                    definition_version=f"{GROUNDED_DEFINITION}-provisional",
+                    sampling_ref=contract.provisional_judge, cards="producer")
+                self.stats.verdicts += 1
+            else:
+                self.queue.settle(handle, channel=CH_VERDICT, score=0.0,
+                                  status=SettleStatus.CENSORED,
+                                  definition_version=f"{GROUNDED_DEFINITION}-unknown",
+                                  sampling_ref=None)
+                self.stats.censored += 1
+                self.window.outcomes += 1
+                self.window.censored += 1
         self.pending.pop(handle, None)
         self.grounded_pending.pop(handle, None)
         self.grounded_closed.add(handle)

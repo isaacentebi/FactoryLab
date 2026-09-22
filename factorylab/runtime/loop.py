@@ -1342,7 +1342,8 @@ class Runtime(
             # A numeric provisional opinion makes this evaluator non-fresh even
             # when the subject has no commitment the runtime can measure.
             self.grounded_pending[about] = self.grounded_pending[about].with_initial(
-                judge_handle=handle, evaluator_id=sample.chosen, forecast_handles=())
+                judge_handle=handle, evaluator_id=sample.chosen, forecast_handles=(),
+                score=verdict)
         if self._judged_commitment(about, payload) is None:
             # Nothing was committed to, so there is nothing to be right or wrong
             # about. The commission is answered unmeasured: no standing moves and
