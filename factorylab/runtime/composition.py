@@ -4,6 +4,13 @@ Seats compose one another's work only through published contracts: an assembly's
 self-description, a tool's promised return, and a request addressed to a *kind* of
 work rather than to a peer's id. What composition earns flows back through the one
 reward channel there is. Nothing here is a channel between seats.
+
+"Respond in kind" (essay II.I.b; information audit M3) is not built as a return
+path. A child already answers with its outputs, and a child may itself issue
+requests (to a kind, with a forwarded propensity), which are self-describing and
+author-neutral. A follow-on request addressed *back to its parent* would name a
+peer, which is the id addressing F5 removes and a third channel R11 forbids, so a
+child that wants more work done asks for a kind like anyone else.
 """
 
 from __future__ import annotations

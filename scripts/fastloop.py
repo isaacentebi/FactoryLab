@@ -55,6 +55,22 @@ DEFAULT_OUT = ROOT / "work/fastloop"
 
 # --- the free tier: a scripted population that exercises the real contracts ---------
 
+#: The one task the scripted population requests of a kind, and the one tool it
+#: registers: fixtures that reach the composition path (W4), not prompts.
+CHILD_TASK = "Summarise the funding state of the named coin."
+HALF_SPREAD: dict[str, Any] = {
+    "kind": "tool", "id": "half-spread",
+    "description": "Half the spread in price units for a mid and a width in basis points.",
+    "args_schema": {"type": "object", "properties": {
+        "mid": {"type": "number"}, "bps": {"type": "integer"}}, "required": ["mid", "bps"]},
+    "returns_schema": {"type": "object", "properties": {"half_spread": {"type": "number"}},
+                       "required": ["half_spread"]},
+    "code": ("import json,sys\na=json.load(sys.stdin)\n"
+             "print(json.dumps({'half_spread': a['mid']*a['bps']/20000}))"),
+    "timeout_s": 2,
+}
+
+
 class PolicyProvider(ScriptedProvider):
     """A deterministic stand-in population for the edition-4 contracts.
 
@@ -94,12 +110,17 @@ class PolicyProvider(ScriptedProvider):
             reply = {"vote": True, "reason": "scripted yes"}
         elif desc.startswith("Testify"):
             reply = {"assessment": "scripted testimony"}
+        elif desc == CHILD_TASK:
+            reply = {"summary": "scripted summary", "action": "hold"}
         else:
+            # Whether the world already lists the scripted tool, read off this prompt.
+            self.tool_listed = f'"{HALF_SPREAD["id"]}"' in text
             reply = self._decide(inputs)
         return ModelResponse(req.model_id, json.dumps(reply), len(text) // 4, 60, "stop",
                              cost_micro=1)
 
     def _decide(self, inputs: dict[str, Any]) -> dict[str, Any]:
+        tool_listed = getattr(self, "tool_listed", False)
         if "tool_results" in inputs:
             # The PR121 journey: after a tool trade, report it as "order" with no fields.
             wrote = any(str(r.get("tool", "")).startswith("venue.place")
@@ -110,6 +131,23 @@ class PolicyProvider(ScriptedProvider):
         self.decisions += 1
         n = self.decisions
         mid = (inputs.get("payload") or {}).get("mids", {}).get("BTC")
+        # W4 plumbing, not a behaviour: one population tool is offered until it is
+        # listed, then called now and then by whichever seat is drawn, and a request
+        # for a kind of work carries a forwarded propensity, so the composition path
+        # and both credits are reached on the free tier.
+        if not tool_listed and n % 5 == 2:
+            return {"action": "build", "register": [HALF_SPREAD]}
+        if tool_listed and n % 6 == 1:
+            return {"action": "investigate", "tool_calls": [{
+                "tool": HALF_SPREAD["id"],
+                "args": {"mid": float(mid) if mid else 100.0, "bps": 10}}]}
+        if n % 9 == 4:
+            return {"action": "investigate", "requests": [{
+                "target": "ProducerReturn", "description": CHILD_TASK,
+                "inputs": {"coin": "BTC"}, "outcome_schema": {
+                    "type": "object", "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"]},
+                "propensity": {"request": 0.5, "hold": 0.5}, "chosen": "request"}]}
         if n % 7 == 3 and mid:
             # The same resting sell twice (decisions 264 and 273), above the market;
             # the venue takes both (Chapter II rulings, R6).
@@ -211,6 +249,7 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                              "mean_y": (round(statistics.fmean(e["score"] for e in opportunity),
                                               3) if opportunity else None)},
         "reward_chain": reward_chain(events),
+        "composition": composition(events),
         "orders": {"intents": dict(intents),
                    "reported_not_placed": kinds.get("order.reported", 0),
                    "refused": kinds.get("order.refused", 0),
@@ -292,6 +331,37 @@ def reward_chain(events: list[dict[str, Any]]) -> dict[str, Any]:
         "exposures_nonzero": sum(1 for e in exposures if (e.get("score") or 0) > 0),
         "noop_share_by_router": {actor: round(c["noop"] / c["draws"], 3)
                                  for actor, c in sorted(draws.items()) if c["draws"]},
+    }
+
+
+def composition(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """How far composition through contracts reached (W4), from the diary alone.
+
+    Plumbing counts, never targets (rulings R12): requests by the kind they named,
+    those refused before any decision opened, executor credits paid through the
+    reward channel, population-tool calls by a seat of another lineage than the
+    tool's builder, and the credits those calls carried to the builders.
+    """
+    children = [e for e in events if e.get("kind") == "request.child"]
+    settled = [e for e in events if e.get("kind") == "composed.settled"]
+    paid = [e for e in settled if e.get("credit") is not None]
+    calls = [e for e in events if e.get("kind") == "tool.population_call"]
+    tool_credits = [e for e in events if e.get("kind") == "credit.tool"]
+    return {
+        "child_requests_by_kind": dict(collections.Counter(
+            str(e.get("requested", e.get("target"))) for e in children)),
+        "child_requests_forwarding_propensity": sum(
+            1 for e in children if e.get("forwarded_propensity")),
+        "requests_refused": sum(1 for e in events if e.get("kind") == "requests.refused"),
+        "executor_credits_held": sum(1 for e in events if e.get("kind") == "credit.composed"),
+        "executor_credits_withheld_same_lineage": sum(
+            1 for e in events if e.get("kind") == "credit.withheld"),
+        "executor_credits_paid": len(paid),
+        "executor_credit_sum": round(sum(e["credit"] for e in paid), 6),
+        "population_tool_calls": len(calls),
+        "population_tool_calls_by_non_builder": sum(1 for e in calls if e.get("across_lineage")),
+        "tool_builder_credits": len(tool_credits),
+        "tool_builder_credit_sum": round(sum(e.get("credit") or 0 for e in tool_credits), 6),
     }
 
 
@@ -386,7 +456,7 @@ def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
     for card in cards:
         add(total, {k: card.get(k) for k in (
             "ticks", "calls", "invocations", "malformed_reasons", "producer_actions",
-            "producer_settlements", "orders", "opportunity_cost")
+            "producer_settlements", "orders", "opportunity_cost", "composition")
             if card.get(k) is not None})
     # Averages and rates are recomputed from the seeds, never summed.
     holds = total.get("opportunity_cost", {})
