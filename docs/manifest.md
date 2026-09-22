@@ -2136,7 +2136,11 @@ PROPENSITY block renders once. No judge-facing projection carries `producer_id`,
 `initial_evaluators`, `final_evaluators` or `excluded_evaluators`; they stay on the
 ledger and on the event, where routing reads them. A judge is not shown its own
 consequence standing, and `your_action_policy` is absent when a seat has no
-registered learner.
+registered learner. When it has one, `your_action_policy` is one draw from that
+learner, `{recommended, p}`, never the distribution (Chapter II rulings R4,
+information audit P3). A seat whose action taken is the recommended action is
+recorded at the learner's own policy, so its round is on-policy; otherwise its own
+declared propensity stands, floored as before.
 
 A decision may buy up to five tool rounds, bounded by its existing money and model
 call ceilings. Known reads can extend retrieval; a write or child call ends it.
