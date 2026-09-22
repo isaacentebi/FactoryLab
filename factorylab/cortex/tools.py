@@ -218,9 +218,11 @@ def web_search_spec(price_micro_per_call: int, max_call_usd: str) -> dict:
         "args_schema": {"type": "object", "properties": {
             "query": {"type": "string"}, "max_results": {"type": "integer"}},
             "required": ["query"], "additionalProperties": False,
-            # Every published tool carries examples its own schema accepts (B1).
-            "examples": [{"query": "Hyperliquid HYPE funding rate history"},
-                         {"query": "USDC depeg news", "max_results": 3}]},
+            # Every published tool carries examples its own schema accepts (B1). They
+            # are placeholders on purpose: an example topic is a suggested plan
+            # (smuggling audit D5).
+            "examples": [{"query": "<query>"},
+                         {"query": "<query>", "max_results": 3}]},
     }
 
 

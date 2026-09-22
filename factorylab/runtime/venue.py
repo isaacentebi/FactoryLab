@@ -582,11 +582,11 @@ class VenueMixin:
         batch_dropped = any(d.get("section") == "tool_calls" and "index" not in d
                             for d in ret.dropped)
         if attempted or batch_dropped:
+            # The refusal states the fact and no remedy (smuggling audit D6).
             self._refuse_order(
                 ret.handle, "nothing was submitted: this decision's venue write was refused "
-                f"({attempted or 'its tool batch was dropped'}), so its answer's order was "
-                "not executed in the write's place -- a decision acts once. Correct the "
-                "write and place it next decision")
+                f"({attempted or 'its tool batch was dropped'}), and its answer's order does "
+                "not execute in the write's place")
             return
         side = out.get("side")
         if not isinstance(side, str) or side.lower() not in ("buy", "sell"):

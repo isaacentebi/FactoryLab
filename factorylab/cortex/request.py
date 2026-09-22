@@ -227,48 +227,26 @@ YOU_HEADER = "YOU\n"
 
 WORLD_UPDATE_HEADER = "WORLD UPDATE\n"
 
-#: GPT-6's third reading, §8, verbatim: the outcome-schema text. It is rendered
-#: once per request, immediately after the schema it is about.
+#: What every return must satisfy, rendered once per request immediately after the
+#: schema it is about: the tool-round protocol and the refusal form, and nothing
+#: else (smuggling audit D1, primitive audit F4; essay II.I.a, robust simplicity).
+#: The pause, monetary-unit, forecast and execution-claim paragraphs of GPT-6's §8
+#: were coaching no code read; a forecast's shape is its own schema's. The
+#: fidelity-objection shape is not repeated here either: it is published once, in
+#: the evaluator answer schema (``settlement.fidelity.objection_schema``), which is
+#: where ``Settler.record_objection`` parses it. If that pipeline is deleted, its
+#: schema goes with it and this text is unaffected.
 OUTCOME_CONTRACT = """OUTCOME CONTRACT
 
 Return the public result required by this request's schema. Optional private
 continuity fields are working_state and ack_through.
 
 Return exactly one JSON object for this turn. To use tools, submit tool_calls
-and end your response; omit final-answer fields you cannot fill yet.
-Actual results arrive in the next request under
-tool_results; earlier results may appear under seen_tool_results. Do not write
-imagined tool responses or additional turns. Use returned evidence to continue
-the investigation or answer the original request.
+and end your response; omit final-answer fields you cannot fill yet. Tool
+results arrive in the next request under tool_results; earlier results may
+appear under seen_tool_results.
 
-For an execution claim, distinguish:
-- intended: no operation has been submitted;
-- submitted: an operation identifier exists, but settlement is not known;
-- settled: an addressed receipt establishes the consequence;
-- rejected: an addressed receipt establishes refusal;
-- unknown: the necessary observation is unavailable.
-
-Reference the exact operation or outcome identifier. A narrative assertion does
-not establish execution or payment.
-
-For a forecast, identify the claim, observation rule, horizon, probability and
-the decision it concerns. Do not replace an unobserved outcome with false.
-
-For a fidelity objection, supply:
-{
-  "value": "<one fixed norm>",
-  "measurement": "<identified card or observation>",
-  "evidence": "<specific evidence of a mismatch>",
-  "uncertainty": <number from 0 to 1>
-}
-The objection is a contestable claim. The measurement it challenges cannot
-establish its own fidelity.
-
-For a pause, state the next relevant condition when you can identify one.
-Do not invent a condition merely to justify a pause.
-
-Use monetary quantities with an explicit asset, custody account and unit.
-Keep resource facts separate from learning scores."""
+To decline the request, return {"status": "cannot", "reason": "<reason>"}."""
 
 #: Every moving block is rendered as compact JSON, like the stable prefix: the
 #: indentation carried no information and cost about an eighth of every prompt.
@@ -657,10 +635,9 @@ class Request:
              "OUTCOME SCHEMA\n"
              f"{json.dumps(self.outcome_schema, sort_keys=True, separators=_COMPACT)}"
              f"{tool_call_instruction}"),
-            # §8's outcome-schema text, once per request and immediately after the
-            # schema it is about: what an execution claim must distinguish, what a
-            # forecast and an objection must carry, and that money names its asset,
-            # its custody account and its unit.
+            # What every return must satisfy, once per request and immediately
+            # after the schema it is about: the tool-round protocol and the refusal
+            # form (smuggling audit D1).
             ("outcome_contract", OUTCOME_CONTRACT),
             ("completion_criterion", f"COMPLETION CRITERION\n{self.completion_criterion}"),
         ])

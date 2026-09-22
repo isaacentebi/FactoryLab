@@ -262,11 +262,13 @@ by `catalogue.search`, whose result carries `models`, `tools` and
 in the prefix — and the schemas a decision never reads no longer ride in front
 of every decision.
 
-The **OUTCOME CONTRACT** (§8, verbatim) is rendered once per request,
-immediately after the outcome schema it is about: what an execution claim must
-distinguish (`intended`, `submitted`, `settled`, `rejected`, `unknown`), what a
-forecast and a fidelity objection must carry, what a pause must state, and that
-a monetary quantity names its asset, its custody account and its unit.
+The **OUTCOME CONTRACT** is rendered once per request, immediately after the
+outcome schema it is about. It states what every return must satisfy and
+nothing else: the tool-round protocol and the refusal form
+(`{"status": "cannot", "reason": ...}`). The execution-claim taxonomy, the pause,
+forecast and monetary-unit paragraphs and the duplicated fidelity-objection shape
+of §8 were removed (Chapter II rulings, smuggling audit D1): no code read them,
+and a fidelity objection's shape is published in the evaluator answer schema.
 
 The change is measured, not assumed: every `invocation` item carries `sections`,
 the UTF-8 bytes rendered per prompt section (`stable_prefix`, `you`,
