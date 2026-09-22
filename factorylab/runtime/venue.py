@@ -513,49 +513,6 @@ class VenueMixin:
             })
         return rows
 
-    def duplicate_resting_order(self, seat: str, handle: str, client_id: str,
-                                operation: str, args: dict) -> str | None:
-        """Why a new order would repeat one this seat already has resting, or None.
-
-        Guarantees only an exact repeat is named: same seat, coin, side, market and
-        size as an order the venue acknowledged as resting whose unfilled quantity
-        is still open. A retry of the same client identity is never a duplicate
-        (it reconciles), and neither is a reduction, a different size, or another
-        seat's order.
-        """
-        if operation not in ("venue.place_market", "venue.place_limit"):
-            return None
-        if args.get("reduce_only") is True or client_id in self.order_intents:
-            return None
-        resting = {str(intent["result"].get("order_id")): intent
-                   for intent in self.order_intents.values()
-                   if intent["operation"] in ("venue.place_market", "venue.place_limit")
-                   and (intent.get("result") or {}).get("order_id") is not None}
-        try:
-            size = Decimal(str(args.get("size")))
-        except ArithmeticError:
-            return None
-        for order in self.consequences.table.orders:
-            prior = resting.get(str(order.order_id))
-            if not order.remaining or prior is None:
-                continue
-            owner = (self.handle_to_assembly.get(prior["handle"])
-                     or self.outcomes.seat_of(prior["handle"]))
-            if prior["handle"] != handle and owner != seat:
-                continue
-            before = prior["args"]
-            try:
-                same_size = Decimal(str(before.get("size"))) == size
-            except ArithmeticError:
-                continue
-            if (same_size and before.get("coin") == args.get("coin")
-                    and before.get("side") == args.get("side")
-                    and before.get("market", "perp") == args.get("market", "perp")):
-                return (f"an identical {args.get('side')} {size} {args.get('coin')} order "
-                        f"from you is already resting (order_id {order.order_id}); cancel "
-                        "or change it before placing another")
-        return None
-
     def _execute_outputs(self, ret: Return) -> None:
         out = ret.outputs
         attempted = self.venue_attempts.pop(ret.handle, None)
@@ -582,11 +539,11 @@ class VenueMixin:
         batch_dropped = any(d.get("section") == "tool_calls" and "index" not in d
                             for d in ret.dropped)
         if attempted or batch_dropped:
+            # The refusal states the fact and no remedy (smuggling audit D6).
             self._refuse_order(
                 ret.handle, "nothing was submitted: this decision's venue write was refused "
-                f"({attempted or 'its tool batch was dropped'}), so its answer's order was "
-                "not executed in the write's place -- a decision acts once. Correct the "
-                "write and place it next decision")
+                f"({attempted or 'its tool batch was dropped'}), and its answer's order does "
+                "not execute in the write's place")
             return
         side = out.get("side")
         if not isinstance(side, str) or side.lower() not in ("buy", "sell"):
@@ -611,14 +568,6 @@ class VenueMixin:
         except (ValueError, ArithmeticError) as exc:
             self._refuse_order(ret.handle,
                                f"order output is not a readable order: {type(exc).__name__}")
-            return
-        args = {"coin": order.coin, "side": "buy" if order.is_buy else "sell",
-                "size": str(order.size), "market": order.market}
-        seat = self.handle_to_assembly.get(ret.handle) or self.outcomes.seat_of(ret.handle)
-        duplicate = self.duplicate_resting_order(seat, ret.handle, ret.handle,
-                                                 "venue.place_market", args)
-        if duplicate:
-            self._refuse_order(ret.handle, duplicate, kind="order.duplicate")
             return
         reason = self._order_collateral(ret.handle, order.coin, order.size, order.is_buy)
         result = ({"status": "rejected", "error": reason} if reason else self._venue_write(
@@ -659,9 +608,11 @@ class VenueMixin:
         """The first write of a batch that would be refused, and why, or None.
 
         Guarantees a batch of venue writes is weighed whole before any of it is
-        submitted: each write meets the same duplicate, collateral, class-transfer
-        and spot-inventory tests it would meet alone, and two identical placements
-        in one batch are one order written twice. ``writes`` is (slot, tool, args)
+        submitted: each write meets the same collateral, class-transfer and
+        spot-inventory tests it would meet alone, and two identical placements in
+        one batch are one order written twice (a decision acts once). An order
+        identical to one an earlier decision left resting is not refused: the venue
+        allows it and fees price it (Chapter II rulings, R6). ``writes`` is (slot, tool, args)
         in batch order. A hedge whose second leg would be refused therefore never
         leaves its first leg standing alone. Collateral is weighed per write against
         the account as it is now, less what the batch's earlier writes take from the
@@ -699,9 +650,6 @@ class VenueMixin:
             if key in placed:
                 return index, "the same order is placed twice in one batch"
             placed.add(key)
-            duplicate = self.duplicate_resting_order(seat, handle, client_id, tool, args)
-            if duplicate:
-                return index, duplicate
             try:
                 size = Decimal(str(args.get("size")))
                 price = Decimal(str(args["price"])) if "price" in args else None

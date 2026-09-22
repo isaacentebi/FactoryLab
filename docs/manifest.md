@@ -262,11 +262,13 @@ by `catalogue.search`, whose result carries `models`, `tools` and
 in the prefix — and the schemas a decision never reads no longer ride in front
 of every decision.
 
-The **OUTCOME CONTRACT** (§8, verbatim) is rendered once per request,
-immediately after the outcome schema it is about: what an execution claim must
-distinguish (`intended`, `submitted`, `settled`, `rejected`, `unknown`), what a
-forecast and a fidelity objection must carry, what a pause must state, and that
-a monetary quantity names its asset, its custody account and its unit.
+The **OUTCOME CONTRACT** is rendered once per request, immediately after the
+outcome schema it is about. It states what every return must satisfy and
+nothing else: the tool-round protocol and the refusal form
+(`{"status": "cannot", "reason": ...}`). The execution-claim taxonomy, the pause,
+forecast and monetary-unit paragraphs and the duplicated fidelity-objection shape
+of §8 were removed (Chapter II rulings, smuggling audit D1): no code read them,
+and a fidelity objection's shape is published in the evaluator answer schema.
 
 The change is measured, not assumed: every `invocation` item carries `sections`,
 the UTF-8 bytes rendered per prompt section (`stable_prefix`, `you`,
@@ -2134,7 +2136,11 @@ PROPENSITY block renders once. No judge-facing projection carries `producer_id`,
 `initial_evaluators`, `final_evaluators` or `excluded_evaluators`; they stay on the
 ledger and on the event, where routing reads them. A judge is not shown its own
 consequence standing, and `your_action_policy` is absent when a seat has no
-registered learner.
+registered learner. When it has one, `your_action_policy` is one draw from that
+learner, `{recommended, p}`, never the distribution (Chapter II rulings R4,
+information audit P3). A seat whose action taken is the recommended action is
+recorded at the learner's own policy, so its round is on-policy; otherwise its own
+declared propensity stands, floored as before.
 
 A decision may buy up to five tool rounds, bounded by its existing money and model
 call ceilings. Known reads can extend retrieval; a write or child call ends it.
