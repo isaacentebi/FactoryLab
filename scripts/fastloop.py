@@ -226,11 +226,59 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
                 if (named := sum(1 for e in opportunity if e.get("declined"))) else None),
         },
         "judge_unmeasured": kinds.get("evaluation.unmeasured", 0),
+        "reward_chain": reward_chain(events),
         "orders": {"intents": dict(intents),
                    "duplicates_refused": kinds.get("order.duplicate", 0),
                    "reported_not_placed": kinds.get("order.reported", 0),
                    "refused": kinds.get("order.refused", 0),
                    "infeasible": kinds.get("order.infeasible", 0)},
+    }
+
+
+def reward_chain(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """How far the reward chain of ruling R1 reached, from the diary alone.
+
+    A judge decision is an invocation in the ``evaluator`` role. It received a
+    consequence score when a ``verdict.consequence`` (or, on diaries written
+    before wave 2, a ``verdict.opportunity``) names it, and a meta grade when a
+    tier above read it: an ``evaluator.meta_grade`` entry, or on older diaries a
+    conformity settlement a meta's handle signed. The NOOP share is, per router,
+    the fraction of its own draws that woke nobody.
+    """
+    judges = {e.get("handle") for e in events
+              if e.get("kind") == "invocation" and e.get("role") == "evaluator"}
+    consequence = {e.get("judge_handle") if e.get("kind") == "verdict.opportunity"
+                   else e.get("handle") for e in events
+                   if e.get("kind") in ("verdict.consequence", "verdict.opportunity")}
+    graded = {e.get("handle") for e in events if e.get("kind") == "evaluator.meta_grade"}
+    for e in events:
+        ret = e.get("return") or {}
+        if (e.get("kind") == "decision.settle" and ret.get("status") == "settled"
+                and ret.get("definition_version") == "conformity-v1"
+                and ret.get("sampling_ref")):
+            graded.add(ret.get("handle"))
+    exposures = [e for e in events if e.get("kind") == "exposure.settled"]
+    draws: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+    for e in events:
+        if e.get("kind") != "decision.open" or e.get("parent_handle") is not None:
+            continue
+        prop = e.get("propensity") or {}
+        actor = str(e.get("actor", ""))
+        if not actor.startswith("router:"):
+            continue
+        draws[actor]["draws"] += 1
+        draws[actor]["noop"] += int(prop.get("chosen") == "NOOP")
+    n = len(judges)
+    return {
+        "judge_decisions": n,
+        "judge_consequence_share": (round(len(judges & consequence) / n, 3) if n else None),
+        "judge_meta_grade_share": round(len(judges & graded) / n, 3) if n else None,
+        "meta_consequence_events": sum(1 for e in events
+                                       if e.get("kind") == "meta.consequence"),
+        "exposures_settled": len(exposures),
+        "exposures_nonzero": sum(1 for e in exposures if (e.get("score") or 0) > 0),
+        "noop_share_by_router": {actor: round(c["noop"] / c["draws"], 3)
+                                 for actor, c in sorted(draws.items()) if c["draws"]},
     }
 
 
@@ -343,6 +391,17 @@ def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
     scored = sum(v for k, v in settled.items() if k.startswith("settled:"))
     total["learning_signal_rate"] = (round(scored / sum(settled.values()), 3)
                                      if settled else None)
+    chains = [c["reward_chain"] for c in cards if c.get("reward_chain")]
+    judges = sum(r["judge_decisions"] for r in chains)
+    total["reward_chain"] = {
+        "judge_decisions": judges,
+        **{share: (round(sum((r[share] or 0) * r["judge_decisions"] for r in chains)
+                         / judges, 3) if judges else None)
+           for share in ("judge_consequence_share", "judge_meta_grade_share")},
+        **{count: sum(r[count] for r in chains)
+           for count in ("meta_consequence_events", "exposures_settled", "exposures_nonzero")},
+        "noop_share_by_router_by_seed": [r["noop_share_by_router"] for r in chains],
+    }
     total["billed_usd"] = str(sum(Decimal(c.get("billed_usd", "0")) for c in cards))
     total["wall_seconds"] = max((c.get("wall_seconds", 0) for c in cards), default=0)
     total["prompt_bytes_median"] = {
