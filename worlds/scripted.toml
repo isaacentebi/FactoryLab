@@ -122,7 +122,6 @@ min_ratio = 3
 jitter_fraction = 0.2
 
 [prices]
-kappa = 0.5
 eta = 0.5
 decay = 0.1
 lambda_max = 1.0

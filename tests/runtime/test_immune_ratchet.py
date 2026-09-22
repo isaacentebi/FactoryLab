@@ -57,7 +57,6 @@ def test_stable_failure_raises_violated_price_with_duration_and_never_halves_it(
     assert [r["step"] for r in ratchets] == [
         rt.m.immune.gain_step * r["duration"] for r in ratchets]
     assert all(r["lambda_after"] >= r["lambda_before"] for r in ratchets)
-    assert not _items(rt, "immune.price_relief")
     assert prices == sorted(prices) and prices[-1] <= rt.m.prices.lambda_max
 
 

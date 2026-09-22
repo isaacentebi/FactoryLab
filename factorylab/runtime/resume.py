@@ -229,7 +229,17 @@ def decode(value: Any) -> Any:
         raise ResumeError("unknown checkpoint record type")
     if "$enum" in value:
         return cls(value["value"])
-    return cls(**{k: decode(v) for k, v in value["fields"].items()})
+    retired = _RETIRED_FIELDS.get(kind, ())
+    return cls(**{k: decode(v) for k, v in value["fields"].items() if k not in retired})
+
+
+# Fields of deleted mechanisms that older checkpoints still carry: read and ignored.
+# ``relief_window``: the halved-price relief (charter audit U2), replaced by the ratchet.
+# ``upward_releases``: the unread UpwardBuffer (time audit T9).
+_RETIRED_FIELDS = {
+    "_CardState": frozenset({"relief_window"}),
+    "RunStats": frozenset({"upward_releases"}),
+}
 
 
 class RecoveryJournal:
@@ -672,8 +682,7 @@ _COMPONENT_FIELDS = (
         "bindings",
     )),
     ("controller", "_PriceController__", (
-        "eta", "kappa", "decay", "lambda_max", "min_window_events", "cards",
-        "controller", "kp", "kd",
+        "eta", "decay", "lambda_max", "min_window_events", "cards", "kp", "kd",
     )),
     ("consequences", "", ("backstop", "table", "mids", "pending_orders", "deferred_events",
                           # R4-C: a released hold's exposure, and the censored
@@ -907,7 +916,7 @@ def restore_runtime(rt, state: dict) -> None:
         _resolve(rt, path).restore(saved)
     for name, prefix, names in _COMPONENT_FIELDS:
         for field in names:
-            if (name == "controller" and field in ("kappa", "controller", "kp", "kd")
+            if (name == "controller" and field in ("kp", "kd")
                     and field not in components[name]):
                 # Older checkpoints inherited these immutable parameters from the same manifest.
                 continue

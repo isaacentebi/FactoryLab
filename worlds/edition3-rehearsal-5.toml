@@ -293,7 +293,6 @@ population_tool_micro_per_call = 50
 max_leverage = 3
 
 [prices]
-kappa = 0.5
 eta = 0.5
 decay = 0.1
 lambda_max = 1.0

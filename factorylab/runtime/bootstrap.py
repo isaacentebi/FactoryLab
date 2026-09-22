@@ -749,12 +749,9 @@ class BootstrapMixin:
         self.controller = ImmunePriceController(
             self.ledger,
             eta=pr.eta,
-            kappa=pr.kappa,
             decay=pr.decay,
             lambda_max=pr.lambda_max,
             min_window_events=pr.min_window_events,
-            timing=self.timing,
-            controller=pr.controller,
             kp=pr.kp,
             kd=pr.kd,
         )

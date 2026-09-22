@@ -338,12 +338,9 @@ address_enabled = true
 # The PID price law (essay II.II.b): eta is the integral gain, kp raises the price in
 # proportion to the window's violation, kd raises it sooner while the measurement moves
 # deeper into violation (positive part only, Stooke et al. 2020, so it damps the climb
-# and never discounts a card still out of its region). kappa is the integrator's
-# damping and is unused under the PID.
-controller = "pid"
+# and never discounts a card still out of its region).
 kp = 0.5
 kd = 0.25
-kappa = 0.5
 eta = 0.5
 decay = 0.1
 lambda_max = 1.0

@@ -6,7 +6,6 @@ from typing import Literal
 
 from factorylab.charter.amendment import proposed_price
 from factorylab.kernel.ledger import Ledger
-from factorylab.kernel.timing import TimingRegistry
 
 
 def _number(value: float, name: str) -> float:
@@ -109,9 +108,7 @@ class _CardState:
     max_step: float = 0.0
     last_window_end_event: int | None = None
     previous_violation: float = 0.0
-    relief_window: int | None = None
-    # The integral term: accumulated pressure, bounded to [0, lambda_max]. The
-    # integral-only controller's price is this term, so the two stay equal there.
+    # The integral term: accumulated pressure, bounded to [0, lambda_max].
     integral: float = 0.0
     # The last accepted observation, for the PID's derivative on measurement.
     previous_value: float | None = None
@@ -120,38 +117,30 @@ class _CardState:
     failing_windows: int = 0
 
 
-CONTROLLERS = ("integral", "pid")
-
-
 class PriceController:
     """Prices stay bounded; revisions require ledgered windows or adopted proposals.
 
     The caller supplies settled observations. Prices are soft penalties only;
     this controller has no settlement, reserve, exploration or spending authority.
 
-    Two laws set a card's price from its window violation ``e`` (distance outside
-    the region, in region-relative units):
+    One law sets a card's price from its window violation ``e`` (distance outside
+    the region, in region-relative units): the PID of essay II.II.b ("the PID
+    controller through which lambda is progressively determined"; Stooke et al.
+    2020). ``lambda = Kp*e + I + D``, where ``I`` accumulates ``eta * e`` while
+    the card violates and leaks ``decay`` per window once it stops, and
+    ``D = Kd * max(0, d(measurement))`` is taken on the measurement, not the
+    error, so a moved region cannot kick the price. ``D`` acts only while the card
+    violates, and only its positive part (Stooke et al.'s own choice): a violation
+    growing fast is priced before the integral has had to wind up to meet it,
+    which is how Kd damps the escalation before it overshoots. A violation that is
+    shrinking but still outside the region is priced by ``P + I`` alone, never
+    below its accumulated integral: the damping the essay asks of Kd is on the
+    price's climb, not a cancellation of it. ``I`` is held in ``[0, lambda_max]``
+    and stops integrating only while the output is already saturated high without
+    it (``P + I >= lambda_max``) *and* the violation is still growing
+    (anti-windup). With ``Kp = Kd = 0`` the law is the integral alone.
 
-    * ``integral`` (the default, every world before the PID existed): the price is
-      an integrator, ``lambda += eta * e`` less a one-sided ``kappa`` damping while
-      the card violates, ``lambda -= decay`` once it stops.
-    * ``pid`` (Stooke et al. 2020; essay II.II.b): ``lambda = Kp*e + I + D``, where
-      ``I`` accumulates ``eta * e`` while the card violates and leaks ``decay`` per
-      window once it stops, and ``D = Kd * max(0, d(measurement))`` is taken on
-      the measurement, not the error, so a moved region cannot kick the price.
-      ``D`` acts only while the card violates, and only its positive part (Stooke
-      et al.'s own choice): a violation growing fast is priced before the integral
-      has had to wind up to meet it, which is how Kd damps the escalation before
-      it overshoots. A violation that is shrinking but still outside the region is
-      priced by ``P + I`` alone, never below its accumulated integral: the damping
-      the essay asks of Kd is on the price's climb, not a cancellation of it.
-      ``I`` is held in ``[0, lambda_max]`` and stops integrating only while the
-      output is already saturated high without it (``P + I >= lambda_max``) *and*
-      the violation is still growing (anti-windup). A sustained or shrinking
-      violation keeps accumulating pressure even while ``P`` alone would saturate,
-      so the price does not collapse to ``P`` the moment the violation eases.
-
-    Either way the price is clipped to ``[0, lambda_max]``.
+    The price is clipped to ``[0, lambda_max]``.
     """
 
     def __init__(
@@ -162,23 +151,14 @@ class PriceController:
         decay: float,
         lambda_max: float,
         min_window_events: int,
-        timing: TimingRegistry | None = None,
-        kappa: float = 0.5,
-        controller: str = "integral",
         kp: float = 0.0,
         kd: float = 0.0,
     ) -> None:
-        """Require finite rates, nonnegative gains/damping and positive bounds/window separation."""
-        if controller not in CONTROLLERS:
-            raise ValueError(f"controller must be one of {CONTROLLERS}")
-        self.__controller = controller
+        """Require finite rates, nonnegative gains and positive bounds/window separation."""
         self.__kp = _number(kp, "kp")
         self.__kd = _number(kd, "kd")
         if self.__kp < 0 or self.__kd < 0:
             raise ValueError("kp and kd must be nonnegative")
-        self.__kappa = _number(kappa, "kappa")
-        if self.__kappa < 0:
-            raise ValueError("kappa must be nonnegative")
         self.__eta = _number(eta, "eta")
         self.__decay = _number(decay, "decay")
         self.__lambda_max = _number(lambda_max, "lambda_max")
@@ -188,28 +168,14 @@ class PriceController:
             raise ValueError("min_window_events must be a positive integer")
         self.__min_window_events = min_window_events
         self.__ledger = ledger
-        self.__timing = timing
         self.__cards: dict[str, _CardState] = {}
 
     def register(self, region: CardRegion) -> None:
-        """Give a new card zero price and exclusive ownership of its timing closures.
-
-        Reuse an unstarted price loop's declared dependencies, or register a leaf
-        if absent. Existing closure history and duplicate card ids are rejected.
-        """
+        """Give a new card zero price; duplicate card ids are rejected."""
         if not isinstance(region, CardRegion):
             raise ValueError("region must be a CardRegion")
         if region.card_id in self.__cards:
             raise ValueError("card_id is already registered")
-        if self.__timing is not None:
-            loop_id = f"price:{region.card_id}"
-            try:
-                count = self.__timing.closure_count(loop_id)
-            except KeyError:
-                self.__timing.register_loop(loop_id, [])
-            else:
-                if count:
-                    raise ValueError("price timing loop must have no prior closures")
         self.__cards[region.card_id] = _CardState(region)
 
     def register_pending(self, card_id: str) -> None:
@@ -219,11 +185,6 @@ class PriceController:
         if card_id in self.__cards:
             raise ValueError("card_id is already registered")
         self.__ledger.append({"kind": "price.register", "card_id": card_id})
-        if self.__timing is not None:
-            try:
-                self.__timing.closure_count(f"price:{card_id}")
-            except KeyError:
-                self.__timing.register_loop(f"price:{card_id}", [])
         self.__cards[card_id] = _CardState(None)
 
     def clear_region(self, card_id: str) -> None:
@@ -291,25 +252,6 @@ class PriceController:
         """Return every registered card id, in registration order."""
         return tuple(self.__cards)
 
-    def relieve(self, card_id: str, *, window: int) -> None:
-        """Halve the effective price for one window without erasing accumulated pressure."""
-        state = self.__cards[card_id]
-        self.__ledger.append({
-            "kind": "immune.price_relief", "card_id": card_id, "window": window,
-            "lambda": state.price, "effective_lambda": state.price / 2,
-        })
-        self.__cards[card_id] = replace(state, relief_window=window)
-
-    def expire_relief(self, *, window: int) -> None:
-        """Restore underlying prices after the relief window's settlements have completed."""
-        for card_id, state in tuple(self.__cards.items()):
-            if state.relief_window is not None and state.relief_window <= window:
-                self.__ledger.append({
-                    "kind": "immune.price_relief_expired", "card_id": card_id,
-                    "window": window, "lambda": state.price,
-                })
-                self.__cards[card_id] = replace(state, relief_window=None)
-
     def remove(self, card_id: str, *, amendment_id: str) -> None:
         """Drop a known card's price and region only after recording its removal."""
         state = self.__cards[card_id]
@@ -320,7 +262,7 @@ class PriceController:
         del self.__cards[card_id]
 
     def update_region(self, region: CardRegion) -> None:
-        """Replace a registered card's bounds; its price, counts and timing history survive.
+        """Replace a registered card's bounds; its price and counts survive.
 
         The runtime calls this when a card's region is re-derived (a rolling bound
         moved, or a new edition restated the card). Unknown cards raise KeyError.
@@ -365,25 +307,8 @@ class PriceController:
             )
             return
         violation = self.violation(card_id, value)
-        if self.__controller == "pid":
-            requested, integral, terms = self._pid(state, value, violation)
-            damping = None
-        else:
-            damping = (
-                self.__kappa * max(0.0, state.previous_violation - violation)
-                if violation > 0 else 0.0
-            )
-            # The penalty ratchets while the violation lasts and decays only once it
-            # stops: damping slows the climb for a shrinking violation, but it can never
-            # turn a card that is still out of its region into a falling price.
-            requested = (
-                state.price + max(0.0, self.__eta * violation - damping)
-                if violation > 0 else state.price - self.__decay
-            )
-            terms = None
+        requested, integral, terms = self._pid(state, value, violation)
         price = min(self.__lambda_max, max(0.0, requested))
-        if terms is None:
-            integral = price  # the integral-only law's price is its integral
         saturated = requested < 0 or requested > self.__lambda_max
         updated = replace(
             state,
@@ -402,18 +327,13 @@ class PriceController:
             "value": value,
             "violation": violation,
             "previous_violation": state.previous_violation,
-            "damping": damping,
             "lambda_before": state.price,
             "lambda_after": price,
             "saturated": saturated,
             "window_end_event": window_end_event,
+            **terms,
         }
-        if terms is not None:
-            del entry["damping"]
-            entry.update({"controller": "pid", **terms})
         self.__ledger.append(entry)
-        if self.__timing is not None:
-            self.__timing.record_closure(f"price:{card_id}", window_end_event)
         self.__cards[card_id] = updated
 
     def _pid(self, state: _CardState, value: float,
@@ -461,7 +381,7 @@ class PriceController:
         state = self.__cards.get(card_id) if isinstance(card_id, str) else None
         if state is None:
             return 0.0
-        return state.price / 2 if state.relief_window is not None else state.price
+        return state.price
 
     def penalty(self, values: dict[str, float]) -> float:
         """Return the unclipped sum for known cards only; callers own score clipping."""
@@ -495,19 +415,15 @@ class PriceController:
         return {
             "parameters": {
                 "eta": self.__eta,
-                "kappa": self.__kappa,
                 "decay": self.__decay,
                 "lambda_max": self.__lambda_max,
                 "min_window_events": self.__min_window_events,
-                "controller": self.__controller,
                 "kp": self.__kp,
                 "kd": self.__kd,
             },
             "cards": {
                 card_id: {
                     "lambda": state.price,
-                    "effective_lambda": self.price(card_id),
-                    "relief_window": state.relief_window,
                     "updates": state.updates,
                     "saturations": state.saturations,
                     "max_step": state.max_step,

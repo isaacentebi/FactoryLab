@@ -84,7 +84,7 @@ def test_grounded_horizon_default_keeps_legacy_identity_and_nondefault_changes_i
     assert scripted.evaluation.grounded_horizon_ticks == 10
     assert "grounded_horizon_ticks" not in scripted.canonical_json()
     assert scripted.manifest_hash() == (
-        "f3bf34acc6aa2e9a530bd176453c1968e526b4083f7f3dedbea59636bdad2dd8"
+        "97160fcb7c2e78bb6ba9037f12e5332c93ba50648cc481f68ee9bb24e87ccc04"
     )
 
     implicit = manifest_from_dict(_base())
@@ -126,14 +126,6 @@ def test_clock_bounds_seed_validation_and_hash():
     d["clock"]["max_tick"] = "20m"
     with pytest.raises(ValueError, match="derived"):
         manifest_from_dict(d)
-
-
-@pytest.mark.parametrize("value", [-1, True, "0.5", float("nan"), float("inf")])
-def test_invalid_kappa_is_rejected(value):
-    raw = _base()
-    raw["prices"] = {"kappa": value}
-    with pytest.raises(ValueError, match="kappa"):
-        manifest_from_dict(raw)
 
 
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "200", None])

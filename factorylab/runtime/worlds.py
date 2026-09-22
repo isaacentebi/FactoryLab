@@ -301,18 +301,15 @@ class PricesSpec:
     decay: float = 0.1
     lambda_max: float = 1.0
     min_window_events: int = 1
-    kappa: float = 0.5
     penalty_cap: float = 0.5
     # Floor on a decision's share of a generic (non-attributable) violation, so
     # splitting participation across many decisions cannot dilute it away.
     min_blame_share: float = 0.1
     # The flat price of one program seat call (C8), reserved and committed like a model call.
     program_micro_per_call: int = 50
-    #: The price law (``charter.controller.PriceController``): ``integral`` is the
-    #: shipped integrator every earlier world ran; ``pid`` adds the proportional
-    #: gain ``kp`` and the derivative-on-measurement gain ``kd`` to the integral
-    #: gain ``eta`` (essay II.II.b). All three keys are hash-neutral at their defaults.
-    controller: str = "integral"
+    #: The one price law is the PID (``charter.controller.PriceController``, essay
+    #: II.II.b): ``kp`` is the proportional gain and ``kd`` the derivative-on-measurement
+    #: gain beside the integral gain ``eta``. At zero the law is the integral alone.
     kp: float = 0.0
     kd: float = 0.0
 
@@ -1007,21 +1004,15 @@ class WorldManifest:
         if (type(p.penalty_cap) not in (int, float) or not isfinite(p.penalty_cap)
                 or not 0 < p.penalty_cap < 1):
             raise ValueError("prices.penalty_cap must be finite and in (0, 1)")
-        if type(p.kappa) not in (int, float) or not isfinite(p.kappa) or p.kappa < 0:
-            raise ValueError("prices.kappa must be finite and nonnegative")
         if (type(p.min_blame_share) not in (int, float) or not isfinite(p.min_blame_share)
                 or not 0 <= p.min_blame_share <= 1):
             raise ValueError("prices.min_blame_share must be finite and in [0, 1]")
         if min(p.eta, p.decay, p.lambda_max) <= 0 or p.min_window_events < 1:
             raise ValueError("prices: eta, decay, lambda_max > 0 and min_window_events >= 1")
-        if p.controller not in ("integral", "pid"):
-            raise ValueError("prices.controller must be integral or pid")
         for name in ("kp", "kd"):
             value = getattr(p, name)
             if type(value) not in (int, float) or not isfinite(value) or value < 0:
                 raise ValueError(f"prices.{name} must be finite and nonnegative")
-        if p.controller == "integral" and (p.kp or p.kd):
-            raise ValueError("prices.kp and prices.kd need prices.controller = \"pid\"")
 
 
 def duration_ns(value: Any) -> int:
@@ -1249,16 +1240,19 @@ def manifest_from_dict(d: dict[str, Any]) -> WorldManifest:
         no_swap_regret_kinds=_manifest_kinds(ev.get("no_swap_regret_kinds", [])),
     )
     pr = d.get("prices") or {}
+    for key in ("kappa", "controller"):
+        if key in pr:
+            # Charter audit U3: the PID is the only price law, so there is no law to
+            # name and no integrator damping; a manifest that says so would lie.
+            raise ValueError(f"prices.{key} was removed: the PID is the only price law")
     prices = PricesSpec(
         eta=float(pr.get("eta", 0.5)),
-        kappa=pr.get("kappa", 0.5),
         decay=float(pr.get("decay", 0.1)),
         lambda_max=float(pr.get("lambda_max", 1.0)),
         min_window_events=int(pr.get("min_window_events", 1)),
         penalty_cap=pr.get("penalty_cap", 0.5),
         min_blame_share=pr.get("min_blame_share", 0.1),
         program_micro_per_call=int(pr.get("program_micro_per_call", 50)),
-        controller=pr.get("controller", "integral"),
         kp=pr.get("kp", 0.0),
         kd=pr.get("kd", 0.0),
     )

@@ -683,9 +683,8 @@ parameters; the observer never substitutes a second set of thresholds.
 | `evaluation.verdict_timeout_events` (or `verdict_timeout_ticks`) | positive integer, in world ticks | `20` | Yes: how long a judgement waits for its judge (a verdict for a producer return, a meta verdict for a verdict) before it is censored. |
 | `prices.penalty_cap` | finite number strictly between 0 and 1 | `0.5` | Yes: maximum penalty before attribution. |
 | `prices.min_blame_share` | finite number in [0, 1] | `0.1` | Yes: floor on one decision's share of a generic (non-attributable) violation; absent from the manifest hash at its default. |
-| `prices.controller` | `integral` or `pid` | `integral` | Yes: the price law. `integral` is the shipped integrator (`lambda += eta*v` less the one-sided `kappa` damping while violating, `-= decay` once compliant). `pid` is `lambda = kp*v + I + D`: `I` accumulates `eta*v` while violating and leaks `decay` once compliant, held in `[0, lambda_max]` and not integrated only while `P + I` already reaches `lambda_max` and the violation is growing (anti-windup); `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. Absent from the manifest hash at its default. |
-| `prices.kp` | finite nonnegative number | `0.0` | Yes: PID proportional gain; nonzero only with `controller = "pid"`. Absent from the hash at its default. |
-| `prices.kd` | finite nonnegative number | `0.0` | Yes: PID derivative gain; nonzero only with `controller = "pid"`. Absent from the hash at its default. |
+| `prices.kp` | finite nonnegative number | `0.0` | Yes: the PID's proportional gain. The PID is the only price law (charter audit U3): `lambda = kp*v + I + D`, where `I` accumulates `eta*v` while violating and leaks `decay` once compliant, held in `[0, lambda_max]` and not integrated only while `P + I` already reaches `lambda_max` and the violation is growing (anti-windup); `D = kd * max(0, d(measurement))/scale`, on the measurement rather than the error, signed toward violation, applied only while violating and only its positive part (Stooke et al. 2020), so a card still out of its region is never priced below `P + I`. With `kp = kd = 0` the law is the integral alone. `prices.controller` and `prices.kappa` are refused. |
+| `prices.kd` | finite nonnegative number | `0.0` | Yes: the PID's derivative-on-measurement gain. |
 | `immune.k` | integer, at least 2 | `3` | Yes: consecutive windows or changes required for diagnosis. |
 | `immune.bins` | integer, exactly 3 | `3` | Yes: inside, up to one scale unit outside, more than one unit outside. |
 | `immune.registration_bins` | increasing nonnegative numeric array | `[0, 2]` | Yes: zero, 1–2, 3+ registrations. Values equal to a cut enter the lower bin. |
@@ -707,9 +706,9 @@ price and accumulated pressure, bounded by `prices.lambda_max`
 attractor (`immune.price_ratchet_ended`). The exploration gain raised for stable
 failure steps back toward each router's seed gamma once a window diagnoses no
 pathology (`immune.gain` with pathology `cleared`); a learning-dead window holds
-it. That state resumes with the controller. (Worlds before this change halved the
-violated cards' effective price for one window instead; `immune.price_relief`
-entries in their diaries record that.)
+it. That state resumes with the controller. (Older worlds halved the violated
+cards' effective price for one window instead; `immune.price_relief` entries in
+their diaries record that. The relief is deleted, charter audit U2.)
 
 ## Timing interpretation
 
