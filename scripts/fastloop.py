@@ -179,13 +179,8 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         ret = e.get("return") or {}
         if role.get(ret.get("handle")) == "producer" and ret.get("channel") == "verdict":
-            version = str(ret.get("definition_version"))
-            label = ("provisional" if version.endswith("-provisional") else
-                     "unknown" if version.endswith("-unknown") else version)
-            producer_settle[f"{ret.get('status')}:{label}"] += 1
+            producer_settle[f"{ret.get('status')}:{ret.get('definition_version')}"] += 1
     kinds = collections.Counter(e.get("kind") for e in events)
-    findings = collections.Counter(e.get("status") for e in events
-                                   if e.get("kind") == "consequence.finding")
     intents = collections.Counter(e.get("operation") for e in events
                                   if e.get("kind") == "order.intent")
     opportunity = [e for e in events if e.get("kind") == "consequence.opportunity"]
@@ -207,18 +202,12 @@ def scorecard(events: list[dict[str, Any]]) -> dict[str, Any]:
         "producer_actions": dict(actions.most_common()),
         "producer_settlements": dict(producer_settle.most_common()),
         "learning_signal_rate": round(scored / total, 3) if total else None,
-        "grounded_findings": dict(findings),
-        "opportunity_cost": {
-            "priced": len(opportunity),
-            "mean_score": (round(statistics.fmean(e["score"] for e in opportunity), 3)
-                           if opportunity else None),
-            "named_declined": sum(1 for e in opportunity if e.get("declined")),
-            "named_regret_rate": (
-                round(sum(Decimal(e["regret_bps"]) > 0 for e in opportunity
-                          if e.get("declined")) / named, 3)
-                if (named := sum(1 for e in opportunity if e.get("declined"))) else None),
-        },
-        "judge_unmeasured": kinds.get("evaluation.unmeasured", 0),
+        # The measured y of holds that named a declined trade (ruling R2): its mean is
+        # what a hold earns its judges' predictions against.
+        "opportunity_cost": {"priced": len(opportunity),
+                             "y_sum": sum(e["score"] for e in opportunity),
+                             "mean_y": (round(statistics.fmean(e["score"] for e in opportunity),
+                                              3) if opportunity else None)},
         "reward_chain": reward_chain(events),
         "orders": {"intents": dict(intents),
                    "reported_not_placed": kinds.get("order.reported", 0),
@@ -239,6 +228,27 @@ def reward_chain(events: list[dict[str, Any]]) -> dict[str, Any]:
     """
     judges = {e.get("handle") for e in events
               if e.get("kind") == "invocation" and e.get("role") == "evaluator"}
+    metas = {e.get("handle") for e in events
+             if e.get("kind") == "invocation" and e.get("role") == "meta"}
+    # A settlement carried a real signal when it is a score the tier above or the world
+    # gave: the reward chain's own definition, or on older diaries a meta's signed
+    # conformity or a meta's consequence. Censored, declined and kernel-zero ones did not.
+    signalled = set()
+    for e in events:
+        ret = e.get("return") or {}
+        version = ret.get("definition_version")
+        if e.get("kind") == "decision.settle" and ret.get("status") == "settled" and (
+                version in ("evaluation-v1", "meta-consequence-v1")
+                or version == "conformity-v1" and ret.get("sampling_ref")):
+            signalled.add(ret.get("handle"))
+    # The mean reward of first-tier judge decisions by which signal they settled on.
+    by_source: dict[str, list[float]] = {"meta_only": [], "world_only": [], "both": []}
+    for e in events:
+        if e.get("kind") != "evaluator.settled" or e.get("tier") != 1 or e.get("reward") is None:
+            continue
+        source = ("both" if e.get("grade") is not None and e.get("consequence") is not None
+                  else "meta_only" if e.get("grade") is not None else "world_only")
+        by_source[source].append(e["reward"])
     consequence = {e.get("judge_handle") if e.get("kind") == "verdict.opportunity"
                    else e.get("handle") for e in events
                    if e.get("kind") in ("verdict.consequence", "verdict.opportunity")}
@@ -261,8 +271,17 @@ def reward_chain(events: list[dict[str, Any]]) -> dict[str, Any]:
         draws[actor]["draws"] += 1
         draws[actor]["noop"] += int(prop.get("chosen") == "NOOP")
     n = len(judges)
+    evaluators = judges | metas
     return {
         "judge_decisions": n,
+        "judge_and_meta_decisions": len(evaluators),
+        "judge_signalled": len(evaluators & signalled),
+        "judge_learning_signal_rate": (round(len(evaluators & signalled) / len(evaluators), 3)
+                                       if evaluators else None),
+        "judge_reward_by_source": {
+            source: {"n": len(v), "sum": round(sum(v), 6),
+                     "mean": round(statistics.fmean(v), 3) if v else None}
+            for source, v in by_source.items()},
         "judge_consequence_share": (round(len(judges & consequence) / n, 3) if n else None),
         "judge_meta_grade_share": round(len(judges & graded) / n, 3) if n else None,
         "meta_consequence_events": sum(1 for e in events
@@ -365,28 +384,34 @@ def combine(cards: list[dict[str, Any]]) -> dict[str, Any]:
     for card in cards:
         add(total, {k: card.get(k) for k in (
             "ticks", "calls", "invocations", "malformed_reasons", "producer_actions",
-            "producer_settlements", "grounded_findings", "judge_unmeasured", "orders",
-            "opportunity_cost")
+            "producer_settlements", "orders", "opportunity_cost")
             if card.get(k) is not None})
     # Averages and rates are recomputed from the seeds, never summed.
-    priced = [c.get("opportunity_cost") or {} for c in cards]
-    n = sum(p.get("priced") or 0 for p in priced)
-    named = sum(p.get("named_declined") or 0 for p in priced)
+    holds = total.get("opportunity_cost", {})
     total["opportunity_cost"] = {
-        "priced": n, "named_declined": named,
-        "mean_score": (round(sum((p.get("mean_score") or 0) * (p.get("priced") or 0)
-                                 for p in priced) / n, 3) if n else None),
-        "named_regret_rate": (round(sum((p.get("named_regret_rate") or 0)
-                                        * (p.get("named_declined") or 0)
-                                        for p in priced) / named, 3) if named else None)}
+        "priced": holds.get("priced", 0),
+        "mean_y": (round(holds["y_sum"] / holds["priced"], 3)
+                   if holds.get("priced") else None)}
     settled = total.get("producer_settlements", {})
     scored = sum(v for k, v in settled.items() if k.startswith("settled:"))
     total["learning_signal_rate"] = (round(scored / sum(settled.values()), 3)
                                      if settled else None)
     chains = [c["reward_chain"] for c in cards if c.get("reward_chain")]
     judges = sum(r["judge_decisions"] for r in chains)
+    evaluators = sum(r.get("judge_and_meta_decisions", 0) for r in chains)
+    sources = {}
+    for source in ("meta_only", "world_only", "both"):
+        rows = [r["judge_reward_by_source"][source] for r in chains
+                if r.get("judge_reward_by_source")]
+        count = sum(row["n"] for row in rows)
+        sources[source] = {"n": count, "mean": (round(sum(row["sum"] for row in rows) / count,
+                                                      3) if count else None)}
     total["reward_chain"] = {
         "judge_decisions": judges,
+        "judge_learning_signal_rate": (
+            round(sum(r.get("judge_signalled", 0) for r in chains) / evaluators, 3)
+            if evaluators else None),
+        "judge_reward_by_source": sources,
         **{share: (round(sum((r[share] or 0) * r["judge_decisions"] for r in chains)
                          / judges, 3) if judges else None)
            for share in ("judge_consequence_share", "judge_meta_grade_share")},
